@@ -1,0 +1,393 @@
+"""Companion Core: FastAPI application with WebSocket, memory, and LLM routing."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import time
+import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import httpx
+import psycopg
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from .fact_extractor import create_episode_summary, extract_facts
+from .llm_router import LLMRouter
+from .mcp_client import MCPClient
+from .memory import MemoryManager
+from .models import SessionState, new_id
+from .personality import assemble_system_prompt, load_personality
+from .proactive import ProactiveEngine
+from .push import add_subscription, get_vapid_public_key, send_push
+from .ws_manager import WSManager
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL", "postgresql://aichat:aichat@aichat-db:5432/aichat"
+)
+
+# ── Globals ──────────────────────────────────────────────────────────────────
+
+memory = MemoryManager()
+router = LLMRouter()
+mcp = MCPClient()
+ws = WSManager()
+proactive = ProactiveEngine()
+
+SESSION_ID = "default"  # Single-user, single session
+
+
+# ── Lifecycle ────────────────────────────────────────────────────────────────
+
+
+async def run_migration() -> None:
+    """Run the companion SQL migration on startup."""
+    migration_path = Path(__file__).parent.parent / "migrations" / "010_companion.sql"
+    if not migration_path.exists():
+        logger.warning("Migration file not found: %s", migration_path)
+        return
+
+    sql = migration_path.read_text()
+    try:
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            await conn.execute(sql)
+            await conn.commit()
+        logger.info("Migration 010_companion.sql applied")
+    except Exception as e:
+        logger.warning("Migration may already be applied: %s", e)
+
+
+async def proactive_callback(message: str) -> None:
+    """Deliver a proactive message via WebSocket or push notification."""
+    if ws.connected:
+        await ws.send_proactive(message)
+    else:
+        personality = load_personality()
+        name = personality.get("name", "Companion")
+        await send_push(title=name, body=message)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application startup/shutdown."""
+    await run_migration()
+    await memory.init()
+    await router.init()
+    await mcp.init()
+    proactive.set_callback(proactive_callback)
+    proactive.start()
+    load_personality()
+    logger.info("Companion core started")
+    yield
+    proactive.stop()
+    await memory.close()
+    await router.close()
+    await mcp.close()
+    logger.info("Companion core stopped")
+
+
+app = FastAPI(title="Companion Core", version="0.1.0", lifespan=lifespan)
+
+# Serve Flutter PWA static files (mounted last so API routes take priority)
+static_dir = Path("/app/static")
+if static_dir.exists():
+    app.mount("/app", StaticFiles(directory=str(static_dir), html=True), name="pwa")
+
+
+# ── Health ───────────────────────────────────────────────────────────────────
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "companion-core", "version": "0.1.0"}
+
+
+# ── Push subscription ───────────────────────────────────────────────────────
+
+
+@app.get("/api/vapid-key")
+async def vapid_key():
+    return {"key": get_vapid_public_key()}
+
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(sub: dict):
+    add_subscription(sub)
+    return {"ok": True}
+
+
+# ── Conversation history ────────────────────────────────────────────────────
+
+
+@app.get("/api/messages")
+async def get_messages(limit: int = 50, before: str | None = None):
+    """Fetch recent messages from PostgreSQL."""
+    try:
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            if before:
+                rows = await conn.execute(
+                    "SELECT id, role, content, content_type, mood, model, created_at "
+                    "FROM companion_messages WHERE created_at < %s "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (before, limit),
+                )
+            else:
+                rows = await conn.execute(
+                    "SELECT id, role, content, content_type, mood, model, created_at "
+                    "FROM companion_messages "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (limit,),
+                )
+            messages = [
+                {
+                    "id": str(r[0]),
+                    "role": r[1],
+                    "content": r[2],
+                    "content_type": r[3],
+                    "mood": r[4],
+                    "model": r[5],
+                    "created_at": r[6].isoformat(),
+                }
+                for r in await rows.fetchall()
+            ]
+        # Return in chronological order
+        messages.reverse()
+        return {"messages": messages}
+    except Exception as e:
+        logger.error("Failed to fetch messages: %s", e)
+        return {"messages": []}
+
+
+# ── WebSocket ────────────────────────────────────────────────────────────────
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await ws.connect(websocket)
+
+    # Ensure session exists
+    session = await memory.get_session(SESSION_ID)
+    if session is None:
+        conv_id = new_id()
+        session = SessionState(conversation_id=conv_id)
+        await memory.save_session(SESSION_ID, session)
+        # Create conversation record
+        await _create_conversation(conv_id)
+
+    try:
+        while True:
+            data = await ws.receive()
+            if data is None:
+                break
+
+            msg_type = data.get("type")
+
+            if msg_type == "message":
+                await _handle_message(data.get("content", ""), session)
+            elif msg_type == "typing":
+                pass  # Could track typing indicators
+            elif msg_type == "voice_end":
+                # Voice data would be transcribed first via companion-voice
+                audio = data.get("audio")
+                if audio:
+                    await _handle_voice(audio, session)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await ws.disconnect()
+
+
+async def _handle_message(content: str, session: SessionState) -> None:
+    """Process a text message: memory recall, LLM, response, extraction."""
+    if not content.strip():
+        return
+
+    start = time.monotonic()
+    proactive.mark_responded()
+
+    # Add user turn to session
+    session = await memory.add_turn(SESSION_ID, "user", content, session)
+
+    # Recall relevant memories
+    episode_memories, rel_facts = await memory.recall_for_prompt(content)
+
+    # Assemble system prompt
+    system_prompt = assemble_system_prompt(
+        mood=session.mood,
+        memories=episode_memories,
+        relationship_facts=rel_facts,
+        tools_available=True,
+    )
+
+    # Build messages for LLM
+    messages = [
+        {"role": t["role"], "content": t["content"]}
+        for t in session.turns[-20:]
+    ]
+
+    # Route to LLM
+    config = router.route(content, session)
+    logger.info("Routing to %s/%s", config.provider, config.model)
+
+    # Stream response
+    msg_id = new_id()
+    full_response = []
+
+    async for token in router.stream(system_prompt, messages, config):
+        full_response.append(token)
+        await ws.send_token(token)
+
+    response_text = "".join(full_response)
+    latency_ms = int((time.monotonic() - start) * 1000)
+
+    await ws.send_done(msg_id, config.model)
+
+    # Add assistant turn to session
+    session = await memory.add_turn(SESSION_ID, "assistant", response_text, session)
+
+    # Store messages in PostgreSQL
+    await _store_message(session.conversation_id, "user", content, config.model)
+    await _store_message(
+        session.conversation_id, "assistant", response_text, config.model,
+        latency_ms=latency_ms,
+    )
+
+    # Background: extract facts and create episodes
+    asyncio.create_task(_background_extraction(content, response_text, session))
+
+
+async def _handle_voice(audio_b64: str, session: SessionState) -> None:
+    """Process voice: STT -> text -> LLM -> TTS -> audio."""
+    voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # STT
+            await ws.send_thinking("Listening...")
+            r = await client.post(
+                f"{voice_url}/stt",
+                json={"audio": audio_b64},
+            )
+            r.raise_for_status()
+            transcript = r.json().get("text", "")
+
+            if not transcript.strip():
+                return
+
+            # Process as text message (which streams the text response)
+            await _handle_message(transcript, session)
+
+            # Get the last assistant response for TTS
+            session = await memory.get_session(SESSION_ID)
+            if session and session.turns:
+                last_turn = session.turns[-1]
+                if last_turn["role"] == "assistant":
+                    # TTS
+                    r = await client.post(
+                        f"{voice_url}/tts",
+                        json={"text": last_turn["content"]},
+                    )
+                    if r.status_code == 200:
+                        import base64
+                        audio_out = base64.b64encode(r.content).decode()
+                        await ws.send_voice(audio_out, final=True)
+    except Exception as e:
+        logger.error("Voice processing failed: %s", e)
+
+
+async def _background_extraction(
+    user_msg: str, assistant_msg: str, session: SessionState
+) -> None:
+    """Background task: extract facts and maybe create an episode."""
+    try:
+        result = await extract_facts(user_msg, assistant_msg)
+
+        # Store new facts
+        for fact in result.get("facts", []):
+            await memory.set_relationship_fact(fact["key"], fact["value"])
+
+        # Update mood in session
+        mood = result.get("mood", "neutral")
+        session.mood = mood
+        await memory.save_session(SESSION_ID, session)
+        await ws.send_mood(mood)
+
+        # Create episode every 10 turns
+        if session.turn_count > 0 and session.turn_count % 10 == 0:
+            summary = await create_episode_summary(session.turns)
+            if summary:
+                episode_id = str(uuid.uuid4())
+                await memory.store_episode(
+                    episode_id=episode_id,
+                    summary=summary,
+                    keywords=result.get("topics", []),
+                    emotion_tags=[mood],
+                    importance=0.5,
+                    conversation_id=session.conversation_id,
+                )
+                logger.info("Episode stored: %s", summary[:80])
+    except Exception as e:
+        logger.error("Background extraction failed: %s", e)
+
+
+# ── DB helpers ───────────────────────────────────────────────────────────────
+
+
+async def _create_conversation(conv_id: str) -> None:
+    try:
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            await conn.execute(
+                "INSERT INTO companion_conversations (id) VALUES (%s) "
+                "ON CONFLICT DO NOTHING",
+                (conv_id,),
+            )
+            await conn.commit()
+    except Exception as e:
+        logger.error("Failed to create conversation: %s", e)
+
+
+async def _store_message(
+    conversation_id: str,
+    role: str,
+    content: str,
+    model: str = "",
+    latency_ms: int | None = None,
+) -> None:
+    try:
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            await conn.execute(
+                "INSERT INTO companion_messages "
+                "(conversation_id, role, content, model, latency_ms) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (conversation_id, role, content, model, latency_ms),
+            )
+            await conn.execute(
+                "UPDATE companion_conversations SET turn_count = turn_count + 1, "
+                "model_used = %s WHERE id = %s",
+                (model, conversation_id),
+            )
+            await conn.commit()
+    except Exception as e:
+        logger.error("Failed to store message: %s", e)
+
+
+# ── Root redirect ────────────────────────────────────────────────────────────
+
+
+@app.get("/")
+async def root():
+    """Redirect to PWA or show status."""
+    if static_dir.exists() and (static_dir / "index.html").exists():
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse("/app/")
+    return {"status": "companion-core running", "pwa": "not built yet"}

@@ -1,0 +1,60 @@
+# Run on dominus: companion-core + companion-voice
+# Reaches aichat services on amarillo via Tailscale (100.111.198.19)
+# Web traffic arrives via companion-gateway on amarillo → here
+services:
+  companion-core:
+    build: ./docker/core
+    container_name: companion-core
+    ports:
+      - "8300:8300"
+    environment:
+      # aichat services on amarillo via gateway proxy ports
+      DATABASE_URL: "postgresql://aichat:${POSTGRES_PASSWORD:?}@100.111.198.19:15432/aichat"
+      REDIS_URL: "redis://100.111.198.19:16379/1"
+      QDRANT_URL: "http://100.111.198.19:16333"
+      # HTTP services via gateway proxy ports
+      MCP_URL: "http://100.111.198.19:18096"
+      DATA_URL: "http://100.111.198.19:18091"
+      INFERENCE_URL: "http://100.111.198.19:18105"
+      # Voice is local on dominus
+      VOICE_URL: "http://companion-voice:8301"
+      # LM Studio is local on dominus
+      LM_STUDIO_URL: "http://host.docker.internal:1234"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      PERSONALITY_PATH: "/config/personality.yaml"
+      VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY:-}"
+      VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY:-}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./config:/config:ro
+      - ./web-build:/app/static:ro
+    depends_on:
+      companion-voice:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8300/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  companion-voice:
+    build: ./docker/voice
+    container_name: companion-voice
+    environment:
+      PIPER_VOICE: "${PIPER_VOICE:-en_US-amy-medium}"
+      WHISPER_MODEL: "${WHISPER_MODEL:-base.en}"
+    volumes:
+      - voice-models:/app/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8301/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  voice-models:

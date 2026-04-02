@@ -1,0 +1,30 @@
+# Run on amarillo: bridges aichat internals to Tailscale + reverse proxies web to dominus
+services:
+  companion-gateway:
+    image: nginx:alpine
+    container_name: companion-gateway
+    ports:
+      # Web traffic reverse proxy (all interfaces → dominus companion-core)
+      - "8300:8300"
+      # aichat HTTP services on Tailscale only
+      - "100.111.198.19:18096:18096"  # MCP gateway
+      - "100.111.198.19:18091:18091"  # Data service
+      - "100.111.198.19:18105:18105"  # Inference
+      # aichat TCP services on Tailscale only
+      - "100.111.198.19:15432:15432"  # PostgreSQL
+      - "100.111.198.19:16379:16379"  # Redis
+      - "100.111.198.19:16333:16333"  # Qdrant
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - aichat_default
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:18091/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+networks:
+  aichat_default:
+    external: true
