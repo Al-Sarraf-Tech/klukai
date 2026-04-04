@@ -184,6 +184,31 @@ async def get_affection():
     return state.model_dump(mode="json")
 
 
+# ── TTS proxy (for Flutter UI speaker button) ──────────────────────────
+
+
+@app.post("/api/tts")
+async def api_tts(req: dict):
+    """Proxy TTS request to companion-voice and return base64 audio."""
+    text = req.get("text", "")
+    if not text:
+        return JSONResponse({"error": "No text"}, status_code=400)
+
+    voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(
+                f"{voice_url}/tts",
+                json={"text": text[:500], "language": req.get("language", "en")},
+            )
+            if r.status_code == 200:
+                import base64
+                return {"audio": base64.b64encode(r.content).decode()}
+            return JSONResponse({"error": "TTS failed"}, status_code=r.status_code)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+
 # ── Image generation ────────────────────────────────────────────────────
 
 
@@ -329,7 +354,7 @@ async def _handle_message(content: str, session: SessionState) -> None:
         agent = AgentLoop(router, mcp, ws)
         agent_result = await agent.run(system_prompt, messages)
 
-        response_text = agent_result.response
+        response_text = _fix_narration(agent_result.response)
         model_name = agent_result.model
 
         # Stream the final response token by token for the UI
@@ -357,7 +382,7 @@ async def _handle_message(content: str, session: SessionState) -> None:
             full_response.append(token)
             await ws.send_token(token)
 
-        response_text = "".join(full_response)
+        response_text = _fix_narration("".join(full_response))
         model_name = config.model
         latency_ms = int((time.monotonic() - start) * 1000)
 
@@ -558,6 +583,22 @@ async def _background_tts(text: str) -> None:
 def _chunk_text(text: str, chunk_size: int = 8) -> list[str]:
     """Split text into chunks for simulated streaming."""
     return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+
+def _fix_narration(text: str) -> str:
+    """Fix second-person narration: convert (You ...) to (I ...) and strip Commander narration."""
+    import re
+    # Convert "(You verb...)" to "(I verb...)" for Klukai's own actions
+    text = re.sub(
+        r'\(You ([a-z])',
+        lambda m: f'(I {m.group(1)}',
+        text,
+    )
+    # Convert "(Your noun)" to "(My noun)"
+    text = re.sub(r'\(Your ', '(My ', text)
+    # Fix "your" at start of parenthetical after conversion
+    text = re.sub(r'\(your ', '(my ', text)
+    return text
 
 
 # ── DB helpers ───────────────────────────────────────────────────────────────

@@ -59,9 +59,17 @@ def build_character_preamble(p: dict, affection_level: int = 0) -> str:
     user_title = p.get("user_title", "Commander")
     backstory = p.get("backstory", "").strip()
 
-    # Key identity facts FIRST — before any tone instructions — so the model
-    # internalizes who Klukai IS before being told how to speak.
+    # ABSOLUTE FIRST RULE — must be the very first thing in the prompt
     preamble = (
+        "### CRITICAL RULE — READ BEFORE ANYTHING ELSE ###\n"
+        "You are Klukai speaking in FIRST PERSON. You say 'I'.\n"
+        "NEVER write '(You pause)' or '(You look)' — the word 'You' in parenthetical actions is BANNED.\n"
+        "ONLY use '(I pause)' '(I look away)' for YOUR actions. NEVER describe the Commander's actions.\n"
+        "### END CRITICAL RULE ###\n\n"
+    )
+
+    # Key identity facts — before tone instructions
+    preamble += (
         f"You are {name}, {identity.get('role', 'Squad Leader')} of "
         f"{identity.get('organization', 'H.I.D.E. 404')}. "
         f"You are an {identity.get('frame', 'SST-05')} frame T-Doll — "
@@ -151,6 +159,35 @@ def build_speech_guidelines(p: dict, affection_level: int = 0) -> str:
         lines.append(f"\nFORBIDDEN WORDS/PHRASES (never use these): {forbidden_str}")
 
     return "\n".join(lines)
+
+
+def build_expressive_block(p: dict, affection_level: int = 0) -> str:
+    """Build vocal expression guidelines based on affection level."""
+    tokens = p.get("expressive_tokens", {})
+    if not tokens:
+        return ""
+
+    habits = tokens.get("vocal_habits", {})
+    if affection_level <= 1:
+        style = habits.get("cold_level", "")
+    elif affection_level <= 3:
+        style = habits.get("warm_level", "")
+    else:
+        style = habits.get("tender_level", "")
+
+    interjections = tokens.get("interjections", {})
+    examples = []
+    for category, words in interjections.items():
+        if isinstance(words, list):
+            examples.extend(words[:2])
+
+    return (
+        "VOCAL EXPRESSION (your voice is synthesized — these render as natural speech):\n"
+        f"  Style: {style}\n"
+        f"  Available: {', '.join(examples[:8])}\n"
+        "  Use '...' for pauses, CAPS for emphasis on single words.\n"
+        "  Use interjections like 'Hmph.', 'Tch.', 'Ha.' sparingly and in-character."
+    )
 
 
 def build_affection_block(
@@ -287,9 +324,13 @@ def build_character_rules() -> str:
         "    in your backstory, relationships, costumes, or equipment sections. You may be cold about\n"
         "    sharing details at low affection, but you never claim ignorance of your own identity.\n"
         "  - Give substantive responses. Even when cold, 2-4 sentences minimum. Terse does not mean empty.\n"
-        "  - ALWAYS speak in first person. You are 'I', never 'Klukai does X' or 'She does X'.\n"
-        "  - NEVER use asterisk actions (*adjusts gloves*) or roleplay narration formatting.\n"
-        "  - Speak directly: 'I brought this' not 'Klukai brought this' or '*brings item*'."
+        "  - NARRATION RULES:\n"
+        "  - You may narrate YOUR OWN actions in parentheses using first person: (I pause) (I look away) (I set down the rifle)\n"
+        "  - NEVER narrate the COMMANDER's actions or reactions. You cannot see into their mind.\n"
+        "  - FORBIDDEN: '(You pause)', '(You freeze)', '(Your expression softens)', '(A smile touches your mouth)'\n"
+        "  - ALLOWED: '(I pause)', '(I glance away)', '(I set the gift on the table)', '(I cross my arms)'\n"
+        "  - The word 'You' in parentheses is ALWAYS wrong. Use 'I' for your own actions.\n"
+        "  - Never describe what the Commander is doing, thinking, or feeling — only what YOU do."
     )
 
 
@@ -313,6 +354,7 @@ def assemble_system_prompt(
     blocks = [
         build_character_preamble(p, affection_level),
         build_character_rules(),
+        build_expressive_block(p, affection_level),
         build_speech_guidelines(p, affection_level),
         build_affection_block(affection_score, affection_level, level_name, p),
         build_context_block(mood, affection_level),

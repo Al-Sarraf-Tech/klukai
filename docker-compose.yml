@@ -46,7 +46,7 @@ services:
     container_name: companion-voice
     environment:
       TTS_ENGINE: "xtts"
-      REFERENCE_WAV: "/app/reference/klukai_reference.wav"
+      REFERENCE_WAV: "/app/reference/american_accent_ref.wav"
       WHISPER_MODEL: "${WHISPER_MODEL:-base.en}"
     volumes:
       - voice-models:/app/models

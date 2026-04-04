@@ -254,6 +254,30 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
   }
 
+  void _handleKeyScroll(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+    if (!_scrollController.hasClients) return;
+
+    final pos = _scrollController.position;
+    final pageSize = pos.viewportDimension * 0.8;
+    final key = event.logicalKey.keyLabel;
+
+    double? target;
+    if (key == 'Page Down') {
+      target = (pos.pixels + pageSize).clamp(pos.minScrollExtent, pos.maxScrollExtent);
+    } else if (key == 'Page Up') {
+      target = (pos.pixels - pageSize).clamp(pos.minScrollExtent, pos.maxScrollExtent);
+    } else if (key == 'Home') {
+      target = pos.minScrollExtent;
+    } else if (key == 'End') {
+      target = pos.maxScrollExtent;
+    }
+
+    if (target != null) {
+      _scrollController.animateTo(target, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+    }
+  }
+
   void _playAudio(String base64Audio) {
     try {
       final dataUrl = 'data:audio/wav;base64,$base64Audio';
@@ -305,14 +329,19 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       backgroundColor: GFL2Colors.background,
       body: SafeArea(
-        child: Column(
-          children: [
-            _buildHeader(),
-            Expanded(child: _buildMessageList()),
-            if (_activeTools.isNotEmpty) _buildToolStatus(),
-            if (_state.isTyping && _streamingId == null) _buildProcessingIndicator(),
-            _buildInputBar(),
-          ],
+        child: KeyboardListener(
+          focusNode: FocusNode()..requestFocus(),
+          autofocus: true,
+          onKeyEvent: _handleKeyScroll,
+          child: Column(
+            children: [
+              _buildHeader(),
+              Expanded(child: _buildMessageList()),
+              if (_activeTools.isNotEmpty) _buildToolStatus(),
+              if (_state.isTyping && _streamingId == null) _buildProcessingIndicator(),
+              _buildInputBar(),
+            ],
+          ),
         ),
       ),
     );

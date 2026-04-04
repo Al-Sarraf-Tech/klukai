@@ -1,15 +1,73 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:web/web.dart' as web;
 import '../models/message.dart';
 import '../main.dart';
 
-class MessageBubble extends StatelessWidget {
+class MessageBubble extends StatefulWidget {
   final ChatMessage message;
 
   const MessageBubble({super.key, required this.message});
 
   @override
+  State<MessageBubble> createState() => _MessageBubbleState();
+}
+
+class _MessageBubbleState extends State<MessageBubble> {
+  bool _isPlaying = false;
+  bool _isLoading = false;
+
+  Future<void> _playVoice() async {
+    if (_isLoading || _isPlaying) return;
+    if (widget.message.content.isEmpty) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      // Get server URL from the page origin
+      final serverUrl = Uri.base.origin.contains('localhost')
+          ? 'http://localhost:8300'
+          : Uri.base.origin;
+
+      final response = await http.post(
+        Uri.parse('$serverUrl/api/tts'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'text': widget.message.content.length > 500
+              ? widget.message.content.substring(0, 500)
+              : widget.message.content,
+          'language': 'en',
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final audioB64 = data['audio'] as String?;
+        if (audioB64 != null) {
+          setState(() {
+            _isLoading = false;
+            _isPlaying = true;
+          });
+          final audio = web.HTMLAudioElement()
+            ..src = 'data:audio/wav;base64,$audioB64';
+          audio.onEnded.listen((_) {
+            if (mounted) setState(() => _isPlaying = false);
+          });
+          audio.play();
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint('Voice playback failed: $e');
+    }
+
+    if (mounted) setState(() { _isLoading = false; _isPlaying = false; });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final isUser = message.role == 'user';
+    final isUser = widget.message.role == 'user';
     final isMobile = MediaQuery.of(context).size.width < 600;
 
     return Padding(
@@ -22,7 +80,7 @@ class MessageBubble extends StatelessWidget {
           Flexible(
             child: Container(
               constraints: BoxConstraints(
-                maxWidth: message.tightBubbleWidth ??
+                maxWidth: widget.message.tightBubbleWidth ??
                     MediaQuery.of(context).size.width * (isMobile ? 0.85 : 0.75),
               ),
               decoration: BoxDecoration(
@@ -63,14 +121,14 @@ class MessageBubble extends StatelessWidget {
                         ),
                       ),
                     SelectableText(
-                      message.content,
+                      widget.message.content,
                       style: TextStyle(
                         color: GFL2Colors.textPrimary.withValues(alpha: 0.92),
                         fontSize: 14,
                         height: 1.5,
                       ),
                     ),
-                    if (message.isStreaming)
+                    if (widget.message.isStreaming)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
                         child: SizedBox(
@@ -82,20 +140,49 @@ class MessageBubble extends StatelessWidget {
                           ),
                         ),
                       ),
-                    // Timestamp
-                    if (!message.isStreaming)
+                    // Bottom row: speaker icon + timestamp
+                    if (!widget.message.isStreaming)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: Text(
-                            _formatTime(message.createdAt),
-                            style: TextStyle(
-                              color: GFL2Colors.textDim.withValues(alpha: 0.4),
-                              fontSize: 9,
-                              fontFamily: 'monospace',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Speaker icon for Klukai messages
+                            if (!isUser)
+                              GestureDetector(
+                                onTap: _playVoice,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: _isLoading
+                                      ? SizedBox(
+                                          width: 14,
+                                          height: 14,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 1.5,
+                                            color: GFL2Colors.primary.withValues(alpha: 0.5),
+                                          ),
+                                        )
+                                      : Icon(
+                                          _isPlaying
+                                              ? Icons.volume_up
+                                              : Icons.volume_up_outlined,
+                                          size: 16,
+                                          color: _isPlaying
+                                              ? GFL2Colors.primary
+                                              : GFL2Colors.textDim.withValues(alpha: 0.4),
+                                        ),
+                                ),
+                              ),
+                            const Spacer(),
+                            Text(
+                              _formatTime(widget.message.createdAt),
+                              style: TextStyle(
+                                color: GFL2Colors.textDim.withValues(alpha: 0.4),
+                                fontSize: 9,
+                                fontFamily: 'monospace',
+                              ),
                             ),
-                          ),
+                          ],
                         ),
                       ),
                   ],
