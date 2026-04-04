@@ -23,15 +23,16 @@ class Role(str, Enum):
 
 
 class Mood(str, Enum):
-    neutral = "neutral"
-    happy = "happy"
-    curious = "curious"
-    concerned = "concerned"
-    playful = "playful"
-    thoughtful = "thoughtful"
-    excited = "excited"
-    tired = "tired"
-    annoyed = "annoyed"
+    composed = "composed"
+    focused = "focused"
+    prideful = "prideful"
+    exasperated = "exasperated"
+    protective = "protective"
+    quietly_pleased = "quietly_pleased"
+    competitive = "competitive"
+    tender = "tender"
+    longing = "longing"
+    battle_ready = "battle_ready"
 
 
 # ── WebSocket protocol ──────────────────────────────────────────────────────
@@ -63,8 +64,8 @@ class Conversation(BaseModel):
     started_at: datetime = Field(default_factory=datetime.now)
     ended_at: datetime | None = None
     summary: str | None = None
-    mood_start: str = "neutral"
-    mood_end: str = "neutral"
+    mood_start: str = "composed"
+    mood_end: str = "composed"
     turn_count: int = 0
     model_used: str = ""
 
@@ -75,7 +76,7 @@ class Message(BaseModel):
     role: Role
     content: str
     content_type: str = "text"
-    mood: str = "neutral"
+    mood: str = "composed"
     tool_calls: dict[str, Any] | None = None
     tokens_used: int = 0
     model: str = ""
@@ -109,7 +110,7 @@ class LLMConfig(BaseModel):
 class SessionState(BaseModel):
     conversation_id: str
     turns: list[dict[str, str]] = Field(default_factory=list)
-    mood: str = "neutral"
+    mood: str = "composed"
     active_topic: str | None = None
     turn_count: int = 0
     last_activity: datetime = Field(default_factory=datetime.now)

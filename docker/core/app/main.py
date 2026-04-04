@@ -16,6 +16,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .affection import AffectionManager
+from .agent_loop import AgentLoop
 from .fact_extractor import create_episode_summary, extract_facts
 from .llm_router import LLMRouter
 from .mcp_client import MCPClient
@@ -43,6 +45,7 @@ router = LLMRouter()
 mcp = MCPClient()
 ws = WSManager()
 proactive = ProactiveEngine()
+affection = AffectionManager()
 
 SESSION_ID = "default"  # Single-user, single session
 
@@ -51,20 +54,19 @@ SESSION_ID = "default"  # Single-user, single session
 
 
 async def run_migration() -> None:
-    """Run the companion SQL migration on startup."""
-    migration_path = Path(__file__).parent.parent / "migrations" / "010_companion.sql"
-    if not migration_path.exists():
-        logger.warning("Migration file not found: %s", migration_path)
-        return
+    """Run all companion SQL migrations on startup."""
+    migration_dir = Path(__file__).parent.parent / "migrations"
+    migration_files = sorted(migration_dir.glob("*.sql"))
 
-    sql = migration_path.read_text()
-    try:
-        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
-            await conn.execute(sql)
-            await conn.commit()
-        logger.info("Migration 010_companion.sql applied")
-    except Exception as e:
-        logger.warning("Migration may already be applied: %s", e)
+    for migration_path in migration_files:
+        sql = migration_path.read_text()
+        try:
+            async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+                await conn.execute(sql)
+                await conn.commit()
+            logger.info("Migration %s applied", migration_path.name)
+        except Exception as e:
+            logger.warning("Migration %s may already be applied: %s", migration_path.name, e)
 
 
 async def proactive_callback(message: str) -> None:
@@ -72,9 +74,7 @@ async def proactive_callback(message: str) -> None:
     if ws.connected:
         await ws.send_proactive(message)
     else:
-        personality = load_personality()
-        name = personality.get("name", "Companion")
-        await send_push(title=name, body=message)
+        await send_push(title="Klukai", body=message)
 
 
 @asynccontextmanager
@@ -84,16 +84,18 @@ async def lifespan(app: FastAPI):
     await memory.init()
     await router.init()
     await mcp.init()
+    await affection.init()
     proactive.set_callback(proactive_callback)
     proactive.start()
     load_personality()
-    logger.info("Companion core started")
+    logger.info("Klukai companion core started")
     yield
     proactive.stop()
     await memory.close()
     await router.close()
     await mcp.close()
-    logger.info("Companion core stopped")
+    await affection.close()
+    logger.info("Klukai companion core stopped")
 
 
 app = FastAPI(title="Companion Core", version="0.1.0", lifespan=lifespan)
@@ -124,6 +126,15 @@ async def vapid_key():
 async def push_subscribe(sub: dict):
     add_subscription(sub)
     return {"ok": True}
+
+
+# ── Affection state ─────────────────────────────────────────────────────────
+
+
+@app.get("/api/affection")
+async def get_affection():
+    state = await affection.get_state()
+    return state.model_dump(mode="json")
 
 
 # ── Conversation history ────────────────────────────────────────────────────
@@ -218,15 +229,21 @@ async def _handle_message(content: str, session: SessionState) -> None:
     # Add user turn to session
     session = await memory.add_turn(SESSION_ID, "user", content, session)
 
-    # Recall relevant memories
-    episode_memories, rel_facts = await memory.recall_for_prompt(content)
+    # Recall relevant memories + past conversation exchanges
+    episode_memories, rel_facts, recalled_exchanges = await memory.recall_for_prompt(content)
+
+    # Get affection state for prompt modulation
+    aff_state = await affection.get_state()
 
     # Assemble system prompt
     system_prompt = assemble_system_prompt(
         mood=session.mood,
         memories=episode_memories,
         relationship_facts=rel_facts,
+        recalled_exchanges=recalled_exchanges,
         tools_available=True,
+        affection_score=aff_state.score,
+        affection_level=aff_state.level,
     )
 
     # Build messages for LLM
@@ -235,30 +252,56 @@ async def _handle_message(content: str, session: SessionState) -> None:
         for t in session.turns[-20:]
     ]
 
-    # Route to LLM
-    config = router.route(content, session)
-    logger.info("Routing to %s/%s", config.provider, config.model)
-
-    # Stream response
+    # Check if this needs the agentic tool-use loop
+    use_agent = router.needs_agent(content)
     msg_id = new_id()
-    full_response = []
 
-    async for token in router.stream(system_prompt, messages, config):
-        full_response.append(token)
-        await ws.send_token(token)
+    if use_agent:
+        # Agentic path: think, use tools, then respond
+        logger.info("Routing to agent loop (tools needed)")
+        agent = AgentLoop(router, mcp, ws)
+        agent_result = await agent.run(system_prompt, messages)
 
-    response_text = "".join(full_response)
-    latency_ms = int((time.monotonic() - start) * 1000)
+        response_text = agent_result.response
+        model_name = agent_result.model
 
-    await ws.send_done(msg_id, config.model)
+        # Stream the final response token by token for the UI
+        for token in _chunk_text(response_text, 8):
+            await ws.send_token(token)
+            await asyncio.sleep(0.02)
+
+        latency_ms = int((time.monotonic() - start) * 1000)
+        await ws.send_done(msg_id, model_name)
+
+        logger.info(
+            "Agent loop: %d iterations, %d tools used (%s)",
+            agent_result.iterations,
+            len(agent_result.tools_used),
+            ", ".join(agent_result.tools_used) or "none",
+        )
+    else:
+        # Direct path: stream from LLM
+        config = router.route(content, session)
+        logger.info("Routing to %s/%s", config.provider, config.model)
+
+        full_response = []
+        async for token in router.stream(system_prompt, messages, config):
+            full_response.append(token)
+            await ws.send_token(token)
+
+        response_text = "".join(full_response)
+        model_name = config.model
+        latency_ms = int((time.monotonic() - start) * 1000)
+
+        await ws.send_done(msg_id, model_name)
 
     # Add assistant turn to session
     session = await memory.add_turn(SESSION_ID, "assistant", response_text, session)
 
     # Store messages in PostgreSQL
-    await _store_message(session.conversation_id, "user", content, config.model)
+    await _store_message(session.conversation_id, "user", content, model_name)
     await _store_message(
-        session.conversation_id, "assistant", response_text, config.model,
+        session.conversation_id, "assistant", response_text, model_name,
         latency_ms=latency_ms,
     )
 
@@ -308,7 +351,7 @@ async def _handle_voice(audio_b64: str, session: SessionState) -> None:
 async def _background_extraction(
     user_msg: str, assistant_msg: str, session: SessionState
 ) -> None:
-    """Background task: extract facts and maybe create an episode."""
+    """Background task: extract facts, adjust affection, and maybe create an episode."""
     try:
         result = await extract_facts(user_msg, assistant_msg)
 
@@ -317,10 +360,65 @@ async def _background_extraction(
             await memory.set_relationship_fact(fact["key"], fact["value"])
 
         # Update mood in session
-        mood = result.get("mood", "neutral")
+        mood = result.get("mood", "composed")
         session.mood = mood
         await memory.save_session(SESSION_ID, session)
         await ws.send_mood(mood)
+
+        # Adjust affection based on interaction
+        try:
+            aff_change = await affection.classify_and_adjust(user_msg, assistant_msg)
+
+            # Sync affection level to proactive engine
+            proactive.set_affection_level(aff_change.new_level)
+
+            # Send real-time affection update to UI
+            await ws.send_affection(
+                aff_change.new_score, aff_change.new_level,
+                aff_change.new_level_name, aff_change.delta,
+            )
+
+            # Handle level transitions
+            if aff_change.level_changed:
+                await ws.send_affection_level_change(
+                    aff_change.new_level, aff_change.new_level_name,
+                    aff_change.level_direction,
+                )
+                # Deliver the special level-change Klukai line
+                personality = load_personality()
+                aff_config = personality.get("affection", {})
+                if aff_change.level_direction == "up":
+                    messages = aff_config.get("level_up_messages", {})
+                else:
+                    messages = aff_config.get("level_down_messages", {})
+                special_line = messages.get(aff_change.new_level)
+                if special_line:
+                    await ws.send_proactive(special_line)
+
+                logger.info(
+                    "Affection level %s: %d -> %d (%s)",
+                    aff_change.level_direction,
+                    aff_change.new_level - (1 if aff_change.level_direction == "up" else -1),
+                    aff_change.new_level,
+                    aff_change.new_level_name,
+                )
+        except Exception as e:
+            logger.warning("Affection adjustment failed: %s", e)
+
+        # Store exchange in conversation memory for rich recall
+        try:
+            exchange_id = str(uuid.uuid4())
+            await memory.store_exchange(
+                exchange_id=exchange_id,
+                user_content=user_msg,
+                assistant_content=assistant_msg,
+                topics=result.get("topics", []),
+                mood=result.get("mood", "composed"),
+                importance=0.7 if result.get("should_remember") else 0.4,
+                conversation_id=session.conversation_id,
+            )
+        except Exception as e:
+            logger.warning("Exchange storage failed: %s", e)
 
         # Create episode every 10 turns
         if session.turn_count > 0 and session.turn_count % 10 == 0:
@@ -338,6 +436,14 @@ async def _background_extraction(
                 logger.info("Episode stored: %s", summary[:80])
     except Exception as e:
         logger.error("Background extraction failed: %s", e)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+
+def _chunk_text(text: str, chunk_size: int = 8) -> list[str]:
+    """Split text into chunks for simulated streaming."""
+    return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
 
 
 # ── DB helpers ───────────────────────────────────────────────────────────────

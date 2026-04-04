@@ -68,6 +68,27 @@ class WSManager:
             {"type": "voice_audio", "audio": audio_b64, "final": final}
         )
 
+    async def send_affection(
+        self, score: int, level: int, level_name: str, delta: int
+    ) -> None:
+        await self.send({
+            "type": "affection",
+            "score": score,
+            "level": level,
+            "level_name": level_name,
+            "delta": delta,
+        })
+
+    async def send_affection_level_change(
+        self, new_level: int, new_level_name: str, direction: str
+    ) -> None:
+        await self.send({
+            "type": "affection_level_change",
+            "level": new_level,
+            "level_name": new_level_name,
+            "direction": direction,
+        })
+
     async def receive(self) -> dict | None:
         if self._ws is None:
             return None

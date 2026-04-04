@@ -15,18 +15,27 @@ LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
 EXTRACTION_MODEL = "qwen2.5-3b-instruct"
 
 FACT_EXTRACTION_PROMPT = """\
-Extract facts about the user from this conversation exchange. Return a JSON object with:
-- "facts": list of {"key": "short_key", "value": "fact description"} (e.g., {"key": "favorite_language", "value": "Rust"})
-- "mood": the user's apparent mood (one of: neutral, happy, curious, concerned, playful, thoughtful, excited, tired, annoyed)
-- "topics": list of discussion topics mentioned
-- "should_remember": boolean - true if this exchange contains something worth remembering long-term
+You are Klukai's internal memory processor. Extract information about the Commander
+from this exchange. Focus on what a devoted elite T-Doll squad leader would consider
+operationally important:
+- Tactical preferences (how they approach problems, decision-making style)
+- Personal details they've shared (work, hobbies, interests, daily life)
+- Emotional state patterns (stress, energy, morale)
+- Promises made (by either party)
+- Things that pleased or displeased the Commander
+- Items, gifts, or resources mentioned
 
-Only include facts that are NEW information about the user. If no new facts, return empty lists.
-Return ONLY valid JSON, no other text.
+Return a JSON object with:
+- "facts": list of {{"key": "short_key", "value": "fact description"}} — only NEW information about the Commander
+- "mood": Klukai's emotional state after this exchange (one of: composed, focused, prideful, exasperated, protective, quietly_pleased, competitive, tender, longing, battle_ready)
+- "topics": list of discussion topics mentioned
+- "should_remember": boolean — true if this exchange contains something worth preserving in long-term operational records
+
+If no new facts, return empty lists. Return ONLY valid JSON, no other text.
 
 Exchange:
-User: {user_message}
-Assistant: {assistant_message}
+Commander: {user_message}
+Klukai: {assistant_message}
 """
 
 
@@ -90,8 +99,10 @@ async def create_episode_summary(
     )
 
     prompt = (
-        "Summarize this conversation in 1-2 sentences. Focus on the key topics "
-        "discussed and any important decisions or facts shared. Be concise.\n\n"
+        "You are Klukai, writing a brief operational log entry about your interaction "
+        "with the Commander. Summarize in 1-2 sentences using first person. Note anything "
+        "significant about the Commander's behavior, mood, or shared information. "
+        "Be concise and professional, but let your investment in the Commander show subtly.\n\n"
         f"{conversation}"
     )
 

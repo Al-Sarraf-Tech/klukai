@@ -6,6 +6,8 @@ class ChatMessage {
   final String? model;
   final DateTime createdAt;
   final bool isStreaming;
+  final int? pretextHandle;
+  final double? tightBubbleWidth;
 
   ChatMessage({
     required this.id,
@@ -15,6 +17,8 @@ class ChatMessage {
     this.model,
     DateTime? createdAt,
     this.isStreaming = false,
+    this.pretextHandle,
+    this.tightBubbleWidth,
   }) : createdAt = createdAt ?? DateTime.now();
 
   ChatMessage copyWith({
@@ -22,6 +26,8 @@ class ChatMessage {
     String? mood,
     String? model,
     bool? isStreaming,
+    int? pretextHandle,
+    double? tightBubbleWidth,
   }) {
     return ChatMessage(
       id: id,
@@ -31,6 +37,8 @@ class ChatMessage {
       model: model ?? this.model,
       createdAt: createdAt,
       isStreaming: isStreaming ?? this.isStreaming,
+      pretextHandle: pretextHandle ?? this.pretextHandle,
+      tightBubbleWidth: tightBubbleWidth ?? this.tightBubbleWidth,
     );
   }
 

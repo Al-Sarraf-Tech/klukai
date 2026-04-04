@@ -3,12 +3,18 @@ class CompanionState {
   final bool isConnected;
   final bool isTyping;
   final String? currentModel;
+  final int affectionScore;
+  final int affectionLevel;
+  final String affectionLevelName;
 
   const CompanionState({
-    this.mood = 'neutral',
+    this.mood = 'composed',
     this.isConnected = false,
     this.isTyping = false,
     this.currentModel,
+    this.affectionScore = 0,
+    this.affectionLevel = 0,
+    this.affectionLevelName = 'Cold Assessment',
   });
 
   CompanionState copyWith({
@@ -16,12 +22,18 @@ class CompanionState {
     bool? isConnected,
     bool? isTyping,
     String? currentModel,
+    int? affectionScore,
+    int? affectionLevel,
+    String? affectionLevelName,
   }) {
     return CompanionState(
       mood: mood ?? this.mood,
       isConnected: isConnected ?? this.isConnected,
       isTyping: isTyping ?? this.isTyping,
       currentModel: currentModel ?? this.currentModel,
+      affectionScore: affectionScore ?? this.affectionScore,
+      affectionLevel: affectionLevel ?? this.affectionLevel,
+      affectionLevelName: affectionLevelName ?? this.affectionLevelName,
     );
   }
 }

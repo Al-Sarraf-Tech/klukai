@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../main.dart';
 
 class MoodIndicator extends StatelessWidget {
   final String mood;
@@ -7,29 +8,33 @@ class MoodIndicator extends StatelessWidget {
 
   Color get moodColor {
     return switch (mood) {
-      'happy' => const Color(0xFF4ADE80),
-      'excited' => const Color(0xFFFBBF24),
-      'curious' => const Color(0xFF60A5FA),
-      'playful' => const Color(0xFFF472B6),
-      'thoughtful' => const Color(0xFF818CF8),
-      'concerned' => const Color(0xFFFB923C),
-      'tired' => const Color(0xFF94A3B8),
-      'annoyed' => const Color(0xFFF87171),
-      _ => const Color(0xFF7C3AED), // neutral
+      'composed'        => GFL2Colors.textDim,
+      'focused'         => GFL2Colors.primary,
+      'prideful'        => GFL2Colors.accent,
+      'exasperated'     => const Color(0xFFF59E0B),
+      'protective'      => GFL2Colors.success,
+      'quietly_pleased' => const Color(0xFF6EE7B7),
+      'competitive'     => GFL2Colors.danger,
+      'tender'          => GFL2Colors.affinity,
+      'longing'         => const Color(0xFF818CF8),
+      'battle_ready'    => GFL2Colors.danger,
+      _                 => GFL2Colors.textDim,
     };
   }
 
-  String get moodEmoji {
+  String get statusText {
     return switch (mood) {
-      'happy' => ':)',
-      'excited' => ':D',
-      'curious' => '?',
-      'playful' => ';)',
-      'thoughtful' => '...',
-      'concerned' => ':|',
-      'tired' => '-_-',
-      'annoyed' => '>:|',
-      _ => '',
+      'composed'        => 'COMPOSED',
+      'focused'         => 'FOCUSED',
+      'prideful'        => 'PRIDEFUL',
+      'exasperated'     => 'IRRITATED',
+      'protective'      => 'ON GUARD',
+      'quietly_pleased' => 'PLEASED',
+      'competitive'     => 'COMPETITIVE',
+      'tender'          => 'TENDER',
+      'longing'         => 'WISTFUL',
+      'battle_ready'    => 'BATTLE READY',
+      _                 => 'COMPOSED',
     };
   }
 
@@ -38,19 +43,35 @@ class MoodIndicator extends StatelessWidget {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 500),
       curve: Curves.easeInOut,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: moodColor.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: moodColor.withValues(alpha: 0.3)),
+        color: moodColor.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(2),
+        border: Border.all(color: moodColor.withValues(alpha: 0.25), width: 1),
       ),
-      child: Text(
-        mood,
-        style: TextStyle(
-          color: moodColor,
-          fontSize: 12,
-          fontWeight: FontWeight.w500,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 5,
+            height: 5,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: moodColor,
+            ),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            statusText,
+            style: TextStyle(
+              color: moodColor,
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.0,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -18,8 +18,9 @@ LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Model aliases
-LOCAL_CASUAL = "qwen2.5-3b-instruct"
-LOCAL_TOOLS = "lfm2-24b-a2b"
+LOCAL_CASUAL = "openai/gpt-oss-20b"                                    # Chat: best character fidelity
+LOCAL_AGENT = "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2"     # Agent: Opus-level tool-use + reasoning
+LOCAL_TOOLS = LOCAL_AGENT                                               # Same as agent
 CLOUD_COMPLEX = "claude-sonnet-4-20250514"
 CLOUD_FALLBACK = "claude-haiku-4-5-20251001"
 
@@ -28,6 +29,14 @@ COMPLEX_SIGNALS = [
     "explain", "analyze", "compare", "why", "reason", "think through",
     "help me understand", "what do you think", "philosophi", "ethic",
     "write a", "draft a", "compose",
+]
+
+# Signals that the message needs tool use (agent loop)
+AGENT_SIGNALS = [
+    "search", "look up", "find out", "what's happening", "current",
+    "latest", "news", "weather", "browse", "check online",
+    "what time", "today's", "right now", "this week",
+    "who is", "what is the price", "stock", "score",
 ]
 
 
@@ -86,14 +95,7 @@ class LLMRouter:
                 base_url=LM_STUDIO_URL,
             )
 
-        # Complexity estimation
-        complexity = self._estimate_complexity(message, session)
-        if complexity > 0.6 and self._anthropic:
-            return LLMConfig(
-                provider="anthropic", model=CLOUD_COMPLEX, temperature=0.7
-            )
-
-        # Default: fast local
+        # Default: gpt-oss-20b for all chat (casual + complex)
         if self._lmstudio_available:
             return LLMConfig(
                 provider="lmstudio",
@@ -108,6 +110,30 @@ class LLMRouter:
             )
 
         raise RuntimeError("No LLM backend available")
+
+    def needs_agent(self, message: str) -> bool:
+        """Determine if a message needs the agentic tool-use loop."""
+        if not self._lmstudio_available:
+            return False  # Need LM Studio for agent loop
+
+        lower = message.lower()
+        for signal in AGENT_SIGNALS:
+            if signal in lower:
+                return True
+
+        # Question marks about factual/current info
+        if "?" in message and any(
+            w in lower for w in ["who", "what", "where", "when", "how much", "how many"]
+        ):
+            # Check if it's about current/external info vs conversational
+            if any(w in lower for w in [
+                "you", "your", "klukai", "commander", "feel", "think about",
+                "opinion", "favorite", "like", "hate",
+            ]):
+                return False  # Conversational question, not a tool query
+            return True
+
+        return False
 
     def _estimate_complexity(self, message: str, session: SessionState) -> float:
         """Heuristic complexity score 0-1."""
@@ -162,6 +188,40 @@ class LLMRouter:
                     yield token
             else:
                 yield f"[Error: LLM unavailable - {e}]"
+
+    async def complete_local(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        config: LLMConfig,
+        tools: list[dict] | None = None,
+    ) -> dict:
+        """Non-streaming completion via LM Studio with optional tool-use.
+
+        Returns an OpenAI-compatible response dict with:
+        - choices[0].message.content (text)
+        - choices[0].message.tool_calls (list of tool calls, if any)
+        """
+        oai_messages = [{"role": "system", "content": system_prompt}] + messages
+
+        body: dict = {
+            "model": config.model,
+            "messages": oai_messages,
+            "max_tokens": config.max_tokens,
+            "temperature": config.temperature,
+            "stream": False,
+        }
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+
+        r = await self._http.post(
+            f"{config.base_url}/v1/chat/completions",
+            json=body,
+            timeout=120.0,
+        )
+        r.raise_for_status()
+        return r.json()
 
     def _get_fallback(self, failed: LLMConfig) -> LLMConfig | None:
         if failed.provider == "lmstudio" and self._anthropic:

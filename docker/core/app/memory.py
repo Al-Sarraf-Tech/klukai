@@ -22,7 +22,11 @@ QDRANT_URL = os.environ.get("QDRANT_URL", "http://aichat-vector:6333")
 SESSION_TTL = 4 * 3600  # 4 hours
 MAX_SESSION_TURNS = 20
 COLLECTION_NAME = "companion_episodes"
+MSG_COLLECTION_NAME = "companion_exchanges"
 EMBED_DIM = 768
+MSG_RECALL_LIMIT = 5
+MSG_MIN_SCORE = 0.35
+RECENCY_WEIGHT = 0.15
 
 
 class MemoryManager:
@@ -32,11 +36,13 @@ class MemoryManager:
         self._redis: redis.Redis | None = None
         self._http: httpx.AsyncClient | None = None
         self._collection_ready = False
+        self._msg_collection_ready = False
 
     async def init(self) -> None:
         self._redis = redis.from_url(REDIS_URL, decode_responses=True)
         self._http = httpx.AsyncClient(timeout=30.0)
         await self._ensure_qdrant_collection()
+        await self._ensure_msg_collection()
 
     async def close(self) -> None:
         if self._redis:
@@ -166,6 +172,129 @@ class MemoryManager:
             for hit in results
         ]
 
+    # ── Conversation Exchange Memory (Qdrant — per-exchange vectors) ────
+
+    async def _ensure_msg_collection(self) -> None:
+        """Create the companion_exchanges Qdrant collection if needed."""
+        if self._msg_collection_ready:
+            return
+        try:
+            r = await self._http.get(
+                f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}"
+            )
+            if r.status_code == 200:
+                self._msg_collection_ready = True
+                return
+        except httpx.HTTPError:
+            pass
+
+        try:
+            await self._http.put(
+                f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}",
+                json={
+                    "vectors": {"size": EMBED_DIM, "distance": "Cosine"},
+                },
+            )
+            # Create keyword index on topics for filtered search
+            await self._http.put(
+                f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/index",
+                json={"field_name": "topics", "field_schema": "keyword"},
+            )
+            self._msg_collection_ready = True
+            logger.info("Created Qdrant collection: %s", MSG_COLLECTION_NAME)
+        except httpx.HTTPError:
+            logger.warning("Failed to create msg collection, will retry later")
+
+    async def store_exchange(
+        self,
+        exchange_id: str,
+        user_content: str,
+        assistant_content: str,
+        topics: list[str],
+        mood: str = "composed",
+        importance: float = 0.5,
+        conversation_id: str | None = None,
+    ) -> None:
+        """Store a user+assistant exchange pair with vector embedding."""
+        combined = f"Commander: {user_content[:500]}\nKlukai: {assistant_content[:500]}"
+        vector = await self.embed_text(combined)
+
+        await self._http.put(
+            f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points",
+            json={
+                "points": [
+                    {
+                        "id": exchange_id,
+                        "vector": vector,
+                        "payload": {
+                            "user_content": user_content,
+                            "assistant_content": assistant_content,
+                            "topics": topics,
+                            "mood": mood,
+                            "importance": importance,
+                            "conversation_id": conversation_id,
+                            "created_at": datetime.now().isoformat(),
+                        },
+                    }
+                ]
+            },
+        )
+
+    async def recall_exchanges(
+        self, query: str, limit: int = MSG_RECALL_LIMIT, min_score: float = MSG_MIN_SCORE
+    ) -> list[dict]:
+        """Semantic search over past conversation exchanges."""
+        vector = await self.embed_text(query)
+        r = await self._http.post(
+            f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points/search",
+            json={
+                "vector": vector,
+                "limit": limit,
+                "score_threshold": min_score,
+                "with_payload": True,
+            },
+        )
+        if r.status_code != 200:
+            logger.warning("Exchange recall failed: %s", r.text)
+            return []
+        results = r.json().get("result", [])
+        return [
+            {
+                "user_content": hit["payload"]["user_content"],
+                "assistant_content": hit["payload"]["assistant_content"],
+                "topics": hit["payload"].get("topics", []),
+                "mood": hit["payload"].get("mood", "composed"),
+                "score": hit["score"],
+                "created_at": hit["payload"].get("created_at", ""),
+            }
+            for hit in results
+        ]
+
+    async def recall_exchanges_with_recency(
+        self, query: str, limit: int = MSG_RECALL_LIMIT
+    ) -> list[dict]:
+        """Recall exchanges with recency-weighted re-ranking."""
+        exchanges = await self.recall_exchanges(query, limit=limit * 2)
+        if not exchanges:
+            return []
+
+        now = datetime.now()
+        for ex in exchanges:
+            try:
+                created = datetime.fromisoformat(ex["created_at"])
+                days_ago = max(0, (now - created).total_seconds() / 86400)
+            except (ValueError, KeyError):
+                days_ago = 30  # fallback for missing dates
+
+            recency_factor = 1.0 / (1.0 + days_ago)
+            ex["final_score"] = (
+                (1 - RECENCY_WEIGHT) * ex["score"]
+                + RECENCY_WEIGHT * recency_factor
+            )
+
+        exchanges.sort(key=lambda x: x["final_score"], reverse=True)
+        return exchanges[:limit]
+
     # ── Tier 3: Factual Memory (aichat-data /memory) ────────────────────
 
     async def store_fact(self, key: str, value: str, ttl: int | None = None) -> None:
@@ -203,11 +332,33 @@ class MemoryManager:
     async def set_relationship_fact(self, key: str, value: str) -> None:
         await self.store_fact(f"rel:{key}", value)
 
+    # ── Milestone tracking ────────────────────────────────────────────────
+
+    async def record_milestone(self, milestone: str) -> bool:
+        """Record a relationship milestone. Returns True if new."""
+        existing = await self.recall_fact(f"milestone:{milestone}")
+        if existing:
+            return False
+        await self.store_fact(f"milestone:{milestone}", datetime.now().isoformat())
+        logger.info("New milestone recorded: %s", milestone)
+        return True
+
+    async def get_milestones(self) -> dict[str, str]:
+        """Get all recorded relationship milestones."""
+        entries = await self.recall_facts_by_pattern("milestone:%")
+        return {
+            e["key"].replace("companion:milestone:", ""): e["value"]
+            for e in entries
+        }
+
     # ── Combined recall for prompt building ──────────────────────────────
 
-    async def recall_for_prompt(self, query: str) -> tuple[list[str], dict]:
-        """Return (episodic_memories, relationship_facts) for prompt assembly."""
+    async def recall_for_prompt(
+        self, query: str
+    ) -> tuple[list[str], dict, list[dict]]:
+        """Return (episodic_memories, relationship_facts, recalled_exchanges)."""
         episodes = await self.recall_episodes(query, limit=5)
         episode_texts = [ep["summary"] for ep in episodes]
         facts = await self.get_relationship_facts()
-        return episode_texts, facts
+        exchanges = await self.recall_exchanges_with_recency(query, limit=MSG_RECALL_LIMIT)
+        return episode_texts, facts, exchanges

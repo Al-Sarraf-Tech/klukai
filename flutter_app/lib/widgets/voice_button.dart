@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../main.dart';
 
 class VoiceButton extends StatefulWidget {
   final VoidCallback? onTapDown;
@@ -68,15 +69,27 @@ class _VoiceButtonState extends State<VoiceButton>
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: widget.isRecording
-                    ? const Color(0xFFEF4444)
+                    ? GFL2Colors.danger
                     : widget.enabled
-                        ? const Color(0xFF7C3AED)
-                        : const Color(0xFF374151),
+                        ? GFL2Colors.primary.withValues(alpha: 0.15)
+                        : GFL2Colors.border,
+                border: Border.all(
+                  color: widget.isRecording
+                      ? GFL2Colors.danger
+                      : widget.enabled
+                          ? GFL2Colors.primary.withValues(alpha: 0.4)
+                          : GFL2Colors.border,
+                  width: 1.5,
+                ),
               ),
               child: Icon(
                 widget.isRecording ? Icons.stop : Icons.mic,
-                color: Colors.white,
-                size: 22,
+                color: widget.isRecording
+                    ? Colors.white
+                    : widget.enabled
+                        ? GFL2Colors.primary
+                        : GFL2Colors.textDim,
+                size: 20,
               ),
             ),
           );
