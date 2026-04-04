@@ -195,11 +195,14 @@ async def api_tts(req: dict):
         return JSONResponse({"error": "No text"}, status_code=400)
 
     voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
+    tts_text = _strip_actions_for_tts(text)
+    if not tts_text.strip():
+        return JSONResponse({"error": "No speakable text"}, status_code=400)
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(
                 f"{voice_url}/tts",
-                json={"text": text[:500], "language": req.get("language", "en")},
+                json={"text": tts_text[:500], "language": req.get("language", "en")},
             )
             if r.status_code == 200:
                 import base64
@@ -378,9 +381,17 @@ async def _handle_message(content: str, session: SessionState) -> None:
         logger.info("Routing to %s/%s", config.provider, config.model)
 
         full_response = []
+        buffer = ""
         async for token in router.stream(system_prompt, messages, config):
             full_response.append(token)
-            await ws.send_token(token)
+            buffer += token
+            # Flush on sentence boundaries or when buffer is large enough to catch patterns
+            if any(c in buffer for c in '.!?\n)') or len(buffer) > 80:
+                fixed = _fix_narration(buffer)
+                await ws.send_token(fixed)
+                buffer = ""
+        if buffer:
+            await ws.send_token(_fix_narration(buffer))
 
         response_text = _fix_narration("".join(full_response))
         model_name = config.model
@@ -557,14 +568,15 @@ async def _background_extraction(
 async def _background_tts(text: str) -> None:
     """Generate TTS audio and send via WebSocket."""
     voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
-    if not text.strip() or len(text) > 500:
-        return  # Skip very long responses to avoid TTS timeout
+    tts_text = _strip_actions_for_tts(text)
+    if not tts_text.strip() or len(tts_text) > 500:
+        return
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(
                 f"{voice_url}/tts",
-                json={"text": text[:500], "language": "en"},
+                json={"text": tts_text[:500], "language": "en"},
             )
             if r.status_code == 200:
                 import base64 as b64
@@ -588,16 +600,23 @@ def _chunk_text(text: str, chunk_size: int = 8) -> list[str]:
 def _fix_narration(text: str) -> str:
     """Fix second-person narration: convert (You ...) to (I ...) and strip Commander narration."""
     import re
-    # Convert "(You verb...)" to "(I verb...)" for Klukai's own actions
-    text = re.sub(
-        r'\(You ([a-z])',
-        lambda m: f'(I {m.group(1)}',
-        text,
-    )
+    # Convert "(You verb...)" to "(I verb...)"
+    text = re.sub(r'\(You ([a-z])', lambda m: f'(I {m.group(1)}', text)
     # Convert "(Your noun)" to "(My noun)"
     text = re.sub(r'\(Your ', '(My ', text)
-    # Fix "your" at start of parenthetical after conversion
     text = re.sub(r'\(your ', '(my ', text)
+    # Strip parentheticals that narrate Commander's actions/appearance
+    text = re.sub(r'\([^)]*(?:your face|your eyes|your expression|your mouth|crosses your|touches your)[^)]*\)', '', text)
+    # Clean up double spaces from removals
+    text = re.sub(r'  +', ' ', text)
+    return text
+
+
+def _strip_actions_for_tts(text: str) -> str:
+    """Remove all parenthetical actions from text for natural voice output."""
+    import re
+    text = re.sub(r'\([^)]*\)', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 
