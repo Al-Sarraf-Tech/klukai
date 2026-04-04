@@ -14,6 +14,7 @@ import '../widgets/mood_indicator.dart';
 import '../widgets/voice_button.dart';
 import '../widgets/affection_gauge.dart';
 import '../widgets/tool_status_indicator.dart';
+import '../widgets/canvas_message_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
   final String serverUrl;
@@ -540,7 +541,14 @@ class _ChatScreenState extends State<ChatScreen> {
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: _messages.length,
-      itemBuilder: (context, index) => MessageBubble(message: _messages[index]),
+      itemBuilder: (context, index) {
+        final msg = _messages[index];
+        // Use canvas bubble for finalized Klukai messages (markdown rendering)
+        if (msg.role == 'assistant' && !msg.isStreaming && PretextService.isReady) {
+          return CanvasMessageBubble(message: msg);
+        }
+        return MessageBubble(message: msg);
+      },
     );
   }
 

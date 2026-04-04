@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .affection import AffectionManager
 from .agent_loop import AgentLoop
+from .image_gen import generate_image
 from .fact_extractor import create_episode_summary, extract_facts
 from .llm_router import LLMRouter
 from .mcp_client import MCPClient
@@ -181,6 +182,26 @@ async def push_subscribe(sub: dict):
 async def get_affection():
     state = await affection.get_state()
     return state.model_dump(mode="json")
+
+
+# ── Image generation ────────────────────────────────────────────────────
+
+
+@app.post("/api/generate-image")
+async def api_generate_image(req: dict):
+    """Generate an image via ComfyUI."""
+    prompt = req.get("prompt", "")
+    if not prompt:
+        return JSONResponse({"error": "No prompt"}, status_code=400)
+
+    img_bytes = await generate_image(prompt)
+    if img_bytes:
+        import base64
+        return {
+            "image": base64.b64encode(img_bytes).decode(),
+            "format": "png",
+        }
+    return JSONResponse({"error": "Generation failed"}, status_code=500)
 
 
 # ── Conversation history ────────────────────────────────────────────────────

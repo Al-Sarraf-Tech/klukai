@@ -21,6 +21,7 @@ services:
       # LM Studio is local on dominus
       LM_STUDIO_URL: "http://host.docker.internal:1234"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      COMFYUI_URL: "http://host.docker.internal:8388"
       PERSONALITY_PATH: "/config/personality.yaml"
       VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY:-}"
       VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY:-}"
