@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:web/web.dart' as web;
 import '../main.dart';
 import '../models/message.dart';
 import '../models/companion_state.dart';
@@ -228,7 +229,11 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollToBottom();
 
       case 'voice_audio':
-        break;
+        // Play Klukai's voice via Web Audio
+        final audioData = msg['audio'] as String?;
+        if (audioData != null) {
+          _playAudio(audioData);
+        }
     }
   }
 
@@ -246,6 +251,16 @@ class _ChatScreenState extends State<ChatScreen> {
     _textController.clear();
     _focusNode.requestFocus();
     _scrollToBottom();
+  }
+
+  void _playAudio(String base64Audio) {
+    try {
+      final dataUrl = 'data:audio/wav;base64,$base64Audio';
+      final audio = web.HTMLAudioElement()..src = dataUrl;
+      audio.play();
+    } catch (e) {
+      debugPrint('Audio playback failed: $e');
+    }
   }
 
   void _prepareMessageLayout(int messageIndex) {

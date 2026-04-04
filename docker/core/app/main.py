@@ -355,6 +355,9 @@ async def _handle_message(content: str, session: SessionState) -> None:
     # Background: extract facts and create episodes
     asyncio.create_task(_background_extraction(content, response_text, session))
 
+    # Background: generate TTS audio for the response
+    asyncio.create_task(_background_tts(response_text))
+
 
 async def _handle_voice(audio_b64: str, session: SessionState) -> None:
     """Process voice: STT -> text -> LLM -> TTS -> audio."""
@@ -500,6 +503,32 @@ async def _background_extraction(
                 logger.info("Episode stored: %s", summary[:80])
     except Exception as e:
         logger.error("Background extraction failed: %s", e)
+
+
+# ── Background TTS ───────────────────────────────────────────────────────
+
+
+async def _background_tts(text: str) -> None:
+    """Generate TTS audio and send via WebSocket."""
+    voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
+    if not text.strip() or len(text) > 500:
+        return  # Skip very long responses to avoid TTS timeout
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                f"{voice_url}/tts",
+                json={"text": text[:500], "language": "en"},
+            )
+            if r.status_code == 200:
+                import base64 as b64
+                audio_b64 = b64.b64encode(r.content).decode()
+                await ws.send_voice(audio_b64, final=True)
+                logger.info("TTS audio sent (%d bytes)", len(r.content))
+            else:
+                logger.warning("TTS returned %d: %s", r.status_code, r.text[:100])
+    except Exception as e:
+        logger.debug("TTS unavailable: %s", e)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────

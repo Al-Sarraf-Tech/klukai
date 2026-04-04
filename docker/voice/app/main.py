@@ -1,13 +1,11 @@
-"""Companion Voice: Piper TTS + faster-whisper STT service."""
+"""Companion Voice: XTTS v2 voice-cloned TTS + faster-whisper STT."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import io
 import logging
 import os
-import subprocess
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,60 +20,57 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PIPER_VOICE = os.environ.get("PIPER_VOICE", "en_US-amy-medium")
+REFERENCE_WAV = os.environ.get("REFERENCE_WAV", "/app/reference/klukai_reference.wav")
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base.en")
 MODEL_DIR = Path("/app/models")
+TTS_ENGINE = os.environ.get("TTS_ENGINE", "xtts")
 
-# Globals
+_tts_model = None
 _whisper_model = None
+_tts_ready = False
 
 
-def _ensure_piper_voice() -> Path:
-    """Download Piper voice model if not present."""
-    voice_dir = MODEL_DIR / "piper"
-    voice_dir.mkdir(parents=True, exist_ok=True)
-    onnx_file = voice_dir / f"{PIPER_VOICE}.onnx"
-    json_file = voice_dir / f"{PIPER_VOICE}.onnx.json"
-
-    if onnx_file.exists() and json_file.exists():
-        return onnx_file
-
-    logger.info("Downloading Piper voice: %s", PIPER_VOICE)
-    base_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{PIPER_VOICE.replace('-', '/')}"
-
-    for fname, dest in [(f"{PIPER_VOICE}.onnx", onnx_file), (f"{PIPER_VOICE}.onnx.json", json_file)]:
-        # Construct the actual HuggingFace URL pattern for piper voices
-        quality = PIPER_VOICE.rsplit("-", 1)[-1]  # e.g., "medium"
-        lang = PIPER_VOICE.split("-")[0] + "_" + PIPER_VOICE.split("-")[1]  # e.g., "en_US"
-        name = "-".join(PIPER_VOICE.split("-")[2:-1])  # e.g., "amy"
-        url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{lang.replace('_', '/')}/{name}/{quality}/{fname}"
-
-        subprocess.run(
-            ["curl", "-sL", "-o", str(dest), url],
-            check=True,
-            timeout=120,
+def _load_xtts():
+    global _tts_model, _tts_ready
+    if _tts_model is not None:
+        return _tts_model
+    try:
+        os.environ["COQUI_TOS_AGREED"] = "1"
+        # XTTS checkpoints use pickle serialization — override weights_only default
+        # This is safe: we're loading the official Coqui XTTS v2 model from HuggingFace
+        import torch
+        _orig_load = torch.load
+        def _patched_load(*a, **kw):
+            kw["weights_only"] = False
+            return _orig_load(*a, **kw)
+        torch.load = _patched_load
+        from TTS.api import TTS
+        logger.info("Loading XTTS v2 model...")
+        _tts_model = TTS(
+            model_name="tts_models/multilingual/multi-dataset/xtts_v2",
+            gpu=True,
         )
-    logger.info("Piper voice downloaded: %s", onnx_file)
-    return onnx_file
+        _tts_ready = True
+        logger.info("XTTS v2 loaded (GPU)")
+        return _tts_model
+    except Exception as e:
+        logger.error("Failed to load XTTS v2: %s", e)
+        return None
 
 
 def _load_whisper():
-    """Load faster-whisper model."""
     global _whisper_model
     if _whisper_model is not None:
         return _whisper_model
-
     try:
         from faster_whisper import WhisperModel
         whisper_dir = MODEL_DIR / "whisper"
         whisper_dir.mkdir(parents=True, exist_ok=True)
         _whisper_model = WhisperModel(
-            WHISPER_MODEL,
-            device="cpu",
-            compute_type="int8",
+            WHISPER_MODEL, device="cpu", compute_type="int8",
             download_root=str(whisper_dir),
         )
-        logger.info("Whisper model loaded: %s", WHISPER_MODEL)
+        logger.info("Whisper loaded: %s", WHISPER_MODEL)
         return _whisper_model
     except Exception as e:
         logger.error("Failed to load Whisper: %s", e)
@@ -84,14 +79,14 @@ def _load_whisper():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _ensure_piper_voice()
+    if TTS_ENGINE == "xtts":
+        _load_xtts()
     _load_whisper()
-    logger.info("Companion voice service started")
+    logger.info("Voice service started (engine: %s)", TTS_ENGINE)
     yield
-    logger.info("Companion voice service stopped")
 
 
-app = FastAPI(title="Companion Voice", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Companion Voice", version="0.2.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -99,76 +94,55 @@ async def health():
     return {
         "status": "ok",
         "service": "companion-voice",
-        "piper_voice": PIPER_VOICE,
-        "whisper_model": WHISPER_MODEL,
+        "tts_engine": TTS_ENGINE,
+        "tts_ready": _tts_ready,
         "whisper_loaded": _whisper_model is not None,
     }
 
 
-# ── TTS ──────────────────────────────────────────────────────────────────────
-
-
 class TTSRequest(BaseModel):
     text: str
-    voice: str | None = None
+    language: str = "en"
 
 
 @app.post("/tts")
 async def text_to_speech(req: TTSRequest):
-    """Convert text to speech using Piper. Returns WAV audio."""
-    voice = req.voice or PIPER_VOICE
-    onnx_path = MODEL_DIR / "piper" / f"{voice}.onnx"
+    """Convert text to speech using XTTS v2 voice cloning."""
+    model = _load_xtts()
+    if model is None:
+        return Response(content=b"XTTS not loaded", status_code=503)
 
-    if not onnx_path.exists():
-        return Response(content=b"Voice model not found", status_code=404)
+    ref = Path(REFERENCE_WAV)
+    if not ref.exists():
+        return Response(content=b"Reference WAV not found", status_code=404)
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "piper",
-            "--model", str(onnx_path),
-            "--output-raw",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=req.text.encode()),
-            timeout=30.0,
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: model.tts_to_file(
+                text=req.text,
+                speaker_wav=str(ref),
+                language=req.language,
+                file_path=tmp_path,
+            ),
         )
 
-        if proc.returncode != 0:
-            logger.error("Piper failed: %s", stderr.decode())
-            return Response(content=b"TTS failed", status_code=500)
-
-        # Raw PCM -> WAV header
-        import struct
-        sample_rate = 22050
-        num_channels = 1
-        bits_per_sample = 16
-        data_size = len(stdout)
-        wav_header = struct.pack(
-            "<4sI4s4sIHHIIHH4sI",
-            b"RIFF", 36 + data_size, b"WAVE",
-            b"fmt ", 16, 1, num_channels,
-            sample_rate, sample_rate * num_channels * bits_per_sample // 8,
-            num_channels * bits_per_sample // 8, bits_per_sample,
-            b"data", data_size,
-        )
-        wav_data = wav_header + stdout
+        with open(tmp_path, "rb") as f:
+            wav_data = f.read()
+        os.unlink(tmp_path)
 
         return Response(content=wav_data, media_type="audio/wav")
-    except asyncio.TimeoutError:
-        return Response(content=b"TTS timeout", status_code=504)
-    except FileNotFoundError:
-        # Piper not installed, return error
-        return Response(content=b"Piper not installed", status_code=503)
-
-
-# ── STT ──────────────────────────────────────────────────────────────────────
+    except Exception as e:
+        logger.error("TTS failed: %s", e)
+        return Response(content=f"TTS failed: {e}".encode(), status_code=500)
 
 
 class STTRequest(BaseModel):
-    audio: str  # base64-encoded audio
+    audio: str
 
 
 @app.post("/stt")
@@ -176,23 +150,17 @@ async def speech_to_text(req: STTRequest):
     """Convert speech to text using faster-whisper."""
     model = _load_whisper()
     if model is None:
-        return {"text": "", "error": "Whisper model not loaded"}
+        return {"text": "", "error": "Whisper not loaded"}
 
     try:
         audio_bytes = base64.b64decode(req.audio)
-
         with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
             tmp.write(audio_bytes)
             tmp_path = tmp.name
-
         try:
             segments, info = model.transcribe(tmp_path, beam_size=5)
             text = " ".join(s.text for s in segments).strip()
-            return {
-                "text": text,
-                "language": info.language,
-                "duration": info.duration,
-            }
+            return {"text": text, "language": info.language, "duration": info.duration}
         finally:
             os.unlink(tmp_path)
     except Exception as e:
@@ -200,15 +168,12 @@ async def speech_to_text(req: STTRequest):
         return {"text": "", "error": str(e)}
 
 
-# ── File upload STT (alternative) ───────────────────────────────────────────
-
-
 @app.post("/stt/upload")
 async def stt_upload(audio: UploadFile = File(...)):
     """STT from file upload."""
     model = _load_whisper()
     if model is None:
-        return {"text": "", "error": "Whisper model not loaded"}
+        return {"text": "", "error": "Whisper not loaded"}
 
     try:
         with tempfile.NamedTemporaryFile(
@@ -218,15 +183,10 @@ async def stt_upload(audio: UploadFile = File(...)):
             content = await audio.read()
             tmp.write(content)
             tmp_path = tmp.name
-
         try:
             segments, info = model.transcribe(tmp_path, beam_size=5)
             text = " ".join(s.text for s in segments).strip()
-            return {
-                "text": text,
-                "language": info.language,
-                "duration": info.duration,
-            }
+            return {"text": text, "language": info.language, "duration": info.duration}
         finally:
             os.unlink(tmp_path)
     except Exception as e:

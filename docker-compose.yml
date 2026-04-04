@@ -44,17 +44,25 @@ services:
     build: ./docker/voice
     container_name: companion-voice
     environment:
-      PIPER_VOICE: "${PIPER_VOICE:-en_US-amy-medium}"
+      TTS_ENGINE: "xtts"
+      REFERENCE_WAV: "/app/reference/klukai_reference.wav"
       WHISPER_MODEL: "${WHISPER_MODEL:-base.en}"
     volumes:
       - voice-models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8301/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
 
 volumes:
   voice-models:

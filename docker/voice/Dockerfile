@@ -1,19 +1,40 @@
-FROM python:3.13-slim
+FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
 
 WORKDIR /app
 
+# Install Python 3.11 (Coqui TTS requires <3.12)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    ffmpeg \
+    software-properties-common curl ffmpeg libsndfile1 \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Piper TTS
-RUN pip install --no-cache-dir piper-tts
+# Create venv with Python 3.11
+RUN python3.11 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
+# Install PyTorch with CUDA
+RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu126
+
+# Install Coqui TTS (includes XTTS v2)
+# Pin transformers<4.46 to avoid BeamSearchScorer removal
+RUN pip install --no-cache-dir "transformers<4.46" "torchaudio<2.6" soundfile && pip install --no-cache-dir TTS
+
+# Install remaining deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Keep Piper as fallback
+RUN pip install --no-cache-dir piper-tts || true
+
+# Auto-accept Coqui TTS license + allow unsafe model loading (needed for XTTS checkpoints)
+ENV COQUI_TOS_AGREED=1
+ENV TORCH_FORCE_WEIGHTS_ONLY_LOAD=0
+
 COPY app/ ./app/
+COPY reference/ ./reference/
 
 EXPOSE 8301
 
