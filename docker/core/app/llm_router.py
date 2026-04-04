@@ -18,7 +18,7 @@ LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Model aliases
-LOCAL_CASUAL = "openai/gpt-oss-20b"                                    # Chat: best character fidelity
+LOCAL_CASUAL = "dolphin-mistral-glm-4.7-flash-24b-venice-edition-thinking-uncensored-i1"  # Chat: richest roleplay
 LOCAL_AGENT = "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2"     # Agent: Opus-level tool-use + reasoning
 LOCAL_TOOLS = LOCAL_AGENT                                               # Same as agent
 CLOUD_COMPLEX = "claude-sonnet-4-20250514"

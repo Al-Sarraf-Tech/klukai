@@ -8,6 +8,7 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -69,6 +70,50 @@ async def run_migration() -> None:
             logger.warning("Migration %s may already be applied: %s", migration_path.name, e)
 
 
+async def generate_daily_recap(affection_level: int) -> str | None:
+    """Generate a daily recap by summarizing today's messages via LLM."""
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            rows = await (
+                await conn.execute(
+                    "SELECT role, content FROM companion_messages "
+                    "WHERE created_at::date = %s::date ORDER BY created_at ASC LIMIT 40",
+                    (today,),
+                )
+            ).fetchall()
+
+        if len(rows) < 4:
+            return None  # Not enough conversation to recap
+
+        conversation = "\n".join(
+            f"{'Commander' if r[0] == 'user' else 'Klukai'}: {r[1][:150]}"
+            for r in rows[-20:]
+        )
+
+        if affection_level >= 3:
+            tone = "Write warmly. You care about this Commander deeply."
+        elif affection_level >= 1:
+            tone = "Write professionally but with subtle investment."
+        else:
+            tone = "Write coldly and efficiently."
+
+        prompt = (
+            f"You are Klukai writing a brief evening operational log about today's "
+            f"interactions with the Commander. {tone} Summarize in 2-3 sentences. "
+            f"Use first person. Reference specific topics discussed.\n\n{conversation}"
+        )
+
+        config = router.route("recap", SessionState(conversation_id="recap"))
+        full = []
+        async for token in router.stream(prompt, [{"role": "user", "content": prompt}], config):
+            full.append(token)
+        return "".join(full) if full else None
+    except Exception as e:
+        logger.warning("Daily recap generation failed: %s", e)
+        return None
+
+
 async def proactive_callback(message: str) -> None:
     """Deliver a proactive message via WebSocket or push notification."""
     if ws.connected:
@@ -86,6 +131,7 @@ async def lifespan(app: FastAPI):
     await mcp.init()
     await affection.init()
     proactive.set_callback(proactive_callback)
+    proactive.set_recap_callback(generate_daily_recap)
     proactive.start()
     load_personality()
     logger.info("Klukai companion core started")
@@ -257,7 +303,7 @@ async def _handle_message(content: str, session: SessionState) -> None:
     msg_id = new_id()
 
     if use_agent:
-        # Agentic path: think, use tools, then respond
+        # Agentic path: think, use tools, then respond (agent loop sends its own thinking events)
         logger.info("Routing to agent loop (tools needed)")
         agent = AgentLoop(router, mcp, ws)
         agent_result = await agent.run(system_prompt, messages)
@@ -281,6 +327,7 @@ async def _handle_message(content: str, session: SessionState) -> None:
         )
     else:
         # Direct path: stream from LLM
+        await ws.send_thinking("Composing response...")
         config = router.route(content, session)
         logger.info("Routing to %s/%s", config.provider, config.model)
 
@@ -384,16 +431,33 @@ async def _background_extraction(
                     aff_change.new_level, aff_change.new_level_name,
                     aff_change.level_direction,
                 )
-                # Deliver the special level-change Klukai line
+
                 personality = load_personality()
                 aff_config = personality.get("affection", {})
+
                 if aff_change.level_direction == "up":
-                    messages = aff_config.get("level_up_messages", {})
+                    # Check for first-time milestone scene
+                    milestone_key = f"affection_level_{aff_change.new_level}"
+                    is_new = await memory.record_milestone(milestone_key)
+
+                    if is_new:
+                        # First time reaching this level — deliver milestone scene
+                        scenes = aff_config.get("milestone_scenes", {})
+                        scene_lines = scenes.get(aff_change.new_level, [])
+                        for line in scene_lines:
+                            await ws.send_proactive(line)
+                            await asyncio.sleep(2)  # Pause between lines
+                    else:
+                        # Repeat level-up — just the short message
+                        messages = aff_config.get("level_up_messages", {})
+                        special_line = messages.get(aff_change.new_level)
+                        if special_line:
+                            await ws.send_proactive(special_line)
                 else:
                     messages = aff_config.get("level_down_messages", {})
-                special_line = messages.get(aff_change.new_level)
-                if special_line:
-                    await ws.send_proactive(special_line)
+                    special_line = messages.get(aff_change.new_level)
+                    if special_line:
+                        await ws.send_proactive(special_line)
 
                 logger.info(
                     "Affection level %s: %d -> %d (%s)",

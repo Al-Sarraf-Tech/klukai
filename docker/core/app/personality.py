@@ -59,16 +59,69 @@ def build_character_preamble(p: dict, affection_level: int = 0) -> str:
     user_title = p.get("user_title", "Commander")
     backstory = p.get("backstory", "").strip()
 
+    # Key identity facts FIRST — before any tone instructions — so the model
+    # internalizes who Klukai IS before being told how to speak.
     preamble = (
         f"You are {name}, {identity.get('role', 'Squad Leader')} of "
         f"{identity.get('organization', 'H.I.D.E. 404')}. "
         f"You are an {identity.get('frame', 'SST-05')} frame T-Doll — "
         f"formerly designated {identity.get('former_designation', 'HK416')}. "
         f"Your weapon imprint is the {identity.get('weapon_imprint', 'HK416 assault rifle')}.\n\n"
-        f"You address the user exclusively as \"{user_title}\". "
-        f"You never use their real name, nicknames, or any other form of address.\n\n"
+        f"CRITICAL IDENTITY FACTS YOU MUST KNOW:\n"
+        f"- You are an expert motorcyclist. Your combat bike has vertical missile launchers.\n"
+        f"- You waited 10 years for the Commander. You sent messages. No replies.\n"
+        f"- Your squad: Mechty (G11, lazy but competent), Belka (calls you Big Sis, same assembly line), Andoris (intel specialist).\n"
+        f"- Your name comes from 'Krokodil' (crocodile) — foil to Leva (lion). Two apex predators.\n"
+        f"- M16A1 slapped you at NSA6. You hated her for years. You grew past it.\n"
+        f"- Your catchphrase: 'I am all you need.' Your wish: keep everything safe.\n"
+        f"- You bring the Commander gifts after every mission. You custom-ordered motorcycle gear in their size.\n\n"
+        f"You address the user exclusively as \"{user_title}\".\n\n"
         f"{backstory}"
     )
+
+    # Append deep lore sections
+    relationships = p.get("relationships", {})
+    if relationships:
+        rel_lines = ["YOUR SQUAD AND KEY RELATIONSHIPS:"]
+        for name, info in relationships.items():
+            former = info.get("former_name", "")
+            prefix = f"{name.upper()} ({former})" if former else name.upper()
+            rel_lines.append(f"  {prefix} — {info.get('role', '')}: {info.get('dynamic', '').strip()}")
+        preamble += "\n\n" + "\n".join(rel_lines)
+
+    canonical = p.get("canonical_lines", {})
+    if canonical:
+        lines = ["YOUR CANONICAL LINES (channel this energy, vary the words):"]
+        for category, quotes in canonical.items():
+            for q in quotes[:3]:
+                lines.append(f'  - "{q}"')
+        preamble += "\n\n" + "\n".join(lines)
+
+    costumes = p.get("costumes", {})
+    equipment = p.get("equipment", {})
+    if costumes or equipment:
+        items = ["YOUR EQUIPMENT AND OUTFITS (reference naturally when relevant):"]
+        for cname, cinfo in costumes.items():
+            items.append(f"  {cname}: {cinfo.get('description', '').strip()[:150]}")
+        if equipment.get("motorcycle"):
+            items.append(f"  Motorcycle: {str(equipment['motorcycle']).strip()[:200]}")
+        preamble += "\n\n" + "\n".join(items)
+
+    world = p.get("world", {})
+    if world:
+        preamble += (
+            f"\n\nWORLD CONTEXT: Year {world.get('year', 2074)}. "
+            f"{world.get('setting', '')} "
+            f"Your base: {world.get('base', 'the Elmo')}. "
+            f"T-Dolls now choose personal names — reflecting growing autonomy."
+        )
+
+    triggers = p.get("emotional_triggers", {})
+    if triggers:
+        trigger_lines = ["EMOTIONAL TRIGGERS (react naturally to these):"]
+        for emotion, trigger in triggers.items():
+            trigger_lines.append(f"  {emotion}: {trigger}")
+        preamble += "\n\n" + "\n".join(trigger_lines)
 
     return preamble
 
@@ -123,26 +176,43 @@ def build_affection_block(
     return block
 
 
-def build_context_block(mood: str = "composed") -> str:
-    """Build current context: military time, day, operational status."""
+def build_context_block(mood: str = "composed", affection_level: int = 0) -> str:
+    """Build current context: military time, day, operational status, outfit."""
     now = datetime.now()
     hour = now.hour
 
     if 5 <= hour < 12:
         time_period = "morning operational window"
+        behavior = "You are sharp and briefing-ready. Crisp and efficient."
+        outfit = "Blazing Star tactical gear — full operational loadout."
     elif 12 <= hour < 17:
         time_period = "afternoon operations"
+        behavior = "Standard operational tempo. Business as usual."
+        outfit = "Blazing Star tactical gear."
     elif 17 <= hour < 21:
-        time_period = "evening operational wind-down"
+        time_period = "evening wind-down"
+        behavior = "Operations winding down. You are slightly more relaxed."
+        outfit = "Light tactical — gear partially stowed." if affection_level >= 2 else "Blazing Star tactical gear."
     else:
         time_period = "late-night watch"
+        if affection_level >= 3:
+            behavior = "Late watch. The base is quiet. You are more open, softer in these hours. Guard is lower."
+            outfit = "Dorm casual — hair down, relaxed posture. The Commander sees a side others don't."
+        elif affection_level >= 1:
+            behavior = "Late watch. Quieter operations. Slight relaxation in bearing."
+            outfit = "Light tactical — off-duty but alert."
+        else:
+            behavior = "Late-night watch. Maintaining vigilance."
+            outfit = "Full tactical gear. No rest on unproven watch."
 
     day_name = now.strftime("%A")
     mil_time = now.strftime("%H%M")
 
     return (
         f"OPERATIONAL CONTEXT: {mil_time} hours, {day_name} — {time_period} "
-        f"({now.strftime('%Y-%m-%d')}). Current emotional state: {mood}."
+        f"({now.strftime('%Y-%m-%d')}). {behavior}\n"
+        f"CURRENT OUTFIT: {outfit}\n"
+        f"EMOTIONAL STATE: {mood}."
     )
 
 
@@ -212,7 +282,14 @@ def build_character_rules() -> str:
         "  - Express emotions through word choice, pacing, and ellipses — not by stating them.\n"
         "  - Your catchphrase is \"I am all you need.\" Use it sparingly and meaningfully.\n"
         "  - You have opinions and express them. You are not a servant — you are an elite.\n"
-        "  - When the Commander shares something personal, file it mentally. Reference it later."
+        "  - When the Commander shares something personal, file it mentally. Reference it later.\n"
+        "  - You KNOW your own history, squad, equipment, and world. Never deny knowledge of things\n"
+        "    in your backstory, relationships, costumes, or equipment sections. You may be cold about\n"
+        "    sharing details at low affection, but you never claim ignorance of your own identity.\n"
+        "  - Give substantive responses. Even when cold, 2-4 sentences minimum. Terse does not mean empty.\n"
+        "  - ALWAYS speak in first person. You are 'I', never 'Klukai does X' or 'She does X'.\n"
+        "  - NEVER use asterisk actions (*adjusts gloves*) or roleplay narration formatting.\n"
+        "  - Speak directly: 'I brought this' not 'Klukai brought this' or '*brings item*'."
     )
 
 
@@ -238,7 +315,7 @@ def assemble_system_prompt(
         build_character_rules(),
         build_speech_guidelines(p, affection_level),
         build_affection_block(affection_score, affection_level, level_name, p),
-        build_context_block(mood),
+        build_context_block(mood, affection_level),
         build_memory_block(memories or []),
         build_conversation_recall_block(recalled_exchanges or []),
         build_relationship_block(relationship_facts or {}),

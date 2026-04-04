@@ -22,25 +22,27 @@ DAILY_POINTS_CAP = 15
 MAX_SCORE = 100
 
 CLASSIFICATION_PROMPT = """\
-Given this exchange between Klukai (an elite T-Doll squad leader) and her Commander,
-classify the Commander's behavior in this interaction.
+Classify ONLY the Commander's message below. Ignore Klukai's response tone entirely.
+The Commander is talking to a cold military character — direct or casual language is NORMAL.
 
 Choose ONE type and rate intensity (1-10):
-- "greeting": Simple hello/goodbye/check-in
-- "genuine_interest": Asking about Klukai, her missions, her squad, her wellbeing
-- "personal_sharing": Commander sharing personal details, trusting Klukai with information
-- "compliment": Sincere praise, admiration, or appreciation of Klukai
-- "mission_discussion": Tactical, operational, or strategic conversation
-- "remembering": Recalling something Klukai previously said or a shared memory
-- "rude": Disrespectful, dismissive, or demeaning language toward Klukai
-- "inappropriate": Sexually inappropriate, objectifying, or degrading
-- "ignoring_advice": Explicitly dismissing Klukai's counsel or recommendations
-- "neutral": Normal conversation that doesn't fit the above categories
+- "greeting": Hello, goodbye, check-in, how are you (intensity 1-3)
+- "genuine_interest": Asking about Klukai, her missions, squad, wellbeing, history (intensity 1-5)
+- "personal_sharing": Commander sharing personal details or feelings (intensity 1-5)
+- "compliment": Praise, admiration, appreciation of Klukai (intensity 3-8)
+- "mission_discussion": Tactical, operational, strategic, or factual conversation (intensity 1-5)
+- "remembering": Recalling something from a previous conversation (intensity 3-5)
+- "rude": ONLY explicit insults, slurs, "shut up", "you're useless", "I don't need you" (intensity 5-10)
+- "inappropriate": ONLY sexually explicit, objectifying, or degrading content (intensity 5-10)
+- "ignoring_advice": ONLY explicitly saying "no I won't do that" to Klukai's direct counsel (intensity 3-5)
+- "neutral": Normal conversation, questions, small talk (intensity 1-3)
+
+IMPORTANT: When in doubt, classify as "neutral" or "genuine_interest". Short messages, questions,
+and casual conversation are NEVER "rude". Only classify as "rude" if the Commander is clearly hostile.
 
 Return ONLY valid JSON: {{"type": "...", "intensity": N}}
 
-Commander: {user_message}
-Klukai: {assistant_message}
+Commander's message: {user_message}
 """
 
 
@@ -119,9 +121,8 @@ class AffectionManager:
             self._state = AffectionState()
 
     async def get_state(self) -> AffectionState:
-        """Get current affection state."""
-        if self._state is None:
-            await self._load_state()
+        """Get current affection state — always reads from DB for consistency."""
+        await self._load_state()
         return self._state
 
     def _compute_level(self, score: int) -> tuple[int, str]:
@@ -164,6 +165,10 @@ class AffectionManager:
 
         # Calculate delta based on type and intensity
         delta = self._calculate_delta(interaction_type, intensity)
+
+        # Cap negative deltas to prevent score destruction
+        if delta < 0:
+            delta = max(delta, -3)  # Max single penalty: -3
 
         # Apply daily cap (only for positive changes)
         if delta > 0:
@@ -214,10 +219,9 @@ class AffectionManager:
     async def _classify_interaction(
         self, user_message: str, assistant_message: str
     ) -> tuple[str, int]:
-        """Use LLM to classify the interaction type and intensity."""
+        """Use LLM to classify the Commander's message type and intensity."""
         prompt = CLASSIFICATION_PROMPT.format(
             user_message=user_message[:500],
-            assistant_message=assistant_message[:500],
         )
 
         try:

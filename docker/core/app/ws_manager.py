@@ -30,6 +30,8 @@ class WSManager:
                 pass
         self._ws = ws
         logger.info("WebSocket connected")
+        # Send handshake so the client confirms the link is active
+        await self.send({"type": "connected", "status": "ok"})
 
     async def disconnect(self) -> None:
         self._ws = None

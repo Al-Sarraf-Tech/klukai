@@ -135,11 +135,16 @@ class ProactiveEngine:
         self._last_proactive_answered: bool = True
         self._muted_until: datetime | None = None
         self._on_message_callback = None
+        self._on_recap_callback = None  # async fn(prompt) -> str for LLM recap generation
         self._affection_level: int = 0
 
     def set_callback(self, callback) -> None:
         """Set callback for delivering proactive messages."""
         self._on_message_callback = callback
+
+    def set_recap_callback(self, callback) -> None:
+        """Set callback for generating daily recap (calls LLM)."""
+        self._on_recap_callback = callback
 
     def set_affection_level(self, level: int) -> None:
         """Update the current affection level for message selection."""
@@ -175,6 +180,14 @@ class ProactiveEngine:
             self._mission_report,
             CronTrigger(hour=14, minute=45),
             id="mission_report",
+            replace_existing=True,
+        )
+
+        # Daily recap at 2100
+        self._scheduler.add_job(
+            self._daily_recap,
+            CronTrigger(hour=21, minute=0),
+            id="daily_recap",
             replace_existing=True,
         )
 
@@ -257,6 +270,23 @@ class ProactiveEngine:
         # 50% chance of a mission report on any given day
         if random.random() < 0.5:
             await self._deliver(self._pick_message(MISSION_REPORTS))
+
+    async def _daily_recap(self) -> None:
+        """Generate and deliver a daily recap from Klukai's perspective."""
+        if not self._on_recap_callback or not self._on_message_callback:
+            return
+        if not self._can_send():
+            return
+
+        try:
+            recap = await self._on_recap_callback(self._affection_level)
+            if recap:
+                self._proactive_count_today += 1
+                self._last_proactive_answered = False
+                await self._on_message_callback(recap)
+                logger.info("Daily recap delivered")
+        except Exception as e:
+            logger.warning("Daily recap failed: %s", e)
 
     async def _reset_daily(self) -> None:
         self._proactive_count_today = 0

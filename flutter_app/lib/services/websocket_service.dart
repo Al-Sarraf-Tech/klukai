@@ -23,10 +23,14 @@ class WebSocketService {
   void _doConnect() {
     try {
       _channel = WebSocketChannel.connect(Uri.parse(_url));
-      _connectionController.add(true);
+      bool confirmed = false;
 
       _channel!.stream.listen(
         (data) {
+          if (!confirmed) {
+            confirmed = true;
+            _connectionController.add(true);
+          }
           try {
             final msg = jsonDecode(data as String) as Map<String, dynamic>;
             _messageController.add(msg);

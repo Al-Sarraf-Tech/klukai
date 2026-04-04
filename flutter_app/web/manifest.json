@@ -1,11 +1,11 @@
 {
-    "name": "Companion",
-    "short_name": "Companion",
+    "name": "Klukai — H.I.D.E. 404",
+    "short_name": "Klukai",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0D1117",
-    "theme_color": "#7C3AED",
-    "description": "Personal AI Companion",
+    "background_color": "#12151E",
+    "theme_color": "#4FC3F7",
+    "description": "H.I.D.E. 404 Neural Link — Commander Interface",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
