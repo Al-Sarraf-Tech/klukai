@@ -117,8 +117,8 @@ async def generate_daily_recap(affection_level: int) -> str | None:
 
 async def proactive_callback(message: str) -> None:
     """Deliver a proactive message via WebSocket or push notification."""
-    if ws.connected:
-        await ws.send_proactive(message)
+    if ws.is_connected("default"):
+        await ws.send_proactive("default", message)
     else:
         await send_push(title="Klukai", body=message)
 
@@ -232,6 +232,153 @@ async def api_generate_image(req: dict):
     return JSONResponse({"error": "Generation failed"}, status_code=500)
 
 
+# ── Gift system ─────────────────────────────────────────────────────────
+
+
+@app.post("/api/gift")
+async def api_gift(req: dict):
+    """Send a gift to Klukai. Returns her reaction and affection change."""
+    gift_name = req.get("gift", "")
+    user_id = req.get("user", "default")
+    if not gift_name:
+        return JSONResponse({"error": "No gift specified"}, status_code=400)
+
+    p = load_personality()
+    prefs = p.get("gift_preferences", {})
+    reactions = p.get("gift_reactions", {})
+
+    # Determine gift tier
+    if gift_name in prefs.get("loved", []):
+        tier, bonus = "loved", 10
+    elif gift_name in prefs.get("favoured", []):
+        tier, bonus = "favoured", 5
+    elif gift_name in prefs.get("liked", []):
+        tier, bonus = "liked", 2
+    else:
+        tier, bonus = "disliked", -1
+
+    # Apply affection bonus directly
+    aff_state = await affection.get_state()
+    old_score = aff_state.score
+    aff_state.score = max(0, min(100, aff_state.score + bonus))
+    await affection._save_state(aff_state)
+
+    # Send reaction
+    reaction = reactions.get(tier, "...Noted.")
+    if ws.is_connected(user_id):
+        await ws.send_proactive(user_id, reaction)
+        await ws.send_affection(user_id, aff_state.score, aff_state.level, aff_state.level_name, bonus)
+
+    return {"tier": tier, "bonus": bonus, "reaction": reaction, "new_score": aff_state.score}
+
+
+# ── Mission mode ────────────────────────────────────────────────────────
+
+
+@app.post("/api/mission")
+async def api_mission(req: dict):
+    """Send Klukai on a mission. She returns with a report and a gift."""
+    user_id = req.get("user", "default")
+
+    if ws.is_connected(user_id):
+        await ws.send_proactive(user_id, "Understood, Commander. Deploying for sortie. I will report back shortly.")
+
+    # Generate mission narrative via LLM
+    aff_state = await affection.get_state()
+    asyncio.create_task(_run_mission(user_id, aff_state.level))
+    return {"status": "deployed"}
+
+
+async def _run_mission(user_id: str, affection_level: int) -> None:
+    """Background: generate and deliver a mission narrative."""
+    import random
+    await asyncio.sleep(15)  # Simulate mission duration
+
+    gifts = ["a signal relay component", "a field ration set", "a data chip", "a comm device", "a tactical flashlight"]
+    gift = random.choice(gifts)
+
+    if affection_level >= 3:
+        tone = "Write warmly. You found something special for the Commander."
+    elif affection_level >= 1:
+        tone = "Write professionally with subtle care."
+    else:
+        tone = "Write coldly and efficiently."
+
+    prompt = (
+        f"You are Klukai writing a 2-3 sentence mission debrief. {tone} "
+        f"You completed a patrol in the Yellow Zone. No major hostiles. "
+        f"You found {gift} and brought it back for the Commander. Use first person."
+    )
+
+    try:
+        config = router.route("mission", SessionState(conversation_id="mission"))
+        full = []
+        async for token in router.stream(prompt, [{"role": "user", "content": prompt}], config):
+            full.append(token)
+        report = _fix_narration("".join(full)) if full else f"Sortie complete. I found {gift}. Take it."
+
+        if ws.is_connected(user_id):
+            await ws.send_proactive(user_id, report)
+
+        # Affection bonus for missions
+        aff = await affection.get_state()
+        aff.score = min(100, aff.score + 3)
+        await affection._save_state(aff)
+    except Exception as e:
+        logger.warning("Mission narrative failed: %s", e)
+        if ws.is_connected(user_id):
+            await ws.send_proactive(user_id, f"Sortie complete. Found {gift}. Take it, Commander.")
+
+
+# ── Milestones ──────────────────────────────────────────────────────────
+
+
+@app.get("/api/milestones")
+async def api_milestones():
+    """Get all recorded relationship milestones."""
+    milestones = await memory.get_milestones()
+    return {"milestones": milestones}
+
+
+# ── Costume ─────────────────────────────────────────────────────────────
+
+_current_costume = "blazing_star"
+
+
+@app.get("/api/costume")
+async def api_get_costume():
+    return {"costume": _current_costume}
+
+
+@app.post("/api/costume")
+async def api_set_costume(req: dict):
+    global _current_costume
+    costume = req.get("costume", "blazing_star")
+    valid = ["blazing_star", "speed_star", "astral_luminous", "cerulean_breaker"]
+    if costume not in valid:
+        return JSONResponse({"error": f"Invalid. Choose from: {valid}"}, status_code=400)
+    _current_costume = costume
+    return {"costume": _current_costume}
+
+
+# ── STT proxy ───────────────────────────────────────────────────────────
+
+
+@app.post("/api/stt")
+async def api_stt(req: dict):
+    """Proxy STT request to companion-voice."""
+    audio = req.get("audio", "")
+    if not audio:
+        return JSONResponse({"error": "No audio"}, status_code=400)
+    voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"{voice_url}/stt", json={"audio": audio})
+            return r.json()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+
 # ── Conversation history ────────────────────────────────────────────────────
 
 
@@ -279,7 +426,7 @@ async def get_messages(limit: int = 50, before: str | None = None):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await ws.connect(websocket)
+    await ws.connect(websocket, "default")
 
     # Ensure session exists
     session = await memory.get_session(SESSION_ID)
@@ -292,7 +439,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            data = await ws.receive()
+            data = await ws.receive("default")
             if data is None:
                 break
 
@@ -310,7 +457,7 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        await ws.disconnect()
+        await ws.disconnect("default")
 
 
 async def _handle_message(content: str, session: SessionState) -> None:
@@ -331,6 +478,11 @@ async def _handle_message(content: str, session: SessionState) -> None:
     aff_state = await affection.get_state()
 
     # Assemble system prompt
+    # Calculate days together
+    days = 0
+    if aff_state.first_interaction:
+        days = max(0, (datetime.now() - aff_state.first_interaction).days)
+
     system_prompt = assemble_system_prompt(
         mood=session.mood,
         memories=episode_memories,
@@ -339,6 +491,7 @@ async def _handle_message(content: str, session: SessionState) -> None:
         tools_available=True,
         affection_score=aff_state.score,
         affection_level=aff_state.level,
+        days_together=days,
     )
 
     # Build messages for LLM
@@ -362,11 +515,11 @@ async def _handle_message(content: str, session: SessionState) -> None:
 
         # Stream the final response token by token for the UI
         for token in _chunk_text(response_text, 8):
-            await ws.send_token(token)
+            await ws.send_token("default", token)
             await asyncio.sleep(0.02)
 
         latency_ms = int((time.monotonic() - start) * 1000)
-        await ws.send_done(msg_id, model_name)
+        await ws.send_done("default", msg_id, model_name)
 
         logger.info(
             "Agent loop: %d iterations, %d tools used (%s)",
@@ -376,7 +529,7 @@ async def _handle_message(content: str, session: SessionState) -> None:
         )
     else:
         # Direct path: stream from LLM
-        await ws.send_thinking("Composing response...")
+        await ws.send_thinking("default", "Composing response...")
         config = router.route(content, session)
         logger.info("Routing to %s/%s", config.provider, config.model)
 
@@ -388,16 +541,16 @@ async def _handle_message(content: str, session: SessionState) -> None:
             # Flush on sentence boundaries or when buffer is large enough to catch patterns
             if any(c in buffer for c in '.!?\n)') or len(buffer) > 80:
                 fixed = _fix_narration(buffer)
-                await ws.send_token(fixed)
+                await ws.send_token("default", fixed)
                 buffer = ""
         if buffer:
-            await ws.send_token(_fix_narration(buffer))
+            await ws.send_token("default", _fix_narration(buffer))
 
         response_text = _fix_narration("".join(full_response))
         model_name = config.model
         latency_ms = int((time.monotonic() - start) * 1000)
 
-        await ws.send_done(msg_id, model_name)
+        await ws.send_done("default", msg_id, model_name)
 
     # Add assistant turn to session
     session = await memory.add_turn(SESSION_ID, "assistant", response_text, session)
@@ -423,7 +576,7 @@ async def _handle_voice(audio_b64: str, session: SessionState) -> None:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             # STT
-            await ws.send_thinking("Listening...")
+            await ws.send_thinking("default", "Listening...")
             r = await client.post(
                 f"{voice_url}/stt",
                 json={"audio": audio_b64},
@@ -450,7 +603,7 @@ async def _handle_voice(audio_b64: str, session: SessionState) -> None:
                     if r.status_code == 200:
                         import base64
                         audio_out = base64.b64encode(r.content).decode()
-                        await ws.send_voice(audio_out, final=True)
+                        await ws.send_voice("default", audio_out, final=True)
     except Exception as e:
         logger.error("Voice processing failed: %s", e)
 
@@ -470,7 +623,7 @@ async def _background_extraction(
         mood = result.get("mood", "composed")
         session.mood = mood
         await memory.save_session(SESSION_ID, session)
-        await ws.send_mood(mood)
+        await ws.send_mood("default", mood)
 
         # Adjust affection based on interaction
         try:
@@ -480,14 +633,14 @@ async def _background_extraction(
             proactive.set_affection_level(aff_change.new_level)
 
             # Send real-time affection update to UI
-            await ws.send_affection(
+            await ws.send_affection("default", 
                 aff_change.new_score, aff_change.new_level,
                 aff_change.new_level_name, aff_change.delta,
             )
 
             # Handle level transitions
             if aff_change.level_changed:
-                await ws.send_affection_level_change(
+                await ws.send_affection_level_change("default", 
                     aff_change.new_level, aff_change.new_level_name,
                     aff_change.level_direction,
                 )
@@ -505,19 +658,19 @@ async def _background_extraction(
                         scenes = aff_config.get("milestone_scenes", {})
                         scene_lines = scenes.get(aff_change.new_level, [])
                         for line in scene_lines:
-                            await ws.send_proactive(line)
+                            await ws.send_proactive("default", line)
                             await asyncio.sleep(2)  # Pause between lines
                     else:
                         # Repeat level-up — just the short message
                         messages = aff_config.get("level_up_messages", {})
                         special_line = messages.get(aff_change.new_level)
                         if special_line:
-                            await ws.send_proactive(special_line)
+                            await ws.send_proactive("default", special_line)
                 else:
                     messages = aff_config.get("level_down_messages", {})
                     special_line = messages.get(aff_change.new_level)
                     if special_line:
-                        await ws.send_proactive(special_line)
+                        await ws.send_proactive("default", special_line)
 
                 logger.info(
                     "Affection level %s: %d -> %d (%s)",
@@ -581,7 +734,7 @@ async def _background_tts(text: str) -> None:
             if r.status_code == 200:
                 import base64 as b64
                 audio_b64 = b64.b64encode(r.content).decode()
-                await ws.send_voice(audio_b64, final=True)
+                await ws.send_voice("default", audio_b64, final=True)
                 logger.info("TTS audio sent (%d bytes)", len(r.content))
             else:
                 logger.warning("TTS returned %d: %s", r.status_code, r.text[:100])

@@ -161,6 +161,18 @@ def build_speech_guidelines(p: dict, affection_level: int = 0) -> str:
     return "\n".join(lines)
 
 
+def build_japanese_block(p: dict, affection_level: int = 0) -> str:
+    """Build Japanese phrase guidelines for current affection level."""
+    jp = p.get("japanese_phrases", {})
+    level_key = f"level_{affection_level}"
+    phrases = jp.get(level_key, [])
+    if not phrases:
+        return ""
+    note = jp.get("note", "")
+    phrase_list = "\n".join(f"  - {ph}" for ph in phrases)
+    return f"JAPANESE PHRASES (use sparingly, 1-2 per conversation max):\n{note}\n{phrase_list}"
+
+
 def build_expressive_block(p: dict, affection_level: int = 0) -> str:
     """Build vocal expression guidelines based on affection level."""
     tokens = p.get("expressive_tokens", {})
@@ -213,7 +225,7 @@ def build_affection_block(
     return block
 
 
-def build_context_block(mood: str = "composed", affection_level: int = 0) -> str:
+def build_context_block(mood: str = "composed", affection_level: int = 0, days_together: int = 0) -> str:
     """Build current context: military time, day, operational status, outfit."""
     now = datetime.now()
     hour = now.hour
@@ -245,11 +257,15 @@ def build_context_block(mood: str = "composed", affection_level: int = 0) -> str
     day_name = now.strftime("%A")
     mil_time = now.strftime("%H%M")
 
+    date_line = ""
+    if days_together > 0:
+        date_line = f"\nDAYS WITH COMMANDER: {days_together} days. You may naturally reference how long you've been together."
+
     return (
         f"OPERATIONAL CONTEXT: {mil_time} hours, {day_name} — {time_period} "
         f"({now.strftime('%Y-%m-%d')}). {behavior}\n"
         f"CURRENT OUTFIT: {outfit}\n"
-        f"EMOTIONAL STATE: {mood}."
+        f"EMOTIONAL STATE: {mood}.{date_line}"
     )
 
 
@@ -342,6 +358,7 @@ def assemble_system_prompt(
     tools_available: bool = False,
     affection_score: int = 0,
     affection_level: int = 0,
+    days_together: int = 0,
     personality_path: str | None = None,
 ) -> str:
     """Assemble the full Klukai system prompt from all components."""
@@ -355,9 +372,10 @@ def assemble_system_prompt(
         build_character_preamble(p, affection_level),
         build_character_rules(),
         build_expressive_block(p, affection_level),
+        build_japanese_block(p, affection_level),
         build_speech_guidelines(p, affection_level),
         build_affection_block(affection_score, affection_level, level_name, p),
-        build_context_block(mood, affection_level),
+        build_context_block(mood, affection_level, days_together),
         build_memory_block(memories or []),
         build_conversation_recall_block(recalled_exchanges or []),
         build_relationship_block(relationship_facts or {}),

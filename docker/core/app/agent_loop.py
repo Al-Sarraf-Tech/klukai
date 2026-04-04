@@ -77,7 +77,7 @@ class AgentLoop:
         # Build working message history (copy to avoid mutating caller's list)
         work_messages = list(messages)
 
-        await self._ws.send_thinking("Analyzing request...")
+        await self._ws.send_thinking("default", "Analyzing request...")
 
         for iteration in range(MAX_ITERATIONS):
             result.iterations = iteration + 1
@@ -145,7 +145,7 @@ class AgentLoop:
                 ))
 
                 # Notify UI
-                await self._ws.send_tool_use(tool_name, "calling")
+                await self._ws.send_tool_use("default", tool_name, "calling")
 
                 # Invoke the MCP tool
                 try:
@@ -170,7 +170,7 @@ class AgentLoop:
                     tool_result=tool_result,
                 ))
 
-                await self._ws.send_tool_use(tool_name, "done")
+                await self._ws.send_tool_use("default", tool_name, "done")
 
                 # Append tool result in OpenAI format (truncated to avoid slow inference)
                 work_messages.append({
@@ -190,7 +190,7 @@ class AgentLoop:
         # force a synthesis call with no tools so the model MUST respond with text
         if not result.response:
             try:
-                await self._ws.send_thinking("Compiling briefing...")
+                await self._ws.send_thinking("default", "Compiling briefing...")
                 final = await self._router.complete_local(
                     system_prompt, work_messages, config, tools=None,
                 )
