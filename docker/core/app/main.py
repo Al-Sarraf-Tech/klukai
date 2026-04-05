@@ -812,7 +812,10 @@ def _fix_narration(text: str) -> str:
     # Strip parentheticals that narrate Commander's actions/appearance
     text = re.sub(r'\([^)]*(?:your face|your eyes|your expression|your mouth|crosses your|touches your)[^)]*\)', '', text)
     # Strip trailing pipe characters (dolphin-glm reasoning artifact)
-    text = text.rstrip('| \n')
+    # Only strip pipes, not newlines (newlines are paragraph formatting)
+    while text.endswith('|'):
+        text = text[:-1]
+    text = text.rstrip(' ')
     # Clean up double spaces from removals
     text = re.sub(r'  +', ' ', text)
     return text
