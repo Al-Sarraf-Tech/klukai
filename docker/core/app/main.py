@@ -574,13 +574,12 @@ async def _handle_message(content: str, session: SessionState) -> None:
     # Background: extract facts and create episodes
     asyncio.create_task(_background_extraction(content, response_text, session))
 
-    # Background: generate TTS audio for the response
-    asyncio.create_task(_background_tts(response_text))
-
-    # Background: generate image if the message requested one
-    if needs_image(content):
-        logger.info("Image generation triggered for: %s", content[:80])
-        asyncio.create_task(_background_image_gen(content))
+    # Background tasks — only if main LLM succeeded (not a fallback error)
+    if not response_text.startswith("Communications disrupted"):
+        asyncio.create_task(_background_tts(response_text))
+        if needs_image(content):
+            logger.info("Image generation triggered for: %s", content[:80])
+            asyncio.create_task(_background_image_gen(content))
 
 
 async def _handle_voice(audio_b64: str, session: SessionState) -> None:

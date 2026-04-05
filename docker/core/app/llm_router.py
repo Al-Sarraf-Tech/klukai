@@ -180,14 +180,14 @@ class LLMRouter:
                     system_prompt, messages, config
                 ):
                     yield token
-        except (httpx.HTTPError, anthropic.APIError) as e:
-            logger.warning("LLM %s failed: %s, trying fallback", config.provider, e)
+        except Exception as e:
+            logger.warning("LLM %s/%s failed: %s, trying fallback", config.provider, config.model, e)
             fallback = self._get_fallback(config)
             if fallback:
                 async for token in self.stream(system_prompt, messages, fallback):
                     yield token
             else:
-                yield f"[Error: LLM unavailable - {e}]"
+                yield "Communications disrupted, Commander. Standby for reconnection."
 
     async def complete_local(
         self,
@@ -224,6 +224,14 @@ class LLMRouter:
         return r.json()
 
     def _get_fallback(self, failed: LLMConfig) -> LLMConfig | None:
+        # Always try falling back to smaller local model first (always loaded, uses less VRAM)
+        if failed.model != "qwen2.5-3b-instruct" and self._lmstudio_available:
+            logger.info("Falling back to qwen2.5-3b-instruct")
+            return LLMConfig(
+                provider="lmstudio",
+                model="qwen2.5-3b-instruct",
+                base_url=LM_STUDIO_URL,
+            )
         if failed.provider == "lmstudio" and self._anthropic:
             return LLMConfig(
                 provider="anthropic", model=CLOUD_FALLBACK, temperature=0.7
@@ -231,7 +239,7 @@ class LLMRouter:
         if failed.provider == "anthropic" and self._lmstudio_available:
             return LLMConfig(
                 provider="lmstudio",
-                model=LOCAL_CASUAL,
+                model="qwen2.5-3b-instruct",
                 base_url=LM_STUDIO_URL,
             )
         return None
@@ -264,7 +272,7 @@ class LLMRouter:
                 "temperature": config.temperature,
                 "stream": True,
             },
-            timeout=120.0,
+            timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0),
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
