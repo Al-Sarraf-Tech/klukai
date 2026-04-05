@@ -15,6 +15,7 @@ import '../widgets/voice_button.dart';
 import '../widgets/affection_gauge.dart';
 import '../widgets/tool_status_indicator.dart';
 import '../widgets/canvas_message_bubble.dart';
+import 'profile_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String serverUrl;
@@ -38,6 +39,14 @@ class _ChatScreenState extends State<ChatScreen> {
   int? _lastAffectionDelta;
   String? _thinkingText;
   final List<Map<String, String>> _activeTools = [];
+  final bool _soundMuted = false;
+
+  bool get _isDormMode {
+    final hour = DateTime.now().hour;
+    return hour >= 21 && _state.affectionLevel >= 2;
+  }
+
+  Color get _bgColor => _isDormMode ? const Color(0xFF16131E) : GFL2Colors.background;
 
   @override
   void initState() {
@@ -143,6 +152,7 @@ class _ChatScreenState extends State<ChatScreen> {
         if (completedIdx != null && completedIdx! >= 0) {
           _prepareMessageLayout(completedIdx!);
         }
+        _playNotificationSound();
 
       case 'mood':
         setState(() {
@@ -228,6 +238,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ));
         });
         _scrollToBottom();
+        _playNotificationSound();
 
       case 'voice_audio':
         // Play Klukai's voice via Web Audio
@@ -276,6 +287,45 @@ class _ChatScreenState extends State<ChatScreen> {
     if (target != null) {
       _scrollController.animateTo(target, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
     }
+  }
+
+  Widget _starterChip(String text) {
+    return GestureDetector(
+      onTap: () {
+        _textController.text = text;
+        _sendMessage();
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: GFL2Colors.surface,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: GFL2Colors.primary.withValues(alpha: 0.3)),
+        ),
+        child: Text(text, style: TextStyle(
+          color: GFL2Colors.primary.withValues(alpha: 0.7),
+          fontSize: 12, fontFamily: 'monospace',
+        )),
+      ),
+    );
+  }
+
+  void _playNotificationSound() {
+    if (_soundMuted) return;
+    try {
+      final audio = web.HTMLAudioElement()..src = 'audio/comm_beep.wav'..volume = 0.3;
+      audio.play();
+    } catch (_) {}
+  }
+
+  void _openProfile() {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => ProfileScreen(
+      serverUrl: widget.serverUrl,
+      affectionScore: _state.affectionScore,
+      affectionLevel: _state.affectionLevel,
+      affectionLevelName: _state.affectionLevelName,
+      totalInteractions: 0,
+    )));
   }
 
   void _playAudio(String base64Audio) {
@@ -327,7 +377,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: GFL2Colors.background,
+      backgroundColor: _bgColor,
       body: SafeArea(
         child: KeyboardListener(
           focusNode: FocusNode()..requestFocus(),
@@ -361,8 +411,10 @@ class _ChatScreenState extends State<ChatScreen> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Portrait with angular cyan border
-              Container(
+              // Portrait — tap to open profile
+              GestureDetector(
+              onTap: _openProfile,
+              child: Container(
                 width: 52,
                 height: 52,
                 decoration: BoxDecoration(
@@ -397,6 +449,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                 ),
+              ),
               ),
               const SizedBox(width: 12),
               // Name + designation + status
@@ -560,6 +613,18 @@ class _ChatScreenState extends State<ChatScreen> {
                 fontSize: 13,
                 fontStyle: FontStyle.italic,
               ),
+            ),
+            const SizedBox(height: 20),
+            // Conversation starters
+            Wrap(
+              spacing: 8, runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                _starterChip('Mission briefing'),
+                _starterChip('Tell me about Belka'),
+                _starterChip("How's the squad?"),
+                _starterChip("Let's go for a ride"),
+              ],
             ),
           ],
         ),
