@@ -25,17 +25,21 @@ class WSManager:
 
     async def connect(self, ws: WebSocket, user_id: str = "default") -> None:
         await ws.accept()
-        # Close previous connection for this user
-        if user_id in self._connections:
+        # Silently replace previous connection — don't close it (triggers client reconnect loop)
+        old = self._connections.get(user_id)
+        self._connections[user_id] = ws
+        if old is not None:
             try:
-                await self._connections[user_id].close(code=1000, reason="new connection")
+                await old.close(code=1000, reason="replaced")
             except Exception:
                 pass
-        self._connections[user_id] = ws
         logger.info("WebSocket connected: user=%s", user_id)
         await self.send(user_id, {"type": "connected", "status": "ok"})
 
-    async def disconnect(self, user_id: str = "default") -> None:
+    async def disconnect(self, user_id: str = "default", ws: WebSocket | None = None) -> None:
+        # Only remove if it's the same connection (prevents new connection from being removed by old one's cleanup)
+        if ws is not None and self._connections.get(user_id) is not ws:
+            return  # Old connection cleaning up — don't touch the new one
         self._connections.pop(user_id, None)
         logger.info("WebSocket disconnected: user=%s", user_id)
 

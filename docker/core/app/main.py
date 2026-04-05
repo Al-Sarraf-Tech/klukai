@@ -457,7 +457,7 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        await ws.disconnect(user_id)
+        await ws.disconnect(user_id, websocket)
 
 
 async def _handle_message(content: str, session: SessionState, user_id: str = "default") -> None:
