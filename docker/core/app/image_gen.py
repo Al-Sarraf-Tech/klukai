@@ -14,10 +14,17 @@ logger = logging.getLogger(__name__)
 
 COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://host.docker.internal:8388")
 
-# Character identity tags
-KLUKAI_TAGS = "1girl, silver hair, green eyes, long hair, high ponytail, athletic, military uniform"
-COMMANDER_TAGS = "1boy, short hair, dark hair, brown eyes, tan skin, strong build, military uniform, commander"
-COUPLE_TAGS = "couple, 1boy, 1girl"
+# Character identity tags — Danbooru format for Animagine XL 3.1
+KLUKAI_TAGS = (
+    "1girl, hk416 \\(girls' frontline\\), silver hair, green eyes, long hair, ponytail, "
+    "hair ornament, tactical clothes, black gloves, thighhighs, military, "
+    "girls' frontline"
+)
+COMMANDER_TAGS = (
+    "1boy, male focus, short hair, dark hair, brown eyes, tan skin, strong build, "
+    "military uniform, commander, jacket"
+)
+COUPLE_TAGS = "couple, 1boy, 1girl, hetero"
 
 # Keywords that indicate a couple/together scene
 COUPLE_KEYWORDS = [
