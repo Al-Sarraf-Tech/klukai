@@ -105,9 +105,12 @@ class MoodIndicator extends StatelessWidget {
       curve: Curves.easeInOut,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: moodColor.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(2),
-        border: Border.all(color: moodColor.withValues(alpha: 0.25), width: 1),
+        color: moodColor.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: moodColor.withValues(alpha: 0.5), width: 1),
+        boxShadow: [
+          BoxShadow(color: moodColor.withValues(alpha: 0.15), blurRadius: 8, spreadRadius: 1),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
