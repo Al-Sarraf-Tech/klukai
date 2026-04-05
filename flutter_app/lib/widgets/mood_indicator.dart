@@ -107,9 +107,10 @@ class MoodIndicator extends StatelessWidget {
       decoration: BoxDecoration(
         color: moodColor.withValues(alpha: 0.2),
         borderRadius: BorderRadius.circular(3),
-        border: Border.all(color: moodColor.withValues(alpha: 0.5), width: 1),
+        border: Border.all(color: moodColor.withValues(alpha: 0.6), width: 1.5),
         boxShadow: [
-          BoxShadow(color: moodColor.withValues(alpha: 0.15), blurRadius: 8, spreadRadius: 1),
+          BoxShadow(color: moodColor.withValues(alpha: 0.25), blurRadius: 12, spreadRadius: 2),
+          BoxShadow(color: moodColor.withValues(alpha: 0.1), blurRadius: 24, spreadRadius: 4),
         ],
       ),
       child: Row(
