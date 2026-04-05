@@ -395,11 +395,4 @@ def assemble_system_prompt(
     ]
 
     # Filter empty blocks and join with clear separators
-    # Pace matching: match Commander's message length
-    if last_msg_length > 0:
-        if last_msg_length < 30:
-            blocks.append("PACE: Commander sent a short message. Keep your response concise — 1-3 sentences.")
-        elif last_msg_length > 200:
-            blocks.append("PACE: Commander sent a detailed message. You may elaborate — 3-6 sentences.")
-
     return "\n\n".join(b for b in blocks if b)

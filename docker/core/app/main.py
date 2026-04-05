@@ -576,7 +576,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
 
     # Background tasks — only if main LLM succeeded (not a fallback error)
     if not response_text.startswith("Communications disrupted"):
-        asyncio.create_task(_background_tts(response_text))
+        # TTS disabled for auto-play — user taps speaker icon instead
         if needs_image(content):
             logger.info("Image generation triggered for: %s", content[:80])
             asyncio.create_task(_background_image_gen(content))
