@@ -42,7 +42,38 @@ NEGATIVE_TAGS = (
 )
 
 # Animagine XL 3.1 workflow
+# Klukai LoRA file (if available in ComfyUI)
+KLUKAI_LORA = "Klukai_GFL2.safetensors"
+KLUKAI_LORA_TRIGGER = "Klukai"
+
+# Animagine XL 3.1 + Klukai LoRA workflow
 WORKFLOW_TEMPLATE = {
+    "4": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "animagine_xl_31.safetensors"},
+    },
+    "10": {
+        "class_type": "LoraLoader",
+        "inputs": {
+            "lora_name": KLUKAI_LORA,
+            "strength_model": 0.85,
+            "strength_clip": 0.85,
+            "model": ["4", 0],
+            "clip": ["4", 1],
+        },
+    },
+    "5": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": 832, "height": 1216, "batch_size": 1},
+    },
+    "6": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["10", 1]},
+    },
+    "7": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": NEGATIVE_TAGS, "clip": ["10", 1]},
+    },
     "3": {
         "class_type": "KSampler",
         "inputs": {
@@ -52,27 +83,11 @@ WORKFLOW_TEMPLATE = {
             "sampler_name": "euler_ancestral",
             "scheduler": "normal",
             "denoise": 1.0,
-            "model": ["4", 0],
+            "model": ["10", 0],
             "positive": ["6", 0],
             "negative": ["7", 0],
             "latent_image": ["5", 0],
         },
-    },
-    "4": {
-        "class_type": "CheckpointLoaderSimple",
-        "inputs": {"ckpt_name": "animagine_xl_31.safetensors"},
-    },
-    "5": {
-        "class_type": "EmptyLatentImage",
-        "inputs": {"width": 832, "height": 1216, "batch_size": 1},
-    },
-    "6": {
-        "class_type": "CLIPTextEncode",
-        "inputs": {"text": "", "clip": ["4", 1]},
-    },
-    "7": {
-        "class_type": "CLIPTextEncode",
-        "inputs": {"text": NEGATIVE_TAGS, "clip": ["4", 1]},
     },
     "8": {
         "class_type": "VAEDecode",
@@ -109,8 +124,8 @@ def is_couple_scene(text: str) -> bool:
 
 
 def build_prompt(scene_tags: str, couple: bool = False) -> str:
-    """Build the full positive prompt with quality tags and character identities."""
-    parts = [QUALITY_TAGS]
+    """Build the full positive prompt with quality tags, LoRA trigger, and character identities."""
+    parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
     if couple:
         parts.append(COUPLE_TAGS)
         parts.append(COMMANDER_TAGS)
