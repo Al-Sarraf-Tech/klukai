@@ -12,3 +12,4 @@ flutter_app/.flutter-plugins-dependencies
 *.iml
 .idea/
 .vscode/
+.superpowers/
