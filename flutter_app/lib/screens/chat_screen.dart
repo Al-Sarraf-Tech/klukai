@@ -57,6 +57,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Color get _moodGlowColor {
     return switch (_state.mood) {
+      // Core
       'composed'        => GFL2Colors.primary,
       'focused'         => const Color(0xFF3B82F6),
       'prideful'        => GFL2Colors.accent,
@@ -67,6 +68,28 @@ class _ChatScreenState extends State<ChatScreen> {
       'tender'          => GFL2Colors.affinity,
       'longing'         => const Color(0xFF818CF8),
       'battle_ready'    => GFL2Colors.danger,
+      // Romantic
+      'flustered'       => const Color(0xFFF472B6),
+      'affectionate'    => const Color(0xFFFDA4AF),
+      'shy'             => const Color(0xFFF9A8D4),
+      'yearning'        => const Color(0xFFC084FC),
+      'devoted'         => const Color(0xFFFB7185),
+      // Tactical
+      'vigilant'        => const Color(0xFF22D3EE),
+      'calculating'     => const Color(0xFF94A3B8),
+      'hunting'         => GFL2Colors.danger,
+      'adrenaline'      => const Color(0xFFFBBF24),
+      // Relaxed
+      'content'         => const Color(0xFF86EFAC),
+      'playful'         => const Color(0xFFA78BFA),
+      'drowsy'          => const Color(0xFF64748B),
+      'amused'          => const Color(0xFF34D399),
+      // Dark
+      'melancholic'     => const Color(0xFF6366F1),
+      'haunted'         => const Color(0xFF7C3AED),
+      'conflicted'      => const Color(0xFFD97706),
+      'determined'      => const Color(0xFFF97316),
+      'vulnerable'      => const Color(0xFFDDD6FE),
       _                 => GFL2Colors.primary,
     };
   }

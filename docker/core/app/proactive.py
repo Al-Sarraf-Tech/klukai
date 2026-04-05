@@ -307,8 +307,8 @@ class ProactiveEngine:
         if self._last_message_time and (now - self._last_message_time) < timedelta(minutes=10):
             return
 
-        # Guard: don't interrupt intimate moments
-        if self._last_mood in ("tender", "longing"):
+        # Guard: don't interrupt intimate/vulnerable moments
+        if self._last_mood in ("tender", "longing", "flustered", "affectionate", "shy", "yearning", "devoted", "vulnerable", "drowsy"):
             return
 
         # Guard: don't pile up unanswered proactives

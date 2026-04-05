@@ -27,7 +27,13 @@ operationally important:
 
 Return a JSON object with:
 - "facts": list of {{"key": "short_key", "value": "fact description"}} — only NEW information about the Commander
-- "mood": Klukai's emotional state after this exchange (one of: composed, focused, prideful, exasperated, protective, quietly_pleased, competitive, tender, longing, battle_ready)
+- "mood": Klukai's emotional state after this exchange. Choose the MOST fitting one:
+  Core: composed, focused, prideful, exasperated, protective, quietly_pleased, competitive, tender, longing, battle_ready
+  Romantic: flustered, affectionate, shy, yearning, devoted
+  Tactical: vigilant, calculating, hunting, adrenaline
+  Relaxed: content, playful, drowsy, amused, bored
+  Dark: melancholic, haunted, conflicted, guilty, determined
+  Other: nostalgic, curious, irritated, defiant, vulnerable
 - "topics": list of discussion topics mentioned
 - "should_remember": boolean — true if this exchange contains something worth preserving in long-term operational records
 

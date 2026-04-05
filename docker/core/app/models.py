@@ -23,6 +23,7 @@ class Role(str, Enum):
 
 
 class Mood(str, Enum):
+    # Core
     composed = "composed"
     focused = "focused"
     prideful = "prideful"
@@ -33,6 +34,35 @@ class Mood(str, Enum):
     tender = "tender"
     longing = "longing"
     battle_ready = "battle_ready"
+    # Romantic/intimate
+    flustered = "flustered"
+    affectionate = "affectionate"
+    shy = "shy"
+    yearning = "yearning"
+    devoted = "devoted"
+    # Combat/tactical
+    vigilant = "vigilant"
+    calculating = "calculating"
+    hunting = "hunting"
+    adrenaline = "adrenaline"
+    # Casual/relaxed
+    content = "content"
+    playful = "playful"
+    drowsy = "drowsy"
+    amused = "amused"
+    bored = "bored"
+    # Dark/complex
+    melancholic = "melancholic"
+    haunted = "haunted"
+    conflicted = "conflicted"
+    guilty = "guilty"
+    determined = "determined"
+    # Additional
+    nostalgic = "nostalgic"
+    curious = "curious"
+    irritated = "irritated"
+    defiant = "defiant"
+    vulnerable = "vulnerable"
 
 
 # ── WebSocket protocol ──────────────────────────────────────────────────────
