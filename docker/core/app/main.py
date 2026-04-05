@@ -802,7 +802,7 @@ def _chunk_text(text: str, chunk_size: int = 8) -> list[str]:
 
 
 def _fix_narration(text: str) -> str:
-    """Fix second-person narration: convert (You ...) to (I ...) and strip Commander narration."""
+    """Fix second-person narration and clean up model artifacts."""
     import re
     # Convert "(You verb...)" to "(I verb...)"
     text = re.sub(r'\(You ([a-z])', lambda m: f'(I {m.group(1)}', text)
@@ -811,6 +811,8 @@ def _fix_narration(text: str) -> str:
     text = re.sub(r'\(your ', '(my ', text)
     # Strip parentheticals that narrate Commander's actions/appearance
     text = re.sub(r'\([^)]*(?:your face|your eyes|your expression|your mouth|crosses your|touches your)[^)]*\)', '', text)
+    # Strip trailing pipe characters (dolphin-glm reasoning artifact)
+    text = text.rstrip('| \n')
     # Clean up double spaces from removals
     text = re.sub(r'  +', ' ', text)
     return text
