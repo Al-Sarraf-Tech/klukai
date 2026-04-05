@@ -14,8 +14,17 @@ logger = logging.getLogger(__name__)
 
 COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://host.docker.internal:8388")
 
-# Klukai's visual identity tags (always prepended)
+# Character identity tags
 KLUKAI_TAGS = "1girl, silver hair, green eyes, long hair, high ponytail, athletic, military uniform"
+COMMANDER_TAGS = "1boy, short hair, dark hair, brown eyes, tan skin, strong build, military uniform, commander"
+COUPLE_TAGS = "couple, 1boy, 1girl"
+
+# Keywords that indicate a couple/together scene
+COUPLE_KEYWORDS = [
+    "us", "we", "together", "our", "cuddling", "cuddle", "holding hands",
+    "embrace", "hug", "hugging", "kissing", "side by side", "couple",
+    "with me", "with you", "both of us", "show us", "imagine us",
+]
 
 QUALITY_TAGS = "masterpiece, best quality, very aesthetic, absurdres"
 NEGATIVE_TAGS = (
@@ -83,10 +92,20 @@ def needs_image(message: str) -> bool:
     return any(kw in lower for kw in IMAGE_KEYWORDS)
 
 
-def build_prompt(scene_tags: str, include_klukai: bool = True) -> str:
-    """Build the full positive prompt with quality tags and Klukai identity."""
+def is_couple_scene(text: str) -> bool:
+    """Detect if the request is for a scene with both Klukai and the Commander."""
+    lower = text.lower()
+    return any(kw in lower for kw in COUPLE_KEYWORDS)
+
+
+def build_prompt(scene_tags: str, couple: bool = False) -> str:
+    """Build the full positive prompt with quality tags and character identities."""
     parts = [QUALITY_TAGS]
-    if include_klukai:
+    if couple:
+        parts.append(COUPLE_TAGS)
+        parts.append(COMMANDER_TAGS)
+        parts.append(KLUKAI_TAGS)
+    else:
         parts.append(KLUKAI_TAGS)
     parts.append(scene_tags)
     return ", ".join(parts)

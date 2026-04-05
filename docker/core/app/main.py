@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .affection import AffectionManager
 from .agent_loop import AgentLoop
-from .image_gen import generate_image, needs_image, build_prompt
+from .image_gen import generate_image, needs_image, build_prompt, is_couple_scene
 from .fact_extractor import create_episode_summary, extract_facts
 from .llm_router import LLMRouter
 from .mcp_client import MCPClient
@@ -734,9 +734,12 @@ async def _background_image_gen(user_request: str) -> None:
         # Notify UI
         await ws.send_proactive("default", "Compiling tactical visualization, Commander. Stand by.")
 
+        # Detect if this is a couple scene
+        couple = is_couple_scene(user_request)
+
         # Enhance the prompt with LLM
-        scene_tags = await _enhance_image_prompt(user_request)
-        full_prompt = build_prompt(scene_tags)
+        scene_tags = await _enhance_image_prompt(user_request, couple=couple)
+        full_prompt = build_prompt(scene_tags, couple=couple)
         logger.info("Image prompt: %s", full_prompt[:200])
 
         # Determine orientation from request
@@ -806,12 +809,22 @@ def _fix_narration(text: str) -> str:
     return text
 
 
-async def _enhance_image_prompt(user_request: str) -> str:
+async def _enhance_image_prompt(user_request: str, couple: bool = False) -> str:
     """Use LLM to convert a natural language scene request into Danbooru-style tags."""
+    char_desc = (
+        "The female character is Klukai: silver hair, green eyes, long ponytail, athletic, military uniform. "
+    )
+    if couple:
+        char_desc += (
+            "The male character is the Commander: short dark hair, brown eyes, tan skin, "
+            "strong build, military uniform. They are a couple. "
+            "IMPORTANT: Include BOTH 1boy and 1girl tags. The male has dark hair, the female has silver hair. "
+        )
+
     prompt = (
         "Convert this scene description into Danbooru-style tags for anime image generation. "
         "Include: characters, setting, mood, lighting, pose, clothing details. "
-        "The female character is Klukai: silver hair, green eyes, long ponytail, athletic, military. "
+        f"{char_desc}"
         "Return ONLY comma-separated tags, nothing else.\n\n"
         f"Scene: {user_request}"
     )

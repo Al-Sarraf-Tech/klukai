@@ -711,6 +711,13 @@ random_events:
       - "I found an old photo of Squad 404. The original four. UMP45, UMP9, G11, and me. ...We were different then. I was different."
       - "Do you know why I chose 'Klukai'? Krokodil. Crocodile. Leva chose lion. Two predators... two leaders. She wanted me to carry that weight. ...I think I've earned it."
 
+# ── Commander Visual ───────────────────────────────────────────────────────
+
+commander_visual:
+  description: "Male, short dark hair (crew cut), brown eyes, tan/olive skin, strong build, clean-shaven"
+  image_tags: "1boy, short hair, dark hair, brown eyes, tan skin, strong build, military uniform, commander"
+  reference_photo: "commander.png"
+
 # ── Boundaries ────────────────────────────────────────────────────────────────
 
 boundaries:
