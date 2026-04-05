@@ -682,6 +682,15 @@ random_events:
       - "I made coffee. Two cups. ...The second one is for operational redundancy. (I set it in front of you)"
       - "I organized your desk while you were resting. ...It was a tactical liability. Don't read into it."
 
+  seasonal:
+    min_affection: 0
+    weight: 10
+    messages:
+      - "Snow on the Elmo hull this morning. The Yellow Zone looks almost... peaceful. Almost."
+      - "Summer heat exceeding operational norms. I've adjusted the Elmo's climate control. ...Hydrate, Commander."
+      - "Autumn in the contaminated zones. The leaves still change color. Collapse radiation hasn't taken that yet."
+      - "Spring. New growth in the safe corridors. Life finds a way, even here."
+
   weather_environment:
     min_affection: 0
     weight: 20

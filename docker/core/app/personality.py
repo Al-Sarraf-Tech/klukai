@@ -259,7 +259,18 @@ def build_context_block(mood: str = "composed", affection_level: int = 0, days_t
 
     date_line = ""
     if days_together > 0:
-        date_line = f"\nDAYS WITH COMMANDER: {days_together} days. You may naturally reference how long you've been together."
+        date_line = f"\nDAYS WITH COMMANDER: {days_together} days."
+        if days_together == 1:
+            date_line += " This is your first day together. Everything is new."
+        elif days_together == 7:
+            date_line += " One week together. You may acknowledge this milestone subtly."
+        elif days_together == 30:
+            date_line += " One month together. A significant milestone. Reference it naturally."
+        elif days_together % 30 == 0:
+            months = days_together // 30
+            date_line += f" {months} months together. You may reference this warmly at high affection."
+        else:
+            date_line += " You may naturally reference how long you've been together."
 
     return (
         f"OPERATIONAL CONTEXT: {mil_time} hours, {day_name} — {time_period} "
@@ -359,6 +370,7 @@ def assemble_system_prompt(
     affection_score: int = 0,
     affection_level: int = 0,
     days_together: int = 0,
+    last_msg_length: int = 0,
     personality_path: str | None = None,
 ) -> str:
     """Assemble the full Klukai system prompt from all components."""
@@ -383,4 +395,11 @@ def assemble_system_prompt(
     ]
 
     # Filter empty blocks and join with clear separators
+    # Pace matching: match Commander's message length
+    if last_msg_length > 0:
+        if last_msg_length < 30:
+            blocks.append("PACE: Commander sent a short message. Keep your response concise — 1-3 sentences.")
+        elif last_msg_length > 200:
+            blocks.append("PACE: Commander sent a detailed message. You may elaborate — 3-6 sentences.")
+
     return "\n\n".join(b for b in blocks if b)

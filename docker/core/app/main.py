@@ -497,6 +497,7 @@ async def _handle_message(content: str, session: SessionState) -> None:
         affection_score=aff_state.score,
         affection_level=aff_state.level,
         days_together=days,
+        last_msg_length=len(content),
     )
 
     # Build messages for LLM
@@ -540,14 +541,17 @@ async def _handle_message(content: str, session: SessionState) -> None:
 
         full_response = []
         buffer = ""
+        first_flush = True
         async for token in router.stream(system_prompt, messages, config):
             full_response.append(token)
             buffer += token
-            # Flush on sentence boundaries or when buffer is large enough to catch patterns
-            if any(c in buffer for c in '.!?\n)') or len(buffer) > 80:
+            # First flush after 20 chars for fast perceived response, then sentence boundaries
+            flush_threshold = 20 if first_flush else 80
+            if any(c in buffer for c in '.!?\n)') or len(buffer) > flush_threshold:
                 fixed = _fix_narration(buffer)
                 await ws.send_token("default", fixed)
                 buffer = ""
+                first_flush = False
         if buffer:
             await ws.send_token("default", _fix_narration(buffer))
 

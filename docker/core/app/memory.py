@@ -356,9 +356,14 @@ class MemoryManager:
     async def recall_for_prompt(
         self, query: str
     ) -> tuple[list[str], dict, list[dict]]:
-        """Return (episodic_memories, relationship_facts, recalled_exchanges)."""
-        episodes = await self.recall_episodes(query, limit=5)
+        """Return (episodic_memories, relationship_facts, recalled_exchanges) — parallel fetch."""
+        import asyncio
+        episodes_task = self.recall_episodes(query, limit=5)
+        facts_task = self.get_relationship_facts()
+        exchanges_task = self.recall_exchanges_with_recency(query, limit=MSG_RECALL_LIMIT)
+
+        episodes, facts, exchanges = await asyncio.gather(
+            episodes_task, facts_task, exchanges_task
+        )
         episode_texts = [ep["summary"] for ep in episodes]
-        facts = await self.get_relationship_facts()
-        exchanges = await self.recall_exchanges_with_recency(query, limit=MSG_RECALL_LIMIT)
         return episode_texts, facts, exchanges

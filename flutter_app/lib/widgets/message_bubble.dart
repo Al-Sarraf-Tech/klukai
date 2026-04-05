@@ -143,17 +143,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                         ),
                       ),
                     if (widget.message.isStreaming)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1.5,
-                            color: GFL2Colors.primary.withValues(alpha: 0.4),
-                          ),
-                        ),
-                      ),
+                      const _BlinkingCursor(),
                     // Bottom row: speaker icon + timestamp
                     if (!widget.message.isStreaming)
                       Padding(
@@ -211,5 +201,50 @@ class _MessageBubbleState extends State<MessageBubble> {
 
   String _formatTime(DateTime dt) {
     return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+/// Blinking terminal cursor for streaming messages.
+class _BlinkingCursor extends StatefulWidget {
+  const _BlinkingCursor();
+
+  @override
+  State<_BlinkingCursor> createState() => _BlinkingCursorState();
+}
+
+class _BlinkingCursorState extends State<_BlinkingCursor>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Opacity(
+          opacity: _controller.value,
+          child: Container(
+            width: 8, height: 16,
+            margin: const EdgeInsets.only(top: 2),
+            color: GFL2Colors.primary.withValues(alpha: 0.6),
+          ),
+        );
+      },
+    );
   }
 }
