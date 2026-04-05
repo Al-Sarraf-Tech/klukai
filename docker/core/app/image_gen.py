@@ -83,6 +83,9 @@ IMAGE_KEYWORDS = [
     "visualize", "what would it look like", "generate an image",
     "create an image", "paint", "illustrate", "depict",
     "imagine us", "imagine me", "how would we look",
+    "that image", "that picture", "another image", "another picture",
+    "try again", "one more", "generate again", "make an image",
+    "make a picture", "render", "sketch",
 ]
 
 

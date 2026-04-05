@@ -575,6 +575,7 @@ async def _handle_message(content: str, session: SessionState) -> None:
 
     # Background: generate image if the message requested one
     if needs_image(content):
+        logger.info("Image generation triggered for: %s", content[:80])
         asyncio.create_task(_background_image_gen(content))
 
 
@@ -731,8 +732,10 @@ async def _background_extraction(
 async def _background_image_gen(user_request: str) -> None:
     """Generate an anime image based on the user's request and send via WebSocket."""
     # Wait for chat response to finish and VRAM to settle
+    logger.info("Image gen: waiting 5s for VRAM...")
     await asyncio.sleep(5)
     try:
+        logger.info("Image gen: starting for '%s'", user_request[:60])
         await ws.send_proactive("default", "Compiling tactical visualization, Commander. Stand by.")
 
         # Detect if this is a couple scene
