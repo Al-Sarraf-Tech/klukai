@@ -8,6 +8,7 @@ class ChatMessage {
   final bool isStreaming;
   final int? pretextHandle;
   final double? tightBubbleWidth;
+  final String? imageData;
 
   ChatMessage({
     required this.id,
@@ -19,6 +20,7 @@ class ChatMessage {
     this.isStreaming = false,
     this.pretextHandle,
     this.tightBubbleWidth,
+    this.imageData,
   }) : createdAt = createdAt ?? DateTime.now();
 
   ChatMessage copyWith({

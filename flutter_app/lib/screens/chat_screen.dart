@@ -287,10 +287,24 @@ class _ChatScreenState extends State<ChatScreen> {
         _playNotificationSound();
 
       case 'voice_audio':
-        // Play Klukai's voice via Web Audio
         final audioData = msg['audio'] as String?;
         if (audioData != null) {
           _playAudio(audioData);
+        }
+
+      case 'image':
+        final imgData = msg['data'] as String?;
+        if (imgData != null) {
+          setState(() {
+            _messages.add(ChatMessage(
+              id: 'image-${DateTime.now().millisecondsSinceEpoch}',
+              role: 'assistant',
+              content: '[IMAGE]',
+              imageData: imgData,
+            ));
+          });
+          _scrollToBottom();
+          _playNotificationSound();
         }
     }
   }

@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .affection import AffectionManager
 from .agent_loop import AgentLoop
-from .image_gen import generate_image
+from .image_gen import generate_image, needs_image, build_prompt
 from .fact_extractor import create_episode_summary, extract_facts
 from .llm_router import LLMRouter
 from .mcp_client import MCPClient
@@ -573,6 +573,10 @@ async def _handle_message(content: str, session: SessionState) -> None:
     # Background: generate TTS audio for the response
     asyncio.create_task(_background_tts(response_text))
 
+    # Background: generate image if the message requested one
+    if needs_image(content):
+        asyncio.create_task(_background_image_gen(content))
+
 
 async def _handle_voice(audio_b64: str, session: SessionState) -> None:
     """Process voice: STT -> text -> LLM -> TTS -> audio."""
@@ -724,6 +728,37 @@ async def _background_extraction(
 # ── Background TTS ───────────────────────────────────────────────────────
 
 
+async def _background_image_gen(user_request: str) -> None:
+    """Generate an anime image based on the user's request and send via WebSocket."""
+    try:
+        # Notify UI
+        await ws.send_proactive("default", "Compiling tactical visualization, Commander. Stand by.")
+
+        # Enhance the prompt with LLM
+        scene_tags = await _enhance_image_prompt(user_request)
+        full_prompt = build_prompt(scene_tags)
+        logger.info("Image prompt: %s", full_prompt[:200])
+
+        # Determine orientation from request
+        landscape_keywords = ["sunset", "landscape", "horizon", "riding", "motorcycle", "driving", "panorama"]
+        if any(kw in user_request.lower() for kw in landscape_keywords):
+            width, height = 1216, 832
+        else:
+            width, height = 832, 1216
+
+        # Generate
+        img_bytes = await generate_image(full_prompt, width=width, height=height)
+        if img_bytes:
+            import base64 as b64
+            img_b64 = b64.b64encode(img_bytes).decode()
+            await ws.send("default", {"type": "image", "data": img_b64})
+            logger.info("Image sent to UI (%d bytes)", len(img_bytes))
+        else:
+            await ws.send_proactive("default", "...Visualization failed. Interference in the rendering pipeline. I'll try again later.")
+    except Exception as e:
+        logger.error("Background image gen failed: %s", e)
+
+
 async def _background_tts(text: str) -> None:
     """Generate TTS audio and send via WebSocket."""
     voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
@@ -769,6 +804,26 @@ def _fix_narration(text: str) -> str:
     # Clean up double spaces from removals
     text = re.sub(r'  +', ' ', text)
     return text
+
+
+async def _enhance_image_prompt(user_request: str) -> str:
+    """Use LLM to convert a natural language scene request into Danbooru-style tags."""
+    prompt = (
+        "Convert this scene description into Danbooru-style tags for anime image generation. "
+        "Include: characters, setting, mood, lighting, pose, clothing details. "
+        "The female character is Klukai: silver hair, green eyes, long ponytail, athletic, military. "
+        "Return ONLY comma-separated tags, nothing else.\n\n"
+        f"Scene: {user_request}"
+    )
+    try:
+        config = router.route("tags", SessionState(conversation_id="image"))
+        tags = []
+        async for token in router.stream(prompt, [{"role": "user", "content": prompt}], config):
+            tags.append(token)
+        return "".join(tags).strip()
+    except Exception as e:
+        logger.warning("Image prompt enhancement failed: %s", e)
+        return user_request
 
 
 def _strip_actions_for_tts(text: str) -> str:

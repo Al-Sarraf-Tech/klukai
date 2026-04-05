@@ -120,14 +120,28 @@ class _MessageBubbleState extends State<MessageBubble> {
                           ),
                         ),
                       ),
-                    SelectableText(
-                      widget.message.content,
-                      style: TextStyle(
-                        color: GFL2Colors.textPrimary.withValues(alpha: 0.92),
-                        fontSize: 14,
-                        height: 1.5,
+                    // Image content
+                    if (widget.message.imageData != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: Image.memory(
+                            base64Decode(widget.message.imageData!),
+                            fit: BoxFit.contain,
+                            width: double.infinity,
+                          ),
+                        ),
+                      )
+                    else
+                      SelectableText(
+                        widget.message.content,
+                        style: TextStyle(
+                          color: GFL2Colors.textPrimary.withValues(alpha: 0.92),
+                          fontSize: 14,
+                          height: 1.5,
+                        ),
                       ),
-                    ),
                     if (widget.message.isStreaming)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),

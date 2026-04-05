@@ -1,7 +1,8 @@
-"""Image generation via ComfyUI API on dominus."""
+"""Image generation via ComfyUI with Animagine XL 3.1 for anime-realistic scenes."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -13,15 +14,26 @@ logger = logging.getLogger(__name__)
 
 COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://host.docker.internal:8388")
 
-# Simple txt2img workflow for ComfyUI
+# Klukai's visual identity tags (always prepended)
+KLUKAI_TAGS = "1girl, silver hair, green eyes, long hair, high ponytail, athletic, military uniform"
+
+QUALITY_TAGS = "masterpiece, best quality, very aesthetic, absurdres"
+NEGATIVE_TAGS = (
+    "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, "
+    "fewer digits, cropped, worst quality, low quality, normal quality, "
+    "jpeg artifacts, signature, watermark, username, blurry, artist name, "
+    "deformed, ugly, duplicate, morbid, mutilated"
+)
+
+# Animagine XL 3.1 workflow
 WORKFLOW_TEMPLATE = {
     "3": {
         "class_type": "KSampler",
         "inputs": {
             "seed": 0,
-            "steps": 20,
-            "cfg": 7.0,
-            "sampler_name": "euler",
+            "steps": 25,
+            "cfg": 6.0,
+            "sampler_name": "euler_ancestral",
             "scheduler": "normal",
             "denoise": 1.0,
             "model": ["4", 0],
@@ -32,11 +44,11 @@ WORKFLOW_TEMPLATE = {
     },
     "4": {
         "class_type": "CheckpointLoaderSimple",
-        "inputs": {"ckpt_name": "sd_xl_base_1.0.safetensors"},
+        "inputs": {"ckpt_name": "animagine_xl_31.safetensors"},
     },
     "5": {
         "class_type": "EmptyLatentImage",
-        "inputs": {"width": 512, "height": 512, "batch_size": 1},
+        "inputs": {"width": 832, "height": 1216, "batch_size": 1},
     },
     "6": {
         "class_type": "CLIPTextEncode",
@@ -44,7 +56,7 @@ WORKFLOW_TEMPLATE = {
     },
     "7": {
         "class_type": "CLIPTextEncode",
-        "inputs": {"text": "bad quality, blurry, ugly", "clip": ["4", 1]},
+        "inputs": {"text": NEGATIVE_TAGS, "clip": ["4", 1]},
     },
     "8": {
         "class_type": "VAEDecode",
@@ -56,19 +68,46 @@ WORKFLOW_TEMPLATE = {
     },
 }
 
+# Keywords that suggest image generation
+IMAGE_KEYWORDS = [
+    "show me", "show us", "draw", "picture of", "image of",
+    "visualize", "what would it look like", "generate an image",
+    "create an image", "paint", "illustrate", "depict",
+    "imagine us", "imagine me", "how would we look",
+]
 
-async def generate_image(prompt: str, width: int = 512, height: int = 512) -> bytes | None:
-    """Generate an image via ComfyUI and return PNG bytes."""
+
+def needs_image(message: str) -> bool:
+    """Check if the message is requesting image generation."""
+    lower = message.lower()
+    return any(kw in lower for kw in IMAGE_KEYWORDS)
+
+
+def build_prompt(scene_tags: str, include_klukai: bool = True) -> str:
+    """Build the full positive prompt with quality tags and Klukai identity."""
+    parts = [QUALITY_TAGS]
+    if include_klukai:
+        parts.append(KLUKAI_TAGS)
+    parts.append(scene_tags)
+    return ", ".join(parts)
+
+
+async def generate_image(
+    prompt: str,
+    width: int = 832,
+    height: int = 1216,
+) -> bytes | None:
+    """Generate an image via ComfyUI Animagine XL 3.1 and return PNG bytes."""
     workflow = json.loads(json.dumps(WORKFLOW_TEMPLATE))
 
-    # Set prompt and dimensions
+    # Set prompt, dimensions, random seed
     workflow["6"]["inputs"]["text"] = prompt
     workflow["5"]["inputs"]["width"] = width
     workflow["5"]["inputs"]["height"] = height
     workflow["3"]["inputs"]["seed"] = int(uuid.uuid4().int % (2**32))
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             # Queue the prompt
             r = await client.post(
                 f"{COMFYUI_URL}/prompt",
@@ -82,21 +121,18 @@ async def generate_image(prompt: str, width: int = 512, height: int = 512) -> by
             if not prompt_id:
                 return None
 
-            # Poll for completion
-            import asyncio
-            for _ in range(60):  # Max 60s
+            # Poll for completion (up to 120s)
+            for _ in range(120):
                 await asyncio.sleep(1)
                 r = await client.get(f"{COMFYUI_URL}/history/{prompt_id}")
                 if r.status_code == 200:
                     history = r.json()
                     if prompt_id in history:
                         outputs = history[prompt_id].get("outputs", {})
-                        # Find the SaveImage node output
-                        for node_id, output in outputs.items():
+                        for output in outputs.values():
                             images = output.get("images", [])
                             if images:
                                 img = images[0]
-                                # Download the image
                                 r2 = await client.get(
                                     f"{COMFYUI_URL}/view",
                                     params={
