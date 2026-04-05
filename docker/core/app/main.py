@@ -447,7 +447,7 @@ async def websocket_endpoint(websocket: WebSocket):
             msg_type = data.get("type")
 
             if msg_type == "message":
-                await _handle_message(data.get("content", ""), session)
+                await _handle_message(data.get("content", ""), session, user_id)
             elif msg_type == "typing":
                 pass
             elif msg_type == "voice_end":
@@ -460,7 +460,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await ws.disconnect(user_id)
 
 
-async def _handle_message(content: str, session: SessionState) -> None:
+async def _handle_message(content: str, session: SessionState, user_id: str = "default") -> None:
     """Process a text message: memory recall, LLM, response, extraction."""
     if not content.strip():
         return
@@ -521,11 +521,11 @@ async def _handle_message(content: str, session: SessionState) -> None:
 
         # Stream the final response token by token for the UI
         for token in _chunk_text(response_text, 8):
-            await ws.send_token("default", token)
+            await ws.send_token(user_id, token)
             await asyncio.sleep(0.02)
 
         latency_ms = int((time.monotonic() - start) * 1000)
-        await ws.send_done("default", msg_id, model_name)
+        await ws.send_done(user_id, msg_id, model_name)
 
         logger.info(
             "Agent loop: %d iterations, %d tools used (%s)",
@@ -535,7 +535,7 @@ async def _handle_message(content: str, session: SessionState) -> None:
         )
     else:
         # Direct path: stream from LLM
-        await ws.send_thinking("default", "Composing response...")
+        await ws.send_thinking(user_id, "Composing response...")
         config = router.route(content, session)
         logger.info("Routing to %s/%s", config.provider, config.model)
 
@@ -549,17 +549,17 @@ async def _handle_message(content: str, session: SessionState) -> None:
             flush_threshold = 20 if first_flush else 80
             if any(c in buffer for c in '.!?\n)') or len(buffer) > flush_threshold:
                 fixed = _fix_narration(buffer)
-                await ws.send_token("default", fixed)
+                await ws.send_token(user_id, fixed)
                 buffer = ""
                 first_flush = False
         if buffer:
-            await ws.send_token("default", _fix_narration(buffer))
+            await ws.send_token(user_id, _fix_narration(buffer))
 
         response_text = _fix_narration("".join(full_response))
         model_name = config.model
         latency_ms = int((time.monotonic() - start) * 1000)
 
-        await ws.send_done("default", msg_id, model_name)
+        await ws.send_done(user_id, msg_id, model_name)
 
     # Add assistant turn to session
     session = await memory.add_turn(SESSION_ID, "assistant", response_text, session)
