@@ -473,18 +473,14 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       backgroundColor: _bgColor,
       body: SafeArea(
-        child: KeyboardListener(
-          focusNode: FocusNode(),
-          onKeyEvent: _handleKeyScroll,
-          child: Column(
-            children: [
-              _buildHeader(),
-              Expanded(child: _buildMessageList()),
-              if (_activeTools.isNotEmpty) _buildToolStatus(),
-              if (_state.isTyping && _streamingId == null) _buildProcessingIndicator(),
-              _buildInputBar(),
-            ],
-          ),
+        child: Column(
+          children: [
+            _buildHeader(),
+            Expanded(child: _buildMessageList()),
+            if (_activeTools.isNotEmpty) _buildToolStatus(),
+            if (_state.isTyping && _streamingId == null) _buildProcessingIndicator(),
+            _buildInputBar(),
+          ],
         ),
       ),
     );
@@ -816,22 +812,14 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: KeyboardListener(
-              focusNode: FocusNode(),
-              onKeyEvent: (event) {
-                if (event is KeyDownEvent &&
-                    event.logicalKey.keyLabel == 'Enter' &&
-                    !HardwareKeyboard.instance.isShiftPressed) {
-                  _sendMessage();
-                }
-              },
-              child: TextField(
-                controller: _textController,
-                focusNode: _focusNode,
-                style: const TextStyle(color: GFL2Colors.textPrimary, fontSize: 14),
-                maxLines: 4,
-                minLines: 1,
-                textInputAction: TextInputAction.send,
+            child: TextField(
+              controller: _textController,
+              focusNode: _focusNode,
+              style: const TextStyle(color: GFL2Colors.textPrimary, fontSize: 14),
+              maxLines: 4,
+              minLines: 1,
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _sendMessage(),
                 decoration: InputDecoration(
                   hintText: '// ENTER COMMAND...',
                   hintStyle: TextStyle(
@@ -858,7 +846,6 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
             ),
-          ),
           const SizedBox(width: 8),
           IconButton(
             onPressed: _state.isConnected ? _sendMessage : null,
