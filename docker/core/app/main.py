@@ -421,6 +421,15 @@ async def get_messages(limit: int = 50, before: str | None = None):
         return {"messages": []}
 
 
+async def _handle_tap_interact(user_id: str) -> None:
+    """Handle tap interaction — deliver a short proactive comment."""
+    if proactive and proactive._can_send():
+        await proactive.trigger_tap()
+    else:
+        # Fallback: send a simple acknowledgment if proactive can't send
+        await ws.send_proactive(user_id, "Hm? Right here, Commander.")
+
+
 # ── WebSocket ────────────────────────────────────────────────────────────────
 
 
@@ -454,6 +463,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 audio = data.get("audio")
                 if audio:
                     await _handle_voice(audio, session)
+            elif msg_type == "tap_interact":
+                await _handle_tap_interact(user_id)
     except WebSocketDisconnect:
         pass
     finally:

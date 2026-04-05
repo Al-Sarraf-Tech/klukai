@@ -275,6 +275,40 @@ class ProactiveEngine:
             await self._on_message_callback(message)
             logger.info("Klukai proactive: %s", message[:60])
 
+    async def trigger_tap(self) -> None:
+        """Generate a short response for a tap interaction on the 3D avatar."""
+        TAP_LINES = {
+            0: [
+                "Hm? Need something, Commander?",
+                "Right here.",
+                "You have my attention.",
+                "Status nominal. What do you need?",
+            ],
+            1: [
+                "I'm listening, Commander.",
+                "Something on your mind?",
+                "Ready for orders.",
+                "All systems green. Go ahead.",
+            ],
+            2: [
+                "Hey. What's up?",
+                "I was just thinking about the last op.",
+                "Commander. Good timing.",
+                "Need me for something?",
+            ],
+            3: [
+                "There you are. I was wondering when you'd check in.",
+                "Missed you. ...Operationally speaking.",
+                "Hey, Commander. Everything okay?",
+            ],
+            4: [
+                "...You always know when I need company.",
+                "Hey. I'm glad you're here.",
+                "Commander... hi.",
+            ],
+        }
+        await self._deliver(self._pick_message(TAP_LINES))
+
     async def _morning_checkin(self) -> None:
         await self._deliver(self._pick_message(MORNING_MESSAGES))
 
