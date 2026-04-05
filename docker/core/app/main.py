@@ -730,8 +730,9 @@ async def _background_extraction(
 
 async def _background_image_gen(user_request: str) -> None:
     """Generate an anime image based on the user's request and send via WebSocket."""
+    # Wait for chat response to finish and VRAM to settle
+    await asyncio.sleep(5)
     try:
-        # Notify UI
         await ws.send_proactive("default", "Compiling tactical visualization, Commander. Stand by.")
 
         # Detect if this is a couple scene
