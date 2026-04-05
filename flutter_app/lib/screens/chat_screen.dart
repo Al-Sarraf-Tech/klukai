@@ -291,6 +291,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void _handleKeyScroll(KeyEvent event) {
     if (event is! KeyDownEvent) return;
     if (!_scrollController.hasClients) return;
+    // Don't intercept keys when the text input has focus
+    if (_focusNode.hasFocus) return;
 
     final pos = _scrollController.position;
     final pageSize = pos.viewportDimension * 0.8;
@@ -431,8 +433,7 @@ class _ChatScreenState extends State<ChatScreen> {
       backgroundColor: _bgColor,
       body: SafeArea(
         child: KeyboardListener(
-          focusNode: FocusNode()..requestFocus(),
-          autofocus: true,
+          focusNode: FocusNode(),
           onKeyEvent: _handleKeyScroll,
           child: Column(
             children: [
