@@ -115,7 +115,7 @@ class _ChatScreenState extends State<ChatScreen> {
         for (var i = 0; i < _messages.length; i++) {
           _prepareMessageLayout(i);
         }
-        _scrollToBottom();
+        _scrollToBottom(instant: true);
       }
     } catch (e) {
       debugPrint('Failed to load history: $e');
@@ -174,7 +174,7 @@ class _ChatScreenState extends State<ChatScreen> {
             }
           }
         });
-        _scrollToBottom();
+        _scrollToBottom(instant: true);
 
       case 'done':
         final model = msg['model'] as String?;
@@ -347,7 +347,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     if (target != null) {
-      _scrollController.animateTo(target, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+      _scrollController.animateTo(target, duration: const Duration(milliseconds: 400), curve: Curves.easeOutCubic);
     }
   }
 
@@ -443,14 +443,18 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool instant = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
+        if (instant) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        } else {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutCubic,
+          );
+        }
       }
     });
   }
@@ -724,6 +728,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     return ListView.builder(
       controller: _scrollController,
+      physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: _messages.length,
       itemBuilder: (context, index) {
