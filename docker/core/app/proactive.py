@@ -135,8 +135,13 @@ class ProactiveEngine:
         self._last_proactive_answered: bool = True
         self._muted_until: datetime | None = None
         self._on_message_callback = None
-        self._on_recap_callback = None  # async fn(prompt) -> str for LLM recap generation
+        self._on_recap_callback = None
         self._affection_level: int = 0
+        # Random event state
+        self._last_random_event: datetime | None = None
+        self._random_events_today: int = 0
+        self._last_message_time: datetime | None = None
+        self._last_mood: str = "composed"
 
     def set_callback(self, callback) -> None:
         """Set callback for delivering proactive messages."""
@@ -149,6 +154,10 @@ class ProactiveEngine:
     def set_affection_level(self, level: int) -> None:
         """Update the current affection level for message selection."""
         self._affection_level = level
+
+    def set_last_mood(self, mood: str) -> None:
+        """Track the last mood for context-aware event filtering."""
+        self._last_mood = mood
 
     def start(self) -> None:
         # Morning briefing at 0800
@@ -180,6 +189,14 @@ class ProactiveEngine:
             self._mission_report,
             CronTrigger(hour=14, minute=45),
             id="mission_report",
+            replace_existing=True,
+        )
+
+        # Random lore events — hourly check with low probability
+        self._scheduler.add_job(
+            self._random_event,
+            CronTrigger(hour="9-21", minute=15),
+            id="random_event",
             replace_existing=True,
         )
 
@@ -220,6 +237,7 @@ class ProactiveEngine:
     def mark_responded(self) -> None:
         """Mark that the Commander responded to the last proactive message."""
         self._last_proactive_answered = True
+        self._last_message_time = datetime.now()
 
     def _can_send(self) -> bool:
         now = datetime.now()
@@ -271,6 +289,84 @@ class ProactiveEngine:
         if random.random() < 0.5:
             await self._deliver(self._pick_message(MISSION_REPORTS))
 
+    async def _random_event(self) -> None:
+        """Fire a random lore event if conditions are met."""
+        from datetime import timedelta
+
+        now = datetime.now()
+
+        # Guard: max 2 per day
+        if self._random_events_today >= 2:
+            return
+
+        # Guard: 3-hour gap between events
+        if self._last_random_event and (now - self._last_random_event) < timedelta(hours=3):
+            return
+
+        # Guard: don't interrupt active conversation (10 min cooldown)
+        if self._last_message_time and (now - self._last_message_time) < timedelta(minutes=10):
+            return
+
+        # Guard: don't interrupt intimate moments
+        if self._last_mood in ("tender", "longing"):
+            return
+
+        # Guard: don't pile up unanswered proactives
+        if not self._last_proactive_answered:
+            return
+
+        # Guard: check mute
+        if self._muted_until and now < self._muted_until:
+            return
+
+        # Roll probability: 15% chance
+        if random.random() > 0.15:
+            return
+
+        # Load event templates from personality
+        try:
+            from .personality import load_personality
+            p = load_personality()
+            events = p.get("random_events", {})
+        except Exception:
+            return
+
+        # Build eligible categories based on affection level
+        eligible = []
+        for category, config in events.items():
+            if not isinstance(config, dict):
+                continue
+            min_aff = config.get("min_affection", 0)
+            if self._affection_level >= min_aff:
+                weight = config.get("weight", 10)
+                messages = config.get("messages", [])
+                if messages:
+                    eligible.append((category, weight, messages))
+
+        if not eligible:
+            return
+
+        # Weighted random selection
+        total_weight = sum(w for _, w, _ in eligible)
+        roll = random.random() * total_weight
+        cumulative = 0
+        selected_messages = eligible[0][2]
+        for category, weight, messages in eligible:
+            cumulative += weight
+            if roll <= cumulative:
+                selected_messages = messages
+                break
+
+        message = random.choice(selected_messages)
+
+        # Deliver
+        if self._on_message_callback:
+            self._random_events_today += 1
+            self._last_random_event = now
+            self._last_proactive_answered = False
+            await self._on_message_callback(message)
+            logger.info("Random event fired: %s", message[:60])
+
     async def _daily_recap(self) -> None:
         """Generate and deliver a daily recap from Klukai's perspective."""
         if not self._on_recap_callback or not self._on_message_callback:
@@ -290,4 +386,5 @@ class ProactiveEngine:
 
     async def _reset_daily(self) -> None:
         self._proactive_count_today = 0
-        logger.info("Daily proactive counter reset")
+        self._random_events_today = 0
+        logger.info("Daily proactive and event counters reset")

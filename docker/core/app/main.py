@@ -629,6 +629,7 @@ async def _background_extraction(
         session.mood = mood
         await memory.save_session(SESSION_ID, session)
         await ws.send_mood("default", mood)
+        proactive.set_last_mood(mood)
 
         # Adjust affection based on interaction
         try:
