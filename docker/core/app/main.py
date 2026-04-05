@@ -426,20 +426,21 @@ async def get_messages(limit: int = 50, before: str | None = None):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await ws.connect(websocket, "default")
+    user_id = websocket.query_params.get("user", "default")
+    await ws.connect(websocket, user_id)
 
     # Ensure session exists
-    session = await memory.get_session(SESSION_ID)
+    session_key = f"{SESSION_ID}:{user_id}" if user_id != "default" else SESSION_ID
+    session = await memory.get_session(session_key)
     if session is None:
         conv_id = new_id()
         session = SessionState(conversation_id=conv_id)
-        await memory.save_session(SESSION_ID, session)
-        # Create conversation record
+        await memory.save_session(session_key, session)
         await _create_conversation(conv_id)
 
     try:
         while True:
-            data = await ws.receive("default")
+            data = await ws.receive(user_id)
             if data is None:
                 break
 
@@ -448,16 +449,15 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg_type == "message":
                 await _handle_message(data.get("content", ""), session)
             elif msg_type == "typing":
-                pass  # Could track typing indicators
+                pass
             elif msg_type == "voice_end":
-                # Voice data would be transcribed first via companion-voice
                 audio = data.get("audio")
                 if audio:
                     await _handle_voice(audio, session)
     except WebSocketDisconnect:
         pass
     finally:
-        await ws.disconnect("default")
+        await ws.disconnect(user_id)
 
 
 async def _handle_message(content: str, session: SessionState) -> None:
@@ -481,7 +481,12 @@ async def _handle_message(content: str, session: SessionState) -> None:
     # Calculate days together
     days = 0
     if aff_state.first_interaction:
-        days = max(0, (datetime.now() - aff_state.first_interaction).days)
+        try:
+            fi = aff_state.first_interaction
+            now = datetime.now(fi.tzinfo) if fi.tzinfo else datetime.now()
+            days = max(0, (now - fi).days)
+        except Exception:
+            days = 0
 
     system_prompt = assemble_system_prompt(
         mood=session.mood,

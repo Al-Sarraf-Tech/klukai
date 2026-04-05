@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'dart:js_interop';
 import 'package:web/web.dart' as web;
 import '../main.dart';
 import '../models/message.dart';
@@ -16,6 +17,12 @@ import '../widgets/affection_gauge.dart';
 import '../widgets/tool_status_indicator.dart';
 import '../widgets/canvas_message_bubble.dart';
 import 'profile_screen.dart';
+
+@JS('audioRecorder.start')
+external JSPromise<JSBoolean> _jsStartRecording();
+
+@JS('audioRecorder.stop')
+external JSPromise<JSString?> _jsStopRecording();
 
 class ChatScreen extends StatefulWidget {
   final String serverUrl;
@@ -47,6 +54,22 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Color get _bgColor => _isDormMode ? const Color(0xFF16131E) : GFL2Colors.background;
+
+  Color get _moodGlowColor {
+    return switch (_state.mood) {
+      'composed'        => GFL2Colors.primary,
+      'focused'         => const Color(0xFF3B82F6),
+      'prideful'        => GFL2Colors.accent,
+      'exasperated'     => const Color(0xFFF59E0B),
+      'protective'      => GFL2Colors.success,
+      'quietly_pleased' => const Color(0xFF6EE7B7),
+      'competitive'     => GFL2Colors.danger,
+      'tender'          => GFL2Colors.affinity,
+      'longing'         => const Color(0xFF818CF8),
+      'battle_ready'    => GFL2Colors.danger,
+      _                 => GFL2Colors.primary,
+    };
+  }
 
   @override
   void initState() {
@@ -289,6 +312,34 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _transcribeAndSend(String audioBase64) async {
+    try {
+      final serverUrl = widget.serverUrl;
+      final response = await http.post(
+        Uri.parse('$serverUrl/api/stt'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'audio': audioBase64}),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final text = (data['text'] as String? ?? '').trim();
+        if (text.isNotEmpty) {
+          setState(() {
+            _messages.add(ChatMessage(
+              id: 'user-${DateTime.now().millisecondsSinceEpoch}',
+              role: 'user',
+              content: text,
+            ));
+          });
+          _ws.sendMessage(text);
+          _scrollToBottom();
+        }
+      }
+    } catch (e) {
+      debugPrint('STT failed: $e');
+    }
+  }
+
   Widget _starterChip(String text) {
     return GestureDetector(
       onTap: () {
@@ -414,20 +465,22 @@ class _ChatScreenState extends State<ChatScreen> {
               // Portrait — tap to open profile
               GestureDetector(
               onTap: _openProfile,
-              child: Container(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 600),
+                curve: Curves.easeInOut,
                 width: 52,
                 height: 52,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(4),
                   border: Border.all(
-                    color: GFL2Colors.primary.withValues(alpha: 0.5),
+                    color: _moodGlowColor.withValues(alpha: 0.6),
                     width: 1.5,
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: GFL2Colors.primary.withValues(alpha: 0.1),
-                      blurRadius: 8,
-                      spreadRadius: 1,
+                      color: _moodGlowColor.withValues(alpha: 0.2),
+                      blurRadius: 12,
+                      spreadRadius: 2,
                     ),
                   ],
                 ),
@@ -704,8 +757,19 @@ class _ChatScreenState extends State<ChatScreen> {
           VoiceButton(
             isRecording: _isRecording,
             enabled: _state.isConnected,
-            onTapDown: () => setState(() => _isRecording = true),
-            onTapUp: () => setState(() => _isRecording = false),
+            onTapDown: () async {
+              setState(() => _isRecording = true);
+              try { await _jsStartRecording().toDart; } catch (_) {}
+            },
+            onTapUp: () async {
+              setState(() => _isRecording = false);
+              try {
+                final b64 = await _jsStopRecording().toDart;
+                if (b64 != null) {
+                  _transcribeAndSend(b64.toDart);
+                }
+              } catch (e) { debugPrint('Recording failed: $e'); }
+            },
           ),
           const SizedBox(width: 8),
           Expanded(
