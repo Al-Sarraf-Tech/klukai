@@ -101,7 +101,7 @@ class LLMConfig(BaseModel):
     provider: str  # "lmstudio" or "anthropic"
     model: str
     base_url: str | None = None
-    max_tokens: int = 2048
+    max_tokens: int = 6144
     temperature: float = 0.8
 
 
