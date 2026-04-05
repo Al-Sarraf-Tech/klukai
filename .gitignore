@@ -1,6 +1,9 @@
 .env
 web-build/*
 !web-build/.gitkeep
+!web-build/index.html
+!web-build/js/
+!web-build/assets/models/
 __pycache__/
 *.pyc
 .venv/
