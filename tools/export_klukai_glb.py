@@ -199,43 +199,62 @@ if klukai_arm2:
             pb.rotation_quaternion = __import__('mathutils').Quaternion((1, 0, 0), __import__('math').radians(angle))
 
     bpy.context.view_layer.update()
-    # Don't apply as rest pose — instead create an animation clip
-    # that holds the arms-down position. Three.js will play it.
-    bpy.context.scene.frame_start = 0
-    bpy.context.scene.frame_end = 120
-    bpy.context.scene.render.fps = 30
+    # Create idle_relaxed animation using fcurve_ensure_for_datablock (the API that works in Blender 5.0)
+    import math as _math
+    from mathutils import Quaternion as _Quat
 
     action = bpy.data.actions.new(name='idle_relaxed')
     action.use_fake_user = True
     klukai_arm2.animation_data_create()
     klukai_arm2.animation_data.action = action
 
-    # Key the arms-down pose at frame 0 and frame 120 (4-second loop)
-    for frame in [0, 60, 120]:
-        bpy.context.scene.frame_set(frame)
-        for bone_name in ['Shoulder_L', 'Shoulder_R', 'Elbow_L', 'Elbow_R']:
-            pb = klukai_arm2.pose.bones.get(bone_name)
-            if pb:
-                pb.keyframe_insert(data_path='rotation_quaternion', frame=frame)
+    FPS = 30
+    DURATION = 120  # 4 seconds at 30fps
+    bpy.context.scene.render.fps = FPS
+    bpy.context.scene.frame_start = 0
+    bpy.context.scene.frame_end = DURATION
 
-        # Add subtle breathing on Spine1_M
-        spine = klukai_arm2.pose.bones.get('Spine1_M')
-        if spine:
-            spine.rotation_mode = 'QUATERNION'
-            breath = __import__('math').sin(frame / 120 * 2 * __import__('math').pi) * 0.02
-            spine.rotation_quaternion = __import__('mathutils').Quaternion((1, 0, 0), breath)
-            spine.keyframe_insert(data_path='rotation_quaternion', frame=frame)
+    def key_bone_quat(action, armature, bone_name, frame, quat):
+        """Insert quaternion keyframes using the Blender 5.0 API that actually exports."""
+        dp = f'pose.bones["{bone_name}"].rotation_quaternion'
+        for i in range(4):
+            fc = action.fcurve_ensure_for_datablock(armature, dp, index=i)
+            kf = fc.keyframe_points.insert(frame, quat[i])
+            kf.interpolation = 'BEZIER'
 
-        # Add subtle head movement
-        head = klukai_arm2.pose.bones.get('Head_M')
-        if head:
-            head.rotation_mode = 'QUATERNION'
-            sway = __import__('math').sin(frame / 120 * __import__('math').pi) * 0.03
-            head.rotation_quaternion = __import__('mathutils').Quaternion((0, 1, 0), sway)
-            head.keyframe_insert(data_path='rotation_quaternion', frame=frame)
+    # Arms-down rotation (verified: -X at 60° puts wrist below shoulder)
+    shoulder_down_L = _Quat((1, 0, 0), _math.radians(-60))
+    shoulder_down_R = _Quat((1, 0, 0), _math.radians(60))
+    elbow_bend_L = _Quat((1, 0, 0), _math.radians(-15))
+    elbow_bend_R = _Quat((1, 0, 0), _math.radians(15))
+
+    # Key static arms-down pose at start and end (loop)
+    for frame in [0, DURATION]:
+        key_bone_quat(action, klukai_arm2, 'Shoulder_L', frame, shoulder_down_L)
+        key_bone_quat(action, klukai_arm2, 'Shoulder_R', frame, shoulder_down_R)
+        key_bone_quat(action, klukai_arm2, 'Elbow_L', frame, elbow_bend_L)
+        key_bone_quat(action, klukai_arm2, 'Elbow_R', frame, elbow_bend_R)
+
+    # Subtle breathing on Spine1_M (oscillates over the duration)
+    for frame in range(0, DURATION + 1, 10):
+        t = frame / DURATION * 2 * _math.pi
+        breath = _Quat((1, 0, 0), _math.sin(t) * 0.015)
+        key_bone_quat(action, klukai_arm2, 'Spine1_M', frame, breath)
+
+    # Subtle head sway
+    for frame in range(0, DURATION + 1, 15):
+        t = frame / DURATION * _math.pi
+        head_q = _Quat((0, 1, 0), _math.sin(t) * 0.025)
+        key_bone_quat(action, klukai_arm2, 'Head_M', frame, head_q)
+
+    # Subtle body sway on Root_M
+    for frame in range(0, DURATION + 1, 15):
+        t = frame / DURATION * 2 * _math.pi
+        root_q = _Quat((0, 0, 1), _math.sin(t) * 0.01)
+        key_bone_quat(action, klukai_arm2, 'Root_M', frame, root_q)
 
     bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"[export] Created idle_relaxed animation")
+    print(f"[export] Created idle_relaxed animation (arms down + breathing + sway)")
 else:
     print("[export] WARNING: Could not find Klukai armature for pose")
 
@@ -388,8 +407,16 @@ def enable_collection_recursive(layer_collection):
         enable_collection_recursive(child)
 enable_collection_recursive(bpy.context.view_layer.layer_collection)
 
-# Set armature to pose mode if it exists
-if armature:
+# Set the idle_relaxed action as active right before export
+# (the exporter only exports the active action in Blender 5.0)
+idle_action = bpy.data.actions.get('idle_relaxed')
+if idle_action and armature:
+    armature.animation_data_create()
+    armature.animation_data.action = idle_action
+    print(f"[export] Set idle_relaxed as active action for export")
+
+# Skip old procedural animations — idle_relaxed already created above
+if False and armature:
     bpy.context.view_layer.objects.active = armature
     bpy.ops.object.mode_set(mode='POSE')
 
