@@ -4,6 +4,7 @@
   let scene, camera, renderer, clock;
   let model = null;
   let skeleton = null;
+  let mixer = null;  // THREE.AnimationMixer for baked animations
   let isDisposed = false;
   let fidgetTimer = null;
   let currentMoodGroup = 'relaxed';
@@ -81,10 +82,43 @@
 
     model = gltf.scene;
 
-    // Remove junk
-    const junk = [];
-    model.traverse(n => { if (n.name === 'Cube' || n.name === 'Camera' || n.name === 'Light') junk.push(n); });
-    junk.forEach(n => n.removeFromParent());
+    // Remove junk and duplicate skin variant meshes
+    const toRemove = [];
+    const seenBases = new Set();
+    model.traverse(n => {
+      // Remove obvious junk
+      if (n.name === 'Cube' || n.name === 'Camera' || n.name === 'Light') {
+        toRemove.push(n);
+        return;
+      }
+      // Hide duplicate skin variants and non-default outfits
+      if (n.isMesh) {
+        const name = n.name.toLowerCase();
+        // Remove Dorm, Fight, and numbered outfit variants (SSR0102, SSR0103 = alt outfits)
+        if (name.includes('dorm') || name.includes('fight') ||
+            name.includes('ssr0102') || name.includes('ssr0103') ||
+            name.includes('ssr0101')) {
+          n.visible = false;
+          return;
+        }
+        // Deduplicate: keep first instance of each base mesh, hide repeats
+        // e.g. face_lod0.001 and face_lod0.003 — keep first, hide second
+        const base = name.replace(/\.\d+$/, '').replace(/_lod\d+/, '');
+        if (name.includes('face') || name.includes('hair')) {
+          if (seenBases.has(base)) {
+            n.visible = false;
+            return;
+          }
+          seenBases.add(base);
+        }
+      }
+    });
+    toRemove.forEach(n => n.removeFromParent());
+
+    // Count visible meshes
+    let visibleMeshes = 0;
+    model.traverse(n => { if (n.isMesh && n.visible) visibleMeshes++; });
+    console.log('[klukai_3d] Visible meshes after cleanup:', visibleMeshes);
 
     scene.add(model);
 
@@ -161,6 +195,22 @@
       }
     });
     console.log('[klukai_3d] Morphs:', Object.keys(morphs));
+
+    // Play baked idle animation if available
+    if (gltf.animations && gltf.animations.length > 0) {
+      mixer = new THREE.AnimationMixer(model);
+      console.log('[klukai_3d] Animations:', gltf.animations.map(a => a.name));
+      // Find idle_relaxed or play the first animation
+      const idleClip = gltf.animations.find(a => a.name === 'idle_relaxed') || gltf.animations[0];
+      if (idleClip) {
+        const action = mixer.clipAction(idleClip);
+        action.setLoop(THREE.LoopRepeat);
+        action.play();
+        console.log('[klukai_3d] Playing animation:', idleClip.name, 'duration:', idleClip.duration.toFixed(2) + 's');
+      }
+    } else {
+      console.log('[klukai_3d] No baked animations found — procedural only');
+    }
 
     // Weight magnitude diagnostic — check if weights are diluted
     if (skeleton && bones.shoulderL) {
@@ -290,7 +340,8 @@
     if (isDisposed) return;
     requestAnimationFrame(animate);
     const dt = clock.getDelta();
-    updateAnimations(dt);
+    if (mixer) mixer.update(dt);  // Tick baked animation
+    updateAnimations(dt);          // Morph targets (blink, talking)
     if (model) model.updateMatrixWorld(true);
     if (skeleton) skeleton.update();
     if (renderer && scene && camera) renderer.render(scene, camera);
@@ -334,8 +385,9 @@
     dispose() {
       isDisposed = true;
       if (fidgetTimer) clearTimeout(fidgetTimer);
+      if (mixer) mixer.stopAllAction();
       if (renderer) { renderer.dispose(); renderer.forceContextLoss(); }
-      scene = null; camera = null; renderer = null; model = null; skeleton = null; bones = {}; morphs = {};
+      scene = null; camera = null; renderer = null; model = null; skeleton = null; mixer = null; bones = {}; morphs = {};
       console.log('[klukai_3d] Disposed');
     },
   };

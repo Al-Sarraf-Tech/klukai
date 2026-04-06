@@ -199,9 +199,43 @@ if klukai_arm2:
             pb.rotation_quaternion = __import__('mathutils').Quaternion((1, 0, 0), __import__('math').radians(angle))
 
     bpy.context.view_layer.update()
-    bpy.ops.pose.armature_apply(selected=False)
+    # Don't apply as rest pose — instead create an animation clip
+    # that holds the arms-down position. Three.js will play it.
+    bpy.context.scene.frame_start = 0
+    bpy.context.scene.frame_end = 120
+    bpy.context.scene.render.fps = 30
+
+    action = bpy.data.actions.new(name='idle_relaxed')
+    action.use_fake_user = True
+    klukai_arm2.animation_data_create()
+    klukai_arm2.animation_data.action = action
+
+    # Key the arms-down pose at frame 0 and frame 120 (4-second loop)
+    for frame in [0, 60, 120]:
+        bpy.context.scene.frame_set(frame)
+        for bone_name in ['Shoulder_L', 'Shoulder_R', 'Elbow_L', 'Elbow_R']:
+            pb = klukai_arm2.pose.bones.get(bone_name)
+            if pb:
+                pb.keyframe_insert(data_path='rotation_quaternion', frame=frame)
+
+        # Add subtle breathing on Spine1_M
+        spine = klukai_arm2.pose.bones.get('Spine1_M')
+        if spine:
+            spine.rotation_mode = 'QUATERNION'
+            breath = __import__('math').sin(frame / 120 * 2 * __import__('math').pi) * 0.02
+            spine.rotation_quaternion = __import__('mathutils').Quaternion((1, 0, 0), breath)
+            spine.keyframe_insert(data_path='rotation_quaternion', frame=frame)
+
+        # Add subtle head movement
+        head = klukai_arm2.pose.bones.get('Head_M')
+        if head:
+            head.rotation_mode = 'QUATERNION'
+            sway = __import__('math').sin(frame / 120 * __import__('math').pi) * 0.03
+            head.rotation_quaternion = __import__('mathutils').Quaternion((0, 1, 0), sway)
+            head.keyframe_insert(data_path='rotation_quaternion', frame=frame)
+
     bpy.ops.object.mode_set(mode='OBJECT')
-    print("[export] Applied arms-down pose as rest pose")
+    print(f"[export] Created idle_relaxed animation")
 else:
     print("[export] WARNING: Could not find Klukai armature for pose")
 
