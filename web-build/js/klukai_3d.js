@@ -82,7 +82,7 @@
   }
 
   async function loadModel(url) {
-    const loader = new THREE.GLTFLoader();
+    const loader = new (window.GLTFLoader || THREE.GLTFLoader)();
     const gltf = await new Promise((resolve, reject) => {
       loader.load(url, resolve, undefined, reject);
     });
