@@ -45,7 +45,54 @@ print(f"[export] Skin: {TARGET_SKIN}")
 # ── Step 1: Open the .blend ─────────────────────────────────────────────────
 
 bpy.ops.wm.open_mainfile(filepath=INPUT_BLEND)
-print(f"[export] Opened blend file. Objects: {[o.name for o in bpy.data.objects]}")
+print(f"[export] Opened blend file. Objects count: {len(bpy.data.objects)}")
+
+# ── Clean up scene: hide non-default skins, remove extra armatures ──────────
+# Make everything visible first so we can manipulate it
+for col in bpy.data.collections:
+    col.hide_viewport = False
+    col.hide_render = False
+for obj in bpy.data.objects:
+    obj.hide_viewport = False
+    obj.hide_render = False
+    obj.hide_set(False)
+def enable_collection_recursive(lc):
+    lc.exclude = False
+    lc.hide_viewport = False
+    for child in lc.children:
+        enable_collection_recursive(child)
+enable_collection_recursive(bpy.context.view_layer.layer_collection)
+
+# Skin variant keywords to HIDE (keep only default skin)
+HIDE_KEYWORDS = ['Astral Luminous', 'Cerulean Breaker', 'Speed Star', 'Dorm',
+                 'Cerulean_Breaker', 'Speed_Star', 'Astral_Luminous']
+
+removed_count = 0
+for obj in list(bpy.data.objects):
+    name = obj.name
+    # DELETE non-default skin variants (not just hide)
+    if any(kw in name for kw in HIDE_KEYWORDS):
+        bpy.data.objects.remove(obj, do_unlink=True)
+        removed_count += 1
+        continue
+    # Remove junk
+    if name in ('Cube', 'Camera'):
+        bpy.data.objects.remove(obj, do_unlink=True)
+        continue
+
+# Remove extra armatures — keep only the main one (Klukai or RIG-Klukai)
+# The extra rigs (Skins, RIG-Skins, weapon rigs) add hundreds of bones
+KEEP_ARMATURES = {'Klukai', 'RIG-Klukai'}
+for obj in list(bpy.data.objects):
+    if obj.type == 'ARMATURE' and obj.name not in KEEP_ARMATURES:
+        # Don't delete if meshes are parented to it
+        has_children = any(c.type == 'MESH' and not c.hide_render for c in obj.children_recursive)
+        if not has_children:
+            print(f"[export] Removing extra armature: {obj.name}")
+            bpy.data.objects.remove(obj, do_unlink=True)
+
+print(f"[export] Removed {removed_count} non-default skin objects")
+print(f"[export] Remaining objects: {len(bpy.data.objects)}")
 
 
 # ── Step 2: Inspect scene ───────────────────────────────────────────────────
@@ -496,6 +543,7 @@ try:
         export_image_format='AUTO',
         export_materials='EXPORT',
         export_skins=True,
+        export_def_bones=True,     # ONLY export deformation bones — strips MCH/ORG/VIS
         export_morph=True,         # Export shape keys / morph targets
         export_morph_normal=True,
         export_lights=False,
