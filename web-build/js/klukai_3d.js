@@ -204,8 +204,8 @@
               if (bIdx === spineIdx && w > 0.001) { spineCount++; spineMax = Math.max(spineMax, w); }
             }
           }
-          console.log('[klukai_3d] DEF-Shoulder_L: ' + shoulderCount + ' verts, max weight: ' + shoulderMax.toFixed(4));
-          console.log('[klukai_3d] DEF-Spine1_M:   ' + spineCount + ' verts, max weight: ' + spineMax.toFixed(4));
+          console.log('[klukai_3d] Shoulder_L: ' + shoulderCount + ' verts, max weight: ' + shoulderMax.toFixed(4));
+          console.log('[klukai_3d] Spine1_M:   ' + spineCount + ' verts, max weight: ' + spineMax.toFixed(4));
           if (shoulderMax < 0.1) console.error('[klukai_3d] CONFIRMED: Shoulder weights are diluted! Max=' + shoulderMax.toFixed(4));
         }
       });

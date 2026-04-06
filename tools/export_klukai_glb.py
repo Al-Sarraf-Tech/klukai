@@ -107,6 +107,82 @@ print(f"[export] Removed {removed_count} non-default skin objects")
 print(f"[export] Remaining objects: {len(bpy.data.objects)}")
 
 
+# ── Skeleton fix: re-parent meshes from 673-bone RIG-Klukai to 152-bone Klukai ──
+# The Body mesh is bound to Skin 0 "RIG-Klukai" (673 bones — full Rigify control
+# rig with DEF/MCH/ORG/VIS bones).  With 4 weights-per-vertex the DEF bone weights
+# get diluted to near-zero and Three.js cannot deform the mesh.
+# Fix: rename vertex groups (strip DEF- prefix), re-parent to the clean "Klukai"
+# armature, then delete the Rigify control rigs entirely.
+
+# Step 1: Rename vertex groups — strip DEF- prefix so they match Klukai bone names
+renamed_count = 0
+for obj in bpy.data.objects:
+    if obj.type == 'MESH':
+        for vg in obj.vertex_groups:
+            if vg.name.startswith('DEF-'):
+                new_name = vg.name[4:]  # Strip "DEF-"
+                # If a group with the target name already exists, rename it out of the way
+                existing = obj.vertex_groups.get(new_name)
+                if existing and existing != vg:
+                    existing.name = existing.name + '_OLD'
+                vg.name = new_name
+                renamed_count += 1
+print(f"[export] Renamed {renamed_count} vertex groups (stripped DEF- prefix)")
+
+# Step 2: Find the clean 152-bone game armature
+klukai_arm = bpy.data.objects.get('Klukai')
+if not klukai_arm:
+    print("[export] ERROR: 'Klukai' armature not found — skeleton re-parent skipped!")
+else:
+    print(f"[export] Found Klukai armature: {len(klukai_arm.data.bones)} bones")
+
+    # Step 3: Re-parent ALL meshes with vertex groups to Klukai armature
+    # and ensure they have a working armature modifier pointing to Klukai
+    rig_arm = bpy.data.objects.get('RIG-Klukai')
+    reparented = 0
+    modifier_fixed = 0
+    for obj in list(bpy.data.objects):
+        if obj.type != 'MESH':
+            continue
+        # Check if this mesh has vertex groups (meaning it should be skinned)
+        if len(obj.vertex_groups) == 0:
+            continue
+
+        # Re-parent to Klukai if currently under RIG-Klukai or any other armature
+        if obj.parent != klukai_arm:
+            obj.parent = klukai_arm
+            obj.parent_type = 'OBJECT'
+            reparented += 1
+
+        # Fix armature modifier: update or create one pointing to Klukai
+        has_armature_mod = False
+        for mod in obj.modifiers:
+            if mod.type == 'ARMATURE':
+                if mod.object != klukai_arm:
+                    mod.object = klukai_arm
+                    modifier_fixed += 1
+                has_armature_mod = True
+                break
+
+        # If no armature modifier exists, add one
+        if not has_armature_mod and len(obj.vertex_groups) > 0:
+            mod = obj.modifiers.new(name='Armature', type='ARMATURE')
+            mod.object = klukai_arm
+            modifier_fixed += 1
+
+    print(f"[export] Re-parented {reparented} meshes to Klukai armature")
+    print(f"[export] Fixed/added {modifier_fixed} armature modifiers")
+
+    # Steps 4-6: Delete the Rigify control rigs — they must not appear in the export
+    for arm_name in ['RIG-Klukai', 'RIG-Skins', 'Skins']:
+        arm = bpy.data.objects.get(arm_name)
+        if arm:
+            bpy.data.objects.remove(arm, do_unlink=True)
+            print(f"[export] Deleted armature: {arm_name}")
+
+print(f"[export] Post-skeleton-fix objects: {len(bpy.data.objects)}")
+
+
 # ── Step 2: Inspect scene ───────────────────────────────────────────────────
 
 # Find the main character armature (the one named "Klukai" with ~152 bones)
