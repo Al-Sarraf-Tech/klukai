@@ -118,27 +118,54 @@
     const center = box.getCenter(new THREE.Vector3());
     model.position.set(-center.x, -box.min.y, -center.z);
 
-    // Find key bones by name patterns (GFL2 rig naming)
+    // Find the skeleton that the Body mesh is skinned to
+    let targetSkeleton = null;
     model.traverse((node) => {
-      if (node.isBone) {
-        const n = node.name;
-        if (n === 'Head_M') bones.head = node;
-        else if (n === 'Neck_M') bones.neck = node;
-        else if (n === 'Chest_M') bones.chest = node;
-        else if (n === 'Spine2_M') bones.spine2 = node;
-        else if (n === 'Spine1_M') bones.spine1 = node;
-        else if (n === 'Root_M') bones.root = node;
-        else if (n === 'Shoulder_L') bones.shoulderL = node;
-        else if (n === 'Shoulder_R') bones.shoulderR = node;
-
-        // Store initial rotations for reset
-        if (!node._initialRot) {
-          node._initialRot = node.rotation.clone();
+      if (node.isSkinnedMesh && (node.name === 'Body' || node.name.includes('body') || node.name.includes('Body'))) {
+        if (node.skeleton) {
+          targetSkeleton = node.skeleton;
+          console.log('[klukai_3d] Found skinned mesh:', node.name, 'skeleton bones:', node.skeleton.bones.length);
         }
       }
     });
 
-    // Index morph targets (shape keys)
+    // Fallback: find any SkinnedMesh with the most bones
+    if (!targetSkeleton) {
+      let maxBones = 0;
+      model.traverse((node) => {
+        if (node.isSkinnedMesh && node.skeleton && node.skeleton.bones.length > maxBones) {
+          maxBones = node.skeleton.bones.length;
+          targetSkeleton = node.skeleton;
+          console.log('[klukai_3d] Fallback skeleton from:', node.name, 'bones:', maxBones);
+        }
+      });
+    }
+
+    if (!targetSkeleton) {
+      console.error('[klukai_3d] No skinned mesh found!');
+    } else {
+      // Only index bones from the actual deformation skeleton
+      const skeletonBoneNames = new Set(targetSkeleton.bones.map(b => b.name));
+      console.log('[klukai_3d] Target skeleton bones:', [...skeletonBoneNames].slice(0, 20), '...');
+
+      for (const bone of targetSkeleton.bones) {
+        const n = bone.name;
+        bone._initialRot = bone.rotation.clone();
+        bone._initialPos = bone.position.clone();
+
+        // Match by exact name or DEF- prefix variant
+        if (n === 'Head_M' || n === 'DEF-Head_M') bones.head = bone;
+        else if (n === 'Neck_M' || n === 'DEF-Neck_M') bones.neck = bone;
+        else if (n === 'Chest_M' || n === 'DEF-Chest_M') bones.chest = bone;
+        else if (n === 'Spine2_M' || n === 'DEF-Spine2_M') bones.spine2 = bone;
+        else if (n === 'Spine1_M' || n === 'DEF-Spine1_M') bones.spine1 = bone;
+        else if (n === 'Root_M' || n === 'DEF-Root_M') bones.root = bone;
+        else if (n === 'Shoulder_L' || n === 'DEF-Shoulder_L') bones.shoulderL = bone;
+        else if (n === 'Shoulder_R' || n === 'DEF-Shoulder_R') bones.shoulderR = bone;
+      }
+    }
+
+    // Index morph targets from all meshes (shape keys are fine to share)
     model.traverse((node) => {
       if (node.isMesh && node.morphTargetDictionary) {
         for (const [name, idx] of Object.entries(node.morphTargetDictionary)) {

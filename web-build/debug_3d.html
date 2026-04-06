@@ -4,13 +4,20 @@
 <meta charset="utf-8">
 <title>Klukai 3D Debug</title>
 <style>
-  body { margin: 0; background: #12151E; color: #ccc; font-family: monospace; }
-  #info { position: absolute; top: 10px; left: 10px; z-index: 10; font-size: 12px; white-space: pre; }
+  body { margin: 0; background: #12151E; color: #0f0; font-family: monospace; }
+  #info { position: absolute; top: 10px; left: 10px; z-index: 10; font-size: 11px;
+          white-space: pre-wrap; max-width: 50%; max-height: 90vh; overflow-y: auto;
+          background: rgba(0,0,0,0.7); padding: 8px; border-radius: 4px; }
   canvas { display: block; width: 100vw; height: 100vh; }
+  #controls { position: absolute; bottom: 10px; left: 10px; z-index: 10; }
+  #controls button { background: #333; color: #0f0; border: 1px solid #0f0; padding: 6px 12px;
+                     margin: 2px; cursor: pointer; font-family: monospace; font-size: 11px; }
+  #controls button:hover { background: #0f0; color: #000; }
 </style>
 </head>
 <body>
 <div id="info">Loading...</div>
+<div id="controls"></div>
 <script type="importmap">
 {
   "imports": {
@@ -25,106 +32,240 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const info = document.getElementById('info');
-function log(msg) { info.textContent += '\n' + msg; console.log(msg); }
+const ctrlDiv = document.getElementById('controls');
+function log(msg) { info.textContent += '\n' + msg; console.log('[debug]', msg); }
+function btn(label, fn) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.onclick = fn;
+  ctrlDiv.appendChild(b);
+}
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x12151E);
 
 const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.01, 1000);
-camera.position.set(0, 1.2, 3);
-
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
-// Orbit controls to explore the scene
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 1, 0);
-controls.update();
+controls.enableDamping = true;
 
-// Lights
 scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 const dir = new THREE.DirectionalLight(0xffffff, 1.0);
 dir.position.set(2, 3, 2);
 scene.add(dir);
-
-// Grid for reference
 scene.add(new THREE.GridHelper(10, 10, 0x4FC3F7, 0x333333));
-
-// Axes helper
 scene.add(new THREE.AxesHelper(2));
 
-log('Scene ready. Loading model...');
+log('Loading model...');
+
+let model = null;
+let allBones = {};
+let allMorphs = {};
+let elapsed = 0;
+let animating = false;
 
 const loader = new GLTFLoader();
 loader.load(
   '/app/assets/models/klukai.glb',
   (gltf) => {
-    const model = gltf.scene;
+    model = gltf.scene;
 
-    // Remove junk objects
+    // Remove junk
     const junk = [];
     model.traverse(n => { if (n.name === 'Cube' || n.name === 'Camera' || n.name === 'Light') junk.push(n); });
     junk.forEach(n => n.removeFromParent());
-    log('Removed junk: ' + junk.map(n => n.name).join(', '));
 
     scene.add(model);
 
-    // Log model info
+    // Center and ground
     const box = new THREE.Box3().setFromObject(model);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
-    log('Model loaded!');
-    log('Bounding box size: ' + size.x.toFixed(2) + ' x ' + size.y.toFixed(2) + ' x ' + size.z.toFixed(2));
-    log('Center: ' + center.x.toFixed(2) + ', ' + center.y.toFixed(2) + ', ' + center.z.toFixed(2));
-    log('Position: ' + model.position.x.toFixed(2) + ', ' + model.position.y.toFixed(2) + ', ' + model.position.z.toFixed(2));
+    model.position.set(-center.x, -box.min.y, -center.z);
 
-    // Count meshes
-    let meshCount = 0, vertCount = 0;
-    model.traverse(n => {
-      if (n.isMesh) {
-        meshCount++;
-        vertCount += n.geometry.attributes.position?.count || 0;
-      }
-    });
-    log('Meshes: ' + meshCount + ', Vertices: ' + vertCount);
-
-    // List animations
-    log('Animations (' + gltf.animations.length + '): ' + gltf.animations.map(a => a.name).join(', '));
-
-    // Check materials
-    let matInfo = [];
-    model.traverse(n => {
-      if (n.isMesh && matInfo.length < 5) {
-        const m = n.material;
-        matInfo.push(n.name + ': ' + m.type + ' visible=' + n.visible + ' opacity=' + m.opacity);
-      }
-    });
-    log('Materials (first 5): \n  ' + matInfo.join('\n  '));
-
-    // Auto-frame camera on model
-    camera.position.set(center.x, center.y + size.y * 0.3, center.z + size.y * 1.5);
-    controls.target.copy(center);
+    // Frame camera
+    camera.position.set(0, size.y * 0.5, size.y * 1.5);
+    controls.target.set(0, size.y * 0.45, 0);
     controls.update();
-    log('Camera framed on model.');
+
+    log('Model loaded! Size: ' + size.x.toFixed(2) + 'x' + size.y.toFixed(2) + 'x' + size.z.toFixed(2));
+
+    // ── Dump ALL bones ──
+    log('\n══ ALL BONES ══');
+    let boneCount = 0;
+    model.traverse(n => {
+      if (n.isBone) {
+        boneCount++;
+        allBones[n.name] = n;
+        n._origRot = n.rotation.clone();
+        n._origPos = n.position.clone();
+      }
+    });
+    const boneNames = Object.keys(allBones);
+    log('Total bones: ' + boneCount);
+    log(boneNames.join(', '));
+
+    // ── Dump ALL morph targets ──
+    log('\n══ ALL MORPH TARGETS ══');
+    model.traverse(n => {
+      if (n.isMesh && n.morphTargetDictionary) {
+        const keys = Object.keys(n.morphTargetDictionary);
+        if (keys.length > 0) {
+          log(n.name + ': ' + keys.join(', '));
+          for (const [name, idx] of Object.entries(n.morphTargetDictionary)) {
+            allMorphs[name] = { mesh: n, index: idx };
+          }
+        }
+      }
+    });
+
+    // ── Dump skeleton hierarchy (first 3 levels) ──
+    log('\n══ SKELETON HIERARCHY (top 3 levels) ══');
+    model.traverse(n => {
+      if (n.isBone && !n.parent?.isBone) {
+        // This is a root bone
+        function printTree(bone, depth) {
+          if (depth > 3) return;
+          log('  '.repeat(depth) + bone.name);
+          for (const child of bone.children) {
+            if (child.isBone) printTree(child, depth + 1);
+          }
+        }
+        printTree(n, 0);
+      }
+    });
+
+    // ── Test buttons ──
+    log('\n══ CONTROLS ══');
+    log('Use buttons below to test bone movement');
+
+    // Find likely head/spine bones by common patterns
+    const headCandidates = boneNames.filter(n => /head|Head/i.test(n));
+    const spineCandidates = boneNames.filter(n => /spine|Spine|chest|Chest/i.test(n));
+    const rootCandidates = boneNames.filter(n => /root|Root|hips|Hips/i.test(n));
+    const neckCandidates = boneNames.filter(n => /neck|Neck/i.test(n));
+
+    log('Head candidates: ' + (headCandidates.join(', ') || 'NONE'));
+    log('Spine candidates: ' + (spineCandidates.join(', ') || 'NONE'));
+    log('Root candidates: ' + (rootCandidates.join(', ') || 'NONE'));
+    log('Neck candidates: ' + (neckCandidates.join(', ') || 'NONE'));
+
+    // Buttons to test each candidate
+    for (const name of headCandidates) {
+      btn('Nod: ' + name, () => {
+        const b = allBones[name];
+        if (b) { b.rotation.x += 0.2; log('Rotated ' + name + ' X+0.2'); }
+      });
+    }
+    for (const name of spineCandidates) {
+      btn('Twist: ' + name, () => {
+        const b = allBones[name];
+        if (b) { b.rotation.y += 0.15; log('Rotated ' + name + ' Y+0.15'); }
+      });
+    }
+    for (const name of rootCandidates) {
+      btn('Sway: ' + name, () => {
+        const b = allBones[name];
+        if (b) { b.rotation.z += 0.1; log('Rotated ' + name + ' Z+0.1'); }
+      });
+    }
+
+    btn('RESET ALL', () => {
+      for (const [name, bone] of Object.entries(allBones)) {
+        if (bone._origRot) bone.rotation.copy(bone._origRot);
+        if (bone._origPos) bone.position.copy(bone._origPos);
+      }
+      log('Reset all bones');
+    });
+
+    btn('BLINK', () => {
+      const m = allMorphs['Eyes_Close_Down_Right'] || allMorphs['Eyes_Close_Down_Left'];
+      if (m) {
+        m.mesh.morphTargetInfluences[m.index] = 1.0;
+        setTimeout(() => { m.mesh.morphTargetInfluences[m.index] = 0; }, 200);
+        log('Blinked!');
+      } else {
+        log('No blink morph found');
+      }
+    });
+
+    btn('MOUTH OPEN', () => {
+      const m = allMorphs['Mouth_Happy'];
+      if (m) {
+        m.mesh.morphTargetInfluences[m.index] = 0.8;
+        setTimeout(() => { m.mesh.morphTargetInfluences[m.index] = 0; }, 500);
+        log('Mouth opened!');
+      } else {
+        log('No mouth morph found');
+      }
+    });
+
+    btn('START IDLE', () => {
+      animating = !animating;
+      log('Idle animation: ' + (animating ? 'ON' : 'OFF'));
+    });
+
+    // Test: rotate every bone by a tiny amount to see which ones affect the mesh
+    btn('WIGGLE ALL BONES', () => {
+      let affected = 0;
+      for (const [name, bone] of Object.entries(allBones)) {
+        bone.rotation.x += 0.05;
+        affected++;
+      }
+      log('Wiggled ' + affected + ' bones');
+    });
   },
   (progress) => {
     if (progress.total) {
-      const pct = ((progress.loaded / progress.total) * 100).toFixed(0);
-      info.textContent = 'Loading... ' + pct + '% (' + (progress.loaded / 1024 / 1024).toFixed(1) + ' MB)';
+      info.textContent = 'Loading... ' + ((progress.loaded / progress.total) * 100).toFixed(0) + '%';
     }
   },
   (error) => {
-    log('ERROR loading model: ' + error.message);
+    log('ERROR: ' + error.message);
     console.error(error);
   }
 );
 
+const clock = new THREE.Clock();
+
 function animate() {
   requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+  elapsed += dt;
   controls.update();
+
+  // Simple procedural idle when toggled on
+  if (animating) {
+    // Try every likely bone name
+    for (const name of ['Head_M', 'head', 'Head', 'DEF-Head_M']) {
+      const b = allBones[name];
+      if (b) {
+        b.rotation.x = (b._origRot?.x || 0) + Math.sin(elapsed * 0.5) * 0.03;
+        b.rotation.y = (b._origRot?.y || 0) + Math.sin(elapsed * 0.3) * 0.04;
+        break;
+      }
+    }
+    for (const name of ['Root_M', 'root', 'DEF-Root_M', 'Hips']) {
+      const b = allBones[name];
+      if (b) {
+        b.rotation.z = (b._origRot?.z || 0) + Math.sin(elapsed * 0.4) * 0.02;
+        break;
+      }
+    }
+    for (const name of ['Spine1_M', 'Spine2_M', 'DEF-Spine1_M', 'DEF-Spine2_M', 'Chest_M']) {
+      const b = allBones[name];
+      if (b) {
+        b.rotation.x = (b._origRot?.x || 0) + Math.sin(elapsed * 0.8) * 0.01;
+        break;
+      }
+    }
+  }
+
   renderer.render(scene, camera);
 }
 animate();
