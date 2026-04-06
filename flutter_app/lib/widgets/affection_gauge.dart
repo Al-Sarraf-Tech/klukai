@@ -52,15 +52,20 @@ class _AffectionGaugeState extends State<AffectionGauge>
     super.dispose();
   }
 
-  double get _fillFraction => (widget.score / 100.0).clamp(0.0, 1.0);
+  double get _fillFraction => (widget.score / 1000.0).clamp(0.0, 1.0);
 
   Color get _barColor {
     return switch (widget.level) {
       0 => GFL2Colors.textDim,       // Grey — cold
-      1 => GFL2Colors.border,        // Blue-grey — professional
-      2 => GFL2Colors.primary,       // Cyan — trusted
-      3 => GFL2Colors.accent,        // Orange — devoted
-      4 => GFL2Colors.affinity,      // Pink — bonded
+      1 => GFL2Colors.textDim,       // Grey — acknowledged
+      2 => GFL2Colors.border,        // Blue-grey — professional
+      3 => GFL2Colors.border,        // Blue-grey — guarded interest
+      4 => GFL2Colors.primary,       // Cyan — trusted ally
+      5 => GFL2Colors.primary,       // Cyan — unguarded
+      6 => GFL2Colors.accent,        // Orange — deep devotion
+      7 => GFL2Colors.accent,        // Orange — vulnerable
+      8 => GFL2Colors.affinity,      // Pink — bonded
+      9 => GFL2Colors.affinity,      // Pink — oath fulfilled
       _ => GFL2Colors.textDim,
     };
   }
@@ -134,7 +139,7 @@ class _AffectionGaugeState extends State<AffectionGauge>
             ],
             const Spacer(),
             Text(
-              '${widget.score}/100',
+              '${widget.score}/1000',
               style: TextStyle(
                 color: GFL2Colors.textDim.withValues(alpha: 0.6),
                 fontSize: 10,
@@ -153,8 +158,8 @@ class _AffectionGaugeState extends State<AffectionGauge>
               children: [
                 // Background with segment dividers
                 Container(color: GFL2Colors.border.withValues(alpha: 0.2)),
-                // Level dividers at 20%, 50%, 80%, 95%
-                for (final pct in [0.20, 0.50, 0.80, 0.95])
+                // Level dividers at tier thresholds (30, 80, 150, 250, 380, 530, 680, 830, 950) / 1000
+                for (final pct in [0.03, 0.08, 0.15, 0.25, 0.38, 0.53, 0.68, 0.83, 0.95])
                   Positioned(
                     left: pct * MediaQuery.of(context).size.width * 0.85,
                     child: Container(
