@@ -49,14 +49,24 @@
       // Scene
       scene = new THREE.Scene();
       clock = new THREE.Clock();
-      camera = new THREE.PerspectiveCamera(30, canvas.clientWidth / canvas.clientHeight, 0.01, 100);
+      camera = new THREE.PerspectiveCamera(30, 1, 0.01, 100); // aspect updated after canvas sizes
       camera.position.set(0, 1.3, 2.0);
       camera.lookAt(0, 1.1, 0);
 
+      // Wait for canvas to have actual dimensions (Flutter platform view may delay sizing)
+      for (let i = 0; i < 50 && (canvas.clientWidth === 0 || canvas.clientHeight === 0); i++) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      const w = canvas.clientWidth || canvas.parentElement?.clientWidth || 400;
+      const h = canvas.clientHeight || canvas.parentElement?.clientHeight || 600;
+      console.log('[klukai_3d] Canvas size:', w, 'x', h);
+
       renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-      renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+      renderer.setSize(w, h);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.outputColorSpace = THREE.SRGBColorSpace;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
 
       scene.add(new THREE.AmbientLight(0xffffff, 0.6));
       const dl = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -95,10 +105,26 @@
 
         scene.add(model);
 
-        // Center
+        // Center and auto-frame camera
         const box = new THREE.Box3().setFromObject(model);
+        const sz = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());
+        // Scale up if model is tiny (Mixamo FBX exports at 0.01 scale)
+        if (sz.y < 0.1) {
+          const scale = 1.7 / sz.y;  // normalize to ~1.7 units tall
+          model.scale.setScalar(scale);
+          box.setFromObject(model);
+          sz.copy(box.getSize(new THREE.Vector3()));
+          center.copy(box.getCenter(new THREE.Vector3()));
+          console.log('[klukai_3d] Scaled up by', scale.toFixed(0) + 'x');
+        }
         model.position.set(-center.x, -box.min.y, -center.z);
+        console.log('[klukai_3d] Model size:', sz.x.toFixed(2), 'x', sz.y.toFixed(2), 'x', sz.z.toFixed(2));
+
+        // Auto-frame: position camera based on actual model height
+        camera.position.set(0, sz.y * 0.59, sz.y * 2.2);
+        camera.lookAt(0, sz.y * 0.50, 0);
+        camera.updateProjectionMatrix();
 
         // Find skeleton
         model.traverse(n => {
