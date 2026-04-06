@@ -134,12 +134,23 @@ class _KlukaiAvatarState extends State<KlukaiAvatar> {
     ui_web.platformViewRegistry.registerViewFactory(
       _viewType,
       (int viewId) {
+        // Wrap canvas in a div so Flutter's platform view sizing works
+        final container = web.document.createElement('div') as web.HTMLDivElement;
+        container.style.width = '100%';
+        container.style.height = '100%';
+        container.style.position = 'relative';
+        container.style.overflow = 'hidden';
+
         final canvas = web.document.createElement('canvas') as web.HTMLCanvasElement;
         canvas.id = _canvasId;
         canvas.style.width = '100%';
         canvas.style.height = '100%';
         canvas.style.display = 'block';
-        return canvas;
+        canvas.style.position = 'absolute';
+        canvas.style.top = '0';
+        canvas.style.left = '0';
+        container.appendChild(canvas);
+        return container;
       },
     );
 

@@ -16,3 +16,5 @@ flutter_app/.flutter-plugins-dependencies
 .idea/
 .vscode/
 .superpowers/
+assets/source-models/
+assets/textures/
