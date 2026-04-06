@@ -9,6 +9,7 @@ class ChatMessage {
   final int? pretextHandle;
   final double? tightBubbleWidth;
   final String? imageData;
+  final String status; // 'sending', 'sent', 'read'
 
   ChatMessage({
     required this.id,
@@ -21,6 +22,7 @@ class ChatMessage {
     this.pretextHandle,
     this.tightBubbleWidth,
     this.imageData,
+    this.status = 'read',
   }) : createdAt = createdAt ?? DateTime.now();
 
   ChatMessage copyWith({
@@ -30,6 +32,7 @@ class ChatMessage {
     bool? isStreaming,
     int? pretextHandle,
     double? tightBubbleWidth,
+    String? status,
   }) {
     return ChatMessage(
       id: id,
@@ -41,6 +44,7 @@ class ChatMessage {
       isStreaming: isStreaming ?? this.isStreaming,
       pretextHandle: pretextHandle ?? this.pretextHandle,
       tightBubbleWidth: tightBubbleWidth ?? this.tightBubbleWidth,
+      status: status ?? this.status,
     );
   }
 
@@ -54,6 +58,7 @@ class ChatMessage {
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'])
           : DateTime.now(),
+      status: json['status'] as String? ?? 'read',
     );
   }
 }

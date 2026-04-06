@@ -16,6 +16,7 @@ import '../widgets/voice_button.dart';
 import '../widgets/affection_gauge.dart';
 import '../widgets/tool_status_indicator.dart';
 import '../widgets/canvas_message_bubble.dart';
+import '../widgets/date_divider.dart';
 import 'profile_screen.dart';
 
 @JS('audioRecorder.start')
@@ -32,7 +33,7 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _ws = WebSocketService();
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
@@ -47,6 +48,8 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _thinkingText;
   final List<Map<String, String>> _activeTools = [];
   final bool _soundMuted = false;
+
+  bool _showScrollFAB = false;
 
   DateTime? _lastTapTime;
 
@@ -99,9 +102,28 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _scrollController.addListener(() {
+      final show = _scrollController.hasClients &&
+          _scrollController.position.maxScrollExtent - _scrollController.position.pixels > 300;
+      if (show != _showScrollFAB) setState(() => _showScrollFAB = show);
+    });
     _loadHistory();
     _loadAffection();
     _connectWS();
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (_isNearBottom()) {
+      _scrollToBottom();
+    }
+  }
+
+  bool _isNearBottom() {
+    if (!_scrollController.hasClients) return true;
+    final pos = _scrollController.position;
+    return pos.maxScrollExtent - pos.pixels < 150;
   }
 
   Future<void> _playTTS(String text) async {
@@ -223,6 +245,10 @@ class _ChatScreenState extends State<ChatScreen> {
           _prepareMessageLayout(completedIdx!);
         }
         _playNotificationSound();
+
+      case 'read_receipt':
+        // Read receipts handled — messages default to 'read' status
+        break;
 
       case 'mood':
         setState(() {
@@ -485,6 +511,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ws.dispose();
     _textController.dispose();
     _scrollController.dispose();
@@ -503,14 +530,28 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildMobileLayout() {
-    return Column(
+    return Stack(
       children: [
-        _buildHeader(),
-        Expanded(child: _buildMessageList()),
-        if (_activeTools.isNotEmpty) _buildToolStatus(),
-        if (_state.isTyping && _streamingId == null)
-          _buildProcessingIndicator(),
-        _buildInputBar(),
+        Column(
+          children: [
+            _buildHeader(),
+            Expanded(child: _buildMessageList()),
+            if (_activeTools.isNotEmpty) _buildToolStatus(),
+            if (_state.isTyping && _streamingId == null)
+              _buildProcessingIndicator(),
+            _buildInputBar(),
+          ],
+        ),
+        if (_showScrollFAB)
+          Positioned(
+            bottom: 80,
+            right: 16,
+            child: FloatingActionButton.small(
+              onPressed: () => _scrollToBottom(),
+              backgroundColor: GFL2Colors.surface,
+              child: const Icon(Icons.keyboard_arrow_down, color: GFL2Colors.primary),
+            ),
+          ),
       ],
     );
   }
@@ -758,11 +799,26 @@ class _ChatScreenState extends State<ChatScreen> {
       itemCount: _messages.length,
       itemBuilder: (context, index) {
         final msg = _messages[index];
-        // Use canvas bubble for finalized Klukai messages (markdown rendering)
-        if (msg.role == 'assistant' && !msg.isStreaming && PretextService.isReady) {
-          return CanvasMessageBubble(message: msg);
+        final msgDate = DateTime(msg.createdAt.year, msg.createdAt.month, msg.createdAt.day);
+        bool showDivider = false;
+        if (index == 0) {
+          showDivider = true;
+        } else {
+          final prev = _messages[index - 1];
+          final prevDate = DateTime(prev.createdAt.year, prev.createdAt.month, prev.createdAt.day);
+          if (msgDate != prevDate) showDivider = true;
         }
-        return MessageBubble(message: msg);
+        // Use canvas bubble for finalized Klukai messages (markdown rendering)
+        final bubble = (msg.role == 'assistant' && !msg.isStreaming && PretextService.isReady)
+            ? CanvasMessageBubble(message: msg)
+            : MessageBubble(message: msg);
+        if (showDivider) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [DateDivider(date: msg.createdAt), bubble],
+          );
+        }
+        return bubble;
       },
     );
   }

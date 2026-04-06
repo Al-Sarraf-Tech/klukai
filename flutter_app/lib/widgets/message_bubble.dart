@@ -181,11 +181,23 @@ class _MessageBubbleState extends State<MessageBubble> {
                             Text(
                               _formatTime(widget.message.createdAt),
                               style: TextStyle(
-                                color: GFL2Colors.textDim.withValues(alpha: 0.4),
-                                fontSize: 9,
+                                color: GFL2Colors.textDim.withValues(alpha: 0.5),
+                                fontSize: 10,
                                 fontFamily: 'monospace',
                               ),
                             ),
+                            if (isUser) ...[
+                              const SizedBox(width: 4),
+                              Icon(
+                                widget.message.status == 'read'
+                                    ? Icons.done_all
+                                    : Icons.done,
+                                size: 14,
+                                color: widget.message.status == 'read'
+                                    ? GFL2Colors.primary.withValues(alpha: 0.7)
+                                    : GFL2Colors.textDim.withValues(alpha: 0.4),
+                              ),
+                            ],
                           ],
                         ),
                       ),
