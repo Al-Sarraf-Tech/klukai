@@ -442,12 +442,26 @@ async def websocket_endpoint(websocket: WebSocket):
     user_id = websocket.query_params.get("user", "default")
     await ws.connect(websocket, user_id)
 
-    # Ensure session exists
+    # Ensure session exists — restore persistent state if session expired
     session_key = f"{SESSION_ID}:{user_id}" if user_id != "default" else SESSION_ID
     session = await memory.get_session(session_key)
     if session is None:
         conv_id = new_id()
-        session = SessionState(conversation_id=conv_id)
+        # Restore mood from persistent state
+        restored_mood = "composed"
+        try:
+            pool = get_pool()
+            async with pool.connection() as conn:
+                row = await (await conn.execute(
+                    "SELECT mood, last_topic FROM companion_persistent_state WHERE user_id = %s",
+                    (user_id,),
+                )).fetchone()
+                if row:
+                    restored_mood = row[0] or "composed"
+                    logger.info("Restored mood '%s' from persistent state", restored_mood)
+        except Exception as e:
+            logger.warning("Failed to restore persistent state: %s", e)
+        session = SessionState(conversation_id=conv_id, mood=restored_mood)
         await memory.save_session(session_key, session)
         await _create_conversation(conv_id)
 
@@ -668,12 +682,26 @@ async def _background_extraction(
         for fact in result.get("facts", []):
             await memory.set_relationship_fact(fact["key"], fact["value"])
 
-        # Update mood in session
+        # Update mood in session + persist to PostgreSQL
         mood = result.get("mood", "composed")
         session.mood = mood
         await memory.save_session(SESSION_ID, session)
         await ws.send_mood("default", mood)
         proactive.set_last_mood(mood)
+
+        # Persist mood so it survives session expiry
+        try:
+            pool = get_pool()
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO companion_persistent_state (user_id, mood, last_conversation_id, updated_at) "
+                    "VALUES (%s, %s, %s, NOW()) "
+                    "ON CONFLICT (user_id) DO UPDATE SET mood = %s, last_conversation_id = %s, updated_at = NOW()",
+                    (user_id, mood, session.conversation_id, mood, session.conversation_id),
+                )
+                await conn.commit()
+        except Exception as e:
+            logger.warning("Failed to persist mood: %s", e)
 
         # Adjust affection based on interaction
         try:
