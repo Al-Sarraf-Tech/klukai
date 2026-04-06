@@ -106,7 +106,7 @@ MATERIAL_TEXTURES = {
     'Klukai_Face': 'c_Clukay_face_d.png',
     'Klukai_Cloth_1': 'c_ClukaySSR01_slg_cloth1_d.png',
     'Klukai_Cloth_2': 'c_ClukaySSR01_slg_cloth2_d.png',
-    'Outline': 'c_ClukaySSR01_slg_cloth2_d.png',
+    # Outline removed - causes dark patches
 }
 
 # Remove bad faces
@@ -118,7 +118,7 @@ for i, slot in enumerate(main_mesh.material_slots):
     if 'Astral' in name or 'Speed' in name or 'Luminous' in name or \
        'Fishnets' in name or 'Leggings_' in name or 'Body_Suit' in name or \
        'Body_(Astral' in name or 'Eyes' in name or 'Eyeblend' in name or \
-       'Eye_Shadow' in name:
+       'Eye_Shadow' in name or 'Outline' in name:
         bad_indices.add(i)
 
 if bad_indices:
