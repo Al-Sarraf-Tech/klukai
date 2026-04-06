@@ -442,28 +442,39 @@ async def websocket_endpoint(websocket: WebSocket):
     user_id = websocket.query_params.get("user", "default")
     await ws.connect(websocket, user_id)
 
-    # Ensure session exists — restore persistent state if session expired
+    # Ensure session exists — always restore mood from PostgreSQL (source of truth)
     session_key = f"{SESSION_ID}:{user_id}" if user_id != "default" else SESSION_ID
     session = await memory.get_session(session_key)
+
+    # Always restore mood from persistent state (PostgreSQL is source of truth)
+    restored_mood = "composed"
+    try:
+        pool = get_pool()
+        async with pool.connection() as conn:
+            row = await (await conn.execute(
+                "SELECT mood FROM companion_persistent_state WHERE user_id = %s",
+                (user_id,),
+            )).fetchone()
+            if row and row[0]:
+                restored_mood = row[0]
+    except Exception as e:
+        logger.warning("Failed to restore persistent mood: %s", e)
+
     if session is None:
         conv_id = new_id()
-        # Restore mood from persistent state
-        restored_mood = "composed"
-        try:
-            pool = get_pool()
-            async with pool.connection() as conn:
-                row = await (await conn.execute(
-                    "SELECT mood, last_topic FROM companion_persistent_state WHERE user_id = %s",
-                    (user_id,),
-                )).fetchone()
-                if row:
-                    restored_mood = row[0] or "composed"
-                    logger.info("Restored mood '%s' from persistent state", restored_mood)
-        except Exception as e:
-            logger.warning("Failed to restore persistent state: %s", e)
         session = SessionState(conversation_id=conv_id, mood=restored_mood)
         await memory.save_session(session_key, session)
         await _create_conversation(conv_id)
+        logger.info("New session created with restored mood '%s'", restored_mood)
+    elif session.mood != restored_mood and restored_mood != "composed":
+        # Existing session but mood drifted — restore from DB
+        session.mood = restored_mood
+        await memory.save_session(session_key, session)
+        logger.info("Session mood corrected to '%s' from persistent state", restored_mood)
+
+    # Send restored mood to frontend immediately on connect
+    if restored_mood != "composed":
+        await ws.send_mood(user_id, restored_mood)
 
     try:
         while True:
