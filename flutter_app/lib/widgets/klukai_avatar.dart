@@ -147,6 +147,11 @@ class _KlukaiAvatarState extends State<KlukaiAvatar> {
   }
 
   Future<void> _initCanvas() async {
+    // Skip if controller is already initialized (widget rebuilt but same controller)
+    if (widget.controller.isInitialized) {
+      if (mounted) setState(() => _ready = true);
+      return;
+    }
     // Give the platform view time to mount in the DOM
     await Future.delayed(const Duration(milliseconds: 500));
     final success = await widget.controller.init(_canvasId, widget.modelUrl);
@@ -157,7 +162,7 @@ class _KlukaiAvatarState extends State<KlukaiAvatar> {
 
   @override
   void dispose() {
-    widget.controller.dispose();
+    // Don't dispose the controller here — it's owned by ChatScreen
     super.dispose();
   }
 
