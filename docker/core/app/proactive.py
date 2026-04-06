@@ -9,6 +9,8 @@ from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from .events import publish as publish_event
+
 logger = logging.getLogger(__name__)
 
 # Guardrails
@@ -273,6 +275,7 @@ class ProactiveEngine:
             self._proactive_count_today += 1
             self._last_proactive_answered = False
             await self._on_message_callback(message)
+            await publish_event("proactive", message)
             logger.info("Klukai proactive: %s", message[:60])
 
     async def trigger_tap(self) -> None:

@@ -11,6 +11,7 @@ import httpx
 import psycopg
 from pydantic import BaseModel
 
+from .events import publish as publish_event
 from .personality import load_personality
 
 logger = logging.getLogger(__name__)
@@ -196,6 +197,11 @@ class AffectionManager:
         level_direction = ""
         if level_changed:
             level_direction = "up" if state.level > old_level else "down"
+            await publish_event(
+                "affection_change",
+                f"{state.level_name} (level {state.level})",
+                delta=delta, level=state.level, direction=level_direction,
+            )
 
         # Persist
         await self._save_state(state)

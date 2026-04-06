@@ -26,6 +26,7 @@ from .mcp_client import MCPClient
 from .memory import MemoryManager
 from .models import SessionState, new_id
 from .personality import assemble_system_prompt, load_personality
+from .events import init as events_init, close as events_close
 from .proactive import ProactiveEngine
 from .push import add_subscription, get_vapid_public_key, send_push
 from .ws_manager import WSManager
@@ -134,10 +135,12 @@ async def lifespan(app: FastAPI):
     proactive.set_callback(proactive_callback)
     proactive.set_recap_callback(generate_daily_recap)
     proactive.start()
+    await events_init()
     load_personality()
     logger.info("Klukai companion core started")
     yield
     proactive.stop()
+    await events_close()
     await memory.close()
     await router.close()
     await mcp.close()
