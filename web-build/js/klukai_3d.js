@@ -259,11 +259,15 @@
 
     setBlush(intensity) {
       if (!model) return;
+      // GFL2 model uses Mouth_Happy as a proxy for blush/smile
       model.traverse((node) => {
         if (node.isMesh && node.morphTargetInfluences && node.morphTargetDictionary) {
-          const idx = node.morphTargetDictionary['blush'];
-          if (idx !== undefined) {
-            node.morphTargetInfluences[idx] = Math.max(0, Math.min(1, intensity));
+          for (const name of ['blush', 'Mouth_Happy', 'Mouth_Smile']) {
+            const idx = node.morphTargetDictionary[name];
+            if (idx !== undefined) {
+              node.morphTargetInfluences[idx] = Math.max(0, Math.min(1, intensity));
+              break;
+            }
           }
         }
       });
