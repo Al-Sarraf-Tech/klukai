@@ -138,30 +138,8 @@
       }
 
       // Set arms-down rest pose using quaternion
-      if (bones.shoulderL) {
-        const q = new THREE.Quaternion();
-        q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), 1.2);
-        bones.shoulderL.quaternion.multiply(q);
-      }
-      if (bones.shoulderR) {
-        const q = new THREE.Quaternion();
-        q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -1.2);
-        bones.shoulderR.quaternion.multiply(q);
-      }
-      if (bones.elbowL) {
-        const q = new THREE.Quaternion();
-        q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.3);
-        bones.elbowL.quaternion.multiply(q);
-      }
-      if (bones.elbowR) {
-        const q = new THREE.Quaternion();
-        q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.3);
-        bones.elbowR.quaternion.multiply(q);
-      }
-
-      // Propagate world matrices — do NOT call calculateInverses() or bind()
-      // as those destroy the glTF's pre-computed inverseBindMatrices
-      model.updateMatrixWorld(true);
+      // Arms-down pose is baked into the .glb rest pose by Blender.
+      // No JS bone rotation needed — model loads already posed.
 
       // Re-save quaternions AFTER rest pose
       for (const b of Object.values(bones)) {

@@ -183,6 +183,29 @@ else:
 print(f"[export] Post-skeleton-fix objects: {len(bpy.data.objects)}")
 
 
+# ── Pose arms down and bake as rest pose ────────────────────────────────────
+# This makes the .glb load with arms already at the character's sides.
+# No JS bone rotation needed for rest pose — just small animation deltas.
+klukai_arm2 = bpy.data.objects.get('Klukai')
+if klukai_arm2:
+    bpy.context.view_layer.objects.active = klukai_arm2
+    bpy.ops.object.mode_set(mode='POSE')
+
+    for bone_name, angle in [('Shoulder_L', -60), ('Shoulder_R', 60),
+                              ('Elbow_L', -15), ('Elbow_R', 15)]:
+        pb = klukai_arm2.pose.bones.get(bone_name)
+        if pb:
+            pb.rotation_mode = 'QUATERNION'
+            pb.rotation_quaternion = __import__('mathutils').Quaternion((1, 0, 0), __import__('math').radians(angle))
+
+    bpy.context.view_layer.update()
+    bpy.ops.pose.armature_apply(selected=False)
+    bpy.ops.object.mode_set(mode='OBJECT')
+    print("[export] Applied arms-down pose as rest pose")
+else:
+    print("[export] WARNING: Could not find Klukai armature for pose")
+
+
 # ── Step 2: Inspect scene ───────────────────────────────────────────────────
 
 # Find the main character armature (the one named "Klukai" with ~152 bones)
