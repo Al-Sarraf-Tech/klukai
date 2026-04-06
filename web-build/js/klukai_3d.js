@@ -126,6 +126,21 @@
         camera.lookAt(0, sz.y * 0.50, 0);
         camera.updateProjectionMatrix();
 
+        // Convert materials to toon shading for anime look
+        model.traverse(n => {
+          if (n.isMesh && n.material) {
+            const mat = n.material;
+            if (mat.map) {
+              const toon = new THREE.MeshToonMaterial({
+                map: mat.map,
+                color: mat.color || 0xffffff,
+                side: THREE.DoubleSide,
+              });
+              n.material = toon;
+            }
+          }
+        });
+
         // Find skeleton
         model.traverse(n => {
           if (n.isSkinnedMesh && n.skeleton && (!skeleton || n.skeleton.bones.length > skeleton.bones.length))
