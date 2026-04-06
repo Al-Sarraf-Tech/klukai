@@ -12,13 +12,13 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
-import psycopg
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .affection import AffectionManager
 from .agent_loop import AgentLoop
+from .db import init_pool, close_pool, get_pool
 from .image_gen import generate_image, needs_image, build_prompt, is_couple_scene
 from .fact_extractor import create_episode_summary, extract_facts
 from .llm_router import LLMRouter
@@ -36,10 +36,6 @@ logging.basicConfig(
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://aichat:aichat@aichat-db:5432/aichat"
-)
 
 # ── Globals ──────────────────────────────────────────────────────────────────
 
@@ -61,10 +57,11 @@ async def run_migration() -> None:
     migration_dir = Path(__file__).parent.parent / "migrations"
     migration_files = sorted(migration_dir.glob("*.sql"))
 
+    pool = get_pool()
     for migration_path in migration_files:
         sql = migration_path.read_text()
         try:
-            async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            async with pool.connection() as conn:
                 await conn.execute(sql)
                 await conn.commit()
             logger.info("Migration %s applied", migration_path.name)
@@ -76,7 +73,8 @@ async def generate_daily_recap(affection_level: int) -> str | None:
     """Generate a daily recap by summarizing today's messages via LLM."""
     try:
         today = datetime.now().strftime("%Y-%m-%d")
-        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        pool = get_pool()
+        async with pool.connection() as conn:
             rows = await (
                 await conn.execute(
                     "SELECT role, content FROM companion_messages "
@@ -106,7 +104,7 @@ async def generate_daily_recap(affection_level: int) -> str | None:
             f"Use first person. Reference specific topics discussed.\n\n{conversation}"
         )
 
-        config = router.route("recap", SessionState(conversation_id="recap"))
+        config = await router.route("recap", SessionState(conversation_id="recap"))
         full = []
         async for token in router.stream(prompt, [{"role": "user", "content": prompt}], config):
             full.append(token)
@@ -127,6 +125,7 @@ async def proactive_callback(message: str) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup/shutdown."""
+    await init_pool(min_size=2, max_size=10)
     await run_migration()
     await memory.init()
     await router.init()
@@ -145,6 +144,7 @@ async def lifespan(app: FastAPI):
     await router.close()
     await mcp.close()
     await affection.close()
+    await close_pool()
     logger.info("Klukai companion core stopped")
 
 
@@ -314,7 +314,7 @@ async def _run_mission(user_id: str, affection_level: int) -> None:
     )
 
     try:
-        config = router.route("mission", SessionState(conversation_id="mission"))
+        config = await router.route("mission", SessionState(conversation_id="mission"))
         full = []
         async for token in router.stream(prompt, [{"role": "user", "content": prompt}], config):
             full.append(token)
@@ -389,7 +389,8 @@ async def api_stt(req: dict):
 async def get_messages(limit: int = 50, before: str | None = None):
     """Fetch recent messages from PostgreSQL."""
     try:
-        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        pool = get_pool()
+        async with pool.connection() as conn:
             if before:
                 rows = await conn.execute(
                     "SELECT id, role, content, content_type, mood, model, created_at "
@@ -514,6 +515,11 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         last_msg_length=len(content),
     )
 
+    # Memory nudge — proactive past reference based on affection level
+    nudge = await memory.get_memory_nudge(session.turn_count, aff_state.level)
+    if nudge:
+        system_prompt += f"\n\n{nudge}"
+
     # Build messages for LLM
     messages = [
         {"role": t["role"], "content": t["content"]}
@@ -521,7 +527,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     ]
 
     # Check if this needs the agentic tool-use loop
-    use_agent = router.needs_agent(content)
+    use_agent = await router.needs_agent(content)
     msg_id = new_id()
 
     if use_agent:
@@ -550,7 +556,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     else:
         # Direct path: stream from LLM
         await ws.send_thinking(user_id, "Composing response...")
-        config = router.route(content, session)
+        config = await router.route(content, session)
         logger.info("Routing to %s/%s", config.provider, config.model)
 
         full_response = []
@@ -562,24 +568,40 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             # First flush after 20 chars for fast perceived response, then sentence boundaries
             flush_threshold = 20 if first_flush else 80
             if any(c in buffer for c in '.!?\n)') or len(buffer) > flush_threshold:
-                fixed = _fix_narration(buffer)
-                await ws.send_token(user_id, fixed)
+                await ws.send_token(user_id, buffer)
                 buffer = ""
                 first_flush = False
         if buffer:
-            await ws.send_token(user_id, _fix_narration(buffer))
+            await ws.send_token(user_id, buffer)
 
-        response_text = _fix_narration("".join(full_response))
+        # Apply narration fix only to the complete text (avoids split-pattern bugs)
+        raw_text = "".join(full_response)
+        response_text = _fix_narration(raw_text)
         model_name = config.model
         latency_ms = int((time.monotonic() - start) * 1000)
 
-        await ws.send_done(user_id, msg_id, model_name)
+        # Send corrected final text if narration fix changed anything
+        final_text = response_text if response_text != raw_text else None
+        await ws.send_done(user_id, msg_id, model_name, final_text=final_text)
 
     # Add assistant turn to session
     session = await memory.add_turn(SESSION_ID, "assistant", response_text, session)
 
-    # Store messages in PostgreSQL
+    # Store messages in PostgreSQL + mark as read
     await _store_message(session.conversation_id, "user", content, model_name)
+    try:
+        pool = get_pool()
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE companion_messages SET read_at = NOW() "
+                "WHERE conversation_id = %s AND role = 'user' AND read_at IS NULL",
+                (session.conversation_id,),
+            )
+            await conn.commit()
+    except Exception as e:
+        logger.warning("Failed to set read_at: %s", e)
+    await ws.send(user_id, {"type": "read_receipt", "read_at": datetime.now().isoformat()})
+
     await _store_message(
         session.conversation_id, "assistant", response_text, model_name,
         latency_ms=latency_ms,
@@ -855,7 +877,7 @@ async def _enhance_image_prompt(user_request: str, couple: bool = False) -> str:
         f"Scene: {user_request}"
     )
     try:
-        config = router.route("tags", SessionState(conversation_id="image"))
+        config = await router.route("tags", SessionState(conversation_id="image"))
         tags = []
         async for token in router.stream(prompt, [{"role": "user", "content": prompt}], config):
             tags.append(token)
@@ -878,7 +900,8 @@ def _strip_actions_for_tts(text: str) -> str:
 
 async def _create_conversation(conv_id: str) -> None:
     try:
-        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        pool = get_pool()
+        async with pool.connection() as conn:
             await conn.execute(
                 "INSERT INTO companion_conversations (id) VALUES (%s) "
                 "ON CONFLICT DO NOTHING",
@@ -897,7 +920,8 @@ async def _store_message(
     latency_ms: int | None = None,
 ) -> None:
     try:
-        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        pool = get_pool()
+        async with pool.connection() as conn:
             await conn.execute(
                 "INSERT INTO companion_messages "
                 "(conversation_id, role, content, model, latency_ms) "

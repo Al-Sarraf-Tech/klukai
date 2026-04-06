@@ -8,9 +8,9 @@ import os
 from datetime import date, datetime
 
 import httpx
-import psycopg
 from pydantic import BaseModel
 
+from .db import get_pool
 from .events import publish as publish_event
 from .personality import load_personality
 
@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
 CLASSIFICATION_MODEL = "qwen2.5-3b-instruct"
 
-DAILY_POINTS_CAP = 15
-MAX_SCORE = 100
+DAILY_POINTS_CAP = 8
+MAX_SCORE = 1000
 
 CLASSIFICATION_PROMPT = """\
 Classify ONLY the Commander's message below. Ignore Klukai's response tone entirely.
@@ -71,10 +71,7 @@ class AffectionChange(BaseModel):
 class AffectionManager:
     """Manages the affection score, classification, and level progression."""
 
-    def __init__(self, db_url: str | None = None) -> None:
-        self._db_url = db_url or os.environ.get(
-            "DATABASE_URL", "postgresql://aichat:aichat@aichat-db:5432/aichat"
-        )
+    def __init__(self) -> None:
         self._state: AffectionState | None = None
         self._http: httpx.AsyncClient | None = None
         self._levels: list[dict] = []
@@ -95,7 +92,8 @@ class AffectionManager:
     async def _load_state(self) -> None:
         """Load current affection state from PostgreSQL."""
         try:
-            async with await psycopg.AsyncConnection.connect(self._db_url) as conn:
+            pool = get_pool()
+            async with pool.connection() as conn:
                 row = await (
                     await conn.execute(
                         "SELECT score, level, level_name, last_interaction_date, "
@@ -333,7 +331,8 @@ class AffectionManager:
     async def _save_state(self, state: AffectionState) -> None:
         """Persist affection state to PostgreSQL."""
         try:
-            async with await psycopg.AsyncConnection.connect(self._db_url) as conn:
+            pool = get_pool()
+            async with pool.connection() as conn:
                 await conn.execute(
                     "UPDATE companion_affection SET "
                     "score = %s, level = %s, level_name = %s, "
@@ -359,7 +358,8 @@ class AffectionManager:
     ) -> None:
         """Log an affection change for audit trail."""
         try:
-            async with await psycopg.AsyncConnection.connect(self._db_url) as conn:
+            pool = get_pool()
+            async with pool.connection() as conn:
                 await conn.execute(
                     "INSERT INTO companion_affection_log "
                     "(delta, reason, old_score, new_score, old_level, new_level) "

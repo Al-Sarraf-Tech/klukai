@@ -271,9 +271,9 @@ class MemoryManager:
         ]
 
     async def recall_exchanges_with_recency(
-        self, query: str, limit: int = MSG_RECALL_LIMIT
+        self, query: str, limit: int = MSG_RECALL_LIMIT, affection_level: int = 0
     ) -> list[dict]:
-        """Recall exchanges with recency-weighted re-ranking."""
+        """Recall exchanges with recency-weighted re-ranking and affection bias."""
         exchanges = await self.recall_exchanges(query, limit=limit * 2)
         if not exchanges:
             return []
@@ -284,13 +284,20 @@ class MemoryManager:
                 created = datetime.fromisoformat(ex["created_at"])
                 days_ago = max(0, (now - created).total_seconds() / 86400)
             except (ValueError, KeyError):
-                days_ago = 30  # fallback for missing dates
+                days_ago = 30
 
             recency_factor = 1.0 / (1.0 + days_ago)
             ex["final_score"] = (
                 (1 - RECENCY_WEIGHT) * ex["score"]
                 + RECENCY_WEIGHT * recency_factor
             )
+
+            # Affection-weighted importance bias
+            importance = ex.get("importance", 0.5) if isinstance(ex, dict) else 0.5
+            if affection_level >= 6:
+                ex["final_score"] += importance * 0.2
+            elif affection_level <= 2:
+                ex["final_score"] += (1.0 - importance) * 0.1
 
         exchanges.sort(key=lambda x: x["final_score"], reverse=True)
         return exchanges[:limit]
@@ -367,3 +374,41 @@ class MemoryManager:
         )
         episode_texts = [ep["summary"] for ep in episodes]
         return episode_texts, facts, exchanges
+
+    async def get_memory_nudge(
+        self, turn_count: int, affection_level: int
+    ) -> str | None:
+        """Return a memory nudge string if it's time for one, else None."""
+        if affection_level <= 2:
+            return None
+
+        if affection_level <= 4:
+            interval = 5
+        elif affection_level <= 6:
+            interval = 4
+        else:
+            interval = 3
+
+        if turn_count % interval != 0 or turn_count == 0:
+            return None
+
+        import random
+        prompts = ["something personal", "a shared memory", "something important",
+                   "a past conversation", "what the Commander told me"]
+        query = random.choice(prompts)
+        exchanges = await self.recall_exchanges_with_recency(
+            query, limit=3, affection_level=affection_level
+        )
+        if not exchanges:
+            return None
+
+        ex = random.choice(exchanges)
+        user_snip = ex["user_content"][:200]
+        asst_snip = ex["assistant_content"][:200]
+        topics = ", ".join(ex.get("topics", [])[:3]) or "a past conversation"
+
+        return (
+            f'[Memory: You once discussed "{topics}". '
+            f'The Commander said: "{user_snip}". '
+            f'You replied: "{asst_snip}".]'
+        )
