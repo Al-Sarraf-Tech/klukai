@@ -304,9 +304,7 @@ def build_conversation_recall_block(exchanges: list[dict]) -> str:
     for i, ex in enumerate(exchanges, 1):
         lines.append(f"  [{i}] Commander: {ex['user_content'][:200]}")
         lines.append(f"      Klukai: {ex['assistant_content'][:200]}")
-        topics = ex.get("topics", [])
-        if topics:
-            lines.append(f"      (Topics: {', '.join(topics[:3])})")
+        # Topics kept in payload but not shown to avoid unnatural output
     return "\n".join(lines)
 
 
@@ -333,6 +331,28 @@ def build_tool_block(tools_available: bool = False) -> str:
         "raw tool output — synthesize it into a Klukai-appropriate briefing.\n"
         f"FRAMING GUIDE:\n{frame_lines}"
     )
+
+
+def build_pace_block(last_msg_length: int = 0) -> str:
+    """Build response length guidance based on the Commander's message length."""
+    if last_msg_length == 0:
+        return ""
+    if last_msg_length <= 15:
+        return (
+            "PACE MATCHING: The Commander's message is very short. "
+            "Match their energy — respond in 1-3 sentences max. Be punchy and direct."
+        )
+    elif last_msg_length <= 60:
+        return (
+            "PACE MATCHING: The Commander's message is brief. "
+            "Keep your response concise — 2-4 sentences. Don't over-elaborate."
+        )
+    elif last_msg_length > 300:
+        return (
+            "PACE MATCHING: The Commander wrote at length. "
+            "You may give a fuller response — but stay focused. Don't pad."
+        )
+    return ""
 
 
 def build_character_rules() -> str:
@@ -383,6 +403,7 @@ def assemble_system_prompt(
     blocks = [
         build_character_preamble(p, affection_level),
         build_character_rules(),
+        build_pace_block(last_msg_length),
         build_expressive_block(p, affection_level),
         build_japanese_block(p, affection_level),
         build_speech_guidelines(p, affection_level),
