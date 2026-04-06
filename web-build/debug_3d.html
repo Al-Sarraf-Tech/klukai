@@ -32,7 +32,7 @@ dl.position.set(2,3,2); scene.add(dl);
 
 log('Loading model...');
 const gltf = await new Promise((resolve, reject) => {
-  new GLTFLoader().load('/app/assets/models/klukai.glb?v=6', resolve,
+  new GLTFLoader().load('/app/assets/models/klukai_v2.glb', resolve,
     p => { if (p.total) L.textContent = 'Loading... ' + ((p.loaded/p.total)*100).toFixed(0) + '%'; },
     reject);
 });
