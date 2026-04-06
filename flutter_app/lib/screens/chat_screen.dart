@@ -16,11 +16,6 @@ import '../widgets/voice_button.dart';
 import '../widgets/affection_gauge.dart';
 import '../widgets/tool_status_indicator.dart';
 import '../widgets/canvas_message_bubble.dart';
-import '../widgets/klukai_avatar.dart';
-import '../widgets/klukai_avatar_panel.dart';
-import '../widgets/klukai_avatar_strip.dart';
-import '../widgets/speech_bubble.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'profile_screen.dart';
 
 @JS('audioRecorder.start')
@@ -53,15 +48,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<Map<String, String>> _activeTools = [];
   final bool _soundMuted = false;
 
-  // 3D Avatar state
-  bool _avatarEnabled = false;
-  bool _audioEnabled = false;
-  final _avatarController = KlukaiAvatarController();
-  String _speechBubbleText = '';
-  bool _isSpeechStreaming = false;
-  DateTime? _lastAssistantMessageTime;
   DateTime? _lastTapTime;
-  String _lastAssistantContent = '';
 
   bool get _isDormMode {
     final hour = DateTime.now().hour;
@@ -115,64 +102,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _loadHistory();
     _loadAffection();
     _connectWS();
-    _loadAvatarPrefs();
-  }
-
-  Future<void> _loadAvatarPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _avatarEnabled = prefs.getBool('avatar_enabled') ?? false;
-      _audioEnabled = prefs.getBool('avatar_audio_enabled') ?? false;
-    });
-  }
-
-  Future<void> _toggleAvatar() async {
-    final prefs = await SharedPreferences.getInstance();
-    final newVal = !_avatarEnabled;
-    await prefs.setBool('avatar_enabled', newVal);
-    setState(() {
-      _avatarEnabled = newVal;
-      if (!newVal) {
-        _avatarController.dispose();
-        _speechBubbleText = '';
-      }
-    });
-  }
-
-  Future<void> _toggleAudio() async {
-    final prefs = await SharedPreferences.getInstance();
-    final newVal = !_audioEnabled;
-    await prefs.setBool('avatar_audio_enabled', newVal);
-    setState(() => _audioEnabled = newVal);
-  }
-
-  void _handleAvatarTap() {
-    final now = DateTime.now();
-    if (_lastTapTime != null &&
-        now.difference(_lastTapTime!).inSeconds < 5) {
-      return;
-    }
-    _lastTapTime = now;
-
-    _avatarController.playReaction('reaction_tap');
-
-    if (_lastAssistantMessageTime != null &&
-        now.difference(_lastAssistantMessageTime!).inSeconds < 30 &&
-        _lastAssistantContent.isNotEmpty) {
-      setState(() {
-        _speechBubbleText = _lastAssistantContent;
-        _isSpeechStreaming = false;
-      });
-      if (_audioEnabled) {
-        _playTTS(_lastAssistantContent);
-      }
-    } else {
-      _ws.send({'type': 'tap_interact'});
-    }
   }
 
   Future<void> _playTTS(String text) async {
-    _avatarController.setTalking(true);
     try {
       final response = await http.post(
         Uri.parse('${widget.serverUrl}/api/tts'),
@@ -185,9 +117,6 @@ class _ChatScreenState extends State<ChatScreen> {
         if (audioData != null) {
           final dataUrl = 'data:audio/wav;base64,$audioData';
           final audio = web.HTMLAudioElement()..src = dataUrl;
-          audio.onEnded.listen((_) {
-            _avatarController.setTalking(false);
-          });
           audio.play();
           return;
         }
@@ -195,11 +124,6 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       debugPrint('TTS failed: $e');
     }
-    _avatarController.setTalking(false);
-  }
-
-  void _dismissSpeechBubble() {
-    setState(() => _speechBubbleText = '');
   }
 
   Future<void> _loadHistory() async {
@@ -275,12 +199,6 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         });
         _scrollToBottom(instant: true);
-        if (_avatarEnabled) {
-          setState(() {
-            _speechBubbleText = _streamingBuffer;
-            _isSpeechStreaming = true;
-          });
-        }
 
       case 'done':
         final model = msg['model'] as String?;
@@ -305,27 +223,11 @@ class _ChatScreenState extends State<ChatScreen> {
           _prepareMessageLayout(completedIdx!);
         }
         _playNotificationSound();
-        if (_avatarEnabled) {
-          _lastAssistantMessageTime = DateTime.now();
-          final completedMsg = completedIdx != null && completedIdx! >= 0
-              ? _messages[completedIdx!]
-              : null;
-          if (completedMsg != null) {
-            _lastAssistantContent = completedMsg.content;
-          }
-          setState(() => _isSpeechStreaming = false);
-          if (_audioEnabled && _lastAssistantContent.isNotEmpty) {
-            _playTTS(_lastAssistantContent);
-          }
-        }
 
       case 'mood':
         setState(() {
           _state = _state.copyWith(mood: msg['mood'] as String? ?? 'composed');
         });
-        if (_avatarEnabled) {
-          _avatarController.setMood(msg['mood'] as String? ?? 'composed');
-        }
 
       case 'thinking':
         setState(() {
@@ -407,17 +309,6 @@ class _ChatScreenState extends State<ChatScreen> {
         });
         _scrollToBottom();
         _playNotificationSound();
-        if (_avatarEnabled) {
-          _lastAssistantMessageTime = DateTime.now();
-          _lastAssistantContent = message;
-          setState(() {
-            _speechBubbleText = message;
-            _isSpeechStreaming = false;
-          });
-          if (_audioEnabled) {
-            _playTTS(message);
-          }
-        }
 
       case 'voice_audio':
         final audioData = msg['audio'] as String?;
@@ -598,60 +489,16 @@ class _ChatScreenState extends State<ChatScreen> {
     _textController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
-    if (_avatarEnabled) {
-      _avatarController.dispose();
-    }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isWide = MediaQuery.of(context).size.width > 768;
-
-    if (_avatarEnabled && _avatarController.isInitialized) {
-      _avatarController.setDormMode(_isDormMode);
-    }
-
     return Scaffold(
       backgroundColor: _bgColor,
       body: SafeArea(
-        child: isWide && _avatarEnabled
-            ? _buildDesktopLayout()
-            : _buildMobileLayout(),
+        child: _buildMobileLayout(),
       ),
-    );
-  }
-
-  Widget _buildDesktopLayout() {
-    return Row(
-      children: [
-        SizedBox(
-          width: MediaQuery.of(context).size.width * 0.35,
-          child: KlukaiAvatarPanel(
-            controller: _avatarController,
-            modelUrl: '/app/assets/models/klukai_v2.glb',
-            speechText: _speechBubbleText,
-            isSpeechStreaming: _isSpeechStreaming,
-            audioEnabled: _audioEnabled,
-            moodGlowColor: _moodGlowColor,
-            onTap: _handleAvatarTap,
-            onAudioToggle: _toggleAudio,
-            onSpeechDismiss: _dismissSpeechBubble,
-          ),
-        ),
-        Expanded(
-          child: Column(
-            children: [
-              _buildHeader(),
-              Expanded(child: _buildMessageList()),
-              if (_activeTools.isNotEmpty) _buildToolStatus(),
-              if (_state.isTyping && _streamingId == null)
-                _buildProcessingIndicator(),
-              _buildInputBar(),
-            ],
-          ),
-        ),
-      ],
     );
   }
 
@@ -659,18 +506,6 @@ class _ChatScreenState extends State<ChatScreen> {
     return Column(
       children: [
         _buildHeader(),
-        if (_avatarEnabled)
-          KlukaiAvatarStrip(
-            controller: _avatarController,
-            modelUrl: '/app/assets/models/klukai_v2.glb',
-            speechText: _speechBubbleText,
-            isSpeechStreaming: _isSpeechStreaming,
-            audioEnabled: _audioEnabled,
-            moodGlowColor: _moodGlowColor,
-            onTap: _handleAvatarTap,
-            onAudioToggle: _toggleAudio,
-            onSpeechDismiss: _dismissSpeechBubble,
-          ),
         Expanded(child: _buildMessageList()),
         if (_activeTools.isNotEmpty) _buildToolStatus(),
         if (_state.isTyping && _streamingId == null)
@@ -812,23 +647,6 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ],
                 ),
-              ),
-              // Avatar toggle
-              const SizedBox(width: 8),
-              IconButton(
-                onPressed: _toggleAvatar,
-                icon: Icon(
-                  _avatarEnabled ? Icons.view_in_ar : Icons.view_in_ar_outlined,
-                  color: _avatarEnabled
-                      ? GFL2Colors.primary
-                      : GFL2Colors.textDim.withValues(alpha: 0.4),
-                  size: 20,
-                ),
-                style: IconButton.styleFrom(
-                  fixedSize: const Size(32, 32),
-                  padding: EdgeInsets.zero,
-                ),
-                tooltip: _avatarEnabled ? 'Hide 3D Avatar' : 'Show 3D Avatar',
               ),
             ],
           ),
