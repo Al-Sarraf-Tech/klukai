@@ -57,8 +57,8 @@
     scene = new THREE.Scene();
     clock = new THREE.Clock();
     camera = new THREE.PerspectiveCamera(30, canvas.clientWidth / canvas.clientHeight, 0.01, 100);
-    camera.position.set(0, 1.2, 3.5);
-    camera.lookAt(0, 1.0, 0);
+    camera.position.set(0, 1.45, 1.6);
+    camera.lookAt(0, 1.35, 0);
     renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
     renderer.setSize(canvas.clientWidth, canvas.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
