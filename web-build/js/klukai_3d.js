@@ -230,7 +230,7 @@
           const MOOD_ANIMS = {
             relaxed: 'idle', happy: 'happy', serious: 'thinking',
             shy: 'bashful', combat: 'excited', tender: 'thankful',
-            drowsy: 'idle', melancholy: 'nervous',
+            drowsy: 'sleeping', melancholy: 'nervous',
           };
           const targetAnim = MOOD_ANIMS[g] || 'idle';
           if (window._klukaiCurrentAnim !== targetAnim && window._klukaiClips[targetAnim]) {
