@@ -142,14 +142,26 @@
           }
         });
 
-        // Play idle animation
+        // Set up animations
         if (gltf.animations.length > 0) {
           mixer = new THREE.AnimationMixer(model);
-          const clip = gltf.animations.find(a => a.name === 'idle') || gltf.animations[0];
-          const action = mixer.clipAction(clip);
-          action.setLoop(THREE.LoopRepeat);
-          action.play();
-          console.log('[klukai_3d] Playing:', clip.name, clip.duration.toFixed(1) + 's');
+          // Index all clips by name
+          const clips = {};
+          for (const clip of gltf.animations) {
+            clips[clip.name] = clip;
+            console.log('[klukai_3d] Animation:', clip.name, clip.duration.toFixed(1) + 's');
+          }
+          // Store clips for switching
+          window._klukaiClips = clips;
+          window._klukaiActions = {};
+
+          // Play idle by default
+          const idleClip = clips['idle'] || gltf.animations[0];
+          const idleAction = mixer.clipAction(idleClip);
+          idleAction.setLoop(THREE.LoopRepeat);
+          idleAction.play();
+          window._klukaiActions.idle = idleAction;
+          window._klukaiCurrentAnim = 'idle';
         }
 
         // Resize handling
@@ -216,7 +228,29 @@
     },
 
     playReaction() {},
-    setTalking(enabled) { isTalking = enabled; },
+    setTalking(enabled) {
+      isTalking = enabled;
+      // Crossfade to talking/idle animation
+      if (mixer && window._klukaiClips) {
+        const targetName = enabled ? 'talking' : 'idle';
+        if (window._klukaiCurrentAnim === targetName) return;
+        const clip = window._klukaiClips[targetName];
+        if (!clip) return;
+        // Get or create the action
+        if (!window._klukaiActions[targetName]) {
+          window._klukaiActions[targetName] = mixer.clipAction(clip);
+          window._klukaiActions[targetName].setLoop(THREE.LoopRepeat);
+        }
+        const fromAction = window._klukaiActions[window._klukaiCurrentAnim];
+        const toAction = window._klukaiActions[targetName];
+        if (fromAction && toAction) {
+          toAction.reset().play();
+          fromAction.crossFadeTo(toAction, 0.5, true);
+        }
+        window._klukaiCurrentAnim = targetName;
+        console.log('[klukai_3d] Animation:', targetName);
+      }
+    },
     setBlush(intensity) { setMorph('Mouth_Happy', Math.max(0, Math.min(1, intensity))); },
     lookAt() {},
 
