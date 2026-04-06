@@ -118,27 +118,25 @@
     const center = box.getCenter(new THREE.Vector3());
     model.position.set(-center.x, -box.min.y, -center.z);
 
-    // Find the skeleton that the Body mesh is skinned to
+    // Find the 673-bone RIG skeleton that the Body mesh is skinned to
     let targetSkeleton = null;
     model.traverse((node) => {
-      if (node.isSkinnedMesh && (node.name === 'Body' || node.name.includes('body') || node.name.includes('Body'))) {
-        if (node.skeleton) {
-          targetSkeleton = node.skeleton;
-          console.log('[klukai_3d] Found skinned mesh:', node.name, 'skeleton bones:', node.skeleton.bones.length);
-        }
+      if (node.isSkinnedMesh && node.name === 'Body' && node.skeleton) {
+        targetSkeleton = node.skeleton;
+        console.log('[klukai_3d] Found Body skeleton:', node.skeleton.bones.length, 'bones');
       }
     });
 
-    // Fallback: find any SkinnedMesh with the most bones
+    // Fallback: find the SkinnedMesh skeleton with the most bones (should be 673)
     if (!targetSkeleton) {
       let maxBones = 0;
       model.traverse((node) => {
         if (node.isSkinnedMesh && node.skeleton && node.skeleton.bones.length > maxBones) {
           maxBones = node.skeleton.bones.length;
           targetSkeleton = node.skeleton;
-          console.log('[klukai_3d] Fallback skeleton from:', node.name, 'bones:', maxBones);
         }
       });
+      if (targetSkeleton) console.log('[klukai_3d] Fallback skeleton:', maxBones, 'bones');
     }
 
     if (!targetSkeleton) {
@@ -148,20 +146,22 @@
       const skeletonBoneNames = new Set(targetSkeleton.bones.map(b => b.name));
       console.log('[klukai_3d] Target skeleton bones:', [...skeletonBoneNames].slice(0, 20), '...');
 
+      // DEF- bones are the ONLY ones that deform the mesh (Rigify convention)
       for (const bone of targetSkeleton.bones) {
         const n = bone.name;
         bone._initialRot = bone.rotation.clone();
         bone._initialPos = bone.position.clone();
 
-        // Match by exact name or DEF- prefix variant
-        if (n === 'Head_M' || n === 'DEF-Head_M') bones.head = bone;
-        else if (n === 'Neck_M' || n === 'DEF-Neck_M') bones.neck = bone;
-        else if (n === 'Chest_M' || n === 'DEF-Chest_M') bones.chest = bone;
-        else if (n === 'Spine2_M' || n === 'DEF-Spine2_M') bones.spine2 = bone;
-        else if (n === 'Spine1_M' || n === 'DEF-Spine1_M') bones.spine1 = bone;
-        else if (n === 'Root_M' || n === 'DEF-Root_M') bones.root = bone;
-        else if (n === 'Shoulder_L' || n === 'DEF-Shoulder_L') bones.shoulderL = bone;
-        else if (n === 'Shoulder_R' || n === 'DEF-Shoulder_R') bones.shoulderR = bone;
+        if (n === 'DEF-Head_M') bones.head = bone;
+        else if (n === 'DEF-Neck_M') bones.neck = bone;
+        else if (n === 'DEF-Chest_M') bones.chest = bone;
+        else if (n === 'DEF-Spine2_M') bones.spine2 = bone;
+        else if (n === 'DEF-Spine1_M') bones.spine1 = bone;
+        else if (n === 'DEF-Root_M') bones.root = bone;
+        else if (n === 'DEF-Shoulder_L') bones.shoulderL = bone;
+        else if (n === 'DEF-Shoulder_R') bones.shoulderR = bone;
+        else if (n === 'DEF-Chest_L') bones.chestL = bone;
+        else if (n === 'DEF-Chest_R') bones.chestR = bone;
       }
     }
 
