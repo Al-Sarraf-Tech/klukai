@@ -629,7 +629,7 @@ class _ChatScreenState extends State<ChatScreen> {
           width: MediaQuery.of(context).size.width * 0.35,
           child: KlukaiAvatarPanel(
             controller: _avatarController,
-            modelUrl: '/app/assets/models/klukai.glb?v=5',
+            modelUrl: '/app/assets/models/klukai.glb?v=6',
             speechText: _speechBubbleText,
             isSpeechStreaming: _isSpeechStreaming,
             audioEnabled: _audioEnabled,
@@ -662,7 +662,7 @@ class _ChatScreenState extends State<ChatScreen> {
         if (_avatarEnabled)
           KlukaiAvatarStrip(
             controller: _avatarController,
-            modelUrl: '/app/assets/models/klukai.glb?v=5',
+            modelUrl: '/app/assets/models/klukai.glb?v=6',
             speechText: _speechBubbleText,
             isSpeechStreaming: _isSpeechStreaming,
             audioEnabled: _audioEnabled,

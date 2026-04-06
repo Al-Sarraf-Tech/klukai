@@ -1,35 +1,9 @@
 <!DOCTYPE html>
 <html>
-<head>
-<meta charset="utf-8">
-<title>Klukai Arm Tuning</title>
+<head><meta charset="utf-8"><title>Klukai Mixamo Test</title>
 <style>body{margin:0;background:#12151E;color:#0f0;font-family:monospace;font-size:12px}
-#controls{position:absolute;top:10px;left:10px;z-index:10;background:rgba(0,0,0,0.85);padding:12px;border-radius:8px}
-button{background:#222;color:#0f0;border:1px solid #0f0;padding:6px 14px;margin:3px;cursor:pointer;font-family:monospace;font-size:12px;border-radius:3px}
-button:hover{background:#0f0;color:#000}
-.label{color:#4FC3F7;margin-top:10px;font-weight:bold}
-#log{position:absolute;bottom:10px;left:10px;z-index:10;background:rgba(0,0,0,0.7);padding:6px;max-width:40%;font-size:11px;white-space:pre-wrap;pointer-events:none}</style>
-</head>
+#log{position:absolute;top:10px;left:10px;z-index:10;background:rgba(0,0,0,0.7);padding:8px;pointer-events:none}</style></head>
 <body>
-<div id="controls">
-  <div class="label">LEFT SHOULDER (try each to find "down")</div>
-  <button onclick="rotShoulder('x', 1.0)">L: X +1.0</button>
-  <button onclick="rotShoulder('x', -1.0)">L: X -1.0</button><br>
-  <button onclick="rotShoulder('y', 1.0)">L: Y +1.0</button>
-  <button onclick="rotShoulder('y', -1.0)">L: Y -1.0</button><br>
-  <button onclick="rotShoulder('z', 1.0)">L: Z +1.0</button>
-  <button onclick="rotShoulder('z', -1.0)">L: Z -1.0</button><br>
-  <div class="label">BOTH ARMS</div>
-  <button onclick="rotBoth('x', 1.0)">Both: X +1.0</button>
-  <button onclick="rotBoth('x', -1.0)">Both: X -1.0</button><br>
-  <button onclick="rotBoth('y', 1.0)">Both: Y +1.0</button>
-  <button onclick="rotBoth('y', -1.0)">Both: Y -1.0</button><br>
-  <button onclick="rotBoth('z', 1.0)">Both: Z +1.0</button>
-  <button onclick="rotBoth('z', -1.0)">Both: Z -1.0</button><br>
-  <div class="label">ACTIONS</div>
-  <button onclick="resetAll()">RESET TO T-POSE</button>
-  <button onclick="toggleIdle()">TOGGLE IDLE ANIM</button>
-</div>
 <div id="log">Loading...</div>
 <script type="importmap">
 {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.168.0/examples/jsm/"}}
@@ -40,7 +14,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const L = document.getElementById('log');
-const log = m => { L.textContent = m; };
+const log = m => { L.textContent += '\n' + m; };
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x12151E);
@@ -56,14 +30,13 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 const dl = new THREE.DirectionalLight(0xffffff, 1);
 dl.position.set(2,3,2); scene.add(dl);
 
-log('Loading model (153 bones)...');
+log('Loading model...');
 const gltf = await new Promise((resolve, reject) => {
-  new GLTFLoader().load('/app/assets/models/klukai.glb?v=3', resolve,
-    p => { if (p.total) log('Loading... ' + ((p.loaded/p.total)*100).toFixed(0) + '%'); },
-    e => reject(e));
+  new GLTFLoader().load('/app/assets/models/klukai.glb?v=6', resolve,
+    p => { if (p.total) L.textContent = 'Loading... ' + ((p.loaded/p.total)*100).toFixed(0) + '%'; },
+    reject);
 });
 const model = gltf.scene;
-model.traverse(n => { if (n.name === 'Cube') n.removeFromParent(); });
 scene.add(model);
 
 const box = new THREE.Box3().setFromObject(model);
@@ -71,116 +44,33 @@ const sz = box.getSize(new THREE.Vector3());
 const ct = box.getCenter(new THREE.Vector3());
 model.position.set(-ct.x, -box.min.y, -ct.z);
 camera.position.set(0, sz.y*0.5, sz.y*1.5);
-controls.target.set(0, sz.y*0.45, 0); controls.update();
+controls.target.set(0, sz.y*0.4, 0);
+controls.update();
 
-let skel = null;
-model.traverse(n => {
-  if (n.isSkinnedMesh && n.skeleton && (!skel || n.skeleton.bones.length > skel.bones.length))
-    skel = n.skeleton;
-});
+log('Model: ' + sz.x.toFixed(2) + 'x' + sz.y.toFixed(2) + 'x' + sz.z.toFixed(2));
+log('Animations: ' + gltf.animations.length);
 
-const B = {};
-if (skel) {
-  for (const bone of skel.bones) {
-    if (bone.name === 'Shoulder_L') B.shoulderL = bone;
-    if (bone.name === 'Shoulder_R') B.shoulderR = bone;
-    if (bone.name === 'Elbow_L') B.elbowL = bone;
-    if (bone.name === 'Elbow_R') B.elbowR = bone;
-    if (bone.name === 'Head_M') B.head = bone;
-    if (bone.name === 'Spine1_M') B.spine1 = bone;
-    if (bone.name === 'Root_M') B.root = bone;
-  }
-  // Save bind-pose quaternions
-  for (const b of Object.values(B)) if (b) b._bindQ = b.quaternion.clone();
+let mixer = null;
+if (gltf.animations.length > 0) {
+  mixer = new THREE.AnimationMixer(model);
+  const clip = gltf.animations[0];
+  const action = mixer.clipAction(clip);
+  action.play();
+  log('Playing: ' + clip.name + ' (' + clip.duration.toFixed(1) + 's)');
+} else {
+  log('NO ANIMATIONS FOUND');
 }
 
-log('Ready. ' + skel.bones.length + ' bones. Click buttons to test arm positions.');
-
-// Expose functions to buttons
-let idleOn = false;
-
-window.rotShoulder = (axis, angle) => {
-  if (!B.shoulderL) return;
-  B.shoulderL.quaternion.copy(B.shoulderL._bindQ);
-  const v = axis === 'x' ? new THREE.Vector3(1,0,0) : axis === 'y' ? new THREE.Vector3(0,1,0) : new THREE.Vector3(0,0,1);
-  const q = new THREE.Quaternion().setFromAxisAngle(v, angle);
-  B.shoulderL.quaternion.multiply(q);
-  log('Left shoulder: ' + axis.toUpperCase() + ' ' + (angle>0?'+':'') + angle);
-};
-
-window.rotBoth = (axis, angle) => {
-  const v = axis === 'x' ? new THREE.Vector3(1,0,0) : axis === 'y' ? new THREE.Vector3(0,1,0) : new THREE.Vector3(0,0,1);
-  if (B.shoulderL) {
-    B.shoulderL.quaternion.copy(B.shoulderL._bindQ);
-    B.shoulderL.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(v, angle));
-  }
-  if (B.shoulderR) {
-    B.shoulderR.quaternion.copy(B.shoulderR._bindQ);
-    B.shoulderR.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(v, -angle));
-  }
-  log('Both shoulders: ' + axis.toUpperCase() + ' ±' + Math.abs(angle));
-};
-
-window.resetAll = () => {
-  for (const b of Object.values(B)) if (b && b._bindQ) b.quaternion.copy(b._bindQ);
-  log('Reset to T-pose');
-};
-
-window.toggleIdle = () => {
-  idleOn = !idleOn;
-  if (idleOn) {
-    for (const b of Object.values(B)) if (b) b._iq = b.quaternion.clone();
-  }
-  log('Idle: ' + (idleOn ? 'ON' : 'OFF'));
-};
-
-// Morphs for blink
-const morphs = {};
-model.traverse(n => {
-  if (n.isMesh && n.morphTargetDictionary) {
-    for (const [name, idx] of Object.entries(n.morphTargetDictionary))
-      if (!morphs[name]) morphs[name] = {mesh:n, index:idx};
-  }
-});
-
 const clock = new THREE.Clock();
-let t = 0, nextBlink = 2;
 function animate() {
   requestAnimationFrame(animate);
-  const dt = clock.getDelta(); t += dt;
-
-  if (idleOn) {
-    if (B.root && B.root._iq) {
-      const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1), Math.sin(t*0.4)*0.015);
-      B.root.quaternion.copy(B.root._iq).multiply(q);
-    }
-    if (B.spine1 && B.spine1._iq) {
-      const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), Math.sin(t*0.8)*0.008);
-      B.spine1.quaternion.copy(B.spine1._iq).multiply(q);
-    }
-    if (B.head && B.head._iq) {
-      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.cos(t*0.5)*0.02, Math.sin(t*0.3)*0.04, 0));
-      B.head.quaternion.copy(B.head._iq).multiply(q);
-    }
-  }
-
-  // Blink
-  if (t >= nextBlink) {
-    const bp = (t-nextBlink)*8;
-    let v = bp<0.5?bp*2:bp<1?(1-bp)*2:0;
-    if (bp>=1){nextBlink=t+2+Math.random()*4;v=0;}
-    ['Eyes_Close_Down_Right','Eyes_Close_Down_Left'].forEach(n => {
-      const m=morphs[n]; if(m) m.mesh.morphTargetInfluences[m.index]=v;
-    });
-  }
-
-  model.updateMatrixWorld(true);
-  if (skel) skel.update();
+  if (mixer) mixer.update(clock.getDelta());
   controls.update();
   renderer.render(scene, camera);
 }
 animate();
-addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+log('Ready. Drag to orbit, scroll to zoom.');
+addEventListener('resize', () => { camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
 </script>
 </body>
 </html>
