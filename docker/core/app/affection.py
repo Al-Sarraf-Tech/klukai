@@ -10,7 +10,7 @@ from datetime import date, datetime
 import httpx
 from pydantic import BaseModel
 
-from .db import get_pool
+from .db import get_conn, get_conn_autocommit
 from .events import publish as publish_event
 from .personality import load_personality
 
@@ -92,8 +92,7 @@ class AffectionManager:
     async def _load_state(self) -> None:
         """Load current affection state from PostgreSQL."""
         try:
-            pool = get_pool()
-            async with pool.connection() as conn:
+            async with get_conn() as conn:
                 row = await (
                     await conn.execute(
                         "SELECT score, level, level_name, last_interaction_date, "
@@ -331,8 +330,7 @@ class AffectionManager:
     async def _save_state(self, state: AffectionState) -> None:
         """Persist affection state to PostgreSQL."""
         try:
-            pool = get_pool()
-            async with pool.connection() as conn:
+            async with get_conn_autocommit() as conn:
                 await conn.execute(
                     "UPDATE companion_affection SET "
                     "score = %s, level = %s, level_name = %s, "
@@ -358,8 +356,7 @@ class AffectionManager:
     ) -> None:
         """Log an affection change for audit trail."""
         try:
-            pool = get_pool()
-            async with pool.connection() as conn:
+            async with get_conn_autocommit() as conn:
                 await conn.execute(
                     "INSERT INTO companion_affection_log "
                     "(delta, reason, old_score, new_score, old_level, new_level) "

@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .affection import AffectionManager
 from .agent_loop import AgentLoop
-from .db import init_pool, close_pool, get_pool
+from .db import init_pool, close_pool, get_pool, get_conn, get_conn_autocommit
 from .image_gen import generate_image, needs_image, build_prompt, is_couple_scene
 from .fact_extractor import create_episode_summary, extract_facts
 from .llm_router import LLMRouter
@@ -161,7 +161,15 @@ if static_dir.exists():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "companion-core", "version": "0.1.0"}
+    from .db import check_health as db_health
+    db = await db_health()
+    status = "ok" if db.get("status") == "ok" else "degraded"
+    return {
+        "status": status,
+        "service": "companion-core",
+        "version": "0.1.0",
+        "database": db,
+    }
 
 
 # ── Push subscription ───────────────────────────────────────────────────────
@@ -449,8 +457,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # Always restore mood from persistent state (PostgreSQL is source of truth)
     restored_mood = "composed"
     try:
-        pool = get_pool()
-        async with pool.connection() as conn:
+        async with get_conn() as conn:
             row = await (await conn.execute(
                 "SELECT mood FROM companion_persistent_state WHERE user_id = %s",
                 (user_id,),
@@ -615,14 +622,12 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Store messages in PostgreSQL + mark as read
     await _store_message(session.conversation_id, "user", content, model_name)
     try:
-        pool = get_pool()
-        async with pool.connection() as conn:
+        async with get_conn_autocommit() as conn:
             await conn.execute(
                 "UPDATE companion_messages SET read_at = NOW() "
                 "WHERE conversation_id = %s AND role = 'user' AND read_at IS NULL",
                 (session.conversation_id,),
             )
-            await conn.commit()
     except Exception as e:
         logger.warning("Failed to set read_at: %s", e)
     await ws.send(user_id, {"type": "read_receipt", "read_at": datetime.now().isoformat()})
@@ -702,15 +707,13 @@ async def _background_extraction(
 
         # Persist mood so it survives session expiry
         try:
-            pool = get_pool()
-            async with pool.connection() as conn:
+            async with get_conn_autocommit() as conn:
                 await conn.execute(
                     "INSERT INTO companion_persistent_state (user_id, mood, last_conversation_id, updated_at) "
                     "VALUES (%s, %s, %s, NOW()) "
                     "ON CONFLICT (user_id) DO UPDATE SET mood = %s, last_conversation_id = %s, updated_at = NOW()",
                     (user_id, mood, session.conversation_id, mood, session.conversation_id),
                 )
-                await conn.commit()
         except Exception as e:
             logger.warning("Failed to persist mood: %s", e)
 
@@ -939,14 +942,12 @@ def _strip_actions_for_tts(text: str) -> str:
 
 async def _create_conversation(conv_id: str) -> None:
     try:
-        pool = get_pool()
-        async with pool.connection() as conn:
+        async with get_conn_autocommit() as conn:
             await conn.execute(
                 "INSERT INTO companion_conversations (id) VALUES (%s) "
                 "ON CONFLICT DO NOTHING",
                 (conv_id,),
             )
-            await conn.commit()
     except Exception as e:
         logger.error("Failed to create conversation: %s", e)
 
@@ -959,8 +960,7 @@ async def _store_message(
     latency_ms: int | None = None,
 ) -> None:
     try:
-        pool = get_pool()
-        async with pool.connection() as conn:
+        async with get_conn_autocommit() as conn:
             await conn.execute(
                 "INSERT INTO companion_messages "
                 "(conversation_id, role, content, model, latency_ms) "
@@ -972,7 +972,6 @@ async def _store_message(
                 "model_used = %s WHERE id = %s",
                 (model, conversation_id),
             )
-            await conn.commit()
     except Exception as e:
         logger.error("Failed to store message: %s", e)
 

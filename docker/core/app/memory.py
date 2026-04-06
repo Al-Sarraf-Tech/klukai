@@ -39,7 +39,13 @@ class MemoryManager:
         self._msg_collection_ready = False
 
     async def init(self) -> None:
-        self._redis = redis.from_url(REDIS_URL, decode_responses=True)
+        self._redis = redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            retry_on_timeout=True,
+            socket_keepalive=True,
+            health_check_interval=30,
+        )
         self._http = httpx.AsyncClient(timeout=30.0)
         await self._ensure_qdrant_collection()
         await self._ensure_msg_collection()
@@ -50,20 +56,41 @@ class MemoryManager:
         if self._http:
             await self._http.aclose()
 
+    async def _redis_op(self, op, *args, **kwargs):
+        """Execute a Redis operation with auto-reconnect on failure."""
+        try:
+            return await op(*args, **kwargs)
+        except (redis.ConnectionError, redis.TimeoutError) as e:
+            logger.warning("Redis connection error: %s — reconnecting", e)
+            try:
+                self._redis = redis.from_url(
+                    REDIS_URL, decode_responses=True,
+                    retry_on_timeout=True, socket_keepalive=True,
+                    health_check_interval=30,
+                )
+                return await op(*args, **kwargs)
+            except Exception as e2:
+                logger.error("Redis reconnect failed: %s", e2)
+                return None
+
     # ── Tier 1: Session (Redis) ──────────────────────────────────────────
 
     async def get_session(self, session_id: str) -> SessionState | None:
-        raw = await self._redis.get(f"companion:session:{session_id}")
+        raw = await self._redis_op(self._redis.get, f"companion:session:{session_id}")
         if raw is None:
             return None
-        return SessionState.model_validate_json(raw)
+        try:
+            return SessionState.model_validate_json(raw)
+        except Exception as e:
+            logger.warning("Failed to parse session: %s", e)
+            return None
 
     async def save_session(self, session_id: str, state: SessionState) -> None:
-        # Keep turns bounded
         if len(state.turns) > MAX_SESSION_TURNS:
             state.turns = state.turns[-MAX_SESSION_TURNS:]
         state.last_activity = datetime.now()
-        await self._redis.set(
+        await self._redis_op(
+            self._redis.set,
             f"companion:session:{session_id}",
             state.model_dump_json(),
             ex=SESSION_TTL,
