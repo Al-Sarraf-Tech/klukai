@@ -1,17 +1,20 @@
 (function () {
   'use strict';
 
-  let scene, camera, renderer, clock, mixer;
+  let scene, camera, renderer, clock;
   let model = null;
-  let currentAction = null;
-  let blinkAction = null;
-  let talkAction = null;
-  let animations = {};
   let isDisposed = false;
   let fidgetTimer = null;
   let currentMoodGroup = 'relaxed';
   let isDormMode = false;
   let rimLight = null;
+  let isTalking = false;
+  let elapsed = 0;
+
+  // Bone references (found after model loads)
+  let bones = {};
+  // Shape key references { meshName: { keyName: { mesh, index } } }
+  let morphs = {};
 
   const MOOD_GROUPS = {
     relaxed: 'relaxed', calm: 'relaxed', content: 'relaxed', neutral: 'relaxed', composed: 'relaxed',
@@ -31,28 +34,39 @@
   };
 
   const RIM_COLORS = {
-    relaxed:    0x4FC3F7,
-    happy:      0x6EE7B7,
-    serious:    0x3B82F6,
-    shy:        0xF9A8D4,
-    combat:     0xEF4444,
-    tender:     0xE88CA5,
-    drowsy:     0x64748B,
-    melancholy: 0x6366F1,
+    relaxed: 0x4FC3F7, happy: 0x6EE7B7, serious: 0x3B82F6, shy: 0xF9A8D4,
+    combat: 0xEF4444, tender: 0xE88CA5, drowsy: 0x64748B, melancholy: 0x6366F1,
   };
 
-  const FIDGETS = {
-    relaxed:    ['fidget_hair', 'fidget_stretch', 'fidget_smile'],
-    happy:      ['fidget_hair', 'fidget_stretch', 'fidget_smile'],
-    serious:    ['fidget_weapon', 'fidget_scan'],
-    shy:        ['fidget_tuck_hair', 'fidget_look_away'],
-    combat:     ['fidget_weapon', 'fidget_scan'],
-    tender:     ['fidget_hair', 'fidget_smile'],
-    drowsy:     ['fidget_yawn', 'fidget_head_nod', 'fidget_rub_eyes'],
-    melancholy: ['fidget_look_away', 'fidget_weight_shift'],
+  // Mood-specific idle parameters
+  const IDLE_PARAMS = {
+    relaxed:    { swayAmp: 0.015, swaySpeed: 0.4, breathAmp: 0.008, headTilt: 0.02 },
+    happy:      { swayAmp: 0.025, swaySpeed: 0.6, breathAmp: 0.010, headTilt: 0.03 },
+    serious:    { swayAmp: 0.006, swaySpeed: 0.3, breathAmp: 0.005, headTilt: 0.01 },
+    shy:        { swayAmp: 0.020, swaySpeed: 0.5, breathAmp: 0.008, headTilt: 0.04 },
+    combat:     { swayAmp: 0.010, swaySpeed: 0.35, breathAmp: 0.007, headTilt: 0.01 },
+    tender:     { swayAmp: 0.018, swaySpeed: 0.45, breathAmp: 0.009, headTilt: 0.03 },
+    drowsy:     { swayAmp: 0.035, swaySpeed: 0.25, breathAmp: 0.012, headTilt: 0.05 },
+    melancholy: { swayAmp: 0.012, swaySpeed: 0.35, breathAmp: 0.007, headTilt: 0.02 },
   };
 
-  const UNIVERSAL_FIDGETS = ['fidget_blink_hard', 'fidget_look_around', 'fidget_weight_shift'];
+  // Fidget state
+  let fidgetActive = false;
+  let fidgetStartTime = 0;
+  let fidgetDuration = 0;
+  let fidgetType = '';
+
+  // Blink state
+  let nextBlinkTime = 0;
+  let blinkPhase = -1; // -1 = not blinking, 0-1 = progress
+
+  // Look-at target (smoothed)
+  let lookTargetX = 0, lookTargetY = 0;
+  let lookCurrentX = 0, lookCurrentY = 0;
+
+  // Tap reaction state
+  let reactionActive = false;
+  let reactionStart = 0;
 
   function createScene(canvas) {
     scene = new THREE.Scene();
@@ -69,9 +83,7 @@
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambient);
-
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
     dirLight.position.set(2, 3, 2);
     scene.add(dirLight);
@@ -82,14 +94,15 @@
   }
 
   async function loadModel(url) {
-    const loader = new (window.GLTFLoader || THREE.GLTFLoader)();
+    const GLTFLoader = window.GLTFLoader;
+    const loader = new GLTFLoader();
     const gltf = await new Promise((resolve, reject) => {
       loader.load(url, resolve, undefined, reject);
     });
 
     model = gltf.scene;
 
-    // Remove junk objects (default Blender cube, cameras, lights)
+    // Remove junk objects
     const toRemove = [];
     model.traverse((node) => {
       if (node.name === 'Cube' || node.name === 'Camera' || node.name === 'Light') {
@@ -97,87 +110,178 @@
       }
     });
     toRemove.forEach(n => n.removeFromParent());
-    if (toRemove.length > 0) {
-      console.log('[klukai_3d] Removed junk objects:', toRemove.map(n => n.name));
-    }
 
     scene.add(model);
 
-    // Recalculate bounds after cleanup
+    // Center and ground the model
     const box = new THREE.Box3().setFromObject(model);
-    const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
-    console.log('[klukai_3d] Model bounds:', size.x.toFixed(2), 'x', size.y.toFixed(2), 'x', size.z.toFixed(2), 'center:', center.x.toFixed(2), center.y.toFixed(2), center.z.toFixed(2));
-
-    // Center model and position feet at ground level
     model.position.set(-center.x, -box.min.y, -center.z);
 
-    mixer = new THREE.AnimationMixer(model);
+    // Find key bones by name patterns (GFL2 rig naming)
+    model.traverse((node) => {
+      if (node.isBone) {
+        const n = node.name;
+        if (n === 'Head_M') bones.head = node;
+        else if (n === 'Neck_M') bones.neck = node;
+        else if (n === 'Chest_M') bones.chest = node;
+        else if (n === 'Spine2_M') bones.spine2 = node;
+        else if (n === 'Spine1_M') bones.spine1 = node;
+        else if (n === 'Root_M') bones.root = node;
+        else if (n === 'Shoulder_L') bones.shoulderL = node;
+        else if (n === 'Shoulder_R') bones.shoulderR = node;
 
-    for (const clip of gltf.animations) {
-      animations[clip.name] = clip;
-    }
-
-    if (animations['blink']) {
-      blinkAction = mixer.clipAction(animations['blink']);
-      blinkAction.setLoop(THREE.LoopRepeat);
-      blinkAction.weight = 1.0;
-      blinkAction.play();
-    }
-
-    playMoodIdle('relaxed');
-    scheduleFidget();
-  }
-
-  function playMoodIdle(group) {
-    const clipName = 'idle_' + group;
-    const clip = animations[clipName] || animations['idle_relaxed'];
-    if (!clip) return;
-
-    const newAction = mixer.clipAction(clip);
-    newAction.setLoop(THREE.LoopRepeat);
-
-    if (currentAction && currentAction !== newAction) {
-      currentAction.crossFadeTo(newAction, 0.5, true);
-    }
-
-    newAction.play();
-    currentAction = newAction;
-    currentMoodGroup = group;
-
-    if (rimLight && RIM_COLORS[group]) {
-      rimLight.color.setHex(RIM_COLORS[group]);
-    }
-  }
-
-  function playOneShot(clipName) {
-    const clip = animations[clipName];
-    if (!clip) return;
-
-    const action = mixer.clipAction(clip);
-    action.setLoop(THREE.LoopOnce);
-    action.clampWhenFinished = false;
-    action.reset().play();
-
-    mixer.addEventListener('finished', function onFinished(e) {
-      if (e.action === action) {
-        mixer.removeEventListener('finished', onFinished);
-        action.stop();
+        // Store initial rotations for reset
+        if (!node._initialRot) {
+          node._initialRot = node.rotation.clone();
+        }
       }
     });
+
+    // Index morph targets (shape keys)
+    model.traverse((node) => {
+      if (node.isMesh && node.morphTargetDictionary) {
+        for (const [name, idx] of Object.entries(node.morphTargetDictionary)) {
+          morphs[name] = { mesh: node, index: idx };
+        }
+      }
+    });
+
+    console.log('[klukai_3d] Bones found:', Object.keys(bones));
+    console.log('[klukai_3d] Morphs found:', Object.keys(morphs));
+
+    // Schedule first blink
+    nextBlinkTime = 2 + Math.random() * 3;
+  }
+
+  // ── Morph target helpers ──────────────────────────────────
+
+  function setMorph(name, value) {
+    const m = morphs[name];
+    if (m) {
+      m.mesh.morphTargetInfluences[m.index] = Math.max(0, Math.min(1, value));
+    }
+  }
+
+  // ── Procedural animation (called every frame) ─────────────
+
+  function updateAnimations(dt) {
+    elapsed += dt;
+    const p = IDLE_PARAMS[currentMoodGroup] || IDLE_PARAMS.relaxed;
+
+    // ── Breathing (spine/chest vertical oscillation) ──
+    if (bones.spine1) {
+      const breathOffset = Math.sin(elapsed * p.swaySpeed * 2.5) * p.breathAmp;
+      bones.spine1.rotation.x = (bones.spine1._initialRot?.x || 0) + breathOffset;
+    }
+
+    // ── Body sway (root side-to-side) ──
+    if (bones.root) {
+      const swayZ = Math.sin(elapsed * p.swaySpeed) * p.swayAmp;
+      const swayX = Math.cos(elapsed * p.swaySpeed * 0.7) * p.swayAmp * 0.3;
+      bones.root.rotation.z = (bones.root._initialRot?.z || 0) + swayZ;
+      bones.root.rotation.x = (bones.root._initialRot?.x || 0) + swayX;
+    }
+
+    // ── Head idle movement ──
+    if (bones.head && !reactionActive) {
+      const headY = Math.sin(elapsed * p.swaySpeed * 0.8) * p.headTilt;
+      const headX = Math.cos(elapsed * p.swaySpeed * 0.5) * p.headTilt * 0.5;
+
+      // Blend with look-at target
+      lookCurrentX += (lookTargetX - lookCurrentX) * 0.05;
+      lookCurrentY += (lookTargetY - lookCurrentY) * 0.05;
+
+      const baseX = (bones.head._initialRot?.x || 0);
+      const baseY = (bones.head._initialRot?.y || 0);
+      bones.head.rotation.x = baseX + headX + lookCurrentY * 0.3;
+      bones.head.rotation.y = baseY + headY + lookCurrentX * 0.4;
+    }
+
+    // ── Blink (shape keys) ──
+    if (elapsed >= nextBlinkTime && blinkPhase < 0) {
+      blinkPhase = 0;
+    }
+    if (blinkPhase >= 0) {
+      blinkPhase += dt * 8; // ~125ms per blink
+      let blinkVal = 0;
+      if (blinkPhase < 0.5) {
+        blinkVal = blinkPhase * 2; // closing
+      } else if (blinkPhase < 1.0) {
+        blinkVal = (1.0 - blinkPhase) * 2; // opening
+      } else {
+        blinkPhase = -1;
+        blinkVal = 0;
+        nextBlinkTime = elapsed + 2 + Math.random() * 4;
+      }
+      setMorph('Eyes_Close_Down_Right', blinkVal);
+      setMorph('Eyes_Close_Down_Left', blinkVal);
+      setMorph('Eyes_Close_Up_Right', blinkVal * 0.3);
+      setMorph('Eyes_Close_Up_Left', blinkVal * 0.3);
+    }
+
+    // ── Talking (mouth shape keys) ──
+    if (isTalking) {
+      const mouthOpen = (Math.sin(elapsed * 12) * 0.3 + 0.3) *
+                         (Math.sin(elapsed * 7.3) * 0.2 + 0.5);
+      setMorph('Mouth_Happy', mouthOpen * 0.6);
+      setMorph('Mouth_Smile', mouthOpen * 0.3);
+    } else {
+      setMorph('Mouth_Happy', 0);
+      setMorph('Mouth_Smile', 0);
+    }
+
+    // ── Tap reaction ──
+    if (reactionActive && bones.head) {
+      const rt = elapsed - reactionStart;
+      if (rt < 0.3) {
+        // Quick tilt
+        bones.head.rotation.y += Math.sin(rt * 10) * 0.1;
+        bones.head.rotation.z = (bones.head._initialRot?.z || 0) + Math.sin(rt * 8) * 0.05;
+      } else if (rt < 0.8) {
+        // Settle back
+        const settle = (rt - 0.3) / 0.5;
+        bones.head.rotation.z = (bones.head._initialRot?.z || 0) * (1 - settle);
+      } else {
+        reactionActive = false;
+      }
+    }
+
+    // ── Fidget ──
+    if (fidgetActive && bones.head) {
+      const ft = (elapsed - fidgetStartTime) / fidgetDuration;
+      if (ft >= 1.0) {
+        fidgetActive = false;
+      } else {
+        const ease = Math.sin(ft * Math.PI); // bell curve
+        switch (fidgetType) {
+          case 'look_around':
+            bones.head.rotation.y += Math.sin(ft * Math.PI * 2) * 0.12 * ease;
+            break;
+          case 'head_tilt':
+            bones.head.rotation.z += Math.sin(ft * Math.PI) * 0.06;
+            break;
+          case 'nod':
+            bones.head.rotation.x += Math.sin(ft * Math.PI * 2) * 0.05 * ease;
+            break;
+          case 'weight_shift':
+            if (bones.root) bones.root.position.x = (Math.sin(ft * Math.PI) * 0.03);
+            break;
+        }
+      }
+    }
   }
 
   function scheduleFidget() {
     if (isDisposed) return;
-    const delay = (30 + Math.random() * 60) * 1000;
+    const delay = (20 + Math.random() * 40) * 1000;
     fidgetTimer = setTimeout(() => {
-      if (isDisposed || isDormMode) return;
-      const moodFidgets = FIDGETS[currentMoodGroup] || [];
-      const allFidgets = [...moodFidgets, ...UNIVERSAL_FIDGETS];
-      const pick = allFidgets[Math.floor(Math.random() * allFidgets.length)];
-      if (animations[pick]) {
-        playOneShot(pick);
-      }
+      if (isDisposed || isDormMode || fidgetActive) return;
+      const types = ['look_around', 'head_tilt', 'nod', 'weight_shift'];
+      fidgetType = types[Math.floor(Math.random() * types.length)];
+      fidgetActive = true;
+      fidgetStartTime = elapsed;
+      fidgetDuration = 1.5 + Math.random() * 1.5;
       scheduleFidget();
     }, delay);
   }
@@ -185,8 +289,8 @@
   function animate() {
     if (isDisposed) return;
     requestAnimationFrame(animate);
-    const delta = clock.getDelta();
-    if (mixer) mixer.update(delta);
+    const dt = clock.getDelta();
+    updateAnimations(dt);
     if (renderer && scene && camera) renderer.render(scene, camera);
   }
 
@@ -194,28 +298,19 @@
     if (!renderer || !camera) return;
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
-    if (canvas.width !== w || canvas.height !== h) {
+    if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) {
       renderer.setSize(w, h, false);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
     }
   }
 
-  let headBone = null;
-  const maxRotX = 0.3;
-  const maxRotY = 0.4;
-
-  function updateLookAt(normX, normY) {
-    if (!headBone || isDormMode) return;
-    const targetY = Math.max(-maxRotY, Math.min(maxRotY, normX * maxRotY));
-    const targetX = Math.max(-maxRotX, Math.min(maxRotX, normY * maxRotX));
-    headBone.rotation.y += (targetY - headBone.rotation.y) * 0.1;
-    headBone.rotation.x += (targetX - headBone.rotation.x) * 0.1;
-  }
+  // ── Public bridge API ─────────────────────────────────────
 
   window.klukaiBridge = {
     async init(canvasId, modelUrl) {
       isDisposed = false;
+      elapsed = 0;
       const canvas = document.getElementById(canvasId);
       if (!canvas) {
         console.error('[klukai_3d] Canvas not found:', canvasId);
@@ -231,96 +326,52 @@
         return false;
       }
 
-      model.traverse((node) => {
-        if (node.isBone && /head/i.test(node.name)) {
-          headBone = node;
-        }
-      });
-
       const resizeObserver = new ResizeObserver(() => handleResize(canvas));
       resizeObserver.observe(canvas);
 
+      // Start render loop and fidgets
       animate();
+      scheduleFidget();
 
-      // Log canvas dimensions for debugging
-      console.log('[klukai_3d] Canvas:', canvas.clientWidth, 'x', canvas.clientHeight,
-                  '| pixel:', canvas.width, 'x', canvas.height,
-                  '| parent:', canvas.parentElement?.clientWidth, 'x', canvas.parentElement?.clientHeight);
-      console.log('[klukai_3d] Initialized. Animations:', Object.keys(animations));
-
-      // If canvas has zero dimensions, poll until parent sizes it
-      if (canvas.clientWidth === 0 || canvas.clientHeight === 0) {
-        console.warn('[klukai_3d] Canvas has zero dimensions, waiting for layout...');
-        let retries = 0;
-        const sizeCheck = setInterval(() => {
-          retries++;
-          if (canvas.clientWidth > 0 && canvas.clientHeight > 0) {
-            clearInterval(sizeCheck);
-            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
-            camera.aspect = canvas.clientWidth / canvas.clientHeight;
-            camera.updateProjectionMatrix();
-            console.log('[klukai_3d] Canvas resized to:', canvas.clientWidth, 'x', canvas.clientHeight);
-          } else if (retries > 50) {
-            clearInterval(sizeCheck);
-            console.error('[klukai_3d] Canvas never got dimensions after 5s');
-          }
-        }, 100);
-      }
+      console.log('[klukai_3d] Canvas:', canvas.clientWidth, 'x', canvas.clientHeight);
+      console.log('[klukai_3d] Initialized. Bones:', Object.keys(bones), 'Morphs:', Object.keys(morphs));
       return true;
     },
 
     setMood(moodName) {
-      if (!mixer) return;
       const group = MOOD_GROUPS[moodName] || 'relaxed';
       if (group !== currentMoodGroup) {
-        playMoodIdle(group);
+        currentMoodGroup = group;
+        if (rimLight && RIM_COLORS[group]) {
+          rimLight.color.setHex(RIM_COLORS[group]);
+        }
       }
     },
 
     playReaction(reactionName) {
-      if (!mixer) return;
-      playOneShot(reactionName);
+      reactionActive = true;
+      reactionStart = elapsed;
     },
 
     setTalking(enabled) {
-      if (!mixer) return;
-      if (enabled && animations['talking']) {
-        if (!talkAction) {
-          talkAction = mixer.clipAction(animations['talking']);
-          talkAction.setLoop(THREE.LoopRepeat);
-          talkAction.weight = 0.8;
-        }
-        talkAction.reset().play();
-      } else if (talkAction) {
-        talkAction.fadeOut(0.3);
-        talkAction = null;
-      }
+      isTalking = enabled;
     },
 
     setBlush(intensity) {
-      if (!model) return;
-      // GFL2 model uses Mouth_Happy as a proxy for blush/smile
-      model.traverse((node) => {
-        if (node.isMesh && node.morphTargetInfluences && node.morphTargetDictionary) {
-          for (const name of ['blush', 'Mouth_Happy', 'Mouth_Smile']) {
-            const idx = node.morphTargetDictionary[name];
-            if (idx !== undefined) {
-              node.morphTargetInfluences[idx] = Math.max(0, Math.min(1, intensity));
-              break;
-            }
-          }
-        }
-      });
+      setMorph('Mouth_Happy', Math.max(0, Math.min(1, intensity)));
     },
 
     lookAt(normX, normY) {
-      updateLookAt(normX, normY);
+      if (!isDormMode) {
+        lookTargetX = Math.max(-1, Math.min(1, normX));
+        lookTargetY = Math.max(-1, Math.min(1, normY));
+      }
     },
 
     setDormMode(enabled) {
       isDormMode = enabled;
       if (enabled) {
-        playMoodIdle('drowsy');
+        currentMoodGroup = 'drowsy';
         if (rimLight) {
           rimLight.intensity = 0.4;
           rimLight.color.setHex(0x64748B);
@@ -333,21 +384,14 @@
     dispose() {
       isDisposed = true;
       if (fidgetTimer) clearTimeout(fidgetTimer);
-      if (mixer) mixer.stopAllAction();
       if (renderer) {
         renderer.dispose();
         renderer.forceContextLoss();
       }
-      scene = null;
-      camera = null;
-      renderer = null;
-      mixer = null;
-      model = null;
-      animations = {};
-      currentAction = null;
-      blinkAction = null;
-      talkAction = null;
-      headBone = null;
+      scene = null; camera = null; renderer = null;
+      model = null; bones = {}; morphs = {};
+      lookTargetX = 0; lookTargetY = 0;
+      lookCurrentX = 0; lookCurrentY = 0;
       console.log('[klukai_3d] Disposed');
     },
   };
