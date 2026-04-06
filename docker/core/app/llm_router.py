@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
 
 import anthropic
@@ -13,6 +14,9 @@ import httpx
 from .models import LLMConfig, SessionState
 
 logger = logging.getLogger(__name__)
+
+# Circuit breaker: seconds to wait before re-probing LM Studio after failure
+_HEALTH_RECHECK_INTERVAL = 15.0
 
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -47,6 +51,7 @@ class LLMRouter:
         self._http: httpx.AsyncClient | None = None
         self._anthropic: anthropic.AsyncAnthropic | None = None
         self._lmstudio_available: bool | None = None
+        self._lmstudio_last_check: float = 0.0
 
     async def init(self) -> None:
         self._http = httpx.AsyncClient(timeout=60.0)
@@ -64,10 +69,23 @@ class LLMRouter:
             self._lmstudio_available = r.status_code == 200
         except httpx.HTTPError:
             self._lmstudio_available = False
+        self._lmstudio_last_check = time.monotonic()
         logger.info("LM Studio available: %s", self._lmstudio_available)
         return self._lmstudio_available
 
-    def route(
+    async def _ensure_lmstudio_fresh(self) -> bool:
+        """Re-check LM Studio if it was down and enough time has passed."""
+        if self._lmstudio_available:
+            return True
+        elapsed = time.monotonic() - self._lmstudio_last_check
+        if elapsed >= _HEALTH_RECHECK_INTERVAL:
+            result = await self._check_lmstudio()
+            if result:
+                logger.info("LM Studio recovered after %.0fs", elapsed)
+            return result
+        return False
+
+    async def route(
         self,
         message: str,
         session: SessionState,
@@ -75,6 +93,10 @@ class LLMRouter:
         user_override: str | None = None,
     ) -> LLMConfig:
         """Decide which model to use for this message."""
+        # Re-check LM Studio if it was previously down
+        if not self._lmstudio_available:
+            await self._ensure_lmstudio_fresh()
+
         # User explicit override
         if user_override:
             if user_override.startswith("claude"):
@@ -111,8 +133,10 @@ class LLMRouter:
 
         raise RuntimeError("No LLM backend available")
 
-    def needs_agent(self, message: str) -> bool:
+    async def needs_agent(self, message: str) -> bool:
         """Determine if a message needs the agentic tool-use loop."""
+        if not self._lmstudio_available:
+            await self._ensure_lmstudio_fresh()
         if not self._lmstudio_available:
             return False  # Need LM Studio for agent loop
 
@@ -181,7 +205,24 @@ class LLMRouter:
                 ):
                     yield token
         except Exception as e:
-            logger.warning("LLM %s/%s failed: %s, trying fallback", config.provider, config.model, e)
+            error_msg = str(e) or type(e).__name__
+            logger.warning("LLM %s/%s failed: %s, trying fallback", config.provider, config.model, error_msg)
+            if config.provider == "lmstudio":
+                self._lmstudio_available = False
+                self._lmstudio_last_check = time.monotonic()
+
+            # Retry once with same config before falling back
+            try:
+                if config.provider == "lmstudio":
+                    await self._check_lmstudio()
+                    if self._lmstudio_available:
+                        logger.info("LM Studio retry after quick re-check")
+                        async for token in self._stream_lmstudio(system_prompt, messages, config):
+                            yield token
+                        return
+            except Exception:
+                pass
+
             fallback = self._get_fallback(config)
             if fallback:
                 async for token in self.stream(system_prompt, messages, fallback):
