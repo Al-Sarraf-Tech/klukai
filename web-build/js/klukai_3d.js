@@ -224,10 +224,54 @@
       if (g !== currentMoodGroup) {
         currentMoodGroup = g;
         if (rimLight && RIM_COLORS[g]) rimLight.color.setHex(RIM_COLORS[g]);
+
+        // Map mood group to animation
+        if (!isTalking && mixer && window._klukaiClips) {
+          const MOOD_ANIMS = {
+            relaxed: 'idle', happy: 'happy', serious: 'thinking',
+            shy: 'bashful', combat: 'excited', tender: 'thankful',
+            drowsy: 'idle', melancholy: 'nervous',
+          };
+          const targetAnim = MOOD_ANIMS[g] || 'idle';
+          if (window._klukaiCurrentAnim !== targetAnim && window._klukaiClips[targetAnim]) {
+            const clip = window._klukaiClips[targetAnim];
+            if (!window._klukaiActions[targetAnim]) {
+              window._klukaiActions[targetAnim] = mixer.clipAction(clip);
+              window._klukaiActions[targetAnim].setLoop(THREE.LoopRepeat);
+            }
+            const from = window._klukaiActions[window._klukaiCurrentAnim];
+            const to = window._klukaiActions[targetAnim];
+            if (from && to) {
+              to.reset().play();
+              from.crossFadeTo(to, 0.8, true);
+            }
+            window._klukaiCurrentAnim = targetAnim;
+            console.log('[klukai_3d] Mood animation:', targetAnim);
+          }
+        }
       }
     },
 
-    playReaction() {},
+    playReaction() {
+      if (mixer && window._klukaiClips && window._klukaiClips['salute']) {
+        const clip = window._klukaiClips['salute'];
+        if (!window._klukaiActions['salute']) {
+          window._klukaiActions['salute'] = mixer.clipAction(clip);
+          window._klukaiActions['salute'].setLoop(THREE.LoopOnce);
+          window._klukaiActions['salute'].clampWhenFinished = false;
+        }
+        const salute = window._klukaiActions['salute'];
+        salute.reset().play();
+        // Return to current animation after salute finishes
+        mixer.addEventListener('finished', function onDone(e) {
+          if (e.action === salute) {
+            mixer.removeEventListener('finished', onDone);
+            const current = window._klukaiActions[window._klukaiCurrentAnim];
+            if (current) { current.reset().play(); }
+          }
+        });
+      }
+    },
     setTalking(enabled) {
       isTalking = enabled;
       // Crossfade to talking/idle animation
