@@ -2,379 +2,189 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Klukai 3D Diagnostic</title>
-<style>
-  body { margin: 0; background: #12151E; color: #0f0; font-family: monospace; font-size: 12px; }
-  #view { position: absolute; top: 0; right: 0; width: 50vw; height: 100vh; }
-  #log { position: absolute; top: 0; left: 0; width: 48vw; height: 100vh; overflow-y: auto;
-         padding: 10px; background: rgba(0,0,0,0.9); white-space: pre-wrap; }
-  .pass { color: #4ADE80; }
-  .fail { color: #EF4444; }
-  .warn { color: #FBBF24; }
-  .info { color: #4FC3F7; }
-  .head { color: #E88CA5; font-weight: bold; font-size: 14px; margin-top: 12px; display: block; }
-  button { background: #222; color: #0f0; border: 1px solid #0f0; padding: 4px 10px;
-           margin: 2px; cursor: pointer; font-family: monospace; font-size: 11px; }
-</style>
+<title>Klukai Animation Test</title>
+<style>body{margin:0;background:#12151E;color:#0f0;font-family:monospace;font-size:12px}
+#log{position:absolute;top:10px;left:10px;z-index:10;background:rgba(0,0,0,0.8);padding:8px;max-width:40%;white-space:pre-wrap;pointer-events:none}</style>
 </head>
 <body>
-<div id="log"></div>
-<canvas id="view"></canvas>
+<div id="log">Loading...</div>
 <script type="importmap">
-{ "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.min.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.168.0/examples/jsm/"
-} }
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.168.0/examples/jsm/"}}
 </script>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const logEl = document.getElementById('log');
-const canvas = document.getElementById('view');
+const L = document.getElementById('log');
+const log = m => { L.textContent += '\n' + m; console.log(m); };
 
-function log(msg, cls='') { logEl.innerHTML += cls ? `<span class="${cls}">${msg}</span>\n` : msg + '\n'; logEl.scrollTop = logEl.scrollHeight; }
-function pass(msg) { log('✓ ' + msg, 'pass'); }
-function fail(msg) { log('✗ ' + msg, 'fail'); }
-function warn(msg) { log('⚠ ' + msg, 'warn'); }
-function info(msg) { log('  ' + msg, 'info'); }
-function head(msg) { log(msg, 'head'); }
-
-// Scene setup
+// Scene
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x12151E);
-const camera = new THREE.PerspectiveCamera(30, canvas.clientWidth / canvas.clientHeight, 0.01, 1000);
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setSize(canvas.clientWidth, canvas.clientHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const camera = new THREE.PerspectiveCamera(30, innerWidth/innerHeight, 0.01, 100);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-const controls = new OrbitControls(camera, canvas);
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 scene.add(new THREE.AmbientLight(0xffffff, 0.8));
-const dir = new THREE.DirectionalLight(0xffffff, 1.0);
-dir.position.set(2, 3, 2);
-scene.add(dir);
-scene.add(new THREE.GridHelper(10, 10, 0x333, 0x222));
+const dl = new THREE.DirectionalLight(0xffffff, 1);
+dl.position.set(2,3,2);
+scene.add(dl);
 
-head('═══ PHASE 0: LOAD MODEL ═══');
-log('Loading /app/assets/models/klukai.glb ...');
-
-const loader = new GLTFLoader();
+// Load
+log('Loading model...');
 const gltf = await new Promise((resolve, reject) => {
-  loader.load('/app/assets/models/klukai.glb',
-    resolve,
-    (p) => { if (p.total) logEl.lastChild && (logEl.lastChild.textContent = 'Loading... ' + ((p.loaded/p.total)*100).toFixed(0) + '%'); },
-    reject
+  new GLTFLoader().load('/app/assets/models/klukai.glb', resolve,
+    p => { if (p.total) L.textContent = 'Loading... ' + ((p.loaded/p.total)*100).toFixed(0) + '%'; },
+    e => { log('LOAD ERROR: ' + e.message); reject(e); }
   );
 });
+log('gltf keys: ' + Object.keys(gltf));
+log('gltf.scene: ' + gltf.scene);
+log('gltf.scenes: ' + gltf.scenes);
+log('gltf type: ' + typeof gltf);
+if (gltf.scene) log('scene.type: ' + gltf.scene.type + ' name: ' + gltf.scene.name);
+if (gltf.scenes) log('scenes count: ' + gltf.scenes.length);
 
-const model = gltf.scene;
+const model = gltf.scene || (gltf.scenes && gltf.scenes[0]);
+if (!model) { log('ERROR: no scene found in gltf!'); throw new Error('No scene'); }
+log('model: ' + model.type + ' children: ' + model.children.length);
 
-// Remove junk
-const junk = [];
-model.traverse(n => { if (n.name === 'Cube' || n.name === 'Camera' || n.name === 'Light') junk.push(n); });
-junk.forEach(n => n.removeFromParent());
-
+// Remove cube - safely
+try {
+  const toRemove = [];
+  model.traverse(n => { if (n.name === 'Cube') toRemove.push(n); });
+  toRemove.forEach(n => n.removeFromParent());
+} catch(e) { log('traverse error: ' + e.message); }
 scene.add(model);
 
 // Center
 const box = new THREE.Box3().setFromObject(model);
-const size = box.getSize(new THREE.Vector3());
-const center = box.getCenter(new THREE.Vector3());
-model.position.set(-center.x, -box.min.y, -center.z);
-camera.position.set(0, size.y * 0.5, size.y * 1.5);
-controls.target.set(0, size.y * 0.45, 0);
+const sz = box.getSize(new THREE.Vector3());
+const ct = box.getCenter(new THREE.Vector3());
+model.position.set(-ct.x, -box.min.y, -ct.z);
+camera.position.set(0, sz.y*0.5, sz.y*1.5);
+controls.target.set(0, sz.y*0.45, 0);
 controls.update();
+log('Model loaded: ' + sz.x.toFixed(2) + 'x' + sz.y.toFixed(2));
 
-pass('Model loaded. Size: ' + size.x.toFixed(2) + ' x ' + size.y.toFixed(2) + ' x ' + size.z.toFixed(2));
-
-// ═══ PHASE 1: Inventory ═══
-head('═══ PHASE 1: INVENTORY ═══');
-
-let allMeshes = [];
-let skinnedMeshes = [];
-let allBones = [];
-
+// Find Body skeleton (673 bones, DEF- prefix)
+let skel = null;
 model.traverse(n => {
-  if (n.isMesh) allMeshes.push(n);
-  if (n.isSkinnedMesh) skinnedMeshes.push(n);
-  if (n.isBone) allBones.push(n);
+  if (n.isSkinnedMesh && n.name === 'Body' && n.skeleton) skel = n.skeleton;
 });
-
-info('Total Meshes: ' + allMeshes.length);
-info('SkinnedMeshes: ' + skinnedMeshes.length);
-info('Total Bones: ' + allBones.length);
-
-if (skinnedMeshes.length > 0) pass('Found ' + skinnedMeshes.length + ' SkinnedMeshes');
-else fail('NO SkinnedMeshes found — bones cannot deform anything!');
-
-// ═══ PHASE 2: Skinning Analysis ═══
-head('═══ PHASE 2: SKINNING ANALYSIS ═══');
-
-for (const sm of skinnedMeshes.slice(0, 5)) {
-  info('--- ' + sm.name + ' ---');
-  info('  isSkinnedMesh: ' + sm.isSkinnedMesh);
-  info('  skeleton: ' + (sm.skeleton ? 'YES (' + sm.skeleton.bones.length + ' bones)' : 'MISSING'));
-  info('  bindMatrix: ' + (sm.bindMatrix ? 'SET' : 'MISSING'));
-  info('  bindMatrixInverse: ' + (sm.bindMatrixInverse ? 'SET' : 'MISSING'));
-
-  if (sm.skeleton) {
-    const skel = sm.skeleton;
-    info('  skeleton.boneInverses: ' + (skel.boneInverses ? skel.boneInverses.length + ' entries' : 'MISSING'));
-    info('  skeleton.boneMatrices: ' + (skel.boneMatrices ? skel.boneMatrices.length + ' floats' : 'MISSING'));
-    info('  First 5 bone names: ' + skel.bones.slice(0, 5).map(b => b.name).join(', '));
-
-    // Check if this skeleton has our target bones
-    const boneNames = new Set(skel.bones.map(b => b.name));
-    const targets = ['Head_M', 'Spine1_M', 'Root_M', 'Chest_M', 'Neck_M'];
-    const found = targets.filter(t => boneNames.has(t));
-    const defFound = targets.filter(t => boneNames.has('DEF-' + t));
-    info('  Game bones in skeleton: ' + (found.length > 0 ? found.join(', ') : 'NONE'));
-    info('  DEF- bones in skeleton: ' + (defFound.length > 0 ? defFound.join(', ') : 'NONE'));
-  }
-
-  // Check geometry skinning attributes
-  const geo = sm.geometry;
-  info('  geometry.skinIndex: ' + (geo.attributes.skinIndex ? 'YES' : 'MISSING'));
-  info('  geometry.skinWeight: ' + (geo.attributes.skinWeight ? 'YES' : 'MISSING'));
+if (!skel) {
+  model.traverse(n => {
+    if (n.isSkinnedMesh && n.skeleton && (!skel || n.skeleton.bones.length > skel.bones.length))
+      skel = n.skeleton;
+  });
 }
+log('Skeleton: ' + (skel ? skel.bones.length + ' bones' : 'NONE'));
 
-// ═══ PHASE 3: Bone Manipulation Test ═══
-head('═══ PHASE 3: BONE MANIPULATION TEST ═══');
-
-// Pick the first SkinnedMesh with a skeleton and try rotating its bones
-let testMesh = skinnedMeshes.find(sm => sm.skeleton && sm.skeleton.bones.length > 10);
-if (!testMesh) {
-  fail('No suitable SkinnedMesh for bone test');
-} else {
-  const skel = testMesh.skeleton;
-  info('Testing with: ' + testMesh.name + ' (' + skel.bones.length + ' bones)');
-
-  // Render one frame first to get baseline
-  renderer.render(scene, camera);
-
-  // Take a pixel sample before
-  const gl = renderer.getContext();
-  const px1 = new Uint8Array(4);
-  gl.readPixels(canvas.width/2, canvas.height/2, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px1);
-
-  // Try rotating EVERY bone in this skeleton by a large amount
+// Find DEF- bones
+const B = {};
+if (skel) {
   for (const bone of skel.bones) {
-    bone.rotation.x += 0.5;
+    if (bone.name === 'DEF-Head_M') B.head = bone;
+    if (bone.name === 'DEF-Neck_M') B.neck = bone;
+    if (bone.name === 'DEF-Chest_M') B.chest = bone;
+    if (bone.name === 'DEF-Spine2_M') B.spine2 = bone;
+    if (bone.name === 'DEF-Spine1_M') B.spine1 = bone;
+    if (bone.name === 'DEF-Root_M') B.root = bone;
   }
+  log('Bones: ' + Object.entries(B).map(([k,v]) => k + '=' + v.name).join(', '));
 
-  // Force skeleton update
-  skel.update();
-
-  // Render again
-  renderer.render(scene, camera);
-
-  // Take pixel sample after
-  const px2 = new Uint8Array(4);
-  gl.readPixels(canvas.width/2, canvas.height/2, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px2);
-
-  const changed = px1[0] !== px2[0] || px1[1] !== px2[1] || px1[2] !== px2[2];
-  if (changed) {
-    pass('Bone rotation CHANGED the rendered output! Skinning works.');
-  } else {
-    warn('Center pixel unchanged after bone rotation. Testing more pixels...');
-
-    // Sample multiple points
-    let anyChanged = false;
-    for (let x = 100; x < canvas.width; x += 100) {
-      for (let y = 100; y < canvas.height; y += 100) {
-        const a = new Uint8Array(4), b = new Uint8Array(4);
-        // Need to re-render with and without
-        // Actually just check if the current render looks different from bg
-        gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, a);
-        if (a[0] !== 18 || a[1] !== 21 || a[2] !== 30) { // not bg color
-          anyChanged = true;
-          break;
-        }
-      }
-      if (anyChanged) break;
-    }
-
-    if (anyChanged) {
-      pass('Model IS rendering with bones rotated — visual change detected.');
-    } else {
-      fail('No visual change from bone rotation. Skinning may be broken.');
-    }
-  }
-
-  // Reset bones
-  for (const bone of skel.bones) {
-    bone.rotation.x -= 0.5;
-  }
-  skel.update();
-  renderer.render(scene, camera);
-}
-
-// ═══ PHASE 4: Morph Target Test ═══
-head('═══ PHASE 4: MORPH TARGET TEST ═══');
-
-let morphTestPassed = false;
-for (const mesh of allMeshes) {
-  if (mesh.morphTargetDictionary && mesh.morphTargetInfluences) {
-    const keys = Object.keys(mesh.morphTargetDictionary);
-    if (keys.length > 0) {
-      info('Testing morphs on: ' + mesh.name + ' (' + keys.length + ' targets)');
-      const testKey = keys.find(k => k.includes('Eyes_Close')) || keys[0];
-      const idx = mesh.morphTargetDictionary[testKey];
-      const oldVal = mesh.morphTargetInfluences[idx];
-      mesh.morphTargetInfluences[idx] = 1.0;
-      renderer.render(scene, camera);
-      info('Set ' + testKey + ' = 1.0');
-      mesh.morphTargetInfluences[idx] = oldVal;
-      morphTestPassed = true;
-      pass('Morph target ' + testKey + ' applied successfully');
-      break;
-    }
-  }
-}
-if (!morphTestPassed) fail('No morph targets could be tested');
-
-// ═══ PHASE 5: Identify the CORRECT bones to animate ═══
-head('═══ PHASE 5: IDENTIFY CORRECT BONES ═══');
-
-// For each SkinnedMesh, check which skeleton it uses and list key bones
-let bestSkeleton = null;
-let bestMeshName = '';
-for (const sm of skinnedMeshes) {
-  if (sm.name === 'Body' || sm.name.includes('body')) {
-    bestSkeleton = sm.skeleton;
-    bestMeshName = sm.name;
-    break;
-  }
-}
-if (!bestSkeleton && skinnedMeshes.length > 0) {
-  // Pick the one with most bones
-  for (const sm of skinnedMeshes) {
-    if (!bestSkeleton || (sm.skeleton && sm.skeleton.bones.length > bestSkeleton.bones.length)) {
-      bestSkeleton = sm.skeleton;
-      bestMeshName = sm.name;
-    }
+  // Save initial state
+  for (const b of Object.values(B)) {
+    b._ir = b.rotation.clone();
+    b._iq = b.quaternion.clone();
   }
 }
 
-if (bestSkeleton) {
-  pass('Best skeleton from mesh "' + bestMeshName + '" has ' + bestSkeleton.bones.length + ' bones');
-  const boneNames = bestSkeleton.bones.map(b => b.name);
-
-  // Find our target bones
-  const targets = {
-    head: boneNames.find(n => n === 'Head_M') || boneNames.find(n => n === 'DEF-Head_M') || boneNames.find(n => /^head$/i.test(n)),
-    neck: boneNames.find(n => n === 'Neck_M') || boneNames.find(n => n === 'DEF-Neck_M'),
-    chest: boneNames.find(n => n === 'Chest_M') || boneNames.find(n => n === 'DEF-Chest_M'),
-    spine2: boneNames.find(n => n === 'Spine2_M') || boneNames.find(n => n === 'DEF-Spine2_M'),
-    spine1: boneNames.find(n => n === 'Spine1_M') || boneNames.find(n => n === 'DEF-Spine1_M'),
-    root: boneNames.find(n => n === 'Root_M') || boneNames.find(n => n === 'DEF-Root_M'),
-  };
-
-  for (const [role, name] of Object.entries(targets)) {
-    if (name) pass(role + ' → ' + name);
-    else fail(role + ' → NOT FOUND in this skeleton');
-  }
-
-  info('All bone names in this skeleton:');
-  info(boneNames.join(', '));
-} else {
-  fail('No skeleton found');
-}
-
-// ═══ INTERACTIVE TESTS ═══
-head('═══ INTERACTIVE TESTS ═══');
-
-function addBtn(label, fn) {
-  const b = document.createElement('button');
-  b.textContent = label;
-  b.onclick = () => { log('> ' + label); fn(); };
-  logEl.appendChild(b);
-}
-
-// Large rotation test on specific bones
-if (bestSkeleton) {
-  const skel = bestSkeleton;
-
-  addBtn('ROTATE Head_M 45°', () => {
-    const b = skel.bones.find(b => b.name === 'Head_M');
-    if (b) { b.rotation.x = Math.PI / 4; info('Head_M rotated 45° on X'); }
-    else fail('Head_M not in skeleton');
-  });
-
-  addBtn('ROTATE Root_M 45°', () => {
-    const b = skel.bones.find(b => b.name === 'Root_M');
-    if (b) { b.rotation.z = Math.PI / 4; info('Root_M rotated 45° on Z'); }
-    else fail('Root_M not in skeleton');
-  });
-
-  addBtn('ROTATE Spine1_M 45°', () => {
-    const b = skel.bones.find(b => b.name === 'Spine1_M');
-    if (b) { b.rotation.x = Math.PI / 4; info('Spine1_M rotated 45° on X'); }
-    else fail('Spine1_M not in skeleton');
-  });
-
-  addBtn('SCRAMBLE ALL (big rotation)', () => {
-    for (const bone of skel.bones) {
-      bone.rotation.set(Math.random() * 2, Math.random() * 2, Math.random() * 2);
-    }
-    info('Scrambled all ' + skel.bones.length + ' bones');
-  });
-
-  addBtn('RESET ALL', () => {
-    for (const bone of skel.bones) {
-      if (bone._initialRot) bone.rotation.copy(bone._initialRot);
-      else bone.rotation.set(0, 0, 0);
-    }
-    info('Reset all bones');
-  });
-}
-
-addBtn('BLINK (morph)', () => {
-  for (const mesh of allMeshes) {
-    if (mesh.morphTargetDictionary && mesh.morphTargetDictionary['Eyes_Close_Down_Right'] !== undefined) {
-      const idx = mesh.morphTargetDictionary['Eyes_Close_Down_Right'];
-      mesh.morphTargetInfluences[idx] = 1.0;
-      const idx2 = mesh.morphTargetDictionary['Eyes_Close_Down_Left'];
-      if (idx2 !== undefined) mesh.morphTargetInfluences[idx2] = 1.0;
-      setTimeout(() => {
-        mesh.morphTargetInfluences[idx] = 0;
-        if (idx2 !== undefined) mesh.morphTargetInfluences[idx2] = 0;
-      }, 500);
-      info('Blink applied on ' + mesh.name);
+// Find morphs
+const morphs = {};
+model.traverse(n => {
+  if (n.isMesh && n.morphTargetDictionary) {
+    for (const [name, idx] of Object.entries(n.morphTargetDictionary)) {
+      if (!morphs[name]) morphs[name] = { mesh: n, idx };
     }
   }
 });
+log('Morphs: ' + Object.keys(morphs).length);
 
-addBtn('SMILE (morph)', () => {
-  for (const mesh of allMeshes) {
-    if (mesh.morphTargetDictionary && mesh.morphTargetDictionary['Mouth_Smile'] !== undefined) {
-      const idx = mesh.morphTargetDictionary['Mouth_Smile'];
-      mesh.morphTargetInfluences[idx] = 1.0;
-      setTimeout(() => { mesh.morphTargetInfluences[idx] = 0; }, 1000);
-      info('Smile applied on ' + mesh.name);
-    }
-  }
-});
+// ═══ AUTO-ANIMATE — NO BUTTONS NEEDED ═══
+log('\n=== STARTING AUTO-ANIMATION ===');
+log('If she moves: bones work. If she blinks: morphs work.');
 
-log('\nClick buttons above to test. Watch the 3D view on the right.');
-log('If SCRAMBLE ALL changes nothing, skinning is fundamentally broken.');
-log('If BLINK/SMILE work but bones don\'t, we switch to morph-only animation.');
-
-// Render loop
 const clock = new THREE.Clock();
+let t = 0;
+let frame = 0;
+let nextBlink = 2;
+
 function animate() {
   requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+  t += dt;
+  frame++;
+
+  // Log first few frames to prove loop is running
+  if (frame <= 3) log('Frame ' + frame + ' dt=' + dt.toFixed(3));
+
+  // ── LARGE obvious bone movements ──
+  if (B.root) {
+    // Sway side to side — LARGE amplitude so it's unmissable
+    B.root.rotation.z = (B.root._ir?.z || 0) + Math.sin(t * 0.5) * 0.08;
+  }
+
+  if (B.spine1) {
+    // Breathing — chest rises and falls
+    B.spine1.rotation.x = (B.spine1._ir?.x || 0) + Math.sin(t * 0.8) * 0.03;
+  }
+
+  if (B.head) {
+    // Head looks around slowly
+    B.head.rotation.y = (B.head._ir?.y || 0) + Math.sin(t * 0.3) * 0.15;
+    B.head.rotation.x = (B.head._ir?.x || 0) + Math.cos(t * 0.4) * 0.05;
+  }
+
+  // ── Blink with morphs ──
+  if (t >= nextBlink) {
+    const blinkProgress = (t - nextBlink) * 8;
+    let val = 0;
+    if (blinkProgress < 0.5) val = blinkProgress * 2;
+    else if (blinkProgress < 1.0) val = (1 - blinkProgress) * 2;
+    else { nextBlink = t + 2 + Math.random() * 3; val = 0; }
+
+    if (morphs['Eyes_Close_Down_Right']) {
+      morphs['Eyes_Close_Down_Right'].mesh.morphTargetInfluences[morphs['Eyes_Close_Down_Right'].idx] = val;
+    }
+    if (morphs['Eyes_Close_Down_Left']) {
+      morphs['Eyes_Close_Down_Left'].mesh.morphTargetInfluences[morphs['Eyes_Close_Down_Left'].idx] = val;
+    }
+  }
+
+  // Log bone state every 2 seconds to prove values are changing
+  if (frame % 120 === 0 && B.head) {
+    log('t=' + t.toFixed(1) + ' head.rot.y=' + B.head.rotation.y.toFixed(4));
+  }
+
+  // CRITICAL: Force skeleton matrix update (Phase 3 proved this works)
+  if (skel) skel.update();
+
   controls.update();
   renderer.render(scene, camera);
 }
+
 animate();
 
-window.addEventListener('resize', () => {
-  camera.aspect = canvas.clientWidth / canvas.clientHeight;
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+  renderer.setSize(innerWidth, innerHeight);
 });
 </script>
 </body>

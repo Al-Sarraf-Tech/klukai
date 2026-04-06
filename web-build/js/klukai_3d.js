@@ -10,6 +10,7 @@
   let rimLight = null;
   let isTalking = false;
   let elapsed = 0;
+  let skeleton = null;  // The active skeleton for update()
 
   // Bone references (found after model loads)
   let bones = {};
@@ -138,6 +139,7 @@
       });
       if (targetSkeleton) console.log('[klukai_3d] Fallback skeleton:', maxBones, 'bones');
     }
+    skeleton = targetSkeleton;
 
     if (!targetSkeleton) {
       console.error('[klukai_3d] No skinned mesh found!');
@@ -173,6 +175,48 @@
         }
       }
     });
+
+    // Also find arm bones for rest pose
+    if (targetSkeleton) {
+      for (const bone of targetSkeleton.bones) {
+        const n = bone.name;
+        if (n === 'DEF-Shoulder_L') bones.shoulderL = bone;
+        else if (n === 'DEF-Shoulder_L001') bones.shoulderL1 = bone;
+        else if (n === 'DEF-Elbow_L') bones.elbowL = bone;
+        else if (n === 'DEF-Elbow_L001') bones.elbowL1 = bone;
+        else if (n === 'DEF-Wrist_L') bones.wristL = bone;
+        else if (n === 'DEF-Shoulder_R') bones.shoulderR = bone;
+        else if (n === 'DEF-Shoulder_R001') bones.shoulderR1 = bone;
+        else if (n === 'DEF-Elbow_R') bones.elbowR = bone;
+        else if (n === 'DEF-Elbow_R001') bones.elbowR1 = bone;
+        else if (n === 'DEF-Wrist_R') bones.wristR = bone;
+        else if (n === 'DEF-Hip_L') bones.hipL = bone;
+        else if (n === 'DEF-Hip_R') bones.hipR = bone;
+      }
+
+      // Set natural rest pose — arms down at sides instead of T-pose
+      // Shoulders rotate down (Z axis brings arms down from T-pose)
+      if (bones.shoulderL) bones.shoulderL.rotation.z += 1.1;   // ~63° down
+      if (bones.shoulderR) bones.shoulderR.rotation.z -= 1.1;
+      if (bones.shoulderL1) bones.shoulderL1.rotation.z += 0.0;
+      if (bones.shoulderR1) bones.shoulderR1.rotation.z -= 0.0;
+      // Slight elbow bend for natural pose
+      if (bones.elbowL) bones.elbowL.rotation.y -= 0.3;
+      if (bones.elbowR) bones.elbowR.rotation.y += 0.3;
+      // Force update to apply rest pose
+      if (skeleton) skeleton.update();
+      console.log('[klukai_3d] Applied natural rest pose (arms down)');
+    }
+
+    // Re-save initial rotations AFTER rest pose so idle animations are relative to it
+    if (targetSkeleton) {
+      for (const bone of Object.values(bones)) {
+        if (bone) {
+          bone._initialRot = bone.rotation.clone();
+          bone._initialPos = bone.position.clone();
+        }
+      }
+    }
 
     console.log('[klukai_3d] Bones found:', Object.keys(bones));
     console.log('[klukai_3d] Morphs found:', Object.keys(morphs));
@@ -318,6 +362,8 @@
     requestAnimationFrame(animate);
     const dt = clock.getDelta();
     updateAnimations(dt);
+    // Force skeleton matrix recalculation after bone manipulation
+    if (skeleton) skeleton.update();
     if (renderer && scene && camera) renderer.render(scene, camera);
   }
 
@@ -416,7 +462,7 @@
         renderer.forceContextLoss();
       }
       scene = null; camera = null; renderer = null;
-      model = null; bones = {}; morphs = {};
+      model = null; skeleton = null; bones = {}; morphs = {};
       lookTargetX = 0; lookTargetY = 0;
       lookCurrentX = 0; lookCurrentY = 0;
       console.log('[klukai_3d] Disposed');
