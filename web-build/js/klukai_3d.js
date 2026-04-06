@@ -68,12 +68,16 @@
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
 
-      scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-      const dl = new THREE.DirectionalLight(0xffffff, 0.8);
-      dl.position.set(2, 3, 2);
-      scene.add(dl);
-      rimLight = new THREE.PointLight(0x4FC3F7, 1.0, 5);
-      rimLight.position.set(-1.5, 1.5, -0.5);
+      // Anime-style lighting: strong key light + soft fill + colored rim
+      scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+      const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
+      keyLight.position.set(1, 2, 3);
+      scene.add(keyLight);
+      const fillLight = new THREE.DirectionalLight(0x8888ff, 0.3);
+      fillLight.position.set(-2, 1, -1);
+      scene.add(fillLight);
+      rimLight = new THREE.PointLight(0x4FC3F7, 1.5, 8);
+      rimLight.position.set(-1.5, 1.5, -1);
       scene.add(rimLight);
 
       // Load model
