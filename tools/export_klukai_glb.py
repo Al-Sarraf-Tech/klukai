@@ -81,15 +81,27 @@ for obj in list(bpy.data.objects):
         continue
 
 # Remove extra armatures — keep only the main one (Klukai or RIG-Klukai)
-# The extra rigs (Skins, RIG-Skins, weapon rigs) add hundreds of bones
 KEEP_ARMATURES = {'Klukai', 'RIG-Klukai'}
 for obj in list(bpy.data.objects):
     if obj.type == 'ARMATURE' and obj.name not in KEEP_ARMATURES:
-        # Don't delete if meshes are parented to it
         has_children = any(c.type == 'MESH' and not c.hide_render for c in obj.children_recursive)
         if not has_children:
             print(f"[export] Removing extra armature: {obj.name}")
             bpy.data.objects.remove(obj, do_unlink=True)
+
+# CRITICAL FIX: Uncheck "Deform" flag on all non-DEF bones
+# Rigify marks ORG/MCH/VIS/tweak bones with use_deform=True by default.
+# With 673 bones competing for the 4-weights-per-vertex limit in glTF,
+# the actual DEF bone weights get diluted to near-zero.
+# Only DEF- prefixed bones should deform the mesh.
+deform_disabled = 0
+for obj in bpy.data.objects:
+    if obj.type == 'ARMATURE':
+        for bone in obj.data.bones:
+            if bone.use_deform and not bone.name.startswith('DEF-'):
+                bone.use_deform = False
+                deform_disabled += 1
+print(f"[export] Disabled 'Deform' on {deform_disabled} non-DEF bones")
 
 print(f"[export] Removed {removed_count} non-default skin objects")
 print(f"[export] Remaining objects: {len(bpy.data.objects)}")

@@ -159,16 +159,9 @@
         bones.elbowR.quaternion.multiply(q);
       }
 
-      // Propagate and recalculate
+      // Propagate world matrices — do NOT call calculateInverses() or bind()
+      // as those destroy the glTF's pre-computed inverseBindMatrices
       model.updateMatrixWorld(true);
-      skeleton.calculateInverses();
-
-      // Rebind all skinned meshes to new rest pose
-      model.traverse(n => {
-        if (n.isSkinnedMesh && n.skeleton === skeleton) {
-          n.bind(skeleton);
-        }
-      });
 
       // Re-save quaternions AFTER rest pose
       for (const b of Object.values(bones)) {
@@ -190,6 +183,33 @@
       }
     });
     console.log('[klukai_3d] Morphs:', Object.keys(morphs));
+
+    // Weight magnitude diagnostic — check if weights are diluted
+    if (skeleton && bones.shoulderL) {
+      const shoulderIdx = skeleton.bones.indexOf(bones.shoulderL);
+      const spineIdx = skeleton.bones.indexOf(bones.spine1);
+      console.log('[klukai_3d] === WEIGHT DIAGNOSTIC ===');
+      console.log('[klukai_3d] Shoulder bone index:', shoulderIdx, 'Spine1 bone index:', spineIdx);
+      model.traverse(n => {
+        if (n.isSkinnedMesh && n.name === 'Body') {
+          const si = n.geometry.attributes.skinIndex;
+          const sw = n.geometry.attributes.skinWeight;
+          let shoulderMax = 0, shoulderCount = 0;
+          let spineMax = 0, spineCount = 0;
+          for (let v = 0; v < si.count; v++) {
+            for (let c = 0; c < 4; c++) {
+              const bIdx = Math.round(si.getComponent(v, c));
+              const w = sw.getComponent(v, c);
+              if (bIdx === shoulderIdx && w > 0.001) { shoulderCount++; shoulderMax = Math.max(shoulderMax, w); }
+              if (bIdx === spineIdx && w > 0.001) { spineCount++; spineMax = Math.max(spineMax, w); }
+            }
+          }
+          console.log('[klukai_3d] DEF-Shoulder_L: ' + shoulderCount + ' verts, max weight: ' + shoulderMax.toFixed(4));
+          console.log('[klukai_3d] DEF-Spine1_M:   ' + spineCount + ' verts, max weight: ' + spineMax.toFixed(4));
+          if (shoulderMax < 0.1) console.error('[klukai_3d] CONFIRMED: Shoulder weights are diluted! Max=' + shoulderMax.toFixed(4));
+        }
+      });
+    }
 
     nextBlinkTime = 2 + Math.random() * 3;
   }
