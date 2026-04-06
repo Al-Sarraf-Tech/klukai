@@ -262,6 +262,12 @@ class LLMRouter:
     ) -> AsyncIterator[str]:
         oai_messages = [{"role": "system", "content": system_prompt}] + messages
 
+        # Some models (e.g. dolphin-mistral-glm thinking variants) emit all tokens
+        # under reasoning_content and leave content empty.  We collect reasoning
+        # tokens as a fallback and yield them if no content tokens appear at all.
+        reasoning_parts: list[str] = []
+        yielded_content = False
+
         async with self._http.stream(
             "POST",
             f"{config.base_url}/v1/chat/completions",
@@ -272,7 +278,8 @@ class LLMRouter:
                 "temperature": config.temperature,
                 "stream": True,
             },
-            timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0),
+            # read timeout raised to 120 s — thinking models can be slow between tokens
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -280,12 +287,24 @@ class LLMRouter:
                     continue
                 data = line[6:]
                 if data == "[DONE]":
-                    return
+                    break
                 try:
                     chunk = json.loads(data)
                     delta = chunk["choices"][0].get("delta", {})
                     content = delta.get("content")
                     if content:
+                        yielded_content = True
                         yield content
+                    elif not yielded_content:
+                        # Collect reasoning tokens; they become the response if no
+                        # content tokens ever arrive (thinking-only model output)
+                        reasoning = delta.get("reasoning_content")
+                        if reasoning:
+                            reasoning_parts.append(reasoning)
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
+
+        # Thinking model path: surface the reasoning text as the response
+        if not yielded_content and reasoning_parts:
+            logger.debug("Thinking model: surfacing %d reasoning chars as response", sum(len(p) for p in reasoning_parts))
+            yield "".join(reasoning_parts)
