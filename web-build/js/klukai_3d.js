@@ -58,8 +58,8 @@
     scene = new THREE.Scene();
     clock = new THREE.Clock();
 
-    camera = new THREE.PerspectiveCamera(30, canvas.clientWidth / canvas.clientHeight, 0.1, 100);
-    camera.position.set(0, 1.2, 2.5);
+    camera = new THREE.PerspectiveCamera(30, canvas.clientWidth / canvas.clientHeight, 0.01, 100);
+    camera.position.set(0, 1.2, 3.5);
     camera.lookAt(0, 1.0, 0);
 
     renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
@@ -88,12 +88,29 @@
     });
 
     model = gltf.scene;
+
+    // Remove junk objects (default Blender cube, cameras, lights)
+    const toRemove = [];
+    model.traverse((node) => {
+      if (node.name === 'Cube' || node.name === 'Camera' || node.name === 'Light') {
+        toRemove.push(node);
+      }
+    });
+    toRemove.forEach(n => n.removeFromParent());
+    if (toRemove.length > 0) {
+      console.log('[klukai_3d] Removed junk objects:', toRemove.map(n => n.name));
+    }
+
     scene.add(model);
 
+    // Recalculate bounds after cleanup
     const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
-    model.position.sub(center);
-    model.position.y += box.getSize(new THREE.Vector3()).y / 2;
+    console.log('[klukai_3d] Model bounds:', size.x.toFixed(2), 'x', size.y.toFixed(2), 'x', size.z.toFixed(2), 'center:', center.x.toFixed(2), center.y.toFixed(2), center.z.toFixed(2));
+
+    // Center model and position feet at ground level
+    model.position.set(-center.x, -box.min.y, -center.z);
 
     mixer = new THREE.AnimationMixer(model);
 
@@ -225,7 +242,30 @@
 
       animate();
 
+      // Log canvas dimensions for debugging
+      console.log('[klukai_3d] Canvas:', canvas.clientWidth, 'x', canvas.clientHeight,
+                  '| pixel:', canvas.width, 'x', canvas.height,
+                  '| parent:', canvas.parentElement?.clientWidth, 'x', canvas.parentElement?.clientHeight);
       console.log('[klukai_3d] Initialized. Animations:', Object.keys(animations));
+
+      // If canvas has zero dimensions, poll until parent sizes it
+      if (canvas.clientWidth === 0 || canvas.clientHeight === 0) {
+        console.warn('[klukai_3d] Canvas has zero dimensions, waiting for layout...');
+        let retries = 0;
+        const sizeCheck = setInterval(() => {
+          retries++;
+          if (canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+            clearInterval(sizeCheck);
+            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+            camera.aspect = canvas.clientWidth / canvas.clientHeight;
+            camera.updateProjectionMatrix();
+            console.log('[klukai_3d] Canvas resized to:', canvas.clientWidth, 'x', canvas.clientHeight);
+          } else if (retries > 50) {
+            clearInterval(sizeCheck);
+            console.error('[klukai_3d] Canvas never got dimensions after 5s');
+          }
+        }, 100);
+      }
       return true;
     },
 
