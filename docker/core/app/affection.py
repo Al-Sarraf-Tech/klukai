@@ -16,7 +16,8 @@ from .personality import load_personality
 
 logger = logging.getLogger(__name__)
 
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
+# Use Arc A380 (local) for classification — keeps RTX 3090 free for chat
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_LOCAL_URL", "http://100.111.198.19:1235")
 CLASSIFICATION_MODEL = "qwen2.5-3b-instruct"
 
 DAILY_POINTS_CAP = 8

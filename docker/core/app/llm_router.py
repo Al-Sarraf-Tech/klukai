@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 # Circuit breaker: seconds to wait before re-probing LM Studio after failure
 _HEALTH_RECHECK_INTERVAL = 15.0
 
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")       # Dominus RTX 3090
+LM_STUDIO_LOCAL_URL = os.environ.get("LM_STUDIO_LOCAL_URL", "http://100.111.198.19:1235")  # Amarillo Arc A380
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Model aliases

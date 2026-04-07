@@ -5,14 +5,24 @@ from __future__ import annotations
 import json
 import logging
 import os
-import uuid
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
+# Use Arc A380 (local) for extraction — keeps RTX 3090 free for chat
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_LOCAL_URL", "http://100.111.198.19:1235")
 EXTRACTION_MODEL = "qwen2.5-3b-instruct"
+
+# Shared httpx client — initialized on first use, reused thereafter
+_http: httpx.AsyncClient | None = None
+
+
+def _get_http() -> httpx.AsyncClient:
+    global _http
+    if _http is None or _http.is_closed:
+        _http = httpx.AsyncClient(timeout=30.0)
+    return _http
 
 FACT_EXTRACTION_PROMPT = """\
 You are Klukai's internal memory processor. Extract information about the Commander
@@ -55,33 +65,33 @@ async def extract_facts(
     )
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"{LM_STUDIO_URL}/v1/chat/completions",
-                json={
-                    "model": EXTRACTION_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 512,
-                    "temperature": 0.1,
-                    "stream": False,
-                },
-            )
-            r.raise_for_status()
-            content = r.json()["choices"][0]["message"]["content"]
+        client = _get_http()
+        r = await client.post(
+            f"{LM_STUDIO_URL}/v1/chat/completions",
+            json={
+                "model": EXTRACTION_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 512,
+                "temperature": 0.1,
+                "stream": False,
+            },
+        )
+        r.raise_for_status()
+        content = r.json()["choices"][0]["message"]["content"]
 
-            # Parse JSON from response (handle markdown code blocks)
-            content = content.strip()
-            if content.startswith("```"):
-                content = content.split("\n", 1)[1]
-                content = content.rsplit("```", 1)[0]
+        # Parse JSON from response (handle markdown code blocks)
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1]
+            content = content.rsplit("```", 1)[0]
 
-            result = json.loads(content)
-            return {
-                "facts": result.get("facts", []),
-                "mood": result.get("mood", "neutral"),
-                "topics": result.get("topics", []),
-                "should_remember": result.get("should_remember", False),
-            }
+        result = json.loads(content)
+        return {
+            "facts": result.get("facts", []),
+            "mood": result.get("mood", "neutral"),
+            "topics": result.get("topics", []),
+            "should_remember": result.get("should_remember", False),
+        }
     except Exception as e:
         logger.warning("Fact extraction failed: %s", e)
         return {
@@ -113,19 +123,19 @@ async def create_episode_summary(
     )
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"{LM_STUDIO_URL}/v1/chat/completions",
-                json={
-                    "model": EXTRACTION_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 150,
-                    "temperature": 0.3,
-                    "stream": False,
-                },
-            )
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"].strip()
+        client = _get_http()
+        r = await client.post(
+            f"{LM_STUDIO_URL}/v1/chat/completions",
+            json={
+                "model": EXTRACTION_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 150,
+                "temperature": 0.3,
+                "stream": False,
+            },
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
         logger.warning("Episode summary failed: %s", e)
         return None
