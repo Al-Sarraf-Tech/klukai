@@ -79,16 +79,35 @@ async def extract_facts(
         r.raise_for_status()
         content = r.json()["choices"][0]["message"]["content"]
 
-        # Parse JSON from response (handle markdown code blocks)
+        # Parse JSON from response (handle markdown code blocks + R1 think tags)
+        import re
+        content = content.strip()
+        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
         content = content.strip()
         if content.startswith("```"):
             content = content.split("\n", 1)[1]
             content = content.rsplit("```", 1)[0]
 
         result = json.loads(content)
+
+        # Validate mood is in the known set
+        VALID_MOODS = {
+            "composed", "focused", "prideful", "exasperated", "protective",
+            "quietly_pleased", "competitive", "tender", "longing", "battle_ready",
+            "flustered", "affectionate", "shy", "yearning", "devoted",
+            "vigilant", "calculating", "hunting", "adrenaline",
+            "content", "playful", "drowsy", "amused", "bored",
+            "melancholic", "haunted", "conflicted", "guilty", "determined",
+            "nostalgic", "curious", "irritated", "defiant", "vulnerable",
+        }
+        mood = result.get("mood", "composed")
+        if mood not in VALID_MOODS:
+            logger.warning("Invalid mood '%s' from extraction, defaulting to composed", mood)
+            mood = "composed"
+
         return {
             "facts": result.get("facts", []),
-            "mood": result.get("mood", "neutral"),
+            "mood": mood,
             "topics": result.get("topics", []),
             "should_remember": result.get("should_remember", False),
         }
@@ -96,7 +115,7 @@ async def extract_facts(
         logger.warning("Fact extraction failed: %s", e)
         return {
             "facts": [],
-            "mood": "neutral",
+            "mood": "composed",
             "topics": [],
             "should_remember": False,
         }
