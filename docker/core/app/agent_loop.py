@@ -8,7 +8,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
-from .llm_router import LLMRouter, LLMConfig, LM_STUDIO_URL, LOCAL_AGENT
+from .llm_router import LLMRouter, LLMConfig, LM_STUDIO_URL, LOCAL_AGENT, LOCAL_CASUAL
 from .mcp_client import MCPClient
 from .tool_schemas import get_tool_schemas
 from .ws_manager import WSManager
@@ -82,9 +82,10 @@ class AgentLoop:
             except Exception as e:
                 logger.warning("MCP session recovery failed: %s", e)
 
+        # Try agent model first, fall back to chat model if not available
         config = LLMConfig(
             provider="lmstudio",
-            model=LOCAL_AGENT,
+            model=LOCAL_CASUAL,  # Use R1 model — handles tools + chat
             base_url=LM_STUDIO_URL,
             max_tokens=2048,
             temperature=0.7,
