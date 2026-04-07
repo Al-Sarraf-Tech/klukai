@@ -20,7 +20,7 @@ DATA_URL = os.environ.get("DATA_URL", "http://aichat-data:8091")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://aichat-vector:6333")
 
 SESSION_TTL = 24 * 3600  # 24 hours — mood persists to DB as backup
-MAX_SESSION_TURNS = 12
+MAX_SESSION_TURNS = 16
 COLLECTION_NAME = "companion_episodes"
 MSG_COLLECTION_NAME = "companion_exchanges"
 EMBED_DIM = 768

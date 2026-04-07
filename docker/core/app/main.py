@@ -559,7 +559,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Build messages for LLM
     messages = [
         {"role": t["role"], "content": t["content"]}
-        for t in session.turns[-12:]
+        for t in session.turns[-16:]
     ]
 
     # Check if this needs the agentic tool-use loop
@@ -891,6 +891,9 @@ def _chunk_text(text: str, chunk_size: int = 8) -> list[str]:
 def _fix_narration(text: str) -> str:
     """Fix second-person narration and clean up model artifacts."""
     import re
+    # Strip R1 reasoning blocks: <think>...</think>
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<\|think\|>.*?<\|/think\|>', '', text, flags=re.DOTALL)
     # Convert "(You verb...)" to "(I verb...)"
     text = re.sub(r'\(You ([a-z])', lambda m: f'(I {m.group(1)}', text)
     # Convert "(Your noun)" to "(My noun)"
