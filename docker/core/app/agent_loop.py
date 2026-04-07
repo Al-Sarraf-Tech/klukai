@@ -15,9 +15,10 @@ from .ws_manager import WSManager
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 3
-TIMEOUT_SECONDS = 120
+MAX_ITERATIONS = 5
+TIMEOUT_SECONDS = 150
 MAX_TOOL_RESULT_CHARS = 3000
+TOOL_TIMEOUT = 45
 
 
 @dataclass
@@ -38,6 +39,15 @@ class AgentResult:
     model: str = LOCAL_AGENT
 
 
+# Status messages for tool operations
+TOOL_STATUS = {
+    "web_search": "Searching the network...",
+    "fetch_url": "Reading intelligence report...",
+    "get_weather": "Checking atmospheric conditions...",
+    "search_web": "Scanning communications...",
+}
+
+
 class AgentLoop:
     """Klukai's agentic reasoning loop with MCP tool access via local LLM."""
 
@@ -56,16 +66,22 @@ class AgentLoop:
         system_prompt: str,
         messages: list[dict],
     ) -> AgentResult:
-        """Execute the agentic loop using Mistral Nemo 12B via LM Studio."""
+        """Execute the agentic loop using local LLM."""
         result = AgentResult(response="")
         start_time = time.monotonic()
 
-        # Get tool schemas in OpenAI format
         tools = await get_tool_schemas(self._mcp)
         if not tools:
             logger.warning("No tools available for agent loop")
+            # Try reinitializing MCP session
+            try:
+                await self._mcp._initialize_session()
+                tools = await get_tool_schemas(self._mcp)
+                if tools:
+                    logger.info("MCP session recovered, %d tools available", len(tools))
+            except Exception as e:
+                logger.warning("MCP session recovery failed: %s", e)
 
-        # Use Opus-distilled Qwen3.5-27B for agentic reasoning + tool-use
         config = LLMConfig(
             provider="lmstudio",
             model=LOCAL_AGENT,
@@ -74,15 +90,12 @@ class AgentLoop:
             temperature=0.7,
         )
 
-        # Build working message history (copy to avoid mutating caller's list)
         work_messages = list(messages)
-
         await self._ws.send_thinking("default", "Analyzing request...")
 
         for iteration in range(MAX_ITERATIONS):
             result.iterations = iteration + 1
 
-            # Check timeout
             elapsed = time.monotonic() - start_time
             if elapsed > TIMEOUT_SECONDS:
                 logger.warning("Agent loop timeout after %.1fs", elapsed)
@@ -95,42 +108,47 @@ class AgentLoop:
                 )
             except Exception as e:
                 logger.error("Agent loop LLM call failed: %s", e)
+                # Try streaming fallback
+                try:
+                    logger.info("Trying streaming fallback for agent response")
+                    await self._ws.send_thinking("default", "Switching to direct response...")
+                    parts = []
+                    async for token in self._router.stream(system_prompt, work_messages, config):
+                        parts.append(token)
+                    if parts:
+                        result.response = "".join(parts)
+                        return result
+                except Exception as e2:
+                    logger.error("Streaming fallback also failed: %s", e2)
+
                 result.response = (
                     "Communications disrupted, Commander. "
                     "I'll respond with what I have."
                 )
                 break
 
-            # Extract the assistant message from OpenAI-compatible response
             choice = response.get("choices", [{}])[0]
             message = choice.get("message", {})
             content = message.get("content", "") or ""
             tool_calls = message.get("tool_calls", []) or []
 
-            # If no tool calls, we have the final response
             if not tool_calls:
                 result.response = content
-                result.steps.append(AgentStep(
-                    type="response",
-                    content=content,
-                ))
+                result.steps.append(AgentStep(type="response", content=content))
                 break
 
-            # Append the full assistant message (with tool_calls) to history
             assistant_msg: dict = {"role": "assistant"}
             if content:
                 assistant_msg["content"] = content
             assistant_msg["tool_calls"] = tool_calls
             work_messages.append(assistant_msg)
 
-            # Process each tool call
             for tc in tool_calls:
                 tc_id = tc.get("id", "")
                 func = tc.get("function", {})
                 tool_name = func.get("name", "unknown")
                 tool_args_str = func.get("arguments", "{}")
 
-                # Parse arguments
                 try:
                     tool_args = json.loads(tool_args_str) if isinstance(tool_args_str, str) else tool_args_str
                 except json.JSONDecodeError:
@@ -144,23 +162,28 @@ class AgentLoop:
                     tool_args=tool_args,
                 ))
 
-                # Notify UI
+                # Send descriptive status message
+                status_msg = TOOL_STATUS.get(tool_name, f"Using {tool_name}...")
                 await self._ws.send_tool_use("default", tool_name, "calling")
+                await self._ws.send_thinking("default", status_msg)
 
-                # Invoke the MCP tool
                 try:
                     tool_result = await asyncio.wait_for(
                         self._mcp.invoke_tool(tool_name, tool_args),
-                        timeout=30.0,
+                        timeout=TOOL_TIMEOUT,
                     )
                 except asyncio.TimeoutError:
-                    tool_result = {"error": f"Tool {tool_name} timed out"}
+                    tool_result = {"error": f"Tool {tool_name} timed out after {TOOL_TIMEOUT}s"}
                     logger.warning("Tool %s timed out", tool_name)
+                    # Reinitialize MCP session in case it's stale
+                    try:
+                        await self._mcp._initialize_session()
+                    except Exception:
+                        pass
                 except Exception as e:
                     tool_result = {"error": str(e)}
                     logger.error("Tool %s failed: %s", tool_name, e)
 
-                # Extract text content from MCP result
                 result_text = _extract_tool_text(tool_result)
 
                 result.steps.append(AgentStep(
@@ -172,7 +195,6 @@ class AgentLoop:
 
                 await self._ws.send_tool_use("default", tool_name, "done")
 
-                # Append tool result in OpenAI format (truncated to avoid slow inference)
                 work_messages.append({
                     "role": "tool",
                     "tool_call_id": tc_id,
@@ -186,8 +208,7 @@ class AgentLoop:
                 ", ".join(tc.get("function", {}).get("name", "?") for tc in tool_calls),
             )
 
-        # If we exhausted iterations without a final text response,
-        # force a synthesis call with no tools so the model MUST respond with text
+        # Force synthesis if no response after all iterations
         if not result.response:
             try:
                 await self._ws.send_thinking("default", "Compiling briefing...")
@@ -216,7 +237,6 @@ class AgentLoop:
 
 def _extract_tool_text(result: dict) -> str:
     """Extract readable text from an MCP tool result."""
-    # MCP results may have nested content structures
     content = result.get("content", [])
     if isinstance(content, list):
         texts = []
@@ -229,9 +249,13 @@ def _extract_tool_text(result: dict) -> str:
             elif isinstance(item, str):
                 texts.append(item)
         if texts:
-            return "\n".join(texts)
+            combined = "\n".join(texts)
+            # Clean up HTML artifacts
+            import re
+            combined = re.sub(r'<[^>]+>', ' ', combined)
+            combined = re.sub(r'\s+', ' ', combined).strip()
+            return combined
 
-    # Fallback: try direct text or stringify
     if isinstance(content, str):
         return content
     if "error" in result:

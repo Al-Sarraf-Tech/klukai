@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from .affection import AffectionManager
 from .agent_loop import AgentLoop
 from .db import init_pool, close_pool, get_pool, get_conn, get_conn_autocommit
-from .image_gen import generate_image, needs_image, build_prompt, is_couple_scene
+from .image_gen import generate_image, needs_image, build_prompt, is_couple_scene, is_landscape
 from .fact_extractor import create_episode_summary, extract_facts
 from .llm_router import LLMRouter
 from .mcp_client import MCPClient
@@ -819,22 +819,22 @@ async def _background_image_gen(user_request: str) -> None:
         logger.info("Image gen: starting for '%s'", user_request[:60])
         await ws.send_proactive("default", "Compiling tactical visualization, Commander. Stand by.")
 
-        # Detect if this is a couple scene
         couple = is_couple_scene(user_request)
 
-        # Enhance the prompt with LLM
-        scene_tags = await _enhance_image_prompt(user_request, couple=couple)
-        full_prompt = build_prompt(scene_tags, couple=couple)
-        logger.info("Image prompt: %s", full_prompt[:200])
+        # Get affection level for mood-aware prompts
+        aff_state = await affection.get_state()
+        aff_level = aff_state.level
 
-        # Determine orientation from request
-        landscape_keywords = ["sunset", "landscape", "horizon", "riding", "motorcycle", "driving", "panorama"]
-        if any(kw in user_request.lower() for kw in landscape_keywords):
+        scene_tags = await _enhance_image_prompt(user_request, couple=couple)
+        full_prompt = build_prompt(scene_tags, couple=couple, affection_level=aff_level)
+        logger.info("Image prompt (aff=%d): %s", aff_level, full_prompt[:200])
+
+        # Determine orientation
+        if is_landscape(user_request):
             width, height = 1216, 832
         else:
             width, height = 832, 1216
 
-        # Generate
         img_bytes = await generate_image(full_prompt, width=width, height=height)
         if img_bytes:
             import base64 as b64

@@ -14,6 +14,16 @@ logger = logging.getLogger(__name__)
 
 COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://host.docker.internal:8388")
 
+_http: httpx.AsyncClient | None = None
+
+
+def _get_http() -> httpx.AsyncClient:
+    global _http
+    if _http is None or _http.is_closed:
+        _http = httpx.AsyncClient(timeout=180.0)
+    return _http
+
+
 # Character identity tags — Danbooru format for Animagine XL 3.1
 KLUKAI_TAGS = (
     "1girl, hk416 \\(girls' frontline\\), silver hair, green eyes, long hair, ponytail, "
@@ -26,7 +36,6 @@ COMMANDER_TAGS = (
 )
 COUPLE_TAGS = "couple, 1boy, 1girl, hetero"
 
-# Keywords that indicate a couple/together scene
 COUPLE_KEYWORDS = [
     "us", "we", "together", "our", "cuddling", "cuddle", "holding hands",
     "embrace", "hug", "hugging", "kissing", "side by side", "couple",
@@ -41,8 +50,6 @@ NEGATIVE_TAGS = (
     "deformed, ugly, duplicate, morbid, mutilated"
 )
 
-# Animagine XL 3.1 workflow
-# Klukai LoRA file (if available in ComfyUI)
 KLUKAI_LORA = "Klukai_GFL2.safetensors"
 KLUKAI_LORA_TRIGGER = "Klukai"
 
@@ -99,7 +106,7 @@ WORKFLOW_TEMPLATE = {
     },
 }
 
-# Keywords that suggest image generation
+# Expanded keyword detection for image requests
 IMAGE_KEYWORDS = [
     "show me", "show us", "draw", "picture of", "image of",
     "visualize", "what would it look like", "generate an image",
@@ -108,7 +115,31 @@ IMAGE_KEYWORDS = [
     "that image", "that picture", "another image", "another picture",
     "try again", "one more", "generate again", "make an image",
     "make a picture", "render", "sketch",
+    "can you show", "what about a", "how about", "let me see",
+    "i want to see", "what if we", "what would you look like",
+    "selfie", "photo of", "snap a pic", "take a picture",
 ]
+
+# Landscape scene keywords — use wider aspect ratio
+LANDSCAPE_KEYWORDS = [
+    "landscape", "scenery", "sunset", "sunrise", "city", "battlefield",
+    "panorama", "wide shot", "environment", "base", "headquarters",
+    "motorcycle", "riding", "driving", "vehicle",
+]
+
+# Mood-to-scene mapping for affection-aware prompt enhancement
+AFFECTION_MOOD_TAGS = {
+    0: "serious, cold expression, military setting",
+    1: "neutral expression, military setting",
+    2: "slight smile, professional setting",
+    3: "soft expression, casual setting",
+    4: "warm smile, comfortable atmosphere",
+    5: "relaxed, intimate setting, soft lighting",
+    6: "loving gaze, warm lighting, close distance",
+    7: "tender expression, gentle, intimate",
+    8: "devoted, gentle smile, warm, close",
+    9: "peaceful, loving, serene, together",
+}
 
 
 def needs_image(message: str) -> bool:
@@ -123,9 +154,21 @@ def is_couple_scene(text: str) -> bool:
     return any(kw in lower for kw in COUPLE_KEYWORDS)
 
 
-def build_prompt(scene_tags: str, couple: bool = False) -> str:
+def is_landscape(text: str) -> bool:
+    """Detect if the scene should use landscape aspect ratio."""
+    lower = text.lower()
+    return any(kw in lower for kw in LANDSCAPE_KEYWORDS)
+
+
+def build_prompt(scene_tags: str, couple: bool = False, affection_level: int = 0) -> str:
     """Build the full positive prompt with quality tags, LoRA trigger, and character identities."""
     parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
+
+    # Add affection-aware mood tags
+    mood_tags = AFFECTION_MOOD_TAGS.get(affection_level, "")
+    if mood_tags:
+        parts.append(mood_tags)
+
     if couple:
         parts.append(COUPLE_TAGS)
         parts.append(COMMANDER_TAGS)
@@ -140,58 +183,66 @@ async def generate_image(
     prompt: str,
     width: int = 832,
     height: int = 1216,
+    retry: bool = True,
 ) -> bytes | None:
     """Generate an image via ComfyUI Animagine XL 3.1 and return PNG bytes."""
+    result = await _try_generate(prompt, width, height)
+    if result is None and retry:
+        logger.info("Image generation retry with new seed")
+        result = await _try_generate(prompt, width, height)
+    return result
+
+
+async def _try_generate(prompt: str, width: int, height: int) -> bytes | None:
+    """Single attempt at image generation."""
     workflow = json.loads(json.dumps(WORKFLOW_TEMPLATE))
 
-    # Set prompt, dimensions, random seed
     workflow["6"]["inputs"]["text"] = prompt
     workflow["5"]["inputs"]["width"] = width
     workflow["5"]["inputs"]["height"] = height
     workflow["3"]["inputs"]["seed"] = int(uuid.uuid4().int % (2**32))
 
     try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            # Queue the prompt
-            r = await client.post(
-                f"{COMFYUI_URL}/prompt",
-                json={"prompt": workflow},
-            )
-            if r.status_code != 200:
-                logger.error("ComfyUI queue failed: %s", r.text[:200])
-                return None
-
-            prompt_id = r.json().get("prompt_id")
-            if not prompt_id:
-                return None
-
-            # Poll for completion (up to 120s)
-            for _ in range(120):
-                await asyncio.sleep(1)
-                r = await client.get(f"{COMFYUI_URL}/history/{prompt_id}")
-                if r.status_code == 200:
-                    history = r.json()
-                    if prompt_id in history:
-                        outputs = history[prompt_id].get("outputs", {})
-                        for output in outputs.values():
-                            images = output.get("images", [])
-                            if images:
-                                img = images[0]
-                                r2 = await client.get(
-                                    f"{COMFYUI_URL}/view",
-                                    params={
-                                        "filename": img["filename"],
-                                        "subfolder": img.get("subfolder", ""),
-                                        "type": img.get("type", "output"),
-                                    },
-                                )
-                                if r2.status_code == 200:
-                                    logger.info("Image generated: %s (%d bytes)", img["filename"], len(r2.content))
-                                    return r2.content
-                        return None
-
-            logger.warning("Image generation timed out")
+        client = _get_http()
+        r = await client.post(
+            f"{COMFYUI_URL}/prompt",
+            json={"prompt": workflow},
+        )
+        if r.status_code != 200:
+            logger.error("ComfyUI queue failed: %s", r.text[:200])
             return None
+
+        prompt_id = r.json().get("prompt_id")
+        if not prompt_id:
+            return None
+
+        # Poll for completion (up to 150s)
+        for _ in range(150):
+            await asyncio.sleep(1)
+            r = await client.get(f"{COMFYUI_URL}/history/{prompt_id}")
+            if r.status_code == 200:
+                history = r.json()
+                if prompt_id in history:
+                    outputs = history[prompt_id].get("outputs", {})
+                    for output in outputs.values():
+                        images = output.get("images", [])
+                        if images:
+                            img = images[0]
+                            r2 = await client.get(
+                                f"{COMFYUI_URL}/view",
+                                params={
+                                    "filename": img["filename"],
+                                    "subfolder": img.get("subfolder", ""),
+                                    "type": img.get("type", "output"),
+                                },
+                            )
+                            if r2.status_code == 200:
+                                logger.info("Image generated: %s (%d bytes)", img["filename"], len(r2.content))
+                                return r2.content
+                    return None
+
+        logger.warning("Image generation timed out")
+        return None
     except Exception as e:
         logger.error("Image generation failed: %s", e)
         return None
