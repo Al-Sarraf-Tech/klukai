@@ -429,6 +429,43 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  List<String> _getStarters() {
+    final level = _state.affectionLevel;
+    final hour = DateTime.now().hour;
+    final isMorning = hour >= 6 && hour < 12;
+    final isEvening = hour >= 18 || hour < 6;
+
+    if (level <= 2) {
+      return [
+        'Mission briefing',
+        'Status report',
+        if (isMorning) "What's the plan today?" else "How's the squad?",
+        'Tell me about yourself',
+      ];
+    } else if (level <= 4) {
+      return [
+        if (isMorning) 'Good morning' else if (isEvening) 'Good evening' else "How's your day?",
+        'Tell me about Belka',
+        "How's the squad?",
+        "Let's go for a ride",
+      ];
+    } else if (level <= 6) {
+      return [
+        if (isMorning) 'Good morning, Klukai' else if (isEvening) "Can't sleep?" else 'I was thinking about you',
+        'Tell me about Mechty',
+        "What's on your mind?",
+        "I missed you",
+      ];
+    } else {
+      return [
+        if (isMorning) 'Good morning, beautiful' else if (isEvening) 'Come sit with me' else 'I love you',
+        "What are you thinking about?",
+        "Tell me a memory",
+        "I'm here",
+      ];
+    }
+  }
+
   Widget _starterChip(String text) {
     return GestureDetector(
       onTap: () {
@@ -776,16 +813,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               ),
             ),
             const SizedBox(height: 20),
-            // Conversation starters
+            // Conversation starters — adapt to affection level
             Wrap(
               spacing: 8, runSpacing: 8,
               alignment: WrapAlignment.center,
-              children: [
-                _starterChip('Mission briefing'),
-                _starterChip('Tell me about Belka'),
-                _starterChip("How's the squad?"),
-                _starterChip("Let's go for a ride"),
-              ],
+              children: _getStarters().map(_starterChip).toList(),
             ),
           ],
         ),
