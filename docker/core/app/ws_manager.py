@@ -1,4 +1,4 @@
-"""WebSocket connection manager for companion — multi-user support."""
+"""WebSocket connection manager for companion — multi-device support."""
 
 from __future__ import annotations
 
@@ -11,52 +11,67 @@ logger = logging.getLogger(__name__)
 
 
 class WSManager:
-    """Manages WebSocket connections per user."""
+    """Manages WebSocket connections per user. Supports multiple devices."""
 
     def __init__(self) -> None:
-        self._connections: dict[str, WebSocket] = {}
+        self._connections: dict[str, set[WebSocket]] = {}
 
     @property
     def connected(self) -> bool:
-        return len(self._connections) > 0
+        return any(conns for conns in self._connections.values())
 
     def is_connected(self, user_id: str = "default") -> bool:
-        return user_id in self._connections
+        return bool(self._connections.get(user_id))
 
     async def connect(self, ws: WebSocket, user_id: str = "default") -> None:
         await ws.accept()
-        # Silently replace previous connection — don't close it (triggers client reconnect loop)
-        old = self._connections.get(user_id)
-        self._connections[user_id] = ws
-        if old is not None:
-            try:
-                await old.close(code=1000, reason="replaced")
-            except Exception:
-                pass
-        logger.info("WebSocket connected: user=%s", user_id)
-        await self.send(user_id, {"type": "connected", "status": "ok"})
+        if user_id not in self._connections:
+            self._connections[user_id] = set()
+        self._connections[user_id].add(ws)
+        count = len(self._connections[user_id])
+        logger.info("WebSocket connected: user=%s (devices=%d)", user_id, count)
+        await self._send_one(ws, {"type": "connected", "status": "ok"})
 
     async def disconnect(self, user_id: str = "default", ws: WebSocket | None = None) -> None:
-        # Only remove if it's the same connection (prevents new connection from being removed by old one's cleanup)
-        if ws is not None and self._connections.get(user_id) is not ws:
-            return  # Old connection cleaning up — don't touch the new one
-        self._connections.pop(user_id, None)
-        logger.info("WebSocket disconnected: user=%s", user_id)
-
-    async def send(self, user_id: str, data: dict) -> None:
-        ws = self._connections.get(user_id)
-        if ws is None:
+        conns = self._connections.get(user_id)
+        if conns is None:
             return
+        if ws is not None:
+            conns.discard(ws)
+        if not conns:
+            self._connections.pop(user_id, None)
+        logger.info("WebSocket disconnected: user=%s (remaining=%d)", user_id, len(conns) if conns else 0)
+
+    async def _send_one(self, ws: WebSocket, data: dict) -> bool:
+        """Send to a single WebSocket. Returns False if failed."""
         try:
             await ws.send_text(json.dumps(data))
+            return True
         except Exception:
+            return False
+
+    async def send(self, user_id: str, data: dict) -> None:
+        """Broadcast to ALL connected devices for this user."""
+        conns = self._connections.get(user_id)
+        if not conns:
+            return
+        dead = []
+        for ws in conns:
+            if not await self._send_one(ws, data):
+                dead.append(ws)
+        for ws in dead:
+            conns.discard(ws)
+        if not conns:
             self._connections.pop(user_id, None)
 
     async def send_token(self, user_id: str, text: str) -> None:
         await self.send(user_id, {"type": "token", "text": text})
 
-    async def send_done(self, user_id: str, message_id: str, model: str) -> None:
-        await self.send(user_id, {"type": "done", "message_id": message_id, "model": model})
+    async def send_done(self, user_id: str, message_id: str, model: str, final_text: str | None = None) -> None:
+        msg = {"type": "done", "message_id": message_id, "model": model}
+        if final_text is not None:
+            msg["text"] = final_text
+        await self.send(user_id, msg)
 
     async def send_thinking(self, user_id: str, text: str) -> None:
         await self.send(user_id, {"type": "thinking", "text": text})
@@ -86,12 +101,17 @@ class WSManager:
         })
 
     async def receive(self, user_id: str = "default") -> dict | None:
-        ws = self._connections.get(user_id)
-        if ws is None:
+        """Receive from ANY connected device for this user."""
+        conns = self._connections.get(user_id)
+        if not conns:
             return None
-        try:
-            text = await ws.receive_text()
-            return json.loads(text)
-        except Exception:
+        # Use the first available connection — messages come from whichever device sends
+        for ws in list(conns):
+            try:
+                text = await ws.receive_text()
+                return json.loads(text)
+            except Exception:
+                conns.discard(ws)
+        if not conns:
             self._connections.pop(user_id, None)
-            return None
+        return None
