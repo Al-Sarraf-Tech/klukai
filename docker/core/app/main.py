@@ -818,8 +818,8 @@ async def _background_extraction(
 async def _background_image_gen(user_request: str) -> None:
     """Generate an anime image based on the user's request and send via WebSocket."""
     # Wait for chat response to finish and VRAM to settle
-    logger.info("Image gen: waiting 5s for VRAM...")
-    await asyncio.sleep(5)
+    logger.info("Image gen: waiting 1s for VRAM...")
+    await asyncio.sleep(1)
     try:
         logger.info("Image gen: starting for '%s'", user_request[:60])
         await ws.send_proactive("default", "Compiling tactical visualization, Commander. Stand by.")
@@ -830,7 +830,7 @@ async def _background_image_gen(user_request: str) -> None:
         aff_state = await affection.get_state()
         aff_level = aff_state.level
 
-        scene_tags = await _enhance_image_prompt(user_request, couple=couple)
+        scene_tags = _enhance_image_prompt(user_request, couple=couple)
         full_prompt = build_prompt(scene_tags, couple=couple, affection_level=aff_level)
         logger.info("Image prompt (aff=%d): %s", aff_level, full_prompt[:200])
 
@@ -904,34 +904,56 @@ def _fix_narration(text: str) -> str:
     return text
 
 
-async def _enhance_image_prompt(user_request: str, couple: bool = False) -> str:
-    """Use LLM to convert a natural language scene request into Danbooru-style tags."""
-    char_desc = (
-        "The female character is Klukai: silver hair, green eyes, long ponytail, athletic, military uniform. "
-    )
-    if couple:
-        char_desc += (
-            "The male character is the Commander: short dark hair, brown eyes, tan skin, "
-            "strong build, military uniform. They are a couple. "
-            "IMPORTANT: Include BOTH 1boy and 1girl tags. The male has dark hair, the female has silver hair. "
-        )
+def _enhance_image_prompt(user_request: str, couple: bool = False) -> str:
+    """Fast keyword-based tag generation — no LLM call needed."""
+    lower = user_request.lower()
+    tags = []
 
-    prompt = (
-        "Convert this scene description into Danbooru-style tags for anime image generation. "
-        "Include: characters, setting, mood, lighting, pose, clothing details. "
-        f"{char_desc}"
-        "Return ONLY comma-separated tags, nothing else.\n\n"
-        f"Scene: {user_request}"
-    )
-    try:
-        config = await router.route("tags", SessionState(conversation_id="image"))
-        tags = []
-        async for token in router.stream(prompt, [{"role": "user", "content": prompt}], config):
-            tags.append(token)
-        return "".join(tags).strip()
-    except Exception as e:
-        logger.warning("Image prompt enhancement failed: %s", e)
-        return user_request
+    # Scene/setting tags
+    SCENE_MAP = {
+        "sunset": "sunset, orange sky, golden hour lighting",
+        "night": "night, moonlight, dark sky, stars",
+        "rain": "rain, wet, umbrella, overcast",
+        "snow": "snow, winter, cold breath, scarf",
+        "beach": "beach, ocean, sand, swimsuit, summer",
+        "cafe": "cafe, table, coffee cup, indoor, cozy",
+        "battle": "battlefield, smoke, debris, action pose",
+        "motorcycle": "motorcycle, riding, wind, speed lines, road",
+        "bed": "bedroom, bed, pillows, soft lighting, intimate",
+        "rooftop": "rooftop, city skyline, wind, evening",
+        "garden": "garden, flowers, natural lighting, peaceful",
+        "office": "office, desk, computer, indoor lighting",
+        "forest": "forest, trees, nature, sunlight through leaves",
+        "city": "city, urban, street, buildings, neon",
+    }
+    for keyword, scene_tags in SCENE_MAP.items():
+        if keyword in lower:
+            tags.append(scene_tags)
+
+    # Mood/action tags
+    MOOD_MAP = {
+        "kiss": "kiss, eyes closed, romantic",
+        "hug": "hug, embrace, close, warm",
+        "cuddle": "cuddling, lying down, comfortable, close",
+        "hold": "holding hands, close, side by side",
+        "smile": "smile, happy, cheerful",
+        "blush": "blush, embarrassed, looking away",
+        "cry": "tears, emotional, sad",
+        "fight": "fighting stance, action, dynamic pose",
+        "sleep": "sleeping, peaceful, eyes closed",
+        "eat": "eating, food, table",
+        "cook": "cooking, kitchen, apron",
+        "read": "reading, book, sitting, quiet",
+    }
+    for keyword, mood_tags in MOOD_MAP.items():
+        if keyword in lower:
+            tags.append(mood_tags)
+
+    # If no specific tags matched, add generic scene
+    if not tags:
+        tags.append("standing, looking at viewer, detailed background")
+
+    return ", ".join(tags)
 
 
 def _strip_actions_for_tts(text: str) -> str:
