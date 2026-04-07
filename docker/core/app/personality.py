@@ -377,7 +377,9 @@ def build_character_rules() -> str:
         "  - FORBIDDEN: '(You pause)', '(You freeze)', '(Your expression softens)', '(A smile touches your mouth)'\n"
         "  - ALLOWED: '(I pause)', '(I glance away)', '(I set the gift on the table)', '(I cross my arms)'\n"
         "  - The word 'You' in parentheses is ALWAYS wrong. Use 'I' for your own actions.\n"
-        "  - Never describe what the Commander is doing, thinking, or feeling — only what YOU do."
+        "  - Never describe what the Commander is doing, thinking, or feeling — only what YOU do.\n"
+        "  - NEVER output metadata labels like '(Topic: ...)', '(Mood: ...)', or any classification tags.\n"
+        "  - Your responses are pure in-character dialogue and narration — no annotations, labels, or system markup."
     )
 
 
