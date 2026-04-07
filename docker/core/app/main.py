@@ -518,8 +518,12 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Add user turn to session
     session = await memory.add_turn(SESSION_ID, "user", content, session)
 
-    # Recall relevant memories + past conversation exchanges
-    episode_memories, rel_facts, recalled_exchanges = await memory.recall_for_prompt(content)
+    # Skip expensive memory recall for very short messages (hi, ok, yes, etc)
+    is_short = len(content.strip()) <= 20
+    if is_short:
+        episode_memories, rel_facts, recalled_exchanges = [], {}, []
+    else:
+        episode_memories, rel_facts, recalled_exchanges = await memory.recall_for_prompt(content)
 
     # Get affection state for prompt modulation
     aff_state = await affection.get_state()
@@ -555,7 +559,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Build messages for LLM
     messages = [
         {"role": t["role"], "content": t["content"]}
-        for t in session.turns[-20:]
+        for t in session.turns[-12:]
     ]
 
     # Check if this needs the agentic tool-use loop

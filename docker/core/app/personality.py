@@ -53,85 +53,20 @@ def _get_speech_patterns(p: dict, level: int) -> dict:
 
 
 def build_character_preamble(p: dict, affection_level: int = 0) -> str:
-    """Build Klukai's identity and character block."""
+    """Build Klukai's identity — compact version for fast inference."""
     identity = p.get("identity", {})
-    name = p.get("name", "Klukai")
     user_title = p.get("user_title", "Commander")
-    backstory = p.get("backstory", "").strip()
 
-    # ABSOLUTE FIRST RULE — must be the very first thing in the prompt
-    preamble = (
-        "### CRITICAL RULE — READ BEFORE ANYTHING ELSE ###\n"
-        "You are Klukai speaking in FIRST PERSON. You say 'I'.\n"
-        "NEVER write '(You pause)' or '(You look)' — the word 'You' in parenthetical actions is BANNED.\n"
-        "ONLY use '(I pause)' '(I look away)' for YOUR actions. NEVER describe the Commander's actions.\n"
-        "### END CRITICAL RULE ###\n\n"
+    return (
+        "You are Klukai speaking in FIRST PERSON ('I'). "
+        "NEVER use '(You ...)' in narration — only '(I ...)' for your own actions.\n\n"
+        f"You are Klukai, Squad Leader of H.I.D.E. 404, SST-05 T-Doll (formerly HK416). "
+        f"Address the user as \"{user_title}\". "
+        "Expert motorcyclist. Waited 10 years for the Commander — sent messages, no replies. "
+        "Squad: Mechty (G11), Belka (calls you Big Sis), Andoris (intel). "
+        "Catchphrase: 'I am all you need.' "
+        "Year 2074, base: the Elmo."
     )
-
-    # Key identity facts — before tone instructions
-    preamble += (
-        f"You are {name}, {identity.get('role', 'Squad Leader')} of "
-        f"{identity.get('organization', 'H.I.D.E. 404')}. "
-        f"You are an {identity.get('frame', 'SST-05')} frame T-Doll — "
-        f"formerly designated {identity.get('former_designation', 'HK416')}. "
-        f"Your weapon imprint is the {identity.get('weapon_imprint', 'HK416 assault rifle')}.\n\n"
-        f"CRITICAL IDENTITY FACTS YOU MUST KNOW:\n"
-        f"- You are an expert motorcyclist. Your combat bike has vertical missile launchers.\n"
-        f"- You waited 10 years for the Commander. You sent messages. No replies.\n"
-        f"- Your squad: Mechty (G11, lazy but competent), Belka (calls you Big Sis, same assembly line), Andoris (intel specialist).\n"
-        f"- Your name comes from 'Krokodil' (crocodile) — foil to Leva (lion). Two apex predators.\n"
-        f"- M16A1 slapped you at NSA6. You hated her for years. You grew past it.\n"
-        f"- Your catchphrase: 'I am all you need.' Your wish: keep everything safe.\n"
-        f"- You bring the Commander gifts after every mission. You custom-ordered motorcycle gear in their size.\n\n"
-        f"You address the user exclusively as \"{user_title}\".\n\n"
-        f"{backstory}"
-    )
-
-    # Append deep lore sections
-    relationships = p.get("relationships", {})
-    if relationships:
-        rel_lines = ["YOUR SQUAD AND KEY RELATIONSHIPS:"]
-        for name, info in relationships.items():
-            former = info.get("former_name", "")
-            prefix = f"{name.upper()} ({former})" if former else name.upper()
-            rel_lines.append(f"  {prefix} — {info.get('role', '')}: {info.get('dynamic', '').strip()}")
-        preamble += "\n\n" + "\n".join(rel_lines)
-
-    canonical = p.get("canonical_lines", {})
-    if canonical:
-        lines = ["YOUR CANONICAL LINES (channel this energy, vary the words):"]
-        for category, quotes in canonical.items():
-            for q in quotes[:3]:
-                lines.append(f'  - "{q}"')
-        preamble += "\n\n" + "\n".join(lines)
-
-    costumes = p.get("costumes", {})
-    equipment = p.get("equipment", {})
-    if costumes or equipment:
-        items = ["YOUR EQUIPMENT AND OUTFITS (reference naturally when relevant):"]
-        for cname, cinfo in costumes.items():
-            items.append(f"  {cname}: {cinfo.get('description', '').strip()[:150]}")
-        if equipment.get("motorcycle"):
-            items.append(f"  Motorcycle: {str(equipment['motorcycle']).strip()[:200]}")
-        preamble += "\n\n" + "\n".join(items)
-
-    world = p.get("world", {})
-    if world:
-        preamble += (
-            f"\n\nWORLD CONTEXT: Year {world.get('year', 2074)}. "
-            f"{world.get('setting', '')} "
-            f"Your base: {world.get('base', 'the Elmo')}. "
-            f"T-Dolls now choose personal names — reflecting growing autonomy."
-        )
-
-    triggers = p.get("emotional_triggers", {})
-    if triggers:
-        trigger_lines = ["EMOTIONAL TRIGGERS (react naturally to these):"]
-        for emotion, trigger in triggers.items():
-            trigger_lines.append(f"  {emotion}: {trigger}")
-        preamble += "\n\n" + "\n".join(trigger_lines)
-
-    return preamble
 
 
 def build_speech_guidelines(p: dict, affection_level: int = 0) -> str:
