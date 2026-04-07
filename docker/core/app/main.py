@@ -270,7 +270,6 @@ async def api_gift(req: dict):
 
     # Apply affection bonus directly
     aff_state = await affection.get_state()
-    old_score = aff_state.score
     aff_state.score = max(0, min(100, aff_state.score + bonus))
     await affection._save_state(aff_state)
 
@@ -536,7 +535,8 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             fi = aff_state.first_interaction
             now = datetime.now(fi.tzinfo) if fi.tzinfo else datetime.now()
             days = max(0, (now - fi).days)
-        except Exception:
+        except Exception as e:
+            logger.debug("Days-together calculation failed: %s", e)
             days = 0
 
     system_prompt = assemble_system_prompt(
@@ -816,9 +816,6 @@ async def _background_extraction(
         logger.error("Background extraction failed: %s", e)
 
 
-# ── Background TTS ───────────────────────────────────────────────────────
-
-
 async def _background_image_gen(user_request: str) -> None:
     """Generate an anime image based on the user's request and send via WebSocket."""
     # Wait for chat response to finish and VRAM to settle
@@ -854,30 +851,6 @@ async def _background_image_gen(user_request: str) -> None:
             await ws.send_proactive("default", "...Visualization failed. Interference in the rendering pipeline. I'll try again later.")
     except Exception as e:
         logger.error("Background image gen failed: %s", e)
-
-
-async def _background_tts(text: str) -> None:
-    """Generate TTS audio and send via WebSocket."""
-    voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
-    tts_text = _strip_actions_for_tts(text)
-    if not tts_text.strip() or len(tts_text) > 500:
-        return
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"{voice_url}/tts",
-                json={"text": tts_text[:500], "language": "en"},
-            )
-            if r.status_code == 200:
-                import base64 as b64
-                audio_b64 = b64.b64encode(r.content).decode()
-                await ws.send_voice("default", audio_b64, final=True)
-                logger.info("TTS audio sent (%d bytes)", len(r.content))
-            else:
-                logger.warning("TTS returned %d: %s", r.status_code, r.text[:100])
-    except Exception as e:
-        logger.debug("TTS unavailable: %s", e)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────

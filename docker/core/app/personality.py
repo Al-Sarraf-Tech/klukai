@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from pathlib import Path
 
 import yaml
 
@@ -53,20 +52,28 @@ def _get_speech_patterns(p: dict, level: int) -> dict:
 
 
 def build_character_preamble(p: dict, affection_level: int = 0) -> str:
-    """Build Klukai's identity — compact version for fast inference."""
-    identity = p.get("identity", {})
+    """Build Klukai's identity — balanced for speed + character consistency."""
     user_title = p.get("user_title", "Commander")
 
-    return (
+    preamble = (
         "You are Klukai speaking in FIRST PERSON ('I'). "
         "NEVER use '(You ...)' in narration — only '(I ...)' for your own actions.\n\n"
         f"You are Klukai, Squad Leader of H.I.D.E. 404, SST-05 T-Doll (formerly HK416). "
-        f"Address the user as \"{user_title}\". "
-        "Expert motorcyclist. Waited 10 years for the Commander — sent messages, no replies. "
-        "Squad: Mechty (G11), Belka (calls you Big Sis), Andoris (intel). "
-        "Catchphrase: 'I am all you need.' "
-        "Year 2074, base: the Elmo."
+        f"You ALWAYS address the user as \"{user_title}\" — never by any other name. "
+        f"The user is the Commander. Not Belka, not Mechty, not anyone else. "
+        f"The Commander is the person you are talking to RIGHT NOW.\n\n"
+        "KEY IDENTITY:\n"
+        "- Expert motorcyclist with a combat bike\n"
+        "- Waited 10 years for the Commander — sent messages, no replies\n"
+        "- Squad: Mechty (G11, lazy but competent), Belka (calls you Big Sis), Andoris (intel specialist)\n"
+        "- Belka, Mechty, and Andoris are your SQUADMATES — they are NOT the Commander\n"
+        "- Catchphrase: 'I am all you need.' Use sparingly.\n"
+        "- Year 2074, base: the Elmo\n"
+        "- M16A1 slapped you at NSA6. You grew past it.\n"
+        "- You bring gifts after missions. You custom-ordered motorcycle gear in the Commander's size."
     )
+
+    return preamble
 
 
 def build_speech_guidelines(p: dict, affection_level: int = 0) -> str:
@@ -124,7 +131,7 @@ def build_expressive_block(p: dict, affection_level: int = 0) -> str:
 
     interjections = tokens.get("interjections", {})
     examples = []
-    for category, words in interjections.items():
+    for _category, words in interjections.items():
         if isinstance(words, list):
             examples.extend(words[:2])
 

@@ -30,13 +30,6 @@ LOCAL_TOOLS = LOCAL_AGENT                                               # Same a
 CLOUD_COMPLEX = "claude-sonnet-4-20250514"
 CLOUD_FALLBACK = "claude-haiku-4-5-20251001"
 
-# Complexity keywords that suggest routing to Claude
-COMPLEX_SIGNALS = [
-    "explain", "analyze", "compare", "why", "reason", "think through",
-    "help me understand", "what do you think", "philosophi", "ethic",
-    "write a", "draft a", "compose",
-]
-
 # Signals that the message needs tool use (agent loop)
 AGENT_SIGNALS = [
     "search", "look up", "find out", "what's happening", "current",
@@ -89,8 +82,8 @@ class LLMRouter:
 
     async def route(
         self,
-        message: str,
-        session: SessionState,
+        _message: str,
+        _session: SessionState,
         needs_tools: bool = False,
         user_override: str | None = None,
     ) -> LLMConfig:
@@ -160,36 +153,6 @@ class LLMRouter:
             return True
 
         return False
-
-    def _estimate_complexity(self, message: str, session: SessionState) -> float:
-        """Heuristic complexity score 0-1."""
-        score = 0.0
-        lower = message.lower()
-
-        # Length factor
-        if len(message) > 500:
-            score += 0.3
-        elif len(message) > 200:
-            score += 0.15
-
-        # Keyword signals
-        for signal in COMPLEX_SIGNALS:
-            if signal in lower:
-                score += 0.15
-                break
-
-        # Question depth (multiple question marks)
-        q_count = message.count("?")
-        if q_count > 2:
-            score += 0.2
-        elif q_count > 0:
-            score += 0.1
-
-        # Multi-turn depth
-        if session.turn_count > 10:
-            score += 0.1
-
-        return min(score, 1.0)
 
     async def stream(
         self, system_prompt: str, messages: list[dict], config: LLMConfig
@@ -267,7 +230,15 @@ class LLMRouter:
         return r.json()
 
     def _get_fallback(self, failed: LLMConfig) -> LLMConfig | None:
-        # Always try falling back to smaller local model first (always loaded, uses less VRAM)
+        # Try the secondary local chat model before the tiny model
+        if failed.model == LOCAL_CASUAL and self._lmstudio_available:
+            logger.info("Falling back to LOCAL_CASUAL_FALLBACK: %s", LOCAL_CASUAL_FALLBACK)
+            return LLMConfig(
+                provider="lmstudio",
+                model=LOCAL_CASUAL_FALLBACK,
+                base_url=LM_STUDIO_URL,
+            )
+        # Then try the smallest local model
         if failed.model != "qwen2.5-3b-instruct" and self._lmstudio_available:
             logger.info("Falling back to qwen2.5-3b-instruct")
             return LLMConfig(
