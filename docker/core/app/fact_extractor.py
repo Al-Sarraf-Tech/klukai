@@ -10,8 +10,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Use Arc A380 (local) for extraction — keeps RTX 3090 free for chat
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_LOCAL_URL", "http://100.111.198.19:1235")
+# Background tasks use dominus LM Studio (qwen2.5-3b, delayed 3s after chat)
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
 EXTRACTION_MODEL = "qwen2.5-3b-instruct"
 
 # Shared httpx client — initialized on first use, reused thereafter
