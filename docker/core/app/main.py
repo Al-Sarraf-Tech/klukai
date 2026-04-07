@@ -690,7 +690,12 @@ async def _handle_voice(audio_b64: str, session: SessionState) -> None:
 async def _background_extraction(
     user_msg: str, assistant_msg: str, session: SessionState, user_id: str = "default"
 ) -> None:
-    """Background task: extract facts, adjust affection, and maybe create an episode."""
+    """Background task: extract facts, adjust affection, and maybe create an episode.
+
+    Delayed 3s so LLM calls don't compete with the main response stream.
+    All calls are serialized (not parallel) to avoid queuing in LM Studio.
+    """
+    await asyncio.sleep(3)  # Let main response finish streaming first
     try:
         result = await extract_facts(user_msg, assistant_msg)
 
