@@ -319,8 +319,8 @@ class LLMRouter:
                 "temperature": config.temperature,
                 "stream": True,
             },
-            # read timeout raised to 120 s — thinking models can be slow between tokens
-            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
+            # read timeout raised to 180s — thinking models can be very slow between tokens
+            timeout=httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0),
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():

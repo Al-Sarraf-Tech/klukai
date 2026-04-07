@@ -638,7 +638,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     )
 
     # Background: extract facts and create episodes
-    asyncio.create_task(_background_extraction(content, response_text, session))
+    asyncio.create_task(_background_extraction(content, response_text, session, user_id))
 
     # Background tasks — only if main LLM succeeded (not a fallback error)
     if not response_text.startswith("Communications disrupted"):
@@ -688,7 +688,7 @@ async def _handle_voice(audio_b64: str, session: SessionState) -> None:
 
 
 async def _background_extraction(
-    user_msg: str, assistant_msg: str, session: SessionState
+    user_msg: str, assistant_msg: str, session: SessionState, user_id: str = "default"
 ) -> None:
     """Background task: extract facts, adjust affection, and maybe create an episode."""
     try:
