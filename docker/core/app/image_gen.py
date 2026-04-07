@@ -40,7 +40,37 @@ COUPLE_KEYWORDS = [
     "us", "we", "together", "our", "cuddling", "cuddle", "holding hands",
     "embrace", "hug", "hugging", "kissing", "side by side", "couple",
     "with me", "with you", "both of us", "show us", "imagine us",
+    "take care of me", "in bed", "lying together", "next to me",
+    "hold me", "carry me", "beside me", "close to me",
 ]
+
+# Squad member detection for multi-character scenes
+SQUAD_KEYWORDS = {
+    "mechty": "1girl, green hair, sleepy expression, lazy pose, military uniform, g11",
+    "belka": "1girl, blonde hair, energetic, younger sister, military uniform",
+    "andoris": "1girl, dark hair, glasses, professional, intel specialist, military uniform",
+    "leva": "1girl, brown hair, tactical vest, confident pose, leader aura, ump45",
+    "groza": "1girl, dark hair, elegant, military, ots-14",
+}
+
+# Situational context tags — detect what's happening in the conversation
+SITUATION_KEYWORDS = {
+    "bed": "bedroom, lying on bed, pillows, blankets, soft lighting, intimate",
+    "sleep": "sleeping, peaceful, eyes closed, bedroom, night",
+    "sick": "nursing, caring, thermometer, worried expression, bedroom",
+    "cooking": "kitchen, apron, cooking, steam, ingredients",
+    "training": "training ground, combat stance, sweat, determined",
+    "patrol": "patrol, outdoors, alert, tactical gear, moonlight",
+    "date": "casual clothes, date, restaurant, candles, romantic",
+    "motorcycle": "motorcycle, leather jacket, wind, road, speed, riding together",
+    "rain": "rain, umbrella, wet, shelter, close together",
+    "night": "night sky, stars, moonlight, quiet, intimate",
+    "morning": "morning light, sunrise, bed, waking up, soft",
+    "bath": "onsen, hot spring, steam, towel, relaxed, water",
+    "fight": "combat, action pose, explosions, debris, intense",
+    "crying": "tears, emotional, comforting, holding, gentle",
+    "gift": "gift box, ribbon, surprise, happy, blushing",
+}
 
 QUALITY_TAGS = "masterpiece, best quality, very aesthetic, absurdres"
 NEGATIVE_TAGS = (

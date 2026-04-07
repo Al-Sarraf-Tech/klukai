@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Klukai 3D Model Viewer</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: system-ui; }
+        #canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            max-width: 300px;
+            z-index: 100;
+        }
+        #info h3 { margin: 0 0 10px 0; }
+        #info p { margin: 5px 0; }
+        #animations {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: #fff;
+            padding: 10px;
+            border-radius: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 11px;
+            z-index: 100;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            margin: 2px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        button:hover { background: #45a049; }
+        button.active { background: #ff9800; }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h3>Klukai 3D</h3>
+        <p id="status">Loading...</p>
+        <p><small>Drag to rotate | Scroll to zoom | Double-click to reset</small></p>
+    </div>
+    <div id="animations"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@r128/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@r128/examples/js/loaders/GLTFLoader.js"></script>
+
+    <script>
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x2a2a3a);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 0.5, 1.5);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        const light1 = new THREE.DirectionalLight(0xffffff, 1.2);
+        light1.position.set(5, 8, 5);
+        light1.castShadow = true;
+        light1.shadow.mapSize.width = 2048;
+        light1.shadow.mapSize.height = 2048;
+        scene.add(light1);
+
+        const light2 = new THREE.DirectionalLight(0x6ba3ff, 0.6);
+        light2.position.set(-5, 4, 8);
+        scene.add(light2);
+
+        const ambLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambLight);
+
+        // Grid
+        const gridHelper = new THREE.GridHelper(5, 10, 0x444444, 0x222222);
+        scene.add(gridHelper);
+
+        // Controls
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 0.5, 0);
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 2;
+        controls.update();
+
+        let mixer = null;
+        const animations = {};
+        let currentAction = null;
+
+        const loader = new THREE.GLTFLoader();
+        loader.load('web-build/assets/models/klukai_v3.glb', (gltf) => {
+            const model = gltf.scene;
+            model.traverse((node) => {
+                if (node.isMesh) {
+                    node.castShadow = true;
+                    node.receiveShadow = true;
+                }
+            });
+            scene.add(model);
+
+            mixer = new THREE.AnimationMixer(model);
+
+            gltf.animations.forEach((clip) => {
+                animations[clip.name] = mixer.clipAction(clip);
+            });
+
+            document.getElementById('status').textContent = `Loaded! ${gltf.animations.length} animations`;
+
+            // Build animation buttons
+            const animDiv = document.getElementById('animations');
+            const title = document.createElement('div');
+            title.style.fontWeight = 'bold';
+            title.textContent = 'Animations:';
+            animDiv.appendChild(title);
+
+            Object.keys(animations).forEach((name) => {
+                const btn = document.createElement('button');
+                btn.textContent = name;
+                btn.onclick = () => playAnimation(name, btn);
+                animDiv.appendChild(btn);
+            });
+
+            // Auto-play idle
+            const idleBtn = Array.from(animDiv.querySelectorAll('button')).find(b => b.textContent === 'idle');
+            if (animations['idle'] && idleBtn) {
+                playAnimation('idle', idleBtn);
+            }
+        });
+
+        function playAnimation(name, button) {
+            if (!animations[name]) return;
+
+            if (currentAction) {
+                currentAction.fadeOut(0.5);
+            }
+
+            currentAction = animations[name];
+            currentAction.reset()
+                .fadeIn(0.5)
+                .play();
+
+            // Highlight button
+            document.querySelectorAll('#animations button').forEach(b => b.classList.remove('active'));
+            if (button) button.classList.add('active');
+        }
+
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta();
+            if (mixer) mixer.update(delta);
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Responsive
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

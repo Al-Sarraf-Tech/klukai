@@ -134,7 +134,15 @@
         model.traverse(n => {
           if (n.isMesh && n.material) {
             const mat = n.material;
-            if (mat.map) {
+            const name = (n.name || '').toLowerCase();
+            const isEye = name.includes('eye');
+            if (isEye && mat.map) {
+              // Eyes: glossy standard material, render on top of face
+              mat.roughness = 0.15;
+              mat.metalness = 0.0;
+              mat.side = THREE.DoubleSide;
+              n.renderOrder = 1;
+            } else if (mat.map) {
               const toon = new THREE.MeshToonMaterial({
                 map: mat.map,
                 color: mat.color || 0xffffff,

@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from .affection import AffectionManager
 from .agent_loop import AgentLoop
 from .db import init_pool, close_pool, get_pool, get_conn, get_conn_autocommit
-from .image_gen import generate_image, needs_image, build_prompt, is_couple_scene, is_landscape
+from .image_gen import generate_image, needs_image, build_prompt, is_couple_scene, is_landscape, SQUAD_KEYWORDS, SITUATION_KEYWORDS
 from .fact_extractor import create_episode_summary, extract_facts
 from .llm_router import LLMRouter
 from .mcp_client import MCPClient
@@ -929,11 +929,22 @@ def _enhance_image_prompt(user_request: str, couple: bool = False) -> str:
         if keyword in lower:
             tags.append(mood_tags)
 
+    # Situational context from conversation
+    for keyword, sit_tags in SITUATION_KEYWORDS.items():
+        if keyword in lower:
+            tags.append(sit_tags)
+
+    # Squad member detection — add their character tags
+    for member, member_tags in SQUAD_KEYWORDS.items():
+        if member in lower:
+            tags.append(member_tags)
+            tags.append("multiple girls" if not couple else "")
+
     # If no specific tags matched, add generic scene
     if not tags:
         tags.append("standing, looking at viewer, detailed background")
 
-    return ", ".join(tags)
+    return ", ".join(t for t in tags if t)
 
 
 def _strip_actions_for_tts(text: str) -> str:

@@ -101,40 +101,18 @@ if obj_mesh and main_mesh:
 
 # ── Assign textures ────────────────────────────────────────────────────────
 MATERIAL_TEXTURES = {
-    'Klukai_Body_(Default)': 'c_ClukaySSR01_slg_cloth2_d.png',
+    'Klukai_Body_(Default)': 'body_d.png',
     'Klukai_Hair': 'c_Clukay_hair_d.png',
     'Klukai_Face': 'c_Clukay_face_d.png',
     'Klukai_Cloth_1': 'c_ClukaySSR01_slg_cloth1_d.png',
     'Klukai_Cloth_2': 'c_ClukaySSR01_slg_cloth2_d.png',
+    'Klukai_Eyes': 'c_Clukay_eye_d.png',
+    'Klukai_Eyeblend': 'c_Clukay_eyeblend.png',
+    'Eye_Shadow': 'c_Clukay_eye_d.png',
     # Outline removed - causes dark patches
 }
 
-# Remove bad faces
-bad_indices = set()
-for i, slot in enumerate(main_mesh.material_slots):
-    mat = slot.material
-    if not mat: continue
-    name = mat.name
-    if 'Astral' in name or 'Speed' in name or 'Luminous' in name or \
-       'Fishnets' in name or 'Leggings_' in name or 'Body_Suit' in name or \
-       'Body_(Astral' in name or 'Eyes' in name or 'Eyeblend' in name or \
-       'Eye_Shadow' in name or 'Outline' in name:
-        bad_indices.add(i)
-
-if bad_indices:
-    bpy.context.view_layer.objects.active = main_mesh
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='DESELECT')
-    bpy.ops.object.mode_set(mode='OBJECT')
-    for poly in main_mesh.data.polygons:
-        if poly.material_index in bad_indices:
-            poly.select = True
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.delete(type='FACE')
-    bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"[export] Removed {len(bad_indices)} bad material groups")
-
-# Assign textures
+# Assign textures FIRST (before deleting faces, so material slots are intact)
 for slot in main_mesh.material_slots:
     mat = slot.material
     if not mat: continue
@@ -162,6 +140,73 @@ for slot in main_mesh.material_slots:
         tex = nodes.new('ShaderNodeTexImage')
         tex.image = bpy.data.images.load(tex_path)
         links.new(tex.outputs['Color'], bsdf.inputs['Base Color'])
+
+# ── Remove bad costume faces (keep eye geometry) ─────────────────────────────
+bad_indices = set()
+for i, slot in enumerate(main_mesh.material_slots):
+    mat = slot.material
+    if not mat: continue
+    name = mat.name
+    if 'Astral' in name or 'Speed' in name or 'Luminous' in name or \
+       'Fishnets' in name or 'Leggings_' in name or 'Body_Suit' in name or \
+       'Body_(Astral' in name or 'Outline' in name:
+        bad_indices.add(i)
+
+if bad_indices:
+    bpy.context.view_layer.objects.active = main_mesh
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bpy.ops.object.mode_set(mode='OBJECT')
+    for poly in main_mesh.data.polygons:
+        if poly.material_index in bad_indices:
+            poly.select = True
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.delete(type='FACE')
+    bpy.ops.object.mode_set(mode='OBJECT')
+    print(f"[export] Removed {len(bad_indices)} costume material groups")
+    print("[export] Eye geometry kept with iris textures")
+
+    # Scale eye vertices to fit sockets and push forward
+    import mathutils
+    EYE_SCALE = 0.6  # shrink to 60% of original size
+    for i, slot in enumerate(main_mesh.material_slots):
+        mat = slot.material
+        if not mat or ('Eye' not in mat.name and 'Eyeblend' not in mat.name):
+            continue
+        # Collect eye vertex indices and find center
+        eye_verts = set()
+        for poly in main_mesh.data.polygons:
+            if poly.material_index == i:
+                for vi in poly.vertices:
+                    eye_verts.add(vi)
+        if not eye_verts:
+            continue
+        # Compute center of eye vertices
+        center = mathutils.Vector((0, 0, 0))
+        for vi in eye_verts:
+            center += main_mesh.data.vertices[vi].co
+        center /= len(eye_verts)
+        # Split into left/right eye groups by X position
+        left_verts = [vi for vi in eye_verts if main_mesh.data.vertices[vi].co.x > 0]
+        right_verts = [vi for vi in eye_verts if main_mesh.data.vertices[vi].co.x <= 0]
+
+        for group_name, group in [("left", left_verts), ("right", right_verts)]:
+            if not group:
+                continue
+            gcenter = mathutils.Vector((0, 0, 0))
+            for vi in group:
+                gcenter += main_mesh.data.vertices[vi].co
+            gcenter /= len(group)
+
+            # Right eye socket is tighter — push further forward
+            forward = 0.0005 if group_name == "left" else 0.001
+
+            for vi in group:
+                v = main_mesh.data.vertices[vi]
+                v.co = gcenter + (v.co - gcenter) * EYE_SCALE
+                v.co.y -= forward
+
+        print(f"[export] Scaled {mat.name}: L={len(left_verts)} R={len(right_verts)} at {EYE_SCALE}x")
 
 # ── Make sure all actions are linked to the armature ─────────────────────────
 # The exporter needs all actions to be assigned or use_fake_user=True
