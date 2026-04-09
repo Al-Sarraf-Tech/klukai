@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -17,6 +18,25 @@ logger = logging.getLogger(__name__)
 
 # Circuit breaker: seconds to wait before re-probing LM Studio after failure
 _HEALTH_RECHECK_INTERVAL = 15.0
+
+# ── Global LM Studio gate ─────────────────────────────────────────────────
+# Single lock shared across ALL modules that call LM Studio.
+# Ensures only 1 request is in-flight at a time — prevents queue pile-up
+# when the server is slow or swapping models.
+_lm_gate: asyncio.Lock | None = None
+
+
+def get_lm_gate() -> asyncio.Lock:
+    """Return the shared LM Studio request gate (created on first call)."""
+    global _lm_gate
+    if _lm_gate is None:
+        _lm_gate = asyncio.Lock()
+    return _lm_gate
+
+
+def lm_gate_busy() -> bool:
+    """True if an LM Studio request is currently in-flight."""
+    return _lm_gate is not None and _lm_gate.locked()
 
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")       # Dominus RTX 3090
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -155,16 +175,22 @@ class LLMRouter:
             if signal in lower:
                 return True
 
-        # Question marks about factual/current info
+        # Question marks: only trigger agent if the question is clearly about
+        # real-world external info, NOT in-character RP or conversational questions.
         if "?" in message and any(
-            w in lower for w in ["who", "what", "where", "when", "how much", "how many"]
+            w in lower for w in ["who is", "what is the price", "how much does",
+                                  "how many people", "where is", "when did"]
         ):
-            # Check if it's about current/external info vs conversational
+            # Must also NOT look like RP/conversational context
             if any(w in lower for w in [
-                "you", "your", "klukai", "commander", "feel", "think about",
-                "opinion", "favorite", "like", "hate",
+                "you", "your", "klukai", "commander", "feel", "think",
+                "opinion", "favorite", "like", "hate", "they", "them",
+                "squad", "mission", "team", "soldier", "t-doll",
+                "remember", "discover", "did we", "did she", "did he",
+                "would", "could", "should", "shall",
+                "base", "hq", "camp", "sector", "area", "weapon",
             ]):
-                return False  # Conversational question, not a tool query
+                return False
             return True
 
         return False
@@ -172,59 +198,56 @@ class LLMRouter:
     async def stream(
         self, system_prompt: str, messages: list[dict], config: LLMConfig
     ) -> AsyncIterator[str]:
-        """Stream tokens from the selected LLM."""
-        try:
-            if config.provider == "anthropic":
-                async for token in self._stream_anthropic(
-                    system_prompt, messages, config
-                ):
-                    yield token
-            else:
+        """Stream tokens from the selected LLM.
+
+        LM Studio calls go through a global gate (1-at-a-time) to prevent
+        queue pile-up when the server is slow or swapping models.
+        On local failure, falls back directly to Claude — no cascading
+        local retries that would just pile more requests onto a stuck server.
+        """
+        if config.provider == "anthropic":
+            async for token in self._stream_anthropic(
+                system_prompt, messages, config
+            ):
+                yield token
+            mark_model_used(config.model)
+            return
+
+        # ── LM Studio path: acquire gate so only 1 request is in-flight ──
+        gate = get_lm_gate()
+        async with gate:
+            try:
                 async for token in self._stream_lmstudio(
                     system_prompt, messages, config
                 ):
                     yield token
-            # Track successful use for keepalive scheduling
-            mark_model_used(config.model)
-        except httpx.ReadTimeout:
-            logger.warning("LLM %s/%s ReadTimeout — skipping local fallbacks", config.provider, config.model)
-            if config.provider == "lmstudio":
+                mark_model_used(config.model)
+                return
+            except httpx.ReadTimeout:
+                logger.warning(
+                    "LLM %s/%s ReadTimeout — server overloaded, skipping local retries",
+                    config.provider, config.model,
+                )
                 self._lmstudio_available = False
                 self._lmstudio_last_check = time.monotonic()
-                # ReadTimeout means the server is alive but model is stuck/overloaded.
-                # Don't waste time on more local models — go straight to Claude.
-                if self._anthropic:
-                    logger.info("Fast-fallback to Claude after ReadTimeout")
-                    cloud = LLMConfig(provider="anthropic", model=CLOUD_FALLBACK, temperature=0.7)
-                    async for token in self._stream_anthropic(system_prompt, messages, cloud):
-                        yield token
-                    return
-                yield "Communications disrupted, Commander. Standby for reconnection."
-        except Exception as e:
-            error_msg = str(e) or type(e).__name__
-            logger.warning("LLM %s/%s failed: %s, trying fallback", config.provider, config.model, error_msg)
-            if config.provider == "lmstudio":
+            except Exception as e:
+                error_msg = str(e) or type(e).__name__
+                logger.warning(
+                    "LLM %s/%s failed: %s — skipping local retries",
+                    config.provider, config.model, error_msg,
+                )
                 self._lmstudio_available = False
                 self._lmstudio_last_check = time.monotonic()
+        # ── Gate released ──
 
-            # Retry once with same config before falling back
-            try:
-                if config.provider == "lmstudio":
-                    await self._check_lmstudio()
-                    if self._lmstudio_available:
-                        logger.info("LM Studio retry after quick re-check")
-                        async for token in self._stream_lmstudio(system_prompt, messages, config):
-                            yield token
-                        return
-            except Exception:
-                pass
-
-            fallback = self._get_fallback(config)
-            if fallback:
-                async for token in self.stream(system_prompt, messages, fallback):
-                    yield token
-            else:
-                yield "Communications disrupted, Commander. Standby for reconnection."
+        # Cloud fallback (outside gate — Anthropic is a different server)
+        if self._anthropic:
+            logger.info("Fast-fallback to Claude after local failure")
+            cloud = LLMConfig(provider="anthropic", model=CLOUD_FALLBACK, temperature=0.7)
+            async for token in self._stream_anthropic(system_prompt, messages, cloud):
+                yield token
+        else:
+            yield "Communications disrupted, Commander. Standby for reconnection."
 
     async def complete_local(
         self,
@@ -235,30 +258,34 @@ class LLMRouter:
     ) -> dict:
         """Non-streaming completion via LM Studio with optional tool-use.
 
+        Gated: only 1 LM Studio request at a time.
+
         Returns an OpenAI-compatible response dict with:
         - choices[0].message.content (text)
         - choices[0].message.tool_calls (list of tool calls, if any)
         """
-        oai_messages = [{"role": "system", "content": system_prompt}] + messages
+        gate = get_lm_gate()
+        async with gate:
+            oai_messages = [{"role": "system", "content": system_prompt}] + messages
 
-        body: dict = {
-            "model": config.model,
-            "messages": oai_messages,
-            "max_tokens": config.max_tokens,
-            "temperature": config.temperature,
-            "stream": False,
-        }
-        if tools:
-            body["tools"] = tools
-            body["tool_choice"] = "auto"
+            body: dict = {
+                "model": config.model,
+                "messages": oai_messages,
+                "max_tokens": config.max_tokens,
+                "temperature": config.temperature,
+                "stream": False,
+            }
+            if tools:
+                body["tools"] = tools
+                body["tool_choice"] = "auto"
 
-        r = await self._http.post(
-            f"{config.base_url}/v1/chat/completions",
-            json=body,
-            timeout=120.0,
-        )
-        r.raise_for_status()
-        return r.json()
+            r = await self._http.post(
+                f"{config.base_url}/v1/chat/completions",
+                json=body,
+                timeout=120.0,
+            )
+            r.raise_for_status()
+            return r.json()
 
     def _get_fallback(self, failed: LLMConfig) -> LLMConfig | None:
         # Try the secondary local chat model before the tiny model
@@ -303,30 +330,37 @@ class LLMRouter:
                 yield text
 
     async def keepalive(self) -> None:
-        """Ping primary chat model to keep it loaded in LM Studio VRAM."""
+        """Ping primary chat model to keep it loaded in LM Studio VRAM.
+
+        Skips if a real request is already in-flight (model is warm by definition).
+        """
+        if lm_gate_busy():
+            return  # Real request in progress — model is warm, skip ping
         if not self._lmstudio_available:
             await self._ensure_lmstudio_fresh()
         if not self._lmstudio_available:
             return
 
+        gate = get_lm_gate()
         for model in (LOCAL_CASUAL, "gemma-4-e2b-it"):
             if not model_needs_keepalive(model):
                 continue
             try:
-                r = await self._http.post(
-                    f"{LM_STUDIO_URL}/v1/chat/completions",
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": "."}],
-                        "max_tokens": 1,
-                        "temperature": 0,
-                        "stream": False,
-                    },
-                    timeout=30.0,
-                )
-                if r.status_code == 200:
-                    mark_model_used(model)
-                    logger.debug("Keepalive OK: %s", model)
+                async with gate:
+                    r = await self._http.post(
+                        f"{LM_STUDIO_URL}/v1/chat/completions",
+                        json={
+                            "model": model,
+                            "messages": [{"role": "user", "content": "."}],
+                            "max_tokens": 1,
+                            "temperature": 0,
+                            "stream": False,
+                        },
+                        timeout=30.0,
+                    )
+                    if r.status_code == 200:
+                        mark_model_used(model)
+                        logger.debug("Keepalive OK: %s", model)
             except Exception as e:
                 logger.warning("Keepalive failed for %s: %s", model, e)
 

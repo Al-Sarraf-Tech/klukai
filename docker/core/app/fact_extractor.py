@@ -21,7 +21,7 @@ _http: httpx.AsyncClient | None = None
 def _get_http() -> httpx.AsyncClient:
     global _http
     if _http is None or _http.is_closed:
-        _http = httpx.AsyncClient(timeout=12.0)
+        _http = httpx.AsyncClient(timeout=30.0)
     return _http
 
 FACT_EXTRACTION_PROMPT = """\
@@ -93,19 +93,31 @@ async def extract_facts(
         prompt += IMAGE_CURATION_ADDENDUM.format(categories=categories)
 
     try:
-        client = _get_http()
-        r = await client.post(
-            f"{LM_STUDIO_URL}/v1/chat/completions",
-            json={
-                "model": EXTRACTION_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 512,
-                "temperature": 0.1,
-                "stream": False,
-            },
-        )
-        r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"]
+        from .llm_router import get_lm_gate
+
+        gate = get_lm_gate()
+        async with gate:  # Waits for main chat to finish streaming
+            client = _get_http()
+            r = await client.post(
+                f"{LM_STUDIO_URL}/v1/chat/completions",
+                json={
+                    "model": EXTRACTION_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 512,
+                    "temperature": 0.1,
+                    "stream": False,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            choices = data.get("choices", [])
+            if not choices:
+                logger.warning("Extraction LLM returned empty choices: %s", data)
+                return {"facts": [], "mood": "composed", "topics": [], "should_remember": False}
+            content = choices[0].get("message", {}).get("content") or ""
+            if not content.strip():
+                logger.warning("Extraction LLM returned empty content")
+                return {"facts": [], "mood": "composed", "topics": [], "should_remember": False}
 
         # Parse JSON from response (handle markdown code blocks + R1 think tags)
         import re
@@ -145,7 +157,7 @@ async def extract_facts(
 
         return out
     except Exception as e:
-        logger.warning("Fact extraction failed: %s", e)
+        logger.warning("Fact extraction failed (%s): %s", type(e).__name__, e)
         return {
             "facts": [],
             "mood": "composed",
@@ -175,19 +187,28 @@ async def create_episode_summary(
     )
 
     try:
-        client = _get_http()
-        r = await client.post(
-            f"{LM_STUDIO_URL}/v1/chat/completions",
-            json={
-                "model": EXTRACTION_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 150,
-                "temperature": 0.3,
-                "stream": False,
-            },
-        )
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"].strip()
+        from .llm_router import get_lm_gate
+
+        gate = get_lm_gate()
+        async with gate:  # Waits for main chat to finish streaming
+            client = _get_http()
+            r = await client.post(
+                f"{LM_STUDIO_URL}/v1/chat/completions",
+                json={
+                    "model": EXTRACTION_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 150,
+                    "temperature": 0.3,
+                    "stream": False,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            choices = data.get("choices", [])
+            if not choices:
+                logger.warning("Episode summary LLM returned empty choices")
+                return None
+            return (choices[0].get("message", {}).get("content") or "").strip() or None
     except Exception as e:
-        logger.warning("Episode summary failed: %s", e)
+        logger.warning("Episode summary failed (%s): %s", type(e).__name__, e)
         return None

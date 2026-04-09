@@ -229,18 +229,22 @@ class AffectionManager:
         )
 
         try:
-            r = await self._http.post(
-                f"{LM_STUDIO_URL}/v1/chat/completions",
-                json={
-                    "model": CLASSIFICATION_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 100,
-                    "temperature": 0.1,
-                    "stream": False,
-                },
-            )
-            r.raise_for_status()
-            content = r.json()["choices"][0]["message"]["content"].strip()
+            from .llm_router import get_lm_gate
+
+            gate = get_lm_gate()
+            async with gate:  # Waits for main chat to finish streaming
+                r = await self._http.post(
+                    f"{LM_STUDIO_URL}/v1/chat/completions",
+                    json={
+                        "model": CLASSIFICATION_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 100,
+                        "temperature": 0.1,
+                        "stream": False,
+                    },
+                )
+                r.raise_for_status()
+                content = r.json()["choices"][0]["message"]["content"].strip()
 
             # Handle markdown code blocks
             if content.startswith("```"):
