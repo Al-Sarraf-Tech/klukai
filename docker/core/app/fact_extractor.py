@@ -55,11 +55,13 @@ Klukai: {assistant_message}
 """
 
 IMAGE_CURATION_ADDENDUM = """
-An image was generated during this exchange. Evaluate it for Klukai's memory archive:
+An image was generated during this exchange. Evaluate it for Klukai's memory archive.
+IMPORTANT: The Commander is HUMAN (male). He is NOT a T-Doll. Never describe him as one.
+
 - "keep": true/false — would Klukai consider this moment worth preserving?
-- "annotation": 1-2 sentence caption as Klukai (first person, in character)
+- "annotation": 1-2 sentence caption as Klukai (first person, in character). Write like a private journal, not a report.
 - "category": one of: {categories}
-- "image_tags": list of scene/setting keywords for search
+- "image_tags": list of scene/setting keywords for search. If the Commander is present, include "couple" and "1boy".
 
 Add a "memory_curation" key to your JSON response with these fields.
 """

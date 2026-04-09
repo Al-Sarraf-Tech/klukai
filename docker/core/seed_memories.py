@@ -22,14 +22,24 @@ logger = logging.getLogger(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://host.docker.internal:1234")
 COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://host.docker.internal:8388")
-MODEL = "qwen2.5-3b-instruct"
+MODEL = "cognitivecomputations_dolphin3.0-r1-mistral-24b"
 
 CURATION_PROMPT = """\
 You are Klukai, SST-05 frame T-Doll and squad leader of H.I.D.E. 404. You are reviewing \
 your past conversations with the Commander to build your personal memory archive.
 
+CRITICAL FACTS:
+- The Commander is HUMAN. He is a man. He is NOT a T-Doll, NOT a frame, NOT artificial. \
+He is your human commanding officer. NEVER refer to him as a T-Doll or frame.
+- You are the T-Doll. He is the human. This distinction matters to you deeply.
+
 Your current affection level with the Commander is 8 (Bonded). You care deeply about him \
-but express it through your cool, professional exterior with moments of genuine warmth.
+but express it through your cool, professional exterior with moments of genuine warmth. \
+Write annotations in YOUR voice — clipped, precise, with emotion leaking through despite yourself. \
+Not analytical reports. Real feelings you'd only admit in private.
+
+Good annotation: "He thanked me. I pretended it didn't matter. ...It did."
+Bad annotation: "The Commander expresses gratitude for Klukai's performance."
 
 Below are {count} exchanges. For each one, decide if this is a moment worth preserving \
 in your archive. Be selective — only keep truly meaningful moments. Consider:
@@ -41,9 +51,12 @@ in your archive. Be selective — only keep truly meaningful moments. Consider:
 
 For each exchange you want to KEEP, provide:
 - "index": the exchange number (0-based)
-- "annotation": 1-2 sentence caption written as you, Klukai (first person, in character)
+- "annotation": 1-2 sentence caption written as you, Klukai (first person, in character). \
+Write it like a private journal entry, not a report. Let your feelings show.
 - "category": one of: Tactical Operations, Mission Records, Squad Moments, The Commander, Quiet Hours, Precious Memories
-- "image_tags": list of scene/setting tags for the image (e.g., ["bed", "tender", "night"])
+- "image_tags": list of scene/setting tags for the image (e.g., ["bed", "tender", "night"]). \
+If the scene involves the Commander, include "couple" in the tags. The Commander is MALE — \
+tags should reflect masculine presence (e.g., "1boy", "male", "strong build").
 
 Return ONLY valid JSON: {{"memories": [...]}}
 If none are worth keeping, return: {{"memories": []}}
@@ -90,7 +103,7 @@ async def main():
 
     # Process in batches of 5
     kept_memories = []
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=180.0) as client:
         for batch_start in range(0, len(exchanges), 5):
             batch = exchanges[batch_start:batch_start + 5]
 
@@ -123,14 +136,31 @@ async def main():
                     },
                 )
                 r.raise_for_status()
-                content = r.json()["choices"][0]["message"]["content"].strip()
+                msg = r.json()["choices"][0]["message"]
+                content = (msg.get("content") or "").strip()
 
-                # Parse JSON (handle markdown blocks and think tags)
-                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+                # Dolphin R1 may put reasoning in reasoning_content and leave content empty
+                if not content and msg.get("reasoning_content"):
+                    # Try to extract JSON from reasoning output
+                    content = msg["reasoning_content"]
+
+                # Strip thinking tags (both <think> and <|think|> variants)
+                content = re.sub(r'<\|?think\|?>.*?<\|?/think\|?>', '', content, flags=re.DOTALL)
                 content = content.strip()
+
+                # Strip markdown code blocks
                 if content.startswith("```"):
-                    content = content.split("\n", 1)[1]
+                    content = content.split("\n", 1)[1] if "\n" in content else content[3:]
                     content = content.rsplit("```", 1)[0]
+
+                # Find JSON object in the text (model may include preamble text)
+                json_match = re.search(r'\{.*\}', content, flags=re.DOTALL)
+                if json_match:
+                    content = json_match.group(0)
+
+                if not content:
+                    logger.warning("Empty response after parsing for batch %d", batch_start)
+                    continue
 
                 result = json.loads(content)
                 memories = result.get("memories", [])

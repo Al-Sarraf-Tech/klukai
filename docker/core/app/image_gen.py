@@ -25,15 +25,69 @@ def _get_http() -> httpx.AsyncClient:
 
 
 # Character identity tags — Danbooru format for Animagine XL 3.1
-KLUKAI_TAGS = (
+# Core identity is FIXED (face, hair, body). Outfit is selected per-scene.
+KLUKAI_IDENTITY = (
     "1girl, hk416 \\(girls' frontline\\), silver hair, green eyes, long hair, ponytail, "
-    "hair ornament, tactical clothes, black gloves, thighhighs, military, "
-    "girls' frontline"
+    "hair ornament, girls' frontline, slim waist, athletic body, toned, slender figure, long legs"
 )
-COMMANDER_TAGS = (
-    "1boy, male focus, short hair, dark hair, brown eyes, tan skin, strong build, "
-    "military uniform, commander, jacket"
+KLUKAI_DEFAULT_OUTFIT = "tactical clothes, black gloves, thighhighs, military"
+
+# Scene-appropriate outfits — matched by keyword in conversation context
+OUTFIT_MAP = {
+    "bed": "white camisole, bare shoulders, relaxed",
+    "sleep": "oversized t-shirt, bare legs, relaxed",
+    "morning": "oversized t-shirt, messy hair, bare legs",
+    "bath": "towel, wet hair, bare shoulders, steam",
+    "beach": "white bikini, sarong, sandals",
+    "swim": "one-piece swimsuit, wet hair",
+    "date": "black dress, elegant, off-shoulder, heels, jewelry",
+    "cafe": "casual blouse, skirt, relaxed fashion",
+    "cooking": "apron over casual clothes, rolled sleeves",
+    "cook": "apron over casual clothes, rolled sleeves",
+    "training": "sports bra, compression shorts, sweat, athletic tape",
+    "workout": "sports bra, compression shorts, sweat, athletic tape",
+    "working out": "sports bra, compression shorts, sweat, athletic tape",
+    "exercise": "sports bra, compression shorts, sweat",
+    "gym": "sports bra, compression shorts, sweat",
+    "casual": "off-shoulder sweater, jeans, sneakers",
+    "home": "oversized hoodie, shorts, comfortable",
+    "rain": "long coat, scarf, boots, umbrella",
+    "snow": "winter coat, scarf, boots, gloves, warm breath",
+    "motorcycle": "leather jacket, boots, wind-blown hair",
+    "formal": "military dress uniform, medals, pristine",
+    "dress": "elegant dress, jewelry, formal",
+    "uniform": "tactical clothes, black gloves, thighhighs, military",
+    "battle": "tactical gear, body armor, combat vest, rifle",
+    "fight": "tactical gear, body armor, combat vest, rifle",
+    "patrol": "tactical clothes, black gloves, thighhighs, military, alert",
+}
+
+COMMANDER_IDENTITY = (
+    "1boy, male focus, masculine, short hair, dark hair, brown eyes, tan skin, "
+    "strong build, tall, broad shoulders, male"
 )
+COMMANDER_DEFAULT_OUTFIT = "military uniform, commander, jacket"
+
+COMMANDER_OUTFIT_MAP = {
+    "bed": "shirtless, bare chest, relaxed",
+    "sleep": "t-shirt, casual pants",
+    "morning": "t-shirt, messy hair",
+    "bath": "towel, bare chest, wet hair",
+    "beach": "swim trunks, bare chest, sunglasses",
+    "date": "dress shirt, slacks, rolled sleeves",
+    "cafe": "casual jacket, t-shirt, jeans",
+    "casual": "hoodie, jeans, sneakers",
+    "home": "t-shirt, sweatpants, relaxed",
+    "training": "tank top, athletic shorts, sweat",
+    "workout": "tank top, athletic shorts, sweat",
+    "motorcycle": "leather jacket, jeans, boots",
+    "formal": "military dress uniform, medals",
+    "rain": "long coat, boots",
+    "snow": "winter jacket, scarf, boots",
+    "battle": "tactical vest, combat gear, helmet",
+    "fight": "tactical vest, combat gear",
+}
+
 COUPLE_TAGS = "couple, 1boy, 1girl, hetero"
 
 COUPLE_KEYWORDS = [
@@ -77,24 +131,26 @@ NEGATIVE_TAGS = (
     "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, "
     "fewer digits, cropped, worst quality, low quality, normal quality, "
     "jpeg artifacts, signature, watermark, username, blurry, artist name, "
-    "deformed, ugly, duplicate, morbid, mutilated"
+    "deformed, ugly, duplicate, morbid, mutilated, "
+    "thick thighs, wide hips, chubby, plump, fat, overweight, huge breasts, "
+    "androgynous, feminine boy, crossdressing, male in female clothes"
 )
 
-KLUKAI_LORA = "Klukai_GFL2.safetensors"
+KLUKAI_LORA = "Klukai_GFL2_IL-03.safetensors"
 KLUKAI_LORA_TRIGGER = "Klukai"
 
-# Animagine XL 3.1 + Klukai LoRA workflow
+# NoobAI-XL (Illustrious) + Klukai IL LoRA workflow
 WORKFLOW_TEMPLATE = {
     "4": {
         "class_type": "CheckpointLoaderSimple",
-        "inputs": {"ckpt_name": "animagine_xl_31.safetensors"},
+        "inputs": {"ckpt_name": "noobai_xl_v1.safetensors"},
     },
     "10": {
         "class_type": "LoraLoader",
         "inputs": {
             "lora_name": KLUKAI_LORA,
-            "strength_model": 0.85,
-            "strength_clip": 0.85,
+            "strength_model": 0.75,
+            "strength_clip": 0.75,
             "model": ["4", 0],
             "clip": ["4", 1],
         },
@@ -180,8 +236,9 @@ def needs_image(message: str) -> bool:
 
 def is_couple_scene(text: str) -> bool:
     """Detect if the request is for a scene with both Klukai and the Commander."""
+    import re
     lower = text.lower()
-    return any(kw in lower for kw in COUPLE_KEYWORDS)
+    return any(re.search(r'\b' + re.escape(kw) + r'\b', lower) for kw in COUPLE_KEYWORDS)
 
 
 def is_landscape(text: str) -> bool:
@@ -190,8 +247,29 @@ def is_landscape(text: str) -> bool:
     return any(kw in lower for kw in LANDSCAPE_KEYWORDS)
 
 
-def build_prompt(scene_tags: str, couple: bool = False, affection_level: int = 0) -> str:
-    """Build the full positive prompt with quality tags, LoRA trigger, and character identities."""
+def _select_outfit(context: str, outfit_map: dict[str, str], default: str) -> str:
+    """Pick the best outfit from a map based on conversation context keywords."""
+    lower = context.lower()
+    for keyword, outfit in outfit_map.items():
+        if keyword in lower:
+            return outfit
+    return default
+
+
+def build_prompt(
+    scene_tags: str,
+    couple: bool = False,
+    affection_level: int = 0,
+    context: str = "",
+) -> str:
+    """Build the full positive prompt with quality tags, LoRA trigger, and character identities.
+
+    Args:
+        scene_tags: Scene/action Danbooru tags.
+        couple: Whether to include the Commander.
+        affection_level: 0-9, affects mood expression tags.
+        context: Recent conversation text for outfit selection.
+    """
     parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
 
     # Add affection-aware mood tags
@@ -199,14 +277,64 @@ def build_prompt(scene_tags: str, couple: bool = False, affection_level: int = 0
     if mood_tags:
         parts.append(mood_tags)
 
+    # Context for outfit matching: use full context (conversation + scene tags)
+    outfit_context = f"{context} {scene_tags}" if context else scene_tags
+    klukai_outfit = _select_outfit(outfit_context, OUTFIT_MAP, KLUKAI_DEFAULT_OUTFIT)
+
     if couple:
+        commander_outfit = _select_outfit(outfit_context, COMMANDER_OUTFIT_MAP, COMMANDER_DEFAULT_OUTFIT)
         parts.append(COUPLE_TAGS)
-        parts.append(COMMANDER_TAGS)
-        parts.append(KLUKAI_TAGS)
+        parts.append(f"{COMMANDER_IDENTITY}, {commander_outfit}")
+        parts.append(KLUKAI_IDENTITY)
     else:
-        parts.append(KLUKAI_TAGS)
+        parts.append(KLUKAI_IDENTITY)
+    parts.append(klukai_outfit)
     parts.append(scene_tags)
     return ", ".join(parts)
+
+
+async def check_comfyui_ready() -> bool:
+    """Check if ComfyUI is reachable and has the queue clear."""
+    try:
+        client = _get_http()
+        r = await client.get(f"{COMFYUI_URL}/queue", timeout=5.0)
+        if r.status_code != 200:
+            return False
+        data = r.json()
+        running = len(data.get("queue_running", []))
+        pending = len(data.get("queue_pending", []))
+        if running > 0 or pending > 0:
+            logger.info("ComfyUI busy: %d running, %d pending", running, pending)
+            return False
+        return True
+    except Exception:
+        return False
+
+
+async def _interrupt_comfyui() -> None:
+    """Interrupt the current ComfyUI generation."""
+    try:
+        client = _get_http()
+        await client.post(f"{COMFYUI_URL}/interrupt", timeout=5.0)
+        logger.info("ComfyUI generation interrupted")
+        await asyncio.sleep(1)  # Let it settle
+    except Exception as e:
+        logger.warning("ComfyUI interrupt failed: %s", e)
+
+
+async def _free_comfyui_vram() -> None:
+    """Unload ComfyUI models from VRAM after generation to free space for LM Studio."""
+    try:
+        await asyncio.sleep(2)  # Let ComfyUI finish post-processing before unloading
+        client = _get_http()
+        await client.post(
+            f"{COMFYUI_URL}/free",
+            json={"unload_models": True, "free_memory": True},
+            timeout=5.0,
+        )
+        logger.info("ComfyUI VRAM freed after image generation")
+    except Exception as e:
+        logger.warning("ComfyUI VRAM free failed: %s", e)
 
 
 async def generate_image(
@@ -216,11 +344,16 @@ async def generate_image(
     retry: bool = True,
 ) -> bytes | None:
     """Generate an image via ComfyUI Animagine XL 3.1 and return PNG bytes."""
-    result = await _try_generate(prompt, width, height)
-    if result is None and retry:
-        logger.info("Image generation retry with new seed")
+    try:
         result = await _try_generate(prompt, width, height)
-    return result
+        if result is None and retry:
+            logger.info("Image generation retry — interrupting stale job and retrying")
+            await _interrupt_comfyui()
+            result = await _try_generate(prompt, width, height)
+        return result
+    finally:
+        # Always free VRAM after gen so LM Studio can reclaim it
+        await _free_comfyui_vram()
 
 
 async def _try_generate(prompt: str, width: int, height: int) -> bytes | None:
@@ -246,8 +379,8 @@ async def _try_generate(prompt: str, width: int, height: int) -> bytes | None:
         if not prompt_id:
             return None
 
-        # Poll for completion (up to 150s)
-        for _ in range(150):
+        # Poll for completion (up to 300s — first gen after model load can be slow)
+        for _ in range(300):
             await asyncio.sleep(1)
             r = await client.get(f"{COMFYUI_URL}/history/{prompt_id}")
             if r.status_code == 200:
@@ -271,7 +404,7 @@ async def _try_generate(prompt: str, width: int, height: int) -> bytes | None:
                                 return r2.content
                     return None
 
-        logger.warning("Image generation timed out")
+        logger.warning("Image generation timed out after 300s")
         return None
     except Exception as e:
         logger.error("Image generation failed: %s", e)

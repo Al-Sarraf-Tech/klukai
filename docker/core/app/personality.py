@@ -366,7 +366,14 @@ def assemble_system_prompt(
     level_config = _get_affection_level_config(p, affection_level)
     level_name = level_config.get("name", "Cold Assessment")
 
+    # Absolute rules (NEVER violate — injected before everything else)
+    abs_rules = p.get("absolute_rules", [])
+    abs_block = ""
+    if abs_rules:
+        abs_block = "ABSOLUTE RULES (never violate):\n" + "\n".join(f"- {r}" for r in abs_rules)
+
     blocks = [
+        abs_block,
         build_character_preamble(p, affection_level),
         build_character_rules(),
         build_pace_block(last_msg_length),
