@@ -54,6 +54,25 @@ _MODEL_TTL = 25 * 60  # 25 minutes — keep models loaded at least this long
 _KEEPALIVE_INTERVAL = 20 * 60  # Ping every 20 minutes to prevent eviction
 _model_last_used: dict[str, float] = {}
 
+# ── Idle auto-unload ──────────────────────────────────────────────────────
+# If no user message for IDLE_TIMEOUT seconds AND no active mission timer,
+# skip keepalive pings and let LM Studio evict models from VRAM.
+IDLE_TIMEOUT = 2 * 3600  # 2 hours
+_last_user_message: float = 0.0
+
+
+def mark_user_active() -> None:
+    """Record that a user message was just received (for idle unload)."""
+    global _last_user_message
+    _last_user_message = time.monotonic()
+
+
+def _is_user_idle() -> bool:
+    """True if no user message received for IDLE_TIMEOUT seconds."""
+    if _last_user_message == 0.0:
+        return False  # Never messaged yet — don't unload on fresh startup
+    return (time.monotonic() - _last_user_message) > IDLE_TIMEOUT
+
 
 def mark_model_used(model: str) -> None:
     """Record that a model was just used (for keepalive scheduling)."""
@@ -171,26 +190,31 @@ class LLMRouter:
             return False  # Need LM Studio for agent loop
 
         lower = message.lower()
+
+        # RP/conversational context words — if any are present, the message
+        # is almost certainly in-character and should NOT route to agent.
+        rp_context = any(w in lower for w in [
+            "you", "your", "klukai", "commander", "feel", "think",
+            "opinion", "favorite", "like", "hate", "they", "them",
+            "squad", "mission", "team", "soldier", "t-doll",
+            "remember", "discover", "did we", "did she", "did he",
+            "would", "could", "should", "shall",
+            "base", "hq", "camp", "sector", "area", "weapon",
+        ])
+
         for signal in AGENT_SIGNALS:
             if signal in lower:
+                # Even if signal matches, RP context overrides (e.g., "who is the squad leader?")
+                if rp_context:
+                    return False
                 return True
 
         # Question marks: only trigger agent if the question is clearly about
         # real-world external info, NOT in-character RP or conversational questions.
-        if "?" in message and any(
+        if "?" in message and not rp_context and any(
             w in lower for w in ["who is", "what is the price", "how much does",
                                   "how many people", "where is", "when did"]
         ):
-            # Must also NOT look like RP/conversational context
-            if any(w in lower for w in [
-                "you", "your", "klukai", "commander", "feel", "think",
-                "opinion", "favorite", "like", "hate", "they", "them",
-                "squad", "mission", "team", "soldier", "t-doll",
-                "remember", "discover", "did we", "did she", "did he",
-                "would", "could", "should", "shall",
-                "base", "hq", "camp", "sector", "area", "weapon",
-            ]):
-                return False
             return True
 
         return False
@@ -333,6 +357,8 @@ class LLMRouter:
         """Ping primary chat model to keep it loaded in LM Studio VRAM.
 
         Skips if a real request is already in-flight (model is warm by definition).
+        Also skips if the user has been idle for IDLE_TIMEOUT and no mission is active,
+        letting LM Studio evict models to free VRAM.
         """
         if lm_gate_busy():
             return  # Real request in progress — model is warm, skip ping
@@ -340,6 +366,13 @@ class LLMRouter:
             await self._ensure_lmstudio_fresh()
         if not self._lmstudio_available:
             return
+
+        # Auto-unload: skip keepalive when user is idle and no mission running
+        if _is_user_idle():
+            from .proactive import has_active_mission
+            if not has_active_mission():
+                logger.info("LLM idle unload: skipping keepalive, letting models evict")
+                return
 
         gate = get_lm_gate()
         for model in (LOCAL_CASUAL, "gemma-4-e2b-it"):

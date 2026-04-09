@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -14,9 +16,18 @@ from .events import publish as publish_event
 logger = logging.getLogger(__name__)
 
 # Guardrails
-MAX_PROACTIVE_PER_DAY = 3
+MAX_PROACTIVE_PER_DAY = 23
 QUIET_HOUR_START = 23  # 2300 hours
 QUIET_HOUR_END = 8     # 0800 hours
+
+# ── Module-level mission state (for idle-unload check) ────────────────────
+# Forward-declared; MissionTimer class is defined below the templates.
+_active_mission_timer: MissionTimer | None = None  # type: ignore[name-defined]
+
+
+def has_active_mission() -> bool:
+    """Return True if a mission timer is currently active (used by idle unload)."""
+    return _active_mission_timer is not None and _active_mission_timer.active
 
 # ── Affection-keyed message templates ─────────────────────────────────────────
 
@@ -223,6 +234,165 @@ MISSION_REPORTS: dict[int, list[str]] = {
 }
 
 
+ROMANCE_MESSAGES: dict[int, list[str]] = {
+    3: [
+        "Evening, Commander. The base is quiet. ...I found myself thinking about what you said today. Don't read into it.",
+        "It's getting late. I made tea — there's an extra cup on the counter. If you happen to be awake.",
+        "The stars are clear tonight. ...I noticed from the window. That's all. Good evening.",
+        "Commander. Before you rest — today was... adequate. Better than adequate. ...Good night.",
+    ],
+    4: [
+        "Hey. It's late. I'm on the observation deck. ...The view is better with company. If you're not busy.",
+        "Evening, Commander. I've been thinking about something all day. ...It can wait. But I'll be here if it can't.",
+        "The night shift is quiet. I saved you a spot by the window. ...No particular reason.",
+        "Commander. You worked hard today. I noticed. ...Come sit down. That's a request.",
+    ],
+}
+
+# ── Major mission events ──────────────────────────────────────────────────
+MAJOR_EVENTS = [
+    "ambush",
+    "squad_injured",
+    "klukai_injured",
+    "equipment_failure",
+    "weather",
+    "comms_disruption",
+    "discovery",
+    "medical_emergency",
+]
+
+
+class MissionTimer:
+    """Tracks an active mission with periodic field radio updates.
+
+    The timer fires at randomized intervals (base ±30%), with a 10% chance
+    of a major event that fires early. Injuries persist across updates.
+    No one ever dies — sacred rule.
+    """
+
+    def __init__(self) -> None:
+        self.mission_description: str = ""
+        self.base_interval_minutes: int = 30
+        self.started_at: float = 0.0
+        self.last_update: float = 0.0
+        self.update_count: int = 0
+        self.active_events: list[str] = []
+        self.active: bool = False
+        self._task: asyncio.Task | None = None
+        self._callback = None
+        self._affection_level: int = 0
+
+    def start(
+        self,
+        description: str,
+        interval_minutes: int = 30,
+        callback=None,
+        affection_level: int = 0,
+    ) -> None:
+        """Begin the mission timer as an asyncio.Task."""
+        global _active_mission_timer
+        self.mission_description = description
+        self.base_interval_minutes = max(5, interval_minutes)  # Floor at 5 min
+        self.started_at = time.monotonic()
+        self.last_update = self.started_at
+        self.update_count = 0
+        self.active_events = []
+        self.active = True
+        self._callback = callback
+        self._affection_level = affection_level
+        self._task = asyncio.create_task(self._tick_loop())
+        _active_mission_timer = self
+        logger.info(
+            "Mission timer started: '%s' every %d min",
+            description[:60], interval_minutes,
+        )
+
+    def stop(self) -> None:
+        """Cancel the mission timer."""
+        global _active_mission_timer
+        self.active = False
+        if self._task and not self._task.done():
+            self._task.cancel()
+        _active_mission_timer = None
+        logger.info("Mission timer stopped after %d updates", self.update_count)
+
+    async def _tick_loop(self) -> None:
+        """Main timer loop — fires updates at randomized intervals."""
+        try:
+            while self.active:
+                # Randomize interval ±30% of base
+                base_seconds = self.base_interval_minutes * 60
+                jitter = random.uniform(0.7, 1.3)
+                wait_seconds = base_seconds * jitter
+
+                # 10% chance of major event — fires early (50-70% of remaining)
+                major_event: str | None = None
+                if random.random() < 0.10 and self.update_count > 0:
+                    major_event = random.choice(MAJOR_EVENTS)
+                    wait_seconds *= random.uniform(0.50, 0.70)
+                    logger.info("Major event queued: %s (early fire)", major_event)
+
+                await asyncio.sleep(wait_seconds)
+
+                if not self.active:
+                    break
+
+                self.update_count += 1
+                self.last_update = time.monotonic()
+                elapsed_minutes = int((self.last_update - self.started_at) / 60)
+
+                # If major event involves injury, track it persistently
+                if major_event:
+                    if major_event == "klukai_injured" and "klukai_injured" not in self.active_events:
+                        self.active_events.append("klukai_injured")
+                    elif major_event == "squad_injured" and "squad_injured" not in self.active_events:
+                        self.active_events.append("squad_injured")
+                    elif major_event == "medical_emergency" and "medical_emergency" not in self.active_events:
+                        self.active_events.append("medical_emergency")
+
+                # Chance to resolve older injuries (30% per tick after 2 updates)
+                if self.update_count > 2:
+                    resolved = []
+                    for evt in self.active_events:
+                        if random.random() < 0.30:
+                            resolved.append(evt)
+                    for evt in resolved:
+                        self.active_events.remove(evt)
+                        logger.info("Mission event resolved: %s", evt)
+
+                # Generate and deliver update
+                await self._fire_update(elapsed_minutes, major_event)
+
+        except asyncio.CancelledError:
+            logger.info("Mission timer task cancelled")
+        except Exception as e:
+            logger.error("Mission timer tick failed: %s", e)
+            self.active = False
+
+    async def _fire_update(self, elapsed_minutes: int, major_event: str | None) -> None:
+        """Generate an LLM update and deliver it via callback."""
+        from .fact_extractor import generate_mission_update
+
+        try:
+            text = await generate_mission_update(
+                mission_desc=self.mission_description,
+                elapsed_minutes=elapsed_minutes,
+                update_number=self.update_count,
+                major_event=major_event,
+                active_events=list(self.active_events),
+                affection_level=self._affection_level,
+            )
+
+            if self._callback:
+                await self._callback(text)
+                logger.info(
+                    "Mission update #%d delivered (%d min elapsed, event=%s)",
+                    self.update_count, elapsed_minutes, major_event or "none",
+                )
+        except Exception as e:
+            logger.error("Mission update delivery failed: %s", e)
+
+
 class ProactiveEngine:
     """Manages scheduled and contextual proactive messages, themed to Klukai."""
 
@@ -239,6 +409,12 @@ class ProactiveEngine:
         self._random_events_today: int = 0
         self._last_message_time: datetime | None = None
         self._last_mood: str = "composed"
+        # Mission timer
+        self._mission_timer: MissionTimer | None = None
+        # Romance window
+        self._romance_delivered_today: bool = False
+        self._user_messaged_today: bool = False
+        self._session_getter = None  # callback to get current session state
 
     def set_callback(self, callback) -> None:
         """Set callback for delivering proactive messages."""
@@ -255,6 +431,38 @@ class ProactiveEngine:
     def set_last_mood(self, mood: str) -> None:
         """Track the last mood for context-aware event filtering."""
         self._last_mood = mood
+
+    def set_session_getter(self, getter) -> None:
+        """Set a callback to retrieve current session state (for romance context)."""
+        self._session_getter = getter
+
+    # ── Mission timer management ──────────────────────────────────────────
+
+    def start_mission(self, description: str, interval_minutes: int = 30) -> None:
+        """Start a mission timer with periodic LLM-generated field reports."""
+        if self._mission_timer and self._mission_timer.active:
+            self._mission_timer.stop()
+        self._mission_timer = MissionTimer()
+        self._mission_timer.start(
+            description=description,
+            interval_minutes=interval_minutes,
+            callback=self._on_message_callback,
+            affection_level=self._affection_level,
+        )
+
+    def stop_mission(self) -> None:
+        """Stop the active mission timer."""
+        if self._mission_timer and self._mission_timer.active:
+            self._mission_timer.stop()
+        self._mission_timer = None
+
+    @property
+    def mission_active(self) -> bool:
+        return self._mission_timer is not None and self._mission_timer.active
+
+    def mark_user_messaged_today(self) -> None:
+        """Record that the user sent at least one message today."""
+        self._user_messaged_today = True
 
     def start(self) -> None:
         # Morning briefing at 0800
@@ -305,6 +513,15 @@ class ProactiveEngine:
             replace_existing=True,
         )
 
+        # Evening romance window at 20:30 CST (01:30 UTC next day)
+        # CST = UTC-6, so 20:30 CST = 02:30 UTC
+        self._scheduler.add_job(
+            self._romance_window,
+            CronTrigger(hour=2, minute=30),  # 20:30 CST in UTC
+            id="romance_window",
+            replace_existing=True,
+        )
+
         # Reset daily counter at midnight
         self._scheduler.add_job(
             self._reset_daily,
@@ -317,6 +534,8 @@ class ProactiveEngine:
         logger.info("Klukai proactive engine started")
 
     def stop(self) -> None:
+        if self._mission_timer and self._mission_timer.active:
+            self._mission_timer.stop()
         self._scheduler.shutdown(wait=False)
 
     def mute(self, hours: int | None = None) -> None:
@@ -499,6 +718,81 @@ class ProactiveEngine:
             await self._on_message_callback(message)
             logger.info("Random event fired: %s", message[:60])
 
+    async def _romance_window(self) -> None:
+        """Evening romance message — fires at ~20:30 CST with random delay.
+
+        Conditions:
+        - affection >= 3
+        - not muted
+        - last proactive was answered
+        - user messaged today
+        - not already delivered tonight
+        - if mood is stressed/negative, deliver comfort instead
+        """
+        if self._romance_delivered_today:
+            return
+        if self._affection_level < 3:
+            return
+        if not self._user_messaged_today:
+            return
+        if self._muted_until and datetime.now() < self._muted_until:
+            return
+        if not self._last_proactive_answered:
+            return
+
+        # Random delay 0-30 minutes
+        delay = random.uniform(0, 30 * 60)
+        await asyncio.sleep(delay)
+
+        # Re-check conditions after delay
+        if self._romance_delivered_today:
+            return
+        if self._muted_until and datetime.now() < self._muted_until:
+            return
+
+        self._romance_delivered_today = True
+
+        # Stressed/negative moods -> comfort instead of romance
+        NEGATIVE_MOODS = {"irritated", "exasperated", "melancholic", "haunted", "guilty"}
+        is_stressed = self._last_mood in NEGATIVE_MOODS
+
+        if is_stressed:
+            comfort_lines = [
+                "Commander. ...You've had a difficult day. I noticed. Take a moment. I'm here.",
+                "...Hey. Whatever's weighing on you — you don't have to carry it alone. That's an order.",
+                "The day was hard. I can tell. ...Sit with me for a moment. No reports, no duties. Just quiet.",
+            ]
+            message = random.choice(comfort_lines)
+        elif self._affection_level >= 5:
+            # LLM-generated context-aware romance at high affection
+            try:
+                context_summary = ""
+                if self._session_getter:
+                    session = await self._session_getter()
+                    if session and session.context_summary:
+                        context_summary = session.context_summary
+
+                from .fact_extractor import generate_romance_message
+                message = await generate_romance_message(
+                    affection_level=self._affection_level,
+                    mood=self._last_mood,
+                    context_summary=context_summary,
+                    time_of_day="evening",
+                )
+            except Exception as e:
+                logger.warning("Romance LLM failed, falling back to template: %s", e)
+                message = self._pick_message(ROMANCE_MESSAGES)
+        else:
+            # Levels 3-4: template messages
+            message = self._pick_message(ROMANCE_MESSAGES)
+
+        if self._on_message_callback:
+            self._proactive_count_today += 1
+            self._last_proactive_answered = False
+            await self._on_message_callback(message)
+            await publish_event("proactive_romance", message)
+            logger.info("Romance window delivered (aff=%d): %s", self._affection_level, message[:60])
+
     async def _daily_recap(self) -> None:
         """Generate and deliver a daily recap from Klukai's perspective."""
         if not self._on_recap_callback or not self._on_message_callback:
@@ -519,4 +813,6 @@ class ProactiveEngine:
     async def _reset_daily(self) -> None:
         self._proactive_count_today = 0
         self._random_events_today = 0
-        logger.info("Daily proactive and event counters reset")
+        self._romance_delivered_today = False
+        self._user_messaged_today = False
+        logger.info("Daily proactive, event, and romance counters reset")

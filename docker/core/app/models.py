@@ -146,3 +146,7 @@ class SessionState(BaseModel):
     active_topic: str | None = None
     turn_count: int = 0
     last_activity: datetime = Field(default_factory=datetime.now)
+    # Mission timer state (survives Redis restores)
+    mission_description: str | None = None
+    mission_interval: int | None = None  # minutes
+    mission_started_at: str | None = None  # ISO timestamp

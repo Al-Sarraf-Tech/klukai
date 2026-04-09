@@ -214,6 +214,150 @@ async def create_episode_summary(
         return None
 
 
+MISSION_UPDATE_PROMPT = """\
+You are Klukai (AR Team squad leader, T-Doll) writing a 2-3 sentence field radio \
+report to the Commander during an active mission. The Commander is HUMAN (male). \
+He is NOT a T-Doll. Write in first person as Klukai over radio comms.
+
+Mission: {mission_desc}
+Time in field: {elapsed_minutes} minutes
+Update #{update_number}
+{event_line}
+{injury_line}
+
+Rules:
+- Keep it 2-3 sentences. This is a field radio report, not a novel.
+- No one dies. Injuries are temporary. The squad always recovers.
+- If Klukai is injured, she downplays it ("It's nothing, Commander. Flesh wound.")
+- If a major event is happening, the tone is urgent and dramatic.
+- Reference the specific mission objective when relevant.
+- Affection level {affection_level}/9 — higher means more personal concern for Commander.\
+"""
+
+ROMANCE_MESSAGE_PROMPT = """\
+You are Klukai (AR Team squad leader, T-Doll) initiating a quiet, intimate evening \
+moment with the Commander. The Commander is HUMAN (male). He is NOT a T-Doll. \
+Write in first person as Klukai. It is {time_of_day}.
+
+Current mood: {mood}
+Affection level: {affection_level}/9
+Today's context: {context_summary}
+
+Rules:
+- Write 2-3 sentences. This is a soft, evening message — not a mission report.
+- Reference something from today's interactions if possible.
+- Tone varies: level 5-6 = warm but guarded, level 7+ = openly intimate.
+- Include subtle physical/environmental details (stars, quiet base, warm drink).
+- Never break character. Never use Commander's real name. Always "Commander".\
+"""
+
+
+async def generate_mission_update(
+    mission_desc: str,
+    elapsed_minutes: int,
+    update_number: int,
+    major_event: str | None,
+    active_events: list[str],
+    affection_level: int,
+) -> str:
+    """Generate an in-character field radio report for an active mission timer.
+
+    Uses gemma-4-e2b-it through the global LM Studio gate.
+    """
+    event_line = f"MAJOR EVENT IN PROGRESS: {major_event}" if major_event else "Situation nominal."
+    injury_line = ""
+    if active_events:
+        injury_line = "Active situations: " + ", ".join(active_events)
+
+    prompt = MISSION_UPDATE_PROMPT.format(
+        mission_desc=mission_desc,
+        elapsed_minutes=elapsed_minutes,
+        update_number=update_number,
+        event_line=event_line,
+        injury_line=injury_line,
+        affection_level=affection_level,
+    )
+
+    try:
+        from .llm_router import get_lm_gate
+
+        gate = get_lm_gate()
+        async with gate:
+            client = _get_http()
+            r = await client.post(
+                f"{LM_STUDIO_URL}/v1/chat/completions",
+                json={
+                    "model": EXTRACTION_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 150,
+                    "temperature": 0.6,
+                    "stream": False,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            choices = data.get("choices", [])
+            if not choices:
+                logger.warning("Mission update LLM returned empty choices")
+                return "...Static on the line. Update delayed. Standing by."
+            content = (choices[0].get("message", {}).get("content") or "").strip()
+            # Strip think tags if present
+            import re
+            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+            return content or "...Comms interference. Update delayed."
+    except Exception as e:
+        logger.warning("Mission update generation failed (%s): %s", type(e).__name__, e)
+        return "...Static on the line. Will retry comms shortly."
+
+
+async def generate_romance_message(
+    affection_level: int,
+    mood: str,
+    context_summary: str,
+    time_of_day: str,
+) -> str:
+    """Generate a context-aware evening romance message from Klukai.
+
+    Uses gemma-4-e2b-it through the global LM Studio gate.
+    """
+    prompt = ROMANCE_MESSAGE_PROMPT.format(
+        affection_level=affection_level,
+        mood=mood,
+        context_summary=context_summary or "A routine day at base.",
+        time_of_day=time_of_day,
+    )
+
+    try:
+        from .llm_router import get_lm_gate
+
+        gate = get_lm_gate()
+        async with gate:
+            client = _get_http()
+            r = await client.post(
+                f"{LM_STUDIO_URL}/v1/chat/completions",
+                json={
+                    "model": EXTRACTION_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 200,
+                    "temperature": 0.7,
+                    "stream": False,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            choices = data.get("choices", [])
+            if not choices:
+                logger.warning("Romance message LLM returned empty choices")
+                return "...The base is quiet tonight. I was thinking of you."
+            content = (choices[0].get("message", {}).get("content") or "").strip()
+            import re
+            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+            return content or "...It's a quiet evening. I wanted to check in."
+    except Exception as e:
+        logger.warning("Romance message generation failed (%s): %s", type(e).__name__, e)
+        return "...The evening is quiet. I was thinking about today."
+
+
 COMPACTION_PROMPT = """\
 You are Klukai's memory compactor. Summarize this conversation segment into a brief \
 3-4 sentence recap preserving: key topics discussed, Commander's requests or emotional \

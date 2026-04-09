@@ -28,38 +28,60 @@ def _get_http() -> httpx.AsyncClient:
 # Core identity is FIXED (face, hair, body). Outfit is selected per-scene.
 KLUKAI_IDENTITY = (
     "1girl, hk416 \\(girls' frontline\\), silver hair, green eyes, long hair, ponytail, "
-    "hair ornament, girls' frontline, slim waist, athletic body, toned, slender figure, long legs"
+    "hair ornament, girls' frontline, slim waist, athletic body, toned, slender figure, "
+    "long legs, beautiful detailed eyes, light blush, detailed skin, "
+    "perfect anatomy, delicate collarbone, navel, medium breasts, elegant neck, "
+    "soft lips, detailed face, expressive eyes, eyelashes"
 )
 KLUKAI_DEFAULT_OUTFIT = "tactical clothes, black gloves, thighhighs, military"
 
 # Scene-appropriate outfits — matched by keyword in conversation context
 OUTFIT_MAP = {
-    "bed": "white camisole, bare shoulders, relaxed",
-    "sleep": "oversized t-shirt, bare legs, relaxed",
-    "morning": "oversized t-shirt, messy hair, bare legs",
-    "bath": "towel, wet hair, bare shoulders, steam",
-    "beach": "white bikini, sarong, sandals",
-    "swim": "one-piece swimsuit, wet hair",
-    "date": "black dress, elegant, off-shoulder, heels, jewelry",
-    "cafe": "casual blouse, skirt, relaxed fashion",
-    "cooking": "apron over casual clothes, rolled sleeves",
-    "cook": "apron over casual clothes, rolled sleeves",
-    "training": "sports bra, compression shorts, sweat, athletic tape",
-    "workout": "sports bra, compression shorts, sweat, athletic tape",
-    "working out": "sports bra, compression shorts, sweat, athletic tape",
-    "exercise": "sports bra, compression shorts, sweat",
-    "gym": "sports bra, compression shorts, sweat",
-    "casual": "off-shoulder sweater, jeans, sneakers",
-    "home": "oversized hoodie, shorts, comfortable",
-    "rain": "long coat, scarf, boots, umbrella",
-    "snow": "winter coat, scarf, boots, gloves, warm breath",
-    "motorcycle": "leather jacket, boots, wind-blown hair",
-    "formal": "military dress uniform, medals, pristine",
-    "dress": "elegant dress, jewelry, formal",
+    # Intimate / risque
+    "bed": "black lace lingerie, bare shoulders, lying on bed, seductive pose, soft lighting",
+    "sleep": "sheer nightgown, bare legs, messy hair, sleepy, soft fabric",
+    "morning": "oversized white shirt, bare legs, no pants, messy hair, sunlight through window",
+    "bath": "bare shoulders, steam, wet skin, towel barely covering, water droplets, onsen",
+    "underwear": "black lace bra, panties, confident pose, bare midriff, bedroom",
+    "lingerie": "black lace lingerie, garter belt, thighhighs, seductive, elegant",
+    "intimate": "sheer negligee, bare shoulders, soft lighting, vulnerability, bedroom",
+    "tender": "white camisole, bare shoulders, soft expression, intimate lighting",
+    "night": "silk slip dress, bare shoulders, moonlight, intimate, hair down",
+    "love": "sheer nightgown, close together, intimate, warm lighting, vulnerable",
+    "close": "white camisole, bare shoulders, gentle expression, close distance",
+    "hold": "oversized shirt, bare legs, clinging, close together, warm",
+    "cuddle": "tank top, shorts, bare legs, cuddling, blankets, warm, comfortable",
+    "kiss": "elegant lingerie, close up, eyes closed, romantic, intimate",
+    # Beach / swim
+    "beach": "white string bikini, sarong, sun-kissed skin, ocean, wet",
+    "swim": "one-piece swimsuit, wet hair, water droplets, pool",
+    # Date / elegant
+    "date": "black backless dress, elegant, high slit, heels, jewelry, updo, evening",
+    "dinner": "wine red dress, off-shoulder, candlelight, classy, romantic",
+    "cafe": "cropped top, high-waist skirt, casual chic, sitting, coffee",
+    # Active / athletic
+    "cooking": "apron only, bare shoulders, kitchen, steam, playful",
+    "cook": "apron only, bare shoulders, kitchen, steam, playful",
+    "training": "sports bra, compression shorts, sweat, athletic tape, toned abs visible",
+    "workout": "sports bra, compression shorts, sweat, toned abs, athletic",
+    "working out": "sports bra, compression shorts, sweat, toned abs, athletic",
+    "exercise": "sports bra, bike shorts, sweat, gym, determined",
+    "gym": "sports bra, bike shorts, sweat, toned midriff, gym",
+    # Casual / home
+    "casual": "off-shoulder sweater, no bra, jeans, sneakers, relaxed",
+    "home": "oversized hoodie, panties, bare legs, comfortable, lazy",
+    "relax": "tank top, shorts, bare feet, comfortable, cozy",
+    # Weather / outdoor
+    "rain": "wet white shirt, clinging fabric, rain, umbrella, see-through",
+    "snow": "winter coat, scarf, thigh-high boots, warm breath, cozy",
+    "motorcycle": "leather jacket, unzipped, crop top underneath, boots, wind-blown hair",
+    # Military / formal
+    "formal": "military dress uniform, medals, pristine, sharp",
+    "dress": "elegant evening gown, high slit, backless, jewelry, sophisticated",
     "uniform": "tactical clothes, black gloves, thighhighs, military",
-    "battle": "tactical gear, body armor, combat vest, rifle",
-    "fight": "tactical gear, body armor, combat vest, rifle",
-    "patrol": "tactical clothes, black gloves, thighhighs, military, alert",
+    "battle": "tactical gear, body armor, combat vest, rifle, intense",
+    "fight": "tactical gear, torn clothes, battle damage, sweat, fierce",
+    "patrol": "tactical clothes, thighhighs, military, alert, night",
 }
 
 COMMANDER_IDENTITY = (
@@ -69,23 +91,34 @@ COMMANDER_IDENTITY = (
 COMMANDER_DEFAULT_OUTFIT = "military uniform, commander, jacket"
 
 COMMANDER_OUTFIT_MAP = {
-    "bed": "shirtless, bare chest, relaxed",
-    "sleep": "t-shirt, casual pants",
-    "morning": "t-shirt, messy hair",
-    "bath": "towel, bare chest, wet hair",
-    "beach": "swim trunks, bare chest, sunglasses",
-    "date": "dress shirt, slacks, rolled sleeves",
-    "cafe": "casual jacket, t-shirt, jeans",
-    "casual": "hoodie, jeans, sneakers",
-    "home": "t-shirt, sweatpants, relaxed",
-    "training": "tank top, athletic shorts, sweat",
-    "workout": "tank top, athletic shorts, sweat",
-    "motorcycle": "leather jacket, jeans, boots",
-    "formal": "military dress uniform, medals",
-    "rain": "long coat, boots",
+    "bed": "shirtless, bare chest, muscular, relaxed, lying down",
+    "sleep": "shirtless, casual pants, relaxed",
+    "morning": "shirtless, messy hair, morning light",
+    "bath": "towel, bare chest, wet hair, muscular",
+    "underwear": "shirtless, boxers, muscular, relaxed",
+    "lingerie": "shirtless, bare chest, muscular",
+    "intimate": "shirtless, bare chest, close distance",
+    "tender": "open shirt, bare chest, gentle",
+    "night": "open shirt, bare chest, moonlight",
+    "love": "shirtless, close together, intimate",
+    "close": "open shirt, gentle expression",
+    "hold": "t-shirt, strong arms, holding",
+    "cuddle": "t-shirt, comfortable, close",
+    "kiss": "open shirt, close up, romantic",
+    "beach": "swim trunks, bare chest, muscular, sun-kissed",
+    "date": "fitted dress shirt, slacks, rolled sleeves, watch, sharp",
+    "dinner": "dark suit, no tie, open collar, candlelight",
+    "cafe": "casual jacket, fitted t-shirt, jeans",
+    "casual": "henley shirt, jeans, sneakers, relaxed",
+    "home": "t-shirt, sweatpants, relaxed, comfortable",
+    "training": "tank top, athletic shorts, sweat, muscular arms",
+    "workout": "tank top, athletic shorts, sweat, muscular",
+    "motorcycle": "leather jacket, jeans, boots, confident",
+    "formal": "military dress uniform, medals, sharp",
+    "rain": "wet shirt, clinging fabric, rain",
     "snow": "winter jacket, scarf, boots",
-    "battle": "tactical vest, combat gear, helmet",
-    "fight": "tactical vest, combat gear",
+    "battle": "tactical vest, combat gear, intense",
+    "fight": "tactical vest, torn shirt, battle worn",
 }
 
 COUPLE_TAGS = "couple, 1boy, 1girl, hetero"
@@ -99,13 +132,92 @@ COUPLE_KEYWORDS = [
 ]
 
 # Squad member detection for multi-character scenes
+# Rich visual profiles — weapon designation IS the character identity
 SQUAD_KEYWORDS = {
-    "mechty": "1girl, green hair, sleepy expression, lazy pose, military uniform, g11",
-    "belka": "1girl, blonde hair, energetic, younger sister, military uniform",
-    "andoris": "1girl, dark hair, glasses, professional, intel specialist, military uniform",
-    "leva": "1girl, brown hair, tactical vest, confident pose, leader aura, ump45",
+    "mechty": "1girl, g11 \\(girls' frontline\\), short brown hair, green eyes, sleepy expression, half-lidded eyes, oversized tactical hoodie, G11 rifle, petite, lazy pose",
+    "belka": "1girl, blonde hair, blue-green eyes, energetic, youthful, idol-like, tactical gear, assault rifle, cheerful expression",
+    "andoris": "1girl, long dark hair, amber eyes, professional, elegant, intelligence specialist, tactical vest, handgun, composed expression",
+    "leva": "1girl, ump45 \\(girls' frontline\\), brown hair, tactical vest, confident pose, leader aura, UMP45 SMG, scar over left eye",
+    "lenna": "1girl, ump9 \\(girls' frontline\\), light brown hair, cheerful, gentle expression, UMP9 SMG",
+    "vector": "1girl, vector \\(girls' frontline\\), short black hair, red eyes, stoic, silent, Vector SMG, lethal aura",
+    "harpsy": "1girl, colorful hair accessories, cheerful, bright personality, tactical gear",
+    "ruchey": "1girl, small build, short stature, nimble, tactical gear, alert expression",
+    "welrod": "1girl, welrod \\(girls' frontline\\), elegant, sophisticated, british aesthetic, Welrod pistol, calm demeanor, silenced weapon",
     "groza": "1girl, dark hair, elegant, military, ots-14",
 }
+
+# ── Mission-aware image generation ────────────────────────────────────────
+
+MISSION_SCENE_TAGS = {
+    "combat": "combat, gunfire, muzzle flash, debris, tactical formation, explosions in background, intense, action pose",
+    "patrol": "patrol, night operation, NVGs, tactical movement, stealth, dark environment, moonlight",
+    "ambush": "ambush, taking cover, return fire, smoke, urgent, diving for cover, bullets",
+    "field_camp": "field camp, tent, campfire, night, equipment laid out, resting between ops",
+    "injury": "field medical, bandaging wounds, blood, torn clothing, determined expression, still fighting",
+    "discovery": "discovery, examining artifact, ancient tech, glowing object, curious, cautious",
+    "weather": "heavy rain, storm, wind, wet clothing, persevering, lightning in background",
+    "comms": "radio equipment, static, adjusting antenna, focused, signal disruption",
+    "extraction": "extraction, helicopter in distance, running, carrying equipment, urgent, dust",
+    "group_photo": "group photo, squad together, team formation, military pose, camaraderie",
+    "victory": "victory, mission complete, relieved, exhausted but smiling, sun rising",
+}
+
+
+def detect_squad_members(text: str) -> list[str]:
+    """Detect which squad members are mentioned in the text."""
+    lower = text.lower()
+    found = []
+    for name in SQUAD_KEYWORDS:
+        if name in lower:
+            found.append(name)
+    return found
+
+
+def build_mission_prompt(
+    scene_type: str = "combat",
+    squad_members: list[str] | None = None,
+    injuries: list[str] | None = None,
+    affection_level: int = 0,
+) -> str:
+    """Build an image prompt for mission-context scenes.
+
+    Args:
+        scene_type: Key from MISSION_SCENE_TAGS.
+        squad_members: List of squad member names to include.
+        injuries: Active injury events (e.g., ["klukai_injured", "squad_injured"]).
+        affection_level: 0-9, affects Klukai's expression.
+    """
+    parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
+
+    # Klukai is always in mission images
+    parts.append(KLUKAI_IDENTITY)
+    parts.append("tactical gear, body armor, combat vest, rifle, intense")
+
+    # Add injury tags to Klukai if she's hurt
+    if injuries and "klukai_injured" in injuries:
+        parts.append("bandaged arm, torn sleeve, blood stains, determined expression, still commanding")
+
+    # Add squad members
+    if squad_members:
+        for name in squad_members[:3]:  # Max 3 extra characters to avoid crowding
+            if name in SQUAD_KEYWORDS:
+                parts.append(SQUAD_KEYWORDS[name])
+        # Add injury tags to generic squad if injured
+        if injuries and "squad_injured" in injuries:
+            parts.append("injured teammate, field bandages, supporting each other")
+        if injuries and "medical_emergency" in injuries:
+            parts.append("field medic, treating wounds, urgent medical attention")
+
+    # Scene tags
+    scene = MISSION_SCENE_TAGS.get(scene_type, MISSION_SCENE_TAGS["combat"])
+    parts.append(scene)
+
+    # Multi-girl tag if squad members present
+    if squad_members:
+        count = len(squad_members) + 1  # +1 for Klukai
+        parts.append(f"{count}girls, multiple girls, group")
+
+    return ", ".join(parts)
 
 # Situational context tags — detect what's happening in the conversation
 SITUATION_KEYWORDS = {
@@ -126,14 +238,20 @@ SITUATION_KEYWORDS = {
     "gift": "gift box, ribbon, surprise, happy, blushing",
 }
 
-QUALITY_TAGS = "masterpiece, best quality, very aesthetic, absurdres"
+QUALITY_TAGS = (
+    "masterpiece, best quality, very aesthetic, absurdres, ultra-detailed, "
+    "beautiful lighting, depth of field, sharp focus, cinematic composition, "
+    "vivid colors, professional, high resolution, intricate details, "
+    "ambient occlusion, volumetric lighting, film grain"
+)
 NEGATIVE_TAGS = (
     "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, "
     "fewer digits, cropped, worst quality, low quality, normal quality, "
     "jpeg artifacts, signature, watermark, username, blurry, artist name, "
-    "deformed, ugly, duplicate, morbid, mutilated, "
+    "deformed, ugly, duplicate, morbid, mutilated, extra limbs, "
     "thick thighs, wide hips, chubby, plump, fat, overweight, huge breasts, "
-    "androgynous, feminine boy, crossdressing, male in female clothes"
+    "androgynous, feminine boy, crossdressing, male in female clothes, "
+    "flat chest, child, loli, shota"
 )
 
 KLUKAI_LORA = "Klukai_GFL2_IL-03.safetensors"
@@ -261,6 +379,7 @@ def build_prompt(
     couple: bool = False,
     affection_level: int = 0,
     context: str = "",
+    squad_members: list[str] | None = None,
 ) -> str:
     """Build the full positive prompt with quality tags, LoRA trigger, and character identities.
 
@@ -269,6 +388,7 @@ def build_prompt(
         couple: Whether to include the Commander.
         affection_level: 0-9, affects mood expression tags.
         context: Recent conversation text for outfit selection.
+        squad_members: Optional list of squad member names to include in the scene.
     """
     parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
 
@@ -289,6 +409,16 @@ def build_prompt(
     else:
         parts.append(KLUKAI_IDENTITY)
     parts.append(klukai_outfit)
+
+    # Add squad members if specified
+    if squad_members:
+        for name in squad_members[:3]:  # Max 3 to avoid overcrowding
+            if name in SQUAD_KEYWORDS:
+                parts.append(SQUAD_KEYWORDS[name])
+        total_girls = 1 + len([n for n in squad_members if n in SQUAD_KEYWORDS])
+        if total_girls > 1:
+            parts.append(f"{total_girls}girls, multiple girls")
+
     parts.append(scene_tags)
     return ", ".join(parts)
 

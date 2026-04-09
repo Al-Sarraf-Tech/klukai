@@ -60,6 +60,14 @@ RECALL_KEYWORDS = [
 SAVE_KEYWORDS = ["save that", "keep this", "keep that", "save this"]
 DISCARD_KEYWORDS = ["delete that", "remove this", "discard that", "forget that"]
 
+# Mission timer detection
+MISSION_START_KEYWORDS = [
+    "updates every", "report every", "keep me posted", "status every", "check in every",
+]
+MISSION_CANCEL_KEYWORDS = [
+    "stop updates", "cancel updates", "enough updates", "stand down", "stop reporting",
+]
+
 # Trivial messages that don't need fact extraction or affection classification
 TRIVIAL_PATTERNS = {
     "ok", "okay", "yes", "no", "yeah", "yep", "nope", "sure", "thanks",
@@ -75,6 +83,43 @@ COMPACT_KEEP_RAW = 4  # Keep this many recent turns verbatim after compaction
 def _wants_recall(message: str) -> bool:
     lower = message.lower()
     return any(kw in lower for kw in RECALL_KEYWORDS)
+
+
+def _wants_mission_start(message: str) -> bool:
+    lower = message.lower()
+    return any(kw in lower for kw in MISSION_START_KEYWORDS)
+
+
+def _wants_mission_cancel(message: str) -> bool:
+    lower = message.lower()
+    return any(kw in lower for kw in MISSION_CANCEL_KEYWORDS)
+
+
+def _parse_interval_minutes(message: str) -> int:
+    """Extract an interval in minutes from a message like 'every 30 minutes' or 'every 1 hour'."""
+    import re
+    lower = message.lower()
+
+    # Match "every N minutes/min"
+    m = re.search(r'every\s+(\d+)\s*(?:min(?:ute)?s?)', lower)
+    if m:
+        return max(5, int(m.group(1)))
+
+    # Match "every N hours/hr"
+    m = re.search(r'every\s+(\d+)\s*(?:hour|hr)s?', lower)
+    if m:
+        return max(5, int(m.group(1)) * 60)
+
+    # Match "every an hour" / "every hour"
+    if re.search(r'every\s+(?:an?\s+)?hour', lower):
+        return 60
+
+    # Match "every half hour"
+    if "half hour" in lower or "half an hour" in lower:
+        return 30
+
+    # Default: 30 minutes
+    return 30
 
 
 # ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -175,6 +220,7 @@ async def lifespan(app: FastAPI):
     await affection.init()
     proactive.set_callback(proactive_callback)
     proactive.set_recap_callback(generate_daily_recap)
+    proactive.set_session_getter(lambda: memory.get_session(SESSION_ID))
     proactive.start()
     await events_init()
     load_personality()
@@ -516,6 +562,23 @@ async def api_memory_categories():
     return await memory_archive.get_categories(aff.level)
 
 
+@app.post("/api/memories/backfill-annotations")
+async def api_backfill_annotations():
+    """Trigger annotation backfill for memories with NULL/empty annotations.
+
+    Runs as a background task so the request returns immediately.
+    """
+    async def _run_backfill():
+        try:
+            result = await memory_archive.backfill_annotations()
+            logger.info("Annotation backfill finished: %s", result)
+        except Exception as e:
+            logger.error("Annotation backfill task failed: %s", e)
+
+    asyncio.create_task(_run_backfill())
+    return {"status": "started", "message": "Annotation backfill running in background."}
+
+
 @app.get("/api/memories/{memory_id}/image")
 async def api_memory_image(memory_id: str):
     from fastapi.responses import Response
@@ -596,6 +659,16 @@ async def websocket_endpoint(websocket: WebSocket):
     if restored_mood != "composed":
         await ws.send_mood(user_id, restored_mood)
 
+    # Restore mission timer from session if it was active before disconnect
+    if session.mission_description and session.mission_interval and not proactive.mission_active:
+        aff_state = await affection.get_state()
+        proactive.set_affection_level(aff_state.level)
+        proactive.start_mission(session.mission_description, session.mission_interval)
+        logger.info(
+            "Mission timer restored from session: every %d min",
+            session.mission_interval,
+        )
+
     try:
         while True:
             data = await ws.receive(user_id)
@@ -625,8 +698,43 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     if not content.strip():
         return
 
+    # Track user activity for idle unload + romance window
+    from .llm_router import mark_user_active
+    mark_user_active()
+    proactive.mark_user_messaged_today()
+
     start = time.monotonic()
     proactive.mark_responded()
+
+    # ── Mission timer detection ───────────────────────────────────────────
+    if _wants_mission_cancel(content):
+        if proactive.mission_active:
+            proactive.stop_mission()
+            # Clear session mission state
+            session.mission_description = None
+            session.mission_interval = None
+            session.mission_started_at = None
+            await memory.save_session(SESSION_ID, session)
+            logger.info("Mission timer cancelled by user")
+        # Don't return — let the message go through to get an in-character response
+
+    elif _wants_mission_start(content):
+        interval = _parse_interval_minutes(content)
+        # Use last few turns as mission context
+        recent = session.turns[-4:] if session.turns else []
+        mission_desc = " ".join(t.get("content", "")[:100] for t in recent if t.get("role") == "user")
+        if not mission_desc:
+            mission_desc = content
+
+        aff_state = await affection.get_state()
+        proactive.start_mission(mission_desc, interval)
+
+        # Persist mission state in session so it survives Redis restores
+        session.mission_description = mission_desc
+        session.mission_interval = interval
+        session.mission_started_at = datetime.now().isoformat()
+        await memory.save_session(SESSION_ID, session)
+        logger.info("Mission timer started: every %d min, desc='%s'", interval, mission_desc[:60])
 
     # Add user turn to session
     session = await memory.add_turn(SESSION_ID, "user", content, session)
@@ -800,8 +908,13 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
                 f"{t['role']}: {t['content'][:200]}" for t in recent_turns
             )
             image_triggered = True
+            # Detect squad members mentioned for multi-character scenes
+            from .image_gen import detect_squad_members
+            mentioned_squad = detect_squad_members(f"{content} {chat_ctx}")
             # _background_image_gen sets _last_memory_id; we'll read it in extraction
-            asyncio.create_task(_background_image_gen(content, chat_context=chat_ctx))
+            asyncio.create_task(_background_image_gen(
+                content, chat_context=chat_ctx, squad_members=mentioned_squad,
+            ))
 
     # Background: extract facts and create episodes
     # Skip extraction for trivial messages (no facts to extract, saves a full LLM round-trip)
@@ -1048,7 +1161,11 @@ async def _background_compaction(session: SessionState) -> None:
         logger.error("Background compaction failed: %s", e)
 
 
-async def _background_image_gen(user_request: str, chat_context: str = "") -> None:
+async def _background_image_gen(
+    user_request: str,
+    chat_context: str = "",
+    squad_members: list[str] | None = None,
+) -> None:
     """Generate an anime image based on the user's request and recent chat context."""
     from .image_gen import check_comfyui_ready
 
@@ -1075,7 +1192,8 @@ async def _background_image_gen(user_request: str, chat_context: str = "") -> No
 
         scene_tags = _enhance_image_prompt(full_context, couple=couple)
         full_prompt = build_prompt(
-            scene_tags, couple=couple, affection_level=aff_level, context=full_context,
+            scene_tags, couple=couple, affection_level=aff_level,
+            context=full_context, squad_members=squad_members,
         )
         logger.info("Image prompt (aff=%d): %s", aff_level, full_prompt[:300])
 

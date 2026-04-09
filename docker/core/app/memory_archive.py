@@ -5,14 +5,29 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import uuid
 from pathlib import Path
 
+import httpx
 from PIL import Image
 
 from .db import get_conn, get_conn_autocommit
 
 logger = logging.getLogger(__name__)
+
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
+EXTRACTION_MODEL = "gemma-4-e2b-it"
+
+# Shared httpx client for LM Studio calls
+_http: httpx.AsyncClient | None = None
+
+
+def _get_http() -> httpx.AsyncClient:
+    global _http
+    if _http is None or _http.is_closed:
+        _http = httpx.AsyncClient(timeout=60.0)
+    return _http
 
 IMAGES_DIR = Path(os.environ.get("IMAGES_DIR", "/images"))
 
@@ -89,6 +104,15 @@ async def save_image(
             valid = available_categories(affection_level)
             if category not in valid:
                 category = valid[-1] if valid else "Mission Records"
+
+        # Ensure annotation is never NULL — every image must have text
+        if not annotation:
+            logger.warning(
+                "Memory %s saved without annotation (prompt=%s). "
+                "Using default placeholder.",
+                memory_id, prompt[:80],
+            )
+            annotation = "Uncaptioned moment."
 
         # Store metadata
         async with get_conn_autocommit() as conn:
@@ -179,7 +203,7 @@ async def list_memories(
                     "id": str(r[0]),
                     "filename": r[1],
                     "thumb_filename": r[2],
-                    "annotation": r[3],
+                    "annotation": r[3] or "",
                     "scene_tags": r[4] or [],
                     "mood": r[5],
                     "affection_level": r[6],
@@ -340,8 +364,115 @@ def _row_to_dict(r) -> dict:
     return {
         "id": str(r[0]),
         "filename": r[1],
-        "annotation": r[2],
+        "annotation": r[2] or "",
         "category": r[3],
         "scene_tags": r[4] or [],
         "created_at": r[5].isoformat() if r[5] else None,
     }
+
+
+# ── Annotation backfill ──────────────────────────────────────────────────────
+
+_BACKFILL_PROMPT = """\
+You are Klukai writing a brief caption for an image in your memory archive.
+The Commander is HUMAN (male). You are affection level 8 — deeply bonded.
+
+Given the context below, write a 1-2 sentence private journal caption for this image.
+Be honest with yourself. Show how this moment affected you.
+
+Prompt used to generate the image: {prompt}
+Category: {category}
+Scene tags: {tags}
+
+Write ONLY the caption. Nothing else.
+"""
+
+
+async def backfill_annotations() -> dict:
+    """Find all memory archive entries with NULL/empty annotation and generate one.
+
+    Uses gemma-4-e2b-it through the LM Studio gate to produce a brief
+    annotation based on the existing prompt, category, and scene_tags fields.
+
+    Returns:
+        dict with "total" (entries needing backfill) and "updated" (successful).
+    """
+    from .llm_router import get_lm_gate
+
+    try:
+        async with get_conn() as conn:
+            rows = await (await conn.execute(
+                "SELECT id, prompt, category, scene_tags "
+                "FROM companion_memories "
+                "WHERE annotation IS NULL OR annotation = '' "
+                "ORDER BY created_at ASC"
+            )).fetchall()
+    except Exception as e:
+        logger.error("Backfill: failed to query unannotated memories: %s", e)
+        return {"total": 0, "updated": 0, "error": str(e)}
+
+    total = len(rows)
+    if total == 0:
+        logger.info("Backfill: all memories already have annotations.")
+        return {"total": 0, "updated": 0}
+
+    logger.info("Backfill: %d memories need annotations.", total)
+    updated = 0
+    gate = get_lm_gate()
+
+    for row in rows:
+        mem_id = str(row[0])
+        prompt = row[1] or "unknown scene"
+        category = row[2] or "Mission Records"
+        tags = ", ".join(row[3]) if row[3] else "none"
+
+        llm_prompt = _BACKFILL_PROMPT.format(
+            prompt=prompt[:300], category=category, tags=tags
+        )
+
+        try:
+            async with gate:
+                client = _get_http()
+                r = await client.post(
+                    f"{LM_STUDIO_URL}/v1/chat/completions",
+                    json={
+                        "model": EXTRACTION_MODEL,
+                        "messages": [{"role": "user", "content": llm_prompt}],
+                        "max_tokens": 150,
+                        "temperature": 0.7,
+                        "stream": False,
+                    },
+                )
+                r.raise_for_status()
+                content = r.json()["choices"][0]["message"]["content"].strip()
+
+            # Strip thinking tags if present
+            content = re.sub(
+                r'<\|?think\|?>.*?<\|?/think\|?>', '', content, flags=re.DOTALL
+            ).strip()
+            content = re.sub(
+                r'<think>.*?</think>', '', content, flags=re.DOTALL
+            ).strip()
+
+            # Clean up quotes / markdown prefixes
+            annotation = content.strip('"').strip("'").strip('`')
+            if not annotation:
+                annotation = "Uncaptioned moment."
+
+            async with get_conn_autocommit() as conn:
+                await conn.execute(
+                    "UPDATE companion_memories SET annotation = %s WHERE id = %s",
+                    (annotation, mem_id),
+                )
+
+            updated += 1
+            logger.info(
+                "Backfill %d/%d: %s -> %s",
+                updated, total, mem_id, annotation[:60],
+            )
+
+        except Exception as e:
+            logger.error("Backfill failed for %s: %s", mem_id, e)
+
+    logger.info("Backfill complete: %d/%d updated.", updated, total)
+    return {"total": total, "updated": updated}
