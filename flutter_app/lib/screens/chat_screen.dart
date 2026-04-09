@@ -508,7 +508,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   void _openArchive() {
     Navigator.push(context, MaterialPageRoute(
-      builder: (_) => MemoryArchiveScreen(serverUrl: widget.serverUrl),
+      builder: (_) => MemoryArchiveScreen(
+        serverUrl: widget.serverUrl,
+        affectionLevel: _state.affectionLevel,
+        affectionLevelName: _state.affectionLevelName,
+      ),
     ));
   }
 
