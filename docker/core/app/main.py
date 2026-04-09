@@ -274,7 +274,7 @@ async def api_tts(req: dict):
 
 @app.post("/api/generate-image")
 async def api_generate_image(req: dict):
-    """Generate an image via ComfyUI."""
+    """Generate an image via ComfyUI and save to memory archive."""
     prompt = req.get("prompt", "")
     if not prompt:
         return JSONResponse({"error": "No prompt"}, status_code=400)
@@ -282,9 +282,16 @@ async def api_generate_image(req: dict):
     img_bytes = await generate_image(prompt)
     if img_bytes:
         import base64
+        # Save to memory archive
+        aff_state = await affection.get_state()
+        mem_id = await memory_archive.save_image(
+            img_bytes, prompt, "api",
+            mood="composed", affection_level=aff_state.level,
+        )
         return {
             "image": base64.b64encode(img_bytes).decode(),
             "format": "png",
+            "memory_id": mem_id,
         }
     return JSONResponse({"error": "Generation failed"}, status_code=500)
 
