@@ -114,6 +114,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _connectWS();
   }
 
+
+
   @override
   void didChangeMetrics() {
     if (_isNearBottom()) {
@@ -379,12 +381,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void _handleKeyScroll(KeyEvent event) {
     if (event is! KeyDownEvent) return;
     if (!_scrollController.hasClients) return;
-    // Don't intercept keys when the text input has focus
-    if (_focusNode.hasFocus) return;
 
     final pos = _scrollController.position;
     final pageSize = pos.viewportDimension * 0.8;
     final key = event.logicalKey.keyLabel;
+    // Only handle navigation keys — these don't conflict with text input
+    if (!{'Page Down', 'Page Up', 'Home', 'End'}.contains(key)) return;
 
     double? target;
     if (key == 'Page Down') {
