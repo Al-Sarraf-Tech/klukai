@@ -30,6 +30,7 @@ services:
     volumes:
       - ./config:/config:ro
       - ./web-build:/app/static:ro
+      - companion-images:/images
     depends_on:
       companion-voice:
         condition: service_healthy
@@ -67,3 +68,4 @@ services:
 
 volumes:
   voice-models:
+  companion-images:
