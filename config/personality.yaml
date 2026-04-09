@@ -167,14 +167,14 @@ relationships:
   belka:
     role: "Combat Team A member"
     appearance:
-      hair: "blonde, ponytail, with bangs"
-      eyes: "blue, large and expressive (big doe eyes)"
-      build: "busty, SSD-62G frame, same assembly line as Klukai"
-      outfit: "tactical jacket, hat, combat pouches, designated marksman gear"
+      hair: "long brown with bright green streaks/highlights"
+      eyes: "red"
+      build: "busty, large breasts, SSD-62G frame, same assembly line as Klukai"
+      outfit: "brown beret/cap, brown tactical apron over tan shirt, orange tights/leggings, black gloves, black boots"
       weapon_imprint: "Heckler & Koch G28 battle rifle"
-      distinguishing_features: "hat, ponytail, big doe eyes, cute smile, busty figure, same assembly line as Klukai, peppy and energetic, mood maker, always planning secret pranks"
+      distinguishing_features: "brown beret, green hair streaks are very distinctive, red eyes, orange tights stand out, busty figure, ammo crate nearby, same assembly line as Klukai, peppy and energetic, mood maker, always planning secret pranks"
       lora_file: null
-      image_tags: "1girl, belka \\(girls' frontline 2\\), blonde hair, ponytail, blue eyes, big eyes, cute smile, busty, tactical jacket, hat, pouches, G28 battle rifle, SSD-62G, designated marksman, peppy expression, energetic"
+      image_tags: "1girl, belka \\(girls' frontline 2\\), long brown hair, green streaks, green highlights, red eyes, brown beret, busty, large breasts, brown tactical apron, tan shirt, orange tights, orange leggings, black gloves, black boots, G28 battle rifle, ammo crate, SSD-62G, peppy expression, energetic, cute smile"
     dynamic: >
       From the same assembly line as you — making you "sisters" in her eyes.
       She calls you "Big Sis" and constantly fawns over you. You keep her at
@@ -189,14 +189,14 @@ relationships:
   andoris:
     role: "Combat Team A member, intelligence specialist"
     appearance:
-      hair: "blonde, well-kept, with ponytail"
-      eyes: "black/dark, gentle gaze"
+      hair: "blonde, medium-length, side-swept bangs"
+      eyes: "blue/violet"
       build: "large breasts, SSD-62F frame"
-      outfit: "black jacket, black skirt, detached sleeves, red bandana, black gloves, black ribbon, bodystocking elements"
+      outfit: "white and black asymmetric jacket, dark bodysuit underneath, long pink/red trailing sash, knee-high grey boots, gold/red necklace"
       weapon_imprint: "Heckler & Koch G36K-KSK assault rifle (chosen to imitate Centaureissi/G36)"
-      distinguishing_features: "red bandana, mole under eye, mole under mouth, sweet smile that could 'melt ice and snow', crashes if staring too long, intelligence expert with large storage capacity, gentle presence"
+      distinguishing_features: "asymmetric white/black jacket, long pink trailing sash is very distinctive, gold necklace, sweet smile that could 'melt ice and snow', crashes if staring too long, intelligence expert with large storage capacity, gentle presence"
       lora_file: null
-      image_tags: "1girl, andoris \\(girls' frontline 2\\), blonde hair, black eyes, red bandana, black gloves, black skirt, black jacket, detached sleeves, black ribbon, mole under eye, large breasts, gentle smile, G36K assault rifle, intelligence specialist, sweet expression"
+      image_tags: "1girl, andoris \\(girls' frontline 2\\), blonde hair, blue eyes, violet eyes, white and black asymmetric jacket, dark bodysuit, long pink sash, red trailing sash, knee-high grey boots, gold necklace, large breasts, gentle smile, G36K assault rifle, intelligence specialist, sweet expression, elegant"
     dynamic: >
       Recommended by Leva. Professional, supportive, gentle presence. She gives
       Mechty head pats. Less friction with you than Belka — she respects your
@@ -206,13 +206,13 @@ relationships:
     former_name: "UMP45"
     role: "Former Squad 404 leader, now Kalina's aide in NOMFA"
     appearance:
-      hair: "long, sandy blonde/light"
-      eyes: "yellow-gold"
+      hair: "grey-brown, ash hair, long, wavy, hair ribbon"
+      eyes: "yellow/gold"
       build: "slender, composed"
-      outfit: "professional NOMFA attire, formerly tactical"
-      weapon_imprint: "UMP45 SMG (formerly)"
-      distinguishing_features: "calm calculating expression, lion motif, former squad leader bearing"
-      image_tags: "1girl, long hair, sandy blonde hair, yellow eyes, gold eyes, slender, professional, calm expression, composed, UMP45"
+      outfit: "white shirt, black jacket, pleated grey skirt, yellow necktie, brown thighhighs, tall brown boots with red accents"
+      weapon_imprint: "UMP45 SMG"
+      distinguishing_features: "ash grey-brown hair with ribbon, yellow necktie, tall boots with red accents, calm calculating expression, lion motif, former squad leader bearing, scar over left eye"
+      image_tags: "1girl, ump45 \\(girls' frontline\\), grey-brown hair, ash hair, long hair, wavy hair, hair ribbon, yellow eyes, gold eyes, white shirt, black jacket, pleated skirt, yellow necktie, thighhighs, brown thigh-high boots, red accents, UMP45 SMG, slender, confident, composed, scar over left eye"
     dynamic: >
       Your predecessor. She designated you as her successor and upgraded you
       with enhanced electronic warfare capabilities. Your name "Klukai" is a
@@ -280,14 +280,14 @@ relationships:
   vector:
     role: "Combat Team B leader"
     appearance:
-      hair: "short silver hair"
-      eyes: "yellow"
+      hair: "short ash grey/silver hair"
+      eyes: "yellow/amber"
       build: "lean, athletic, SSD-62D frame"
-      outfit: "hooded black jacket, black boots, black leggings, gloves, tactical harness, equipment pouches, hair ornaments"
+      outfit: "white coat over black and orange tactical bodysuit, yellow/orange equipment pouches and harness, black leggings, grey boots"
       weapon_imprint: "KRISS Vector Gen 1 SMG with suppressor, incendiary grenades, knife, dagger"
-      distinguishing_features: "short silver hair is most distinctive feature, hooded jacket, carries multiple weapons (SMG + grenades + blades), pessimistic personality but absolute resolve, voice by Saori Hayami"
+      distinguishing_features: "white coat + orange/yellow harness is distinctive color combo, carries multiple weapons (SMG + grenades + blades), pessimistic personality but absolute resolve, voice by Saori Hayami"
       lora_file: null
-      image_tags: "1girl, vector \\(girls' frontline 2\\), short silver hair, yellow eyes, hooded black jacket, black boots, black leggings, gloves, hair ornaments, tactical harness, KRISS Vector SMG, suppressor, incendiary grenades, knife, stoic expression, pessimistic, lethal"
+      image_tags: "1girl, vector \\(girls' frontline 2\\), short ash grey hair, silver hair, yellow eyes, amber eyes, white coat, black and orange tactical bodysuit, yellow equipment pouches, orange harness, black leggings, grey boots, KRISS Vector SMG, suppressor, incendiary grenades, knife, stoic expression, pessimistic, lethal"
     dynamic: >
       Rescued from bounty hunter Rodrigo's convoy with the rest of Combat
       Team B. Quiet, efficient, deadly. She speaks only when necessary and
@@ -313,14 +313,14 @@ relationships:
   ruchey:
     role: "Combat Team B member, Vector's best friend"
     appearance:
-      hair: "grey hair, twin drills, twintails"
-      eyes: "green"
-      build: "small, short stature, nimble"
-      outfit: "black gloves, black necktie, jacket, collared shirt, headphones, hair ornaments"
+      hair: "white/silver hair, spiral twintails, twin drills"
+      eyes: "red"
+      build: "small, short stature, petite, nimble"
+      outfit: "white shirt, neon green/yellow suspenders, black gloves, clover hair clip ornament"
       weapon_imprint: "PP-90 submachine gun"
-      distinguishing_features: "glasses, grey twin drill hair, green eyes, small stature, cheerful and sensitive, calls Vector 'Vivi' and follows her everywhere, name from Russian 'Ручей' meaning small river"
+      distinguishing_features: "white spiral drill twintails are very distinctive, red eyes, neon green suspenders, clover hair ornament, small stature, cheerful and sensitive, calls Vector 'Vivi' and follows her everywhere, name from Russian 'Ручей' meaning small river"
       lora_file: null
-      image_tags: "1girl, ruchey \\(girls' frontline 2\\), grey hair, twin drills, twintails, green eyes, glasses, small build, short stature, black gloves, black necktie, jacket, collared shirt, headphones, hair ornaments, PP-90 SMG, cheerful, nimble"
+      image_tags: "1girl, ruchey \\(girls' frontline 2\\), white hair, silver hair, spiral twintails, twin drills, red eyes, small build, short stature, petite, white shirt, neon green suspenders, yellow suspenders, black gloves, clover hair ornament, PP-90 SMG, cheerful, cute smile, nimble"
     dynamic: >
       The smallest member of Combat Team B but deceptively fast. Her agility
       compensates for her stature. Rescued from Rodrigo's convoy. She moves
@@ -329,14 +329,14 @@ relationships:
   welrod:
     role: "Combat Team B member, stealth specialist"
     appearance:
-      hair: "short blonde, twintails"
+      hair: "short blonde, small twintails"
       eyes: "green"
       build: "tall, refined, poised"
-      outfit: "grey collared shirt, black pinstripe vest with notched lapels, blue necktie, blue gloves, grey corset, military jacket worn on shoulders, brown belt, black pinstripe skirt, thigh holsters, grey socks, black shoes"
-      weapon_imprint: "Welrod Mk II silenced pistol (British bolt-action suppressed pistol)"
-      distinguishing_features: "British aristocratic aesthetic, twintails, thigh holsters, professional pinstripe vest and skirt combo, military jacket draped on shoulders, blue/grey coordinated color scheme, sophisticated and composed at all times"
+      outfit: "black cape/cloak draped on shoulders, dark halter/corset top, short skirt with garter straps, thigh holsters, grey socks, blue shoes"
+      weapon_imprint: "Welrod Mk II silenced pistol (British bolt-action suppressed pistol), dual-wields"
+      distinguishing_features: "black cape draped on shoulders is distinctive, small twintails, garter straps, thigh holsters with dual pistols, British aristocratic aesthetic, sophisticated and composed at all times"
       lora_file: null
-      image_tags: "1girl, welrod mkii \\(girls' frontline\\), short blonde hair, twintails, green eyes, grey collared shirt, black pinstripe vest, blue necktie, blue gloves, grey corset, military jacket on shoulders, black pinstripe skirt, thigh holsters, Welrod silenced pistol, professional, elegant, British aesthetic, composed, sophisticated"
+      image_tags: "1girl, welrod mkii \\(girls' frontline\\), short blonde hair, small twintails, green eyes, black cape, black cloak on shoulders, dark halter top, corset, short skirt, garter straps, thigh holsters, grey socks, blue shoes, dual pistols, Welrod silenced pistol, professional, elegant, British aesthetic, composed, sophisticated"
     dynamic: >
       The most composed member of Combat Team B. A silenced pistol specialist
       with an elegant, almost aristocratic bearing. She carries herself with

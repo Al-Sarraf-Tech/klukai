@@ -144,22 +144,26 @@ SQUAD_KEYWORDS = {
         "lazy pose, drowsy"
     ),
     "belka": (
-        "1girl, belka \\(girls' frontline 2\\), blonde hair, ponytail, blue eyes, "
-        "big eyes, cute smile, energetic, youthful, busty, "
-        "tactical jacket, hat, pouches, H&K G28 battle rifle, "
-        "SSD-62G frame, designated marksman, peppy expression"
+        "1girl, belka \\(girls' frontline 2\\), long brown hair, green streaks, green highlights, "
+        "red eyes, brown beret, busty, large breasts, "
+        "brown tactical apron, tan shirt, orange tights, orange leggings, "
+        "black gloves, black boots, H&K G28 battle rifle, ammo crate, "
+        "SSD-62G frame, designated marksman, peppy expression, energetic, cute smile"
     ),
     "andoris": (
-        "1girl, andoris \\(girls' frontline 2\\), blonde hair, black eyes, "
-        "red bandana, black gloves, black skirt, black jacket, detached sleeves, "
-        "black ribbon, mole under eye, large breasts, gentle smile, "
-        "H&K G36K assault rifle, intelligence specialist, sweet expression"
+        "1girl, andoris \\(girls' frontline 2\\), blonde hair, blue eyes, violet eyes, "
+        "white and black asymmetric jacket, dark bodysuit, "
+        "long pink sash, red trailing sash, knee-high grey boots, "
+        "gold necklace, red necklace, large breasts, gentle smile, "
+        "H&K G36K assault rifle, intelligence specialist, sweet expression, elegant"
     ),
     # ── Former / Allied ──────────────────────────────────────────────
     "leva": (
-        "1girl, ump45 \\(girls' frontline\\), sandy blonde hair, yellow eyes, "
-        "scar over left eye, tactical vest, confident pose, leader aura, "
-        "UMP45 SMG, slender, composed, NOMFA attire"
+        "1girl, ump45 \\(girls' frontline\\), grey-brown hair, ash hair, long hair, "
+        "yellow eyes, gold eyes, hair ribbon, "
+        "white shirt, black jacket, pleated skirt, yellow necktie, "
+        "thighhighs, brown thigh-high boots, red accents, "
+        "UMP45 SMG, slender, confident pose, leader aura, composed"
     ),
     "lenna": (
         "1girl, ump9 \\(girls' frontline\\), light brown hair, chestnut hair, "
@@ -168,9 +172,10 @@ SQUAD_KEYWORDS = {
     ),
     # ── Combat Team B ────────────────────────────────────────────────
     "vector": (
-        "1girl, vector \\(girls' frontline 2\\), short silver hair, yellow eyes, "
-        "hooded black jacket, black boots, black leggings, gloves, "
-        "hair ornaments, tactical harness, equipment pouches, "
+        "1girl, vector \\(girls' frontline 2\\), short ash grey hair, silver hair, "
+        "yellow eyes, amber eyes, "
+        "white coat, black and orange tactical bodysuit, "
+        "yellow equipment pouches, orange harness, black leggings, grey boots, "
         "KRISS Vector SMG, suppressor, incendiary grenades, knife, dagger, "
         "stoic expression, pessimistic, lethal aura"
     ),
@@ -182,21 +187,29 @@ SQUAD_KEYWORDS = {
         "introverted, timid expression, cute, tech geek"
     ),
     "ruchey": (
-        "1girl, ruchey \\(girls' frontline 2\\), grey hair, twin drills, twintails, "
-        "green eyes, glasses, small build, short stature, "
-        "black gloves, black necktie, jacket, collared shirt, "
-        "headphones, hair ornaments, "
-        "PP-90 submachine gun, cheerful, nimble"
+        "1girl, ruchey \\(girls' frontline 2\\), white hair, silver hair, "
+        "spiral twintails, twin drills, red eyes, "
+        "small build, short stature, petite, "
+        "white shirt, neon green suspenders, yellow suspenders, "
+        "black gloves, hair clip, clover hair ornament, "
+        "PP-90 submachine gun, cheerful, cute smile, nimble"
     ),
     "welrod": (
-        "1girl, welrod mkii \\(girls' frontline\\), short blonde hair, twintails, "
+        "1girl, welrod mkii \\(girls' frontline\\), short blonde hair, small twintails, "
         "green eyes, professional, elegant, british aesthetic, "
-        "grey collared shirt, black pinstripe vest, blue necktie, blue gloves, "
-        "grey corset, military jacket on shoulders, black pinstripe skirt, "
-        "thigh holsters, Welrod silenced pistol, composed, sophisticated"
+        "black cape, black cloak on shoulders, dark halter top, corset, "
+        "short skirt, garter straps, thigh holsters, "
+        "grey socks, blue shoes, dual pistols, Welrod silenced pistol, "
+        "composed, sophisticated"
     ),
     # ── Other ────────────────────────────────────────────────────────
-    "groza": "1girl, ots-14 \\(girls' frontline\\), dark hair, elegant, military, mysterious",
+    "groza": (
+        "1girl, ots-14 \\(girls' frontline\\), blonde hair, strawberry blonde, "
+        "long hair, low ponytail, gold eyes, amber eyes, "
+        "white coat, red lining, dark bodysuit, multiple belts, "
+        "tall brown boots, knee-high boots, OTs-14 rifle, "
+        "confident smirk, military, elegant"
+    ),
 }
 
 # ── Mission-aware image generation ────────────────────────────────────────
