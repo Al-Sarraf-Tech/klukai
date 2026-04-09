@@ -103,7 +103,7 @@ async def extract_facts(
                 json={
                     "model": EXTRACTION_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 512,
+                    "max_tokens": 256,
                     "temperature": 0.1,
                     "stream": False,
                 },
@@ -211,4 +211,56 @@ async def create_episode_summary(
             return (choices[0].get("message", {}).get("content") or "").strip() or None
     except Exception as e:
         logger.warning("Episode summary failed (%s): %s", type(e).__name__, e)
+        return None
+
+
+COMPACTION_PROMPT = """\
+You are Klukai's memory compactor. Summarize this conversation segment into a brief \
+3-4 sentence recap preserving: key topics discussed, Commander's requests or emotional \
+state, any promises or decisions made, and the current scene/situation. Write in third \
+person past tense. Be concise.
+
+{conversation}"""
+
+
+async def compact_turns(turns: list[dict]) -> str | None:
+    """Summarize a block of conversation turns into a compact recap via gemma."""
+    if len(turns) < 2:
+        return None
+
+    conversation = "\n".join(
+        f"{'Commander' if t['role'] == 'user' else 'Klukai'}: {t['content'][:300]}"
+        for t in turns
+    )
+
+    prompt = COMPACTION_PROMPT.format(conversation=conversation)
+
+    try:
+        from .llm_router import get_lm_gate
+
+        gate = get_lm_gate()
+        async with gate:
+            client = _get_http()
+            r = await client.post(
+                f"{LM_STUDIO_URL}/v1/chat/completions",
+                json={
+                    "model": EXTRACTION_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 200,
+                    "temperature": 0.2,
+                    "stream": False,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            choices = data.get("choices", [])
+            if not choices:
+                return None
+            content = (choices[0].get("message", {}).get("content") or "").strip()
+            # Strip think tags if present
+            import re
+            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+            return content or None
+    except Exception as e:
+        logger.warning("Session compaction failed (%s): %s", type(e).__name__, e)
         return None

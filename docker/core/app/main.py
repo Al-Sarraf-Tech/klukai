@@ -60,6 +60,17 @@ RECALL_KEYWORDS = [
 SAVE_KEYWORDS = ["save that", "keep this", "keep that", "save this"]
 DISCARD_KEYWORDS = ["delete that", "remove this", "discard that", "forget that"]
 
+# Trivial messages that don't need fact extraction or affection classification
+TRIVIAL_PATTERNS = {
+    "ok", "okay", "yes", "no", "yeah", "yep", "nope", "sure", "thanks",
+    "thank you", "haha", "lol", "hm", "hmm", "mhm", "hi", "hey", "hello",
+    "good", "nice", "cool", "right", "agreed", "understood",
+}
+
+# Compaction threshold — compact oldest turns when session exceeds this
+COMPACT_THRESHOLD = 8
+COMPACT_KEEP_RAW = 4  # Keep this many recent turns verbatim after compaction
+
 
 def _wants_recall(message: str) -> bool:
     lower = message.lower()
@@ -659,11 +670,17 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     if nudge:
         system_prompt += f"\n\n{nudge}"
 
-    # Build messages for LLM
-    messages = [
+    # Build messages for LLM — use summary + recent turns for compact context
+    messages = []
+    if session.context_summary:
+        messages.append({
+            "role": "system",
+            "content": f"[Earlier conversation summary: {session.context_summary}]",
+        })
+    messages.extend(
         {"role": t["role"], "content": t["content"]}
         for t in session.turns[-16:]
-    ]
+    )
 
     # Check if this needs the agentic tool-use loop
     use_agent = await router.needs_agent(content)
@@ -787,12 +804,23 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             asyncio.create_task(_background_image_gen(content, chat_context=chat_ctx))
 
     # Background: extract facts and create episodes
-    # Pass image_triggered so curation is requested; memory_id resolved after image gen (async)
-    asyncio.create_task(_background_extraction(
-        content, response_text, session, user_id,
-        image_generated=image_triggered,
-        # memory_id resolved via _last_memory_id in _background_extraction with a small delay
-    ))
+    # Skip extraction for trivial messages (no facts to extract, saves a full LLM round-trip)
+    content_stripped = content.strip().lower().rstrip("!.?)")
+    is_trivial = content_stripped in TRIVIAL_PATTERNS or (
+        len(content_stripped) <= 5 and not image_triggered
+    )
+
+    if not is_trivial:
+        asyncio.create_task(_background_extraction(
+            content, response_text, session, user_id,
+            image_generated=image_triggered,
+        ))
+    else:
+        logger.info("Trivial message, skipping extraction: %s", content[:40])
+
+    # Background: compact session if turns exceed threshold
+    if len(session.turns) >= COMPACT_THRESHOLD:
+        asyncio.create_task(_background_compaction(session))
 
 
 async def _handle_voice(audio_b64: str, session: SessionState) -> None:
@@ -979,6 +1007,45 @@ async def _background_extraction(
                 logger.info("Episode stored: %s", summary[:80])
     except Exception as e:
         logger.error("Background extraction failed: %s", e)
+
+
+async def _background_compaction(session: SessionState) -> None:
+    """Compact older session turns into a summary to reduce prefill tokens.
+
+    Triggered when session.turns >= COMPACT_THRESHOLD. Summarizes the oldest
+    turns via gemma-4-e2b-it, keeps the last COMPACT_KEEP_RAW turns verbatim.
+    """
+    from .fact_extractor import compact_turns
+
+    try:
+        turns = session.turns
+        if len(turns) < COMPACT_THRESHOLD:
+            return
+
+        # Split: compact the old turns, keep the recent ones raw
+        old_turns = turns[:-COMPACT_KEEP_RAW]
+        recent_turns = turns[-COMPACT_KEEP_RAW:]
+
+        # Build text to compact (include existing summary if any)
+        if session.context_summary:
+            old_turns = [{"role": "system", "content": f"[Previous summary: {session.context_summary}]"}] + old_turns
+
+        summary = await compact_turns(old_turns)
+        if not summary:
+            logger.warning("Compaction returned empty summary, keeping raw turns")
+            return
+
+        # Replace session turns with summary + recent raw turns
+        session.context_summary = summary
+        session.turns = recent_turns
+        await memory.save_session(SESSION_ID, session)
+
+        logger.info(
+            "Session compacted: %d turns → summary (%d chars) + %d raw turns",
+            len(old_turns), len(summary), len(recent_turns),
+        )
+    except Exception as e:
+        logger.error("Background compaction failed: %s", e)
 
 
 async def _background_image_gen(user_request: str, chat_context: str = "") -> None:

@@ -133,6 +133,7 @@ class LLMConfig(BaseModel):
     base_url: str | None = None
     max_tokens: int = 2048
     temperature: float = 0.8
+    read_timeout: float = 180.0  # Per-model read timeout for streaming
 
 
 # ── Session state (Redis) ───────────────────────────────────────────────────
@@ -140,6 +141,7 @@ class LLMConfig(BaseModel):
 class SessionState(BaseModel):
     conversation_id: str
     turns: list[dict[str, str]] = Field(default_factory=list)
+    context_summary: str | None = None  # Rolling summary of compacted earlier turns
     mood: str = "composed"
     active_topic: str | None = None
     turn_count: int = 0
