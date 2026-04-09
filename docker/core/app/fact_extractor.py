@@ -10,9 +10,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Background tasks use dominus LM Studio (qwen2.5-3b, delayed 3s after chat)
+# Background tasks use LM Studio (gemma-4-e2b-it on Intel Arc, delayed 3s after chat)
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
-EXTRACTION_MODEL = "qwen2.5-3b-instruct"
+EXTRACTION_MODEL = "gemma-4-e2b-it"
 
 # Shared httpx client — initialized on first use, reused thereafter
 _http: httpx.AsyncClient | None = None

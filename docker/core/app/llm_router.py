@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 _HEALTH_RECHECK_INTERVAL = 15.0
 
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")       # Dominus RTX 3090
-LM_STUDIO_LOCAL_URL = os.environ.get("LM_STUDIO_LOCAL_URL", "http://100.111.198.19:1235")  # Amarillo Arc A380
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Model aliases
@@ -29,6 +28,22 @@ LOCAL_AGENT = "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2"     # Agent: 
 LOCAL_TOOLS = LOCAL_AGENT                                               # Same as agent
 CLOUD_COMPLEX = "claude-sonnet-4-20250514"
 CLOUD_FALLBACK = "claude-haiku-4-5-20251001"
+
+# ── Model keep-alive ───────────────────────────────────────────────────────
+_MODEL_TTL = 25 * 60  # 25 minutes — keep models loaded at least this long
+_KEEPALIVE_INTERVAL = 20 * 60  # Ping every 20 minutes to prevent eviction
+_model_last_used: dict[str, float] = {}
+
+
+def mark_model_used(model: str) -> None:
+    """Record that a model was just used (for keepalive scheduling)."""
+    _model_last_used[model] = time.monotonic()
+
+
+def model_needs_keepalive(model: str) -> bool:
+    """True if the model hasn't been used recently and may be evicted."""
+    last = _model_last_used.get(model, 0)
+    return last == 0 or (time.monotonic() - last > _KEEPALIVE_INTERVAL)
 
 # Signals that the message needs tool use (agent loop)
 AGENT_SIGNALS = [
@@ -169,6 +184,22 @@ class LLMRouter:
                     system_prompt, messages, config
                 ):
                     yield token
+            # Track successful use for keepalive scheduling
+            mark_model_used(config.model)
+        except httpx.ReadTimeout:
+            logger.warning("LLM %s/%s ReadTimeout — skipping local fallbacks", config.provider, config.model)
+            if config.provider == "lmstudio":
+                self._lmstudio_available = False
+                self._lmstudio_last_check = time.monotonic()
+                # ReadTimeout means the server is alive but model is stuck/overloaded.
+                # Don't waste time on more local models — go straight to Claude.
+                if self._anthropic:
+                    logger.info("Fast-fallback to Claude after ReadTimeout")
+                    cloud = LLMConfig(provider="anthropic", model=CLOUD_FALLBACK, temperature=0.7)
+                    async for token in self._stream_anthropic(system_prompt, messages, cloud):
+                        yield token
+                    return
+                yield "Communications disrupted, Commander. Standby for reconnection."
         except Exception as e:
             error_msg = str(e) or type(e).__name__
             logger.warning("LLM %s/%s failed: %s, trying fallback", config.provider, config.model, error_msg)
@@ -239,11 +270,11 @@ class LLMRouter:
                 base_url=LM_STUDIO_URL,
             )
         # Then try the smallest local model
-        if failed.model != "qwen2.5-3b-instruct" and self._lmstudio_available:
-            logger.info("Falling back to qwen2.5-3b-instruct")
+        if failed.model != "gemma-4-e2b-it" and self._lmstudio_available:
+            logger.info("Falling back to gemma-4-e2b-it")
             return LLMConfig(
                 provider="lmstudio",
-                model="qwen2.5-3b-instruct",
+                model="gemma-4-e2b-it",
                 base_url=LM_STUDIO_URL,
             )
         if failed.provider == "lmstudio" and self._anthropic:
@@ -253,7 +284,7 @@ class LLMRouter:
         if failed.provider == "anthropic" and self._lmstudio_available:
             return LLMConfig(
                 provider="lmstudio",
-                model="qwen2.5-3b-instruct",
+                model="gemma-4-e2b-it",
                 base_url=LM_STUDIO_URL,
             )
         return None
@@ -270,6 +301,34 @@ class LLMRouter:
         ) as stream:
             async for text in stream.text_stream:
                 yield text
+
+    async def keepalive(self) -> None:
+        """Ping primary chat model to keep it loaded in LM Studio VRAM."""
+        if not self._lmstudio_available:
+            await self._ensure_lmstudio_fresh()
+        if not self._lmstudio_available:
+            return
+
+        for model in (LOCAL_CASUAL, "gemma-4-e2b-it"):
+            if not model_needs_keepalive(model):
+                continue
+            try:
+                r = await self._http.post(
+                    f"{LM_STUDIO_URL}/v1/chat/completions",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": "."}],
+                        "max_tokens": 1,
+                        "temperature": 0,
+                        "stream": False,
+                    },
+                    timeout=30.0,
+                )
+                if r.status_code == 200:
+                    mark_model_used(model)
+                    logger.debug("Keepalive OK: %s", model)
+            except Exception as e:
+                logger.warning("Keepalive failed for %s: %s", model, e)
 
     async def _stream_lmstudio(
         self, system_prompt: str, messages: list[dict], config: LLMConfig
@@ -292,8 +351,7 @@ class LLMRouter:
                 "temperature": config.temperature,
                 "stream": True,
             },
-            # read timeout raised to 180s — thinking models can be very slow between tokens
-            timeout=httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0),
+            timeout=httpx.Timeout(connect=10.0, read=config.read_timeout, write=10.0, pool=10.0),
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():

@@ -16,9 +16,9 @@ from .personality import load_personality
 
 logger = logging.getLogger(__name__)
 
-# Background tasks use dominus LM Studio (qwen2.5-3b, delayed 3s after chat)
+# Background tasks use LM Studio (gemma-4-e2b-it on Intel Arc, delayed 3s after chat)
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
-CLASSIFICATION_MODEL = "qwen2.5-3b-instruct"
+CLASSIFICATION_MODEL = "gemma-4-e2b-it"
 
 DAILY_POINTS_CAP = 8
 MAX_SCORE = 1000
@@ -79,7 +79,7 @@ class AffectionManager:
 
     async def init(self) -> None:
         """Load state from database and personality config."""
-        self._http = httpx.AsyncClient(timeout=30.0)
+        self._http = httpx.AsyncClient(timeout=12.0)
         p = load_personality()
         self._levels = p.get("affection", {}).get("levels", [])
 
