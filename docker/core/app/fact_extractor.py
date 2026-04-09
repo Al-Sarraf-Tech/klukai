@@ -21,7 +21,7 @@ _http: httpx.AsyncClient | None = None
 def _get_http() -> httpx.AsyncClient:
     global _http
     if _http is None or _http.is_closed:
-        _http = httpx.AsyncClient(timeout=30.0)
+        _http = httpx.AsyncClient(timeout=12.0)
     return _http
 
 FACT_EXTRACTION_PROMPT = """\
@@ -54,15 +54,41 @@ Commander: {user_message}
 Klukai: {assistant_message}
 """
 
+IMAGE_CURATION_ADDENDUM = """
+An image was generated during this exchange. Evaluate it for Klukai's memory archive:
+- "keep": true/false — would Klukai consider this moment worth preserving?
+- "annotation": 1-2 sentence caption as Klukai (first person, in character)
+- "category": one of: {categories}
+- "image_tags": list of scene/setting keywords for search
+
+Add a "memory_curation" key to your JSON response with these fields.
+"""
+
 
 async def extract_facts(
-    user_message: str, assistant_message: str
+    user_message: str,
+    assistant_message: str,
+    image_generated: bool = False,
+    affection_level: int = 0,
 ) -> dict:
-    """Extract facts, mood, and topics from a conversation exchange."""
+    """Extract facts, mood, and topics from a conversation exchange.
+
+    Args:
+        user_message: The user's message text.
+        assistant_message: Klukai's response text.
+        image_generated: If True, append curation prompt and extract memory_curation.
+        affection_level: Current affection level, used to determine valid categories.
+    """
+    from .memory_archive import available_categories
+
     prompt = FACT_EXTRACTION_PROMPT.format(
         user_message=user_message[:1000],
         assistant_message=assistant_message[:1000],
     )
+
+    if image_generated:
+        categories = ", ".join(available_categories(affection_level))
+        prompt += IMAGE_CURATION_ADDENDUM.format(categories=categories)
 
     try:
         client = _get_http()
@@ -105,12 +131,17 @@ async def extract_facts(
             logger.warning("Invalid mood '%s' from extraction, defaulting to composed", mood)
             mood = "composed"
 
-        return {
+        out: dict = {
             "facts": result.get("facts", []),
             "mood": mood,
             "topics": result.get("topics", []),
             "should_remember": result.get("should_remember", False),
         }
+
+        if image_generated and "memory_curation" in result:
+            out["memory_curation"] = result["memory_curation"]
+
+        return out
     except Exception as e:
         logger.warning("Fact extraction failed: %s", e)
         return {

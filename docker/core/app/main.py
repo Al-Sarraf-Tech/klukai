@@ -23,6 +23,7 @@ from .image_gen import generate_image, needs_image, build_prompt, is_couple_scen
 from .fact_extractor import create_episode_summary, extract_facts
 from .llm_router import LLMRouter
 from .mcp_client import MCPClient
+from . import memory_archive
 from .memory import MemoryManager
 from .models import SessionState, new_id
 from .personality import assemble_system_prompt, load_personality
@@ -47,6 +48,22 @@ proactive = ProactiveEngine()
 affection = AffectionManager()
 
 SESSION_ID = "default"  # Single-user, single session
+
+# Tracks the most recently generated memory_id for commander save/discard overrides
+_last_memory_id: str | None = None
+
+RECALL_KEYWORDS = [
+    "show me a memory", "remember when", "that time we", "do you remember",
+    "show me something", "recall a memory", "our memories", "your memories",
+]
+
+SAVE_KEYWORDS = ["save that", "keep this", "keep that", "save this"]
+DISCARD_KEYWORDS = ["delete that", "remove this", "discard that", "forget that"]
+
+
+def _wants_recall(message: str) -> bool:
+    lower = message.lower()
+    return any(kw in lower for kw in RECALL_KEYWORDS)
 
 
 # ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -122,9 +139,23 @@ async def proactive_callback(message: str) -> None:
         await send_push(title="Klukai", body=message)
 
 
+async def _keepalive_loop() -> None:
+    """Periodically ping LM Studio models to keep them loaded in VRAM."""
+    from .llm_router import _KEEPALIVE_INTERVAL
+    while True:
+        await asyncio.sleep(_KEEPALIVE_INTERVAL)
+        try:
+            await router.keepalive()
+        except Exception as e:
+            logger.warning("Keepalive loop error: %s", e)
+
+_keepalive_task: asyncio.Task | None = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup/shutdown."""
+    global _keepalive_task
     await init_pool(min_size=2, max_size=10)
     await run_migration()
     await memory.init()
@@ -136,8 +167,23 @@ async def lifespan(app: FastAPI):
     proactive.start()
     await events_init()
     load_personality()
-    logger.info("Klukai companion core started")
+
+    # Warm up primary chat model on startup
+    logger.info("Warming up primary LLM model...")
+    try:
+        await router.keepalive()
+        logger.info("LLM warmup complete")
+    except Exception as e:
+        logger.warning("LLM warmup failed (will retry on first message): %s", e)
+
+    # Start periodic keepalive to prevent model eviction (25-min TTL)
+    _keepalive_task = asyncio.create_task(_keepalive_loop())
+    logger.info("Klukai companion core started (keepalive every 20 min)")
+
     yield
+
+    if _keepalive_task:
+        _keepalive_task.cancel()
     proactive.stop()
     await events_close()
     await memory.close()
@@ -432,6 +478,56 @@ async def get_messages(limit: int = 50, before: str | None = None):
         return {"messages": []}
 
 
+# ── Memory archive API ──────────────────────────────────────────────────────
+# NOTE: /api/memories/categories MUST be defined before /api/memories/{memory_id}
+# so FastAPI does not try to parse "categories" as a memory_id path parameter.
+
+
+@app.get("/api/memories")
+async def api_memories(
+    category: str | None = None,
+    limit: int = 20,
+    before: str | None = None,
+):
+    return await memory_archive.list_memories(category=category, limit=limit, before=before)
+
+
+@app.get("/api/memories/categories")
+async def api_memory_categories():
+    aff = await affection.get_state()
+    return await memory_archive.get_categories(aff.level)
+
+
+@app.get("/api/memories/{memory_id}/image")
+async def api_memory_image(memory_id: str):
+    from fastapi.responses import Response
+    data = await memory_archive.get_image_bytes(memory_id, thumbnail=False)
+    if data:
+        return Response(content=data, media_type="image/png")
+    return JSONResponse({"error": "Not found"}, status_code=404)
+
+
+@app.get("/api/memories/{memory_id}/thumbnail")
+async def api_memory_thumbnail(memory_id: str):
+    from fastapi.responses import Response
+    data = await memory_archive.get_image_bytes(memory_id, thumbnail=True)
+    if data:
+        return Response(content=data, media_type="image/png")
+    return JSONResponse({"error": "Not found"}, status_code=404)
+
+
+@app.post("/api/memories/{memory_id}/keep")
+async def api_memory_keep(memory_id: str):
+    ok = await memory_archive.update_kept(memory_id, kept=True, kept_by="commander")
+    return {"ok": ok}
+
+
+@app.post("/api/memories/{memory_id}/discard")
+async def api_memory_discard(memory_id: str):
+    ok = await memory_archive.update_kept(memory_id, kept=False)
+    return {"ok": ok}
+
+
 async def _handle_tap_interact(user_id: str) -> None:
     """Handle tap interaction — deliver a short proactive comment."""
     if proactive and proactive._can_send():
@@ -595,10 +691,22 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         config = await router.route(content, session)
         logger.info("Routing to %s/%s", config.provider, config.model)
 
+        # Fire a delayed "warming up" message if model is slow to respond
+        warmup_timer: asyncio.Task | None = None
+        if config.provider == "lmstudio":
+            async def _warmup_notify():
+                await asyncio.sleep(8.0)
+                await ws.send_thinking(user_id, "Loading neural pathways, Commander. Stand by...")
+            warmup_timer = asyncio.create_task(_warmup_notify())
+
         full_response = []
         buffer = ""
         first_flush = True
         async for token in router.stream(system_prompt, messages, config):
+            # Cancel warmup message once first token arrives
+            if warmup_timer and not warmup_timer.done():
+                warmup_timer.cancel()
+                warmup_timer = None
             full_response.append(token)
             buffer += token
             # First flush after 20 chars for fast perceived response, then sentence boundaries
@@ -607,6 +715,8 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
                 await ws.send_token(user_id, buffer)
                 buffer = ""
                 first_flush = False
+        if warmup_timer and not warmup_timer.done():
+            warmup_timer.cancel()
         if buffer:
             await ws.send_token(user_id, buffer)
 
@@ -641,15 +751,41 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         latency_ms=latency_ms,
     )
 
-    # Background: extract facts and create episodes
-    asyncio.create_task(_background_extraction(content, response_text, session, user_id))
+    # Commander save/discard overrides — operate on the most recent memory
+    content_lower = content.lower()
+    if any(kw in content_lower for kw in SAVE_KEYWORDS) and _last_memory_id:
+        asyncio.create_task(_do_memory_keep(_last_memory_id, kept=True))
+    elif any(kw in content_lower for kw in DISCARD_KEYWORDS) and _last_memory_id:
+        asyncio.create_task(_do_memory_keep(_last_memory_id, kept=False))
+
+    # Track whether image gen was triggered (for extraction curation pass)
+    image_triggered = False
+    triggered_memory_id: str | None = None
 
     # Background tasks — only if main LLM succeeded (not a fallback error)
     if not response_text.startswith("Communications disrupted"):
-        # TTS disabled for auto-play — user taps speaker icon instead
-        if needs_image(content):
+        # Recall detection takes priority over new image generation
+        if _wants_recall(content):
+            logger.info("Memory recall triggered for: %s", content[:80])
+            asyncio.create_task(_background_recall(content, session, user_id))
+        elif needs_image(content):
             logger.info("Image generation triggered for: %s", content[:80])
-            asyncio.create_task(_background_image_gen(content))
+            # Build chat context from last few turns for scene-aware prompting
+            recent_turns = session.turns[-6:]  # Last 3 exchanges
+            chat_ctx = "\n".join(
+                f"{t['role']}: {t['content'][:200]}" for t in recent_turns
+            )
+            image_triggered = True
+            # _background_image_gen sets _last_memory_id; we'll read it in extraction
+            asyncio.create_task(_background_image_gen(content, chat_context=chat_ctx))
+
+    # Background: extract facts and create episodes
+    # Pass image_triggered so curation is requested; memory_id resolved after image gen (async)
+    asyncio.create_task(_background_extraction(
+        content, response_text, session, user_id,
+        image_generated=image_triggered,
+        # memory_id resolved via _last_memory_id in _background_extraction with a small delay
+    ))
 
 
 async def _handle_voice(audio_b64: str, session: SessionState) -> None:
@@ -692,7 +828,12 @@ async def _handle_voice(audio_b64: str, session: SessionState) -> None:
 
 
 async def _background_extraction(
-    user_msg: str, assistant_msg: str, session: SessionState, user_id: str = "default"
+    user_msg: str,
+    assistant_msg: str,
+    session: SessionState,
+    user_id: str = "default",
+    image_generated: bool = False,
+    memory_id: str | None = None,
 ) -> None:
     """Background task: extract facts, adjust affection, and maybe create an episode.
 
@@ -701,7 +842,24 @@ async def _background_extraction(
     """
     await asyncio.sleep(3)  # Let main response finish streaming first
     try:
-        result = await extract_facts(user_msg, assistant_msg)
+        aff_state_bg = await affection.get_state()
+        result = await extract_facts(
+            user_msg, assistant_msg,
+            image_generated=image_generated,
+            affection_level=aff_state_bg.level,
+        )
+
+        # Apply curation if image was generated and curation data came back
+        # Resolve memory_id: prefer explicit arg, fall back to module-level _last_memory_id
+        # (image gen runs concurrently and sets it ~1-30s before extraction completes)
+        curation_target = memory_id or (image_generated and _last_memory_id) or None
+        if image_generated and curation_target and "memory_curation" in result:
+            try:
+                await memory_archive.update_curation(
+                    curation_target, result["memory_curation"], aff_state_bg.level
+                )
+            except Exception as e:
+                logger.warning("Memory curation update failed for %s: %s", curation_target, e)
 
         # Store new facts
         for fact in result.get("facts", []):
@@ -816,27 +974,39 @@ async def _background_extraction(
         logger.error("Background extraction failed: %s", e)
 
 
-async def _background_image_gen(user_request: str) -> None:
-    """Generate an anime image based on the user's request and send via WebSocket."""
+async def _background_image_gen(user_request: str, chat_context: str = "") -> None:
+    """Generate an anime image based on the user's request and recent chat context."""
+    from .image_gen import check_comfyui_ready
+
     # Wait for chat response to finish and VRAM to settle
     logger.info("Image gen: waiting 1s for VRAM...")
     await asyncio.sleep(1)
     try:
         logger.info("Image gen: starting for '%s'", user_request[:60])
-        await ws.send_proactive("default", "Compiling tactical visualization, Commander. Stand by.")
 
-        couple = is_couple_scene(user_request)
+        # Check if ComfyUI is ready
+        ready = await check_comfyui_ready()
+        if not ready:
+            await ws.send_thinking("default", "Warming up image systems, Commander. Stand by...")
+        else:
+            await ws.send_thinking("default", "Compiling tactical visualization, Commander...")
+
+        # Use both the request AND recent chat for context-aware generation
+        full_context = f"{chat_context}\n{user_request}" if chat_context else user_request
+        couple = is_couple_scene(full_context)
 
         # Get affection level for mood-aware prompts
         aff_state = await affection.get_state()
         aff_level = aff_state.level
 
-        scene_tags = _enhance_image_prompt(user_request, couple=couple)
-        full_prompt = build_prompt(scene_tags, couple=couple, affection_level=aff_level)
-        logger.info("Image prompt (aff=%d): %s", aff_level, full_prompt[:200])
+        scene_tags = _enhance_image_prompt(full_context, couple=couple)
+        full_prompt = build_prompt(
+            scene_tags, couple=couple, affection_level=aff_level, context=full_context,
+        )
+        logger.info("Image prompt (aff=%d): %s", aff_level, full_prompt[:300])
 
         # Determine orientation
-        if is_landscape(user_request):
+        if is_landscape(full_context):
             width, height = 1216, 832
         else:
             width, height = 832, 1216
@@ -844,13 +1014,61 @@ async def _background_image_gen(user_request: str) -> None:
         img_bytes = await generate_image(full_prompt, width=width, height=height)
         if img_bytes:
             import base64 as b64
+            global _last_memory_id
+
+            # Get current session state for archive metadata
+            session_for_save = await memory.get_session(SESSION_ID)
+            conv_id = session_for_save.conversation_id if session_for_save else "unknown"
+            session_mood = session_for_save.mood if session_for_save else "composed"
+
+            # Save to memory archive before sending to UI
+            memory_id = await memory_archive.save_image(
+                img_bytes, full_prompt, conv_id, session_mood, aff_level,
+            )
+            if memory_id:
+                _last_memory_id = memory_id
+                logger.info("Image archived as memory %s", memory_id)
+
             img_b64 = b64.b64encode(img_bytes).decode()
-            await ws.send("default", {"type": "image", "data": img_b64})
+            await ws.send("default", {"type": "image", "data": img_b64, "memory_id": memory_id})
             logger.info("Image sent to UI (%d bytes)", len(img_bytes))
         else:
             await ws.send_proactive("default", "...Visualization failed. Interference in the rendering pipeline. I'll try again later.")
     except Exception as e:
         logger.error("Background image gen failed: %s", e)
+
+
+async def _background_recall(content: str, session: SessionState, user_id: str) -> None:
+    """Retrieve a memory from the archive and send it to the UI as a proactive message + image."""
+    try:
+        aff_state = await affection.get_state()
+        mem = await memory_archive.recall_memory(content, session.mood, aff_state.level)
+        if not mem:
+            await ws.send_proactive(user_id, "...I searched through our records, but couldn't find anything matching that.")
+            return
+
+        annotation = mem.get("annotation") or "A moment I've preserved."
+        await ws.send_proactive(user_id, annotation)
+
+        img_bytes = await memory_archive.get_image_bytes(mem["id"], thumbnail=False)
+        if img_bytes:
+            import base64 as b64
+            img_b64 = b64.b64encode(img_bytes).decode()
+            await ws.send(user_id, {"type": "image", "data": img_b64, "memory_id": mem["id"]})
+            logger.info("Recalled memory %s sent to UI", mem["id"])
+    except Exception as e:
+        logger.error("Background recall failed: %s", e)
+
+
+async def _do_memory_keep(memory_id: str, kept: bool) -> None:
+    """Apply a commander save/discard override to a memory."""
+    try:
+        kept_by = "commander" if kept else "discarded"
+        ok = await memory_archive.update_kept(memory_id, kept=kept, kept_by=kept_by)
+        if ok:
+            logger.info("Memory %s: kept=%s by commander", memory_id, kept)
+    except Exception as e:
+        logger.error("Memory keep/discard failed for %s: %s", memory_id, e)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
