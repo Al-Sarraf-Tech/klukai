@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:js_interop';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:web/web.dart' as web;
@@ -65,6 +66,21 @@ class _MessageBubbleState extends State<MessageBubble> {
     if (mounted) setState(() { _isLoading = false; _isPlaying = false; });
   }
 
+  void _downloadImage(String base64Data) {
+    try {
+      final bytes = base64Decode(base64Data);
+      final blob = web.Blob([bytes.toJS].toJS, web.BlobPropertyBag(type: 'image/png'));
+      final url = web.URL.createObjectURL(blob);
+      final a = web.document.createElement('a') as web.HTMLAnchorElement
+        ..href = url
+        ..download = 'klukai_memory_${DateTime.now().millisecondsSinceEpoch}.png';
+      a.click();
+      web.URL.revokeObjectURL(url);
+    } catch (e) {
+      debugPrint('Download failed: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isUser = widget.message.role == 'user';
@@ -124,13 +140,32 @@ class _MessageBubbleState extends State<MessageBubble> {
                     if (widget.message.imageData != null)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: Image.memory(
-                            base64Decode(widget.message.imageData!),
-                            fit: BoxFit.contain,
-                            width: double.infinity,
-                          ),
+                        child: Stack(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: Image.memory(
+                                base64Decode(widget.message.imageData!),
+                                fit: BoxFit.contain,
+                                width: double.infinity,
+                              ),
+                            ),
+                            Positioned(
+                              bottom: 4,
+                              right: 4,
+                              child: GestureDetector(
+                                onTap: () => _downloadImage(widget.message.imageData!),
+                                child: Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black54,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Icon(Icons.download, color: Colors.white70, size: 16),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       )
                     else

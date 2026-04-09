@@ -18,6 +18,7 @@ import '../widgets/tool_status_indicator.dart';
 import '../widgets/canvas_message_bubble.dart';
 import '../widgets/date_divider.dart';
 import 'profile_screen.dart';
+import 'memory_archive_screen.dart';
 
 @JS('audioRecorder.start')
 external JSPromise<JSBoolean> _jsStartRecording();
@@ -505,6 +506,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     )));
   }
 
+  void _openArchive() {
+    Navigator.push(context, MaterialPageRoute(
+      builder: (_) => MemoryArchiveScreen(serverUrl: widget.serverUrl),
+    ));
+  }
+
   void _playAudio(String base64Audio) {
     try {
       final dataUrl = 'data:audio/wav;base64,$base64Audio';
@@ -720,6 +727,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           ),
                         ),
                         const Spacer(),
+                        IconButton(
+                          onPressed: _openArchive,
+                          icon: Icon(Icons.photo_library_outlined,
+                              color: GFL2Colors.primary.withValues(alpha: 0.5), size: 18),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          tooltip: 'Memory Archive',
+                        ),
                         MoodIndicator(mood: _state.mood),
                       ],
                     ),
@@ -826,7 +841,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     return ListView.builder(
       controller: _scrollController,
-      physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+      physics: const ClampingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: _messages.length,
       itemBuilder: (context, index) {
