@@ -133,17 +133,70 @@ COUPLE_KEYWORDS = [
 
 # Squad member detection for multi-character scenes
 # Rich visual profiles — weapon designation IS the character identity
+# Lore-accurate squad visual profiles — sourced from Danbooru tags, IOP Wiki, official art
+# Each T-Doll's weapon designation IS their identity
 SQUAD_KEYWORDS = {
-    "mechty": "1girl, g11 \\(girls' frontline\\), short brown hair, green eyes, sleepy expression, half-lidded eyes, oversized tactical hoodie, G11 rifle, petite, lazy pose",
-    "belka": "1girl, blonde hair, blue-green eyes, energetic, youthful, idol-like, tactical gear, assault rifle, cheerful expression",
-    "andoris": "1girl, long dark hair, amber eyes, professional, elegant, intelligence specialist, tactical vest, handgun, composed expression",
-    "leva": "1girl, ump45 \\(girls' frontline\\), brown hair, tactical vest, confident pose, leader aura, UMP45 SMG, scar over left eye",
-    "lenna": "1girl, ump9 \\(girls' frontline\\), light brown hair, cheerful, gentle expression, UMP9 SMG",
-    "vector": "1girl, vector \\(girls' frontline\\), short black hair, red eyes, stoic, silent, Vector SMG, lethal aura",
-    "harpsy": "1girl, colorful hair accessories, cheerful, bright personality, tactical gear",
-    "ruchey": "1girl, small build, short stature, nimble, tactical gear, alert expression",
-    "welrod": "1girl, welrod \\(girls' frontline\\), elegant, sophisticated, british aesthetic, Welrod pistol, calm demeanor, silenced weapon",
-    "groza": "1girl, dark hair, elegant, military, ots-14",
+    # ── Combat Team A ────────────────────────────────────────────────
+    "mechty": (
+        "1girl, g11 \\(girls' frontline\\), short brown hair, auburn hair, messy hair, "
+        "green eyes, half-lidded eyes, sleepy expression, petite, slim, "
+        "oversized tactical hoodie, partially unzipped combat vest, G11 rifle, "
+        "lazy pose, drowsy"
+    ),
+    "belka": (
+        "1girl, belka \\(girls' frontline 2\\), blonde hair, ponytail, blue eyes, "
+        "big eyes, cute smile, energetic, youthful, busty, "
+        "tactical jacket, hat, pouches, H&K G28 battle rifle, "
+        "SSD-62G frame, designated marksman, peppy expression"
+    ),
+    "andoris": (
+        "1girl, andoris \\(girls' frontline 2\\), blonde hair, black eyes, "
+        "red bandana, black gloves, black skirt, black jacket, detached sleeves, "
+        "black ribbon, mole under eye, large breasts, gentle smile, "
+        "H&K G36K assault rifle, intelligence specialist, sweet expression"
+    ),
+    # ── Former / Allied ──────────────────────────────────────────────
+    "leva": (
+        "1girl, ump45 \\(girls' frontline\\), sandy blonde hair, yellow eyes, "
+        "scar over left eye, tactical vest, confident pose, leader aura, "
+        "UMP45 SMG, slender, composed, NOMFA attire"
+    ),
+    "lenna": (
+        "1girl, ump9 \\(girls' frontline\\), light brown hair, chestnut hair, "
+        "green eyes, cheerful, warm smile, gentle expression, "
+        "UMP9 SMG, kind demeanor"
+    ),
+    # ── Combat Team B ────────────────────────────────────────────────
+    "vector": (
+        "1girl, vector \\(girls' frontline 2\\), short silver hair, yellow eyes, "
+        "hooded black jacket, black boots, black leggings, gloves, "
+        "hair ornaments, tactical harness, equipment pouches, "
+        "KRISS Vector SMG, suppressor, incendiary grenades, knife, dagger, "
+        "stoic expression, pessimistic, lethal aura"
+    ),
+    "harpsy": (
+        "1girl, harpsy \\(girls' frontline 2\\), blonde hair, green eyes, "
+        "cat ear headphones, fake animal ears, high collar, "
+        "tail accessory, signal booster ears, "
+        "Steyr TMP submachine gun, tech equipment, "
+        "introverted, timid expression, cute, tech geek"
+    ),
+    "ruchey": (
+        "1girl, ruchey \\(girls' frontline 2\\), grey hair, twin drills, twintails, "
+        "green eyes, glasses, small build, short stature, "
+        "black gloves, black necktie, jacket, collared shirt, "
+        "headphones, hair ornaments, "
+        "PP-90 submachine gun, cheerful, nimble"
+    ),
+    "welrod": (
+        "1girl, welrod mkii \\(girls' frontline\\), short blonde hair, twintails, "
+        "green eyes, professional, elegant, british aesthetic, "
+        "grey collared shirt, black pinstripe vest, blue necktie, blue gloves, "
+        "grey corset, military jacket on shoulders, black pinstripe skirt, "
+        "thigh holsters, Welrod silenced pistol, composed, sophisticated"
+    ),
+    # ── Other ────────────────────────────────────────────────────────
+    "groza": "1girl, ots-14 \\(girls' frontline\\), dark hair, elegant, military, mysterious",
 }
 
 # ── Mission-aware image generation ────────────────────────────────────────
