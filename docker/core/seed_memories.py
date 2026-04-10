@@ -131,17 +131,29 @@ async def main():
                     json={
                         "model": SELECTOR_MODEL,
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 512,
+                        "max_tokens": 2048,
                         "temperature": 0.1,
                         "stream": False,
                     },
                 )
                 r.raise_for_status()
-                content = r.json()["choices"][0]["message"]["content"].strip()
+                msg = r.json()["choices"][0]["message"]
+                content = (msg.get("content") or "").strip()
+                # Thinking models: check reasoning fields
+                if not content:
+                    content = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
+                # Strip thinking tags
+                content = re.sub(r'<\|?think\|?>.*?<\|?/think\|?>', '', content, flags=re.DOTALL).strip()
                 content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-                if content.startswith("```"):
-                    content = content.split("\n", 1)[1]
-                    content = content.rsplit("```", 1)[0]
+                # Strip markdown
+                if "```" in content:
+                    parts = content.split("```")
+                    if len(parts) >= 3:
+                        content = parts[1].lstrip("json").strip()
+                # Find JSON in mixed text
+                if content and not content.startswith("{"):
+                    m = re.search(r'\{.*\}', content, flags=re.DOTALL)
+                    if m: content = m.group(0)
                 content = re.sub(r',\s*([}\]])', r'\1', content)
 
                 result = json.loads(content)
@@ -188,9 +200,12 @@ async def main():
                     },
                 )
                 r.raise_for_status()
-                content = r.json()["choices"][0]["message"]["content"].strip()
+                msg = r.json()["choices"][0]["message"]
+                content = (msg.get("content") or "").strip()
+                if not content:
+                    content = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
 
-                # Strip thinking tags — take whatever plain text remains
+                # Strip thinking tags
                 content = re.sub(r'<\|?think\|?>.*?<\|?/think\|?>', '', content, flags=re.DOTALL).strip()
                 content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
 
