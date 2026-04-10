@@ -761,6 +761,11 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             logger.debug("Days-together calculation failed: %s", e)
             days = 0
 
+    # Get active mission description for context injection
+    mission_desc = None
+    if proactive.mission_active and hasattr(proactive, '_mission_timer') and proactive._mission_timer:
+        mission_desc = proactive._mission_timer.mission_description
+
     system_prompt = assemble_system_prompt(
         mood=session.mood,
         memories=episode_memories,
@@ -771,6 +776,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         affection_level=aff_state.level,
         days_together=days,
         last_msg_length=len(content),
+        mission_description=mission_desc,
     )
 
     # Memory nudge — proactive past reference based on affection level

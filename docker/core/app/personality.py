@@ -427,6 +427,21 @@ def build_character_rules() -> str:
     )
 
 
+def build_mission_context_block(mission_description: str | None = None) -> str:
+    """Build mission situation awareness for the system prompt."""
+    if not mission_description:
+        return ""
+    return (
+        f"ACTIVE MISSION: You (Klukai) are currently deployed in the field.\n"
+        f"Mission: {mission_description}\n"
+        f"The Commander is at base (the Elmo) monitoring via radio comms. "
+        f"You are physically separated from the Commander. "
+        f"Your messages to the Commander are radio transmissions. "
+        f"Acknowledge this separation — you miss him but stay professional on comms.\n"
+        f"Any squad members NOT mentioned as being with the Commander are with you in the field."
+    )
+
+
 def assemble_system_prompt(
     mood: str = "composed",
     memories: list[str] | None = None,
@@ -438,6 +453,7 @@ def assemble_system_prompt(
     days_together: int = 0,
     last_msg_length: int = 0,
     personality_path: str | None = None,
+    mission_description: str | None = None,
 ) -> str:
     """Assemble the full Klukai system prompt from all components."""
     p = load_personality(personality_path)
@@ -463,6 +479,7 @@ def assemble_system_prompt(
         build_speech_guidelines(p, affection_level),
         build_affection_block(affection_score, affection_level, level_name, p),
         build_context_block(mood, affection_level, days_together),
+        build_mission_context_block(mission_description),
         build_memory_block(memories or []),
         build_conversation_recall_block(recalled_exchanges or []),
         build_relationship_block(relationship_facts or {}),
