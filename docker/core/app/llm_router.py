@@ -320,23 +320,10 @@ class LLMRouter:
                 model=LOCAL_CASUAL_FALLBACK,
                 base_url=LM_STUDIO_URL,
             )
-        # Then try the smallest local model
-        if failed.model != "gemma-4-e2b-it" and self._lmstudio_available:
-            logger.info("Falling back to gemma-4-e2b-it")
-            return LLMConfig(
-                provider="lmstudio",
-                model="gemma-4-e2b-it",
-                base_url=LM_STUDIO_URL,
-            )
+        # Local models exhausted — fall back to Claude
         if failed.provider == "lmstudio" and self._anthropic:
             return LLMConfig(
                 provider="anthropic", model=CLOUD_FALLBACK, temperature=0.7
-            )
-        if failed.provider == "anthropic" and self._lmstudio_available:
-            return LLMConfig(
-                provider="lmstudio",
-                model="gemma-4-e2b-it",
-                base_url=LM_STUDIO_URL,
             )
         return None
 
@@ -375,7 +362,8 @@ class LLMRouter:
                 return
 
         gate = get_lm_gate()
-        for model in (LOCAL_CASUAL, "gemma-4-e2b-it"):
+        # Only keepalive dolphin — it handles chat + extraction + classification
+        for model in (LOCAL_CASUAL,):
             if not model_needs_keepalive(model):
                 continue
             try:

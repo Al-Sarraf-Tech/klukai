@@ -16,9 +16,9 @@ from .personality import load_personality
 
 logger = logging.getLogger(__name__)
 
-# Background tasks use LM Studio (gemma-4-e2b-it on Intel Arc, delayed 3s after chat)
+# Affection classification uses dolphin on RTX 3090 — same model as chat, already warm.
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
-CLASSIFICATION_MODEL = "gemma-4-e2b-it"
+CLASSIFICATION_MODEL = "cognitivecomputations_dolphin3.0-r1-mistral-24b"
 
 DAILY_POINTS_CAP = 8
 MAX_SCORE = 1000

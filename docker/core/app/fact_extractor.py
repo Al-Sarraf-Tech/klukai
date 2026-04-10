@@ -10,9 +10,10 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Background tasks use LM Studio (gemma-4-e2b-it on Intel Arc, delayed 3s after chat)
+# Background tasks use dolphin on RTX 3090 — same model as chat, already warm.
+# Runs 3s after chat response so dolphin is guaranteed loaded. No model swapping.
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
-EXTRACTION_MODEL = "gemma-4-e2b-it"
+EXTRACTION_MODEL = "cognitivecomputations_dolphin3.0-r1-mistral-24b"
 
 # Shared httpx client — initialized on first use, reused thereafter
 _http: httpx.AsyncClient | None = None
@@ -267,7 +268,7 @@ async def generate_mission_update(
 ) -> str:
     """Generate an in-character field radio report for an active mission timer.
 
-    Uses gemma-4-e2b-it through the global LM Studio gate.
+    Uses dolphin through the global LM Studio gate.
     """
     event_line = f"MAJOR EVENT IN PROGRESS: {major_event}" if major_event else "Situation nominal."
     injury_line = ""
@@ -323,7 +324,7 @@ async def generate_romance_message(
 ) -> str:
     """Generate a context-aware evening romance message from Klukai.
 
-    Uses gemma-4-e2b-it through the global LM Studio gate.
+    Uses dolphin through the global LM Studio gate.
     """
     prompt = ROMANCE_MESSAGE_PROMPT.format(
         affection_level=affection_level,

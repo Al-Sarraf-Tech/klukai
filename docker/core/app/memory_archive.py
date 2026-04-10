@@ -17,7 +17,7 @@ from .db import get_conn, get_conn_autocommit
 logger = logging.getLogger(__name__)
 
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
-EXTRACTION_MODEL = "gemma-4-e2b-it"
+EXTRACTION_MODEL = "cognitivecomputations_dolphin3.0-r1-mistral-24b"
 
 # Shared httpx client for LM Studio calls
 _http: httpx.AsyncClient | None = None
@@ -391,7 +391,7 @@ Write ONLY the caption. Nothing else.
 async def backfill_annotations() -> dict:
     """Find all memory archive entries with NULL/empty annotation and generate one.
 
-    Uses gemma-4-e2b-it through the LM Studio gate to produce a brief
+    Uses dolphin through the LM Studio gate to produce a brief
     annotation based on the existing prompt, category, and scene_tags fields.
 
     Returns:

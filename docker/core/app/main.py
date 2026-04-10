@@ -1143,7 +1143,7 @@ async def _background_compaction(session: SessionState) -> None:
     """Compact older session turns into a summary to reduce prefill tokens.
 
     Triggered when session.turns >= COMPACT_THRESHOLD. Summarizes the oldest
-    turns via gemma-4-e2b-it, keeps the last COMPACT_KEEP_RAW turns verbatim.
+    turns via dolphin, keeps the last COMPACT_KEEP_RAW turns verbatim.
     """
     from .fact_extractor import compact_turns
 
