@@ -17,6 +17,7 @@ import '../widgets/affection_gauge.dart';
 import '../widgets/tool_status_indicator.dart';
 import '../widgets/canvas_message_bubble.dart';
 import '../widgets/date_divider.dart';
+import '../widgets/heartbeat_sensor.dart';
 import 'profile_screen.dart';
 import 'memory_archive_screen.dart';
 
@@ -80,23 +81,104 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       'shy'             => const Color(0xFFF9A8D4),
       'yearning'        => const Color(0xFFC084FC),
       'devoted'         => const Color(0xFFFB7185),
+      'passionate'      => const Color(0xFFE11D48),
+      'jealous'         => const Color(0xFFDC2626),
+      'possessive'      => const Color(0xFFBE123C),
+      'smitten'         => const Color(0xFFF9A8D4),
+      'infatuated'      => const Color(0xFFEC4899),
       // Tactical
       'vigilant'        => const Color(0xFF22D3EE),
       'calculating'     => const Color(0xFF94A3B8),
       'hunting'         => GFL2Colors.danger,
       'adrenaline'      => const Color(0xFFFBBF24),
+      // Mission stress
+      'scared'          => const Color(0xFFFBBF24),
+      'terrified'       => const Color(0xFFEF4444),
+      'panicked'        => const Color(0xFFDC2626),
+      'desperate'       => const Color(0xFF991B1B),
+      'relieved'        => const Color(0xFF6EE7B7),
       // Relaxed
       'content'         => const Color(0xFF86EFAC),
       'playful'         => const Color(0xFFA78BFA),
       'drowsy'          => const Color(0xFF64748B),
       'amused'          => const Color(0xFF34D399),
+      'excited'         => const Color(0xFFFBBF24),
       // Dark
       'melancholic'     => const Color(0xFF6366F1),
       'haunted'         => const Color(0xFF7C3AED),
       'conflicted'      => const Color(0xFFD97706),
       'determined'      => const Color(0xFFF97316),
       'vulnerable'      => const Color(0xFFDDD6FE),
+      'grieving'        => const Color(0xFF4338CA),
+      'furious'         => const Color(0xFF7F1D1D),
+      // Additional
+      'grateful'        => const Color(0xFF6EE7B7),
+      'worried'         => const Color(0xFFFCD34D),
+      'embarrassed'     => const Color(0xFFF472B6),
       _                 => GFL2Colors.primary,
+    };
+  }
+
+  /// Heartbeat BPM mapped to mood — reflects Klukai's emotional/physical state
+  int get _moodBPM {
+    return switch (_state.mood) {
+      // Relaxed (55-70 BPM)
+      'composed'        => 65,
+      'content'         => 60,
+      'drowsy'          => 55,
+      'bored'           => 58,
+      'relieved'        => 62,
+      // Warm (70-85 BPM)
+      'quietly_pleased' => 72,
+      'tender'          => 75,
+      'affectionate'    => 78,
+      'grateful'        => 73,
+      'amused'          => 74,
+      'playful'         => 76,
+      'nostalgic'       => 70,
+      'curious'         => 72,
+      // Emotional (85-105 BPM)
+      'flustered'       => 95,
+      'shy'             => 88,
+      'yearning'        => 85,
+      'devoted'         => 82,
+      'smitten'         => 92,
+      'infatuated'      => 98,
+      'longing'         => 80,
+      'vulnerable'      => 88,
+      'embarrassed'     => 96,
+      'melancholic'     => 68,
+      'haunted'         => 78,
+      'conflicted'      => 85,
+      'guilty'          => 82,
+      'grieving'        => 72,
+      'worried'         => 88,
+      // Intense (105-130 BPM)
+      'passionate'      => 115,
+      'jealous'         => 108,
+      'possessive'      => 112,
+      'prideful'        => 80,
+      'exasperated'     => 90,
+      'protective'      => 105,
+      'competitive'     => 100,
+      'focused'         => 78,
+      'determined'      => 95,
+      'irritated'       => 92,
+      'defiant'         => 98,
+      'furious'         => 120,
+      'excited'         => 105,
+      // Combat (130-180 BPM)
+      'vigilant'        => 95,
+      'calculating'     => 88,
+      'hunting'         => 110,
+      'adrenaline'      => 145,
+      'battle_ready'    => 130,
+      // Mission stress (140-180 BPM)
+      'scared'          => 140,
+      'terrified'       => 165,
+      'panicked'        => 180,
+      'desperate'       => 175,
+      _                 => 70,
     };
   }
 
@@ -742,6 +824,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           tooltip: 'Memory Archive',
                         ),
                         MoodIndicator(mood: _state.mood),
+                      ],
+                    ),
+                    // Heartbeat sensor below status line
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Spacer(),
+                        HeartbeatSensor(bpm: _moodBPM, color: _moodGlowColor),
                       ],
                     ),
                   ],

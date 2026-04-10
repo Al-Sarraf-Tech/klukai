@@ -23,46 +23,63 @@ class Role(str, Enum):
 
 
 class Mood(str, Enum):
-    # Core
-    composed = "composed"
-    focused = "focused"
-    prideful = "prideful"
-    exasperated = "exasperated"
-    protective = "protective"
-    quietly_pleased = "quietly_pleased"
-    competitive = "competitive"
-    tender = "tender"
-    longing = "longing"
-    battle_ready = "battle_ready"
-    # Romantic/intimate
-    flustered = "flustered"
-    affectionate = "affectionate"
-    shy = "shy"
-    yearning = "yearning"
-    devoted = "devoted"
-    # Combat/tactical
-    vigilant = "vigilant"
-    calculating = "calculating"
-    hunting = "hunting"
-    adrenaline = "adrenaline"
-    # Casual/relaxed
-    content = "content"
-    playful = "playful"
-    drowsy = "drowsy"
-    amused = "amused"
-    bored = "bored"
-    # Dark/complex
-    melancholic = "melancholic"
-    haunted = "haunted"
-    conflicted = "conflicted"
-    guilty = "guilty"
-    determined = "determined"
-    # Additional
-    nostalgic = "nostalgic"
-    curious = "curious"
-    irritated = "irritated"
-    defiant = "defiant"
-    vulnerable = "vulnerable"
+    # Core — everyday operational states
+    composed = "composed"          # Default calm, professional demeanor
+    focused = "focused"            # Deep concentration on a task
+    prideful = "prideful"          # Showing off accomplishments or skill
+    exasperated = "exasperated"    # Frustrated with incompetence or absurdity
+    protective = "protective"      # Shielding Commander or squad from harm
+    quietly_pleased = "quietly_pleased"  # Satisfied but won't admit it
+    competitive = "competitive"    # Challenged, wants to prove herself
+    tender = "tender"              # Gentle, caring — rare vulnerability
+    longing = "longing"            # Missing the Commander or past times
+    battle_ready = "battle_ready"  # Combat imminent, weapons hot
+    # Romantic/intimate — emotional closeness with Commander
+    flustered = "flustered"        # Caught off guard by affection
+    affectionate = "affectionate"  # Openly warm and loving
+    shy = "shy"                    # Embarrassed by own feelings
+    yearning = "yearning"          # Deep desire for closeness
+    devoted = "devoted"            # Unconditional commitment
+    passionate = "passionate"      # Intense romantic/physical desire
+    jealous = "jealous"            # Threatened by attention to others
+    possessive = "possessive"      # "You're mine, Commander"
+    smitten = "smitten"            # Head over heels, can't hide it
+    infatuated = "infatuated"      # Obsessively thinking about Commander
+    # Combat/tactical — mission states
+    vigilant = "vigilant"          # On alert, scanning for threats
+    calculating = "calculating"    # Analyzing tactical options
+    hunting = "hunting"            # Tracking a target
+    adrenaline = "adrenaline"      # Mid-combat rush
+    # Mission stress — danger responses (Klukai is tough but not invincible)
+    scared = "scared"              # Genuine fear, rare — something truly dangerous
+    terrified = "terrified"        # Overwhelming threat, fight-or-flight
+    panicked = "panicked"          # Lost composure, desperate measures
+    desperate = "desperate"        # Last resort, nothing left to lose
+    relieved = "relieved"          # Danger passed, exhaling
+    # Casual/relaxed — off-duty states
+    content = "content"            # At peace, comfortable
+    playful = "playful"            # Teasing, light-hearted
+    drowsy = "drowsy"              # Sleepy, winding down
+    amused = "amused"              # Something genuinely funny
+    bored = "bored"                # Nothing to do, restless
+    excited = "excited"            # Anticipating something good
+    # Dark/complex — emotional weight
+    melancholic = "melancholic"    # Sad but reflective
+    haunted = "haunted"            # Past trauma surfacing
+    conflicted = "conflicted"      # Torn between duty and desire
+    guilty = "guilty"              # Regret over actions or words
+    determined = "determined"      # Resolute, won't back down
+    grieving = "grieving"          # Loss or near-loss of someone
+    furious = "furious"            # Cold, controlled rage
+    # Additional — nuanced states
+    nostalgic = "nostalgic"        # Remembering better times
+    curious = "curious"            # Interested, investigating
+    irritated = "irritated"        # Annoyed but in control
+    defiant = "defiant"            # Refusing to comply
+    vulnerable = "vulnerable"      # Guard completely down
+    grateful = "grateful"          # Deeply thankful
+    worried = "worried"            # Concern for Commander or squad
+    embarrassed = "embarrassed"    # More intense than shy — mortified
 
 
 # ── WebSocket protocol ──────────────────────────────────────────────────────

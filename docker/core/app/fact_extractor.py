@@ -39,11 +39,12 @@ Return a JSON object with:
 - "facts": list of {{"key": "short_key", "value": "fact description"}} — only NEW information about the Commander
 - "mood": Klukai's emotional state after this exchange. Choose the MOST fitting one:
   Core: composed, focused, prideful, exasperated, protective, quietly_pleased, competitive, tender, longing, battle_ready
-  Romantic: flustered, affectionate, shy, yearning, devoted
+  Romantic: flustered, affectionate, shy, yearning, devoted, passionate, jealous, possessive, smitten, infatuated
   Tactical: vigilant, calculating, hunting, adrenaline
-  Relaxed: content, playful, drowsy, amused, bored
-  Dark: melancholic, haunted, conflicted, guilty, determined
-  Other: nostalgic, curious, irritated, defiant, vulnerable
+  Mission stress: scared, terrified, panicked, desperate, relieved
+  Relaxed: content, playful, drowsy, amused, bored, excited
+  Dark: melancholic, haunted, conflicted, guilty, determined, grieving, furious
+  Other: nostalgic, curious, irritated, defiant, vulnerable, grateful, worried, embarrassed
 - "topics": list of discussion topics mentioned
 - "should_remember": boolean — true if this exchange contains something worth preserving in long-term operational records
 
@@ -135,10 +136,14 @@ async def extract_facts(
             "composed", "focused", "prideful", "exasperated", "protective",
             "quietly_pleased", "competitive", "tender", "longing", "battle_ready",
             "flustered", "affectionate", "shy", "yearning", "devoted",
+            "passionate", "jealous", "possessive", "smitten", "infatuated",
             "vigilant", "calculating", "hunting", "adrenaline",
-            "content", "playful", "drowsy", "amused", "bored",
+            "scared", "terrified", "panicked", "desperate", "relieved",
+            "content", "playful", "drowsy", "amused", "bored", "excited",
             "melancholic", "haunted", "conflicted", "guilty", "determined",
+            "grieving", "furious",
             "nostalgic", "curious", "irritated", "defiant", "vulnerable",
+            "grateful", "worried", "embarrassed",
         }
         mood = result.get("mood", "composed")
         if mood not in VALID_MOODS:
