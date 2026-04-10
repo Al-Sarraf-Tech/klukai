@@ -505,11 +505,11 @@ class ProactiveEngine:
             replace_existing=True,
         )
 
-        # Mission events — every 10 min, 24/7 (only fires if mission is active)
+        # Mission events — every 5 min, 24/7 (only fires if mission is active)
         self._scheduler.add_job(
             self._mission_random_event,
             "interval",
-            minutes=10,
+            minutes=5,
             id="mission_random_event",
             replace_existing=True,
         )
@@ -752,8 +752,8 @@ class ProactiveEngine:
         if self._muted_until and now < self._muted_until:
             return
 
-        # 40% chance per check (every 10 min)
-        if random.random() > 0.40:
+        # 75% chance per check (every 5 min)
+        if random.random() > 0.75:
             return
 
         # Load mission-relevant event categories
