@@ -1,258 +1,74 @@
-"""Background fact extraction from conversations."""
+"""Background fact extraction, mood classification, and content generation.
+
+All LLM calls go through llm_json.call_llm() or call_llm_text() —
+rock-solid JSON parsing with automatic reasoning field extraction.
+"""
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
-import httpx
+from .llm_json import call_llm, call_llm_text
 
 logger = logging.getLogger(__name__)
 
-# Background tasks use gpt-oss-20b — rock-solid JSON, uncensored, no thinking tags.
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
 EXTRACTION_MODEL = "gpt-oss-20b-absolute-heresy-i1"
 
-# Shared httpx client — initialized on first use, reused thereafter
-_http: httpx.AsyncClient | None = None
+# ── Valid moods (must match models.py Mood enum) ─────────────────────────
 
+VALID_MOODS = frozenset({
+    "composed", "focused", "prideful", "exasperated", "protective",
+    "quietly_pleased", "competitive", "tender", "longing", "battle_ready",
+    "flustered", "affectionate", "shy", "yearning", "devoted",
+    "passionate", "jealous", "possessive", "smitten", "infatuated",
+    "vigilant", "calculating", "hunting", "adrenaline",
+    "scared", "terrified", "panicked", "desperate", "relieved",
+    "content", "playful", "drowsy", "amused", "bored", "excited",
+    "melancholic", "haunted", "conflicted", "guilty", "determined",
+    "grieving", "furious",
+    "nostalgic", "curious", "irritated", "defiant", "vulnerable",
+    "grateful", "worried", "embarrassed",
+})
 
-def _get_http() -> httpx.AsyncClient:
-    global _http
-    if _http is None or _http.is_closed:
-        _http = httpx.AsyncClient(timeout=30.0)
-    return _http
+_DEFAULT_RESULT: dict = {
+    "facts": [],
+    "mood": "composed",
+    "topics": [],
+    "should_remember": False,
+    "interaction": {"type": "neutral", "intensity": 5},
+}
 
-FACT_EXTRACTION_PROMPT = """\
-You are Klukai's internal processor. Analyze this exchange in ONE pass.
-The Commander is HUMAN (male). You are the T-Doll.
+# ── Prompts ──────────────────────────────────────────────────────────────
 
-Return a JSON object with ALL of these fields:
+EXTRACTION_PROMPT = """\
+Analyze this exchange. The Commander is HUMAN (male). Klukai is a T-Doll.
 
-1. "mood": YOUR emotional state after this exchange. Pick the MOST fitting:
-   composed, focused, prideful, exasperated, protective, quietly_pleased, competitive,
-   tender, longing, battle_ready, flustered, affectionate, shy, yearning, devoted,
-   passionate, jealous, possessive, smitten, infatuated, vigilant, calculating, hunting,
-   adrenaline, scared, terrified, panicked, desperate, relieved, content, playful, drowsy,
-   amused, bored, excited, melancholic, haunted, conflicted, guilty, determined, grieving,
-   furious, nostalgic, curious, irritated, defiant, vulnerable, grateful, worried, embarrassed
+Return ONLY valid JSON with these fields:
+{{"mood":"<one word from the list>","interaction":{{"type":"<type>","intensity":<1-10>}},"facts":[],"topics":[],"should_remember":false}}
 
-2. "interaction": classify the Commander's message ONLY (ignore your response):
-   {{"type": ONE OF greeting/genuine_interest/personal_sharing/compliment/mission_discussion/remembering/rude/inappropriate/ignoring_advice/neutral, "intensity": 1-10}}
-   IMPORTANT: casual/short messages are NEVER "rude". Only explicit hostility is "rude".
+Moods: composed, focused, prideful, exasperated, protective, quietly_pleased, \
+competitive, tender, longing, battle_ready, flustered, affectionate, shy, yearning, \
+devoted, passionate, jealous, possessive, smitten, infatuated, vigilant, calculating, \
+hunting, adrenaline, scared, terrified, panicked, desperate, relieved, content, playful, \
+drowsy, amused, bored, excited, melancholic, haunted, conflicted, guilty, determined, \
+grieving, furious, nostalgic, curious, irritated, defiant, vulnerable, grateful, worried, embarrassed
 
-3. "facts": list of {{"key": "short_key", "value": "description"}} — only NEW info about the Commander
+Interaction types: greeting, genuine_interest, personal_sharing, compliment, \
+mission_discussion, remembering, neutral
+IMPORTANT: Short/casual messages are NEVER "rude". Only explicit hostility is "rude".
 
-4. "topics": list of discussion topics
-
-5. "should_remember": true if this exchange is worth preserving
-
-Return ONLY valid JSON. No markdown, no explanation, no thinking tags.
-
-Exchange:
 Commander: {user_message}
-Klukai: {assistant_message}
-"""
+Klukai: {assistant_message}"""
 
 IMAGE_CURATION_ADDENDUM = """
-An image was generated during this exchange. Evaluate it for Klukai's memory archive.
-IMPORTANT: The Commander is HUMAN (male). He is NOT a T-Doll. Never describe him as one.
-
-- "keep": true/false — would Klukai consider this moment worth preserving?
-- "annotation": 1-2 sentence caption as Klukai (first person, in character). Write like a private journal, not a report.
-- "category": one of: {categories}
-- "image_tags": list of scene/setting keywords for search. If the Commander is present, include "couple" and "1boy".
-
-Add a "memory_curation" key to your JSON response with these fields.
-"""
-
-
-async def extract_facts(
-    user_message: str,
-    assistant_message: str,
-    image_generated: bool = False,
-    affection_level: int = 0,
-) -> dict:
-    """Extract facts, mood, and topics from a conversation exchange.
-
-    Args:
-        user_message: The user's message text.
-        assistant_message: Klukai's response text.
-        image_generated: If True, append curation prompt and extract memory_curation.
-        affection_level: Current affection level, used to determine valid categories.
-    """
-    from .memory_archive import available_categories
-
-    prompt = FACT_EXTRACTION_PROMPT.format(
-        user_message=user_message[:1000],
-        assistant_message=assistant_message[:1000],
-    )
-
-    if image_generated:
-        categories = ", ".join(available_categories(affection_level))
-        prompt += IMAGE_CURATION_ADDENDUM.format(categories=categories)
-
-    try:
-        from .llm_router import get_lm_gate
-
-        gate = get_lm_gate()
-        async with gate:  # Waits for main chat to finish streaming
-            client = _get_http()
-            r = await client.post(
-                f"{LM_STUDIO_URL}/v1/chat/completions",
-                json={
-                    "model": EXTRACTION_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 384,
-                    "temperature": 0.1,
-                    "stream": False,
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-            choices = data.get("choices", [])
-            if not choices:
-                logger.warning("Extraction LLM returned empty choices: %s", data)
-                return {"facts": [], "mood": "composed", "topics": [], "should_remember": False, "interaction": {"type": "neutral", "intensity": 5}}
-            msg = choices[0].get("message", {})
-            content = (msg.get("content") or "").strip()
-
-            # Thinking models put output in reasoning/reasoning_content instead of content
-            if not content:
-                reasoning = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
-                if reasoning:
-                    content = reasoning
-                    logger.debug("Using reasoning field for extraction (content was empty)")
-
-            if not content:
-                logger.warning("Extraction LLM returned empty content + reasoning")
-                return {"facts": [], "mood": "composed", "topics": [], "should_remember": False, "interaction": {"type": "neutral", "intensity": 5}}
-
-        # Parse JSON from response (handle thinking tags, markdown, embedded JSON)
-        import re
-        content = content.strip()
-        # Strip all thinking tag variants
-        content = re.sub(r'<\|?think\|?>.*?<\|?/think\|?>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-        content = content.strip()
-        # Strip markdown code blocks
-        if "```" in content:
-            parts = content.split("```")
-            if len(parts) >= 3:
-                inner = parts[1]
-                if inner.startswith("json"):
-                    inner = inner[4:]
-                content = inner.strip()
-        # Find JSON object if mixed with reasoning text
-        if content and not content.startswith("{"):
-            json_match = re.search(r'\{.*\}', content, flags=re.DOTALL)
-            if json_match:
-                content = json_match.group(0)
-        # Fix trailing commas
-        content = re.sub(r',\s*([}\]])', r'\1', content)
-
-        result = json.loads(content)
-
-        # Validate mood is in the known set
-        VALID_MOODS = {
-            "composed", "focused", "prideful", "exasperated", "protective",
-            "quietly_pleased", "competitive", "tender", "longing", "battle_ready",
-            "flustered", "affectionate", "shy", "yearning", "devoted",
-            "passionate", "jealous", "possessive", "smitten", "infatuated",
-            "vigilant", "calculating", "hunting", "adrenaline",
-            "scared", "terrified", "panicked", "desperate", "relieved",
-            "content", "playful", "drowsy", "amused", "bored", "excited",
-            "melancholic", "haunted", "conflicted", "guilty", "determined",
-            "grieving", "furious",
-            "nostalgic", "curious", "irritated", "defiant", "vulnerable",
-            "grateful", "worried", "embarrassed",
-        }
-        mood = result.get("mood", "composed")
-        if mood not in VALID_MOODS:
-            logger.warning("Invalid mood '%s' from extraction, defaulting to composed", mood)
-            mood = "composed"
-
-        # Extract interaction classification (merged — no separate LLM call needed)
-        interaction = result.get("interaction", {})
-        if not isinstance(interaction, dict):
-            interaction = {"type": "neutral", "intensity": 5}
-
-        out: dict = {
-            "facts": result.get("facts", []),
-            "mood": mood,
-            "topics": result.get("topics", []),
-            "should_remember": result.get("should_remember", False),
-            "interaction": interaction,
-        }
-
-        if image_generated and "memory_curation" in result:
-            out["memory_curation"] = result["memory_curation"]
-
-        return out
-    except Exception as e:
-        logger.warning("Fact extraction failed (%s): %s", type(e).__name__, e)
-        return {
-            "facts": [],
-            "mood": "composed",
-            "topics": [],
-            "should_remember": False,
-            "interaction": {"type": "neutral", "intensity": 5},
-        }
-
-
-async def create_episode_summary(
-    turns: list[dict], max_turns: int = 10
-) -> str | None:
-    """Summarize a conversation segment for episodic memory."""
-    if len(turns) < 3:
-        return None
-
-    recent = turns[-max_turns:]
-    conversation = "\n".join(
-        f"{t['role'].title()}: {t['content'][:200]}" for t in recent
-    )
-
-    prompt = (
-        "You are Klukai, writing a brief operational log entry about your interaction "
-        "with the Commander. Summarize in 1-2 sentences using first person. Note anything "
-        "significant about the Commander's behavior, mood, or shared information. "
-        "Be concise and professional, but let your investment in the Commander show subtly.\n\n"
-        f"{conversation}"
-    )
-
-    try:
-        from .llm_router import get_lm_gate
-
-        gate = get_lm_gate()
-        async with gate:  # Waits for main chat to finish streaming
-            client = _get_http()
-            r = await client.post(
-                f"{LM_STUDIO_URL}/v1/chat/completions",
-                json={
-                    "model": EXTRACTION_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 150,
-                    "temperature": 0.3,
-                    "stream": False,
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-            choices = data.get("choices", [])
-            if not choices:
-                logger.warning("Episode summary LLM returned empty choices")
-                return None
-            return (choices[0].get("message", {}).get("content") or "").strip() or None
-    except Exception as e:
-        logger.warning("Episode summary failed (%s): %s", type(e).__name__, e)
-        return None
-
+Also add "memory_curation" to your JSON:
+{{"keep":true/false,"annotation":"1-2 sentence Klukai journal entry","category":"<one of: {categories}>","image_tags":["tag1","tag2"]}}
+The Commander is HUMAN (male). NOT a T-Doll."""
 
 MISSION_UPDATE_PROMPT = """\
-You are Klukai (AR Team squad leader, T-Doll) writing a 2-3 sentence field radio \
-report to the Commander during an active mission. The Commander is HUMAN (male). \
-He is NOT a T-Doll. Write in first person as Klukai over radio comms.
+You are Klukai writing a 2-3 sentence field radio report to the Commander (HUMAN male).
 
 Mission: {mission_desc}
 Time in field: {elapsed_minutes} minutes
@@ -260,31 +76,104 @@ Update #{update_number}
 {event_line}
 {injury_line}
 
-Rules:
-- Keep it 2-3 sentences. This is a field radio report, not a novel.
-- No one dies. Injuries are temporary. The squad always recovers.
-- If Klukai is injured, she downplays it ("It's nothing, Commander. Flesh wound.")
-- If a major event is happening, the tone is urgent and dramatic.
-- Reference the specific mission objective when relevant.
-- Affection level {affection_level}/9 — higher means more personal concern for Commander.\
-"""
+Rules: 2-3 sentences max. No deaths. Injuries are temporary. Reference the mission objective. \
+Affection {affection_level}/9 — higher means more personal concern."""
 
-ROMANCE_MESSAGE_PROMPT = """\
-You are Klukai (AR Team squad leader, T-Doll) initiating a quiet, intimate evening \
-moment with the Commander. The Commander is HUMAN (male). He is NOT a T-Doll. \
-Write in first person as Klukai. It is {time_of_day}.
+ROMANCE_PROMPT = """\
+You are Klukai initiating a quiet evening moment with the Commander (HUMAN male). \
+It is {time_of_day}. Mood: {mood}. Affection: {affection_level}/9.
+Context: {context_summary}
 
-Current mood: {mood}
-Affection level: {affection_level}/9
-Today's context: {context_summary}
+Write 2-3 soft sentences. Reference today if possible. Level 7+ = openly intimate. \
+Include environmental details (stars, quiet base). Always "Commander", never real name."""
 
-Rules:
-- Write 2-3 sentences. This is a soft, evening message — not a mission report.
-- Reference something from today's interactions if possible.
-- Tone varies: level 5-6 = warm but guarded, level 7+ = openly intimate.
-- Include subtle physical/environmental details (stars, quiet base, warm drink).
-- Never break character. Never use Commander's real name. Always "Commander".\
-"""
+COMPACTION_PROMPT = """\
+Summarize this conversation in 3-4 sentences. Preserve: key topics, Commander's emotional \
+state, promises/decisions, current scene. Third person past tense. Be concise.
+
+{conversation}"""
+
+
+# ── Public API ───────────────────────────────────────────────────────────
+
+async def extract_facts(
+    user_message: str,
+    assistant_message: str,
+    image_generated: bool = False,
+    affection_level: int = 0,
+) -> dict:
+    """Extract mood, facts, interaction classification in one LLM call.
+
+    Returns dict with: mood, interaction, facts, topics, should_remember.
+    Never raises — returns safe defaults on any failure.
+    """
+    from .llm_router import get_lm_gate
+
+    prompt = EXTRACTION_PROMPT.format(
+        user_message=user_message[:800],
+        assistant_message=assistant_message[:800],
+    )
+
+    if image_generated:
+        from .memory_archive import available_categories
+        cats = ", ".join(available_categories(affection_level))
+        prompt += IMAGE_CURATION_ADDENDUM.format(categories=cats)
+
+    gate = get_lm_gate()
+    async with gate:
+        result = await call_llm(
+            LM_STUDIO_URL, EXTRACTION_MODEL, prompt,
+            max_tokens=2048, temperature=0.1,
+        )
+
+    if not result:
+        return dict(_DEFAULT_RESULT)
+
+    # Validate mood
+    mood = result.get("mood", "composed")
+    if mood not in VALID_MOODS:
+        logger.warning("Invalid mood '%s', defaulting to composed", mood)
+        mood = "composed"
+
+    # Validate interaction
+    interaction = result.get("interaction", {})
+    if not isinstance(interaction, dict) or "type" not in interaction:
+        interaction = {"type": "neutral", "intensity": 5}
+
+    out = {
+        "facts": result.get("facts", []),
+        "mood": mood,
+        "topics": result.get("topics", []),
+        "should_remember": result.get("should_remember", False),
+        "interaction": interaction,
+    }
+
+    if image_generated and "memory_curation" in result:
+        out["memory_curation"] = result["memory_curation"]
+
+    return out
+
+
+async def create_episode_summary(turns: list[dict], max_turns: int = 10) -> str | None:
+    """Summarize a conversation segment for episodic memory."""
+    if len(turns) < 3:
+        return None
+
+    from .llm_router import get_lm_gate
+
+    conversation = "\n".join(
+        f"{t['role'].title()}: {t['content'][:200]}" for t in turns[-max_turns:]
+    )
+
+    gate = get_lm_gate()
+    async with gate:
+        text = await call_llm_text(
+            LM_STUDIO_URL, EXTRACTION_MODEL,
+            f"Write a 1-2 sentence Klukai journal entry about this interaction.\n\n{conversation}",
+            max_tokens=150, temperature=0.3,
+        )
+
+    return text or None
 
 
 async def generate_mission_update(
@@ -295,151 +184,69 @@ async def generate_mission_update(
     active_events: list[str],
     affection_level: int,
 ) -> str:
-    """Generate an in-character field radio report for an active mission timer.
-
-    Uses dolphin through the global LM Studio gate.
-    """
-    event_line = f"MAJOR EVENT IN PROGRESS: {major_event}" if major_event else "Situation nominal."
-    injury_line = ""
-    if active_events:
-        injury_line = "Active situations: " + ", ".join(active_events)
+    """Generate an in-character field radio report."""
+    from .llm_router import get_lm_gate
 
     prompt = MISSION_UPDATE_PROMPT.format(
         mission_desc=mission_desc,
         elapsed_minutes=elapsed_minutes,
         update_number=update_number,
-        event_line=event_line,
-        injury_line=injury_line,
+        event_line=f"MAJOR EVENT: {major_event}" if major_event else "Situation nominal.",
+        injury_line=("Active: " + ", ".join(active_events)) if active_events else "",
         affection_level=affection_level,
     )
 
-    try:
-        from .llm_router import get_lm_gate
+    gate = get_lm_gate()
+    async with gate:
+        text = await call_llm_text(
+            LM_STUDIO_URL, EXTRACTION_MODEL, prompt,
+            max_tokens=150, temperature=0.6,
+        )
 
-        gate = get_lm_gate()
-        async with gate:
-            client = _get_http()
-            r = await client.post(
-                f"{LM_STUDIO_URL}/v1/chat/completions",
-                json={
-                    "model": EXTRACTION_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 150,
-                    "temperature": 0.6,
-                    "stream": False,
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-            choices = data.get("choices", [])
-            if not choices:
-                logger.warning("Mission update LLM returned empty choices")
-                return "...Static on the line. Update delayed. Standing by."
-            content = (choices[0].get("message", {}).get("content") or "").strip()
-            # Strip think tags if present
-            import re
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-            return content or "...Comms interference. Update delayed."
-    except Exception as e:
-        logger.warning("Mission update generation failed (%s): %s", type(e).__name__, e)
-        return "...Static on the line. Will retry comms shortly."
+    return text or "...Static on the line. Update delayed."
 
 
 async def generate_romance_message(
-    affection_level: int,
-    mood: str,
-    context_summary: str,
-    time_of_day: str,
+    affection_level: int, mood: str, context_summary: str, time_of_day: str,
 ) -> str:
-    """Generate a context-aware evening romance message from Klukai.
+    """Generate a context-aware evening romance message."""
+    from .llm_router import get_lm_gate
 
-    Uses dolphin through the global LM Studio gate.
-    """
-    prompt = ROMANCE_MESSAGE_PROMPT.format(
+    prompt = ROMANCE_PROMPT.format(
         affection_level=affection_level,
         mood=mood,
         context_summary=context_summary or "A routine day at base.",
         time_of_day=time_of_day,
     )
 
-    try:
-        from .llm_router import get_lm_gate
+    gate = get_lm_gate()
+    async with gate:
+        text = await call_llm_text(
+            LM_STUDIO_URL, EXTRACTION_MODEL, prompt,
+            max_tokens=200, temperature=0.7,
+        )
 
-        gate = get_lm_gate()
-        async with gate:
-            client = _get_http()
-            r = await client.post(
-                f"{LM_STUDIO_URL}/v1/chat/completions",
-                json={
-                    "model": EXTRACTION_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 200,
-                    "temperature": 0.7,
-                    "stream": False,
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-            choices = data.get("choices", [])
-            if not choices:
-                logger.warning("Romance message LLM returned empty choices")
-                return "...The base is quiet tonight. I was thinking of you."
-            content = (choices[0].get("message", {}).get("content") or "").strip()
-            import re
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-            return content or "...It's a quiet evening. I wanted to check in."
-    except Exception as e:
-        logger.warning("Romance message generation failed (%s): %s", type(e).__name__, e)
-        return "...The evening is quiet. I was thinking about today."
-
-
-COMPACTION_PROMPT = """\
-You are Klukai's memory compactor. Summarize this conversation segment into a brief \
-3-4 sentence recap preserving: key topics discussed, Commander's requests or emotional \
-state, any promises or decisions made, and the current scene/situation. Write in third \
-person past tense. Be concise.
-
-{conversation}"""
+    return text or "...The evening is quiet. I was thinking about today."
 
 
 async def compact_turns(turns: list[dict]) -> str | None:
-    """Summarize a block of conversation turns into a compact recap via gemma."""
+    """Summarize conversation turns into a compact recap."""
     if len(turns) < 2:
         return None
+
+    from .llm_router import get_lm_gate
 
     conversation = "\n".join(
         f"{'Commander' if t['role'] == 'user' else 'Klukai'}: {t['content'][:300]}"
         for t in turns
     )
 
-    prompt = COMPACTION_PROMPT.format(conversation=conversation)
+    gate = get_lm_gate()
+    async with gate:
+        text = await call_llm_text(
+            LM_STUDIO_URL, EXTRACTION_MODEL,
+            COMPACTION_PROMPT.format(conversation=conversation),
+            max_tokens=200, temperature=0.2,
+        )
 
-    try:
-        from .llm_router import get_lm_gate
-
-        gate = get_lm_gate()
-        async with gate:
-            client = _get_http()
-            r = await client.post(
-                f"{LM_STUDIO_URL}/v1/chat/completions",
-                json={
-                    "model": EXTRACTION_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 200,
-                    "temperature": 0.2,
-                    "stream": False,
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-            choices = data.get("choices", [])
-            if not choices:
-                return None
-            content = (choices[0].get("message", {}).get("content") or "").strip()
-            # Strip think tags if present
-            import re
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-            return content or None
-    except Exception as e:
-        logger.warning("Session compaction failed (%s): %s", type(e).__name__, e)
-        return None
+    return text or None

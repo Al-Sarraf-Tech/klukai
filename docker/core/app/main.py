@@ -1058,6 +1058,10 @@ async def _background_extraction(
         # Adjust affection using the merged interaction classification (no separate LLM call)
         try:
             interaction = result.get("interaction", {})
+            if isinstance(interaction, str):
+                interaction = {"type": interaction, "intensity": 5}
+            elif not isinstance(interaction, dict):
+                interaction = {"type": "neutral", "intensity": 5}
             interaction_type = interaction.get("type", "neutral")
             intensity = max(1, min(10, int(interaction.get("intensity", 5))))
             aff_change = await affection.apply_classification(interaction_type, intensity)
