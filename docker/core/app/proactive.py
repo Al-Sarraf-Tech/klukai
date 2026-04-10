@@ -497,10 +497,10 @@ class ProactiveEngine:
             replace_existing=True,
         )
 
-        # Random lore events — hourly check with low probability
+        # Random lore events — every 30 min, boosted during missions/intimate moods
         self._scheduler.add_job(
             self._random_event,
-            CronTrigger(hour="9-21", minute=15),
+            CronTrigger(hour="9-23", minute="15,45"),
             id="random_event",
             replace_existing=True,
         )
@@ -646,32 +646,36 @@ class ProactiveEngine:
 
         now = datetime.now()
 
-        # Guard: max 2 per day
-        if self._random_events_today >= 2:
+        # Guard: max 5 per day
+        if self._random_events_today >= 5:
             return
 
-        # Guard: 3-hour gap between events
-        if self._last_random_event and (now - self._last_random_event) < timedelta(hours=3):
+        # Guard: 45-min gap between events
+        if self._last_random_event and (now - self._last_random_event) < timedelta(minutes=45):
             return
 
-        # Guard: don't interrupt active conversation (10 min cooldown)
-        if self._last_message_time and (now - self._last_message_time) < timedelta(minutes=10):
+        # Guard: don't interrupt active typing (3 min cooldown)
+        if self._last_message_time and (now - self._last_message_time) < timedelta(minutes=3):
             return
 
-        # Guard: don't interrupt intimate/vulnerable moments
-        if self._last_mood in ("tender", "longing", "flustered", "affectionate", "shy", "yearning", "devoted", "vulnerable", "drowsy"):
-            return
-
-        # Guard: don't pile up unanswered proactives
-        if not self._last_proactive_answered:
-            return
+        # Intimate/vulnerable moods BOOST events instead of blocking them
+        # — these are the moments Klukai would naturally say something
+        intimate_mood = self._last_mood in (
+            "tender", "longing", "flustered", "affectionate", "shy",
+            "yearning", "devoted", "vulnerable", "drowsy",
+        )
 
         # Guard: check mute
         if self._muted_until and now < self._muted_until:
             return
 
-        # Roll probability: 15% chance
-        if random.random() > 0.15:
+        # Roll probability: 35% base, 60% during intimate moods, 50% during missions
+        base_chance = 0.35
+        if intimate_mood:
+            base_chance = 0.60
+        if self.mission_active:
+            base_chance = max(base_chance, 0.50)
+        if random.random() > base_chance:
             return
 
         # Load event templates from personality
