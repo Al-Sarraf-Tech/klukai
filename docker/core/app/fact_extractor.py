@@ -116,19 +116,42 @@ async def extract_facts(
             if not choices:
                 logger.warning("Extraction LLM returned empty choices: %s", data)
                 return {"facts": [], "mood": "composed", "topics": [], "should_remember": False, "interaction": {"type": "neutral", "intensity": 5}}
-            content = choices[0].get("message", {}).get("content") or ""
-            if not content.strip():
-                logger.warning("Extraction LLM returned empty content")
+            msg = choices[0].get("message", {})
+            content = (msg.get("content") or "").strip()
+
+            # Dolphin R1 thinking model: JSON often lands in reasoning_content
+            if not content:
+                reasoning = (msg.get("reasoning_content") or "").strip()
+                if reasoning:
+                    content = reasoning
+                    logger.debug("Using reasoning_content for extraction (content was empty)")
+
+            if not content:
+                logger.warning("Extraction LLM returned empty content + reasoning")
                 return {"facts": [], "mood": "composed", "topics": [], "should_remember": False, "interaction": {"type": "neutral", "intensity": 5}}
 
-        # Parse JSON from response (handle markdown code blocks + R1 think tags)
+        # Parse JSON from response (handle thinking tags, markdown, embedded JSON)
         import re
         content = content.strip()
+        # Strip all thinking tag variants
+        content = re.sub(r'<\|?think\|?>.*?<\|?/think\|?>', '', content, flags=re.DOTALL)
         content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
         content = content.strip()
-        if content.startswith("```"):
-            content = content.split("\n", 1)[1]
-            content = content.rsplit("```", 1)[0]
+        # Strip markdown code blocks
+        if "```" in content:
+            parts = content.split("```")
+            if len(parts) >= 3:
+                inner = parts[1]
+                if inner.startswith("json"):
+                    inner = inner[4:]
+                content = inner.strip()
+        # Find JSON object if mixed with reasoning text
+        if content and not content.startswith("{"):
+            json_match = re.search(r'\{.*\}', content, flags=re.DOTALL)
+            if json_match:
+                content = json_match.group(0)
+        # Fix trailing commas
+        content = re.sub(r',\s*([}\]])', r'\1', content)
 
         result = json.loads(content)
 
