@@ -425,7 +425,7 @@ class LLMRouter:
                     elif not yielded_content:
                         # Collect reasoning tokens; they become the response if no
                         # content tokens ever arrive (thinking-only model output)
-                        reasoning = delta.get("reasoning_content")
+                        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
                         if reasoning:
                             reasoning_parts.append(reasoning)
                 except (json.JSONDecodeError, KeyError, IndexError):

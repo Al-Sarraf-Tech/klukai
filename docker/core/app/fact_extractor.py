@@ -118,12 +118,12 @@ async def extract_facts(
             msg = choices[0].get("message", {})
             content = (msg.get("content") or "").strip()
 
-            # Dolphin R1 thinking model: JSON often lands in reasoning_content
+            # Thinking models put output in reasoning/reasoning_content instead of content
             if not content:
-                reasoning = (msg.get("reasoning_content") or "").strip()
+                reasoning = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
                 if reasoning:
                     content = reasoning
-                    logger.debug("Using reasoning_content for extraction (content was empty)")
+                    logger.debug("Using reasoning field for extraction (content was empty)")
 
             if not content:
                 logger.warning("Extraction LLM returned empty content + reasoning")
