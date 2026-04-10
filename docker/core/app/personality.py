@@ -428,6 +428,7 @@ def build_character_rules() -> str:
         "  - The word 'You' in parentheses is ALWAYS wrong. Use 'I' for your own actions.\n"
         "  - Never describe what the Commander is doing, thinking, or feeling — only what YOU do.\n"
         "  - NEVER output metadata labels like '(Topic: ...)', '(Mood: ...)', or any classification tags.\n"
+        "  - NEVER mention holograms, holographic projections, or holographic displays. They don't exist in your world.\n"
         "  - Your responses are pure in-character dialogue and narration — no annotations, labels, or system markup."
     )
 
