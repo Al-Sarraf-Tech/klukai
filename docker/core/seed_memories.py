@@ -111,6 +111,7 @@ async def main():
     # ── PASS 1: Selection with qwen2.5-3b (fast, reliable JSON) ──
     logger.info("=== PASS 1: Selection (qwen2.5-3b) ===")
     selected = []
+    failed_batches = []
     async with httpx.AsyncClient(timeout=30.0) as client:
         for batch_start in range(0, len(exchanges), 5):
             batch = exchanges[batch_start:batch_start + 5]
@@ -167,8 +168,60 @@ async def main():
 
             except Exception as e:
                 logger.warning("  Batch %d failed: %s", batch_start, e)
+                failed_batches.append((batch_start, batch))
 
             await asyncio.sleep(2)
+
+    # Retry failed batches once
+    if failed_batches:
+        logger.info("Retrying %d failed batches...", len(failed_batches))
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            for batch_start, batch in failed_batches:
+                exchange_text = ""
+                for j, ex in enumerate(batch):
+                    exchange_text += f"\nExchange {j} ({ex['created_at']}):\n"
+                    exchange_text += f"  Commander: {ex['user'][:200]}\n"
+                    exchange_text += f"  Klukai: {ex['assistant'][:200]}\n"
+
+                prompt = SELECTION_PROMPT.format(count=len(batch), exchanges=exchange_text)
+                try:
+                    r = await client.post(
+                        f"{LM_STUDIO_URL}/v1/chat/completions",
+                        json={
+                            "model": SELECTOR_MODEL,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "max_tokens": 2048,
+                            "temperature": 0.1,
+                            "stream": False,
+                        },
+                    )
+                    r.raise_for_status()
+                    msg = r.json()["choices"][0]["message"]
+                    content = (msg.get("content") or "").strip()
+                    if not content:
+                        content = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
+                    content = re.sub(r'<\|?think\|?>.*?<\|?/think\|?>', '', content, flags=re.DOTALL).strip()
+                    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                    if "```" in content:
+                        parts = content.split("```")
+                        if len(parts) >= 3:
+                            content = parts[1].lstrip("json").strip()
+                    if content and not content.startswith("{"):
+                        m = re.search(r'\{.*\}', content, flags=re.DOTALL)
+                        if m: content = m.group(0)
+                    content = re.sub(r',\s*([}\]])', r'\1', content)
+
+                    result = json.loads(content)
+                    for mem in result.get("memories", []):
+                        idx = mem.get("index", 0)
+                        if 0 <= idx < len(batch):
+                            mem["exchange"] = batch[idx]
+                            mem["global_index"] = batch_start + idx
+                            selected.append(mem)
+                            logger.info("  RETRY: Selected exchange %d (%s)", batch_start + idx, mem.get("category", "?"))
+                except Exception as e:
+                    logger.warning("  RETRY batch %d failed again: %s", batch_start, e)
+                await asyncio.sleep(3)
 
     logger.info("Pass 1 complete: %d exchanges selected from %d", len(selected), len(exchanges))
 
