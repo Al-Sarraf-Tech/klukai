@@ -92,7 +92,12 @@ class AffectionManager:
             await self._http.aclose()
 
     async def _load_state(self) -> None:
-        """Load current affection state from PostgreSQL."""
+        """Load current affection state from PostgreSQL.
+
+        Includes a hard floor: if the DB somehow has a score far below what
+        was previously earned (e.g., stale read after restart), preserve the
+        higher value. Score can only drop via legitimate decay/penalties.
+        """
         try:
             async with get_conn() as conn:
                 row = await (
@@ -104,8 +109,24 @@ class AffectionManager:
                 ).fetchone()
 
                 if row:
+                    new_score = row[0]
+                    # Hard floor: never let a DB read silently drop score by >50 points
+                    # Legitimate decay is small (-1/day). Large drops = stale data.
+                    if self._state and self._state.score > 0:
+                        if new_score < self._state.score - 50:
+                            logger.warning(
+                                "Affection score anomaly: DB=%d, memory=%d — keeping higher value",
+                                new_score, self._state.score,
+                            )
+                            # Write the correct value back to DB
+                            await conn.execute(
+                                "UPDATE companion_affection SET score=%s, level=%s, level_name=%s WHERE id=1",
+                                (self._state.score, self._state.level, self._state.level_name),
+                            )
+                            return
+
                     self._state = AffectionState(
-                        score=row[0],
+                        score=new_score,
                         level=row[1],
                         level_name=row[2],
                         last_interaction_date=row[3],
@@ -114,11 +135,13 @@ class AffectionManager:
                         total_interactions=row[6],
                         first_interaction=row[7],
                     )
+                    logger.debug("Affection loaded: score=%d lv%d", new_score, row[1])
                 else:
                     self._state = AffectionState()
         except Exception as e:
             logger.warning("Failed to load affection state: %s", e)
-            self._state = AffectionState()
+            if not self._state:
+                self._state = AffectionState()
 
     async def get_state(self) -> AffectionState:
         """Get current affection state — always reads from DB for consistency."""
@@ -183,9 +206,10 @@ class AffectionManager:
         # Calculate delta based on type and intensity
         delta = self._calculate_delta(interaction_type, intensity)
 
-        # Cap negative deltas to prevent score destruction
+        # TESTING MODE: no negative changes — score only goes up
+        # TODO: re-enable penalties after testing is complete
         if delta < 0:
-            delta = max(delta, -3)  # Max single penalty: -3
+            delta = 0
 
         # Apply daily cap (only for positive changes)
         if delta > 0:
@@ -313,7 +337,8 @@ class AffectionManager:
             return int(score_range)
 
     async def _apply_absence_decay(self) -> None:
-        """Apply decay for days with no interaction."""
+        """Apply decay for days with no interaction. DISABLED during testing."""
+        return  # TODO: re-enable after testing
         state = await self.get_state()
         if state.last_interaction_date is None:
             return
@@ -331,10 +356,15 @@ class AffectionManager:
         if total_decay == 0:
             return
 
+        # Cap decay: never lose more than 10% of score or 30 points, whichever is smaller
+        max_decay = min(int(state.score * 0.10), 30)
+        total_decay = max(total_decay, -max_decay)
+
         old_score = state.score
         old_level = state.level
         state.score = max(0, state.score + total_decay)
         state.level, state.level_name = self._compute_level(state.score)
+        logger.info("Absence decay: %d points for %d days (capped), score %d→%d", total_decay, days_absent - 1, old_score, state.score)
 
         await self._save_state(state)
         if total_decay != 0:
