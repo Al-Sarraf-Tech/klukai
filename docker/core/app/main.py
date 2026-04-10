@@ -1020,6 +1020,19 @@ async def _background_extraction(
         await ws.send_mood("default", mood)
         proactive.set_last_mood(mood)
 
+        # Auto-start mission when mood hits battle_ready and no mission is active
+        if mood == "battle_ready" and not proactive.mission_active:
+            recent_text = " ".join(
+                t.get("content", "")[:100] for t in session.turns[-4:]
+                if t.get("role") == "user"
+            ) or "Combat operation"
+            proactive.start_mission(recent_text, interval_minutes=30)
+            session.mission_description = recent_text
+            session.mission_interval = 30
+            session.mission_started_at = datetime.now().isoformat()
+            await memory.save_session(SESSION_ID, session)
+            logger.info("Mission auto-started from battle_ready mood: %s", recent_text[:60])
+
         # Persist mood so it survives session expiry
         try:
             async with get_conn_autocommit() as conn:
