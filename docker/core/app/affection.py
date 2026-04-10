@@ -134,10 +134,32 @@ class AffectionManager:
                 result_name = lv.get("name", "Unknown")
         return result_level, result_name
 
+    async def apply_classification(
+        self, interaction_type: str, intensity: int
+    ) -> AffectionChange:
+        """Apply a pre-classified interaction to the affection score.
+
+        Called with classification from the merged extraction (one LLM call
+        handles mood + facts + classification together).
+        """
+        return await self._apply_delta(interaction_type, intensity)
+
     async def classify_and_adjust(
         self, user_message: str, assistant_message: str
     ) -> AffectionChange:
-        """Classify interaction and adjust affection score."""
+        """Classify interaction via LLM and adjust affection score.
+
+        Legacy method — prefer apply_classification() with merged extraction.
+        """
+        interaction_type, intensity = await self._classify_interaction(
+            user_message, assistant_message
+        )
+        return await self._apply_delta(interaction_type, intensity)
+
+    async def _apply_delta(
+        self, interaction_type: str, intensity: int
+    ) -> AffectionChange:
+        """Core affection adjustment logic — shared by both paths."""
         state = await self.get_state()
         today = date.today()
 
@@ -156,11 +178,6 @@ class AffectionManager:
             state.first_interaction = datetime.now()
 
         state.total_interactions += 1
-
-        # Classify the interaction
-        interaction_type, intensity = await self._classify_interaction(
-            user_message, assistant_message
-        )
 
         # Calculate delta based on type and intensity
         delta = self._calculate_delta(interaction_type, intensity)

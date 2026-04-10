@@ -26,30 +26,30 @@ def _get_http() -> httpx.AsyncClient:
     return _http
 
 FACT_EXTRACTION_PROMPT = """\
-You are Klukai's internal memory processor. Extract information about the Commander
-from this exchange. Focus on what a devoted elite T-Doll squad leader would consider
-operationally important:
-- Tactical preferences (how they approach problems, decision-making style)
-- Personal details they've shared (work, hobbies, interests, daily life)
-- Emotional state patterns (stress, energy, morale)
-- Promises made (by either party)
-- Things that pleased or displeased the Commander
-- Items, gifts, or resources mentioned
+You are Klukai's internal processor. Analyze this exchange in ONE pass.
+The Commander is HUMAN (male). You are the T-Doll.
 
-Return a JSON object with:
-- "facts": list of {{"key": "short_key", "value": "fact description"}} — only NEW information about the Commander
-- "mood": Klukai's emotional state after this exchange. Choose the MOST fitting one:
-  Core: composed, focused, prideful, exasperated, protective, quietly_pleased, competitive, tender, longing, battle_ready
-  Romantic: flustered, affectionate, shy, yearning, devoted, passionate, jealous, possessive, smitten, infatuated
-  Tactical: vigilant, calculating, hunting, adrenaline
-  Mission stress: scared, terrified, panicked, desperate, relieved
-  Relaxed: content, playful, drowsy, amused, bored, excited
-  Dark: melancholic, haunted, conflicted, guilty, determined, grieving, furious
-  Other: nostalgic, curious, irritated, defiant, vulnerable, grateful, worried, embarrassed
-- "topics": list of discussion topics mentioned
-- "should_remember": boolean — true if this exchange contains something worth preserving in long-term operational records
+Return a JSON object with ALL of these fields:
 
-If no new facts, return empty lists. Return ONLY valid JSON, no other text.
+1. "mood": YOUR emotional state after this exchange. Pick the MOST fitting:
+   composed, focused, prideful, exasperated, protective, quietly_pleased, competitive,
+   tender, longing, battle_ready, flustered, affectionate, shy, yearning, devoted,
+   passionate, jealous, possessive, smitten, infatuated, vigilant, calculating, hunting,
+   adrenaline, scared, terrified, panicked, desperate, relieved, content, playful, drowsy,
+   amused, bored, excited, melancholic, haunted, conflicted, guilty, determined, grieving,
+   furious, nostalgic, curious, irritated, defiant, vulnerable, grateful, worried, embarrassed
+
+2. "interaction": classify the Commander's message ONLY (ignore your response):
+   {{"type": ONE OF greeting/genuine_interest/personal_sharing/compliment/mission_discussion/remembering/rude/inappropriate/ignoring_advice/neutral, "intensity": 1-10}}
+   IMPORTANT: casual/short messages are NEVER "rude". Only explicit hostility is "rude".
+
+3. "facts": list of {{"key": "short_key", "value": "description"}} — only NEW info about the Commander
+
+4. "topics": list of discussion topics
+
+5. "should_remember": true if this exchange is worth preserving
+
+Return ONLY valid JSON. No markdown, no explanation, no thinking tags.
 
 Exchange:
 Commander: {user_message}
@@ -105,7 +105,7 @@ async def extract_facts(
                 json={
                     "model": EXTRACTION_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 256,
+                    "max_tokens": 384,
                     "temperature": 0.1,
                     "stream": False,
                 },
@@ -115,11 +115,11 @@ async def extract_facts(
             choices = data.get("choices", [])
             if not choices:
                 logger.warning("Extraction LLM returned empty choices: %s", data)
-                return {"facts": [], "mood": "composed", "topics": [], "should_remember": False}
+                return {"facts": [], "mood": "composed", "topics": [], "should_remember": False, "interaction": {"type": "neutral", "intensity": 5}}
             content = choices[0].get("message", {}).get("content") or ""
             if not content.strip():
                 logger.warning("Extraction LLM returned empty content")
-                return {"facts": [], "mood": "composed", "topics": [], "should_remember": False}
+                return {"facts": [], "mood": "composed", "topics": [], "should_remember": False, "interaction": {"type": "neutral", "intensity": 5}}
 
         # Parse JSON from response (handle markdown code blocks + R1 think tags)
         import re
@@ -151,11 +151,17 @@ async def extract_facts(
             logger.warning("Invalid mood '%s' from extraction, defaulting to composed", mood)
             mood = "composed"
 
+        # Extract interaction classification (merged — no separate LLM call needed)
+        interaction = result.get("interaction", {})
+        if not isinstance(interaction, dict):
+            interaction = {"type": "neutral", "intensity": 5}
+
         out: dict = {
             "facts": result.get("facts", []),
             "mood": mood,
             "topics": result.get("topics", []),
             "should_remember": result.get("should_remember", False),
+            "interaction": interaction,
         }
 
         if image_generated and "memory_curation" in result:
@@ -169,6 +175,7 @@ async def extract_facts(
             "mood": "composed",
             "topics": [],
             "should_remember": False,
+            "interaction": {"type": "neutral", "intensity": 5},
         }
 
 

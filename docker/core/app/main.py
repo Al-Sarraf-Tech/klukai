@@ -1049,9 +1049,12 @@ async def _background_extraction(
         except Exception as e:
             logger.warning("Failed to persist mood: %s", e)
 
-        # Adjust affection based on interaction
+        # Adjust affection using the merged interaction classification (no separate LLM call)
         try:
-            aff_change = await affection.classify_and_adjust(user_msg, assistant_msg)
+            interaction = result.get("interaction", {})
+            interaction_type = interaction.get("type", "neutral")
+            intensity = max(1, min(10, int(interaction.get("intensity", 5))))
+            aff_change = await affection.apply_classification(interaction_type, intensity)
 
             # Sync affection level to proactive engine
             proactive.set_affection_level(aff_change.new_level)
