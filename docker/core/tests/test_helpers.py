@@ -171,6 +171,12 @@ class TestIntentDetection:
     def test_recall_case_insensitive(self):
         assert _wants_recall("SHOW ME A MEMORY")
 
+    def test_recall_photo_album(self):
+        assert _wants_recall("show me our photos")
+
+    def test_recall_scrapbook(self):
+        assert _wants_recall("open your scrapbook")
+
     # Mission start
     def test_mission_start_updates_every(self):
         assert _wants_mission_start("Give me updates every 30 minutes")
@@ -216,3 +222,49 @@ class TestParseInterval:
 
     def test_2_hours(self):
         assert _parse_interval_minutes("every 2 hours") == 120
+
+
+# ── Squad member detection ────────────────────────────────────────────────────
+
+
+class TestSquadDetection:
+    def test_detect_mechty(self):
+        from app.helpers import detect_squad_address
+        assert detect_squad_address("Hey Mechty, come here") == "Mechty"
+
+    def test_detect_by_alias(self):
+        from app.helpers import detect_squad_address
+        assert detect_squad_address("Where's G11?") == "Mechty"
+
+    def test_detect_belka(self):
+        from app.helpers import detect_squad_address
+        assert detect_squad_address("How's Belka doing?") == "Belka"
+
+    def test_detect_leva_by_ump45(self):
+        from app.helpers import detect_squad_address
+        assert detect_squad_address("Talk to UMP45") == "Leva"
+
+    def test_no_squad_member(self):
+        from app.helpers import detect_squad_address
+        assert detect_squad_address("Hello Commander") is None
+
+    def test_case_insensitive(self):
+        from app.helpers import detect_squad_address
+        assert detect_squad_address("WHERE IS ANDORIS") == "Andoris"
+
+
+# ── Dream inquiry detection ───────────────────────────────────────────────────
+
+
+class TestDreamDetection:
+    def test_dream_inquiry_positive(self):
+        from app.helpers import wants_dream_inquiry
+        assert wants_dream_inquiry("Did you dream about me?")
+
+    def test_dream_inquiry_sleep(self):
+        from app.helpers import wants_dream_inquiry
+        assert wants_dream_inquiry("How did you sleep?")
+
+    def test_dream_inquiry_negative(self):
+        from app.helpers import wants_dream_inquiry
+        assert not wants_dream_inquiry("What's for dinner?")

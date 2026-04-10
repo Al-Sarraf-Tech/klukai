@@ -394,6 +394,20 @@ def build_squad_voices_block(p: dict) -> str:
     )
 
 
+def build_squad_interaction_hint(addressed_member: str | None) -> str:
+    """Inject a hint when the Commander addresses a specific squad member."""
+    if not addressed_member:
+        return ""
+    return (
+        f"SQUAD INTERACTION: The Commander is addressing {addressed_member} directly. "
+        f"Give {addressed_member} prominent dialogue in your response — at least 2-3 lines "
+        f"of their speech in their distinct voice. You (Klukai) are still the narrator and "
+        f"protagonist, but let {addressed_member} shine in this exchange. React to what "
+        f"{addressed_member} says — agree, disagree, roll your eyes, comment. This is a "
+        f"squad scene, not a solo performance."
+    )
+
+
 def build_tool_block(tools_available: bool = False) -> str:
     """Add tool instructions framed through Klukai's identity."""
     if not tools_available:
@@ -515,6 +529,7 @@ def assemble_system_prompt(
     last_msg_length: int = 0,
     personality_path: str | None = None,
     mission_description: str | None = None,
+    addressed_member: str | None = None,
 ) -> str:
     """Assemble the full Klukai system prompt from all components."""
     p = load_personality(personality_path)
@@ -534,6 +549,7 @@ def assemble_system_prompt(
         build_character_preamble(p, affection_level),
         build_character_rules(),
         build_squad_voices_block(p),
+        build_squad_interaction_hint(addressed_member),
         build_pace_block(last_msg_length),
         build_expressive_block(p, affection_level),
         build_japanese_block(p, affection_level),

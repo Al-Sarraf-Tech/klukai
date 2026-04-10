@@ -109,6 +109,8 @@ def strip_actions_for_tts(text: str) -> str:
 RECALL_KEYWORDS = [
     "show me a memory", "remember when", "that time we", "do you remember",
     "show me something", "recall a memory", "our memories", "your memories",
+    "our photos", "your album", "that picture", "show me that image",
+    "photo album", "your scrapbook", "memory archive",
 ]
 
 SAVE_KEYWORDS = ["save that", "keep this", "keep that", "save this"]
@@ -121,11 +123,61 @@ MISSION_CANCEL_KEYWORDS = [
     "stop updates", "cancel updates", "enough updates", "stand down", "stop reporting",
 ]
 
+# Squad member addressing — Commander wants to talk to/about a specific squad member
+SQUAD_MEMBERS = {
+    "mechty": "Mechty",
+    "g11": "Mechty",
+    "belka": "Belka",
+    "g28": "Belka",
+    "andoris": "Andoris",
+    "vector": "Vector",
+    "harpsy": "Harpsy",
+    "ruchey": "Ruchey",
+    "welrod": "Welrod",
+    "leva": "Leva",
+    "ump45": "Leva",
+    "ump9": "Lenna",
+    "lenna": "Lenna",
+}
+
+SQUAD_ADDRESS_PATTERNS = [
+    "hey {name}", "talk to {name}", "where's {name}", "where is {name}",
+    "how's {name}", "how is {name}", "call {name}", "get {name}",
+    "bring {name}", "what about {name}", "ask {name}",
+]
+
+
+def detect_squad_address(message: str) -> str | None:
+    """Detect if the Commander is addressing a specific squad member.
+
+    Returns the canonical squad member name (e.g., 'Mechty') or None.
+    """
+    lower = message.lower()
+
+    # Check if any squad member name appears in the message
+    for alias, canonical in SQUAD_MEMBERS.items():
+        if alias in lower:
+            return canonical
+
+    return None
+
+
 TRIVIAL_PATTERNS = {
     "ok", "okay", "yes", "no", "yeah", "yep", "nope", "sure", "thanks",
     "thank you", "haha", "lol", "hm", "hmm", "mhm", "hi", "hey", "hello",
     "good", "nice", "cool", "right", "agreed", "understood",
 }
+
+DREAM_INQUIRY_KEYWORDS = [
+    "did you dream", "dream about me", "what did you dream",
+    "any dreams", "sleep well", "how did you sleep",
+    "nightmares", "good dreams",
+]
+
+
+def wants_dream_inquiry(message: str) -> bool:
+    lower = message.lower()
+    return any(kw in lower for kw in DREAM_INQUIRY_KEYWORDS)
 
 
 def wants_recall(message: str) -> bool:

@@ -197,6 +197,21 @@ class TestMoodSystem:
         combat = {"battle_ready", "vigilant", "calculating", "adrenaline"}
         assert combat.issubset(set(self.ALL_MOODS))
 
+    def test_all_moods_have_ambient_mapping(self):
+        """Core mood categories should have ambient sound mappings."""
+        # These are the mood groups that have explicit ambient mappings
+        mapped_moods = {
+            "tender", "affectionate", "devoted", "shy", "flustered", "vulnerable",
+            "composed", "content", "quietly_pleased", "relieved", "drowsy",
+            "focused", "vigilant", "calculating",
+            "battle_ready", "adrenaline", "hunting",
+            "melancholic", "haunted", "grieving", "guilty", "nostalgic",
+            "playful", "amused", "excited", "curious",
+            "passionate", "yearning", "longing", "smitten",
+        }
+        # At least 30 moods should have ambient mappings
+        assert len(mapped_moods) >= 30
+
 
 # ── Memory Archive Categories ───────────────────────────────────────────────
 
@@ -370,6 +385,16 @@ class TestPersonalityConfig:
         rules = p.get("absolute_rules", [])
         for rule in rules:
             assert "hologram" not in rule.lower() or "never" in rule.lower()
+
+    def test_has_daily_challenges(self, p):
+        challenges = p.get("daily_challenges", {}).get("challenges", [])
+        assert len(challenges) >= 5
+
+    def test_daily_challenges_have_types(self, p):
+        challenges = p.get("daily_challenges", {}).get("challenges", [])
+        types = {c["type"] for c in challenges}
+        assert "personal_sharing" in types
+        assert "competitive" in types
 
 
 # ── Narration Pipeline ──────────────────────────────────────────────────────

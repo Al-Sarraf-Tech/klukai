@@ -309,11 +309,38 @@ async def background_recall(content: str, session: SessionState, user_id: str) -
         aff_state = await affection.get_state()
         mem = await memory_archive.recall_memory(content, session.mood, aff_state.level)
         if not mem:
-            await ws.send_proactive(user_id, "...I searched through our records, but couldn't find anything matching that.")
+            await ws.send_proactive(user_id, "...I searched through our records, but nothing matched. Perhaps we haven't made that memory yet, Commander.")
             return
 
-        annotation = mem.get("annotation") or "A moment I've preserved."
-        await ws.send_proactive(user_id, annotation)
+        # Format the memory card
+        from datetime import datetime, timezone
+        mem_date = mem.get("created_at")
+        if mem_date:
+            if isinstance(mem_date, str):
+                mem_date = datetime.fromisoformat(mem_date)
+            if mem_date.tzinfo is None:
+                mem_date = mem_date.replace(tzinfo=timezone.utc)
+            days_ago = (datetime.now(timezone.utc) - mem_date).days
+            if days_ago == 0:
+                time_ref = "earlier today"
+            elif days_ago == 1:
+                time_ref = "yesterday"
+            elif days_ago < 7:
+                time_ref = f"{days_ago} days ago"
+            else:
+                time_ref = mem_date.strftime("%B %d")
+        else:
+            time_ref = ""
+
+        category = mem.get("category", "")
+        annotation = mem.get("annotation", "") or "A moment I've preserved."
+
+        # Send formatted memory card
+        card = f"[{category}]"
+        if time_ref:
+            card += f" — {time_ref}"
+        card += f"\n\n{annotation}"
+        await ws.send_proactive(user_id, card)
 
         img_bytes = await memory_archive.get_image_bytes(mem["id"], thumbnail=False)
         if img_bytes:

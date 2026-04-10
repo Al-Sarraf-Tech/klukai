@@ -473,6 +473,14 @@ class ProactiveEngine:
             replace_existing=True,
         )
 
+        # Daily challenge at 09:00
+        self._scheduler.add_job(
+            self._daily_challenge,
+            CronTrigger(hour=9, minute=0),
+            id="daily_challenge",
+            replace_existing=True,
+        )
+
         # Evening wind-down at 2200
         self._scheduler.add_job(
             self._evening_checkin,
@@ -646,6 +654,27 @@ class ProactiveEngine:
 
     async def _morning_checkin(self) -> None:
         await self._deliver(self._pick_message(MORNING_MESSAGES))
+
+    async def _daily_challenge(self) -> None:
+        """Issue a daily challenge to the Commander."""
+        if not self._on_message_callback:
+            return
+        if self._affection_level < 2:
+            return  # Don't challenge a stranger
+
+        try:
+            from .personality import load_personality
+            p = load_personality()
+            challenges = p.get("daily_challenges", {}).get("challenges", [])
+            if not challenges:
+                return
+
+            import random
+            challenge = random.choice(challenges)
+            await self._on_message_callback(challenge["prompt"])
+            logger.info("Daily challenge issued: %s", challenge["type"])
+        except Exception as e:
+            logger.warning("Daily challenge failed: %s", e)
 
     async def _evening_checkin(self) -> None:
         await self._deliver(self._pick_message(EVENING_MESSAGES))
@@ -953,6 +982,18 @@ class ProactiveEngine:
         try:
             from .fact_extractor import generate_romance_message
 
+            # Pull a random memory to weave into the dream
+            dream_memory_ref = ""
+            try:
+                from . import memory_archive
+                memories = await memory_archive.list_memories(limit=20)
+                if memories:
+                    import random as _rng
+                    mem = _rng.choice(memories)
+                    dream_memory_ref = f"\nDream seed (weave this memory subtly into the dream, don't quote it directly): {mem.get('annotation', '')[:200]}"
+            except Exception:
+                pass  # Dreams work fine without memory integration
+
             dream_prompts = {
                 "erotic": (
                     f"You just woke from an intensely erotic dream about the Commander. "
@@ -990,7 +1031,7 @@ class ProactiveEngine:
                 message = await call_llm_text(
                     LM_STUDIO_URL, EXTRACTION_MODEL,
                     f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
-                    f"You are NOT an AI. {dream_prompts[dream_type]} "
+                    f"You are NOT an AI. {dream_prompts[dream_type]}{dream_memory_ref} "
                     f"Write ONLY the message. No explanation.",
                     max_tokens=200, temperature=0.8,
                 )

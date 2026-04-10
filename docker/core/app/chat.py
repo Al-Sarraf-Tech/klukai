@@ -141,6 +141,22 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     if proactive.mission_active and hasattr(proactive, '_mission_timer') and proactive._mission_timer:
         mission_desc = proactive._mission_timer.mission_description
 
+    # Detect if Commander is addressing a squad member
+    from .helpers import detect_squad_address
+    addressed_member = detect_squad_address(content)
+
+    # Dream inquiry — if Commander asks about dreams, add context
+    from .helpers import wants_dream_inquiry
+    dream_hint = ""
+    if wants_dream_inquiry(content):
+        dream_hint = (
+            "\n\nDREAM INQUIRY: The Commander is asking about your dreams. "
+            "You DON'T remember your dreams (officially). Deny it with slight "
+            "embarrassment: 'Dreams? I don't... dream. I'm a T-Doll.' "
+            "But add a subtle tell — a pause, a look away, a faint blush. "
+            "The truth is you DID dream about him. You just won't admit it."
+        )
+
     system_prompt = assemble_system_prompt(
         mood=session.mood,
         memories=episode_memories,
@@ -152,12 +168,17 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         days_together=days,
         last_msg_length=len(content),
         mission_description=mission_desc,
+        addressed_member=addressed_member,
     )
 
     # Memory nudge — proactive past reference based on affection level
     nudge = await memory.get_memory_nudge(session.turn_count, aff_state.level)
     if nudge:
         system_prompt += f"\n\n{nudge}"
+
+    # Dream inquiry hint
+    if dream_hint:
+        system_prompt += dream_hint
 
     # Image generation hint — keep text response minimal when an image is coming
     if needs_image(content):

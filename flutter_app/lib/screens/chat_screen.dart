@@ -27,6 +27,15 @@ external JSPromise<JSBoolean> _jsStartRecording();
 @JS('audioRecorder.stop')
 external JSPromise<JSString?> _jsStopRecording();
 
+@JS('ambientAudio.setMood')
+external void _jsSetAmbientMood(String mood);
+
+@JS('ambientAudio.toggleMute')
+external JSBoolean _jsToggleAmbientMute();
+
+@JS('ambientAudio.isMuted')
+external JSBoolean _jsIsAmbientMuted();
+
 class ChatScreen extends StatefulWidget {
   final String serverUrl;
   const ChatScreen({super.key, required this.serverUrl});
@@ -50,6 +59,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   String? _thinkingText;
   final List<Map<String, String>> _activeTools = [];
   final bool _soundMuted = false;
+  bool _ambientMuted = true;
 
   bool _showScrollFAB = false;
 
@@ -345,6 +355,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         setState(() {
           _state = _state.copyWith(mood: msg['mood'] as String? ?? 'composed');
         });
+        try { _jsSetAmbientMood(msg['mood'] as String? ?? 'composed'); } catch (_) {}
 
       case 'thinking':
         setState(() {
@@ -829,6 +840,26 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           ),
                         ),
                         const Spacer(),
+                        IconButton(
+                          onPressed: () {
+                            try {
+                              final isOn = _jsToggleAmbientMute().toDart;
+                              setState(() => _ambientMuted = !isOn);
+                            } catch (_) {
+                              setState(() => _ambientMuted = !_ambientMuted);
+                            }
+                          },
+                          icon: Icon(
+                            _ambientMuted ? Icons.music_off : Icons.music_note,
+                            color: _ambientMuted
+                                ? GFL2Colors.primary.withValues(alpha: 0.3)
+                                : _moodGlowColor.withValues(alpha: 0.8),
+                            size: 18,
+                          ),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          tooltip: _ambientMuted ? 'Enable ambient audio' : 'Mute ambient audio',
+                        ),
                         IconButton(
                           onPressed: _openArchive,
                           icon: Icon(Icons.photo_library_outlined,
