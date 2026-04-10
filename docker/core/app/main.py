@@ -1149,7 +1149,8 @@ async def _background_extraction(
                 )
                 logger.info("Episode stored: %s", summary[:80])
     except Exception as e:
-        logger.error("Background extraction failed: %s", e)
+        import traceback
+        logger.error("Background extraction failed: %s\n%s", e, traceback.format_exc())
 
 
 async def _background_compaction(session: SessionState) -> None:

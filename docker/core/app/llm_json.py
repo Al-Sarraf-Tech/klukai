@@ -123,7 +123,7 @@ async def call_llm(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    http = client or httpx.AsyncClient(timeout=30.0)
+    http = client or httpx.AsyncClient(timeout=120.0)
     close_after = client is None
 
     try:
@@ -181,7 +181,7 @@ async def call_llm_text(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    http = client or httpx.AsyncClient(timeout=30.0)
+    http = client or httpx.AsyncClient(timeout=120.0)
     close_after = client is None
 
     try:
