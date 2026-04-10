@@ -64,58 +64,64 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   Color get _moodGlowColor {
     return switch (_state.mood) {
-      // Core
-      'composed'        => GFL2Colors.primary,
-      'focused'         => const Color(0xFF3B82F6),
-      'prideful'        => GFL2Colors.accent,
-      'exasperated'     => const Color(0xFFF59E0B),
-      'protective'      => GFL2Colors.success,
-      'quietly_pleased' => const Color(0xFF6EE7B7),
-      'competitive'     => GFL2Colors.danger,
-      'tender'          => GFL2Colors.affinity,
-      'longing'         => const Color(0xFF818CF8),
-      'battle_ready'    => GFL2Colors.danger,
-      // Romantic
-      'flustered'       => const Color(0xFFF472B6),
-      'affectionate'    => const Color(0xFFFDA4AF),
-      'shy'             => const Color(0xFFF9A8D4),
-      'yearning'        => const Color(0xFFC084FC),
-      'devoted'         => const Color(0xFFFB7185),
-      'passionate'      => const Color(0xFFE11D48),
-      'jealous'         => const Color(0xFFDC2626),
-      'possessive'      => const Color(0xFFBE123C),
-      'smitten'         => const Color(0xFFF9A8D4),
-      'infatuated'      => const Color(0xFFEC4899),
-      // Tactical
-      'vigilant'        => const Color(0xFF22D3EE),
-      'calculating'     => const Color(0xFF94A3B8),
-      'hunting'         => GFL2Colors.danger,
-      'adrenaline'      => const Color(0xFFFBBF24),
-      // Mission stress
-      'scared'          => const Color(0xFFFBBF24),
-      'terrified'       => const Color(0xFFEF4444),
-      'panicked'        => const Color(0xFFDC2626),
-      'desperate'       => const Color(0xFF991B1B),
-      'relieved'        => const Color(0xFF6EE7B7),
-      // Relaxed
-      'content'         => const Color(0xFF86EFAC),
-      'playful'         => const Color(0xFFA78BFA),
-      'drowsy'          => const Color(0xFF64748B),
-      'amused'          => const Color(0xFF34D399),
-      'excited'         => const Color(0xFFFBBF24),
-      // Dark
-      'melancholic'     => const Color(0xFF6366F1),
-      'haunted'         => const Color(0xFF7C3AED),
-      'conflicted'      => const Color(0xFFD97706),
-      'determined'      => const Color(0xFFF97316),
-      'vulnerable'      => const Color(0xFFDDD6FE),
-      'grieving'        => const Color(0xFF4338CA),
-      'furious'         => const Color(0xFF7F1D1D),
-      // Additional
-      'grateful'        => const Color(0xFF6EE7B7),
-      'worried'         => const Color(0xFFFCD34D),
-      'embarrassed'     => const Color(0xFFF472B6),
-      _                 => GFL2Colors.primary,
+      // Core — blues and cyans
+      'composed'        => const Color(0xFF4FC3F7), // calm cyan
+      'focused'         => const Color(0xFF3B82F6), // sharp blue
+      'prideful'        => const Color(0xFFE8923E), // proud orange
+      'exasperated'     => const Color(0xFFF59E0B), // frustrated amber
+      'protective'      => const Color(0xFF10B981), // guardian green
+      'quietly_pleased' => const Color(0xFF6EE7B7), // subtle mint
+      'competitive'     => const Color(0xFFFF6B35), // fierce orange-red
+      'tender'          => const Color(0xFFE88CA5), // soft pink
+      'longing'         => const Color(0xFF818CF8), // wistful indigo
+      'battle_ready'    => const Color(0xFFEF4444), // combat red
+      // Romantic — pinks, roses, magentas (each unique)
+      'flustered'       => const Color(0xFFF472B6), // hot pink
+      'affectionate'    => const Color(0xFFFDA4AF), // warm rose
+      'shy'             => const Color(0xFFFFB3C6), // soft blush
+      'yearning'        => const Color(0xFFC084FC), // aching purple
+      'devoted'         => const Color(0xFFFB7185), // deep rose
+      'passionate'      => const Color(0xFFE11D48), // burning crimson
+      'jealous'         => const Color(0xFFB91C1C), // dark jealous red
+      'possessive'      => const Color(0xFFBE123C), // possessive wine
+      'smitten'         => const Color(0xFFFF80AB), // lovesick pink
+      'infatuated'      => const Color(0xFFEC4899), // obsessive magenta
+      // Tactical — teals and steel
+      'vigilant'        => const Color(0xFF22D3EE), // alert cyan
+      'calculating'     => const Color(0xFF94A3B8), // cold steel
+      'hunting'         => const Color(0xFFD97706), // predator amber
+      'adrenaline'      => const Color(0xFFEAB308), // rush gold
+      // Mission stress — yellows through deep reds
+      'scared'          => const Color(0xFFFACC15), // fear yellow
+      'terrified'       => const Color(0xFFEF4444), // terror red
+      'panicked'        => const Color(0xFFFF2D2D), // panic bright red
+      'desperate'       => const Color(0xFF991B1B), // desperation dark red
+      'relieved'        => const Color(0xFF5EEAD4), // relief teal
+      // Relaxed — greens and soft purples
+      'content'         => const Color(0xFF86EFAC), // peaceful green
+      'playful'         => const Color(0xFFA78BFA), // mischief purple
+      'drowsy'          => const Color(0xFF64748B), // sleepy grey
+      'amused'          => const Color(0xFF34D399), // laughing emerald
+      'bored'           => const Color(0xFF78716C), // dull stone
+      'excited'         => const Color(0xFFFB923C), // excited tangerine
+      // Dark — deep blues, purples, blacks
+      'melancholic'     => const Color(0xFF6366F1), // sad indigo
+      'haunted'         => const Color(0xFF7C3AED), // ghost violet
+      'conflicted'      => const Color(0xFFD97706), // torn amber
+      'guilty'          => const Color(0xFF78350F), // guilt brown
+      'determined'      => const Color(0xFFF97316), // resolute orange
+      'grieving'        => const Color(0xFF312E81), // mourning navy
+      'furious'         => const Color(0xFF7F1D1D), // cold fury maroon
+      // Additional — each distinct
+      'nostalgic'       => const Color(0xFF8B5CF6), // memory violet
+      'curious'         => const Color(0xFF06B6D4), // inquisitive cyan
+      'irritated'       => const Color(0xFFEA580C), // annoyed burnt orange
+      'defiant'         => const Color(0xFFDC2626), // defiance red
+      'vulnerable'      => const Color(0xFFDDD6FE), // exposed lavender
+      'grateful'        => const Color(0xFF2DD4BF), // thankful turquoise
+      'worried'         => const Color(0xFFFCD34D), // anxious yellow
+      'embarrassed'     => const Color(0xFFFF6B9D), // mortified coral
+      _                 => const Color(0xFF4FC3F7), // default cyan
     };
   }
 
