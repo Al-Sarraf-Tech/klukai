@@ -1020,8 +1020,12 @@ async def _background_extraction(
         await ws.send_mood("default", mood)
         proactive.set_last_mood(mood)
 
-        # Auto-start mission when mood hits battle_ready and no mission is active
-        if mood == "battle_ready" and not proactive.mission_active:
+        # Auto-start mission when mood hits battle_ready or vigilant (if was battle_ready)
+        mission_moods = {"battle_ready"}
+        # Vigilant triggers mission only if previous mood was battle_ready (mid-combat awareness)
+        if mood == "vigilant" and proactive._last_mood == "battle_ready":
+            mission_moods.add("vigilant")
+        if mood in mission_moods and not proactive.mission_active:
             recent_text = " ".join(
                 t.get("content", "")[:100] for t in session.turns[-4:]
                 if t.get("role") == "user"
