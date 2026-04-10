@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # Affection classification uses gpt-oss-20b — reliable JSON, uncensored.
 # Only used as legacy fallback — primary path is merged extraction via extract_facts().
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
-CLASSIFICATION_MODEL = "openai/gpt-oss-20b"
+CLASSIFICATION_MODEL = "gpt-oss-20b-absolute-heresy-i1"
 
 DAILY_POINTS_CAP = 8
 MAX_SCORE = 1000

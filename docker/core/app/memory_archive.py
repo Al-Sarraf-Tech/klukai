@@ -17,7 +17,7 @@ from .db import get_conn, get_conn_autocommit
 logger = logging.getLogger(__name__)
 
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
-EXTRACTION_MODEL = "openai/gpt-oss-20b"
+EXTRACTION_MODEL = "gpt-oss-20b-absolute-heresy-i1"
 
 # Shared httpx client for LM Studio calls
 _http: httpx.AsyncClient | None = None

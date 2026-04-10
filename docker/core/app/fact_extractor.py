@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Background tasks use gpt-oss-20b — rock-solid JSON, uncensored, no thinking tags.
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
-EXTRACTION_MODEL = "openai/gpt-oss-20b"
+EXTRACTION_MODEL = "gpt-oss-20b-absolute-heresy-i1"
 
 # Shared httpx client — initialized on first use, reused thereafter
 _http: httpx.AsyncClient | None = None
