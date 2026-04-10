@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     name: Test Suite
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, python-slim]
     defaults:
       run:
         working-directory: docker/core
@@ -32,7 +32,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, python-slim]
     defaults:
       run:
         working-directory: docker/core
