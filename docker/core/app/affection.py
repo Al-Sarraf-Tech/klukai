@@ -16,9 +16,10 @@ from .personality import load_personality
 
 logger = logging.getLogger(__name__)
 
-# Affection classification uses dolphin on RTX 3090 — same model as chat, already warm.
+# Affection classification uses gpt-oss-20b — reliable JSON, uncensored.
+# Only used as legacy fallback — primary path is merged extraction via extract_facts().
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
-CLASSIFICATION_MODEL = "cognitivecomputations_dolphin3.0-r1-mistral-24b"
+CLASSIFICATION_MODEL = "openai/gpt-oss-20b"
 
 DAILY_POINTS_CAP = 8
 MAX_SCORE = 1000

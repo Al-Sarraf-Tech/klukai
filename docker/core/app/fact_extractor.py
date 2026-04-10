@@ -10,10 +10,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Background tasks use dolphin on RTX 3090 — same model as chat, already warm.
-# Runs 3s after chat response so dolphin is guaranteed loaded. No model swapping.
+# Background tasks use gpt-oss-20b — rock-solid JSON, uncensored, no thinking tags.
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
-EXTRACTION_MODEL = "cognitivecomputations_dolphin3.0-r1-mistral-24b"
+EXTRACTION_MODEL = "openai/gpt-oss-20b"
 
 # Shared httpx client — initialized on first use, reused thereafter
 _http: httpx.AsyncClient | None = None
