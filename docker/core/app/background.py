@@ -1,7 +1,7 @@
 """Background tasks — extraction, compaction, image gen, recall.
 
 These are all async functions launched via ``asyncio.create_task()``
-from the WebSocket message handler in main.py.
+from the WebSocket message handler in chat.py.
 """
 
 from __future__ import annotations

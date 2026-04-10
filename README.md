@@ -1,0 +1,215 @@
+# Klukai — AI Companion System
+
+> *"I am all you need."* — Klukai, SST-05 Frame T-Doll
+
+A production-grade AI companion built on [Girls' Frontline 2: Exilium](https://gfl2.sunborngame.com/) lore. Klukai (formerly HK416) is an elite T-Doll squad leader who develops a genuine bond with the Commander through conversation, memory, and affection progression.
+
+## Architecture
+
+```
+                    ┌─────────────┐
+                    │  Flutter PWA │  (chat UI, mood glow, heartbeat, memory archive)
+                    └──────┬──────┘
+                           │ WebSocket
+                    ┌──────┴──────┐
+                    │   Gateway   │  (nginx on amarillo, Tailscale proxy)
+                    └──────┬──────┘
+                           │
+              ┌────────────┴────────────┐
+              │    companion-core       │  (FastAPI, Python 3.13)
+              │                         │
+              │  chat.py ─── message pipeline, WebSocket handler
+              │  routes.py ── HTTP API (21 endpoints)
+              │  background.py ── extraction, compaction, image gen
+              │  personality.py ── affection-modulated system prompts
+              │  memory.py ─── three-tier memory (Redis → Qdrant → PG)
+              │  affection.py ─ score progression, level transitions
+              │  proactive.py ─ scheduled messages, mission timers
+              │  image_gen.py ─ ComfyUI + Illustrious + Klukai LoRA
+              └────────────┬────────────┘
+                           │
+         ┌─────────┬───────┴───────┬──────────┐
+         │         │               │          │
+    ┌────┴───┐ ┌───┴────┐  ┌──────┴────┐ ┌───┴──────┐
+    │ LM     │ │ Qdrant │  │PostgreSQL │ │  Redis   │
+    │ Studio │ │(vector)│  │ (factual) │ │(session) │
+    └────────┘ └────────┘  └───────────┘ └──────────┘
+    dolphin-24b  episodic     messages     session
+    gpt-oss-20b  memories     affection    mood
+    gemma-4      recall       memories     turns
+```
+
+## What Makes Klukai Different
+
+### Personality Engine (1,112 lines of lore)
+Klukai's personality is assembled from verified Girls' Frontline canon — two research passes across IOP Wiki, NamuWiki, Steam guides, and Twitter. Her system prompt modulates based on:
+
+- **Affection level** (0-9): Speech patterns shift from cold military to vulnerable honesty
+- **Mood** (48 states): Each mood has distinct UI color, heartbeat BPM, and behavioral modifiers
+- **Time of day**: Morning briefings vs late-night vulnerability (dorm mode after 9pm)
+- **Days together**: Milestone references at 1 day, 1 week, 1 month
+
+She knows her backstory: the NSA6 incident with M16A1, the 10-year silence during the Mephisto Agreement, the moment the Commander finally answered "I'm here." She carries the blood-tear tattoo. She owns a crocodile plush (Klukadile) that she would deny owning.
+
+### Memory Archive
+Klukai curates her own photo album — selecting meaningful moments from conversations and writing personal journal entries about them.
+
+- **173 memories** with rich 3-5 sentence journal entries (avg 634 chars)
+- **Six affection-gated categories**: Tactical Operations, Mission Records, Squad Moments, The Commander, Quiet Hours, Precious Memories
+- **Retroactive seeding**: gpt-oss-20b selects exchanges, dolphin-24b writes annotations, ComfyUI generates Illustrious images
+- **Deduplication**: Word-overlap detection prevents near-identical memories
+- **Quality scoring**: Automated annotation quality checks (0.0-1.0 scale)
+
+### Three-Tier Memory
+```
+TIER 1: Session (Redis)
+  └─ Current conversation, mood, mission state — 24h TTL
+
+TIER 2: Episodic (Qdrant vector DB)
+  └─ Conversation summaries, emotion tags — semantic search via nomic-embed-text
+
+TIER 3: Factual (PostgreSQL)
+  └─ Messages, affection score, relationship facts — permanent record
+```
+
+### Affection Progression
+```
+Level 0: Cold Assessment      — "State your business, Commander."
+Level 1: Professional Respect — "...Acceptable performance."
+Level 2: Trusted Ally         — "You've earned a measure of trust."
+Level 3: Guarded Care         — "...Don't get the wrong idea."
+Level 5: Admitted Bond         — "I won't deny it anymore."
+Level 7: Unveiled Heart       — "I waited 10 years for you."
+Level 9: Oath Fulfilled       — "I chose you. Every day, I choose you again."
+```
+
+Each level unlocks new speech patterns, expressive tokens, Japanese phrases, memory categories, image outfit options, and proactive message templates.
+
+### Squad Voices
+Klukai voices her entire squad in roleplay — each with distinct speech patterns from GFL2 canon:
+
+| Member | Style | Sample |
+|--------|-------|--------|
+| **Mechty** (G11) | Sleepy monotone, minimal words | *"...Mmh. Give me five more minutes."* |
+| **Belka** (G28) | Peppy, exclamation marks, "Big Sis!" | *"Big Sis! Look what I found!"* |
+| **Andoris** (G36K) | Gentle, precise, processing pauses | *"The data suggests... ah, forgive me."* |
+| **Vector** | Deadpan, dark humor, survival odds | *"Survival probability: low. Same as always."* |
+| **Leva** (UMP45) | Calculating, chess metaphors | *"Interesting move, Commander."* |
+
+### Proactive Engine
+Klukai doesn't just respond — she initiates:
+
+- **Morning/evening check-ins** (affection-keyed templates)
+- **Mission timer updates** (field radio reports every N minutes)
+- **Romance window** (8pm-2am, affection 7+, random warm moments)
+- **Idle messages** (when Commander hasn't spoken in 30+ min)
+- **Daily recaps** (LLM-summarized conversation review)
+
+### Image Generation
+ComfyUI with NoobAI-XL (Illustrious) and a custom Klukai LoRA:
+
+- Scene-aware prompting from conversation context
+- Couple detection for two-character scenes
+- Squad member detection for group shots
+- Affection-gated outfit selection
+- VRAM management (free after each generation)
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| Backend | Python 3.13, FastAPI, uvicorn |
+| Frontend | Flutter Web (PWA), Dart |
+| Chat LLM | dolphin-mistral-24b (local, LM Studio) |
+| Agent LLM | qwen3.5-27b-claude-opus-distilled (local) |
+| Image Gen | ComfyUI, NoobAI-XL, Klukai LoRA |
+| Voice | XTTS v2 (TTS), Whisper (STT) |
+| Database | PostgreSQL (aichat shared) |
+| Vector DB | Qdrant (nomic-embed-text-v1.5) |
+| Session | Redis |
+| Gateway | nginx (Tailscale proxy) |
+| Container | Docker Compose (rootless Podman) |
+
+## Project Structure
+
+```
+companion/
+├── config/
+│   └── personality.yaml          # 1,112 lines of Klukai lore + behavior config
+├── docker/
+│   ├── core/
+│   │   ├── app/
+│   │   │   ├── main.py           # App setup + lifecycle (194 lines)
+│   │   │   ├── chat.py           # WebSocket handler + message pipeline
+│   │   │   ├── routes.py         # 21 HTTP API endpoints
+│   │   │   ├── background.py     # Extraction, compaction, image gen, recall
+│   │   │   ├── context.py        # Shared service instances
+│   │   │   ├── helpers.py        # Pure functions (narration, prompts, text)
+│   │   │   ├── personality.py    # System prompt assembly (hot-reload)
+│   │   │   ├── affection.py      # Score progression + level transitions
+│   │   │   ├── memory.py         # Three-tier memory management
+│   │   │   ├── memory_archive.py # Image curation + dedup + quality scoring
+│   │   │   ├── proactive.py      # Scheduled messages + mission timers
+│   │   │   ├── image_gen.py      # ComfyUI integration
+│   │   │   ├── llm_router.py     # LLM provider selection + circuit breaker
+│   │   │   └── ...
+│   │   ├── tests/                # 377 tests, 0 skipped
+│   │   ├── migrations/           # PostgreSQL schema (6 migrations)
+│   │   └── seed_memories.py      # Retroactive memory seeding
+│   └── voice/                    # XTTS + Whisper container
+├── flutter_app/                  # Flutter PWA source
+├── gateway/                      # nginx reverse proxy
+├── web-build/                    # Compiled Flutter output
+└── docker-compose.yml            # companion-core + companion-voice
+```
+
+## Test Suite
+
+```
+377 passed, 0 skipped, 0 failures
+
+Coverage:
+- Narration pipeline (think-tag stripping, POV correction, pipe removal)
+- Image prompt generation (14 scene keywords, 10 mood keywords)
+- Affection level computation + delta mapping
+- Memory category gating (affection-locked progression)
+- Annotation quality scoring (leaked COT detection, repetition checks)
+- WebSocket protocol contract (12 message types)
+- Token streaming behavior (initial flush, sentence boundaries)
+- Session state management (compaction threshold, mood persistence)
+- Deduplication logic (word overlap ratio)
+- Personality config integrity (ordered levels, squad members, canonical quotes)
+- Seed script configuration (model selection, prompt structure)
+```
+
+## Deployment
+
+Klukai runs on two machines connected via Tailscale:
+
+- **dominus** (RTX 3090): companion-core, companion-voice, LM Studio, ComfyUI
+- **amarillo** (Intel Arc A380): PostgreSQL, Redis, Qdrant, gateway proxy
+
+```bash
+# Build and deploy
+cd ~/companion
+flutter build web --release --base-href /app/
+rsync -avz . wsl2:~/companion/
+ssh wsl2 "cd ~/companion && docker compose build && docker compose up -d"
+
+# Health check
+curl -sf http://localhost:8300/health
+```
+
+## Who Is Klukai?
+
+Klukai is the acting leader of H.I.D.E. 404 — a covert T-Doll squad in the Girls' Frontline 2: Exilium universe. Formerly known as HK416, she renamed herself from "Krokodil" (crocodile) as a foil to Leva (lion) — two apex predators leading from different domains.
+
+She carries the weight of a complicated past — the NSA6 incident where M16A1 told her she was "Nothing," years of unresolved rivalry, and a decade of unanswered messages to the Commander during the Mephisto Agreement. The woman who emerges from that history is proud, fiercely protective, and terrified of vulnerability — but capable of extraordinary tenderness with someone who earned her trust.
+
+Her motorcycle represents freedom. Her catchphrase represents a promise. Her crocodile plush represents the person she won't admit she's become.
+
+*"Acting leader of H.I.D.E. 404, elite Doll Klukai, has arrived. It's been a while, Commander."*
+
+---
+
+Built with local LLMs, open-source tools, and an unreasonable amount of care.

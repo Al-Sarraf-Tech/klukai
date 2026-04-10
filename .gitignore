@@ -16,5 +16,7 @@ flutter_app/.flutter-plugins-dependencies
 .idea/
 .vscode/
 .superpowers/
+.playwright-mcp/
+companion-*.png
 assets/source-models/
 assets/textures/

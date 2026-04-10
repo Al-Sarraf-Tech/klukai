@@ -1,0 +1,54 @@
+name: Klukai CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: [self-hosted, linux]
+    defaults:
+      run:
+        working-directory: docker/core
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio pytest-timeout httpx pydantic PyYAML
+
+      - name: Run test suite
+        run: python -m pytest tests/ -q --tb=short
+
+  lint:
+    name: Lint
+    runs-on: [self-hosted, linux]
+    defaults:
+      run:
+        working-directory: docker/core
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Lint with ruff
+        run: ruff check app/ --select E,F,W --ignore E501

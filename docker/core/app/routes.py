@@ -1,8 +1,8 @@
 """HTTP API routes.
 
 All @app.get / @app.post endpoints are registered here via
-``register_routes(app)``.  The WebSocket endpoint stays in main.py
-because it is tightly coupled to the message-handling loop.
+``register_routes(app)``.  The WebSocket endpoint and message-handling
+loop live in chat.py, registered via ``register_websocket(app)``.
 """
 
 from __future__ import annotations
