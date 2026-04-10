@@ -497,11 +497,20 @@ class ProactiveEngine:
             replace_existing=True,
         )
 
-        # Random lore events — every 30 min, boosted during missions/intimate moods
+        # Random lore events — every 30 min during normal hours
         self._scheduler.add_job(
             self._random_event,
             CronTrigger(hour="9-23", minute="15,45"),
             id="random_event",
+            replace_existing=True,
+        )
+
+        # Mission events — every 10 min, 24/7 (only fires if mission is active)
+        self._scheduler.add_job(
+            self._mission_random_event,
+            "interval",
+            minutes=10,
+            id="mission_random_event",
             replace_existing=True,
         )
 
@@ -721,6 +730,76 @@ class ProactiveEngine:
             self._last_proactive_answered = False
             await self._on_message_callback(message)
             logger.info("Random event fired: %s", message[:60])
+
+    async def _mission_random_event(self) -> None:
+        """Fire mission-related events any time a mission is active. No hour restrictions."""
+        from datetime import timedelta
+
+        if not self.mission_active:
+            return
+
+        now = datetime.now()
+
+        # Guard: 15-min gap between mission events
+        if self._last_random_event and (now - self._last_random_event) < timedelta(minutes=15):
+            return
+
+        # Guard: don't interrupt active typing (2 min cooldown)
+        if self._last_message_time and (now - self._last_message_time) < timedelta(minutes=2):
+            return
+
+        # Guard: check mute
+        if self._muted_until and now < self._muted_until:
+            return
+
+        # 40% chance per check (every 10 min)
+        if random.random() > 0.40:
+            return
+
+        # Load mission-relevant event categories
+        try:
+            from .personality import load_personality
+            p = load_personality()
+            events = p.get("random_events", {})
+        except Exception:
+            return
+
+        # Prefer mission-related categories
+        mission_cats = ["tactical_updates", "squad_comms", "combat_observations", "field_reports"]
+        eligible = []
+        for category, config in events.items():
+            if not isinstance(config, dict):
+                continue
+            min_aff = config.get("min_affection", 0)
+            if self._affection_level >= min_aff:
+                weight = config.get("weight", 10)
+                # Boost mission-relevant categories
+                if category in mission_cats:
+                    weight *= 3
+                messages = config.get("messages", [])
+                if messages:
+                    eligible.append((category, weight, messages))
+
+        if not eligible:
+            return
+
+        total_weight = sum(w for _, w, _ in eligible)
+        roll = random.random() * total_weight
+        cumulative = 0
+        selected_messages = eligible[0][2]
+        for category, weight, messages in eligible:
+            cumulative += weight
+            if roll <= cumulative:
+                selected_messages = messages
+                break
+
+        message = random.choice(selected_messages)
+
+        if self._on_message_callback:
+            self._random_events_today += 1
+            self._last_random_event = now
+            await self._on_message_callback(message)
+            logger.info("Mission event fired: %s", message[:60])
 
     async def _romance_window(self) -> None:
         """Evening romance message — fires at ~20:30 CST with random delay.
