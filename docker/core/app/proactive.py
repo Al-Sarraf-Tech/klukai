@@ -732,8 +732,9 @@ class ProactiveEngine:
             logger.info("Random event fired: %s", message[:60])
 
     async def _mission_random_event(self) -> None:
-        """Fire mission-related events any time a mission is active. No hour restrictions."""
+        """Fire contextual mission events using LLM. No hour restrictions."""
         from datetime import timedelta
+        from .fact_extractor import generate_mission_update
 
         if not self.mission_active:
             return
@@ -756,50 +757,45 @@ class ProactiveEngine:
         if random.random() > 0.75:
             return
 
-        # Load mission-relevant event categories
+        # Generate a contextual mission update using the actual mission description
         try:
-            from .personality import load_personality
-            p = load_personality()
-            events = p.get("random_events", {})
-        except Exception:
-            return
+            timer = self._mission_timer
+            if not timer:
+                return
 
-        # Prefer mission-related categories
-        mission_cats = ["tactical_updates", "squad_comms", "combat_observations", "field_reports"]
-        eligible = []
-        for category, config in events.items():
-            if not isinstance(config, dict):
-                continue
-            min_aff = config.get("min_affection", 0)
-            if self._affection_level >= min_aff:
-                weight = config.get("weight", 10)
-                # Boost mission-relevant categories
-                if category in mission_cats:
-                    weight *= 3
-                messages = config.get("messages", [])
-                if messages:
-                    eligible.append((category, weight, messages))
+            # Pick a random major event for drama (30% chance)
+            major_events = [
+                "Enemy contact — hostiles spotted",
+                "Anomalous readings detected",
+                "Squad member reporting unusual activity",
+                "Comms interference — possible jamming",
+                "Weather conditions deteriorating",
+                "Found signs of recent enemy activity",
+                "Perimeter breach detected",
+                "Supply cache discovered",
+                None, None, None, None, None, None, None,  # 70% chance of no major event
+            ]
+            major_event = random.choice(major_events)
 
-        if not eligible:
-            return
+            elapsed = int((now - timer._start_time).total_seconds() / 60) if hasattr(timer, '_start_time') else timer.update_count * 30
 
-        total_weight = sum(w for _, w, _ in eligible)
-        roll = random.random() * total_weight
-        cumulative = 0
-        selected_messages = eligible[0][2]
-        for category, weight, messages in eligible:
-            cumulative += weight
-            if roll <= cumulative:
-                selected_messages = messages
-                break
+            message = await generate_mission_update(
+                mission_desc=timer.mission_description,
+                elapsed_minutes=elapsed,
+                update_number=timer.update_count + 1,
+                major_event=major_event,
+                active_events=timer._active_events if hasattr(timer, '_active_events') else [],
+                affection_level=self._affection_level,
+            )
 
-        message = random.choice(selected_messages)
+            if message and self._on_message_callback:
+                self._random_events_today += 1
+                self._last_random_event = now
+                await self._on_message_callback(message)
+                logger.info("Mission event fired (contextual): %s", message[:60])
 
-        if self._on_message_callback:
-            self._random_events_today += 1
-            self._last_random_event = now
-            await self._on_message_callback(message)
-            logger.info("Mission event fired: %s", message[:60])
+        except Exception as e:
+            logger.warning("Mission event generation failed: %s", e)
 
     async def _romance_window(self) -> None:
         """Evening romance message — fires at ~20:30 CST with random delay.
