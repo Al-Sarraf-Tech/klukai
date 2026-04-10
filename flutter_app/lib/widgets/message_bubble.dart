@@ -136,36 +136,55 @@ class _MessageBubbleState extends State<MessageBubble> {
                           ),
                         ),
                       ),
-                    // Image content
+                    // Image content — fixed aspect ratio prevents scroll jumps
                     if (widget.message.imageData != null)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
-                        child: Stack(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
-                              child: Image.memory(
-                                base64Decode(widget.message.imageData!),
-                                fit: BoxFit.contain,
-                                width: double.infinity,
-                              ),
-                            ),
-                            Positioned(
-                              bottom: 4,
-                              right: 4,
-                              child: GestureDetector(
-                                onTap: () => _downloadImage(widget.message.imageData!),
-                                child: Container(
-                                  padding: const EdgeInsets.all(6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black54,
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: const Icon(Icons.download, color: Colors.white70, size: 16),
+                        child: AspectRatio(
+                          aspectRatio: 1.0, // Illustrious generates square images
+                          child: Stack(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(4),
+                                child: Image.memory(
+                                  base64Decode(widget.message.imageData!),
+                                  fit: BoxFit.cover,
+                                  width: double.infinity,
+                                  height: double.infinity,
+                                  frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                                    if (wasSynchronouslyLoaded || frame != null) return child;
+                                    return Container(
+                                      color: const Color(0xFF1A1A2E),
+                                      child: const Center(
+                                        child: SizedBox(
+                                          width: 24, height: 24,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Color(0xFF4FC3F7),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
                                 ),
                               ),
-                            ),
-                          ],
+                              Positioned(
+                                bottom: 4,
+                                right: 4,
+                                child: GestureDetector(
+                                  onTap: () => _downloadImage(widget.message.imageData!),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(6),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black54,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: const Icon(Icons.download, color: Colors.white70, size: 16),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       )
                     else

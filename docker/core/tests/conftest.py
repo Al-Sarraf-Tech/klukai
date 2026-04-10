@@ -12,6 +12,24 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+# ── Psycopg shim ─────────────────────────────────────────────────────────────
+# Mock psycopg/psycopg_pool at the module level before any app code imports
+# them. This allows app.affection and app.main to be imported in test
+# environments that don't have psycopg installed (e.g., dev workstations).
+# The mocks are injected early enough that importorskip("psycopg") still
+# works correctly for tests that need a real psycopg.
+def _inject_psycopg_shim() -> None:
+    """Install lightweight MagicMock shims for psycopg if not installed."""
+    if "psycopg" not in sys.modules:
+        try:
+            import psycopg  # noqa: F401 — already installed, nothing to do
+        except ModuleNotFoundError:
+            sys.modules.setdefault("psycopg", MagicMock())
+            sys.modules.setdefault("psycopg.rows", MagicMock())
+            sys.modules.setdefault("psycopg_pool", MagicMock())
+
+_inject_psycopg_shim()
+
 import pytest
 
 # Ensure the app package is importable from the repo root
@@ -173,3 +191,25 @@ def make_session():
         )
 
     return _make
+
+
+# ── Personality config fixtures ─────────────────────────────────────────────
+
+@pytest.fixture
+def personality_config_path():
+    """Resolve personality.yaml path — works in container and repo."""
+    container = Path("/config/personality.yaml")
+    if container.exists():
+        return str(container)
+    # __file__ is .../docker/core/tests/conftest.py — 4 parents up = companion/
+    repo = Path(__file__).resolve().parent.parent.parent.parent / "config" / "personality.yaml"
+    if repo.exists():
+        return str(repo)
+    pytest.skip("personality.yaml not found")
+
+
+@pytest.fixture
+def personality_config(personality_config_path):
+    """Load and return the personality config dict."""
+    from app.personality import reload_personality
+    return reload_personality(personality_config_path)

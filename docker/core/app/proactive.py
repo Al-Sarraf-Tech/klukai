@@ -595,7 +595,8 @@ class ProactiveEngine:
 
     def _pick_message(self, messages: dict[int, list[str]]) -> str:
         """Pick a random message for the current affection level."""
-        level = min(self._affection_level, max(messages.keys()))
+        available = sorted(messages.keys())
+        level = max((k for k in available if k <= self._affection_level), default=0)
         pool = messages.get(level, messages.get(0, ["..."]))
         return random.choice(pool)
 

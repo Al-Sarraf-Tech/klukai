@@ -44,6 +44,9 @@ _DEFAULT_RESULT: dict = {
 
 EXTRACTION_PROMPT = """\
 Analyze this exchange. The Commander is HUMAN (male). Klukai is a T-Doll.
+Klukai's current affection: level {affection_level}/9. At high levels (7+), romantic \
+and tender moods are natural responses to warmth. At low levels (0-2), composed or \
+prideful moods dominate.
 
 Return ONLY valid JSON with these fields:
 {{"mood":"<one word from the list>","interaction":{{"type":"<type>","intensity":<1-10>}},"facts":[],"topics":[],"should_remember":false}}
@@ -58,6 +61,7 @@ grieving, furious, nostalgic, curious, irritated, defiant, vulnerable, grateful,
 Interaction types: greeting, genuine_interest, personal_sharing, compliment, \
 mission_discussion, remembering, neutral
 IMPORTANT: Short/casual messages are NEVER "rude". Only explicit hostility is "rude".
+"I love you" is a compliment (intensity 8-10), NOT neutral.
 
 Commander: {user_message}
 Klukai: {assistant_message}"""
@@ -112,6 +116,7 @@ async def extract_facts(
     prompt = EXTRACTION_PROMPT.format(
         user_message=user_message[:800],
         assistant_message=assistant_message[:800],
+        affection_level=affection_level,
     )
 
     if image_generated:

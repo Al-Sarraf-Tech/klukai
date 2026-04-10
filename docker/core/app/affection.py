@@ -144,8 +144,16 @@ class AffectionManager:
                 self._state = AffectionState()
 
     async def get_state(self) -> AffectionState:
-        """Get current affection state — always reads from DB for consistency."""
-        await self._load_state()
+        """Get current affection state. TESTING: pinned to max."""
+        # TODO: remove pin after testing
+        from datetime import date as _date, datetime as _dt
+        self._state = AffectionState(
+            score=1000, level=9, level_name="Oath Fulfilled",
+            last_interaction_date=_date.today(),
+            consecutive_days=7, daily_points_earned=0,
+            total_interactions=338,
+            first_interaction=_dt(2026, 4, 6),  # Project start date
+        )
         return self._state
 
     def _compute_level(self, score: int) -> tuple[int, str]:

@@ -62,6 +62,83 @@ def available_categories(affection_level: int) -> list[str]:
     return cats
 
 
+def annotation_quality_score(text: str) -> float:
+    """Score annotation quality 0.0-1.0 based on specificity and character voice.
+
+    Used to identify annotations that need re-writing:
+    - 0.0 = leaked chain-of-thought or completely broken
+    - 0.3-0.5 = generic/repetitive (tag-based, lacks specificity)
+    - 0.6-0.8 = decent but could be better
+    - 0.9-1.0 = specific, personal, sounds like Klukai
+    """
+    if not text:
+        return 0.0
+    score = 1.0
+    lower = text.lower()
+    # Leaked COT = instant zero
+    if lower.startswith(("we need", "the user", "let me")):
+        return 0.0
+    if "1-2 sentence" in lower:
+        return 0.0
+    # Repetitive openers
+    if lower.startswith("whisper"):
+        score -= 0.4
+    # Generic romantic vocabulary (sign of tag-based annotation)
+    generic_words = ["intertwined", "sanctuary", "souls entwined", "hearts beat as one",
+                     "glow of dawn", "moonlit sheets", "neon lights"]
+    for word in generic_words:
+        if word in lower:
+            score -= 0.15
+    # Too short = lacking detail
+    if len(text) < 30:
+        score -= 0.3
+    # Too long = verbose/rambling
+    if len(text) > 350:
+        score -= 0.2
+    # Bonus: specific details (places, actions, sensory words)
+    specific_markers = ["office", "bed", "motorcycle", "café", "rooftop", "morning",
+                        "collar", "rifle", "coffee", "rain", "briefing", "0300",
+                        "shoulder", "hand", "scar", "laugh"]
+    specifics = sum(1 for m in specific_markers if m in lower)
+    score += min(0.2, specifics * 0.05)
+    return max(0.0, min(1.0, score))
+
+
+async def _is_duplicate_annotation(annotation: str, threshold: float = 0.7) -> bool:
+    """Check if a substantially similar annotation already exists.
+
+    Uses simple word overlap ratio — fast, no LLM or embedding needed.
+    Returns True if a recent memory has >threshold word overlap.
+    """
+    if not annotation or annotation == "Uncaptioned moment.":
+        return False
+    try:
+        async with get_conn() as conn:
+            rows = await (await conn.execute(
+                "SELECT annotation FROM companion_memories "
+                "WHERE kept = true AND annotation IS NOT NULL "
+                "ORDER BY created_at DESC LIMIT 30"
+            )).fetchall()
+
+        target_words = set(annotation.lower().split())
+        if len(target_words) < 3:
+            return False
+
+        for row in rows:
+            existing = row[0] or ""
+            existing_words = set(existing.lower().split())
+            if not existing_words:
+                continue
+            overlap = len(target_words & existing_words)
+            ratio = overlap / max(len(target_words), len(existing_words))
+            if ratio > threshold:
+                logger.debug("Duplicate detected (%.0f%% overlap): %s", ratio * 100, annotation[:50])
+                return True
+    except Exception as e:
+        logger.debug("Dedup check failed: %s", e)
+    return False
+
+
 async def save_image(
     image_bytes: bytes,
     prompt: str,
@@ -113,6 +190,14 @@ async def save_image(
                 memory_id, prompt[:80],
             )
             annotation = "Uncaptioned moment."
+
+        # Deduplication — skip if a very similar annotation already exists
+        if await _is_duplicate_annotation(annotation):
+            logger.info("Skipping duplicate memory: %s", annotation[:60])
+            # Clean up the already-written image files
+            img_path.unlink(missing_ok=True)
+            thumb_path.unlink(missing_ok=True)
+            return None
 
         # Store metadata
         async with get_conn_autocommit() as conn:

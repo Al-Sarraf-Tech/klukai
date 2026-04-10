@@ -49,6 +49,7 @@ services:
       TTS_ENGINE: "xtts"
       REFERENCE_WAV: "/app/reference/klukai_reference.wav"
       WHISPER_MODEL: "${WHISPER_MODEL:-base.en}"
+      TTS_HOME: "/app/models/tts"
     volumes:
       - voice-models:/app/models
     deploy:

@@ -444,7 +444,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               imageData: imgData,
             ));
           });
-          _scrollToBottom();
+          // Retry scroll 3 times to catch image decode layout shifts
+          _scrollToBottom(retries: 3);
           _playNotificationSound();
         }
     }
@@ -631,17 +632,24 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     });
   }
 
-  void _scrollToBottom({bool instant = false}) {
+  void _scrollToBottom({bool instant = false, int retries = 0}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
+        final target = _scrollController.position.maxScrollExtent;
         if (instant) {
-          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+          _scrollController.jumpTo(target);
         } else {
           _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
+            target,
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeOutCubic,
           );
+        }
+        // Images decode asynchronously — re-scroll to catch layout shifts
+        if (retries > 0) {
+          Future.delayed(const Duration(milliseconds: 150), () {
+            _scrollToBottom(instant: true, retries: retries - 1);
+          });
         }
       }
     });

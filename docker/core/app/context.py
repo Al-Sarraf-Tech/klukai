@@ -1,0 +1,31 @@
+"""Shared application context — global service instances.
+
+Every module that needs these services imports from here instead of
+creating its own instances.  This avoids circular imports and ensures
+a single set of singletons across the process.
+"""
+
+from __future__ import annotations
+
+from .affection import AffectionManager
+from .llm_router import LLMRouter
+from .mcp_client import MCPClient
+from .memory import MemoryManager
+from .proactive import ProactiveEngine
+from .ws_manager import WSManager
+
+memory = MemoryManager()
+router = LLMRouter()
+mcp = MCPClient()
+ws = WSManager()
+proactive = ProactiveEngine()
+affection = AffectionManager()
+
+SESSION_ID = "default"  # Single-user, single session
+
+# Tracks the most recently generated memory_id for commander save/discard overrides
+last_memory_id: str | None = None
+
+# Compaction threshold — compact oldest turns when session exceeds this
+COMPACT_THRESHOLD = 8
+COMPACT_KEEP_RAW = 4  # Keep this many recent turns verbatim after compaction
