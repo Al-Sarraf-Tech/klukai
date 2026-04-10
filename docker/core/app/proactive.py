@@ -514,6 +514,14 @@ class ProactiveEngine:
             replace_existing=True,
         )
 
+        # Late-night dreams — fires once between 1-4 AM if conditions are right
+        self._scheduler.add_job(
+            self._dream_event,
+            CronTrigger(hour="1-4", minute=37),
+            id="dream_event",
+            replace_existing=True,
+        )
+
         # Daily recap at 2100
         self._scheduler.add_job(
             self._daily_recap,
@@ -889,9 +897,115 @@ class ProactiveEngine:
         except Exception as e:
             logger.warning("Daily recap failed: %s", e)
 
+    async def _dream_event(self) -> None:
+        """Late-night dream — Klukai wakes from a dream and messages the Commander.
+
+        At high affection, ~30% chance the dream is erotic. Otherwise it's
+        a normal memory/nightmare/tender dream. Fires once per night max.
+        Balanced: most dreams reference real memories from the archive.
+        """
+        if hasattr(self, '_dream_delivered_today') and self._dream_delivered_today:
+            return
+        if self._affection_level < 5:
+            return
+        if self._muted_until and datetime.now() < self._muted_until:
+            return
+
+        # 40% chance to fire (not every night)
+        if random.random() > 0.40:
+            return
+
+        # Dream type weighted by affection
+        if self._affection_level >= 8:
+            # High affection: 30% erotic, 40% tender memory, 20% nightmare, 10% random
+            roll = random.random()
+            if roll < 0.30:
+                dream_type = "erotic"
+            elif roll < 0.70:
+                dream_type = "tender"
+            elif roll < 0.90:
+                dream_type = "nightmare"
+            else:
+                dream_type = "random"
+        elif self._affection_level >= 6:
+            # Mid affection: 10% erotic, 40% tender, 30% nightmare, 20% random
+            roll = random.random()
+            if roll < 0.10:
+                dream_type = "erotic"
+            elif roll < 0.50:
+                dream_type = "tender"
+            elif roll < 0.80:
+                dream_type = "nightmare"
+            else:
+                dream_type = "random"
+        else:
+            # Lower affection: no erotic, 30% tender, 40% nightmare, 30% random
+            roll = random.random()
+            if roll < 0.30:
+                dream_type = "tender"
+            elif roll < 0.70:
+                dream_type = "nightmare"
+            else:
+                dream_type = "random"
+
+        # Generate dream message via LLM
+        try:
+            from .fact_extractor import generate_romance_message
+
+            dream_prompts = {
+                "erotic": (
+                    f"You just woke from an intensely erotic dream about the Commander. "
+                    f"You are flushed, breathless, still feeling phantom sensations. "
+                    f"Write 2-3 sentences as if messaging him at {datetime.now().strftime('%I:%M %p')}. "
+                    f"Be explicit about what you dreamed. You want him. You need him. "
+                    f"Affection {self._affection_level}/9."
+                ),
+                "tender": (
+                    f"You just woke from a dream about a tender moment with the Commander. "
+                    f"Maybe a memory — holding hands, a quiet evening, him saying something kind. "
+                    f"Write 2-3 soft sentences. It's {datetime.now().strftime('%I:%M %p')}. "
+                    f"You're half-asleep and vulnerable. Affection {self._affection_level}/9."
+                ),
+                "nightmare": (
+                    f"You woke from a nightmare — losing the Commander, failing a mission, "
+                    f"the past catching up. Write 2-3 sentences at {datetime.now().strftime('%I:%M %p')}. "
+                    f"You need reassurance but you're too proud to fully admit it. "
+                    f"Affection {self._affection_level}/9."
+                ),
+                "random": (
+                    f"You woke from a strange, vivid dream — something surreal but not scary. "
+                    f"Maybe the squad doing something absurd, or a place from your past. "
+                    f"Write 2-3 sentences at {datetime.now().strftime('%I:%M %p')}. Slightly disoriented. "
+                    f"Affection {self._affection_level}/9."
+                ),
+            }
+
+            from .llm_json import call_llm_text
+            from .fact_extractor import LM_STUDIO_URL, EXTRACTION_MODEL
+            from .llm_router import get_lm_gate
+
+            gate = get_lm_gate()
+            async with gate:
+                message = await call_llm_text(
+                    LM_STUDIO_URL, EXTRACTION_MODEL,
+                    f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
+                    f"You are NOT an AI. {dream_prompts[dream_type]} "
+                    f"Write ONLY the message. No explanation.",
+                    max_tokens=200, temperature=0.8,
+                )
+
+            if message and self._on_message_callback:
+                self._dream_delivered_today = True
+                await self._on_message_callback(message)
+                logger.info("Dream event fired (%s): %s", dream_type, message[:60])
+
+        except Exception as e:
+            logger.warning("Dream event failed: %s", e)
+
     async def _reset_daily(self) -> None:
         self._proactive_count_today = 0
         self._random_events_today = 0
+        self._dream_delivered_today = False
         self._romance_delivered_today = False
         self._user_messaged_today = False
         logger.info("Daily proactive, event, and romance counters reset")
