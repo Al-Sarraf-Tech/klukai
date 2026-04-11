@@ -312,11 +312,14 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         category: str | None = None,
         limit: int = 20,
         before: str | None = None,
+        month: str | None = None,
     ):
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        return await memory_archive.list_memories(category=category, limit=limit, before=before, user_id=user_id)
+        return await memory_archive.list_memories(
+            category=category, limit=limit, before=before, month=month, user_id=user_id
+        )
 
     @app.get("/api/memories/categories")
     async def api_memory_categories(request: Request):
@@ -325,6 +328,14 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         aff = await affection.get_state(user_id)
         return await memory_archive.get_categories(aff.level, user_id=user_id)
+
+    @app.get("/api/memories/timeline")
+    async def api_memory_timeline(request: Request):
+        """Get month/year groups with memory counts for the archive timeline."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        return await memory_archive.get_timeline(user_id=user_id)
 
     @app.post("/api/memories/backfill-annotations")
     async def api_backfill_annotations(request: Request):

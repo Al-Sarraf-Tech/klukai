@@ -26,8 +26,10 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
   late final MemoryService _service;
 
   List<MemoryCategory> _categories = [];
+  List<MonthGroup> _timeline = [];
   List<Memory> _memories = [];
   String _selectedCategory = 'All';
+  String? _selectedMonth;  // null = all months
   bool _loadingCategories = true;
   bool _loadingMemories = true;
 
@@ -36,6 +38,7 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
     super.initState();
     _service = MemoryService(serverUrl: widget.serverUrl);
     _loadCategories();
+    _loadTimeline();
     _loadMemories();
   }
 
@@ -53,11 +56,19 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
     }
   }
 
-  Future<void> _loadMemories({String? category}) async {
+  Future<void> _loadTimeline() async {
+    try {
+      final tl = await _service.fetchTimeline();
+      if (mounted) setState(() => _timeline = tl);
+    } catch (_) {}
+  }
+
+  Future<void> _loadMemories({String? category, String? month}) async {
     setState(() => _loadingMemories = true);
     try {
       final mems = await _service.fetchMemories(
         category: category == 'All' ? null : category,
+        month: month,
         limit: 50,
       );
       if (mounted) {
@@ -74,7 +85,13 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
   void _selectCategory(String cat) {
     if (_selectedCategory == cat) return;
     setState(() => _selectedCategory = cat);
-    _loadMemories(category: cat);
+    _loadMemories(category: cat, month: _selectedMonth);
+  }
+
+  void _selectMonth(String? month) {
+    if (_selectedMonth == month) return;
+    setState(() => _selectedMonth = month);
+    _loadMemories(category: _selectedCategory, month: month);
   }
 
   int get _totalKept {
@@ -205,6 +222,24 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
               child: Container(height: 1, color: GFL2Colors.border.withValues(alpha: 0.4)),
             ),
             _buildSidebarItem('All', _totalKept),
+            // Month/year section
+            if (_timeline.isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+                child: Text(
+                  'TIMELINE',
+                  style: TextStyle(
+                    color: GFL2Colors.textDim.withValues(alpha: 0.6),
+                    fontSize: 9,
+                    fontFamily: 'monospace',
+                    letterSpacing: 1.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              _buildSidebarMonthItem(null, 'All Months', _totalKept),
+              ..._timeline.map((g) => _buildSidebarMonthItem(g.month, g.label, g.count)),
+            ],
             const Spacer(),
             // Archive stats
             Padding(
@@ -314,12 +349,62 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
     );
   }
 
+  Widget _buildSidebarMonthItem(String? month, String label, int count) {
+    final isSelected = _selectedMonth == month;
+    return GestureDetector(
+      onTap: () => _selectMonth(month),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? GFL2Colors.primary.withValues(alpha: 0.08)
+              : Colors.transparent,
+          border: Border(
+            left: BorderSide(
+              color: isSelected ? GFL2Colors.primary : Colors.transparent,
+              width: 2,
+            ),
+          ),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? GFL2Colors.textPrimary : GFL2Colors.textDim.withValues(alpha: 0.7),
+                  fontSize: 10,
+                  fontFamily: 'monospace',
+                  letterSpacing: 0.4,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Text(
+              '$count',
+              style: TextStyle(
+                color: isSelected
+                    ? GFL2Colors.primary.withValues(alpha: 0.8)
+                    : GFL2Colors.textDim.withValues(alpha: 0.3),
+                fontSize: 9,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ── Mobile Layout ───────────────────────────────────────────────────────────
 
   Widget _buildMobileLayout() {
     return Column(
       children: [
         _buildMobileCategoryTabs(),
+        if (_timeline.isNotEmpty) _buildMonthTabs(),
         Container(height: 1, color: GFL2Colors.border.withValues(alpha: 0.4)),
         Expanded(child: _buildTimeline(isCompact: true)),
       ],
@@ -383,6 +468,58 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
             fontSize: 10,
             fontFamily: 'monospace',
             letterSpacing: 0.8,
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w400,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMonthTabs() {
+    return Container(
+      color: GFL2Colors.surface,
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: SizedBox(
+        height: 28,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          physics: const ClampingScrollPhysics(),
+          itemCount: _timeline.length + 1, // +1 for "All" tab
+          separatorBuilder: (_, __) => const SizedBox(width: 5),
+          itemBuilder: (_, i) {
+            if (i == 0) return _buildMonthTab(null, 'ALL');
+            final group = _timeline[i - 1];
+            return _buildMonthTab(group.month, '${group.label} (${group.count})');
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMonthTab(String? month, String label) {
+    final isSelected = _selectedMonth == month;
+    return GestureDetector(
+      onTap: () => _selectMonth(month),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? GFL2Colors.primary.withValues(alpha: 0.15)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(3),
+          border: Border.all(
+            color: isSelected
+                ? GFL2Colors.primary.withValues(alpha: 0.6)
+                : GFL2Colors.border.withValues(alpha: 0.3),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? GFL2Colors.primary : GFL2Colors.textDim.withValues(alpha: 0.6),
+            fontSize: 9,
+            fontFamily: 'monospace',
+            letterSpacing: 0.6,
             fontWeight: isSelected ? FontWeight.w700 : FontWeight.w400,
           ),
         ),

@@ -268,9 +268,10 @@ async def list_memories(
     category: str | None = None,
     limit: int = 20,
     before: str | None = None,
+    month: str | None = None,
     user_id: str = "jalsarraf",
 ) -> list[dict]:
-    """List kept memories, optionally filtered by category, scoped to user."""
+    """List kept memories, optionally filtered by category and/or month (YYYY-MM), scoped to user."""
     try:
         async with get_conn() as conn:
             conditions = ["kept = true", "user_id = %s"]
@@ -282,6 +283,9 @@ async def list_memories(
             if before:
                 conditions.append("created_at < %s")
                 params.append(before)
+            if month:
+                conditions.append("to_char(created_at, 'YYYY-MM') = %s")
+                params.append(month)
 
             where = " AND ".join(conditions)
             params.append(limit)
@@ -311,6 +315,23 @@ async def list_memories(
             ]
     except Exception as e:
         logger.error("Failed to list memories: %s", e)
+        return []
+
+
+async def get_timeline(user_id: str = "jalsarraf") -> list[dict]:
+    """Return month/year groups with memory counts for the archive timeline."""
+    try:
+        async with get_conn() as conn:
+            rows = await (await conn.execute(
+                "SELECT to_char(created_at, 'YYYY-MM') as month, count(*) "
+                "FROM companion_memories "
+                "WHERE kept = true AND user_id = %s "
+                "GROUP BY month ORDER BY month DESC",
+                (user_id,),
+            )).fetchall()
+            return [{"month": r[0], "count": r[1]} for r in rows]
+    except Exception as e:
+        logger.error("Failed to get timeline: %s", e)
         return []
 
 

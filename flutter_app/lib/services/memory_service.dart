@@ -23,16 +23,28 @@ class MemoryService {
     String? category,
     int limit = 20,
     String? before,
+    String? month,
   }) async {
     final params = <String, String>{'limit': limit.toString()};
     if (category != null && category != 'All') params['category'] = category;
     if (before != null) params['before'] = before;
+    if (month != null) params['month'] = month;
 
     final uri = Uri.parse('$serverUrl/api/memories').replace(queryParameters: params);
     final response = await http.get(uri, headers: _authHeaders);
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as List;
       return data.map((m) => Memory.fromJson(m)).toList();
+    }
+    return [];
+  }
+
+  Future<List<MonthGroup>> fetchTimeline() async {
+    final uri = Uri.parse('$serverUrl/api/memories/timeline');
+    final response = await http.get(uri, headers: _authHeaders);
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as List;
+      return data.map((m) => MonthGroup.fromJson(m)).toList();
     }
     return [];
   }
