@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:web/web.dart' as web;
 import '../main.dart';
 import '../models/memory.dart';
 import '../services/memory_service.dart';
@@ -529,7 +530,13 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
   Future<void> _download() async {
     setState(() => _downloading = true);
     try {
-      final response = await http.get(Uri.parse(_imageUrl));
+      String authToken = '';
+      try {
+        authToken = web.window.localStorage.getItem('klukai_token') ?? '';
+      } catch (_) {}
+      final response = await http.get(Uri.parse(_imageUrl), headers: {
+        'Authorization': 'Bearer $authToken',
+      });
       if (response.statusCode == 200) {
         // Web download via anchor element not available in pure Flutter web
         // without dart:html; signal success instead.

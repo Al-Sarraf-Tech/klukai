@@ -13,7 +13,7 @@ from datetime import datetime
 
 from . import context
 from . import memory_archive
-from .context import ws, memory, router, affection, proactive, SESSION_ID
+from .context import ws, memory, router, affection, proactive, SESSION_ID, session_id
 from .db import get_conn_autocommit
 from .fact_extractor import create_episode_summary, extract_facts
 from .helpers import enhance_image_prompt as _enhance_image_prompt
@@ -39,7 +39,7 @@ async def background_extraction(
     """
     await asyncio.sleep(3)  # Let main response finish streaming first
     try:
-        aff_state_bg = await affection.get_state()
+        aff_state_bg = await affection.get_state(user_id)
         result = await extract_facts(
             user_msg, assistant_msg,
             image_generated=image_generated,
@@ -65,7 +65,7 @@ async def background_extraction(
         # Update mood in session + persist to PostgreSQL
         mood = result.get("mood", "composed")
         session.mood = mood
-        await memory.save_session(SESSION_ID, session)
+        await memory.save_session(session_id(user_id), session)
         await ws.send_mood(user_id, mood)
         proactive.set_last_mood(mood)
 
@@ -83,7 +83,7 @@ async def background_extraction(
             session.mission_description = recent_text
             session.mission_interval = 30
             session.mission_started_at = datetime.now().isoformat()
-            await memory.save_session(SESSION_ID, session)
+            await memory.save_session(session_id(user_id), session)
             logger.info("Mission auto-started from battle_ready mood: %s", recent_text[:60])
 
         # Persist mood so it survives session expiry
@@ -107,7 +107,7 @@ async def background_extraction(
                 interaction = {"type": "neutral", "intensity": 5}
             interaction_type = interaction.get("type", "neutral")
             intensity = max(1, min(10, int(interaction.get("intensity", 5))))
-            aff_change = await affection.apply_classification(interaction_type, intensity)
+            aff_change = await affection.apply_classification(interaction_type, intensity, user_id)
 
             # Sync affection level to proactive engine
             proactive.set_affection_level(aff_change.new_level)
@@ -196,7 +196,7 @@ async def background_extraction(
         logger.error("Background extraction failed: %s\n%s", e, traceback.format_exc())
 
 
-async def background_compaction(session: SessionState) -> None:
+async def background_compaction(session: SessionState, user_id: str = "jalsarraf") -> None:
     """Compact older session turns into a summary to reduce prefill tokens.
 
     Triggered when session.turns >= COMPACT_THRESHOLD. Summarizes the oldest
@@ -225,7 +225,7 @@ async def background_compaction(session: SessionState) -> None:
         # Replace session turns with summary + recent raw turns
         session.context_summary = summary
         session.turns = recent_turns
-        await memory.save_session(SESSION_ID, session)
+        await memory.save_session(session_id(user_id), session)
 
         logger.info(
             "Session compacted: %d turns -> summary (%d chars) + %d raw turns",
@@ -239,6 +239,7 @@ async def background_image_gen(
     user_request: str,
     chat_context: str = "",
     squad_members: list[str] | None = None,
+    user_id: str = "jalsarraf",
 ) -> None:
     """Generate an anime image based on the user's request and recent chat context."""
     from .image_gen import check_comfyui_ready
@@ -252,16 +253,16 @@ async def background_image_gen(
         # Check if ComfyUI is ready
         ready = await check_comfyui_ready()
         if not ready:
-            await ws.send_thinking("default", "Warming up image systems, Commander. Stand by...")
+            await ws.send_thinking(user_id, "Warming up image systems, Commander. Stand by...")
         else:
-            await ws.send_thinking("default", "Compiling tactical visualization, Commander...")
+            await ws.send_thinking(user_id, "Compiling tactical visualization, Commander...")
 
         # Use both the request AND recent chat for context-aware generation
         full_context = f"{chat_context}\n{user_request}" if chat_context else user_request
         couple = is_couple_scene(full_context)
 
         # Get affection level for mood-aware prompts
-        aff_state = await affection.get_state()
+        aff_state = await affection.get_state(user_id)
         aff_level = aff_state.level
 
         scene_tags = _enhance_image_prompt(full_context, couple=couple)
@@ -282,23 +283,24 @@ async def background_image_gen(
             import base64 as b64
 
             # Get current session state for archive metadata
-            session_for_save = await memory.get_session(SESSION_ID)
+            session_for_save = await memory.get_session(session_id(user_id))
             conv_id = session_for_save.conversation_id if session_for_save else "unknown"
             session_mood = session_for_save.mood if session_for_save else "composed"
 
             # Save to memory archive before sending to UI
             memory_id = await memory_archive.save_image(
                 img_bytes, full_prompt, conv_id, session_mood, aff_level,
+                user_id=user_id,
             )
             if memory_id:
                 context.last_memory_id = memory_id
                 logger.info("Image archived as memory %s", memory_id)
 
             img_b64 = b64.b64encode(img_bytes).decode()
-            await ws.send("default", {"type": "image", "data": img_b64, "memory_id": memory_id})
+            await ws.send(user_id, {"type": "image", "data": img_b64, "memory_id": memory_id})
             logger.info("Image sent to UI (%d bytes)", len(img_bytes))
         else:
-            await ws.send_proactive("default", "...Visualization failed. Interference in the rendering pipeline. I'll try again later.")
+            await ws.send_proactive(user_id, "...Visualization failed. Interference in the rendering pipeline. I'll try again later.")
     except Exception as e:
         logger.error("Background image gen failed: %s", e)
 
@@ -306,8 +308,8 @@ async def background_image_gen(
 async def background_recall(content: str, session: SessionState, user_id: str) -> None:
     """Retrieve a memory from the archive and send it to the UI as a proactive message + image."""
     try:
-        aff_state = await affection.get_state()
-        mem = await memory_archive.recall_memory(content, session.mood, aff_state.level)
+        aff_state = await affection.get_state(user_id)
+        mem = await memory_archive.recall_memory(content, session.mood, aff_state.level, user_id=user_id)
         if not mem:
             await ws.send_proactive(user_id, "...I searched through our records, but nothing matched. Perhaps we haven't made that memory yet, Commander.")
             return

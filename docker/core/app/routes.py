@@ -12,7 +12,7 @@ import logging
 import os
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from . import memory_archive
@@ -34,8 +34,40 @@ logger = logging.getLogger(__name__)
 _current_costume = "blazing_star"
 
 
+async def _get_user_id(request: Request) -> str | None:
+    """Extract user_id from Authorization header. Returns None if invalid."""
+    from .auth import get_user_from_token
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:]
+        return await get_user_from_token(token)
+    return None
+
+
 def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     """Attach all HTTP endpoints to *app*."""
+
+    # ── Authentication ─────────────────────────────────────────────────────
+
+    @app.post("/api/auth/login")
+    async def login(req: dict, request: Request):
+        from .auth import authenticate, check_ip_banned
+        ip = request.client.host if request.client else "unknown"
+        if await check_ip_banned(ip):
+            return JSONResponse({"error": "IP banned"}, status_code=403)
+        username = req.get("username", "")
+        password = req.get("password", "")
+        token = await authenticate(username, password, ip)
+        if token:
+            return {"token": token, "user_id": username}
+        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+
+    @app.get("/api/auth/verify")
+    async def verify_token(request: Request):
+        user_id = await _get_user_id(request)
+        if user_id:
+            return {"user_id": user_id}
+        return JSONResponse({"error": "Invalid token"}, status_code=401)
 
     # ── Health ──────────────────────────────────────────────────────────────
 
@@ -65,8 +97,9 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Affection state ────────────────────────────────────────────────────
 
     @app.get("/api/affection")
-    async def get_affection():
-        state = await affection.get_state()
+    async def get_affection(request: Request):
+        user_id = await _get_user_id(request) or "jalsarraf"
+        state = await affection.get_state(user_id)
         return state.model_dump(mode="json")
 
     # ── TTS proxy ──────────────────────────────────────────────────────────
@@ -98,19 +131,21 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Image generation ───────────────────────────────────────────────────
 
     @app.post("/api/generate-image")
-    async def api_generate_image(req: dict):
+    async def api_generate_image(req: dict, request: Request):
         """Generate an image via ComfyUI and save to memory archive."""
         prompt = req.get("prompt", "")
         if not prompt:
             return JSONResponse({"error": "No prompt"}, status_code=400)
 
+        user_id = await _get_user_id(request) or "jalsarraf"
         img_bytes = await generate_image(prompt)
         if img_bytes:
             import base64
-            aff_state = await affection.get_state()
+            aff_state = await affection.get_state(user_id)
             mem_id = await memory_archive.save_image(
                 img_bytes, prompt, "api",
                 mood="composed", affection_level=aff_state.level,
+                user_id=user_id,
             )
             return {
                 "image": base64.b64encode(img_bytes).decode(),
@@ -122,10 +157,10 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Gift system ────────────────────────────────────────────────────────
 
     @app.post("/api/gift")
-    async def api_gift(req: dict):
+    async def api_gift(req: dict, request: Request):
         """Send a gift to Klukai. Returns her reaction and affection change."""
         gift_name = req.get("gift", "")
-        user_id = req.get("user", "default")
+        user_id = await _get_user_id(request) or req.get("user", "jalsarraf")
         if not gift_name:
             return JSONResponse({"error": "No gift specified"}, status_code=400)
 
@@ -142,9 +177,9 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         else:
             tier, bonus = "disliked", -1
 
-        aff_state = await affection.get_state()
+        aff_state = await affection.get_state(user_id)
         aff_state.score = max(0, min(100, aff_state.score + bonus))
-        await affection._save_state(aff_state)
+        await affection._save_state(aff_state, user_id)
 
         reaction = reactions.get(tier, "...Noted.")
         if ws.is_connected(user_id):
@@ -156,14 +191,14 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Mission mode ───────────────────────────────────────────────────────
 
     @app.post("/api/mission")
-    async def api_mission(req: dict):
+    async def api_mission(req: dict, request: Request):
         """Send Klukai on a mission. She returns with a report and a gift."""
-        user_id = req.get("user", "default")
+        user_id = await _get_user_id(request) or req.get("user", "jalsarraf")
 
         if ws.is_connected(user_id):
             await ws.send_proactive(user_id, "Understood, Commander. Deploying for sortie. I will report back shortly.")
 
-        aff_state = await affection.get_state()
+        aff_state = await affection.get_state(user_id)
         asyncio.create_task(_run_mission(user_id, aff_state.level))
         return {"status": "deployed"}
 
@@ -210,24 +245,25 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Conversation history ───────────────────────────────────────────────
 
     @app.get("/api/messages")
-    async def get_messages(limit: int = 50, before: str | None = None):
-        """Fetch recent messages from PostgreSQL."""
+    async def get_messages(request: Request, limit: int = 50, before: str | None = None):
+        """Fetch recent messages from PostgreSQL, scoped to authenticated user."""
+        user_id = await _get_user_id(request) or "jalsarraf"
         try:
             pool = get_pool()
             async with pool.connection() as conn:
                 if before:
                     rows = await conn.execute(
                         "SELECT id, role, content, content_type, mood, model, created_at "
-                        "FROM companion_messages WHERE created_at < %s "
+                        "FROM companion_messages WHERE user_id = %s AND created_at < %s "
                         "ORDER BY created_at DESC LIMIT %s",
-                        (before, limit),
+                        (user_id, before, limit),
                     )
                 else:
                     rows = await conn.execute(
                         "SELECT id, role, content, content_type, mood, model, created_at "
-                        "FROM companion_messages "
+                        "FROM companion_messages WHERE user_id = %s "
                         "ORDER BY created_at DESC LIMIT %s",
-                        (limit,),
+                        (user_id, limit),
                     )
                 messages = [
                     {
@@ -253,16 +289,19 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
     @app.get("/api/memories")
     async def api_memories(
+        request: Request,
         category: str | None = None,
         limit: int = 20,
         before: str | None = None,
     ):
-        return await memory_archive.list_memories(category=category, limit=limit, before=before)
+        user_id = await _get_user_id(request) or "jalsarraf"
+        return await memory_archive.list_memories(category=category, limit=limit, before=before, user_id=user_id)
 
     @app.get("/api/memories/categories")
-    async def api_memory_categories():
-        aff = await affection.get_state()
-        return await memory_archive.get_categories(aff.level)
+    async def api_memory_categories(request: Request):
+        user_id = await _get_user_id(request) or "jalsarraf"
+        aff = await affection.get_state(user_id)
+        return await memory_archive.get_categories(aff.level, user_id=user_id)
 
     @app.post("/api/memories/backfill-annotations")
     async def api_backfill_annotations():
@@ -307,13 +346,14 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
     @app.get("/")
     async def root():
-        """Redirect to PWA or show status."""
+        """Serve login page or redirect to app."""
         from pathlib import Path
-        static_dir = Path("/app/static")
-        if static_dir.exists() and (static_dir / "index.html").exists():
-            from fastapi.responses import RedirectResponse
-            return RedirectResponse("/app/")
-        return {"status": "companion-core running", "pwa": "not built yet"}
+        from fastapi.responses import FileResponse
+
+        login_path = Path("/app/static/login.html")
+        if login_path.exists():
+            return FileResponse(login_path, media_type="text/html")
+        return {"status": "companion-core running", "auth": "login page not deployed"}
 
 
 # ── Private helpers (used by routes above) ─────────────────────────────────
@@ -350,9 +390,9 @@ async def _run_mission(user_id: str, affection_level: int) -> None:
         if ws.is_connected(user_id):
             await ws.send_proactive(user_id, report)
 
-        aff = await affection.get_state()
+        aff = await affection.get_state(user_id)
         aff.score = min(100, aff.score + 3)
-        await affection._save_state(aff)
+        await affection._save_state(aff, user_id)
     except Exception as e:
         logger.warning("Mission narrative failed: %s", e)
         if ws.is_connected(user_id):

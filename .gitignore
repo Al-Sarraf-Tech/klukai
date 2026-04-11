@@ -2,6 +2,7 @@
 web-build/*
 !web-build/.gitkeep
 !web-build/index.html
+!web-build/login.html
 !web-build/js/
 !web-build/assets/models/
 __pycache__/

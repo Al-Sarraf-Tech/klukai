@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:web/web.dart' as web;
 import '../main.dart';
 import 'timeline_screen.dart';
 
@@ -28,6 +29,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _costume = 'blazing_star';
   Map<String, String> _milestones = {};
 
+  Map<String, String> get _authHeaders {
+    String token = '';
+    try {
+      token = web.window.localStorage.getItem('klukai_token') ?? '';
+    } catch (_) {}
+    return {
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json',
+    };
+  }
+
   @override
   void initState() {
     super.initState();
@@ -36,8 +48,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _loadData() async {
     try {
-      final costumeR = await http.get(Uri.parse('${widget.serverUrl}/api/costume'));
-      final milestonesR = await http.get(Uri.parse('${widget.serverUrl}/api/milestones'));
+      final costumeR = await http.get(Uri.parse('${widget.serverUrl}/api/costume'), headers: _authHeaders);
+      final milestonesR = await http.get(Uri.parse('${widget.serverUrl}/api/milestones'), headers: _authHeaders);
       if (costumeR.statusCode == 200) {
         setState(() => _costume = jsonDecode(costumeR.body)['costume'] ?? 'blazing_star');
       }
@@ -52,7 +64,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       await http.post(
         Uri.parse('${widget.serverUrl}/api/costume'),
-        headers: {'Content-Type': 'application/json'},
+        headers: _authHeaders,
         body: jsonEncode({'costume': costume}),
       );
       setState(() => _costume = costume);

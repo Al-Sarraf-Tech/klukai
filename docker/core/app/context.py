@@ -21,7 +21,12 @@ ws = WSManager()
 proactive = ProactiveEngine()
 affection = AffectionManager()
 
-SESSION_ID = "default"  # Single-user, single session
+SESSION_ID = "default"  # Legacy constant — prefer session_id(user_id)
+
+
+def session_id(user_id: str) -> str:
+    """Return a per-user session key for Redis."""
+    return f"session:{user_id}"
 
 # Tracks the most recently generated memory_id for commander save/discard overrides
 last_memory_id: str | None = None

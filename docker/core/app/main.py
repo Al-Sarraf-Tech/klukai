@@ -18,6 +18,7 @@ from .context import (
     memory,
     proactive,
     router,
+    session_id,
     ws,
 )
 from .chat import register_websocket
@@ -65,7 +66,8 @@ async def generate_daily_recap(affection_level: int) -> str | None:
             rows = await (
                 await conn.execute(
                     "SELECT role, content FROM companion_messages "
-                    "WHERE created_at::date = %s::date ORDER BY created_at ASC LIMIT 40",
+                    "WHERE user_id = 'jalsarraf' AND created_at::date = %s::date "
+                    "ORDER BY created_at ASC LIMIT 40",
                     (today,),
                 )
             ).fetchall()
@@ -128,13 +130,15 @@ async def lifespan(app: FastAPI):
     global _keepalive_task
     await init_pool(min_size=2, max_size=10)
     await run_migration()
+    from .auth import init_users
+    await init_users()
     await memory.init()
     await router.init()
     await mcp.init()
     await affection.init()
     proactive.set_callback(proactive_callback)
     proactive.set_recap_callback(generate_daily_recap)
-    proactive.set_session_getter(lambda: memory.get_session(SESSION_ID))
+    proactive.set_session_getter(lambda: memory.get_session(session_id("jalsarraf")))
     proactive.start()
     await events_init()
     load_personality()

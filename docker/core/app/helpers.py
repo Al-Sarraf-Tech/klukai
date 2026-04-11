@@ -218,17 +218,17 @@ def parse_interval_minutes(message: str) -> int:
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
 
-async def create_conversation(conv_id: str) -> None:
-    """Create a new conversation record."""
+async def create_conversation(conv_id: str, user_id: str = "jalsarraf") -> None:
+    """Create a new conversation record scoped to a user."""
     import logging
     from .db import get_conn_autocommit
     logger = logging.getLogger(__name__)
     try:
         async with get_conn_autocommit() as conn:
             await conn.execute(
-                "INSERT INTO companion_conversations (id) VALUES (%s) "
+                "INSERT INTO companion_conversations (id, user_id) VALUES (%s, %s) "
                 "ON CONFLICT DO NOTHING",
-                (conv_id,),
+                (conv_id, user_id),
             )
     except Exception as e:
         logger.error("Failed to create conversation: %s", e)
@@ -240,6 +240,7 @@ async def store_message(
     content: str,
     model: str = "",
     latency_ms: int | None = None,
+    user_id: str = "jalsarraf",
 ) -> None:
     """Store a message and update conversation turn count."""
     import logging
@@ -249,9 +250,9 @@ async def store_message(
         async with get_conn_autocommit() as conn:
             await conn.execute(
                 "INSERT INTO companion_messages "
-                "(conversation_id, role, content, model, latency_ms) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (conversation_id, role, content, model, latency_ms),
+                "(conversation_id, role, content, model, latency_ms, user_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (conversation_id, role, content, model, latency_ms, user_id),
             )
             await conn.execute(
                 "UPDATE companion_conversations SET turn_count = turn_count + 1, "

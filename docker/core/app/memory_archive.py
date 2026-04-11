@@ -146,6 +146,7 @@ async def save_image(
     mood: str = "composed",
     affection_level: int = 0,
     curation: dict | None = None,
+    user_id: str = "jalsarraf",
 ) -> str | None:
     """Save a generated image to the volume and create a metadata row.
 
@@ -204,12 +205,12 @@ async def save_image(
             await conn.execute(
                 "INSERT INTO companion_memories "
                 "(id, filename, thumb_filename, prompt, annotation, scene_tags, "
-                "mood, affection_level, kept, kept_by, category, conversation_id) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "mood, affection_level, kept, kept_by, category, conversation_id, user_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     memory_id, filename, thumb_filename, prompt, annotation,
                     scene_tags, mood, affection_level, kept, kept_by,
-                    category, conversation_id,
+                    category, conversation_id, user_id,
                 ),
             )
 
@@ -258,12 +259,13 @@ async def list_memories(
     category: str | None = None,
     limit: int = 20,
     before: str | None = None,
+    user_id: str = "jalsarraf",
 ) -> list[dict]:
-    """List kept memories, optionally filtered by category."""
+    """List kept memories, optionally filtered by category, scoped to user."""
     try:
         async with get_conn() as conn:
-            conditions = ["kept = true"]
-            params: list = []
+            conditions = ["kept = true", "user_id = %s"]
+            params: list = [user_id]
 
             if category:
                 conditions.append("category = %s")
@@ -303,14 +305,15 @@ async def list_memories(
         return []
 
 
-async def get_categories(affection_level: int) -> list[dict]:
-    """Return available categories with memory counts."""
+async def get_categories(affection_level: int, user_id: str = "jalsarraf") -> list[dict]:
+    """Return available categories with memory counts, scoped to user."""
     try:
         valid = available_categories(affection_level)
         async with get_conn() as conn:
             rows = await (await conn.execute(
                 "SELECT category, count(*) FROM companion_memories "
-                "WHERE kept = true GROUP BY category"
+                "WHERE kept = true AND user_id = %s GROUP BY category",
+                (user_id,),
             )).fetchall()
 
             counts = {r[0]: r[1] for r in rows}
@@ -366,8 +369,9 @@ async def recall_memory(
     query: str | None,
     mood: str,
     affection_level: int,
+    user_id: str = "jalsarraf",
 ) -> dict | None:
-    """Recall a memory from the archive.
+    """Recall a memory from the archive, scoped to user.
 
     Specific query: search scene_tags + annotation text.
     Vague/none: mood-weighted random from kept memories.
@@ -382,9 +386,9 @@ async def recall_memory(
                     rows = await (await conn.execute(
                         "SELECT id, filename, annotation, category, scene_tags, created_at "
                         "FROM companion_memories "
-                        "WHERE kept = true AND %s = ANY(scene_tags) "
+                        "WHERE kept = true AND user_id = %s AND %s = ANY(scene_tags) "
                         "ORDER BY created_at DESC LIMIT 1",
-                        (term,),
+                        (user_id, term),
                     )).fetchall()
                     if rows:
                         return _row_to_dict(rows[0])
@@ -394,9 +398,9 @@ async def recall_memory(
                     rows = await (await conn.execute(
                         "SELECT id, filename, annotation, category, scene_tags, created_at "
                         "FROM companion_memories "
-                        "WHERE kept = true AND annotation ILIKE %s "
+                        "WHERE kept = true AND user_id = %s AND annotation ILIKE %s "
                         "ORDER BY created_at DESC LIMIT 1",
-                        (f"%{term}%",),
+                        (user_id, f"%{term}%"),
                     )).fetchall()
                     if rows:
                         return _row_to_dict(rows[0])
@@ -424,19 +428,20 @@ async def recall_memory(
             rows = await (await conn.execute(
                 "SELECT id, filename, annotation, category, scene_tags, created_at "
                 "FROM companion_memories "
-                "WHERE kept = true AND category = %s "
+                "WHERE kept = true AND user_id = %s AND category = %s "
                 "ORDER BY random() LIMIT 1",
-                (chosen_cat,),
+                (user_id, chosen_cat),
             )).fetchall()
 
             if rows:
                 return _row_to_dict(rows[0])
 
-            # Fallback: any kept memory
+            # Fallback: any kept memory for this user
             rows = await (await conn.execute(
                 "SELECT id, filename, annotation, category, scene_tags, created_at "
-                "FROM companion_memories WHERE kept = true "
-                "ORDER BY random() LIMIT 1"
+                "FROM companion_memories WHERE kept = true AND user_id = %s "
+                "ORDER BY random() LIMIT 1",
+                (user_id,),
             )).fetchall()
             return _row_to_dict(rows[0]) if rows else None
 

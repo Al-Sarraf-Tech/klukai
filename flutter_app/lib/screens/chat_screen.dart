@@ -231,7 +231,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     try {
       final response = await http.post(
         Uri.parse('${widget.serverUrl}/api/tts'),
-        headers: {'Content-Type': 'application/json'},
+        headers: _authHeaders,
         body: jsonEncode({'text': text, 'language': 'en'}),
       );
       if (response.statusCode == 200) {
@@ -249,10 +249,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  Map<String, String> get _authHeaders {
+    final token = _authToken ?? _getToken() ?? '';
+    return {
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json',
+    };
+  }
+
   Future<void> _loadHistory() async {
     try {
       final uri = Uri.parse('${widget.serverUrl}/api/messages?limit=50');
-      final response = await http.get(uri);
+      final response = await http.get(uri, headers: _authHeaders);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final messages = (data['messages'] as List)
@@ -272,7 +280,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Future<void> _loadAffection() async {
     try {
       final uri = Uri.parse('${widget.serverUrl}/api/affection');
-      final response = await http.get(uri);
+      final response = await http.get(uri, headers: _authHeaders);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         setState(() {
@@ -289,9 +297,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  String? _authToken;
+
+  String? _getToken() {
+    try {
+      return web.window.localStorage.getItem('klukai_token');
+    } catch (_) {
+      return null;
+    }
+  }
+
   void _connectWS() {
+    _authToken = _getToken();
+    if (_authToken == null || _authToken!.isEmpty) {
+      // No token — redirect to login page
+      web.window.location.href = '/';
+      return;
+    }
     final wsUrl = '${widget.serverUrl.replaceFirst('http', 'ws')}/ws';
-    _ws.connect(wsUrl);
+    _ws.connect(wsUrl, token: _authToken);
     _ws.connectionState.listen((connected) {
       setState(() => _state = _state.copyWith(isConnected: connected));
     });
@@ -509,7 +533,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       final serverUrl = widget.serverUrl;
       final response = await http.post(
         Uri.parse('$serverUrl/api/stt'),
-        headers: {'Content-Type': 'application/json'},
+        headers: _authHeaders,
         body: jsonEncode({'audio': audioBase64}),
       );
       if (response.statusCode == 200) {

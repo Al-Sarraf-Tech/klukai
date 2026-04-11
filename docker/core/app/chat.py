@@ -32,6 +32,7 @@ from .context import (
     memory,
     proactive,
     router,
+    session_id,
     ws,
 )
 from .db import get_conn, get_conn_autocommit
@@ -89,7 +90,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             session.mission_description = None
             session.mission_interval = None
             session.mission_started_at = None
-            await memory.save_session(SESSION_ID, session)
+            await memory.save_session(session_id(user_id), session)
             logger.info("Mission timer cancelled by user")
         # Don't return — let the message go through to get an in-character response
 
@@ -101,18 +102,19 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         if not mission_desc:
             mission_desc = content
 
-        aff_state = await affection.get_state()
+        aff_state = await affection.get_state(user_id)
         proactive.start_mission(mission_desc, interval)
 
         # Persist mission state in session so it survives Redis restores
         session.mission_description = mission_desc
         session.mission_interval = interval
         session.mission_started_at = datetime.now().isoformat()
-        await memory.save_session(SESSION_ID, session)
+        await memory.save_session(session_id(user_id), session)
         logger.info("Mission timer started: every %d min, desc='%s'", interval, mission_desc[:60])
 
     # Add user turn to session
-    session = await memory.add_turn(SESSION_ID, "user", content, session)
+    sid = session_id(user_id)
+    session = await memory.add_turn(sid, "user", content, session)
 
     # Skip expensive memory recall for very short messages (hi, ok, yes, etc)
     is_short = len(content.strip()) <= 20
@@ -122,7 +124,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         episode_memories, rel_facts, recalled_exchanges = await memory.recall_for_prompt(content)
 
     # Get affection state for prompt modulation
-    aff_state = await affection.get_state()
+    aff_state = await affection.get_state(user_id)
 
     # Assemble system prompt
     # Calculate days together
@@ -275,16 +277,17 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         await ws.send_done(user_id, msg_id, model_name, final_text=final_text)
 
     # Add assistant turn to session
-    session = await memory.add_turn(SESSION_ID, "assistant", response_text, session)
+    session = await memory.add_turn(sid, "assistant", response_text, session)
 
     # Store messages in PostgreSQL + mark as read
-    await _store_message(session.conversation_id, "user", content, model_name)
+    await _store_message(session.conversation_id, "user", content, model_name, user_id=user_id)
     try:
         async with get_conn_autocommit() as conn:
             await conn.execute(
                 "UPDATE companion_messages SET read_at = NOW() "
-                "WHERE conversation_id = %s AND role = 'user' AND read_at IS NULL",
-                (session.conversation_id,),
+                "WHERE conversation_id = %s AND role = 'user' AND read_at IS NULL "
+                "AND user_id = %s",
+                (session.conversation_id, user_id),
             )
     except Exception as e:
         logger.warning("Failed to set read_at: %s", e)
@@ -292,7 +295,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
 
     await _store_message(
         session.conversation_id, "assistant", response_text, model_name,
-        latency_ms=latency_ms,
+        latency_ms=latency_ms, user_id=user_id,
     )
 
     # Commander save/discard overrides — operate on the most recent memory
@@ -325,6 +328,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             mentioned_squad = detect_squad_members(f"{content} {chat_ctx}")
             asyncio.create_task(background_image_gen(
                 content, chat_context=chat_ctx, squad_members=mentioned_squad,
+                user_id=user_id,
             ))
 
     # Background: extract facts and create episodes
@@ -350,17 +354,17 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
 
     # Background: compact session if turns exceed threshold
     if len(session.turns) >= COMPACT_THRESHOLD:
-        asyncio.create_task(background_compaction(session))
+        asyncio.create_task(background_compaction(session, user_id))
 
 
-async def _handle_voice(audio_b64: str, session: SessionState) -> None:
+async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "default") -> None:
     """Process voice: STT -> text -> LLM -> TTS -> audio."""
     voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             # STT
-            await ws.send_thinking("default", "Listening...")
+            await ws.send_thinking(user_id, "Listening...")
             r = await client.post(
                 f"{voice_url}/stt",
                 json={"audio": audio_b64},
@@ -372,10 +376,10 @@ async def _handle_voice(audio_b64: str, session: SessionState) -> None:
                 return
 
             # Process as text message (which streams the text response)
-            await _handle_message(transcript, session)
+            await _handle_message(transcript, session, user_id)
 
             # Get the last assistant response for TTS
-            session = await memory.get_session(SESSION_ID)
+            session = await memory.get_session(session_id(user_id))
             if session and session.turns:
                 last_turn = session.turns[-1]
                 if last_turn["role"] == "assistant":
@@ -387,7 +391,7 @@ async def _handle_voice(audio_b64: str, session: SessionState) -> None:
                     if r.status_code == 200:
                         import base64
                         audio_out = base64.b64encode(r.content).decode()
-                        await ws.send_voice("default", audio_out, final=True)
+                        await ws.send_voice(user_id, audio_out, final=True)
     except Exception as e:
         logger.error("Voice processing failed: %s", e)
 
@@ -397,11 +401,23 @@ def register_websocket(app: FastAPI) -> None:
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
-        user_id = websocket.query_params.get("user", "default")
+        # Authenticate via token query param
+        token = websocket.query_params.get("token", "")
+        if token:
+            from .auth import get_user_from_token
+            user_id = await get_user_from_token(token)
+            if not user_id:
+                await websocket.close(code=4001, reason="Invalid or expired token")
+                return
+        else:
+            # Legacy fallback — reject unauthenticated connections
+            await websocket.close(code=4001, reason="Authentication required")
+            return
+
         await ws.connect(websocket, user_id)
 
         # Ensure session exists — always restore mood from PostgreSQL (source of truth)
-        session_key = f"{SESSION_ID}:{user_id}" if user_id != "default" else SESSION_ID
+        session_key = session_id(user_id)
         session = await memory.get_session(session_key)
 
         # Always restore mood from persistent state (PostgreSQL is source of truth)
@@ -421,8 +437,8 @@ def register_websocket(app: FastAPI) -> None:
             conv_id = new_id()
             session = SessionState(conversation_id=conv_id, mood=restored_mood)
             await memory.save_session(session_key, session)
-            await _create_conversation(conv_id)
-            logger.info("New session created with restored mood '%s'", restored_mood)
+            await _create_conversation(conv_id, user_id=user_id)
+            logger.info("New session created with restored mood '%s' for user %s", restored_mood, user_id)
         elif session.mood != restored_mood and restored_mood != "composed":
             # Existing session but mood drifted — restore from DB
             session.mood = restored_mood
@@ -435,7 +451,7 @@ def register_websocket(app: FastAPI) -> None:
 
         # Restore mission timer from session if it was active before disconnect
         if session.mission_description and session.mission_interval and not proactive.mission_active:
-            aff_state = await affection.get_state()
+            aff_state = await affection.get_state(user_id)
             proactive.set_affection_level(aff_state.level)
             proactive.start_mission(session.mission_description, session.mission_interval)
             logger.info(
@@ -458,7 +474,7 @@ def register_websocket(app: FastAPI) -> None:
                 elif msg_type == "voice_end":
                     audio = data.get("audio")
                     if audio:
-                        await _handle_voice(audio, session)
+                        await _handle_voice(audio, session, user_id)
                 elif msg_type == "tap_interact":
                     await _handle_tap_interact(user_id)
         except WebSocketDisconnect:

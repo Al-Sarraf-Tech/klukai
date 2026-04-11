@@ -91,8 +91,8 @@ class AffectionManager:
         if self._http:
             await self._http.aclose()
 
-    async def _load_state(self) -> None:
-        """Load current affection state from PostgreSQL.
+    async def _load_state(self, user_id: str = "jalsarraf") -> None:
+        """Load current affection state from PostgreSQL for a specific user.
 
         Includes a hard floor: if the DB somehow has a score far below what
         was previously earned (e.g., stale read after restart), preserve the
@@ -104,7 +104,8 @@ class AffectionManager:
                     await conn.execute(
                         "SELECT score, level, level_name, last_interaction_date, "
                         "consecutive_days, daily_points_earned, total_interactions, "
-                        "first_interaction FROM companion_affection WHERE id = 1"
+                        "first_interaction FROM companion_affection WHERE user_id = %s",
+                        (user_id,),
                     )
                 ).fetchone()
 
@@ -120,8 +121,9 @@ class AffectionManager:
                             )
                             # Write the correct value back to DB
                             await conn.execute(
-                                "UPDATE companion_affection SET score=%s, level=%s, level_name=%s WHERE id=1",
-                                (self._state.score, self._state.level, self._state.level_name),
+                                "UPDATE companion_affection SET score=%s, level=%s, level_name=%s "
+                                "WHERE user_id=%s",
+                                (self._state.score, self._state.level, self._state.level_name, user_id),
                             )
                             return
 
@@ -135,25 +137,33 @@ class AffectionManager:
                         total_interactions=row[6],
                         first_interaction=row[7],
                     )
-                    logger.debug("Affection loaded: score=%d lv%d", new_score, row[1])
+                    logger.debug("Affection loaded for %s: score=%d lv%d", user_id, new_score, row[1])
                 else:
                     self._state = AffectionState()
         except Exception as e:
-            logger.warning("Failed to load affection state: %s", e)
+            logger.warning("Failed to load affection state for %s: %s", user_id, e)
             if not self._state:
                 self._state = AffectionState()
 
-    async def get_state(self) -> AffectionState:
-        """Get current affection state. TESTING: pinned to max."""
-        # TODO: remove pin after testing
-        from datetime import date as _date, datetime as _dt
-        self._state = AffectionState(
-            score=1000, level=9, level_name="Oath Fulfilled",
-            last_interaction_date=_date.today(),
-            consecutive_days=7, daily_points_earned=0,
-            total_interactions=338,
-            first_interaction=_dt(2026, 4, 6),  # Project start date
-        )
+    async def get_state(self, user_id: str = "jalsarraf") -> AffectionState:
+        """Get current affection state for a user.
+
+        jalsarraf is permanently pinned at max trust (level 9, 1000/1000).
+        Other users load from DB normally.
+        """
+        if user_id == "jalsarraf":
+            from datetime import date as _date, datetime as _dt
+            self._state = AffectionState(
+                score=1000, level=9, level_name="Oath Fulfilled",
+                last_interaction_date=_date.today(),
+                consecutive_days=7, daily_points_earned=0,
+                total_interactions=338,
+                first_interaction=_dt(2026, 4, 6),  # Project start date
+            )
+            return self._state
+
+        # Other users: load from DB
+        await self._load_state(user_id)
         return self._state
 
     def _compute_level(self, score: int) -> tuple[int, str]:
@@ -167,17 +177,17 @@ class AffectionManager:
         return result_level, result_name
 
     async def apply_classification(
-        self, interaction_type: str, intensity: int
+        self, interaction_type: str, intensity: int, user_id: str = "jalsarraf"
     ) -> AffectionChange:
         """Apply a pre-classified interaction to the affection score.
 
         Called with classification from the merged extraction (one LLM call
         handles mood + facts + classification together).
         """
-        return await self._apply_delta(interaction_type, intensity)
+        return await self._apply_delta(interaction_type, intensity, user_id)
 
     async def classify_and_adjust(
-        self, user_message: str, assistant_message: str
+        self, user_message: str, assistant_message: str, user_id: str = "jalsarraf"
     ) -> AffectionChange:
         """Classify interaction via LLM and adjust affection score.
 
@@ -186,13 +196,13 @@ class AffectionManager:
         interaction_type, intensity = await self._classify_interaction(
             user_message, assistant_message
         )
-        return await self._apply_delta(interaction_type, intensity)
+        return await self._apply_delta(interaction_type, intensity, user_id)
 
     async def _apply_delta(
-        self, interaction_type: str, intensity: int
+        self, interaction_type: str, intensity: int, user_id: str = "jalsarraf"
     ) -> AffectionChange:
         """Core affection adjustment logic — shared by both paths."""
-        state = await self.get_state()
+        state = await self.get_state(user_id)
         today = date.today()
 
         # Reset daily counter if new day
@@ -252,11 +262,11 @@ class AffectionManager:
             )
 
         # Persist
-        await self._save_state(state)
+        await self._save_state(state, user_id)
 
         # Log the change
         if delta != 0:
-            await self._log_change(delta, interaction_type, old_score, state.score, old_level, state.level)
+            await self._log_change(delta, interaction_type, old_score, state.score, old_level, state.level, user_id)
 
         self._state = state
 
@@ -388,8 +398,8 @@ class AffectionManager:
             total_decay, days_absent - 1, old_score, state.score,
         )
 
-    async def _save_state(self, state: AffectionState) -> None:
-        """Persist affection state to PostgreSQL."""
+    async def _save_state(self, state: AffectionState, user_id: str = "jalsarraf") -> None:
+        """Persist affection state to PostgreSQL for a specific user."""
         try:
             async with get_conn_autocommit() as conn:
                 await conn.execute(
@@ -398,31 +408,33 @@ class AffectionManager:
                     "last_interaction_date = %s, consecutive_days = %s, "
                     "daily_points_earned = %s, total_interactions = %s, "
                     "first_interaction = %s, updated_at = NOW() "
-                    "WHERE id = 1",
+                    "WHERE user_id = %s",
                     (
                         state.score, state.level, state.level_name,
                         state.last_interaction_date, state.consecutive_days,
                         state.daily_points_earned, state.total_interactions,
                         state.first_interaction,
+                        user_id,
                     ),
                 )
                 await conn.commit()
         except Exception as e:
-            logger.error("Failed to save affection state: %s", e)
+            logger.error("Failed to save affection state for %s: %s", user_id, e)
 
     async def _log_change(
         self, delta: int, reason: str,
         old_score: int, new_score: int,
         old_level: int, new_level: int,
+        user_id: str = "jalsarraf",
     ) -> None:
         """Log an affection change for audit trail."""
         try:
             async with get_conn_autocommit() as conn:
                 await conn.execute(
                     "INSERT INTO companion_affection_log "
-                    "(delta, reason, old_score, new_score, old_level, new_level) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (delta, reason, old_score, new_score, old_level, new_level),
+                    "(delta, reason, old_score, new_score, old_level, new_level, user_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (delta, reason, old_score, new_score, old_level, new_level, user_id),
                 )
                 await conn.commit()
         except Exception as e:

@@ -31,9 +31,17 @@ class _MessageBubbleState extends State<MessageBubble> {
           ? 'http://localhost:8300'
           : Uri.base.origin;
 
+      String authToken = '';
+      try {
+        authToken = web.window.localStorage.getItem('klukai_token') ?? '';
+      } catch (_) {}
+
       final response = await http.post(
         Uri.parse('$serverUrl/api/tts'),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $authToken',
+        },
         body: jsonEncode({
           'text': widget.message.content.length > 500
               ? widget.message.content.substring(0, 500)

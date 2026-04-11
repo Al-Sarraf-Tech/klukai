@@ -9,13 +9,22 @@ class WebSocketService {
   Timer? _reconnectTimer;
   String _url = '';
   bool _intentionalClose = false;
+  String? _token;
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<bool> get connectionState => _connectionController.stream;
   bool get isConnected => _channel != null;
 
-  void connect(String url) {
-    _url = url;
+  void connect(String url, {String? token}) {
+    _token = token;
+    // Append token as query param for WebSocket auth
+    if (token != null && token.isNotEmpty) {
+      final uri = Uri.parse(url);
+      final sep = uri.queryParameters.isEmpty ? '?' : '&';
+      _url = '$url${sep}token=$token';
+    } else {
+      _url = url;
+    }
     _intentionalClose = false;
     _doConnect();
   }
