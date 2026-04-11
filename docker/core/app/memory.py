@@ -147,10 +147,11 @@ class MemoryManager:
         emotion_tags: list[str],
         importance: float,
         conversation_id: str | None = None,
+        user_id: str = "jalsarraf",
     ) -> str:
         vector = await self.embed_text(summary)
 
-        # Store in Qdrant
+        # Store in Qdrant with user_id for isolation
         await self._http.put(
             f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points",
             json={
@@ -164,6 +165,7 @@ class MemoryManager:
                             "emotion_tags": emotion_tags,
                             "importance": importance,
                             "conversation_id": conversation_id,
+                            "user_id": user_id,
                             "created_at": datetime.now().isoformat(),
                         },
                     }
@@ -173,7 +175,8 @@ class MemoryManager:
         return episode_id
 
     async def recall_episodes(
-        self, query: str, limit: int = 5, min_score: float = 0.3
+        self, query: str, limit: int = 5, min_score: float = 0.3,
+        user_id: str = "jalsarraf",
     ) -> list[dict]:
         vector = await self.embed_text(query)
         r = await self._http.post(
@@ -183,6 +186,9 @@ class MemoryManager:
                 "limit": limit,
                 "score_threshold": min_score,
                 "with_payload": True,
+                "filter": {
+                    "must": [{"key": "user_id", "match": {"value": user_id}}]
+                },
             },
         )
         if r.status_code != 200:
@@ -241,8 +247,9 @@ class MemoryManager:
         mood: str = "composed",
         importance: float = 0.5,
         conversation_id: str | None = None,
+        user_id: str = "jalsarraf",
     ) -> None:
-        """Store a user+assistant exchange pair with vector embedding."""
+        """Store a user+assistant exchange pair with vector embedding, scoped to user."""
         combined = f"Commander: {user_content[:500]}\nKlukai: {assistant_content[:500]}"
         vector = await self.embed_text(combined)
 
@@ -260,6 +267,7 @@ class MemoryManager:
                             "mood": mood,
                             "importance": importance,
                             "conversation_id": conversation_id,
+                            "user_id": user_id,
                             "created_at": datetime.now().isoformat(),
                         },
                     }
@@ -268,9 +276,10 @@ class MemoryManager:
         )
 
     async def recall_exchanges(
-        self, query: str, limit: int = MSG_RECALL_LIMIT, min_score: float = MSG_MIN_SCORE
+        self, query: str, limit: int = MSG_RECALL_LIMIT, min_score: float = MSG_MIN_SCORE,
+        user_id: str = "jalsarraf",
     ) -> list[dict]:
-        """Semantic search over past conversation exchanges."""
+        """Semantic search over past conversation exchanges, scoped to user."""
         vector = await self.embed_text(query)
         r = await self._http.post(
             f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points/search",
@@ -279,6 +288,9 @@ class MemoryManager:
                 "limit": limit,
                 "score_threshold": min_score,
                 "with_payload": True,
+                "filter": {
+                    "must": [{"key": "user_id", "match": {"value": user_id}}]
+                },
             },
         )
         if r.status_code != 200:
@@ -298,10 +310,11 @@ class MemoryManager:
         ]
 
     async def recall_exchanges_with_recency(
-        self, query: str, limit: int = MSG_RECALL_LIMIT, affection_level: int = 0
+        self, query: str, limit: int = MSG_RECALL_LIMIT, affection_level: int = 0,
+        user_id: str = "jalsarraf",
     ) -> list[dict]:
         """Recall exchanges with recency-weighted re-ranking and affection bias."""
-        exchanges = await self.recall_exchanges(query, limit=limit * 2)
+        exchanges = await self.recall_exchanges(query, limit=limit * 2, user_id=user_id)
         if not exchanges:
             return []
 
@@ -331,70 +344,78 @@ class MemoryManager:
 
     # ── Tier 3: Factual Memory (aichat-data /memory) ────────────────────
 
-    async def store_fact(self, key: str, value: str, ttl: int | None = None) -> None:
-        body: dict = {"key": f"companion:{key}", "value": value}
+    async def store_fact(self, key: str, value: str, ttl: int | None = None,
+                         user_id: str = "jalsarraf") -> None:
+        body: dict = {"key": f"companion:{user_id}:{key}", "value": value}
         if ttl:
             body["ttl_seconds"] = ttl
         await self._http.post(f"{DATA_URL}/memory/store", json=body)
 
-    async def recall_fact(self, key: str) -> str | None:
+    async def recall_fact(self, key: str, user_id: str = "jalsarraf") -> str | None:
         r = await self._http.get(
-            f"{DATA_URL}/memory/recall", params={"key": f"companion:{key}"}
+            f"{DATA_URL}/memory/recall", params={"key": f"companion:{user_id}:{key}"}
         )
         data = r.json()
         if data.get("found"):
             return data.get("value")
         return None
 
-    async def recall_facts_by_pattern(self, pattern: str) -> list[dict]:
+    async def recall_facts_by_pattern(self, pattern: str,
+                                       user_id: str = "jalsarraf") -> list[dict]:
         r = await self._http.get(
             f"{DATA_URL}/memory/recall",
-            params={"pattern": f"companion:{pattern}"},
+            params={"pattern": f"companion:{user_id}:{pattern}"},
         )
         data = r.json()
         return data.get("entries", [])
 
     # ── Relationship facts (convenience) ─────────────────────────────────
 
-    async def get_relationship_facts(self) -> dict:
-        entries = await self.recall_facts_by_pattern("rel:%")
+    async def get_relationship_facts(self, user_id: str = "jalsarraf") -> dict:
+        entries = await self.recall_facts_by_pattern("rel:%", user_id=user_id)
+        # Strip the full prefix: companion:{user_id}:rel:
+        prefix = f"companion:{user_id}:rel:"
         return {
-            e["key"].replace("companion:rel:", ""): e["value"]
+            e["key"].replace(prefix, ""): e["value"]
             for e in entries
         }
 
-    async def set_relationship_fact(self, key: str, value: str) -> None:
-        await self.store_fact(f"rel:{key}", value)
+    async def set_relationship_fact(self, key: str, value: str,
+                                     user_id: str = "jalsarraf") -> None:
+        await self.store_fact(f"rel:{key}", value, user_id=user_id)
 
     # ── Milestone tracking ────────────────────────────────────────────────
 
-    async def record_milestone(self, milestone: str) -> bool:
+    async def record_milestone(self, milestone: str, user_id: str = "jalsarraf") -> bool:
         """Record a relationship milestone. Returns True if new."""
-        existing = await self.recall_fact(f"milestone:{milestone}")
+        existing = await self.recall_fact(f"milestone:{milestone}", user_id=user_id)
         if existing:
             return False
-        await self.store_fact(f"milestone:{milestone}", datetime.now().isoformat())
-        logger.info("New milestone recorded: %s", milestone)
+        await self.store_fact(f"milestone:{milestone}", datetime.now().isoformat(), user_id=user_id)
+        logger.info("New milestone recorded: %s for %s", milestone, user_id)
         return True
 
-    async def get_milestones(self) -> dict[str, str]:
-        """Get all recorded relationship milestones."""
-        entries = await self.recall_facts_by_pattern("milestone:%")
+    async def get_milestones(self, user_id: str = "jalsarraf") -> dict[str, str]:
+        """Get all recorded relationship milestones for a user."""
+        entries = await self.recall_facts_by_pattern("milestone:%", user_id=user_id)
+        prefix = f"companion:{user_id}:milestone:"
         return {
-            e["key"].replace("companion:milestone:", ""): e["value"]
+            e["key"].replace(prefix, ""): e["value"]
             for e in entries
         }
 
     # ── Combined recall for prompt building ──────────────────────────────
 
     async def recall_for_prompt(
-        self, query: str
+        self, query: str, user_id: str = "jalsarraf",
     ) -> tuple[list[str], dict, list[dict]]:
-        """Return (episodic_memories, relationship_facts, recalled_exchanges) — parallel fetch."""
+        """Return (episodic_memories, relationship_facts, recalled_exchanges) — parallel fetch, scoped to user."""
         import asyncio
-        episodes_task = self.recall_episodes(query, limit=5)
-        facts_task = self.get_relationship_facts()
-        exchanges_task = self.recall_exchanges_with_recency(query, limit=MSG_RECALL_LIMIT)
+        episodes_task = self.recall_episodes(query, limit=5, user_id=user_id)
+        facts_task = self.get_relationship_facts(user_id=user_id)
+        exchanges_task = self.recall_exchanges_with_recency(
+            query, limit=MSG_RECALL_LIMIT, user_id=user_id
+        )
 
         episodes, facts, exchanges = await asyncio.gather(
             episodes_task, facts_task, exchanges_task
@@ -403,9 +424,9 @@ class MemoryManager:
         return episode_texts, facts, exchanges
 
     async def get_memory_nudge(
-        self, turn_count: int, affection_level: int
+        self, turn_count: int, affection_level: int, user_id: str = "jalsarraf",
     ) -> str | None:
-        """Return a memory nudge string if it's time for one, else None."""
+        """Return a memory nudge string if it's time for one, else None. Scoped to user."""
         if affection_level <= 2:
             return None
 
@@ -424,7 +445,7 @@ class MemoryManager:
                    "a past conversation", "what the Commander told me"]
         query = random.choice(prompts)
         exchanges = await self.recall_exchanges_with_recency(
-            query, limit=3, affection_level=affection_level
+            query, limit=3, affection_level=affection_level, user_id=user_id,
         )
         if not exchanges:
             return None

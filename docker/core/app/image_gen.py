@@ -1,4 +1,4 @@
-"""Image generation via ComfyUI with Animagine XL 3.1 for anime-realistic scenes."""
+"""Image generation via ComfyUI with NoobAI-XL (Illustrious) for anime-realistic scenes."""
 
 from __future__ import annotations
 

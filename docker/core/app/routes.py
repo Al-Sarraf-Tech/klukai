@@ -178,7 +178,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             tier, bonus = "disliked", -1
 
         aff_state = await affection.get_state(user_id)
-        aff_state.score = max(0, min(100, aff_state.score + bonus))
+        aff_state.score = max(0, min(1000, aff_state.score + bonus))
         await affection._save_state(aff_state, user_id)
 
         reaction = reactions.get(tier, "...Noted.")
@@ -304,12 +304,16 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         return await memory_archive.get_categories(aff.level, user_id=user_id)
 
     @app.post("/api/memories/backfill-annotations")
-    async def api_backfill_annotations():
+    async def api_backfill_annotations(request: Request):
         """Trigger annotation backfill for memories with NULL/empty annotations."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+
         async def _run_backfill():
             try:
-                result = await memory_archive.backfill_annotations()
-                logger.info("Annotation backfill finished: %s", result)
+                result = await memory_archive.backfill_annotations(user_id=user_id)
+                logger.info("Annotation backfill finished for %s: %s", user_id, result)
             except Exception as e:
                 logger.error("Annotation backfill task failed: %s", e)
 
@@ -317,29 +321,41 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         return {"status": "started", "message": "Annotation backfill running in background."}
 
     @app.get("/api/memories/{memory_id}/image")
-    async def api_memory_image(memory_id: str):
+    async def api_memory_image(memory_id: str, request: Request):
         from fastapi.responses import Response
-        data = await memory_archive.get_image_bytes(memory_id, thumbnail=False)
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        data = await memory_archive.get_image_bytes(memory_id, thumbnail=False, user_id=user_id)
         if data:
             return Response(content=data, media_type="image/png")
         return JSONResponse({"error": "Not found"}, status_code=404)
 
     @app.get("/api/memories/{memory_id}/thumbnail")
-    async def api_memory_thumbnail(memory_id: str):
+    async def api_memory_thumbnail(memory_id: str, request: Request):
         from fastapi.responses import Response
-        data = await memory_archive.get_image_bytes(memory_id, thumbnail=True)
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        data = await memory_archive.get_image_bytes(memory_id, thumbnail=True, user_id=user_id)
         if data:
             return Response(content=data, media_type="image/png")
         return JSONResponse({"error": "Not found"}, status_code=404)
 
     @app.post("/api/memories/{memory_id}/keep")
-    async def api_memory_keep(memory_id: str):
-        ok = await memory_archive.update_kept(memory_id, kept=True, kept_by="commander")
+    async def api_memory_keep(memory_id: str, request: Request):
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        ok = await memory_archive.update_kept(memory_id, kept=True, kept_by="commander", user_id=user_id)
         return {"ok": ok}
 
     @app.post("/api/memories/{memory_id}/discard")
-    async def api_memory_discard(memory_id: str):
-        ok = await memory_archive.update_kept(memory_id, kept=False)
+    async def api_memory_discard(memory_id: str, request: Request):
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        ok = await memory_archive.update_kept(memory_id, kept=False, user_id=user_id)
         return {"ok": ok}
 
     # ── Root redirect ──────────────────────────────────────────────────────

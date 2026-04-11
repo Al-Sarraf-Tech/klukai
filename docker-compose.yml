@@ -25,6 +25,10 @@ services:
       PERSONALITY_PATH: "/config/personality.yaml"
       VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY:-}"
       VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY:-}"
+      SEED_PASSWORD_JALSARRAF: "${SEED_PASSWORD_JALSARRAF:-}"
+      SEED_PASSWORD_RICKY: "${SEED_PASSWORD_RICKY:-}"
+      SEED_PASSWORD_MIGUEL: "${SEED_PASSWORD_MIGUEL:-}"
+      SEED_PASSWORD_BLACKMAN: "${SEED_PASSWORD_BLACKMAN:-}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

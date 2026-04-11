@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 from datetime import datetime, timezone
 
@@ -12,20 +13,14 @@ from .db import get_conn, get_conn_autocommit
 
 logger = logging.getLogger(__name__)
 
-# Pre-defined users — passwords are hashed on first startup
+# Seed users — passwords read from environment variables.
+# Set SEED_PASSWORD_<USERNAME> in .env or docker-compose environment.
+# If a password env var is missing, that user is skipped (not created).
 _SEED_USERS = [
-    {
-        "id": "jalsarraf",
-        "username": "jalsarraf",
-        "password": "REDACTED_PASSWORD",
-        "display_name": "Commander",
-    },
-    {
-        "id": "ricky",
-        "username": "ricky",
-        "password": "REDACTED_PASSWORD",
-        "display_name": "Commander",
-    },
+    {"id": "jalsarraf", "username": "jalsarraf", "display_name": "Commander"},
+    {"id": "ricky", "username": "ricky", "display_name": "Commander"},
+    {"id": "miguel", "username": "miguel", "display_name": "Commander"},
+    {"id": "blackman", "username": "blackman", "display_name": "Commander"},
 ]
 
 # Failed login threshold — 3 failures from same IP within 1 hour = ban
@@ -36,6 +31,8 @@ IP_BAN_WINDOW_MINUTES = 60
 async def init_users() -> None:
     """Create seed users if they don't already exist.
 
+    Passwords are read from SEED_PASSWORD_<USERNAME> environment variables.
+    If a password env var is missing, the user is skipped.
     Called once during application startup.
     """
     try:
@@ -51,8 +48,18 @@ async def init_users() -> None:
                     logger.debug("User %s already exists", user["id"])
                     continue
 
+                # Read password from environment — skip user if not set
+                env_key = f"SEED_PASSWORD_{user['username'].upper()}"
+                password = os.environ.get(env_key, "")
+                if not password:
+                    logger.warning(
+                        "Skipping user %s: no %s environment variable set",
+                        user["id"], env_key,
+                    )
+                    continue
+
                 pw_hash = bcrypt.hashpw(
-                    user["password"].encode(), bcrypt.gensalt()
+                    password.encode(), bcrypt.gensalt()
                 ).decode()
                 await conn.execute(
                     "INSERT INTO companion_users (id, username, password_hash, display_name) "

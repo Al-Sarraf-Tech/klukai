@@ -123,7 +123,9 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     if is_short:
         episode_memories, rel_facts, recalled_exchanges = [], {}, []
     else:
-        episode_memories, rel_facts, recalled_exchanges = await memory.recall_for_prompt(content)
+        episode_memories, rel_facts, recalled_exchanges = await memory.recall_for_prompt(
+            content, user_id=user_id
+        )
 
     # Get affection state for prompt modulation
     aff_state = await affection.get_state(user_id)
@@ -194,7 +196,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     )
 
     # Memory nudge — proactive past reference based on affection level
-    nudge = await memory.get_memory_nudge(session.turn_count, aff_state.level)
+    nudge = await memory.get_memory_nudge(session.turn_count, aff_state.level, user_id=user_id)
     if nudge:
         system_prompt += f"\n\n{nudge}"
 

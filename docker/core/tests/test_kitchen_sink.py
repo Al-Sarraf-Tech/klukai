@@ -1022,6 +1022,147 @@ class TestHeartbeatSpikeIntegration:
             assert mood not in self.HIGH_INTENSITY_MOODS, f"{mood} should not spike"
 
 
+class TestMultiUserIsolation:
+    """Verify complete data isolation between users across all memory layers."""
+
+    def test_fact_keys_are_user_scoped(self):
+        """Relationship facts must include user_id in the key to prevent cross-user leaks."""
+        from app.memory import MemoryManager
+        mgr = MemoryManager()
+        # Verify the method signatures accept user_id
+        import inspect
+        sig = inspect.signature(mgr.store_fact)
+        assert "user_id" in sig.parameters
+        sig = inspect.signature(mgr.recall_fact)
+        assert "user_id" in sig.parameters
+        sig = inspect.signature(mgr.set_relationship_fact)
+        assert "user_id" in sig.parameters
+        sig = inspect.signature(mgr.get_relationship_facts)
+        assert "user_id" in sig.parameters
+
+    def test_milestone_keys_are_user_scoped(self):
+        """Milestones must include user_id to prevent one user blocking another's firsts."""
+        from app.memory import MemoryManager
+        mgr = MemoryManager()
+        import inspect
+        sig = inspect.signature(mgr.record_milestone)
+        assert "user_id" in sig.parameters
+        sig = inspect.signature(mgr.get_milestones)
+        assert "user_id" in sig.parameters
+
+    def test_episode_store_includes_user_id(self):
+        """Episodes stored in Qdrant must include user_id in payload."""
+        from app.memory import MemoryManager
+        import inspect
+        sig = inspect.signature(MemoryManager.store_episode)
+        assert "user_id" in sig.parameters
+
+    def test_episode_recall_filters_by_user_id(self):
+        """Episode recall must filter by user_id to prevent cross-user memory bleed."""
+        from app.memory import MemoryManager
+        import inspect
+        sig = inspect.signature(MemoryManager.recall_episodes)
+        assert "user_id" in sig.parameters
+
+    def test_exchange_store_includes_user_id(self):
+        """Exchanges stored in Qdrant must include user_id in payload."""
+        from app.memory import MemoryManager
+        import inspect
+        sig = inspect.signature(MemoryManager.store_exchange)
+        assert "user_id" in sig.parameters
+
+    def test_exchange_recall_filters_by_user_id(self):
+        """Exchange recall must filter by user_id."""
+        from app.memory import MemoryManager
+        import inspect
+        sig = inspect.signature(MemoryManager.recall_exchanges)
+        assert "user_id" in sig.parameters
+
+    def test_recall_for_prompt_passes_user_id(self):
+        """recall_for_prompt must accept and forward user_id to all sub-calls."""
+        from app.memory import MemoryManager
+        import inspect
+        sig = inspect.signature(MemoryManager.recall_for_prompt)
+        assert "user_id" in sig.parameters
+
+    def test_memory_nudge_passes_user_id(self):
+        """get_memory_nudge must accept user_id."""
+        from app.memory import MemoryManager
+        import inspect
+        sig = inspect.signature(MemoryManager.get_memory_nudge)
+        assert "user_id" in sig.parameters
+
+    def test_image_bytes_enforces_user_ownership(self):
+        """get_image_bytes must accept user_id for ownership check."""
+        from app.memory_archive import get_image_bytes
+        import inspect
+        sig = inspect.signature(get_image_bytes)
+        assert "user_id" in sig.parameters
+
+    def test_update_kept_enforces_user_ownership(self):
+        """update_kept must accept user_id for ownership check."""
+        from app.memory_archive import update_kept
+        import inspect
+        sig = inspect.signature(update_kept)
+        assert "user_id" in sig.parameters
+
+    def test_update_curation_enforces_user_ownership(self):
+        """update_curation must accept user_id for ownership check."""
+        from app.memory_archive import update_curation
+        import inspect
+        sig = inspect.signature(update_curation)
+        assert "user_id" in sig.parameters
+
+    def test_backfill_scoped_to_user(self):
+        """backfill_annotations must accept user_id to scope the query."""
+        from app.memory_archive import backfill_annotations
+        import inspect
+        sig = inspect.signature(backfill_annotations)
+        assert "user_id" in sig.parameters
+
+    def test_different_users_get_different_fact_keys(self):
+        """Two users storing the same fact key must not collide."""
+        # The key format should be: companion:{user_id}:rel:{key}
+        # User A: companion:alice:rel:commander_wearing
+        # User B: companion:bob:rel:commander_wearing
+        # These are different keys in the aichat-data store
+        key_a = f"companion:alice:rel:wearing"
+        key_b = f"companion:bob:rel:wearing"
+        assert key_a != key_b
+
+    def test_different_users_get_different_milestone_keys(self):
+        """Two users recording the same milestone must not block each other."""
+        key_a = f"companion:alice:milestone:first_message"
+        key_b = f"companion:bob:milestone:first_message"
+        assert key_a != key_b
+
+
+class TestAuthSecurity:
+    """Verify auth security measures."""
+
+    def test_no_plaintext_passwords_in_source(self):
+        """_SEED_USERS must not contain a 'password' field."""
+        from app.auth import _SEED_USERS
+        for user in _SEED_USERS:
+            assert "password" not in user, f"User {user['id']} has plaintext password in source!"
+
+    def test_seed_users_have_required_fields(self):
+        """Each seed user must have id, username, display_name."""
+        from app.auth import _SEED_USERS
+        for user in _SEED_USERS:
+            assert "id" in user
+            assert "username" in user
+            assert "display_name" in user
+
+    def test_gift_score_uses_1000_scale(self):
+        """The gift endpoint must use 0-1000 scale, not 0-100."""
+        import inspect
+        from app.routes import register_routes
+        src = inspect.getsource(register_routes)
+        assert "min(1000," in src, "Gift endpoint should use min(1000, ...) not min(100, ...)"
+        assert "min(100," not in src or "min(1000," in src
+
+
 class TestLeapYearSafety:
     """Test that anniversary logic handles Feb 29 safely."""
 

@@ -58,9 +58,9 @@ async def background_extraction(
             except Exception as e:
                 logger.warning("Memory curation update failed for %s: %s", curation_target, e)
 
-        # Store new facts
+        # Store new facts (scoped to user)
         for fact in result.get("facts", []):
-            await memory.set_relationship_fact(fact["key"], fact["value"])
+            await memory.set_relationship_fact(fact["key"], fact["value"], user_id=user_id)
 
         # Store commander details as relationship facts (feature: she remembers)
         commander_details = result.get("commander_details", {})
@@ -68,7 +68,7 @@ async def background_extraction(
             for detail_key, detail_val in commander_details.items():
                 if detail_val and isinstance(detail_val, str):
                     await memory.set_relationship_fact(
-                        f"commander_{detail_key}", detail_val
+                        f"commander_{detail_key}", detail_val, user_id=user_id
                     )
 
         # Store gift if detected (feature: comfort objects)
@@ -85,9 +85,11 @@ async def background_extraction(
         await ws.send_mood(user_id, mood)
         proactive.set_last_mood(mood)
 
-        # Record "firsts" for anniversary tracking
+        # Record "firsts" for anniversary tracking (scoped to user)
         if session.turn_count == 1:
             await proactive.record_first(user_id, "first_message")
+            # Also record milestone in the fact store
+            await memory.record_milestone("first_message", user_id=user_id)
 
         # Physical state: long conversation -> relaxed
         if session.turn_count > 0 and session.turn_count % 10 == 0:
@@ -170,6 +172,8 @@ async def background_extraction(
                     is_new = await memory.record_milestone(milestone_key)
 
                     if is_new:
+                        # Also record in user-scoped fact store
+                        await memory.record_milestone(milestone_key, user_id=user_id)
                         # First time reaching this level — deliver milestone scene
                         scenes = aff_config.get("milestone_scenes", {})
                         scene_lines = scenes.get(aff_change.new_level, [])
@@ -198,7 +202,7 @@ async def background_extraction(
         except Exception as e:
             logger.warning("Affection adjustment failed: %s", e)
 
-        # Store exchange in conversation memory for rich recall
+        # Store exchange in conversation memory for rich recall (scoped to user)
         try:
             exchange_id = str(uuid.uuid4())
             await memory.store_exchange(
@@ -209,11 +213,12 @@ async def background_extraction(
                 mood=result.get("mood", "composed"),
                 importance=0.7 if result.get("should_remember") else 0.4,
                 conversation_id=session.conversation_id,
+                user_id=user_id,
             )
         except Exception as e:
             logger.warning("Exchange storage failed: %s", e)
 
-        # Create episode every 10 turns
+        # Create episode every 10 turns (scoped to user)
         if session.turn_count > 0 and session.turn_count % 10 == 0:
             summary = await create_episode_summary(session.turns)
             if summary:
@@ -225,6 +230,7 @@ async def background_extraction(
                     emotion_tags=[mood],
                     importance=0.5,
                     conversation_id=session.conversation_id,
+                    user_id=user_id,
                 )
                 logger.info("Episode stored: %s", summary[:80])
     except Exception as e:
@@ -336,8 +342,9 @@ async def background_image_gen(
             await ws.send(user_id, {"type": "image", "data": img_b64, "memory_id": memory_id})
             logger.info("Image sent to UI (%d bytes)", len(img_bytes))
 
-            # Record first image milestone
+            # Record first image milestone (both DB table and fact store)
             await proactive.record_first(user_id, "first_image")
+            await memory.record_milestone("first_image", user_id=user_id)
         else:
             await ws.send_proactive(user_id, "...Visualization failed. Interference in the rendering pipeline. I'll try again later.")
     except Exception as e:

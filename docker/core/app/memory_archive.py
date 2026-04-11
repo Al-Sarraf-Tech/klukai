@@ -17,7 +17,7 @@ from .db import get_conn, get_conn_autocommit
 logger = logging.getLogger(__name__)
 
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
-EXTRACTION_MODEL = "gpt-oss-20b-absolute-heresy-i1"
+EXTRACTION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
 # Shared httpx client for LM Studio calls
 _http: httpx.AsyncClient | None = None
@@ -237,14 +237,23 @@ def _generate_thumbnail(src: Path, dst: Path, width: int = 320) -> None:
         logger.warning("Thumbnail generation failed: %s", e)
 
 
-async def get_image_bytes(memory_id: str, thumbnail: bool = False) -> bytes | None:
-    """Read image bytes from the volume."""
+async def get_image_bytes(
+    memory_id: str, thumbnail: bool = False, user_id: str | None = None
+) -> bytes | None:
+    """Read image bytes from the volume. If user_id is provided, enforces ownership."""
     try:
         async with get_conn() as conn:
             col = "thumb_filename" if thumbnail else "filename"
-            row = await (await conn.execute(
-                f"SELECT {col} FROM companion_memories WHERE id = %s", (memory_id,)
-            )).fetchone()
+            if user_id:
+                row = await (await conn.execute(
+                    f"SELECT {col} FROM companion_memories WHERE id = %s AND user_id = %s",
+                    (memory_id, user_id),
+                )).fetchone()
+            else:
+                # Internal calls (e.g., recall) may not have user context
+                row = await (await conn.execute(
+                    f"SELECT {col} FROM companion_memories WHERE id = %s", (memory_id,)
+                )).fetchone()
             if not row or not row[0]:
                 return None
             path = IMAGES_DIR / row[0]
@@ -326,21 +335,36 @@ async def get_categories(affection_level: int, user_id: str = "jalsarraf") -> li
         return []
 
 
-async def update_kept(memory_id: str, kept: bool, kept_by: str = "commander") -> bool:
-    """Commander saves or discards a memory."""
+async def update_kept(
+    memory_id: str, kept: bool, kept_by: str = "commander", user_id: str | None = None
+) -> bool:
+    """Commander saves or discards a memory. If user_id provided, enforces ownership.
+
+    Returns True only if a row was actually updated. Returns False if the memory
+    doesn't exist or doesn't belong to this user.
+    """
     try:
         async with get_conn_autocommit() as conn:
-            await conn.execute(
-                "UPDATE companion_memories SET kept = %s, kept_by = %s WHERE id = %s",
-                (kept, kept_by, memory_id),
-            )
-        return True
+            if user_id:
+                result = await conn.execute(
+                    "UPDATE companion_memories SET kept = %s, kept_by = %s "
+                    "WHERE id = %s AND user_id = %s",
+                    (kept, kept_by, memory_id, user_id),
+                )
+            else:
+                result = await conn.execute(
+                    "UPDATE companion_memories SET kept = %s, kept_by = %s WHERE id = %s",
+                    (kept, kept_by, memory_id),
+                )
+        return bool(result.rowcount and result.rowcount > 0)
     except Exception as e:
         logger.error("Failed to update memory %s: %s", memory_id, e)
         return False
 
 
-async def update_curation(memory_id: str, curation: dict, affection_level: int = 0) -> bool:
+async def update_curation(
+    memory_id: str, curation: dict, affection_level: int = 0, user_id: str | None = None
+) -> bool:
     """Update a memory row with LLM curation results after initial save."""
     try:
         kept = curation.get("keep", True)
@@ -353,11 +377,18 @@ async def update_curation(memory_id: str, curation: dict, affection_level: int =
             category = valid[-1] if valid else "Mission Records"
 
         async with get_conn_autocommit() as conn:
-            await conn.execute(
-                "UPDATE companion_memories SET kept = %s, annotation = %s, "
-                "category = %s, scene_tags = %s WHERE id = %s",
-                (kept, annotation, category, scene_tags, memory_id),
-            )
+            if user_id:
+                await conn.execute(
+                    "UPDATE companion_memories SET kept = %s, annotation = %s, "
+                    "category = %s, scene_tags = %s WHERE id = %s AND user_id = %s",
+                    (kept, annotation, category, scene_tags, memory_id, user_id),
+                )
+            else:
+                await conn.execute(
+                    "UPDATE companion_memories SET kept = %s, annotation = %s, "
+                    "category = %s, scene_tags = %s WHERE id = %s",
+                    (kept, annotation, category, scene_tags, memory_id),
+                )
         logger.info("Memory %s curated: kept=%s, category=%s", memory_id, kept, category)
         return True
     except Exception as e:
@@ -478,11 +509,10 @@ Write ONLY the caption. Nothing else.
 """
 
 
-async def backfill_annotations() -> dict:
-    """Find all memory archive entries with NULL/empty annotation and generate one.
+async def backfill_annotations(user_id: str = "jalsarraf") -> dict:
+    """Find memory archive entries with NULL/empty annotation and generate one.
 
-    Uses dolphin through the LM Studio gate to produce a brief
-    annotation based on the existing prompt, category, and scene_tags fields.
+    Scoped to a specific user. Uses dolphin through the LM Studio gate.
 
     Returns:
         dict with "total" (entries needing backfill) and "updated" (successful).
@@ -494,8 +524,9 @@ async def backfill_annotations() -> dict:
             rows = await (await conn.execute(
                 "SELECT id, prompt, category, scene_tags "
                 "FROM companion_memories "
-                "WHERE annotation IS NULL OR annotation = '' "
-                "ORDER BY created_at ASC"
+                "WHERE (annotation IS NULL OR annotation = '') AND user_id = %s "
+                "ORDER BY created_at ASC",
+                (user_id,),
             )).fetchall()
     except Exception as e:
         logger.error("Backfill: failed to query unannotated memories: %s", e)

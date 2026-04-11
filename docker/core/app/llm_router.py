@@ -311,22 +311,6 @@ class LLMRouter:
             r.raise_for_status()
             return r.json()
 
-    def _get_fallback(self, failed: LLMConfig) -> LLMConfig | None:
-        # Try the secondary local chat model before the tiny model
-        if failed.model == LOCAL_CASUAL and self._lmstudio_available:
-            logger.info("Falling back to LOCAL_CASUAL_FALLBACK: %s", LOCAL_CASUAL_FALLBACK)
-            return LLMConfig(
-                provider="lmstudio",
-                model=LOCAL_CASUAL_FALLBACK,
-                base_url=LM_STUDIO_URL,
-            )
-        # Local models exhausted — fall back to Claude
-        if failed.provider == "lmstudio" and self._anthropic:
-            return LLMConfig(
-                provider="anthropic", model=CLOUD_FALLBACK, temperature=0.7
-            )
-        return None
-
     async def _stream_anthropic(
         self, system_prompt: str, messages: list[dict], config: LLMConfig
     ) -> AsyncIterator[str]:

@@ -104,10 +104,13 @@ async def generate_daily_recap(affection_level: int) -> str | None:
 
 
 async def proactive_callback(message: str) -> None:
-    """Deliver a proactive message via WebSocket or push notification."""
-    if ws.is_connected("default"):
-        await ws.send_proactive("default", message)
-    else:
+    """Deliver a proactive message to ALL connected users via WebSocket or push."""
+    delivered = False
+    for user_id in list(ws._connections.keys()):
+        if ws.is_connected(user_id):
+            await ws.send_proactive(user_id, message)
+            delivered = True
+    if not delivered:
         await send_push(title="Klukai", body=message)
 
 
@@ -138,7 +141,15 @@ async def lifespan(app: FastAPI):
     await affection.init()
     proactive.set_callback(proactive_callback)
     proactive.set_recap_callback(generate_daily_recap)
-    proactive.set_session_getter(lambda: memory.get_session(session_id("jalsarraf")))
+    # Session getter tries the primary user first, then any connected user
+    async def _get_any_session():
+        for uid in list(ws._connections.keys()):
+            s = await memory.get_session(session_id(uid))
+            if s:
+                return s
+        # Fallback to primary user
+        return await memory.get_session(session_id("jalsarraf"))
+    proactive.set_session_getter(_get_any_session)
     proactive.start()
     await events_init()
     load_personality()
