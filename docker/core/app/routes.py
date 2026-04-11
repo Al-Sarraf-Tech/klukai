@@ -98,7 +98,9 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
     @app.get("/api/affection")
     async def get_affection(request: Request):
-        user_id = await _get_user_id(request) or "jalsarraf"
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
         state = await affection.get_state(user_id)
         return state.model_dump(mode="json")
 
@@ -137,7 +139,9 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         if not prompt:
             return JSONResponse({"error": "No prompt"}, status_code=400)
 
-        user_id = await _get_user_id(request) or "jalsarraf"
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
         img_bytes = await generate_image(prompt)
         if img_bytes:
             import base64
@@ -205,9 +209,12 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Milestones ─────────────────────────────────────────────────────────
 
     @app.get("/api/milestones")
-    async def api_milestones():
-        """Get all recorded relationship milestones."""
-        milestones = await memory.get_milestones()
+    async def api_milestones(request: Request):
+        """Get all recorded relationship milestones for the authenticated user."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        milestones = await memory.get_milestones(user_id=user_id)
         return {"milestones": milestones}
 
     # ── Costume ────────────────────────────────────────────────────────────
@@ -247,7 +254,9 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     @app.get("/api/messages")
     async def get_messages(request: Request, limit: int = 50, before: str | None = None):
         """Fetch recent messages from PostgreSQL, scoped to authenticated user."""
-        user_id = await _get_user_id(request) or "jalsarraf"
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
         try:
             pool = get_pool()
             async with pool.connection() as conn:
@@ -294,12 +303,16 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         limit: int = 20,
         before: str | None = None,
     ):
-        user_id = await _get_user_id(request) or "jalsarraf"
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
         return await memory_archive.list_memories(category=category, limit=limit, before=before, user_id=user_id)
 
     @app.get("/api/memories/categories")
     async def api_memory_categories(request: Request):
-        user_id = await _get_user_id(request) or "jalsarraf"
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
         aff = await affection.get_state(user_id)
         return await memory_archive.get_categories(aff.level, user_id=user_id)
 

@@ -390,7 +390,7 @@ async def background_recall(content: str, session: SessionState, user_id: str) -
         card += f"\n\n{annotation}"
         await ws.send_proactive(user_id, card)
 
-        img_bytes = await memory_archive.get_image_bytes(mem["id"], thumbnail=False)
+        img_bytes = await memory_archive.get_image_bytes(mem["id"], thumbnail=False, user_id=user_id)
         if img_bytes:
             import base64 as b64
             img_b64 = b64.b64encode(img_bytes).decode()
