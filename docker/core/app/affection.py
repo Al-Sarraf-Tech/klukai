@@ -71,12 +71,26 @@ class AffectionChange(BaseModel):
 
 
 class AffectionManager:
-    """Manages the affection score, classification, and level progression."""
+    """Manages the affection score, classification, and level progression.
+
+    State is cached per-user to prevent cross-user contamination. Each user_id
+    gets its own AffectionState entry in _states dict.
+    """
 
     def __init__(self) -> None:
-        self._state: AffectionState | None = None
+        self._states: dict[str, AffectionState] = {}
         self._http: httpx.AsyncClient | None = None
         self._levels: list[dict] = []
+
+    @property
+    def _state(self) -> AffectionState | None:
+        """Backward compat — returns jalsarraf's state (legacy callers)."""
+        return self._states.get("jalsarraf")
+
+    @_state.setter
+    def _state(self, value: AffectionState | None) -> None:
+        if value is not None:
+            self._states["jalsarraf"] = value
 
     async def init(self) -> None:
         """Load state from database and personality config."""
@@ -94,9 +108,8 @@ class AffectionManager:
     async def _load_state(self, user_id: str = "jalsarraf") -> None:
         """Load current affection state from PostgreSQL for a specific user.
 
-        Includes a hard floor: if the DB somehow has a score far below what
-        was previously earned (e.g., stale read after restart), preserve the
-        higher value. Score can only drop via legitimate decay/penalties.
+        Uses per-user cache. Hard floor prevents stale DB reads from
+        silently dropping score. Each user's state is independent.
         """
         try:
             async with get_conn() as conn:
@@ -111,23 +124,22 @@ class AffectionManager:
 
                 if row:
                     new_score = row[0]
-                    # Hard floor: never let a DB read silently drop score by >50 points
-                    # Legitimate decay is small (-1/day). Large drops = stale data.
-                    if self._state and self._state.score > 0:
-                        if new_score < self._state.score - 50:
+                    # Hard floor: check against THIS USER's cached state only
+                    cached = self._states.get(user_id)
+                    if cached and cached.score > 0:
+                        if new_score < cached.score - 50:
                             logger.warning(
-                                "Affection score anomaly: DB=%d, memory=%d — keeping higher value",
-                                new_score, self._state.score,
+                                "Affection score anomaly for %s: DB=%d, memory=%d — keeping higher value",
+                                user_id, new_score, cached.score,
                             )
-                            # Write the correct value back to DB
                             await conn.execute(
                                 "UPDATE companion_affection SET score=%s, level=%s, level_name=%s "
                                 "WHERE user_id=%s",
-                                (self._state.score, self._state.level, self._state.level_name, user_id),
+                                (cached.score, cached.level, cached.level_name, user_id),
                             )
                             return
 
-                    self._state = AffectionState(
+                    self._states[user_id] = AffectionState(
                         score=new_score,
                         level=row[1],
                         level_name=row[2],
@@ -139,32 +151,33 @@ class AffectionManager:
                     )
                     logger.debug("Affection loaded for %s: score=%d lv%d", user_id, new_score, row[1])
                 else:
-                    self._state = AffectionState()
+                    self._states[user_id] = AffectionState()
         except Exception as e:
             logger.warning("Failed to load affection state for %s: %s", user_id, e)
-            if not self._state:
-                self._state = AffectionState()
+            if user_id not in self._states:
+                self._states[user_id] = AffectionState()
 
     async def get_state(self, user_id: str = "jalsarraf") -> AffectionState:
         """Get current affection state for a user.
 
         jalsarraf is permanently pinned at max trust (level 9, 1000/1000).
-        Other users load from DB normally.
+        Other users load from DB normally. Each user gets isolated state.
         """
         if user_id == "jalsarraf":
             from datetime import date as _date, datetime as _dt
-            self._state = AffectionState(
+            state = AffectionState(
                 score=1000, level=9, level_name="Oath Fulfilled",
                 last_interaction_date=_date.today(),
                 consecutive_days=7, daily_points_earned=0,
                 total_interactions=338,
-                first_interaction=_dt(2026, 4, 6),  # Project start date
+                first_interaction=_dt(2026, 4, 6),
             )
-            return self._state
+            self._states[user_id] = state
+            return state
 
-        # Other users: load from DB
+        # Other users: load from DB into per-user cache
         await self._load_state(user_id)
-        return self._state
+        return self._states.get(user_id, AffectionState())
 
     def _compute_level(self, score: int) -> tuple[int, str]:
         """Map score to level index and name."""
@@ -268,7 +281,7 @@ class AffectionManager:
         if delta != 0:
             await self._log_change(delta, interaction_type, old_score, state.score, old_level, state.level, user_id)
 
-        self._state = state
+        self._states[user_id] = state
 
         return AffectionChange(
             delta=delta,

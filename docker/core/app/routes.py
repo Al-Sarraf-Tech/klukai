@@ -164,7 +164,9 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     async def api_gift(req: dict, request: Request):
         """Send a gift to Klukai. Returns her reaction and affection change."""
         gift_name = req.get("gift", "")
-        user_id = await _get_user_id(request) or req.get("user", "jalsarraf")
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
         if not gift_name:
             return JSONResponse({"error": "No gift specified"}, status_code=400)
 
@@ -197,7 +199,9 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     @app.post("/api/mission")
     async def api_mission(req: dict, request: Request):
         """Send Klukai on a mission. She returns with a report and a gift."""
-        user_id = await _get_user_id(request) or req.get("user", "jalsarraf")
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
 
         if ws.is_connected(user_id):
             await ws.send_proactive(user_id, "Understood, Commander. Deploying for sortie. I will report back shortly.")

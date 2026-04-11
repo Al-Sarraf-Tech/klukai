@@ -128,16 +128,28 @@ class MemoryManager:
             )
             self._collection_ready = True
             logger.info("Created Qdrant collection: %s", COLLECTION_NAME)
+            # Create user_id index for filtered search performance
+            try:
+                await self._http.put(
+                    f"{QDRANT_URL}/collections/{COLLECTION_NAME}/index",
+                    json={"field_name": "user_id", "field_schema": "keyword"},
+                )
+            except Exception:
+                pass  # Non-critical — search still works, just slower
         except httpx.HTTPError:
             logger.warning("Failed to create Qdrant collection, will retry later")
 
     async def embed_text(self, text: str) -> list[float]:
-        r = await self._http.post(
-            f"{INFERENCE_URL}/v1/embeddings",
-            json={"input": text, "model": "nomic-embed-text-v1.5"},
-        )
-        r.raise_for_status()
-        return r.json()["data"][0]["embedding"]
+        try:
+            r = await self._http.post(
+                f"{INFERENCE_URL}/v1/embeddings",
+                json={"input": text, "model": "nomic-embed-text-v1.5"},
+            )
+            r.raise_for_status()
+            return r.json()["data"][0]["embedding"]
+        except Exception as e:
+            logger.warning("Embedding failed: %s — returning zero vector", e)
+            return [0.0] * EMBED_DIM
 
     async def store_episode(
         self,
@@ -149,29 +161,30 @@ class MemoryManager:
         conversation_id: str | None = None,
         user_id: str = "jalsarraf",
     ) -> str:
-        vector = await self.embed_text(summary)
-
-        # Store in Qdrant with user_id for isolation
-        await self._http.put(
-            f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points",
-            json={
-                "points": [
-                    {
-                        "id": episode_id,
-                        "vector": vector,
-                        "payload": {
-                            "summary": summary,
-                            "keywords": keywords,
-                            "emotion_tags": emotion_tags,
-                            "importance": importance,
-                            "conversation_id": conversation_id,
-                            "user_id": user_id,
-                            "created_at": datetime.now().isoformat(),
-                        },
-                    }
-                ]
-            },
-        )
+        try:
+            vector = await self.embed_text(summary)
+            await self._http.put(
+                f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points",
+                json={
+                    "points": [
+                        {
+                            "id": episode_id,
+                            "vector": vector,
+                            "payload": {
+                                "summary": summary,
+                                "keywords": keywords,
+                                "emotion_tags": emotion_tags,
+                                "importance": importance,
+                                "conversation_id": conversation_id,
+                                "user_id": user_id,
+                                "created_at": datetime.now().isoformat(),
+                            },
+                        }
+                    ]
+                },
+            )
+        except Exception as e:
+            logger.warning("Failed to store episode %s: %s", episode_id[:8], e)
         return episode_id
 
     async def recall_episodes(
@@ -228,11 +241,18 @@ class MemoryManager:
                     "vectors": {"size": EMBED_DIM, "distance": "Cosine"},
                 },
             )
-            # Create keyword index on topics for filtered search
+            # Create keyword indexes for filtered search
             await self._http.put(
                 f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/index",
                 json={"field_name": "topics", "field_schema": "keyword"},
             )
+            try:
+                await self._http.put(
+                    f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/index",
+                    json={"field_name": "user_id", "field_schema": "keyword"},
+                )
+            except Exception:
+                pass  # Non-critical
             self._msg_collection_ready = True
             logger.info("Created Qdrant collection: %s", MSG_COLLECTION_NAME)
         except httpx.HTTPError:
@@ -250,30 +270,32 @@ class MemoryManager:
         user_id: str = "jalsarraf",
     ) -> None:
         """Store a user+assistant exchange pair with vector embedding, scoped to user."""
-        combined = f"Commander: {user_content[:500]}\nKlukai: {assistant_content[:500]}"
-        vector = await self.embed_text(combined)
-
-        await self._http.put(
-            f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points",
-            json={
-                "points": [
-                    {
-                        "id": exchange_id,
-                        "vector": vector,
-                        "payload": {
-                            "user_content": user_content,
-                            "assistant_content": assistant_content,
-                            "topics": topics,
-                            "mood": mood,
-                            "importance": importance,
-                            "conversation_id": conversation_id,
-                            "user_id": user_id,
-                            "created_at": datetime.now().isoformat(),
-                        },
-                    }
-                ]
-            },
-        )
+        try:
+            combined = f"Commander: {user_content[:500]}\nKlukai: {assistant_content[:500]}"
+            vector = await self.embed_text(combined)
+            await self._http.put(
+                f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points",
+                json={
+                    "points": [
+                        {
+                            "id": exchange_id,
+                            "vector": vector,
+                            "payload": {
+                                "user_content": user_content,
+                                "assistant_content": assistant_content,
+                                "topics": topics,
+                                "mood": mood,
+                                "importance": importance,
+                                "conversation_id": conversation_id,
+                                "user_id": user_id,
+                                "created_at": datetime.now().isoformat(),
+                            },
+                        }
+                    ]
+                },
+            )
+        except Exception as e:
+            logger.warning("Failed to store exchange %s: %s", exchange_id[:8], e)
 
     async def recall_exchanges(
         self, query: str, limit: int = MSG_RECALL_LIMIT, min_score: float = MSG_MIN_SCORE,

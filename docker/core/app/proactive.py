@@ -668,11 +668,12 @@ class ProactiveEngine:
         await self._deliver(self._pick_message(TAP_LINES))
 
     async def _morning_checkin(self) -> None:
-        # Update physical state based on time of day
+        # Update physical state based on time of day for all connected users
         try:
-            from .context import physical
+            from .context import physical, ws
             hour = datetime.now().hour
-            await physical.on_time_of_day("jalsarraf", hour)
+            for uid in list(ws._connections.keys()):
+                await physical.on_time_of_day(uid, hour)
         except Exception as e:
             logger.debug("Physical time-of-day update failed: %s", e)
         await self._deliver(self._pick_message(MORNING_MESSAGES))
@@ -699,11 +700,12 @@ class ProactiveEngine:
             logger.warning("Daily challenge failed: %s", e)
 
     async def _evening_checkin(self) -> None:
-        # Update physical state for late watch (cold, etc.)
+        # Update physical state for late watch for all connected users
         try:
-            from .context import physical
+            from .context import physical, ws
             hour = datetime.now().hour
-            await physical.on_time_of_day("jalsarraf", hour)
+            for uid in list(ws._connections.keys()):
+                await physical.on_time_of_day(uid, hour)
         except Exception as e:
             logger.debug("Physical time-of-day update failed: %s", e)
         await self._deliver(self._pick_message(EVENING_MESSAGES))

@@ -406,6 +406,7 @@ async def main():
                     memory_id = await save_image(
                         img_bytes, full_prompt, "seed",
                         mood="tender", affection_level=8, curation=curation,
+                        user_id="jalsarraf",
                     )
                     if memory_id:
                         saved_count += 1
