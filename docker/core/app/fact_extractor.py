@@ -38,6 +38,8 @@ _DEFAULT_RESULT: dict = {
     "topics": [],
     "should_remember": False,
     "interaction": {"type": "neutral", "intensity": 5},
+    "commander_details": {},
+    "gift_item": None,
 }
 
 # ── Prompts ──────────────────────────────────────────────────────────────
@@ -49,7 +51,7 @@ and tender moods are natural responses to warmth. At low levels (0-2), composed 
 prideful moods dominate.
 
 Return ONLY valid JSON with these fields:
-{{"mood":"<one word from the list>","interaction":{{"type":"<type>","intensity":<1-10>}},"facts":[],"topics":[],"should_remember":false}}
+{{"mood":"<one word from the list>","interaction":{{"type":"<type>","intensity":<1-10>}},"facts":[],"topics":[],"should_remember":false,"commander_details":{{}},"gift_item":null}}
 
 Moods: composed, focused, prideful, exasperated, protective, quietly_pleased, \
 competitive, tender, longing, battle_ready, flustered, affectionate, shy, yearning, \
@@ -62,6 +64,13 @@ Interaction types: greeting, genuine_interest, personal_sharing, compliment, \
 mission_discussion, remembering, neutral
 IMPORTANT: Short/casual messages are NEVER "rude". Only explicit hostility is "rude".
 "I love you" is a compliment (intensity 8-10), NOT neutral.
+
+commander_details: Extract any personal info the Commander shares about himself. \
+Keys: "wearing" (clothes), "eating" (food/drink), "doing" (activities), "feeling" (physical/emotional state). \
+Values are short strings. Only include keys that are explicitly mentioned. Empty object if none.
+
+gift_item: If the Commander is giving Klukai a gift/present, set this to a short description \
+of the item (e.g., "leather jacket", "coffee mug", "flowers"). null if no gift.
 
 Commander: {user_message}
 Klukai: {assistant_message}"""
@@ -151,6 +160,8 @@ async def extract_facts(
         "topics": result.get("topics", []),
         "should_remember": result.get("should_remember", False),
         "interaction": interaction,
+        "commander_details": result.get("commander_details", {}),
+        "gift_item": result.get("gift_item"),
     }
 
     if image_generated and "memory_curation" in result:

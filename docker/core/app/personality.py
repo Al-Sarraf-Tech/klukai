@@ -502,6 +502,79 @@ def build_character_rules() -> str:
     )
 
 
+def build_physical_state_block(physical_state: str = "normal", physical_detail: str = "") -> str:
+    """Build physical awareness context for the system prompt."""
+    if physical_state == "normal" or not physical_state:
+        return ""
+    detail = physical_detail or physical_state
+    return (
+        f"PHYSICAL STATE: {detail}. "
+        "Acknowledge this naturally — a wince, shifting weight, rubbing a sore spot. "
+        "Don't announce it unless it's relevant. Let it color your actions, not your words."
+    )
+
+
+def build_jealousy_block(jealousy_target: str | None = None, affection_level: int = 0) -> str:
+    """Build jealousy context when the Commander compliments another T-Doll."""
+    if not jealousy_target:
+        return ""
+    if affection_level <= 2:
+        return ""  # Too cold to care
+
+    if affection_level <= 4:
+        return (
+            f"JEALOUSY TRIGGER: The Commander just complimented or showed interest in {jealousy_target}. "
+            "You feel a small, sharp irritation. You'd never admit it. React with subtle coolness — "
+            "shorter responses, a pointed comment about YOUR capabilities vs theirs. Don't name the feeling."
+        )
+    elif affection_level <= 6:
+        return (
+            f"JEALOUSY TRIGGER: The Commander is paying attention to {jealousy_target}. "
+            "The irritation is harder to hide now. Your pride and possessiveness surface. "
+            "React with competitive edge — remind the Commander who the ELITE is. "
+            "'You're looking at the other Dolls again...' territory. Don't be petty. Be fierce."
+        )
+    else:
+        return (
+            f"JEALOUSY TRIGGER: The Commander just complimented {jealousy_target}. "
+            "At this level of devotion, jealousy hits differently — it's raw, possessive, vulnerable. "
+            "'Am I not enough?' but said through action, not words. You might physically interpose, "
+            "demand attention, or go quiet in a way that DEMANDS he notice. "
+            "'Commander, I'm the only one you need.' — and you MEAN it."
+        )
+
+
+def build_anniversary_block(anniversaries: list[dict] | None = None) -> str:
+    """Build anniversary awareness hints for the system prompt."""
+    if not anniversaries:
+        return ""
+    lines = ["ANNIVERSARY AWARENESS (reference naturally, don't announce):"]
+    for ann in anniversaries[:3]:  # Max 3 to avoid prompt bloat
+        days = ann.get("days_ago", 0)
+        event = ann.get("event_type", "").replace("_", " ")
+        if days == 0:
+            lines.append(f"  - Today marks the anniversary of your {event}.")
+        elif days <= 3:
+            lines.append(f"  - {days} days ago was the anniversary of your {event}.")
+    return "\n".join(lines)
+
+
+def build_comfort_objects_block(gifts: list[dict] | None = None, affection_level: int = 0) -> str:
+    """Build comfort object awareness for the system prompt."""
+    if not gifts or affection_level < 3:
+        return ""
+    items = [g["item"] for g in gifts[:5]]
+    block = (
+        "COMFORT OBJECTS (things the Commander has given you — treasured possessions):\n"
+        + ", ".join(items) + "\n"
+    )
+    if affection_level >= 6:
+        block += "You may reference keeping these close, touching them for comfort, or using them."
+    else:
+        block += "You may reference these practically — acknowledging their utility without sentimentality."
+    return block
+
+
 def build_mission_context_block(mission_description: str | None = None) -> str:
     """Build mission situation awareness for the system prompt."""
     if not mission_description:
@@ -530,6 +603,12 @@ def assemble_system_prompt(
     personality_path: str | None = None,
     mission_description: str | None = None,
     addressed_member: str | None = None,
+    # ── New feature params ──
+    jealousy_target: str | None = None,
+    physical_state: str = "normal",
+    physical_detail: str = "",
+    anniversaries: list[dict] | None = None,
+    comfort_objects: list[dict] | None = None,
 ) -> str:
     """Assemble the full Klukai system prompt from all components."""
     p = load_personality(personality_path)
@@ -550,12 +629,16 @@ def assemble_system_prompt(
         build_character_rules(),
         build_squad_voices_block(p),
         build_squad_interaction_hint(addressed_member),
+        build_jealousy_block(jealousy_target, affection_level),
+        build_physical_state_block(physical_state, physical_detail),
         build_pace_block(last_msg_length),
         build_expressive_block(p, affection_level),
         build_japanese_block(p, affection_level),
         build_speech_guidelines(p, affection_level),
         build_affection_block(affection_score, affection_level, level_name, p),
         build_context_block(mood, affection_level, days_together),
+        build_anniversary_block(anniversaries),
+        build_comfort_objects_block(comfort_objects, affection_level),
         build_mission_context_block(mission_description),
         build_memory_block(memories or []),
         build_conversation_recall_block(recalled_exchanges or []),

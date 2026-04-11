@@ -100,6 +100,12 @@ class WSManager:
             "level_name": new_level_name, "direction": direction,
         })
 
+    async def send_heartbeat_spike(self, user_id: str, bpm: int, mood: str) -> None:
+        """Send a heartbeat spike alert for high-intensity emotional moments."""
+        await self.send(user_id, {
+            "type": "heartbeat_spike", "bpm": bpm, "mood": mood,
+        })
+
     async def receive(self, user_id: str = "default") -> dict | None:
         """Receive from ANY connected device for this user."""
         conns = self._connections.get(user_id)

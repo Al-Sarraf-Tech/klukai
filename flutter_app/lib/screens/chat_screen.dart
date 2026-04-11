@@ -62,6 +62,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _ambientMuted = true;
 
   bool _showScrollFAB = false;
+  int? _heartbeatSpikeOverride;  // Temporary BPM override from heartbeat_spike
+  Timer? _spikeDecayTimer;
 
   DateTime? _lastTapTime;
 
@@ -135,8 +137,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     };
   }
 
-  /// Heartbeat BPM mapped to mood — reflects Klukai's emotional/physical state
+  /// Heartbeat BPM mapped to mood — reflects Klukai's emotional/physical state.
+  /// A heartbeat_spike event temporarily overrides this with a higher BPM.
   int get _moodBPM {
+    if (_heartbeatSpikeOverride != null) return _heartbeatSpikeOverride!;
     return switch (_state.mood) {
       // Relaxed (55-70 BPM)
       'composed'        => 65,
@@ -483,6 +487,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           _scrollToBottom(retries: 3);
           _playNotificationSound();
         }
+
+      case 'heartbeat_spike':
+        final spikeBpm = msg['bpm'] as int? ?? 160;
+        setState(() {
+          _heartbeatSpikeOverride = spikeBpm;
+        });
+        // Decay back to normal BPM after 5 seconds
+        _spikeDecayTimer?.cancel();
+        _spikeDecayTimer = Timer(const Duration(seconds: 5), () {
+          if (mounted) {
+            setState(() {
+              _heartbeatSpikeOverride = null;
+            });
+          }
+        });
     }
   }
 
@@ -693,6 +712,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _spikeDecayTimer?.cancel();
     _ws.dispose();
     _textController.dispose();
     _scrollController.dispose();
@@ -900,7 +920,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     Row(
                       children: [
                         const Spacer(),
-                        HeartbeatSensor(bpm: _moodBPM, color: _moodGlowColor),
+                        HeartbeatSensor(
+                          bpm: _moodBPM,
+                          color: _heartbeatSpikeOverride != null
+                              ? const Color(0xFFFF1744)  // Red flash during spike
+                              : _moodGlowColor,
+                        ),
                       ],
                     ),
                   ],

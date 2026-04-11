@@ -413,6 +413,7 @@ class ProactiveEngine:
         self._mission_timer: MissionTimer | None = None
         # Romance window
         self._romance_delivered_today: bool = False
+        self._dream_delivered_today: bool = False
         self._user_messaged_today: bool = False
         self._session_getter = None  # callback to get current session state
 
@@ -450,9 +451,15 @@ class ProactiveEngine:
             affection_level=self._affection_level,
         )
 
-    def stop_mission(self) -> None:
-        """Stop the active mission timer."""
+    def stop_mission(self, user_id: str = "jalsarraf", trigger_aftermath: bool = True) -> None:
+        """Stop the active mission timer. Optionally triggers aftermath image."""
         if self._mission_timer and self._mission_timer.active:
+            # Capture timer state BEFORE stopping — the async task needs it
+            timer_snapshot = self._mission_timer
+            if trigger_aftermath:
+                asyncio.create_task(
+                    self.trigger_mission_aftermath_image(user_id, timer=timer_snapshot)
+                )
             self._mission_timer.stop()
         self._mission_timer = None
 
@@ -494,6 +501,14 @@ class ProactiveEngine:
             self._idle_check,
             CronTrigger(hour="9-21/2", minute=30),
             id="idle_check",
+            replace_existing=True,
+        )
+
+        # Unsent messages — fires on same schedule as idle, separate roll
+        self._scheduler.add_job(
+            self._unsent_message_check,
+            CronTrigger(hour="10-22/3", minute=15),
+            id="unsent_message_check",
             replace_existing=True,
         )
 
@@ -653,6 +668,13 @@ class ProactiveEngine:
         await self._deliver(self._pick_message(TAP_LINES))
 
     async def _morning_checkin(self) -> None:
+        # Update physical state based on time of day
+        try:
+            from .context import physical
+            hour = datetime.now().hour
+            await physical.on_time_of_day("jalsarraf", hour)
+        except Exception as e:
+            logger.debug("Physical time-of-day update failed: %s", e)
         await self._deliver(self._pick_message(MORNING_MESSAGES))
 
     async def _daily_challenge(self) -> None:
@@ -677,6 +699,13 @@ class ProactiveEngine:
             logger.warning("Daily challenge failed: %s", e)
 
     async def _evening_checkin(self) -> None:
+        # Update physical state for late watch (cold, etc.)
+        try:
+            from .context import physical
+            hour = datetime.now().hour
+            await physical.on_time_of_day("jalsarraf", hour)
+        except Exception as e:
+            logger.debug("Physical time-of-day update failed: %s", e)
         await self._deliver(self._pick_message(EVENING_MESSAGES))
 
     async def _idle_check(self) -> None:
@@ -815,14 +844,14 @@ class ProactiveEngine:
             ]
             major_event = random.choice(major_events)
 
-            elapsed = int((now - timer._start_time).total_seconds() / 60) if hasattr(timer, '_start_time') else timer.update_count * 30
+            elapsed = int((time.monotonic() - timer.started_at) / 60) if timer.started_at else timer.update_count * 30
 
             message = await generate_mission_update(
                 mission_desc=timer.mission_description,
                 elapsed_minutes=elapsed,
                 update_number=timer.update_count + 1,
                 major_event=major_event,
-                active_events=timer._active_events if hasattr(timer, '_active_events') else [],
+                active_events=list(timer.active_events),
                 affection_level=self._affection_level,
             )
 
@@ -934,7 +963,7 @@ class ProactiveEngine:
         a normal memory/nightmare/tender dream. Fires once per night max.
         Balanced: most dreams reference real memories from the archive.
         """
-        if hasattr(self, '_dream_delivered_today') and self._dream_delivered_today:
+        if self._dream_delivered_today:
             return
         if self._affection_level < 5:
             return
@@ -1043,6 +1072,284 @@ class ProactiveEngine:
 
         except Exception as e:
             logger.warning("Dream event failed: %s", e)
+
+    # ── Unsent messages (feature: vulnerability through "deleted" texts) ────
+
+    async def _unsent_message_check(self) -> None:
+        """Occasionally send a '[Message deleted]' followed by a flustered follow-up.
+
+        Only fires at affection 5+. 15% chance per idle check slot.
+        Shows vulnerability Klukai would normally hide.
+        """
+        if self._affection_level < 5:
+            return
+        if not self._can_send():
+            return
+        if random.random() > 0.15:
+            return
+
+        FOLLOW_UPS: dict[int, list[str]] = {
+            5: [
+                "...Ignore that. Comm error.",
+                "That was a draft. Disregard.",
+                "Wrong channel. Carry on, Commander.",
+            ],
+            6: [
+                "...That wasn't meant to send. Forget it.",
+                "Ignore that. I was— never mind.",
+                "...Pretend you didn't see that.",
+            ],
+            7: [
+                "...I didn't mean to send that. Or maybe I did. Forget it.",
+                "That was... ignore it. Please.",
+                "...Delete that from your memory. That's an order.",
+            ],
+            8: [
+                "...You weren't supposed to see that.",
+                "...I'll tell you in person. When I'm ready.",
+                "Don't ask about it. Just... come find me later.",
+            ],
+            9: [
+                "...You know what it said. You always know.",
+                "...I'll finish that sentence tonight. In person.",
+                "...Read between the lines, Commander.",
+            ],
+        }
+
+        level = max(5, min(9, self._affection_level))
+        follows = FOLLOW_UPS.get(level, FOLLOW_UPS[5])
+
+        # Send the "deleted" message
+        if self._on_message_callback:
+            self._proactive_count_today += 1
+            self._last_proactive_answered = False
+            await self._on_message_callback("[Message deleted]")
+            logger.info("Unsent message triggered (aff=%d)", self._affection_level)
+
+            # Wait 3-8 seconds, then send the follow-up
+            await asyncio.sleep(random.uniform(3.0, 8.0))
+            follow_up = random.choice(follows)
+            await self._on_message_callback(follow_up)
+
+    # ── Anniversary awareness ────────────────────────────────────────────
+
+    async def check_anniversaries(self, user_id: str = "jalsarraf") -> list[dict]:
+        """Check for anniversaries near today. Returns list of matching events.
+
+        Results are cached for 5 minutes to avoid hitting the DB on every message.
+        """
+        # TTL cache: avoid DB query per message
+        cache_key = f"ann:{user_id}"
+        now = datetime.now()
+        if hasattr(self, '_ann_cache') and cache_key in self._ann_cache:
+            cached_at, cached_result = self._ann_cache[cache_key]
+            if (now - cached_at).total_seconds() < 300:  # 5 min TTL
+                return cached_result
+
+        from .db import get_conn
+        from datetime import date
+
+        today = date.today()
+        results = []
+
+        try:
+            async with get_conn() as conn:
+                rows = await (await conn.execute(
+                    "SELECT event_type, event_date FROM companion_firsts "
+                    "WHERE user_id = %s",
+                    (user_id,),
+                )).fetchall()
+
+                for row in rows:
+                    event_type, event_date = row[0], row[1]
+                    # Check if today matches the anniversary (same month+day, different year)
+                    if event_date.month == today.month and event_date.day == today.day and event_date.year < today.year:
+                        years = today.year - event_date.year
+                        results.append({
+                            "event_type": event_type,
+                            "event_date": event_date.isoformat(),
+                            "years_ago": years,
+                            "days_ago": 0,
+                        })
+                    # Also check ±3 days for "near" anniversaries
+                    elif event_date.year < today.year:
+                        try:
+                            ann_this_year = event_date.replace(year=today.year)
+                        except ValueError:
+                            # Feb 29 in a non-leap year — use Feb 28
+                            ann_this_year = event_date.replace(year=today.year, day=28)
+                        delta = abs((today - ann_this_year).days)
+                        if 0 < delta <= 3:
+                            results.append({
+                                "event_type": event_type,
+                                "event_date": event_date.isoformat(),
+                                "years_ago": today.year - event_date.year,
+                                "days_ago": delta,
+                            })
+        except Exception as e:
+            logger.warning("Anniversary check failed: %s", e)
+
+        # Cache result
+        if not hasattr(self, '_ann_cache'):
+            self._ann_cache: dict[str, tuple[datetime, list[dict]]] = {}
+        self._ann_cache[cache_key] = (now, results)
+
+        return results
+
+    async def record_first(
+        self, user_id: str, event_type: str, metadata: dict | None = None
+    ) -> bool:
+        """Record a relationship 'first'. Returns True if new, False if already recorded."""
+        from .db import get_conn_autocommit
+        from datetime import date
+        import json as _json
+
+        try:
+            async with get_conn_autocommit() as conn:
+                result = await conn.execute(
+                    "INSERT INTO companion_firsts (user_id, event_type, event_date, metadata) "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT (user_id, event_type) DO NOTHING",
+                    (user_id, event_type, date.today(), _json.dumps(metadata or {})),
+                )
+                if result.rowcount and result.rowcount > 0:
+                    logger.info("New first recorded: %s for %s", event_type, user_id)
+                    return True
+        except Exception as e:
+            logger.warning("Failed to record first '%s': %s", event_type, e)
+        return False
+
+    # ── Comfort objects (gifts) ──────────────────────────────────────────
+
+    async def get_comfort_objects(self, user_id: str = "jalsarraf") -> list[dict]:
+        """Get all gifts/comfort objects for a user. Cached for 5 minutes."""
+        cache_key = f"gifts:{user_id}"
+        now = datetime.now()
+        if hasattr(self, '_gifts_cache') and cache_key in self._gifts_cache:
+            cached_at, cached_result = self._gifts_cache[cache_key]
+            if (now - cached_at).total_seconds() < 300:
+                return cached_result
+
+        from .db import get_conn
+
+        try:
+            async with get_conn() as conn:
+                rows = await (await conn.execute(
+                    "SELECT item, description, sentiment, given_date, referenced_count "
+                    "FROM companion_gifts WHERE user_id = %s ORDER BY given_date DESC",
+                    (user_id,),
+                )).fetchall()
+                result = [
+                    {
+                        "item": r[0], "description": r[1], "sentiment": r[2],
+                        "given_date": r[3].isoformat() if r[3] else None,
+                        "referenced_count": r[4],
+                    }
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.warning("Failed to load comfort objects: %s", e)
+            result = []
+
+        if not hasattr(self, '_gifts_cache'):
+            self._gifts_cache: dict[str, tuple[datetime, list[dict]]] = {}
+        self._gifts_cache[cache_key] = (now, result)
+        return result
+
+    async def store_gift(
+        self, user_id: str, item: str, description: str | None = None,
+        sentiment: str = "treasured",
+    ) -> None:
+        """Store a new gift from the Commander."""
+        from .db import get_conn_autocommit
+
+        try:
+            async with get_conn_autocommit() as conn:
+                await conn.execute(
+                    "INSERT INTO companion_gifts (user_id, item, description, sentiment) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (user_id, item, description, sentiment),
+                )
+            logger.info("Gift stored: '%s' for %s", item, user_id)
+            # Invalidate cache so next query picks up the new gift
+            if hasattr(self, '_gifts_cache'):
+                self._gifts_cache.pop(f"gifts:{user_id}", None)
+        except Exception as e:
+            logger.warning("Failed to store gift '%s': %s", item, e)
+
+    # ── Mission aftermath image ──────────────────────────────────────────
+
+    async def trigger_mission_aftermath_image(
+        self, user_id: str = "jalsarraf", timer: MissionTimer | None = None
+    ) -> None:
+        """Generate a mission aftermath image when a mission ends.
+
+        Called from stop_mission() with a captured timer snapshot. The timer
+        is passed explicitly because self._mission_timer is nulled synchronously
+        before this coroutine runs.
+        """
+        if not self._on_message_callback:
+            return
+
+        if not timer:
+            return
+
+        try:
+            from .image_gen import build_mission_prompt, generate_image
+
+            # Determine scene type based on final state
+            if timer.active_events:
+                scene_type = "injury" if any("injured" in e for e in timer.active_events) else "extraction"
+            else:
+                scene_type = "victory"
+
+            prompt = build_mission_prompt(
+                scene_type=scene_type,
+                injuries=timer.active_events,
+                affection_level=self._affection_level,
+            )
+
+            # Aftermath caption
+            captions = {
+                "victory": [
+                    "...Mission complete. (I exhale slowly) Everyone made it back.",
+                    "All units accounted for. (I lower the rifle) ...We did it, Commander.",
+                    "Objective secured. (I wipe sweat from my brow) ...I'm coming home.",
+                ],
+                "extraction": [
+                    "Extraction complete. (I lean against the transport) ...That was close.",
+                    "We're out. (I check the squad) Everyone breathing? Good. Report later.",
+                    "...Made it. Barely. (I close my eyes) Heading back to base.",
+                ],
+                "injury": [
+                    "(I press a hand to the bandaged wound) ...Mission complete. Medical when I arrive.",
+                    "We're through. (I wince) ...Don't worry about the field dressing. I've had worse.",
+                    "Objective complete. (I grip my arm) ...I'll be fine. Stop looking at me like that.",
+                ],
+            }
+
+            caption = random.choice(captions.get(scene_type, captions["victory"]))
+            await self._on_message_callback(caption)
+
+            # Generate and send the aftermath image in background
+            async def _gen_aftermath():
+                try:
+                    await asyncio.sleep(2)  # Let caption deliver first
+                    img_bytes = await generate_image(prompt, width=1216, height=832)
+                    if img_bytes:
+                        import base64 as b64
+                        # Import ws from context to send image
+                        from .context import ws
+                        img_b64 = b64.b64encode(img_bytes).decode()
+                        await ws.send(user_id, {"type": "image", "data": img_b64})
+                        logger.info("Mission aftermath image sent (%s)", scene_type)
+                except Exception as e:
+                    logger.warning("Aftermath image gen failed: %s", e)
+
+            asyncio.create_task(_gen_aftermath())
+            logger.info("Mission aftermath triggered: scene=%s", scene_type)
+
+        except Exception as e:
+            logger.warning("Mission aftermath failed: %s", e)
 
     async def _reset_daily(self) -> None:
         self._proactive_count_today = 0

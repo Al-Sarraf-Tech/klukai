@@ -13,7 +13,7 @@ from datetime import datetime
 
 from . import context
 from . import memory_archive
-from .context import ws, memory, router, affection, proactive, SESSION_ID, session_id
+from .context import ws, memory, affection, proactive, session_id
 from .db import get_conn_autocommit
 from .fact_extractor import create_episode_summary, extract_facts
 from .helpers import enhance_image_prompt as _enhance_image_prompt
@@ -62,12 +62,37 @@ async def background_extraction(
         for fact in result.get("facts", []):
             await memory.set_relationship_fact(fact["key"], fact["value"])
 
+        # Store commander details as relationship facts (feature: she remembers)
+        commander_details = result.get("commander_details", {})
+        if isinstance(commander_details, dict):
+            for detail_key, detail_val in commander_details.items():
+                if detail_val and isinstance(detail_val, str):
+                    await memory.set_relationship_fact(
+                        f"commander_{detail_key}", detail_val
+                    )
+
+        # Store gift if detected (feature: comfort objects)
+        gift_item = result.get("gift_item")
+        if gift_item and isinstance(gift_item, str) and len(gift_item) > 1:
+            await proactive.store_gift(user_id, gift_item)
+            # Record as a "first" if it's the first gift
+            await proactive.record_first(user_id, "first_gift")
+
         # Update mood in session + persist to PostgreSQL
         mood = result.get("mood", "composed")
         session.mood = mood
         await memory.save_session(session_id(user_id), session)
         await ws.send_mood(user_id, mood)
         proactive.set_last_mood(mood)
+
+        # Record "firsts" for anniversary tracking
+        if session.turn_count == 1:
+            await proactive.record_first(user_id, "first_message")
+
+        # Physical state: long conversation -> relaxed
+        if session.turn_count > 0 and session.turn_count % 10 == 0:
+            from .context import physical
+            await physical.on_long_conversation(user_id)
 
         # Auto-start mission when mood hits battle_ready or vigilant (if was battle_ready)
         mission_moods = {"battle_ready"}
@@ -108,6 +133,17 @@ async def background_extraction(
             interaction_type = interaction.get("type", "neutral")
             intensity = max(1, min(10, int(interaction.get("intensity", 5))))
             aff_change = await affection.apply_classification(interaction_type, intensity, user_id)
+
+            # Heartbeat spike detection (feature: heartbeat spike alerts)
+            HIGH_INTENSITY_MOODS = {
+                "passionate": 165, "terrified": 175, "panicked": 180,
+                "desperate": 170, "furious": 160, "adrenaline": 155,
+                "yearning": 150, "infatuated": 152,
+            }
+            if mood in HIGH_INTENSITY_MOODS and intensity >= 7:
+                bpm = HIGH_INTENSITY_MOODS[mood]
+                await ws.send_heartbeat_spike(user_id, bpm, mood)
+                logger.info("Heartbeat spike: %s bpm=%d intensity=%d", mood, bpm, intensity)
 
             # Sync affection level to proactive engine
             proactive.set_affection_level(aff_change.new_level)
@@ -299,6 +335,9 @@ async def background_image_gen(
             img_b64 = b64.b64encode(img_bytes).decode()
             await ws.send(user_id, {"type": "image", "data": img_b64, "memory_id": memory_id})
             logger.info("Image sent to UI (%d bytes)", len(img_bytes))
+
+            # Record first image milestone
+            await proactive.record_first(user_id, "first_image")
         else:
             await ws.send_proactive(user_id, "...Visualization failed. Interference in the rendering pipeline. I'll try again later.")
     except Exception as e:

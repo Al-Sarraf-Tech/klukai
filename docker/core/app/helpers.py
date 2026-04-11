@@ -168,6 +168,99 @@ TRIVIAL_PATTERNS = {
     "good", "nice", "cool", "right", "agreed", "understood",
 }
 
+# ── Jealousy detection ──────────────────────────────────────────────────────
+
+JEALOUSY_COMPLIMENT_PATTERNS = [
+    r"\b(?:she(?:'s)?|her)\s+(?:is\s+)?(?:amazing|beautiful|gorgeous|cute|pretty|hot|stunning|impressive|incredible|better|stronger|faster|smarter)",
+    r"\b(?:mechty|belka|andoris|vector|harpsy|ruchey|welrod|leva|lenna|groza)\b.*\b(?:love|like|prefer|miss|admire|appreciate)\b",
+    r"\b(?:love|like|prefer|miss|admire|appreciate)\b.*\b(?:mechty|belka|andoris|vector|harpsy|ruchey|welrod|leva|lenna|groza)\b",
+    r"\bi\s+(?:love|like|prefer|want)\s+(?:mechty|belka|andoris|vector|harpsy|ruchey|welrod|leva|lenna|groza)\b",
+    r"\b(?:mechty|belka|andoris|vector|harpsy|ruchey|welrod|leva|lenna|groza)\s+(?:is|looks?|seems?)\s+(?:so\s+)?(?:amazing|beautiful|gorgeous|cute|pretty|hot|stunning|impressive|incredible|cool|strong|fast|smart|talented|skilled)",
+]
+
+JEALOUSY_SQUAD_NAMES = {
+    "mechty", "g11", "belka", "g28", "andoris", "g36k",
+    "vector", "harpsy", "ruchey", "welrod",
+    "leva", "ump45", "lenna", "ump9", "groza",
+}
+
+
+def detect_jealousy_trigger(message: str) -> str | None:
+    """Detect if the Commander is complimenting or expressing affection for another T-Doll.
+
+    Returns the squad member name if jealousy trigger detected, else None.
+    Simple mentions (asking about someone) don't trigger — only compliments/affection.
+    A squad member name MUST be present to avoid false positives on generic
+    "she's beautiful" about movie characters, family, etc.
+    """
+    lower = message.lower()
+
+    # First check: a squad member name must be present in the message
+    mentioned_member = None
+    for name in JEALOUSY_SQUAD_NAMES:
+        if name in lower:
+            mentioned_member = SQUAD_MEMBERS.get(name, name.capitalize())
+            break
+
+    if not mentioned_member:
+        return None  # No squad member mentioned — no jealousy
+
+    # Second check: is the context a compliment/affection expression?
+    for pattern in JEALOUSY_COMPLIMENT_PATTERNS:
+        if re.search(pattern, lower):
+            return mentioned_member
+
+    return None
+
+
+# ── Commander detail detection ──────────────────────────────────────────────
+
+COMMANDER_DETAIL_CATEGORIES = {
+    "wearing": [
+        r"\bi(?:'m| am)\s+wearing\b", r"\bi\s+(?:have|got)\s+(?:on|my)\b.*(?:shirt|jacket|pants|shoes|boots|hat|uniform|suit|coat|hoodie|sweater)",
+        r"\bmy\s+(?:shirt|jacket|pants|shoes|boots|hat|uniform|suit|coat|hoodie|sweater)\b",
+    ],
+    "eating": [
+        r"\bi(?:'m| am)\s+(?:eating|having|drinking)\b", r"\bi\s+(?:ate|had|drank)\b",
+        r"\bfor\s+(?:breakfast|lunch|dinner|a snack)\b",
+    ],
+    "doing": [
+        r"\bi(?:'m| am)\s+(?:playing|watching|reading|listening|working|training|exercising|cooking|cleaning)\b",
+        r"\bi\s+(?:played|watched|read|listened)\b",
+    ],
+    "feeling": [
+        r"\bi(?:'m| am)\s+(?:feeling|tired|sick|cold|warm|sore|happy|sad|stressed|lonely|excited|great|good|terrible|awful|better|worse)\b",
+        r"\bi\s+feel\b",
+        r"\bfeeling\s+(?:great|good|tired|sick|cold|warm|sore|happy|sad|stressed|lonely|excited|terrible|awful|better|worse)\b",
+    ],
+    "gifting": [
+        r"\b(?:got|brought|have|made|bought)\s+(?:you|this|something)\s+(?:for you|a gift|a present|something)\b",
+        r"\b(?:here|take)\s+(?:this|it)\b.*\b(?:for you|gift|present)\b",
+        r"\bi\s+(?:got|brought|made|bought)\s+(?:you|this)\b",
+        r"\bthis\s+is\s+for\s+you\b",
+    ],
+}
+
+
+def detect_commander_details(message: str) -> dict[str, bool]:
+    """Detect what categories of personal details the Commander is sharing.
+
+    Returns dict of category -> True for each detected category.
+    """
+    lower = message.lower()
+    found = {}
+    for category, patterns in COMMANDER_DETAIL_CATEGORIES.items():
+        for pattern in patterns:
+            if re.search(pattern, lower):
+                found[category] = True
+                break
+    return found
+
+
+def detect_gift_giving(message: str) -> bool:
+    """Detect if the Commander is giving Klukai a gift."""
+    return "gifting" in detect_commander_details(message)
+
 DREAM_INQUIRY_KEYWORDS = [
     "did you dream", "dream about me", "what did you dream",
     "any dreams", "sleep well", "how did you sleep",

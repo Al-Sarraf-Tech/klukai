@@ -85,7 +85,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # ── Mission timer detection ───────────────────────────────────────────
     if _wants_mission_cancel(content):
         if proactive.mission_active:
-            proactive.stop_mission()
+            proactive.stop_mission(user_id=user_id)
             # Clear session mission state
             session.mission_description = None
             session.mission_interval = None
@@ -110,6 +110,8 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         session.mission_interval = interval
         session.mission_started_at = datetime.now().isoformat()
         await memory.save_session(session_id(user_id), session)
+        # Record first mission milestone
+        await proactive.record_first(user_id, "first_mission")
         logger.info("Mission timer started: every %d min, desc='%s'", interval, mission_desc[:60])
 
     # Add user turn to session
@@ -144,8 +146,21 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         mission_desc = proactive._mission_timer.mission_description
 
     # Detect if Commander is addressing a squad member
-    from .helpers import detect_squad_address
+    from .helpers import detect_squad_address, detect_jealousy_trigger
     addressed_member = detect_squad_address(content)
+
+    # Jealousy detection — Commander complimenting another T-Doll
+    jealousy_target = detect_jealousy_trigger(content)
+
+    # Physical state awareness
+    from .context import physical
+    phys_state, phys_detail = await physical.get_state(user_id)
+
+    # Anniversary awareness
+    anniversaries = await proactive.check_anniversaries(user_id)
+
+    # Comfort objects for prompt context
+    comfort_objects = await proactive.get_comfort_objects(user_id)
 
     # Dream inquiry — if Commander asks about dreams, add context
     from .helpers import wants_dream_inquiry
@@ -171,6 +186,11 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         last_msg_length=len(content),
         mission_description=mission_desc,
         addressed_member=addressed_member,
+        jealousy_target=jealousy_target,
+        physical_state=phys_state,
+        physical_detail=phys_detail,
+        anniversaries=anniversaries,
+        comfort_objects=comfort_objects,
     )
 
     # Memory nudge — proactive past reference based on affection level

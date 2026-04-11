@@ -11,6 +11,7 @@ from .affection import AffectionManager
 from .llm_router import LLMRouter
 from .mcp_client import MCPClient
 from .memory import MemoryManager
+from .physical_state import PhysicalStateTracker
 from .proactive import ProactiveEngine
 from .ws_manager import WSManager
 
@@ -20,6 +21,7 @@ mcp = MCPClient()
 ws = WSManager()
 proactive = ProactiveEngine()
 affection = AffectionManager()
+physical = PhysicalStateTracker()
 
 SESSION_ID = "default"  # Legacy constant — prefer session_id(user_id)
 
