@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from . import memory_archive
-from .context import ws, memory, router, affection, proactive, SESSION_ID
+from .context import ws, memory, router, affection
 from .db import get_pool
 from .helpers import (
     fix_narration as _fix_narration,
@@ -107,8 +107,11 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── TTS proxy ──────────────────────────────────────────────────────────
 
     @app.post("/api/tts")
-    async def api_tts(req: dict):
+    async def api_tts(req: dict, request: Request):
         """Proxy TTS request to companion-voice and return base64 audio."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
         text = req.get("text", "")
         if not text:
             return JSONResponse({"error": "No text"}, status_code=400)
@@ -240,8 +243,11 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── STT proxy ──────────────────────────────────────────────────────────
 
     @app.post("/api/stt")
-    async def api_stt(req: dict):
+    async def api_stt(req: dict, request: Request):
         """Proxy STT request to companion-voice."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
         audio = req.get("audio", "")
         if not audio:
             return JSONResponse({"error": "No audio"}, status_code=400)
