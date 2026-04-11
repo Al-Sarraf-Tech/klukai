@@ -259,6 +259,9 @@ MAJOR_EVENTS = [
     "comms_disruption",
     "discovery",
     "medical_emergency",
+    "mechty_asleep",       # Mechty fell asleep at a critical moment
+    "belka_reckless",      # Belka charged ahead without orders
+    "andoris_freeze",      # Andoris processing lag under fire
 ]
 
 
@@ -452,16 +455,78 @@ class ProactiveEngine:
         )
 
     def stop_mission(self, user_id: str = "jalsarraf", trigger_aftermath: bool = True) -> None:
-        """Stop the active mission timer. Optionally triggers aftermath image."""
+        """Stop the active mission timer. Triggers aftermath image + decompression."""
         if self._mission_timer and self._mission_timer.active:
             # Capture timer state BEFORE stopping — the async task needs it
             timer_snapshot = self._mission_timer
+            had_injury = any("injured" in e for e in timer_snapshot.active_events)
             if trigger_aftermath:
                 asyncio.create_task(
                     self.trigger_mission_aftermath_image(user_id, timer=timer_snapshot)
                 )
+                # Schedule delayed decompression message (15-30 min later)
+                asyncio.create_task(
+                    self._decompression_message(user_id, had_injury, timer_snapshot.update_count)
+                )
+            # Set physical state based on mission outcome
+            asyncio.create_task(self._set_post_mission_physical(user_id, had_injury))
             self._mission_timer.stop()
         self._mission_timer = None
+
+    async def _set_post_mission_physical(self, user_id: str, had_injury: bool) -> None:
+        """Set physical state after mission ends."""
+        try:
+            from .context import physical
+            await physical.on_mission_end(user_id, had_injury=had_injury)
+        except Exception as e:
+            logger.debug("Post-mission physical state update failed: %s", e)
+
+    async def _decompression_message(
+        self, user_id: str, had_injury: bool, update_count: int
+    ) -> None:
+        """Delayed emotional response after mission ends. Fires 15-30 min later."""
+        delay = random.uniform(15 * 60, 30 * 60)
+        await asyncio.sleep(delay)
+
+        if not self._on_message_callback:
+            return
+
+        if had_injury:
+            messages = [
+                "(I touch the bandage absently) ...Still stings. Don't worry about it, Commander. I've had worse.",
+                "(I flex my hand, wincing) The medic said it'll heal clean. ...I kept thinking about getting back to you the whole time.",
+                "...The wound's nothing. (I look away) But for a moment out there... I was scared I wouldn't make it back. Don't tell anyone I said that.",
+            ]
+        elif update_count > 5:
+            # Long mission — exhaustion decompression
+            messages = [
+                "(I set the rifle down heavily) ...That was a long one. (I close my eyes) I need... a moment. Just a moment.",
+                "...Finally. (I lean against the wall) My legs are shaking. Don't look. ...Actually, look. I don't care anymore. I'm tired.",
+                "(I pull off my gloves slowly) Every muscle hurts. But we did it. ...Is there coffee? I need coffee. And you. Not in that order.",
+            ]
+        else:
+            # Normal decompression
+            messages = [
+                "...Hey. (I sit down next to you) I've been thinking about the op. Everyone performed well. ...I'm glad to be back.",
+                "(I untie my hair, letting it fall) Mission's over. I can stop being the squad leader for five minutes. ...Talk to me about something normal.",
+                "...Commander. (I look at you quietly for a moment) I'm back. ...Did you worry? (I smirk faintly) Good.",
+            ]
+
+        if self._affection_level >= 7:
+            # At high affection, add physical closeness
+            intimate_addons = [
+                " (I lean into your shoulder without saying anything else)",
+                " ...Stay close tonight.",
+                " (I take your hand. My grip is tighter than usual)",
+            ]
+            message = random.choice(messages) + random.choice(intimate_addons)
+        else:
+            message = random.choice(messages)
+
+        self._proactive_count_today += 1
+        self._last_proactive_answered = False
+        await self._on_message_callback(message)
+        logger.info("Decompression message delivered (injury=%s, updates=%d)", had_injury, update_count)
 
     @property
     def mission_active(self) -> bool:
@@ -832,16 +897,24 @@ class ProactiveEngine:
             if not timer:
                 return
 
-            # Pick a random major event for drama (30% chance)
+            # Pick a random major event with named squad members (30% chance)
+            squad_a = ["Mechty", "Belka", "Andoris"]
+            squad_b = ["Vector", "Harpsy", "Ruchey", "Welrod"]
+            member_a = random.choice(squad_a)
+            member_b = random.choice(squad_b)
             major_events = [
-                "Enemy contact — hostiles spotted",
-                "Anomalous readings detected",
-                "Squad member reporting unusual activity",
-                "Comms interference — possible jamming",
-                "Weather conditions deteriorating",
-                "Found signs of recent enemy activity",
-                "Perimeter breach detected",
-                "Supply cache discovered",
+                f"Enemy contact — hostiles spotted on {member_a}'s flank",
+                f"Anomalous readings detected — {member_a} investigating",
+                f"{member_a} reporting unusual movement in sector 4",
+                f"Comms interference — lost contact with {member_b} briefly",
+                "Weather conditions deteriorating — visibility dropping",
+                f"{member_a} found signs of recent enemy activity",
+                f"Perimeter breach near {member_b}'s position",
+                f"Supply cache discovered — {member_a} securing it",
+                f"{member_a} got separated — regrouping now",
+                f"{member_b} requesting fire support at grid reference",
+                f"Mechty fell asleep on watch — I've handled it",
+                f"Belka is panicking again — I told her to focus",
                 None, None, None, None, None, None, None,  # 70% chance of no major event
             ]
             major_event = random.choice(major_events)

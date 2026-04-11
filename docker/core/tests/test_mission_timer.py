@@ -98,6 +98,7 @@ class TestMajorEventProbability:
         expected_events = {
             "ambush", "squad_injured", "klukai_injured", "equipment_failure",
             "weather", "comms_disruption", "discovery", "medical_emergency",
+            "mechty_asleep", "belka_reckless", "andoris_freeze",
         }
         assert set(MAJOR_EVENTS) == expected_events
 

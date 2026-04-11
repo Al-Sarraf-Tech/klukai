@@ -89,8 +89,12 @@ Update #{update_number}
 {event_line}
 {injury_line}
 
+Your squad is with you: Mechty (sleepy but deadly), Belka (energetic, calls you Big Sis), \
+Andoris (gentle intel specialist). Reference specific squad members by name — what they're \
+doing, how they're performing, small moments that show personality.
+
 Rules: 2-3 sentences max. No deaths. Injuries are temporary. Reference the mission objective. \
-Affection {affection_level}/9 — higher means more personal concern."""
+Affection {affection_level}/9 — higher means more personal concern for getting back to Commander."""
 
 ROMANCE_PROMPT = """\
 You are Klukai initiating a quiet evening moment with the Commander (HUMAN male). \

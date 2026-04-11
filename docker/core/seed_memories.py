@@ -129,11 +129,18 @@ def _clean_annotation(text: str) -> str | None:
 
 # ── Seeding State ────────────────────────────────────────────────────────────
 
-async def _get_last_seeded_at(conn) -> datetime | None:
-    """Get the timestamp of the last seeded exchange."""
+async def _get_last_seeded_at(conn, user_id: str = "jalsarraf") -> datetime | None:
+    """Get the timestamp of the last seeded exchange for a user."""
+    key = f"last_seeded_at:{user_id}"
+    # Try user-scoped key first, fall back to legacy key
     row = await (await conn.execute(
-        "SELECT value FROM companion_relationship WHERE key = 'last_seeded_at'"
+        "SELECT value FROM companion_relationship WHERE key = %s", (key,)
     )).fetchone()
+    if not row:
+        # Legacy fallback for jalsarraf
+        row = await (await conn.execute(
+            "SELECT value FROM companion_relationship WHERE key = 'last_seeded_at'"
+        )).fetchone()
     if row and row[0]:
         try:
             val = json.loads(row[0]) if isinstance(row[0], str) else row[0]
@@ -143,13 +150,14 @@ async def _get_last_seeded_at(conn) -> datetime | None:
     return None
 
 
-async def _set_last_seeded_at(conn, ts: datetime) -> None:
-    """Record the timestamp of the most recent seeded exchange."""
+async def _set_last_seeded_at(conn, ts: datetime, user_id: str = "jalsarraf") -> None:
+    """Record the timestamp of the most recent seeded exchange for a user."""
+    key = f"last_seeded_at:{user_id}"
     await conn.execute(
         "INSERT INTO companion_relationship (key, value, updated_at) "
-        "VALUES ('last_seeded_at', %s, NOW()) "
+        "VALUES (%s, %s, NOW()) "
         "ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = NOW()",
-        (json.dumps(ts.isoformat()), json.dumps(ts.isoformat())),
+        (key, json.dumps(ts.isoformat()), json.dumps(ts.isoformat())),
     )
     await conn.commit()
 
@@ -230,21 +238,29 @@ async def _annotate(client: httpx.AsyncClient, exchange: dict,
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 async def main():
-    logger.info("=== Memory Seeder Starting ===")
+    # Parse --user argument (default: jalsarraf)
+    target_user = "jalsarraf"
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg == "--user" and i < len(sys.argv):
+            target_user = sys.argv[i + 1] if (i + 1) < len(sys.argv) else "jalsarraf"
+        elif arg.startswith("--user="):
+            target_user = arg.split("=", 1)[1]
+
+    logger.info("=== Memory Seeder Starting (user: %s) ===", target_user)
     logger.info("Selector: %s | Annotator: %s", SELECTOR_MODEL, ANNOTATOR_MODEL)
 
     conn = await psycopg.AsyncConnection.connect(DATABASE_URL)
 
     # Get last seeded timestamp for incremental processing
-    last_seeded = await _get_last_seeded_at(conn)
+    last_seeded = await _get_last_seeded_at(conn, target_user)
     if last_seeded:
         logger.info("Last seeded at: %s — processing only newer exchanges", last_seeded)
-        where_clause = "WHERE created_at > %s"
-        params = (last_seeded,)
+        where_clause = "WHERE user_id = %s AND created_at > %s"
+        params = (target_user, last_seeded)
     else:
-        logger.info("First run — processing all exchanges")
-        where_clause = ""
-        params = ()
+        logger.info("First run for %s — processing all exchanges", target_user)
+        where_clause = "WHERE user_id = %s"
+        params = (target_user,)
 
     cur = await conn.execute(
         f"SELECT role, content, created_at FROM companion_messages "
@@ -319,7 +335,7 @@ async def main():
     if not selected:
         logger.info("No memories selected — updating last_seeded_at anyway")
         if newest_ts:
-            await _set_last_seeded_at(conn, newest_ts)
+            await _set_last_seeded_at(conn, newest_ts, target_user)
         await conn.close()
         return
 
@@ -356,7 +372,7 @@ async def main():
 
     if not selected:
         if newest_ts:
-            await _set_last_seeded_at(conn, newest_ts)
+            await _set_last_seeded_at(conn, newest_ts, target_user)
         await conn.close()
         return
 
@@ -406,7 +422,7 @@ async def main():
                     memory_id = await save_image(
                         img_bytes, full_prompt, "seed",
                         mood="tender", affection_level=8, curation=curation,
-                        user_id="jalsarraf",
+                        user_id=target_user,
                     )
                     if memory_id:
                         saved_count += 1
@@ -436,7 +452,7 @@ async def main():
 
     # Update last_seeded_at so next run only processes new messages
     if newest_ts:
-        await _set_last_seeded_at(conn, newest_ts)
+        await _set_last_seeded_at(conn, newest_ts, target_user)
         logger.info("Updated last_seeded_at to %s", newest_ts)
 
     await close_pool()
