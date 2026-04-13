@@ -58,7 +58,7 @@ def get_pool() -> AsyncConnectionPool:
 
 @asynccontextmanager
 async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
-    """Get a connection with automatic retry on stale/broken connections.
+    """Get a connection with retry on acquisition failure.
 
     Usage:
         async with get_conn() as conn:
@@ -67,21 +67,28 @@ async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
     """
     pool = get_pool()
     last_err = None
+    conn = None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            async with pool.connection() as conn:
-                yield conn
-                return
+            conn = await pool.getconn()
+            break
         except (psycopg.OperationalError, psycopg.InterfaceError) as e:
             last_err = e
             if attempt < MAX_RETRIES:
-                logger.warning("DB connection error (attempt %d/%d): %s — retrying",
-                               attempt + 1, MAX_RETRIES + 1, e)
+                logger.warning("DB connection error (attempt %d/%d): %s — retrying in %ss",
+                               attempt + 1, MAX_RETRIES + 1, e, RETRY_DELAY * (attempt + 1))
                 await asyncio.sleep(RETRY_DELAY * (attempt + 1))
             else:
                 logger.error("DB connection failed after %d attempts: %s", MAX_RETRIES + 1, e)
                 raise
-    raise last_err  # should not reach here
+
+    if conn is None:
+        raise last_err or RuntimeError("Failed to acquire DB connection")
+
+    try:
+        yield conn
+    finally:
+        await pool.putconn(conn)
 
 
 @asynccontextmanager

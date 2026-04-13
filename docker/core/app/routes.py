@@ -75,12 +75,45 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     async def health():
         from .db import check_health as db_health
         db = await db_health()
-        status = "ok" if db.get("status") == "ok" else "degraded"
+
+        # Check Redis
+        redis_ok = False
+        try:
+            from .memory import REDIS_URL
+            import redis.asyncio as aioredis
+            r = aioredis.from_url(REDIS_URL, decode_responses=True)
+            await r.ping()
+            await r.aclose()
+            redis_ok = True
+        except Exception:
+            pass
+
+        # Check Qdrant
+        qdrant_ok = False
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                from .memory import QDRANT_URL
+                resp = await client.get(f"{QDRANT_URL}/healthz")
+                qdrant_ok = resp.status_code == 200
+        except Exception:
+            pass
+
+        db_ok = db.get("status") == "ok"
+        if db_ok and redis_ok and qdrant_ok:
+            status = "ok"
+        elif db_ok:
+            status = "degraded"
+        else:
+            status = "unhealthy"
+
         return {
             "status": status,
             "service": "companion-core",
             "version": "0.1.0",
             "database": db,
+            "redis": "ok" if redis_ok else "down",
+            "qdrant": "ok" if qdrant_ok else "down",
         }
 
     # ── Push subscription ──────────────────────────────────────────────────

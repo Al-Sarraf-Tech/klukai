@@ -68,7 +68,9 @@ class MemoryManager:
                     retry_on_timeout=True, socket_keepalive=True,
                     health_check_interval=30,
                 )
-                return await op(*args, **kwargs)
+                # Re-bind operation to the new client
+                new_op = getattr(self._redis, op.__name__)
+                return await new_op(*args, **kwargs)
             except Exception as e2:
                 logger.error("Redis reconnect failed: %s", e2)
                 return None
@@ -368,18 +370,24 @@ class MemoryManager:
 
     async def store_fact(self, key: str, value: str, ttl: int | None = None,
                          user_id: str = "jalsarraf") -> None:
-        body: dict = {"key": f"companion:{user_id}:{key}", "value": value}
-        if ttl:
-            body["ttl_seconds"] = ttl
-        await self._http.post(f"{DATA_URL}/memory/store", json=body)
+        try:
+            body: dict = {"key": f"companion:{user_id}:{key}", "value": value}
+            if ttl:
+                body["ttl_seconds"] = ttl
+            await self._http.post(f"{DATA_URL}/memory/store", json=body)
+        except Exception as e:
+            logger.warning("store_fact failed for %s: %s", key, e)
 
     async def recall_fact(self, key: str, user_id: str = "jalsarraf") -> str | None:
-        r = await self._http.get(
-            f"{DATA_URL}/memory/recall", params={"key": f"companion:{user_id}:{key}"}
-        )
-        data = r.json()
-        if data.get("found"):
-            return data.get("value")
+        try:
+            r = await self._http.get(
+                f"{DATA_URL}/memory/recall", params={"key": f"companion:{user_id}:{key}"}
+            )
+            data = r.json()
+            if data.get("found"):
+                return data.get("value")
+        except Exception as e:
+            logger.warning("recall_fact failed for %s: %s", key, e)
         return None
 
     async def recall_facts_by_pattern(self, pattern: str,

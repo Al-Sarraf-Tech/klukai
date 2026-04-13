@@ -33,6 +33,10 @@ services:
       - ./config:/config:ro
       - ./web-build:/app/static:ro
       - companion-images:/images
+    deploy:
+      resources:
+        limits:
+          memory: 1g
     networks:
       - default
       - aichat

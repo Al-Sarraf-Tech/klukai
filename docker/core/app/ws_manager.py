@@ -107,17 +107,43 @@ class WSManager:
         })
 
     async def receive(self, user_id: str = "default") -> dict | None:
-        """Receive from ANY connected device for this user."""
+        """Receive from ANY connected device for this user using asyncio.wait."""
+        import asyncio
         conns = self._connections.get(user_id)
         if not conns:
             return None
-        # Use the first available connection — messages come from whichever device sends
+
+        # Create receive tasks for all connected devices — first one to respond wins
+        tasks = {}
         for ws in list(conns):
-            try:
-                text = await ws.receive_text()
-                return json.loads(text)
-            except Exception:
-                conns.discard(ws)
+            task = asyncio.create_task(ws.receive_text())
+            tasks[task] = ws
+
+        if not tasks:
+            return None
+
+        try:
+            done, pending = await asyncio.wait(tasks.keys(), return_when=asyncio.FIRST_COMPLETED)
+
+            # Cancel pending tasks
+            for task in pending:
+                task.cancel()
+
+            # Process the first completed result
+            for task in done:
+                try:
+                    text = task.result()
+                    return json.loads(text)
+                except json.JSONDecodeError:
+                    return None
+                except Exception:
+                    # This connection died — remove it
+                    ws = tasks[task]
+                    conns.discard(ws)
+
+        except Exception:
+            pass
+
         if not conns:
             self._connections.pop(user_id, None)
         return None

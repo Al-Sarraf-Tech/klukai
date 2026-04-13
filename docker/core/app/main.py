@@ -142,7 +142,13 @@ async def lifespan(app: FastAPI):
     proactive.set_callback(proactive_callback)
     proactive.set_recap_callback(generate_daily_recap)
     # Session getter tries the primary user first, then any connected user
-    async def _get_any_session():
+    async def _get_any_session(user_id: str = None):
+        # Try specific user first if provided
+        if user_id:
+            s = await memory.get_session(session_id(user_id))
+            if s:
+                return s
+        # Try any connected user
         for uid in list(ws._connections.keys()):
             s = await memory.get_session(session_id(uid))
             if s:
