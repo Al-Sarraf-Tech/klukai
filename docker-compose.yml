@@ -8,20 +8,20 @@ services:
     ports:
       - "8300:8300"
     environment:
-      # aichat services on amarillo via gateway proxy ports
-      DATABASE_URL: "postgresql://aichat:${POSTGRES_PASSWORD:?}@100.111.198.19:15432/aichat"
-      REDIS_URL: "redis://100.111.198.19:16379/1"
-      QDRANT_URL: "http://100.111.198.19:16333"
-      # HTTP services via gateway proxy ports
-      MCP_URL: "http://100.111.198.19:18096"
-      DATA_URL: "http://100.111.198.19:18091"
-      INFERENCE_URL: "http://100.111.198.19:18105"
-      # Voice is local on dominus
-      VOICE_URL: "http://companion-voice:8301"
-      # LM Studio is local on dominus
-      LM_STUDIO_URL: "http://host.docker.internal:1234"
+      # aichat services on amarillo (LAN via Docker network)
+      DATABASE_URL: "postgresql://aichat:${POSTGRES_PASSWORD:?}@aichat-db:5432/aichat"
+      REDIS_URL: "redis://aichat-redis:6379/1"
+      QDRANT_URL: "http://aichat-vector:6333"
+      MCP_URL: "http://aichat-mcp:8096"
+      DATA_URL: "http://aichat-data:8091"
+      INFERENCE_URL: "http://aichat-inference:8105"
+      # Voice on dominus (LAN)
+      VOICE_URL: "http://192.168.50.2:8301"
+      # LM Studio on dominus (LAN)
+      LM_STUDIO_URL: "http://192.168.50.2:1234"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      COMFYUI_URL: "http://host.docker.internal:8388"
+      # ComfyUI on dominus (LAN)
+      COMFYUI_URL: "http://192.168.50.2:8188"
       PERSONALITY_PATH: "/config/personality.yaml"
       VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY:-}"
       VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY:-}"
@@ -29,15 +29,13 @@ services:
       SEED_PASSWORD_RICKY: "${SEED_PASSWORD_RICKY:-}"
       SEED_PASSWORD_MIGUEL: "${SEED_PASSWORD_MIGUEL:-}"
       SEED_PASSWORD_BLACKMAN: "${SEED_PASSWORD_BLACKMAN:-}"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./config:/config:ro
       - ./web-build:/app/static:ro
       - companion-images:/images
-    depends_on:
-      companion-voice:
-        condition: service_healthy
+    networks:
+      - default
+      - aichat
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8300/health"]
@@ -74,3 +72,8 @@ services:
 volumes:
   voice-models:
   companion-images:
+
+networks:
+  aichat:
+    external: true
+    name: aichat_default
