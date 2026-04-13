@@ -50,3 +50,34 @@ def clear_cache() -> None:
     """Clear the cached schemas (e.g., on MCP reconnect)."""
     global _CACHED_SCHEMAS
     _CACHED_SCHEMAS = None
+
+
+# Built-in tools that don't need MCP
+BUILTIN_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "recall_memory",
+            "description": "Search Klukai's memory for facts, past conversations, and details about the Commander. Use when asked 'do you remember', 'what did I tell you', 'my favorite', etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to search for in memory"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "Get the current date and time. Use when the conversation references time of day, scheduling, or current date.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+
+def get_builtin_tools() -> list[dict]:
+    return list(BUILTIN_TOOLS)

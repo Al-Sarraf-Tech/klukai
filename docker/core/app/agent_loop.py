@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from .llm_router import LLMRouter, LLMConfig, LM_STUDIO_URL, LOCAL_AGENT, LOCAL_CASUAL
 from .mcp_client import MCPClient
-from .tool_schemas import get_tool_schemas
+from .tool_schemas import get_tool_schemas, get_builtin_tools
 from .ws_manager import WSManager
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,37 @@ class AgentLoop:
         self._mcp = mcp
         self._ws = ws
 
+    async def _builtin_recall_memory(self, args: dict, user_id: str) -> dict:
+        """Search Klukai's memory for the Commander."""
+        query = args.get("query", "")
+        try:
+            from .memory import CompanionMemory
+            memory = CompanionMemory.instance() if hasattr(CompanionMemory, 'instance') else None
+            if not memory:
+                return {"content": [{"type": "text", "text": "Memory system unavailable."}]}
+
+            # Search facts
+            facts = await memory.recall_facts_by_pattern(f"*{query.replace(' ', '*')}*", user_id=user_id)
+            fact_text = "\n".join(f"- {f.get('value', '')}" for f in facts[:5]) if facts else "No matching facts found."
+
+            # Search episodic
+            episodes = await memory.search_episodic(query, user_id=user_id, limit=3)
+            ep_text = "\n".join(f"- {e.get('content', '')[:150]}" for e in episodes) if episodes else ""
+
+            result = f"Facts:\n{fact_text}"
+            if ep_text:
+                result += f"\n\nRelated conversations:\n{ep_text}"
+
+            return {"content": [{"type": "text", "text": result}]}
+        except Exception as e:
+            return {"content": [{"type": "text", "text": f"Memory search error: {e}"}]}
+
+    async def _builtin_get_time(self) -> dict:
+        """Return current date/time."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        return {"content": [{"type": "text", "text": now.strftime("%A, %B %d, %Y at %I:%M %p UTC")}]}
+
     async def run(
         self,
         system_prompt: str,
@@ -73,8 +104,7 @@ class AgentLoop:
 
         tools = await get_tool_schemas(self._mcp)
         if not tools:
-            logger.warning("No tools available for agent loop")
-            # Try reinitializing MCP session
+            logger.warning("No MCP tools available — trying recovery")
             try:
                 await self._mcp._initialize_session()
                 tools = await get_tool_schemas(self._mcp)
@@ -82,6 +112,9 @@ class AgentLoop:
                     logger.info("MCP session recovered, %d tools available", len(tools))
             except Exception as e:
                 logger.warning("MCP session recovery failed: %s", e)
+
+        # Always include builtin tools (memory recall, time)
+        tools = (tools or []) + get_builtin_tools()
 
         # Try agent model first, fall back to chat model if not available
         config = LLMConfig(
@@ -169,22 +202,27 @@ class AgentLoop:
                 await self._ws.send_tool_use(user_id, tool_name, "calling")
                 await self._ws.send_thinking(user_id, status_msg)
 
-                try:
-                    tool_result = await asyncio.wait_for(
-                        self._mcp.invoke_tool(tool_name, tool_args),
-                        timeout=TOOL_TIMEOUT,
-                    )
-                except asyncio.TimeoutError:
-                    tool_result = {"error": f"Tool {tool_name} timed out after {TOOL_TIMEOUT}s"}
-                    logger.warning("Tool %s timed out", tool_name)
-                    # Reinitialize MCP session in case it's stale
+                # Handle builtin tools locally, others via MCP
+                if tool_name == "recall_memory":
+                    tool_result = await self._builtin_recall_memory(tool_args, user_id)
+                elif tool_name == "get_current_time":
+                    tool_result = await self._builtin_get_time()
+                else:
                     try:
-                        await self._mcp._initialize_session()
-                    except Exception:
-                        pass
-                except Exception as e:
-                    tool_result = {"error": str(e)}
-                    logger.error("Tool %s failed: %s", tool_name, e)
+                        tool_result = await asyncio.wait_for(
+                            self._mcp.invoke_tool(tool_name, tool_args),
+                            timeout=TOOL_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        tool_result = {"error": f"Tool {tool_name} timed out after {TOOL_TIMEOUT}s"}
+                        logger.warning("Tool %s timed out", tool_name)
+                        try:
+                            await self._mcp._initialize_session()
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        tool_result = {"error": str(e)}
+                        logger.error("Tool %s failed: %s", tool_name, e)
 
                 result_text = _extract_tool_text(tool_result)
 
