@@ -331,6 +331,10 @@ NEGATIVE_TAGS = (
     "fewer digits, cropped, worst quality, low quality, normal quality, "
     "jpeg artifacts, signature, watermark, username, blurry, artist name, "
     "deformed, ugly, duplicate, morbid, mutilated, extra limbs, "
+    "extra arms, extra legs, fused limbs, limbs through body, clipping, "
+    "multiple people, multiple boys, multiple girls, clone, twin, "
+    "two heads, two faces, extra faces, disfigured, "
+    "interlocking limbs, overlapping bodies, merged bodies, "
     "thick thighs, wide hips, chubby, plump, fat, overweight, huge breasts, "
     "androgynous, feminine boy, crossdressing, male in female clothes, "
     "flat chest, child, loli, shota"
@@ -372,7 +376,7 @@ WORKFLOW_TEMPLATE = {
         "inputs": {
             "seed": 0,
             "steps": 25,
-            "cfg": 6.0,
+            "cfg": 7.0,
             "sampler_name": "euler_ancestral",
             "scheduler": "normal",
             "denoise": 1.0,

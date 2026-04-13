@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:web/web.dart' as web;
@@ -24,6 +25,7 @@ class MemoryArchiveScreen extends StatefulWidget {
 
 class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
   late final MemoryService _service;
+  String _authToken = '';
 
   List<MemoryCategory> _categories = [];
   List<MonthGroup> _timeline = [];
@@ -36,6 +38,9 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
   @override
   void initState() {
     super.initState();
+    try {
+      _authToken = web.window.localStorage.getItem('klukai_token') ?? '';
+    } catch (_) {}
     _service = MemoryService(serverUrl: widget.serverUrl);
     _loadCategories();
     _loadTimeline();
@@ -120,6 +125,7 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
       builder: (_) => _MemoryDetailDialog(
         memory: memory,
         serverUrl: widget.serverUrl,
+        authToken: _authToken,
       ),
     );
   }
@@ -598,6 +604,7 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
                   itemBuilder: (_, i) => MemoryTimelineEntry(
                     memory: _memories[i],
                     serverUrl: widget.serverUrl,
+                    authToken: _authToken,
                     isCompact: isCompact,
                     onTap: () => _openMemoryDetail(_memories[i]),
                   ),
@@ -648,10 +655,12 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
 class _MemoryDetailDialog extends StatefulWidget {
   final Memory memory;
   final String serverUrl;
+  final String authToken;
 
   const _MemoryDetailDialog({
     required this.memory,
     required this.serverUrl,
+    required this.authToken,
   });
 
   @override
@@ -660,19 +669,39 @@ class _MemoryDetailDialog extends StatefulWidget {
 
 class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
   bool _downloading = false;
+  Uint8List? _imageBytes;
+  bool _imageFailed = false;
 
   String get _imageUrl =>
       '${widget.serverUrl}/api/memories/${widget.memory.id}/image';
 
+  @override
+  void initState() {
+    super.initState();
+    _loadImage();
+  }
+
+  Future<void> _loadImage() async {
+    try {
+      final response = await http.get(
+        Uri.parse(_imageUrl),
+        headers: {'Authorization': 'Bearer ${widget.authToken}'},
+      );
+      if (response.statusCode == 200 && mounted) {
+        setState(() => _imageBytes = response.bodyBytes);
+      } else if (mounted) {
+        setState(() => _imageFailed = true);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _imageFailed = true);
+    }
+  }
+
   Future<void> _download() async {
     setState(() => _downloading = true);
     try {
-      String authToken = '';
-      try {
-        authToken = web.window.localStorage.getItem('klukai_token') ?? '';
-      } catch (_) {}
       final response = await http.get(Uri.parse(_imageUrl), headers: {
-        'Authorization': 'Bearer $authToken',
+        'Authorization': 'Bearer ${widget.authToken}',
       });
       if (response.statusCode == 200) {
         // Web download via anchor element not available in pure Flutter web
@@ -768,34 +797,30 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
                         constraints: BoxConstraints(
                           maxHeight: MediaQuery.of(context).size.height * 0.6,
                         ),
-                        child: Image.network(
-                          _imageUrl,
-                          fit: BoxFit.contain,
-                          errorBuilder: (ctx2, err, stk) => Container(
-                            height: 200,
-                            color: GFL2Colors.panel,
-                            child: Center(
-                              child: Icon(
-                                Icons.broken_image_outlined,
-                                color: GFL2Colors.textDim.withValues(alpha: 0.3),
-                                size: 48,
-                              ),
-                            ),
-                          ),
-                          loadingBuilder: (_, child, progress) {
-                            if (progress == null) return child;
-                            return Container(
-                              height: 200,
-                              color: GFL2Colors.panel,
-                              child: Center(
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 1.5,
-                                  color: GFL2Colors.primary.withValues(alpha: 0.5),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
+                        child: _imageBytes != null
+                            ? Image.memory(_imageBytes!, fit: BoxFit.contain)
+                            : _imageFailed
+                                ? Container(
+                                    height: 200,
+                                    color: GFL2Colors.panel,
+                                    child: Center(
+                                      child: Icon(
+                                        Icons.broken_image_outlined,
+                                        color: GFL2Colors.textDim.withValues(alpha: 0.3),
+                                        size: 48,
+                                      ),
+                                    ),
+                                  )
+                                : Container(
+                                    height: 200,
+                                    color: GFL2Colors.panel,
+                                    child: Center(
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 1.5,
+                                        color: GFL2Colors.primary.withValues(alpha: 0.5),
+                                      ),
+                                    ),
+                                  ),
                       ),
                     ),
                     // Annotation

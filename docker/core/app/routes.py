@@ -394,6 +394,32 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
     # ── Root redirect ──────────────────────────────────────────────────────
 
+    @app.get("/flutter_service_worker.js")
+    async def root_service_worker():
+        """Serve self-destructing SW at root scope to kill the old cached SW.
+
+        The Flutter app used to be served at / with a SW at / scope. Now it's
+        at /app/ with a SW at /app/ scope. Browsers that still have the old SW
+        cached will check /flutter_service_worker.js for updates. This serves
+        a version that immediately unregisters itself and clears all caches.
+        """
+        from fastapi.responses import Response
+        sw_code = (
+            "self.addEventListener('install', () => self.skipWaiting());\n"
+            "self.addEventListener('activate', (e) => {\n"
+            "  e.waitUntil(caches.keys()"
+            ".then(ns => Promise.all(ns.map(n => caches.delete(n))))"
+            ".then(() => self.registration.unregister())"
+            ".then(() => self.clients.matchAll({type:'window'}))"
+            ".then(cs => cs.forEach(c => c.navigate(c.url))));\n"
+            "});\n"
+        )
+        return Response(
+            content=sw_code,
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+
     @app.get("/")
     async def root():
         """Serve login page or redirect to app."""

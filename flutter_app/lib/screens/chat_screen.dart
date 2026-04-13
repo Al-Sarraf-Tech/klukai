@@ -18,6 +18,7 @@ import '../widgets/tool_status_indicator.dart';
 import '../widgets/canvas_message_bubble.dart';
 import '../widgets/date_divider.dart';
 import '../widgets/heartbeat_sensor.dart';
+import '../widgets/exit_icon.dart';
 import 'profile_screen.dart';
 import 'memory_archive_screen.dart';
 
@@ -35,6 +36,18 @@ external JSBoolean _jsToggleAmbientMute();
 
 @JS('ambientAudio.isMuted')
 external JSBoolean _jsIsAmbientMuted();
+
+/// Unregister all service workers so login.html loads from server, not cache.
+void _unregisterServiceWorker() {
+  try {
+    final sw = web.window.navigator.serviceWorker;
+    sw.getRegistrations().toDart.then((regs) {
+      for (final reg in regs.toDart) {
+        reg.unregister();
+      }
+    });
+  } catch (_) {}
+}
 
 class ChatScreen extends StatefulWidget {
   final String serverUrl;
@@ -64,6 +77,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _showScrollFAB = false;
   int? _heartbeatSpikeOverride;  // Temporary BPM override from heartbeat_spike
   Timer? _spikeDecayTimer;
+  Timer? _inputLockTimer;  // Safety timeout to auto-unlock input
 
   DateTime? _lastTapTime;
 
@@ -202,6 +216,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     };
   }
 
+  /// Lock input with a reason string and auto-unlock safety timeout.
+  void _lockInput(String reason, {Duration timeout = const Duration(seconds: 30)}) {
+    _inputLockTimer?.cancel();
+    setState(() {
+      _state = _state.copyWith(isInputLocked: true, inputLockReason: reason);
+    });
+    _inputLockTimer = Timer(timeout, () {
+      if (mounted) _unlockInput();
+    });
+  }
+
+  /// Unlock input and cancel any pending safety timer.
+  void _unlockInput() {
+    _inputLockTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _state = _state.copyWith(isInputLocked: false, inputLockReason: null);
+    });
+  }
+
+  /// Whether input should be disabled (locked OR disconnected).
+  bool get _inputDisabled => !_state.isConnected || _state.isInputLocked;
+
   @override
   void initState() {
     super.initState();
@@ -332,6 +369,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     switch (type) {
       case 'token':
         final text = msg['text'] as String? ?? '';
+        if (!_state.isInputLocked) {
+          _lockInput('RECEIVING TRANSMISSION', timeout: const Duration(seconds: 60));
+        }
         setState(() {
           _streamingBuffer += text;
           if (_streamingId == null) {
@@ -370,6 +410,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           _activeTools.clear();
           _state = _state.copyWith(isTyping: false, currentModel: model);
         });
+        _unlockInput();
         if (completedIdx != null && completedIdx! >= 0) {
           _prepareMessageLayout(completedIdx!);
         }
@@ -456,6 +497,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
       case 'proactive':
         final message = msg['message'] as String? ?? '';
+        _lockInput('INCOMING TRANSMISSION', timeout: const Duration(milliseconds: 1500));
         setState(() {
           _messages.add(ChatMessage(
             id: 'proactive-${DateTime.now().millisecondsSinceEpoch}',
@@ -465,6 +507,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         });
         _scrollToBottom();
         _playNotificationSound();
+        // Auto-unlock after brief pause
+        Timer(const Duration(milliseconds: 1500), () {
+          if (mounted && _state.inputLockReason == 'INCOMING TRANSMISSION') _unlockInput();
+        });
 
       case 'voice_audio':
         final audioData = msg['audio'] as String?;
@@ -475,6 +521,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       case 'image':
         final imgData = msg['data'] as String?;
         if (imgData != null) {
+          _lockInput('IMAGE INCOMING', timeout: const Duration(seconds: 2));
           setState(() {
             _messages.add(ChatMessage(
               id: 'image-${DateTime.now().millisecondsSinceEpoch}',
@@ -486,10 +533,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           // Retry scroll 3 times to catch image decode layout shifts
           _scrollToBottom(retries: 3);
           _playNotificationSound();
+          Timer(const Duration(seconds: 2), () {
+            if (mounted && _state.inputLockReason == 'IMAGE INCOMING') _unlockInput();
+          });
         }
 
       case 'heartbeat_spike':
         final spikeBpm = msg['bpm'] as int? ?? 160;
+        _lockInput('HEARTBEAT SURGE', timeout: const Duration(seconds: 5));
         setState(() {
           _heartbeatSpikeOverride = spikeBpm;
         });
@@ -500,12 +551,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             setState(() {
               _heartbeatSpikeOverride = null;
             });
+            if (_state.inputLockReason == 'HEARTBEAT SURGE') _unlockInput();
           }
         });
     }
   }
 
   void _sendMessage() {
+    if (_inputDisabled) return;
     final text = _textController.text.trim();
     if (text.isEmpty) return;
     setState(() {
@@ -651,6 +704,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     )));
   }
 
+  void _logout() {
+    _ws.dispose();
+    try {
+      web.window.localStorage.removeItem('klukai_token');
+    } catch (_) {}
+    // Unregister Flutter service worker so login.html loads from server
+    _unregisterServiceWorker();
+    web.window.location.href = '/';
+  }
+
   void _openArchive() {
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => MemoryArchiveScreen(
@@ -713,6 +776,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _spikeDecayTimer?.cancel();
+    _inputLockTimer?.cancel();
     _ws.dispose();
     _textController.dispose();
     _scrollController.dispose();
@@ -773,45 +837,45 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             children: [
               // Portrait — tap to open profile
               GestureDetector(
-              onTap: _openProfile,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 600),
-                curve: Curves.easeInOut,
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(
-                    color: _moodGlowColor.withValues(alpha: 0.6),
-                    width: 1.5,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: _moodGlowColor.withValues(alpha: 0.2),
-                      blurRadius: 12,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(3),
-                  child: Image.asset(
-                    'assets/klukai_portrait.png',
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, e, s) => Container(
-                      color: GFL2Colors.panel,
-                      child: const Center(
-                        child: Text('K',
-                            style: TextStyle(
-                              color: GFL2Colors.primary,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                            )),
+                onTap: _openProfile,
+                child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 600),
+                      curve: Curves.easeInOut,
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: _moodGlowColor.withValues(alpha: 0.6),
+                          width: 1.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: _moodGlowColor.withValues(alpha: 0.2),
+                            blurRadius: 12,
+                            spreadRadius: 2,
+                          ),
+                        ],
                       ),
-                    ),
-                  ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: Image.asset(
+                          'assets/klukai_portrait.png',
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, e, s) => Container(
+                            color: GFL2Colors.panel,
+                            child: const Center(
+                              child: Text('K',
+                                  style: TextStyle(
+                                    color: GFL2Colors.primary,
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w700,
+                                  )),
+                            ),
+                          ),
+                        ),
+                      ),
                 ),
-              ),
               ),
               const SizedBox(width: 12),
               // Name + designation + status
@@ -884,6 +948,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           ),
                         ),
                         const Spacer(),
+                        // Icon cluster: mute | archive | exit | mood
                         IconButton(
                           onPressed: () {
                             try {
@@ -898,20 +963,31 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                             color: _ambientMuted
                                 ? GFL2Colors.primary.withValues(alpha: 0.3)
                                 : _moodGlowColor.withValues(alpha: 0.8),
-                            size: 18,
+                            size: 16,
                           ),
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                           tooltip: _ambientMuted ? 'Enable ambient audio' : 'Mute ambient audio',
                         ),
                         IconButton(
                           onPressed: _openArchive,
                           icon: Icon(Icons.photo_library_outlined,
-                              color: GFL2Colors.primary.withValues(alpha: 0.5), size: 18),
+                              color: GFL2Colors.primary.withValues(alpha: 0.5), size: 16),
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                           tooltip: 'Memory Archive',
                         ),
+                        GestureDetector(
+                          onTap: _logout,
+                          child: Tooltip(
+                            message: 'Disconnect',
+                            child: ExitIcon(
+                              size: 18,
+                              color: GFL2Colors.danger.withValues(alpha: 0.8),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
                         MoodIndicator(mood: _state.mood),
                       ],
                     ),
@@ -1117,7 +1193,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         children: [
           VoiceButton(
             isRecording: _isRecording,
-            enabled: _state.isConnected,
+            enabled: !_inputDisabled,
             onTapDown: () async {
               setState(() => _isRecording = true);
               try { await _jsStartRecording().toDart; } catch (_) {}
@@ -1137,15 +1213,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             child: TextField(
               controller: _textController,
               focusNode: _focusNode,
-              style: const TextStyle(color: GFL2Colors.textPrimary, fontSize: 14),
+              readOnly: _state.isInputLocked,
+              style: TextStyle(
+                color: _state.isInputLocked
+                    ? GFL2Colors.textDim.withValues(alpha: 0.3)
+                    : GFL2Colors.textPrimary,
+                fontSize: 14,
+              ),
               maxLines: 4,
               minLines: 1,
               textInputAction: TextInputAction.send,
-              onSubmitted: (_) => _sendMessage(),
+              onSubmitted: _inputDisabled ? null : (_) => _sendMessage(),
                 decoration: InputDecoration(
-                  hintText: '// ENTER COMMAND...',
+                  hintText: _state.isInputLocked
+                      ? '// ${_state.inputLockReason ?? "STANDBY"}...'
+                      : '// ENTER COMMAND...',
                   hintStyle: TextStyle(
-                    color: GFL2Colors.textDim.withValues(alpha: 0.35),
+                    color: _state.isInputLocked
+                        ? _moodGlowColor.withValues(alpha: 0.4)
+                        : GFL2Colors.textDim.withValues(alpha: 0.35),
                     fontFamily: 'monospace',
                     fontSize: 13,
                   ),
@@ -1170,12 +1256,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             ),
           const SizedBox(width: 8),
           IconButton(
-            onPressed: _state.isConnected ? _sendMessage : null,
+            onPressed: _inputDisabled ? null : _sendMessage,
             icon: const Icon(Icons.send, color: Colors.white, size: 20),
             style: IconButton.styleFrom(
-              backgroundColor: _state.isConnected
-                  ? GFL2Colors.accent
-                  : GFL2Colors.border,
+              backgroundColor: _inputDisabled
+                  ? GFL2Colors.border
+                  : GFL2Colors.accent,
               fixedSize: const Size(44, 44),
               shape: const CircleBorder(),
             ),

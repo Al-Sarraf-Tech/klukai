@@ -1,10 +1,13 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import '../main.dart';
 import '../models/memory.dart';
 
-class MemoryTimelineEntry extends StatelessWidget {
+class MemoryTimelineEntry extends StatefulWidget {
   final Memory memory;
   final String serverUrl;
+  final String authToken;
   final bool isCompact;
   final VoidCallback? onTap;
 
@@ -12,17 +15,27 @@ class MemoryTimelineEntry extends StatelessWidget {
     super.key,
     required this.memory,
     required this.serverUrl,
+    required this.authToken,
     this.isCompact = false,
     this.onTap,
   });
 
-  String get _thumbnailUrl => '$serverUrl/api/memories/${memory.id}/thumbnail';
+  @override
+  State<MemoryTimelineEntry> createState() => _MemoryTimelineEntryState();
+}
+
+class _MemoryTimelineEntryState extends State<MemoryTimelineEntry> {
+  Uint8List? _thumbBytes;
+  bool _thumbFailed = false;
+
+  String get _thumbnailUrl =>
+      '${widget.serverUrl}/api/memories/${widget.memory.id}/thumbnail';
 
   Color get _dotColor =>
-      memory.keptBy == 'commander' ? GFL2Colors.primary : GFL2Colors.affinity;
+      widget.memory.keptBy == 'commander' ? GFL2Colors.primary : GFL2Colors.affinity;
 
   String get _timestamp {
-    final d = memory.createdAt;
+    final d = widget.memory.createdAt;
     final month = _monthAbbr(d.month);
     final hour = d.hour.toString().padLeft(2, '0');
     final min = d.minute.toString().padLeft(2, '0');
@@ -38,12 +51,34 @@ class MemoryTimelineEntry extends StatelessWidget {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _loadThumbnail();
+  }
+
+  Future<void> _loadThumbnail() async {
+    try {
+      final response = await http.get(
+        Uri.parse(_thumbnailUrl),
+        headers: {'Authorization': 'Bearer ${widget.authToken}'},
+      );
+      if (response.statusCode == 200 && mounted) {
+        setState(() => _thumbBytes = response.bodyBytes);
+      } else if (mounted) {
+        setState(() => _thumbFailed = true);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _thumbFailed = true);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final thumbW = isCompact ? 70.0 : 90.0;
-    final thumbH = isCompact ? 93.0 : 120.0;
+    final thumbW = widget.isCompact ? 70.0 : 90.0;
+    final thumbH = widget.isCompact ? 93.0 : 120.0;
 
     return GestureDetector(
-      onTap: onTap,
+      onTap: widget.onTap,
       child: IntrinsicHeight(
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -112,26 +147,26 @@ class MemoryTimelineEntry extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              if (memory.annotation != null &&
-                                  memory.annotation!.isNotEmpty)
+                              if (widget.memory.annotation != null &&
+                                  widget.memory.annotation!.isNotEmpty)
                                 Text(
-                                  '"${memory.annotation}"',
+                                  '"${widget.memory.annotation}"',
                                   style: const TextStyle(
                                     color: GFL2Colors.textPrimary,
                                     fontSize: 12,
                                     fontStyle: FontStyle.italic,
                                     height: 1.4,
                                   ),
-                                  maxLines: isCompact ? 2 : 4,
+                                  maxLines: widget.isCompact ? 2 : 4,
                                   overflow: TextOverflow.ellipsis,
                                 ),
-                              if (memory.sceneTags.isNotEmpty) ...[
+                              if (widget.memory.sceneTags.isNotEmpty) ...[
                                 const SizedBox(height: 6),
                                 Wrap(
                                   spacing: 4,
                                   runSpacing: 4,
-                                  children: memory.sceneTags
-                                      .take(isCompact ? 3 : 5)
+                                  children: widget.memory.sceneTags
+                                      .take(widget.isCompact ? 3 : 5)
                                       .map(_buildTag)
                                       .toList(),
                                 ),
@@ -154,6 +189,36 @@ class MemoryTimelineEntry extends StatelessWidget {
   }
 
   Widget _buildThumbnail(double w, double h) {
+    Widget content;
+    if (_thumbBytes != null) {
+      content = Image.memory(_thumbBytes!, fit: BoxFit.cover);
+    } else if (_thumbFailed) {
+      content = Container(
+        color: GFL2Colors.panel,
+        child: Center(
+          child: Icon(
+            Icons.image_not_supported_outlined,
+            color: GFL2Colors.textDim.withValues(alpha: 0.3),
+            size: 20,
+          ),
+        ),
+      );
+    } else {
+      content = Container(
+        color: GFL2Colors.panel,
+        child: Center(
+          child: SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 1.5,
+              color: GFL2Colors.primary.withValues(alpha: 0.4),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Container(
       width: w,
       height: h,
@@ -166,36 +231,7 @@ class MemoryTimelineEntry extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(2),
-        child: Image.network(
-          _thumbnailUrl,
-          fit: BoxFit.cover,
-          errorBuilder: (context2, error, stack) => Container(
-            color: GFL2Colors.panel,
-            child: Center(
-              child: Icon(
-                Icons.image_not_supported_outlined,
-                color: GFL2Colors.textDim.withValues(alpha: 0.3),
-                size: 20,
-              ),
-            ),
-          ),
-          loadingBuilder: (_, child, progress) {
-            if (progress == null) return child;
-            return Container(
-              color: GFL2Colors.panel,
-              child: Center(
-                child: SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 1.5,
-                    color: GFL2Colors.primary.withValues(alpha: 0.4),
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
+        child: content,
       ),
     );
   }
@@ -223,7 +259,7 @@ class MemoryTimelineEntry extends StatelessWidget {
   }
 
   Widget _buildSavedByBadge() {
-    final isKlukai = memory.keptBy != 'commander';
+    final isKlukai = widget.memory.keptBy != 'commander';
     final label = isKlukai ? 'SAVED BY KLUKAI' : 'SAVED BY COMMANDER';
     final color = isKlukai ? GFL2Colors.affinity : GFL2Colors.primary;
 

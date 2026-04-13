@@ -3,209 +3,189 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Klukai — H.I.D.E. 404</title>
+<title>KLUKAI // NEURAL LINK AUTH</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    background: #0a0e1a;
-    color: #e0e6f0;
-    height: 100vh;
+    background: #12151E;
+    color: #D4DDE6;
+    font-family: 'Courier New', monospace;
     display: flex;
     align-items: center;
     justify-content: center;
-    overflow: hidden;
+    min-height: 100vh;
   }
-  /* Animated background gradient */
-  body::before {
-    content: '';
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: radial-gradient(ellipse at 30% 50%, rgba(79, 195, 247, 0.08) 0%, transparent 50%),
-                radial-gradient(ellipse at 70% 50%, rgba(233, 140, 165, 0.05) 0%, transparent 50%);
-    animation: pulse 8s ease-in-out infinite;
-    z-index: 0;
+  .login-box {
+    background: #1A1F2E;
+    border: 1px solid #3A4256;
+    border-radius: 6px;
+    padding: 40px 32px;
+    width: 100%;
+    max-width: 380px;
+    box-shadow: 0 0 40px rgba(79,195,247,0.05);
   }
-  @keyframes pulse {
-    0%, 100% { opacity: 0.6; }
-    50% { opacity: 1; }
-  }
-  .login-container {
-    position: relative;
-    z-index: 1;
-    width: 380px;
-    padding: 40px;
-    background: rgba(22, 27, 45, 0.95);
-    border: 1px solid rgba(79, 195, 247, 0.2);
-    border-radius: 8px;
-    box-shadow: 0 0 40px rgba(79, 195, 247, 0.1);
-  }
-  .logo-section {
+  .title {
     text-align: center;
-    margin-bottom: 32px;
+    margin-bottom: 8px;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 3px;
+    color: #D4DDE6;
   }
-  .logo-section h1 {
-    font-size: 28px;
-    font-weight: 300;
-    letter-spacing: 8px;
-    color: #4FC3F7;
-    margin-bottom: 4px;
+  .accent-bar {
+    width: 48px;
+    height: 2px;
+    background: #E8923E;
+    margin: 0 auto 6px;
   }
-  .logo-section .subtitle {
+  .subtitle {
+    text-align: center;
     font-size: 10px;
-    letter-spacing: 4px;
-    color: rgba(79, 195, 247, 0.5);
-    text-transform: uppercase;
+    color: #6B7D8D;
+    letter-spacing: 1.2px;
+    margin-bottom: 28px;
   }
-  .logo-section .designation {
-    font-size: 11px;
-    color: rgba(224, 230, 240, 0.3);
-    margin-top: 8px;
-    font-family: monospace;
-    letter-spacing: 2px;
+  .field {
+    margin-bottom: 16px;
   }
-  .divider {
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(79, 195, 247, 0.3), transparent);
-    margin: 24px 0;
-  }
-  .form-group {
-    margin-bottom: 20px;
-  }
-  .form-group label {
+  label {
     display: block;
     font-size: 10px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: rgba(79, 195, 247, 0.6);
-    margin-bottom: 8px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #6B7D8D;
+    margin-bottom: 6px;
   }
-  .form-group input {
+  input {
     width: 100%;
-    padding: 12px 16px;
-    background: rgba(10, 14, 26, 0.8);
-    border: 1px solid rgba(79, 195, 247, 0.15);
+    padding: 10px 14px;
+    background: #12151E;
+    border: 1px solid #3A4256;
     border-radius: 4px;
-    color: #e0e6f0;
+    color: #D4DDE6;
+    font-family: 'Courier New', monospace;
     font-size: 14px;
-    font-family: monospace;
     outline: none;
-    transition: border-color 0.3s;
+    transition: border-color 0.2s;
   }
-  .form-group input:focus {
-    border-color: rgba(79, 195, 247, 0.5);
+  input:focus {
+    border-color: #4FC3F7;
   }
-  .form-group input::placeholder {
-    color: rgba(224, 230, 240, 0.2);
-  }
-  .login-btn {
+  .btn {
     width: 100%;
-    padding: 14px;
-    background: transparent;
-    border: 1px solid rgba(79, 195, 247, 0.4);
+    padding: 12px;
+    background: #E8923E;
+    color: #fff;
+    border: none;
     border-radius: 4px;
-    color: #4FC3F7;
-    font-size: 12px;
-    letter-spacing: 3px;
-    text-transform: uppercase;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
     cursor: pointer;
-    transition: all 0.3s;
-    font-family: monospace;
+    margin-top: 8px;
+    transition: background 0.2s;
   }
-  .login-btn:hover {
-    background: rgba(79, 195, 247, 0.1);
-    border-color: rgba(79, 195, 247, 0.7);
-    box-shadow: 0 0 20px rgba(79, 195, 247, 0.15);
-  }
-  .login-btn:disabled {
-    opacity: 0.3;
+  .btn:hover { background: #d17e2f; }
+  .btn:disabled {
+    background: #3A4256;
     cursor: not-allowed;
   }
-  .error-msg {
+  .error {
     color: #EF4444;
-    font-size: 12px;
-    text-align: center;
-    margin-top: 16px;
-    min-height: 18px;
-    font-family: monospace;
-  }
-  .quote {
-    text-align: center;
-    margin-top: 24px;
     font-size: 11px;
-    color: rgba(224, 230, 240, 0.25);
-    font-style: italic;
+    text-align: center;
+    margin-top: 12px;
+    min-height: 16px;
+    letter-spacing: 0.5px;
   }
+  .status {
+    text-align: center;
+    font-size: 10px;
+    color: #4FC3F7;
+    margin-top: 16px;
+    letter-spacing: 0.8px;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .status.visible { opacity: 1; }
 </style>
 </head>
 <body>
-<div class="login-container">
-  <div class="logo-section">
-    <h1>KLUKAI</h1>
-    <div class="subtitle">H.I.D.E. 404 // Companion System</div>
-    <div class="designation">SST-05 // SECURE ACCESS REQUIRED</div>
-  </div>
-  <div class="divider"></div>
-  <form id="loginForm" onsubmit="handleLogin(event)">
-    <div class="form-group">
-      <label>Identification</label>
-      <input type="text" id="username" placeholder="// ENTER CALLSIGN" autocomplete="username" required>
+<div class="login-box">
+  <div class="title">KLUKAI</div>
+  <div class="accent-bar"></div>
+  <div class="subtitle">SST-05 // H.I.D.E. 404 — NEURAL LINK AUTH</div>
+
+  <form id="loginForm">
+    <div class="field">
+      <label>CALLSIGN</label>
+      <input type="text" id="username" autocomplete="username" autofocus required>
     </div>
-    <div class="form-group">
-      <label>Authorization Code</label>
-      <input type="password" id="password" placeholder="// ENTER CODE" autocomplete="current-password" required>
+    <div class="field">
+      <label>PASSPHRASE</label>
+      <input type="password" id="password" autocomplete="current-password" required>
     </div>
-    <button type="submit" class="login-btn" id="loginBtn">Authenticate</button>
+    <button type="submit" class="btn" id="submitBtn">ESTABLISH LINK</button>
   </form>
-  <div class="error-msg" id="errorMsg"></div>
-  <div class="quote">"I am all you need."</div>
+
+  <div class="error" id="error"></div>
+  <div class="status" id="status">AUTHENTICATING...</div>
 </div>
 
 <script>
-async function handleLogin(e) {
+const form = document.getElementById('loginForm');
+const errorEl = document.getElementById('error');
+const statusEl = document.getElementById('status');
+const submitBtn = document.getElementById('submitBtn');
+
+// Unregister any Flutter service workers so this page loads fresh
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(regs => {
+    regs.forEach(r => r.unregister());
+  });
+}
+
+// If already authenticated, skip to app
+const existing = localStorage.getItem('klukai_token');
+if (existing) {
+  fetch('/api/auth/verify', { headers: { 'Authorization': 'Bearer ' + existing } })
+    .then(r => { if (r.ok) window.location.href = '/app/?_=' + Date.now(); })
+    .catch(() => {});
+}
+
+form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const btn = document.getElementById('loginBtn');
-  const err = document.getElementById('errorMsg');
+  errorEl.textContent = '';
+  statusEl.classList.add('visible');
+  submitBtn.disabled = true;
+
   const username = document.getElementById('username').value.trim();
   const password = document.getElementById('password').value;
 
-  btn.disabled = true;
-  btn.textContent = 'VERIFYING...';
-  err.textContent = '';
-
   try {
-    const r = await fetch('/api/auth/login', {
+    const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
-    const data = await r.json();
-    if (r.ok && data.token) {
+    const data = await res.json();
+
+    if (res.ok && data.token) {
       localStorage.setItem('klukai_token', data.token);
-      localStorage.setItem('klukai_user', data.user_id);
-      window.location.href = '/app/';
-    } else if (r.status === 403) {
-      err.textContent = 'ACCESS DENIED \u2014 IP RESTRICTED';
+      statusEl.textContent = 'LINK ESTABLISHED — REDIRECTING...';
+      setTimeout(() => { window.location.href = '/app/?_=' + Date.now(); }, 400);
     } else {
-      err.textContent = 'AUTHENTICATION FAILED';
+      errorEl.textContent = data.error || 'AUTHENTICATION FAILED';
+      statusEl.classList.remove('visible');
+      submitBtn.disabled = false;
     }
-  } catch (ex) {
-    err.textContent = 'CONNECTION ERROR';
+  } catch (err) {
+    errorEl.textContent = 'COMM LINK DOWN — CHECK CONNECTION';
+    statusEl.classList.remove('visible');
+    submitBtn.disabled = false;
   }
-
-  btn.disabled = false;
-  btn.textContent = 'Authenticate';
-}
-
-// If already authenticated, skip login
-const token = localStorage.getItem('klukai_token');
-if (token) {
-  fetch('/api/auth/verify', {
-    headers: { 'Authorization': 'Bearer ' + token }
-  }).then(r => {
-    if (r.ok) window.location.href = '/app/';
-  });
-}
+});
 </script>
 </body>
 </html>

@@ -6,6 +6,8 @@ class CompanionState {
   final int affectionScore;
   final int affectionLevel;
   final String affectionLevelName;
+  final bool isInputLocked;
+  final String? inputLockReason;
 
   const CompanionState({
     this.mood = 'composed',
@@ -15,6 +17,8 @@ class CompanionState {
     this.affectionScore = 0,
     this.affectionLevel = 0,
     this.affectionLevelName = 'Cold Assessment',
+    this.isInputLocked = false,
+    this.inputLockReason,
   });
 
   CompanionState copyWith({
@@ -25,6 +29,8 @@ class CompanionState {
     int? affectionScore,
     int? affectionLevel,
     String? affectionLevelName,
+    bool? isInputLocked,
+    String? inputLockReason,
   }) {
     return CompanionState(
       mood: mood ?? this.mood,
@@ -34,6 +40,8 @@ class CompanionState {
       affectionScore: affectionScore ?? this.affectionScore,
       affectionLevel: affectionLevel ?? this.affectionLevel,
       affectionLevelName: affectionLevelName ?? this.affectionLevelName,
+      isInputLocked: isInputLocked ?? this.isInputLocked,
+      inputLockReason: inputLockReason,
     );
   }
 }

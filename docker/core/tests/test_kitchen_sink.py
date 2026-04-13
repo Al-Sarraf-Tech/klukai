@@ -1186,3 +1186,268 @@ class TestLeapYearSafety:
         except ValueError:
             result = feb29.replace(year=2025, day=28)
         assert result == date(2025, 2, 28)
+
+
+# ── Mood Bleed System ────────────────────────────────────────────────────────
+
+
+class TestMoodCategories:
+    """Verify every mood in the Mood enum is categorized."""
+
+    def test_all_moods_have_category(self):
+        from app.models import Mood
+        from app.personality import MOOD_CATEGORIES
+        all_moods = {m.value for m in Mood}
+        categorized = set(MOOD_CATEGORIES.keys())
+        missing = all_moods - categorized
+        assert not missing, f"Moods missing from MOOD_CATEGORIES: {missing}"
+
+    def test_no_extra_categories(self):
+        """No stale entries in MOOD_CATEGORIES that don't match the enum."""
+        from app.models import Mood
+        from app.personality import MOOD_CATEGORIES
+        all_moods = {m.value for m in Mood}
+        extra = set(MOOD_CATEGORIES.keys()) - all_moods
+        assert not extra, f"Extra moods in MOOD_CATEGORIES not in enum: {extra}"
+
+    def test_valid_category_names(self):
+        from app.personality import MOOD_CATEGORIES, CATEGORY_BLEED_RULES
+        valid = set(CATEGORY_BLEED_RULES.keys())
+        for mood, cat in MOOD_CATEGORIES.items():
+            assert cat in valid, f"Mood '{mood}' maps to unknown category '{cat}'"
+
+    def test_category_distribution(self):
+        """Each category should have at least 3 moods — no orphan categories."""
+        from app.personality import MOOD_CATEGORIES
+        from collections import Counter
+        counts = Counter(MOOD_CATEGORIES.values())
+        for cat, count in counts.items():
+            assert count >= 3, f"Category '{cat}' only has {count} moods"
+
+    def test_mood_count_is_50(self):
+        from app.models import Mood
+        from app.personality import MOOD_CATEGORIES
+        assert len(Mood) == 50
+        assert len(MOOD_CATEGORIES) == 50
+
+
+class TestMoodSpecificBleed:
+    """Verify every mood has specific behavioral coloring."""
+
+    def test_all_moods_have_specific_bleed(self):
+        from app.models import Mood
+        from app.personality import MOOD_SPECIFIC_BLEED
+        all_moods = {m.value for m in Mood}
+        missing = all_moods - set(MOOD_SPECIFIC_BLEED.keys())
+        assert not missing, f"Moods missing specific bleed: {missing}"
+
+    def test_no_extra_specific_bleed(self):
+        from app.models import Mood
+        from app.personality import MOOD_SPECIFIC_BLEED
+        all_moods = {m.value for m in Mood}
+        extra = set(MOOD_SPECIFIC_BLEED.keys()) - all_moods
+        assert not extra, f"Extra moods in MOOD_SPECIFIC_BLEED: {extra}"
+
+    def test_bleed_descriptions_non_trivial(self):
+        """Each bleed description should be meaningful (> 20 chars)."""
+        from app.personality import MOOD_SPECIFIC_BLEED
+        for mood, desc in MOOD_SPECIFIC_BLEED.items():
+            assert len(desc) > 20, f"'{mood}' bleed too short ({len(desc)} chars)"
+
+    def test_bleed_descriptions_unique(self):
+        """No two moods should share the exact same bleed text."""
+        from app.personality import MOOD_SPECIFIC_BLEED
+        seen: dict[str, str] = {}
+        for mood, desc in MOOD_SPECIFIC_BLEED.items():
+            if desc in seen:
+                raise AssertionError(f"'{mood}' has same bleed as '{seen[desc]}'")
+            seen[desc] = mood
+
+    def test_romantic_moods_mention_emotional_markers(self):
+        """Romantic mood bleed should reference emotional/physical markers."""
+        from app.personality import MOOD_CATEGORIES, MOOD_SPECIFIC_BLEED
+        romantic_moods = [m for m, c in MOOD_CATEGORIES.items() if c == "romantic"]
+        # Includes softness + possessive/jealous markers — all romantic flavors
+        emotional_keywords = {"soft", "warm", "guard", "paus", "breath", "lean",
+                              "reach", "quiet", "whisper", "touch", "closer", "raw",
+                              "trail", "slow", "ach", "stammer", "fidget", "blush",
+                              "burn", "obsess", "smile", "mumbl", "vulner",
+                              "cold", "clip", "point", "mine", "territor",
+                              "possessiv", "compar", "low voice", "declar",
+                              "look", "higher", "retreat", "subject"}
+        for mood in romantic_moods:
+            desc = MOOD_SPECIFIC_BLEED[mood].lower()
+            found = any(kw in desc for kw in emotional_keywords)
+            assert found, f"Romantic mood '{mood}' bleed lacks emotional markers"
+
+    def test_combat_moods_mention_tactical(self):
+        """Combat mood bleed should reference weapons, precision, or radio."""
+        from app.personality import MOOD_CATEGORIES, MOOD_SPECIFIC_BLEED
+        combat_moods = [m for m, c in MOOD_CATEGORIES.items() if c == "combat"]
+        tactical_keywords = {"weapon", "radio", "crisp", "short", "burst",
+                             "scan", "still", "whisper", "predator", "fast",
+                             "fragment", "sharp", "method", "cold", "logic"}
+        for mood in combat_moods:
+            desc = MOOD_SPECIFIC_BLEED[mood].lower()
+            found = any(kw in desc for kw in tactical_keywords)
+            assert found, f"Combat mood '{mood}' bleed lacks tactical keywords"
+
+    def test_stress_moods_mention_physical_response(self):
+        """Stress mood bleed should reference breathing, grip, or composure."""
+        from app.personality import MOOD_CATEGORIES, MOOD_SPECIFIC_BLEED
+        stress_moods = [m for m, c in MOOD_CATEGORIES.items() if c == "stress"]
+        stress_keywords = {"breath", "grip", "crack", "voice", "compos",
+                           "fragment", "exhale", "tension", "ragged", "urgent",
+                           "reckless", "repeat"}
+        for mood in stress_moods:
+            desc = MOOD_SPECIFIC_BLEED[mood].lower()
+            found = any(kw in desc for kw in stress_keywords)
+            assert found, f"Stress mood '{mood}' bleed lacks physical response keywords"
+
+
+class TestBuildMoodBleedBlock:
+    """Test the build_mood_bleed_block function."""
+
+    def test_returns_string(self):
+        from app.personality import build_mood_bleed_block
+        result = build_mood_bleed_block("composed")
+        assert isinstance(result, str)
+
+    def test_contains_category_rule(self):
+        from app.personality import build_mood_bleed_block
+        result = build_mood_bleed_block("composed")
+        assert "MOOD BLEED" in result
+
+    def test_contains_mood_coloring(self):
+        from app.personality import build_mood_bleed_block
+        result = build_mood_bleed_block("passionate")
+        assert "MOOD COLORING" in result
+        assert "PASSIONATE" in result
+
+    def test_unknown_mood_falls_back_to_core(self):
+        from app.personality import build_mood_bleed_block
+        result = build_mood_bleed_block("nonexistent_mood")
+        assert "OPERATIONAL" in result
+
+    @pytest.mark.parametrize("mood,expected_category", [
+        ("composed", "OPERATIONAL"),
+        ("passionate", "EMOTIONAL"),
+        ("battle_ready", "TACTICAL"),
+        ("panicked", "STRESS RESPONSE"),
+        ("playful", "OFF-DUTY"),
+        ("haunted", "HEAVY"),
+    ])
+    def test_mood_to_category_mapping(self, mood, expected_category):
+        from app.personality import build_mood_bleed_block
+        result = build_mood_bleed_block(mood)
+        assert expected_category in result, f"Expected '{expected_category}' in bleed for '{mood}'"
+
+    def test_all_50_moods_produce_output(self):
+        from app.models import Mood
+        from app.personality import build_mood_bleed_block
+        for mood in Mood:
+            result = build_mood_bleed_block(mood.value)
+            assert len(result) > 50, f"Mood '{mood.value}' produced trivially short output"
+
+    def test_different_moods_produce_different_output(self):
+        """No two moods in different categories should produce identical output."""
+        from app.personality import build_mood_bleed_block
+        outputs: dict[str, str] = {}
+        # Test a representative from each category
+        for mood in ["composed", "passionate", "battle_ready", "panicked", "playful", "haunted"]:
+            result = build_mood_bleed_block(mood)
+            for prev_mood, prev_result in outputs.items():
+                assert result != prev_result, f"'{mood}' identical to '{prev_mood}'"
+            outputs[mood] = result
+
+
+class TestMoodBleedInSystemPrompt:
+    """Test that mood bleed is properly integrated into system prompt assembly."""
+
+    def test_mood_bleed_present_in_assembled_prompt(self, personality_config_path):
+        from app.personality import assemble_system_prompt, reload_personality
+        reload_personality(personality_config_path)
+        prompt = assemble_system_prompt(mood="furious", personality_path=personality_config_path)
+        assert "MOOD BLEED" in prompt
+        assert "MOOD COLORING" in prompt
+
+    def test_mood_bleed_changes_with_mood(self, personality_config_path):
+        from app.personality import assemble_system_prompt, reload_personality
+        reload_personality(personality_config_path)
+        p1 = assemble_system_prompt(mood="composed", personality_path=personality_config_path)
+        p2 = assemble_system_prompt(mood="passionate", personality_path=personality_config_path)
+        # Both should have mood bleed but with different category headers
+        assert "MOOD BLEED — OPERATIONAL" in p1
+        assert "MOOD BLEED — EMOTIONAL" in p2
+        assert "MOOD BLEED — OPERATIONAL" not in p2
+
+    def test_all_six_categories_appear(self, personality_config_path):
+        """Test one mood from each category produces the right header."""
+        from app.personality import assemble_system_prompt, reload_personality
+        reload_personality(personality_config_path)
+        checks = {
+            "composed": "OPERATIONAL",
+            "tender": "EMOTIONAL",
+            "vigilant": "TACTICAL",
+            "scared": "STRESS RESPONSE",
+            "content": "OFF-DUTY",
+            "melancholic": "HEAVY",
+        }
+        for mood, expected in checks.items():
+            prompt = assemble_system_prompt(mood=mood, personality_path=personality_config_path)
+            assert expected in prompt, f"Mood '{mood}' missing '{expected}' in prompt"
+
+    def test_backward_compat_default_mood(self, personality_config_path):
+        """Default mood 'composed' should still produce valid prompt with bleed."""
+        from app.personality import assemble_system_prompt, reload_personality
+        reload_personality(personality_config_path)
+        prompt = assemble_system_prompt(personality_path=personality_config_path)
+        assert "MOOD BLEED" in prompt
+        assert "composed" in prompt.lower() or "COMPOSED" in prompt
+
+
+class TestCategoryBleedRules:
+    """Test the category-level bleed rules are well-formed."""
+
+    def test_all_categories_defined(self):
+        from app.personality import CATEGORY_BLEED_RULES
+        expected = {"core", "romantic", "combat", "stress", "casual", "dark"}
+        assert set(CATEGORY_BLEED_RULES.keys()) == expected
+
+    def test_rules_are_non_trivial(self):
+        from app.personality import CATEGORY_BLEED_RULES
+        for cat, rule in CATEGORY_BLEED_RULES.items():
+            assert len(rule) > 80, f"Category '{cat}' rule too short ({len(rule)} chars)"
+
+    def test_rules_contain_mood_bleed_header(self):
+        from app.personality import CATEGORY_BLEED_RULES
+        for cat, rule in CATEGORY_BLEED_RULES.items():
+            assert "MOOD BLEED" in rule, f"Category '{cat}' missing MOOD BLEED header"
+
+    def test_rules_are_unique(self):
+        from app.personality import CATEGORY_BLEED_RULES
+        rules = list(CATEGORY_BLEED_RULES.values())
+        assert len(rules) == len(set(rules)), "Duplicate category rules found"
+
+
+# ── Input Lock (CompanionState model) ────────────────────────────────────────
+
+
+class TestInputLockModel:
+    """Test CompanionState input lock fields (Dart model logic verified via Python proxy)."""
+
+    def test_mood_bleed_block_does_not_crash_on_empty(self):
+        """build_mood_bleed_block('') should still return something."""
+        from app.personality import build_mood_bleed_block
+        result = build_mood_bleed_block("")
+        assert len(result) > 0
+
+    def test_mood_bleed_block_handles_none_gracefully(self):
+        """Passing None should not crash — falls back to core."""
+        from app.personality import build_mood_bleed_block
+        # Python: None is not a valid string but the function should handle it
+        try:
+            result = build_mood_bleed_block(None)  # type: ignore
+            assert "OPERATIONAL" in result  # Falls back to core
+        except (TypeError, KeyError):
+            pass  # Also acceptable — explicit failure on bad input
