@@ -90,8 +90,11 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         return {"key": get_vapid_public_key()}
 
     @app.post("/api/push/subscribe")
-    async def push_subscribe(sub: dict):
-        add_subscription(sub)
+    async def push_subscribe(sub: dict, request: Request):
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+        await add_subscription(user_id, sub)
         return {"ok": True}
 
     # ── Affection state ────────────────────────────────────────────────────
