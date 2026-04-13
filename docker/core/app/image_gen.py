@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://host.docker.internal:8388")
 
 _http: httpx.AsyncClient | None = None
+_image_gen_lock = asyncio.Semaphore(1)  # Only one image gen at a time — prevents GPU overload
 
 
 def _get_http() -> httpx.AsyncClient:
@@ -559,7 +560,14 @@ async def generate_image(
     height: int = 1216,
     retry: bool = True,
 ) -> bytes | None:
-    """Generate an image via ComfyUI Animagine XL 3.1 and return PNG bytes."""
+    """Generate an image via ComfyUI. Semaphore ensures one at a time."""
+    async with _image_gen_lock:
+        return await _generate_image_inner(prompt, width, height, retry)
+
+
+async def _generate_image_inner(
+    prompt: str, width: int, height: int, retry: bool,
+) -> bytes | None:
     try:
         result = await _try_generate(prompt, width, height)
         if result is None and retry:

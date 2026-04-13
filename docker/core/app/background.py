@@ -49,7 +49,7 @@ async def background_extraction(
         # Apply curation if image was generated and curation data came back
         # Resolve memory_id: prefer explicit arg, fall back to module-level last_memory_id
         # (image gen runs concurrently and sets it ~1-30s before extraction completes)
-        curation_target = memory_id or (image_generated and context.last_memory_id) or None
+        curation_target = memory_id or (image_generated and context.get_last_memory_id(user_id)) or None
         if image_generated and curation_target and "memory_curation" in result:
             try:
                 await memory_archive.update_curation(
@@ -335,7 +335,7 @@ async def background_image_gen(
                 user_id=user_id,
             )
             if memory_id:
-                context.last_memory_id = memory_id
+                context.set_last_memory_id(user_id, memory_id)
                 logger.info("Image archived as memory %s", memory_id)
 
             img_b64 = b64.b64encode(img_bytes).decode()

@@ -57,7 +57,7 @@ async def run_migration() -> None:
             logger.warning("Migration %s may already be applied: %s", migration_path.name, e)
 
 
-async def generate_daily_recap(affection_level: int) -> str | None:
+async def generate_daily_recap(affection_level: int, user_id: str = "jalsarraf") -> str | None:
     """Generate a daily recap by summarizing today's messages via LLM."""
     try:
         today = datetime.now().strftime("%Y-%m-%d")
@@ -66,9 +66,9 @@ async def generate_daily_recap(affection_level: int) -> str | None:
             rows = await (
                 await conn.execute(
                     "SELECT role, content FROM companion_messages "
-                    "WHERE user_id = 'jalsarraf' AND created_at::date = %s::date "
+                    "WHERE user_id = %s AND created_at::date = %s::date "
                     "ORDER BY created_at ASC LIMIT 40",
-                    (today,),
+                    (user_id, today,),
                 )
             ).fetchall()
 
@@ -164,7 +164,19 @@ async def lifespan(app: FastAPI):
 
     # Start periodic keepalive to prevent model eviction (25-min TTL)
     _keepalive_task = asyncio.create_task(_keepalive_loop())
-    logger.info("Klukai companion core started (keepalive every 20 min)")
+
+    # Session token cleanup — runs every 6 hours
+    async def _session_cleanup_loop():
+        while True:
+            await asyncio.sleep(6 * 3600)
+            try:
+                from .auth import cleanup_expired_sessions
+                await cleanup_expired_sessions()
+            except Exception:
+                pass
+    asyncio.create_task(_session_cleanup_loop())
+
+    logger.info("Klukai companion core started (keepalive every 20 min, session cleanup every 6h)")
 
     yield
 

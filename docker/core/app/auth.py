@@ -191,3 +191,19 @@ async def get_user_from_token(token: str) -> str | None:
     except Exception as e:
         logger.warning("Token lookup failed: %s", e)
     return None
+
+
+async def cleanup_expired_sessions() -> int:
+    """Delete expired session tokens. Call periodically."""
+    try:
+        async with get_conn_autocommit() as conn:
+            cur = await conn.execute(
+                "DELETE FROM companion_auth_sessions WHERE expires_at < NOW() RETURNING token"
+            )
+            rows = await cur.fetchall()
+            if rows:
+                logger.info("Cleaned up %d expired sessions", len(rows))
+            return len(rows)
+    except Exception as e:
+        logger.warning("Session cleanup failed: %s", e)
+        return 0

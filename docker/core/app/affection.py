@@ -237,9 +237,8 @@ class AffectionManager:
         # Calculate delta based on type and intensity
         delta = self._calculate_delta(interaction_type, intensity)
 
-        # TESTING MODE: no negative changes — score only goes up
-        # TODO: re-enable penalties after testing is complete
-        if delta < 0:
+        # jalsarraf is pinned at max trust — never reduce
+        if user_id == "jalsarraf" and delta < 0:
             delta = 0
 
         # Apply daily cap (only for positive changes)
@@ -367,10 +366,11 @@ class AffectionManager:
         else:
             return int(score_range)
 
-    async def _apply_absence_decay(self) -> None:
-        """Apply decay for days with no interaction. DISABLED during testing."""
-        return  # TODO: re-enable after testing
-        state = await self.get_state()
+    async def _apply_absence_decay(self, user_id: str = "jalsarraf") -> None:
+        """Apply decay for days with no interaction. jalsarraf is exempt."""
+        if user_id == "jalsarraf":
+            return  # pinned at max trust
+        state = await self.get_state(user_id)
         if state.last_interaction_date is None:
             return
 

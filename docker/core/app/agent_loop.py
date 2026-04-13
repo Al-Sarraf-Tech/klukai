@@ -65,6 +65,7 @@ class AgentLoop:
         self,
         system_prompt: str,
         messages: list[dict],
+        user_id: str = "default",
     ) -> AgentResult:
         """Execute the agentic loop using local LLM."""
         result = AgentResult(response="")
@@ -92,7 +93,7 @@ class AgentLoop:
         )
 
         work_messages = list(messages)
-        await self._ws.send_thinking("default", "Analyzing request...")
+        await self._ws.send_thinking(user_id, "Analyzing request...")
 
         for iteration in range(MAX_ITERATIONS):
             result.iterations = iteration + 1
@@ -112,7 +113,7 @@ class AgentLoop:
                 # Try streaming fallback
                 try:
                     logger.info("Trying streaming fallback for agent response")
-                    await self._ws.send_thinking("default", "Switching to direct response...")
+                    await self._ws.send_thinking(user_id, "Switching to direct response...")
                     parts = []
                     async for token in self._router.stream(system_prompt, work_messages, config):
                         parts.append(token)
@@ -165,8 +166,8 @@ class AgentLoop:
 
                 # Send descriptive status message
                 status_msg = TOOL_STATUS.get(tool_name, f"Using {tool_name}...")
-                await self._ws.send_tool_use("default", tool_name, "calling")
-                await self._ws.send_thinking("default", status_msg)
+                await self._ws.send_tool_use(user_id, tool_name, "calling")
+                await self._ws.send_thinking(user_id, status_msg)
 
                 try:
                     tool_result = await asyncio.wait_for(
@@ -194,7 +195,7 @@ class AgentLoop:
                     tool_result=tool_result,
                 ))
 
-                await self._ws.send_tool_use("default", tool_name, "done")
+                await self._ws.send_tool_use(user_id, tool_name, "done")
 
                 work_messages.append({
                     "role": "tool",
@@ -212,7 +213,7 @@ class AgentLoop:
         # Force synthesis if no response after all iterations
         if not result.response:
             try:
-                await self._ws.send_thinking("default", "Compiling briefing...")
+                await self._ws.send_thinking(user_id, "Compiling briefing...")
                 final = await self._router.complete_local(
                     system_prompt, work_messages, config, tools=None,
                 )

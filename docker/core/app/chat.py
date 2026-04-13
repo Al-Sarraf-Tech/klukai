@@ -234,7 +234,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         # Agentic path: think, use tools, then respond (agent loop sends its own thinking events)
         logger.info("Routing to agent loop (tools needed)")
         agent = AgentLoop(router, mcp, ws)
-        agent_result = await agent.run(system_prompt, messages)
+        agent_result = await agent.run(system_prompt, messages, user_id=user_id)
 
         response_text = _fix_narration(agent_result.response)
         model_name = agent_result.model
@@ -322,10 +322,11 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
 
     # Commander save/discard overrides — operate on the most recent memory
     content_lower = content.lower()
-    if any(kw in content_lower for kw in SAVE_KEYWORDS) and context.last_memory_id:
-        asyncio.create_task(do_memory_keep(context.last_memory_id, kept=True))
-    elif any(kw in content_lower for kw in DISCARD_KEYWORDS) and context.last_memory_id:
-        asyncio.create_task(do_memory_keep(context.last_memory_id, kept=False))
+    user_last_mem = context.get_last_memory_id(user_id)
+    if any(kw in content_lower for kw in SAVE_KEYWORDS) and user_last_mem:
+        asyncio.create_task(do_memory_keep(user_last_mem, kept=True))
+    elif any(kw in content_lower for kw in DISCARD_KEYWORDS) and user_last_mem:
+        asyncio.create_task(do_memory_keep(user_last_mem, kept=False))
 
     # Track whether image gen was triggered (for extraction curation pass)
     image_triggered = False
@@ -490,7 +491,10 @@ def register_websocket(app: FastAPI) -> None:
                 msg_type = data.get("type")
 
                 if msg_type == "message":
-                    await _handle_message(data.get("content", ""), session, user_id)
+                    content = data.get("content", "")
+                    if isinstance(content, str):
+                        content = content[:4000]  # Input length limit
+                    await _handle_message(content, session, user_id)
                 elif msg_type == "typing":
                     pass
                 elif msg_type == "voice_end":

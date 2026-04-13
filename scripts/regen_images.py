@@ -27,7 +27,11 @@ CHECKPOINT = "noobai_xl_v1.safetensors"
 NEGATIVE = (
     "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, "
     "fewer digits, cropped, worst quality, low quality, normal quality, "
-    "jpeg artifacts, signature, watermark, username, blurry, deformed, ugly"
+    "jpeg artifacts, signature, watermark, username, blurry, deformed, ugly, "
+    "extra arms, extra legs, fused limbs, limbs through body, clipping, "
+    "multiple people, multiple boys, multiple girls, clone, twin, "
+    "two heads, two faces, extra faces, disfigured, "
+    "interlocking limbs, overlapping bodies, merged bodies"
 )
 
 WORKFLOW = {
@@ -40,7 +44,7 @@ WORKFLOW = {
     "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["10", 1]}},
     "7": {"class_type": "CLIPTextEncode", "inputs": {"text": NEGATIVE, "clip": ["10", 1]}},
     "3": {"class_type": "KSampler", "inputs": {
-        "seed": 0, "steps": 25, "cfg": 6.0, "sampler_name": "euler_ancestral",
+        "seed": 0, "steps": 25, "cfg": 7.0, "sampler_name": "euler_ancestral",
         "scheduler": "normal", "denoise": 1.0,
         "model": ["10", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0],
     }},
