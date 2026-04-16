@@ -112,7 +112,7 @@ async def get_conn_autocommit() -> AsyncIterator[psycopg.AsyncConnection]:
 async def check_health() -> dict:
     """Check database connectivity. Returns status dict for health endpoint."""
     try:
-        async with get_conn() as conn:
+        async with get_conn_autocommit() as conn:
             row = await (await conn.execute("SELECT 1")).fetchone()
             if row and row[0] == 1:
                 # Also check pool stats

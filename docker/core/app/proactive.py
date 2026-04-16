@@ -785,7 +785,6 @@ class ProactiveEngine:
 
     async def _random_event(self) -> None:
         """Fire a random lore event if conditions are met."""
-        from datetime import timedelta
 
         now = datetime.now()
 
@@ -867,7 +866,6 @@ class ProactiveEngine:
 
     async def _mission_random_event(self) -> None:
         """Fire contextual mission events using LLM. No hour restrictions."""
-        from datetime import timedelta
         from .fact_extractor import generate_mission_update
 
         if not self.mission_active:
@@ -1084,7 +1082,6 @@ class ProactiveEngine:
 
         # Generate dream message via LLM
         try:
-            from .fact_extractor import generate_romance_message
 
             # Pull a random memory to weave into the dream
             dream_memory_ref = ""

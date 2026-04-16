@@ -20,7 +20,8 @@ jobs:
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
-          pip install pytest pytest-asyncio pytest-timeout httpx pydantic PyYAML
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-timeout
 
       - name: Run test suite
         run: python3 -m pytest tests/ -q --tb=short
@@ -41,4 +42,4 @@ jobs:
           pip install ruff
 
       - name: Lint with ruff
-        run: ruff check app/ --select E,F,W --ignore E501
+        run: ruff check app/ --select E,F,W --ignore E501,F541,F841

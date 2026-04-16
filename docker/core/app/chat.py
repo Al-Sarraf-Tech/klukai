@@ -26,7 +26,6 @@ from .background import (
 from . import context
 from .context import (
     COMPACT_THRESHOLD,
-    SESSION_ID,
     affection,
     mcp,
     memory,
@@ -39,15 +38,13 @@ from .db import get_conn, get_conn_autocommit
 from .helpers import (
     chunk_text as _chunk_text,
     fix_narration as _fix_narration,
-    strip_actions_for_tts as _strip_actions_for_tts,
     wants_recall as _wants_recall,
     wants_mission_start as _wants_mission_start,
     wants_mission_cancel as _wants_mission_cancel,
     parse_interval_minutes as _parse_interval_minutes,
     create_conversation as _create_conversation,
     store_message as _store_message,
-    RECALL_KEYWORDS, SAVE_KEYWORDS, DISCARD_KEYWORDS,
-    MISSION_START_KEYWORDS, MISSION_CANCEL_KEYWORDS,
+    SAVE_KEYWORDS, DISCARD_KEYWORDS,
     TRIVIAL_PATTERNS,
 )
 from .image_gen import needs_image

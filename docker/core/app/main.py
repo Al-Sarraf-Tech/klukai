@@ -12,7 +12,6 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from .context import (
-    SESSION_ID,
     affection,
     mcp,
     memory,
