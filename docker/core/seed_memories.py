@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://host.docker.internal:1234")
+LM_TTL_SECONDS = int(os.environ.get("LM_STUDIO_TTL", "600"))
 COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://host.docker.internal:8388")
 
 # gpt-oss-20b for selection: reliable structured JSON at low temperature
@@ -193,6 +194,7 @@ async def _call_llm(client: httpx.AsyncClient, model: str, prompt: str,
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": False,
+            "ttl": LM_TTL_SECONDS,
         },
     )
     r.raise_for_status()
@@ -320,6 +322,7 @@ async def main():
                     "model": model,
                     "messages": [{"role": "user", "content": "."}],
                     "max_tokens": 1, "temperature": 0, "stream": False,
+                    "ttl": LM_TTL_SECONDS,
                 })
                 if r.status_code == 200:
                     logger.info("Model %s warmed up", model.split("/")[-1][:30])

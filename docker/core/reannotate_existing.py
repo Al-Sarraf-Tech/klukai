@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://host.docker.internal:1234")
+LM_TTL_SECONDS = int(os.environ.get("LM_STUDIO_TTL", "600"))
 
 # dolphin-24b for annotation: clean creative text, no chain-of-thought leakage
 ANNOTATOR_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
@@ -178,6 +179,7 @@ async def _call_annotator(client: httpx.AsyncClient, user_msg: str,
             "max_tokens": 400,
             "temperature": 0.85,
             "stream": False,
+            "ttl": LM_TTL_SECONDS,
         },
     )
     r.raise_for_status()

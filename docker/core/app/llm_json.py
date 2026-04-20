@@ -127,6 +127,7 @@ async def call_llm(
     close_after = client is None
 
     try:
+        from .llm_router import LM_TTL_SECONDS
         r = await http.post(
             f"{url}/v1/chat/completions",
             json={
@@ -135,6 +136,7 @@ async def call_llm(
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "stream": False,
+                "ttl": LM_TTL_SECONDS,
             },
         )
         r.raise_for_status()
@@ -185,6 +187,7 @@ async def call_llm_text(
     close_after = client is None
 
     try:
+        from .llm_router import LM_TTL_SECONDS
         r = await http.post(
             f"{url}/v1/chat/completions",
             json={
@@ -193,6 +196,7 @@ async def call_llm_text(
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "stream": False,
+                "ttl": LM_TTL_SECONDS,
             },
         )
         r.raise_for_status()

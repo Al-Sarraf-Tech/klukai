@@ -575,6 +575,7 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict:
         try:
             async with gate:
                 client = _get_http()
+                from .llm_router import LM_TTL_SECONDS
                 r = await client.post(
                     f"{LM_STUDIO_URL}/v1/chat/completions",
                     json={
@@ -583,6 +584,7 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict:
                         "max_tokens": 150,
                         "temperature": 0.7,
                         "stream": False,
+                        "ttl": LM_TTL_SECONDS,
                     },
                 )
                 r.raise_for_status()

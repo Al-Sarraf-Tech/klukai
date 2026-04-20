@@ -41,6 +41,11 @@ def lm_gate_busy() -> bool:
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")       # Dominus RTX 3090
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
+# Per-request TTL (seconds) — LM Studio auto-unloads the model this long
+# after the last request. Applies only to JIT-loaded models; manual loads
+# keep their own lifecycle. Override via env LM_STUDIO_TTL.
+LM_TTL_SECONDS = int(os.environ.get("LM_STUDIO_TTL", "600"))
+
 # Model aliases
 LOCAL_CASUAL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"  # Chat: uncensored, clean streaming, no thinking tags
 LOCAL_CASUAL_FALLBACK = "dolphin-mistral-glm-4.7-flash-24b-venice-edition-thinking-uncensored-i1"  # Previous chat model
@@ -311,6 +316,7 @@ class LLMRouter:
                 "max_tokens": config.max_tokens,
                 "temperature": config.temperature,
                 "stream": False,
+                "ttl": LM_TTL_SECONDS,
             }
             if tools:
                 body["tools"] = tools
@@ -397,6 +403,7 @@ class LLMRouter:
                             "max_tokens": 1,
                             "temperature": 0,
                             "stream": False,
+                            "ttl": LM_TTL_SECONDS,
                         },
                         timeout=30.0,
                     )
@@ -426,6 +433,7 @@ class LLMRouter:
                 "max_tokens": config.max_tokens,
                 "temperature": config.temperature,
                 "stream": True,
+                "ttl": LM_TTL_SECONDS,
             },
             timeout=httpx.Timeout(connect=10.0, read=config.read_timeout, write=10.0, pool=10.0),
         ) as response:

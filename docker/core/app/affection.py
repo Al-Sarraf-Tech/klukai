@@ -305,6 +305,7 @@ class AffectionManager:
 
             gate = get_lm_gate()
             async with gate:  # Waits for main chat to finish streaming
+                from .llm_router import LM_TTL_SECONDS
                 r = await self._http.post(
                     f"{LM_STUDIO_URL}/v1/chat/completions",
                     json={
@@ -313,6 +314,7 @@ class AffectionManager:
                         "max_tokens": 100,
                         "temperature": 0.1,
                         "stream": False,
+                        "ttl": LM_TTL_SECONDS,
                     },
                 )
                 r.raise_for_status()

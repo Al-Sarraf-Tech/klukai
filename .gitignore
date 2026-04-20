@@ -20,6 +20,9 @@ flutter_app/.flutter-plugins-dependencies
 .playwright-mcp/
 .remember/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 companion-*.png
 assets/source-models/
 assets/textures/

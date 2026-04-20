@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -163,16 +164,19 @@ async def lifespan(app: FastAPI):
     await events_init()
     load_personality()
 
-    # Warm up primary chat model on startup
-    logger.info("Warming up primary LLM model...")
-    try:
-        await router.keepalive()
-        logger.info("LLM warmup complete")
-    except Exception as e:
-        logger.warning("LLM warmup failed (will retry on first message): %s", e)
-
-    # Start periodic keepalive to prevent model eviction (25-min TTL)
-    _keepalive_task = asyncio.create_task(_keepalive_loop())
+    # Load-on-demand: no startup warmup, no periodic keepalive.
+    # LM Studio's JIT TTL evicts dolphin after idle; first message
+    # reloads it (~3-5s cold-start). Set KLUKAI_LLM_KEEPALIVE=1 to
+    # re-enable the keepalive loop.
+    if os.environ.get("KLUKAI_LLM_KEEPALIVE") == "1":
+        try:
+            await router.keepalive()
+        except Exception as e:
+            logger.warning("LLM warmup failed: %s", e)
+        _keepalive_task = asyncio.create_task(_keepalive_loop())
+        logger.info("LLM keepalive enabled (KLUKAI_LLM_KEEPALIVE=1)")
+    else:
+        logger.info("LLM load-on-demand mode (no keepalive, JIT TTL handles unload)")
 
     # Session token cleanup — runs every 6 hours
     async def _session_cleanup_loop():
@@ -185,7 +189,7 @@ async def lifespan(app: FastAPI):
                 pass
     asyncio.create_task(_session_cleanup_loop())
 
-    logger.info("Klukai companion core started (keepalive every 20 min, session cleanup every 1h)")
+    logger.info("Klukai companion core started (session cleanup every 1h)")
 
     yield
 
