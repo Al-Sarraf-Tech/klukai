@@ -80,6 +80,18 @@ async def background_extraction(
 
         # Update mood in session + persist to PostgreSQL
         mood = result.get("mood", "composed")
+
+        # Mood contagion: nudge Klukai's mood toward user's sentiment.
+        # Small effect — the LLM-detected mood is the primary signal; contagion
+        # is a one-step bounded adjustment that never jumps more than one register.
+        try:
+            from .character_behaviors import nudge_mood, interaction_to_sentiment
+            sentiment = interaction_to_sentiment(result.get("interaction"))
+            if sentiment:
+                mood = nudge_mood(mood, sentiment)
+        except Exception as e:
+            logger.debug("Mood contagion skipped: %s", e)
+
         session.mood = mood
         await memory.save_session(session_id(user_id), session)
         await ws.send_mood(user_id, mood)

@@ -126,6 +126,35 @@ def select_anniversary_from_firsts(firsts: list[dict],
 
 # Sentiment -> mood pull. Small magnitudes so a single message doesn't
 # flip her whole register — it nudges.
+def interaction_to_sentiment(interaction: dict | None) -> str | None:
+    """Map an LLM-extracted `interaction` dict to a sentiment label for nudge_mood.
+
+    interaction shape (from fact_extractor):
+      {"type": "flirty" | "playful" | "tender" | "combative" | "neutral" | ...,
+       "intensity": 1..10}
+
+    Returns one of 'positive' | 'flirty' | 'negative_light' | 'negative_heavy' | None.
+    Intensity>=7 weights toward the stronger variant. Unknowns return None.
+    """
+    if not interaction or not isinstance(interaction, dict):
+        return None
+    t = str(interaction.get("type", "")).lower()
+    try:
+        intensity = int(interaction.get("intensity", 5) or 5)
+    except (TypeError, ValueError):
+        intensity = 5
+
+    if t == "flirty":
+        return "flirty"
+    if t in {"playful", "warm", "affectionate", "tender", "positive"}:
+        return "positive"
+    if t in {"combative", "hostile", "angry", "rude", "negative"}:
+        return "negative_heavy" if intensity >= 7 else "negative_light"
+    if t in {"sad", "hurt", "distressed", "vulnerable"}:
+        return "negative_heavy"
+    return None
+
+
 _MOOD_NUDGES: dict[str, dict[str, str]] = {
     "negative_heavy": {
         "composed":  "tender",
