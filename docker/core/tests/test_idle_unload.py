@@ -75,7 +75,7 @@ class TestIsUserIdle:
 class TestKeepaliveIdleBehavior:
     @pytest.mark.asyncio
     async def test_keepalive_skips_when_idle_no_mission(self):
-        """When user is idle and no mission is active, keepalive should skip."""
+        """When user is idle and no mission is active (and outside early-AM window), keepalive should skip."""
         r = LLMRouter()
         r._lmstudio_available = True
         r._http = AsyncMock()
@@ -84,7 +84,8 @@ class TestKeepaliveIdleBehavior:
         llm_router_mod._last_user_message = time.monotonic() - IDLE_TIMEOUT - 100
 
         with patch("app.llm_router.lm_gate_busy", return_value=False), \
-             patch("app.proactive.has_active_mission", return_value=False):
+             patch("app.proactive.has_active_mission", return_value=False), \
+             patch("app.llm_router._is_early_am_window", return_value=False):
             await r.keepalive()
 
         # HTTP post should NOT have been called (keepalive skipped)

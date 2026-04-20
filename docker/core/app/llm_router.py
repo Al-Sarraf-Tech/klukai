@@ -68,6 +68,12 @@ def set_seeding_active(active: bool) -> None:
     _seeding_active = active
 
 
+def _is_early_am_window() -> bool:
+    """Hours 1-4 local time — proactive engine runs dreams/events, keep LLM warm."""
+    from datetime import datetime
+    return 1 <= datetime.now().hour <= 4
+
+
 def mark_user_active() -> None:
     """Record that a user message was just received (for idle unload)."""
     global _last_user_message
@@ -352,14 +358,11 @@ class LLMRouter:
 
         # Auto-unload: skip keepalive when no users connected AND no mission running
         # Exception: early AM (1-4) — proactive engine needs LLM for dreams/events
-        from datetime import datetime
-        hour = datetime.now().hour
-        early_am_window = 1 <= hour <= 4
         from .context import ws
         anyone_connected = bool(ws._connections)
         from .proactive import has_active_mission
 
-        if not anyone_connected and not has_active_mission() and not early_am_window:
+        if not anyone_connected and not has_active_mission() and not _is_early_am_window():
             if _is_user_idle():
                 logger.info("LLM idle unload: no connections, no mission, letting models evict")
                 return
