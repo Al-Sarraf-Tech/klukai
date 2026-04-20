@@ -162,12 +162,26 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
         if not greeting or len(greeting) < 10:
             return
 
+        # If this was a dream, persist it as a memory archive entry
+        if kind == "dream":
+            try:
+                from . import dreams
+                mood_now = getattr(aff_state, "mood", "tender") if hasattr(aff_state, "mood") else "tender"
+                await dreams.save_dream(
+                    dream_text=greeting,
+                    user_id=user_id,
+                    affection_level=aff_state.level,
+                    mood=mood_now,
+                )
+            except Exception as e:
+                logger.warning("Dream save skipped: %s", e)
+
         # Deliver via WS if still connected
         if ws.is_connected(user_id):
             await ws.send_proactive(user_id, greeting)
             logger.info(
-                "Reflection-on-return sent to %s (away %dh): %s",
-                user_id, int(hours_away), greeting[:60]
+                "Reflection-on-return sent to %s (away %dh kind=%s): %s",
+                user_id, int(hours_away), kind, greeting[:60]
             )
     except Exception as e:
         logger.warning("Reflection-on-return failed: %s", e)

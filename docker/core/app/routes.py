@@ -637,6 +637,24 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         await reset(user_id_target, bucket)
         return {"ok": True, "user_id": user_id_target, "bucket": bucket}
 
+    # ── Dream diary (text-only memories from reflection-on-return) ──────────
+
+    @app.get("/api/dreams")
+    async def api_dreams(request: Request, limit: int = 20):
+        """List the user's saved dreams (reflection-on-return 'dream' path).
+
+        Dreams are memory-archive rows with category='Dreams', text-only by
+        default (filename starts with 'dream-' sentinel). Returns newest-first.
+        """
+        from . import error_codes as ec
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        from . import dreams as dream_mod
+        items = await dream_mod.list_dreams(user_id=user_id, limit=limit)
+        total = await dream_mod.count_dreams(user_id=user_id)
+        return {"count": len(items), "total": total, "dreams": items}
+
     # ── Affection timeline (Your Journey graph data) ────────────────────────
 
     @app.get("/api/user/affection-timeline")

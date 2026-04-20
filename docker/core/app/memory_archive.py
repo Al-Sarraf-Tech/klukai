@@ -33,7 +33,7 @@ IMAGES_DIR = Path(os.environ.get("IMAGES_DIR", "/images"))
 
 # Affection-gated categories
 CATEGORIES_BY_LEVEL = {
-    0: ["Tactical Operations", "Mission Records", "Squad Moments"],
+    0: ["Tactical Operations", "Mission Records", "Squad Moments", "Dreams"],
     3: ["The Commander", "Quiet Hours"],
     6: ["Precious Memories"],
 }
