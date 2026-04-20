@@ -54,17 +54,15 @@ echo "  flutter_bootstrap.js → $BOOT_HASHED"
 sed -i "s|flutter_bootstrap.js|$BOOT_HASHED|g" index.html
 
 echo ""
-echo "=== Step 6: Deploy to dominus ==="
-rsync -avz --delete -e 'ssh -p 2222' "$WEB_BUILD/" wsl2:~/klukai/web-build/
-
-echo ""
-echo "=== Step 7: Verify ==="
+echo "=== Step 6: Verify local deploy ==="
+# amarillo's companion-core bind-mounts ./web-build as /app/static (docker-compose.yml),
+# so the local file rewrite in Steps 3-5 IS the deploy. No remote rsync needed.
 echo "  Login page:"
-ssh -p 2222 wsl2 'curl -s http://localhost:8300/ | head -1'
+curl -s http://localhost:8300/ | head -1
 echo "  Flutter app:"
-ssh -p 2222 wsl2 'curl -s http://localhost:8300/app/ | grep "base href"'
+curl -s http://localhost:8300/app/ | grep "base href"
 echo "  Hashed JS exists:"
-ssh -p 2222 wsl2 "ls ~/klukai/web-build/$MAIN_HASHED ~/klukai/web-build/$BOOT_HASHED"
+ls "$WEB_BUILD/$MAIN_HASHED" "$WEB_BUILD/$BOOT_HASHED"
 
 echo ""
 echo "=== Deploy complete ==="
