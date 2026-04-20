@@ -578,6 +578,47 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         ok = await memory_archive.update_kept(memory_id, kept=False, user_id=user_id)
         return {"ok": ok}
 
+    # ── Affection timeline (Your Journey graph data) ────────────────────────
+
+    @app.get("/api/user/affection-timeline")
+    async def api_affection_timeline(request: Request, days: int = 30):
+        """Return the authenticated user's affection-score timeline over N days.
+
+        Pulls from companion_affection_log, bucketed by day. Useful for
+        graphing relationship progression in the Flutter UI.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        days = max(1, min(days, 365))
+        try:
+            pool = get_pool()
+            async with pool.connection() as conn:
+                rows = await (await conn.execute(
+                    "SELECT DATE(created_at) AS day, "
+                    "  MAX(new_score) AS end_score, "
+                    "  SUM(delta) AS net_delta, "
+                    "  COUNT(*) AS events "
+                    "FROM companion_affection_log "
+                    "WHERE user_id = %s AND created_at > NOW() - INTERVAL '%s days' "
+                    "GROUP BY DATE(created_at) "
+                    "ORDER BY day ASC",
+                    (user_id, days),
+                )).fetchall()
+            points = [
+                {
+                    "date": r[0].isoformat() if r[0] else None,
+                    "end_score": r[1],
+                    "net_delta": r[2],
+                    "events": r[3],
+                }
+                for r in rows
+            ]
+            return {"days": days, "count": len(points), "points": points}
+        except Exception as e:
+            logger.error("Affection timeline failed: %s", e)
+            return JSONResponse({"error": "Timeline unavailable"}, status_code=500)
+
     # ── Audit log viewer (admin-only) ──────────────────────────────────────
 
     @app.get("/api/audit")
