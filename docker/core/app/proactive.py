@@ -661,6 +661,14 @@ class ProactiveEngine:
             replace_existing=True,
         )
 
+        # Daily anniversary check: 14:00 UTC (~08:00 CST) — before morning greeting sends
+        self._scheduler.add_job(
+            self._anniversary_check,
+            CronTrigger(hour=13, minute=58),
+            id="anniversary_check",
+            replace_existing=True,
+        )
+
         self._scheduler.start()
         logger.info("Klukai proactive engine started")
 
@@ -1464,6 +1472,61 @@ class ProactiveEngine:
         self._user_messaged.clear()
         self._last_answered.clear()
         logger.info("Daily proactive, event, and romance counters reset (all users)")
+
+    async def _anniversary_check(self) -> None:
+        """Surface anniversary greetings at the start of each day.
+
+        For every user with activity in the past 30 days, load their
+        companion_firsts rows and check if today matches any anniversary
+        (via character_behaviors.select_anniversary_from_firsts). If so,
+        deliver a warm remark via ws.send_proactive (when connected) or
+        stash the anniversary as a flag for the morning briefing.
+        """
+        try:
+            from .db import get_pool
+            from .character_behaviors import select_anniversary_from_firsts
+
+            pool = get_pool()
+            async with pool.connection() as conn:
+                users = await (await conn.execute(
+                    "SELECT DISTINCT user_id FROM companion_messages "
+                    "WHERE created_at > NOW() - INTERVAL '30 days'"
+                )).fetchall()
+
+            if not users:
+                return
+
+            for (user_id,) in users:
+                async with pool.connection() as conn:
+                    firsts_rows = await (await conn.execute(
+                        "SELECT event_type, event_date, metadata "
+                        "FROM companion_firsts WHERE user_id = %s",
+                        (user_id,),
+                    )).fetchall()
+                firsts = [
+                    {"event_type": r[0], "event_date": r[1], "metadata": r[2]}
+                    for r in firsts_rows
+                ]
+                pick = select_anniversary_from_firsts(firsts)
+                if not pick:
+                    continue
+
+                years = pick["years"]
+                et = pick["event_type"].replace("_", " ")
+                msg = (
+                    f"Commander — today marks {years} year{'s' if years != 1 else ''} "
+                    f"since our {et}. I remember."
+                )
+                try:
+                    from .context import ws
+                    if ws.is_connected(user_id):
+                        await ws.send_proactive(user_id, msg)
+                    logger.info("Anniversary surfaced: user=%s years=%s type=%s",
+                                user_id, years, et)
+                except Exception as e:
+                    logger.warning("Anniversary send failed user=%s: %s", user_id, e)
+        except Exception as e:
+            logger.error("Anniversary check failed: %s", e)
 
     async def _weekly_reflection(self) -> None:
         """Write a per-user weekly reflection episode every Sunday evening.
