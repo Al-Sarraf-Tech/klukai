@@ -228,6 +228,94 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(_SecurityHeadersMiddleware)
 
 
+# ── Request ID tracing ──────────────────────────────────────────────────────
+
+class _RequestIdMiddleware(BaseHTTPMiddleware):
+    """Inject X-Request-ID on every request. Propagate if client sent one."""
+
+    async def dispatch(self, request: Request, call_next):
+        import uuid
+        rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+        request.state.request_id = rid
+        response: StarletteResponse = await call_next(request)
+        response.headers["X-Request-ID"] = rid
+        return response
+
+
+app.add_middleware(_RequestIdMiddleware)
+
+
+# ── Rate limiting ───────────────────────────────────────────────────────────
+
+# Map path prefix -> rate limit bucket. Longest match wins.
+_RATE_LIMIT_BUCKETS: dict[str, str] = {
+    "/api/auth/login":         "login",
+    "/api/user/export":        "export",
+    "/api/user/stats":         "stats",
+    "/api/tts":                "tts",
+    "/api/stt":                "stt",
+    "/api/generate-image":     "image_gen",
+    "/api/gift":               "gift",
+    "/api/mission":            "mission",
+    "/api/memories/search":    "search",
+}
+
+
+def _bucket_for_path(path: str) -> str | None:
+    """Return the rate limit bucket for a given path, or None to skip."""
+    hit = None
+    for prefix, bucket in _RATE_LIMIT_BUCKETS.items():
+        if path == prefix or path.startswith(prefix + "/"):
+            if hit is None or len(prefix) > len(hit[0]):
+                hit = (prefix, bucket)
+    return hit[1] if hit else None
+
+
+class _RateLimitMiddleware(BaseHTTPMiddleware):
+    """Enforce Redis-backed rate limits on rate-protected endpoints.
+
+    Uses user_id from Authorization header when present; falls back to
+    client IP for unauthenticated endpoints like /api/auth/login.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        bucket = _bucket_for_path(path)
+        if bucket is None:
+            return await call_next(request)
+
+        # Resolve identity: user_id from bearer token or IP for pre-auth calls
+        identity = None
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            try:
+                from .auth import get_user_from_token
+                identity = await get_user_from_token(auth[7:])
+            except Exception:
+                identity = None
+        if not identity:
+            identity = request.client.host if request.client else "anon"
+
+        from .rate_limit import check_and_consume, RateLimitExceeded
+        try:
+            remaining, retry_after = await check_and_consume(identity, bucket)
+        except RateLimitExceeded as exc:
+            return JSONResponse(
+                {"error": "Too many requests", "bucket": exc.bucket,
+                 "retry_after": exc.retry_after},
+                status_code=429,
+                headers={"Retry-After": str(exc.retry_after)},
+            )
+
+        response: StarletteResponse = await call_next(request)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers["X-RateLimit-Bucket"] = bucket
+        return response
+
+
+app.add_middleware(_RateLimitMiddleware)
+
+
 @app.exception_handler(Exception)
 async def _global_exception_handler(request: Request, exc: Exception):
     logger.error("Unhandled exception on %s: %s", request.url.path, exc, exc_info=True)
