@@ -653,6 +653,14 @@ class ProactiveEngine:
             replace_existing=True,
         )
 
+        # Weekly reflection: Sunday 21:00 CST (03:00 UTC Monday)
+        self._scheduler.add_job(
+            self._weekly_reflection,
+            CronTrigger(day_of_week="mon", hour=3, minute=0),
+            id="weekly_reflection",
+            replace_existing=True,
+        )
+
         self._scheduler.start()
         logger.info("Klukai proactive engine started")
 
@@ -1456,3 +1464,102 @@ class ProactiveEngine:
         self._user_messaged.clear()
         self._last_answered.clear()
         logger.info("Daily proactive, event, and romance counters reset (all users)")
+
+    async def _weekly_reflection(self) -> None:
+        """Write a per-user weekly reflection episode every Sunday evening.
+
+        Pulls the past 7 days of conversation + major events, asks the LLM
+        to write a short reflection in Klukai's voice. Stored as a special
+        episode with importance=8 so it surfaces later as a milestone.
+        """
+        try:
+            from .context import memory, router as llm_router
+            from .db import get_pool
+            from .models import LLMConfig
+            from .personality import build_character_preamble
+            import uuid
+
+            pool = get_pool()
+            async with pool.connection() as conn:
+                users = await (await conn.execute(
+                    "SELECT DISTINCT user_id FROM companion_messages "
+                    "WHERE created_at > NOW() - INTERVAL '7 days'"
+                )).fetchall()
+
+            if not users:
+                logger.info("Weekly reflection: no active users in past 7d, skipping")
+                return
+
+            for (user_id,) in users:
+                # Pull recent conversation context
+                async with pool.connection() as conn:
+                    rows = await (await conn.execute(
+                        "SELECT role, content FROM companion_messages "
+                        "WHERE user_id = %s AND created_at > NOW() - INTERVAL '7 days' "
+                        "ORDER BY created_at ASC LIMIT 200",
+                        (user_id,),
+                    )).fetchall()
+
+                if len(rows) < 10:
+                    logger.info("Weekly reflection: user=%s too few messages, skipping", user_id)
+                    continue
+
+                # Summarize via LLM
+                excerpt = "\n".join(
+                    f"{r[0]}: {r[1][:200]}" for r in rows[-80:]
+                )
+                from .personality import load_personality
+                p = load_personality()
+                affection_level = self._affection_levels.get(user_id, 0)
+                system_prompt = build_character_preamble(p, affection_level)
+                user_prompt = (
+                    "Write a private weekly reflection journal entry — a "
+                    "personal, honest note you'd keep for yourself. Reflect on "
+                    "the past week with Commander: what stood out, how you felt, "
+                    "what you'd want to return to. 120-200 words. First-person. "
+                    "No bullet points.\n\n"
+                    "Past week excerpt:\n" + excerpt
+                )
+                try:
+                    import os
+                    config = LLMConfig(
+                        provider="lmstudio",
+                        model="cognitivecomputations_dolphin-mistral-24b-venice-edition",
+                        base_url=os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234"),
+                        temperature=0.85,
+                        max_tokens=400,
+                    )
+                    resp = await llm_router.complete_local(
+                        system_prompt=system_prompt,
+                        messages=[{"role": "user", "content": user_prompt}],
+                        config=config,
+                    )
+                    reflection = (
+                        resp.get("choices", [{}])[0]
+                        .get("message", {})
+                        .get("content", "")
+                    )
+                except Exception as e:
+                    logger.warning("Weekly reflection LLM failed user=%s: %s", user_id, e)
+                    continue
+
+                if not reflection or len(reflection.strip()) < 50:
+                    continue
+
+                # Store as a special high-importance episode
+                episode_id = str(uuid.uuid4())
+                try:
+                    await memory.store_episode(
+                        episode_id=episode_id,
+                        summary=reflection.strip(),
+                        keywords=["weekly_reflection", "journal"],
+                        emotion_tags=["reflective"],
+                        importance=8,
+                        conversation_id="weekly-reflection",
+                        user_id=user_id,
+                    )
+                    logger.info("Weekly reflection saved: user=%s ep=%s", user_id, episode_id[:8])
+                except Exception as e:
+                    logger.warning("Weekly reflection save failed user=%s: %s", user_id, e)
+        except Exception as e:
+            logger.error("Weekly reflection job failed: %s", e)
