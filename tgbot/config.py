@@ -14,7 +14,7 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://100.111.198.19:16379/1")
 COMPANION_CORE_URL = os.environ.get("COMPANION_CORE_URL", "http://localhost:8300")
 COMPANION_VOICE_URL = os.environ.get("COMPANION_VOICE_URL", "http://localhost:8301")
 CLAUDE_CLI = os.environ.get("CLAUDE_CLI", "/home/jalsarraf/.local/bin/claude")
-COMPANION_DIR = os.environ.get("COMPANION_DIR", "/home/jalsarraf/git/companion")
+COMPANION_DIR = os.environ.get("COMPANION_DIR", "/home/jalsarraf/git/klukai")
 
 # Ops layer validates service names against this set to prevent injection
 VALID_SERVICES = {"core", "voice"}

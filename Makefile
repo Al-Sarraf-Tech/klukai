@@ -67,6 +67,6 @@ health:
 
 deploy: gateway
 	@echo "Gateway started on amarillo. Now deploy to dominus:"
-	@echo "  1. Copy repo to dominus:  rsync -avz --exclude .git . dominus:~/companion/"
+	@echo "  1. Copy repo to dominus:  rsync -avz --exclude .git . dominus:~/git/klukai/"
 	@echo "  2. SSH to dominus:        ssh dominus"
-	@echo "  3. Build and run:         cd ~/companion && make build && make run"
+	@echo "  3. Build and run:         cd ~/git/klukai && make build && make run"

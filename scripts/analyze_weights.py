@@ -7,7 +7,7 @@ import struct
 import json
 import sys
 
-GLB_PATH = "/home/jalsarraf/git/companion/web-build/assets/models/klukai.glb"
+GLB_PATH = "/home/jalsarraf/git/klukai/web-build/assets/models/klukai.glb"
 
 # --------------------------------------------------------------------------- #
 # 1. Parse GLB header + JSON chunk

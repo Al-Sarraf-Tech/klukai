@@ -55,7 +55,7 @@ sed -i "s|flutter_bootstrap.js|$BOOT_HASHED|g" index.html
 
 echo ""
 echo "=== Step 6: Deploy to dominus ==="
-rsync -avz --delete -e 'ssh -p 2222' "$WEB_BUILD/" wsl2:~/companion/web-build/
+rsync -avz --delete -e 'ssh -p 2222' "$WEB_BUILD/" wsl2:~/klukai/web-build/
 
 echo ""
 echo "=== Step 7: Verify ==="
@@ -64,7 +64,7 @@ ssh -p 2222 wsl2 'curl -s http://localhost:8300/ | head -1'
 echo "  Flutter app:"
 ssh -p 2222 wsl2 'curl -s http://localhost:8300/app/ | grep "base href"'
 echo "  Hashed JS exists:"
-ssh -p 2222 wsl2 "ls ~/companion/web-build/$MAIN_HASHED ~/companion/web-build/$BOOT_HASHED"
+ssh -p 2222 wsl2 "ls ~/klukai/web-build/$MAIN_HASHED ~/klukai/web-build/$BOOT_HASHED"
 
 echo ""
 echo "=== Deploy complete ==="

@@ -9,7 +9,7 @@ import json
 import sys
 from collections import Counter
 
-GLB_PATH = "/home/jalsarraf/git/companion/web-build/assets/models/klukai.glb"
+GLB_PATH = "/home/jalsarraf/git/klukai/web-build/assets/models/klukai.glb"
 
 # --------------------------------------------------------------------------- #
 # Parse GLB

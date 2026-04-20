@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/jalsarraf/git/companion
-ExecStart=/home/jalsarraf/git/companion/tgbot/.venv/bin/python -m tgbot
-EnvironmentFile=/home/jalsarraf/git/companion/tgbot/.env
+WorkingDirectory=/home/jalsarraf/git/klukai
+ExecStart=/home/jalsarraf/git/klukai/tgbot/.venv/bin/python -m tgbot
+EnvironmentFile=/home/jalsarraf/git/klukai/tgbot/.env
 Restart=always
 RestartSec=5
 StandardOutput=append:/mnt/nvmeINT/logs/klukai-bot.log

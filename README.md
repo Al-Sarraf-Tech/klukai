@@ -191,10 +191,10 @@ Klukai runs on two machines connected via Tailscale:
 
 ```bash
 # Build and deploy
-cd ~/companion
+cd ~/git/klukai
 flutter build web --release --base-href /app/
-rsync -avz . wsl2:~/companion/
-ssh wsl2 "cd ~/companion && docker compose build && docker compose up -d"
+rsync -avz . wsl2:~/klukai/
+ssh wsl2 "cd ~/klukai && docker compose build && docker compose up -d"
 
 # Health check
 curl -sf http://localhost:8300/health
