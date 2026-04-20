@@ -179,9 +179,14 @@ async def check_ip_banned(ip: str) -> bool:
 
 
 async def get_user_from_token(token: str) -> str | None:
-    """Look up user_id from a session token. Returns None if expired/invalid."""
+    """Look up user_id from a session token. Returns None if expired/invalid.
+
+    Rolling-refresh: successful lookups extend expires_at by 7 days if
+    current expiry is <3 days away, so an active user never gets logged
+    out mid-session.
+    """
     try:
-        async with get_conn() as conn:
+        async with get_conn_autocommit() as conn:
             row = await (
                 await conn.execute(
                     "SELECT user_id, expires_at FROM companion_auth_sessions "
@@ -197,12 +202,86 @@ async def get_user_from_token(token: str) -> str | None:
                     from datetime import timezone as tz
                     expires = expires.replace(tzinfo=tz.utc)
                 if now < expires:
+                    # Roll the expiry forward on active use (within 3 days of expiry)
+                    from datetime import timedelta
+                    if expires - now < timedelta(days=3):
+                        try:
+                            await conn.execute(
+                                "UPDATE companion_auth_sessions "
+                                "SET expires_at = NOW() + INTERVAL '7 days' "
+                                "WHERE token = %s",
+                                (token,),
+                            )
+                        except Exception:
+                            pass  # refresh is best-effort
                     return row[0]
                 else:
                     logger.debug("Token expired for user %s", row[0])
     except Exception as e:
         logger.warning("Token lookup failed: %s", e)
     return None
+
+
+async def get_session_info(token: str) -> dict | None:
+    """Return session metadata (expires_at, created_at) for /api/session/info."""
+    try:
+        async with get_conn() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT user_id, created_at, expires_at "
+                    "FROM companion_auth_sessions WHERE token = %s",
+                    (token,),
+                )
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "user_id": row[0],
+                "created_at": row[1].isoformat() if row[1] else None,
+                "expires_at": row[2].isoformat() if row[2] else None,
+            }
+    except Exception as e:
+        logger.warning("get_session_info failed: %s", e)
+        return None
+
+
+async def change_password(user_id: str, old_password: str, new_password: str) -> bool:
+    """Change a user's password. Requires correct current password.
+
+    Returns True on success. On success, invalidates ALL existing sessions
+    for this user (forces logout on all devices).
+    """
+    if not new_password or len(new_password) < 8:
+        return False
+    try:
+        async with get_conn_autocommit() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT password_hash FROM companion_users WHERE id = %s",
+                    (user_id,),
+                )
+            ).fetchone()
+            if not row or not bcrypt.checkpw(old_password.encode(), row[0].encode()):
+                return False
+            new_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+            await conn.execute(
+                "UPDATE companion_users SET password_hash = %s WHERE id = %s",
+                (new_hash, user_id),
+            )
+            # Invalidate all existing sessions for this user
+            await conn.execute(
+                "DELETE FROM companion_auth_sessions WHERE user_id = %s",
+                (user_id,),
+            )
+            try:
+                from . import audit
+                await audit.log("password.changed", user_id=user_id)
+            except Exception:
+                pass
+            return True
+    except Exception as e:
+        logger.error("Password change failed for %s: %s", user_id, e)
+        return False
 
 
 async def cleanup_expired_sessions() -> int:

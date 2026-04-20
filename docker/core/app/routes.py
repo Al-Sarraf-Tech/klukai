@@ -56,6 +56,10 @@ class PushSubscription(BaseModel):
     endpoint: str
     keys: dict
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8, max_length=128)
+
 logger = logging.getLogger(__name__)
 
 
@@ -577,6 +581,61 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         ok = await memory_archive.update_kept(memory_id, kept=False, user_id=user_id)
         return {"ok": ok}
+
+    # ── Session info + password change ──────────────────────────────────────
+
+    @app.get("/api/session/info")
+    async def api_session_info(request: Request):
+        """Return the current session's expiry + age metadata."""
+        from . import error_codes as ec
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return ec.auth_required()
+        token = auth[7:]
+        from .auth import get_session_info
+        info = await get_session_info(token)
+        if not info:
+            return ec.err(ec.AUTH_INVALID, "Session not found", status_code=401)
+        return info
+
+    @app.post("/api/user/change-password")
+    async def api_change_password(req: ChangePasswordRequest, request: Request):
+        """Change the authenticated user's password.
+
+        Rate-limited via middleware (login bucket — shares brute-force protection).
+        Invalidates all existing sessions on success.
+        """
+        from . import error_codes as ec
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        from .auth import change_password
+        ok = await change_password(user_id, req.old_password, req.new_password)
+        if not ok:
+            return ec.err(ec.AUTH_INVALID, "Current password incorrect or new password too weak",
+                           status_code=400)
+        return {"ok": True, "sessions_invalidated": True}
+
+    # ── Admin: rate-limit reset ─────────────────────────────────────────────
+
+    @app.post("/api/admin/rate-limit/reset")
+    async def api_admin_ratelimit_reset(request: Request, user_id_target: str, bucket: str):
+        """Clear a (user_id, bucket) rate-limit counter. Admin only.
+
+        Use for debugging or unstucking a user who hit a limit accidentally.
+        """
+        from . import error_codes as ec
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        if user_id != "jalsarraf":
+            return ec.admin_only()
+        from .rate_limit import reset, LIMITS
+        if bucket not in LIMITS and bucket != "default":
+            return ec.err(ec.INPUT_INVALID, f"Unknown bucket: {bucket}", status_code=400,
+                           extra={"known": list(LIMITS.keys())})
+        await reset(user_id_target, bucket)
+        return {"ok": True, "user_id": user_id_target, "bucket": bucket}
 
     # ── Affection timeline (Your Journey graph data) ────────────────────────
 
