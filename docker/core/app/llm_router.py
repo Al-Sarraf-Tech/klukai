@@ -316,13 +316,28 @@ class LLMRouter:
                 body["tools"] = tools
                 body["tool_choice"] = "auto"
 
+            import time as _time
+            _start = _time.monotonic()
             r = await self._http.post(
                 f"{config.base_url}/v1/chat/completions",
                 json=body,
                 timeout=120.0,
             )
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+            try:
+                from .observability import record_llm_usage
+                usage = data.get("usage") or {}
+                record_llm_usage(
+                    model=config.model,
+                    tokens_in=int(usage.get("prompt_tokens", 0) or 0),
+                    tokens_out=int(usage.get("completion_tokens", 0) or 0),
+                    latency_ms=(_time.monotonic() - _start) * 1000,
+                    route="chat",
+                )
+            except Exception:
+                pass
+            return data
 
     async def _stream_anthropic(
         self, system_prompt: str, messages: list[dict], config: LLMConfig
