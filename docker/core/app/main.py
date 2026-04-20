@@ -316,6 +316,31 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
 app.add_middleware(_RateLimitMiddleware)
 
 
+# ── Metrics recording ───────────────────────────────────────────────────────
+
+class _MetricsMiddleware(BaseHTTPMiddleware):
+    """Count requests and record latency for every handled request."""
+
+    async def dispatch(self, request: Request, call_next):
+        import time
+        from . import metrics
+        start = time.monotonic()
+        try:
+            response: StarletteResponse = await call_next(request)
+        except Exception:
+            elapsed_ms = (time.monotonic() - start) * 1000
+            metrics.incr("requests_total", path=request.url.path, status="500")
+            metrics.observe_latency("request_latency_ms", elapsed_ms, path=request.url.path)
+            raise
+        elapsed_ms = (time.monotonic() - start) * 1000
+        metrics.incr("requests_total", path=request.url.path, status=str(response.status_code))
+        metrics.observe_latency("request_latency_ms", elapsed_ms, path=request.url.path)
+        return response
+
+
+app.add_middleware(_MetricsMiddleware)
+
+
 @app.exception_handler(Exception)
 async def _global_exception_handler(request: Request, exc: Exception):
     logger.error("Unhandled exception on %s: %s", request.url.path, exc, exc_info=True)

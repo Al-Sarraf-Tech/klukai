@@ -131,6 +131,12 @@ async def authenticate(username: str, password: str, ip: str) -> str | None:
                     (ip,),
                 )
                 logger.info("User %s authenticated from %s", username, ip)
+                try:
+                    from . import audit
+                    await audit.log(audit.EVENT_LOGIN_SUCCESS, user_id=row[0],
+                                    ip_address=ip, metadata={"username": username})
+                except Exception:
+                    pass
                 return token
             else:
                 # Failure — record attempt
@@ -140,6 +146,12 @@ async def authenticate(username: str, password: str, ip: str) -> str | None:
                     (ip,),
                 )
                 logger.warning("Failed login for '%s' from %s", username, ip)
+                try:
+                    from . import audit
+                    await audit.log(audit.EVENT_LOGIN_FAILURE, user_id=None,
+                                    ip_address=ip, metadata={"username": username})
+                except Exception:
+                    pass
                 return None
     except Exception as e:
         logger.error("Authentication error: %s", e)

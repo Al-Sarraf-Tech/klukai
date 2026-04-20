@@ -546,6 +546,55 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         ok = await memory_archive.update_kept(memory_id, kept=False, user_id=user_id)
         return {"ok": ok}
 
+    # ── Audit log viewer (admin-only) ──────────────────────────────────────
+
+    @app.get("/api/audit")
+    async def api_audit(
+        request: Request,
+        limit: int = 100,
+        event_type: str | None = None,
+        user_id_filter: str | None = None,
+    ):
+        """Read recent audit events. Admin only.
+
+        Query params: limit (1-1000), event_type, user_id_filter.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        if user_id != "jalsarraf":
+            return JSONResponse({"error": "Admin only"}, status_code=403)
+        from . import audit
+        events = await audit.recent(limit=limit, event_type=event_type,
+                                    user_id=user_id_filter)
+        return {"count": len(events), "events": events}
+
+    # ── Metrics (admin-only) ────────────────────────────────────────────────
+
+    @app.get("/api/metrics")
+    async def api_metrics(request: Request):
+        """In-process metrics snapshot (admin user only).
+
+        Returns counters, latency histograms, and uptime. Admin scoping:
+        user must be 'jalsarraf' (the operator). Other users get 403.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        if user_id != "jalsarraf":
+            return JSONResponse({"error": "Admin only"}, status_code=403)
+        from . import metrics as _m
+        snap = _m.snapshot()
+        try:
+            pool = get_pool()
+            snap["db_pool"] = {
+                "min_size": pool.min_size,
+                "max_size": pool.max_size,
+            }
+        except Exception:
+            snap["db_pool"] = {"status": "unavailable"}
+        return snap
+
     # ── Memory search (full-text over annotations + prompts) ───────────────
 
     @app.get("/api/memories/search")
@@ -747,6 +796,24 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                 "first_interaction": aff.first_interaction.isoformat() if aff.first_interaction else None,
             }
 
+            # Audit the export
+            try:
+                from . import audit
+                ip = request.client.host if request.client else None
+                await audit.log(
+                    audit.EVENT_EXPORT_REQUESTED,
+                    user_id=user_id,
+                    ip_address=ip,
+                    request_id=getattr(request.state, "request_id", None),
+                    metadata={
+                        "include_messages": include_messages,
+                        "include_memories": include_memories,
+                        "message_count": len(export.get("messages", [])),
+                        "memory_count": len(export.get("memories_kept", [])),
+                    },
+                )
+            except Exception:
+                pass
             return export
         except Exception as e:
             logger.error("Export failed: %s", e)
