@@ -68,7 +68,7 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
     best-effort nicety.
     """
     try:
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timezone
         from .db import get_pool
 
         pool = get_pool()
