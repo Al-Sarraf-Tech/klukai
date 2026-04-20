@@ -347,6 +347,17 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             await ws.send_proactive(user_id, reaction)
             await ws.send_affection(user_id, aff_state.score, aff_state.level, aff_state.level_name, bonus)
 
+        try:
+            from . import audit
+            ip = request.client.host if request.client else None
+            await audit.log(
+                audit.EVENT_GIFT_GIVEN, user_id=user_id, ip_address=ip,
+                request_id=getattr(request.state, "request_id", None),
+                metadata={"gift": gift_name, "tier": tier, "bonus": bonus},
+            )
+        except Exception:
+            pass
+
         return {"tier": tier, "bonus": bonus, "reaction": reaction, "new_score": aff_state.score}
 
     # ── Mission mode ───────────────────────────────────────────────────────
@@ -363,6 +374,17 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
         aff_state = await affection.get_state(user_id)
         asyncio.create_task(_run_mission(user_id, aff_state.level))
+
+        try:
+            from . import audit
+            ip = request.client.host if request.client else None
+            await audit.log(
+                audit.EVENT_MISSION_STARTED, user_id=user_id, ip_address=ip,
+                request_id=getattr(request.state, "request_id", None),
+            )
+        except Exception:
+            pass
+
         return {"status": "deployed"}
 
     # ── Milestones ─────────────────────────────────────────────────────────
@@ -395,6 +417,16 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         if req.costume not in valid:
             return JSONResponse({"error": f"Invalid. Choose from: {valid}"}, status_code=400)
         _current_costume = req.costume
+        try:
+            from . import audit
+            ip = request.client.host if request.client else None
+            await audit.log(
+                audit.EVENT_COSTUME_CHANGED, user_id=user_id, ip_address=ip,
+                request_id=getattr(request.state, "request_id", None),
+                metadata={"costume": req.costume},
+            )
+        except Exception:
+            pass
         return {"costume": _current_costume}
 
     # ── STT proxy ──────────────────────────────────────────────────────────
