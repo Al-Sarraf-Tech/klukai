@@ -141,13 +141,27 @@ class MemoryManager:
             logger.warning("Failed to create Qdrant collection, will retry later")
 
     async def embed_text(self, text: str) -> list[float]:
+        # Cache-first path — same text yields same vector
+        try:
+            from . import caches
+            cached = await caches.get_embedding(text)
+            if cached:
+                return cached
+        except Exception:
+            pass
         try:
             r = await self._http.post(
                 f"{INFERENCE_URL}/v1/embeddings",
                 json={"input": text, "model": "nomic-embed-text-v1.5"},
             )
             r.raise_for_status()
-            return r.json()["data"][0]["embedding"]
+            vector = r.json()["data"][0]["embedding"]
+            try:
+                from . import caches
+                await caches.put_embedding(text, vector)
+            except Exception:
+                pass
+            return vector
         except Exception as e:
             logger.error("EMBEDDING FAILED — search quality degraded: %s", e)
             return [0.0] * EMBED_DIM
