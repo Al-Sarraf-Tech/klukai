@@ -1,6 +1,6 @@
-# Run on dominus: companion-core + companion-voice
-# Reaches aichat services on amarillo via Tailscale (100.111.198.19)
-# Web traffic arrives via companion-gateway on amarillo → here
+# Run on amarillo: companion-core (consolidated with aichat infra)
+# Shares Docker networks with infra-postgres, redis, qdrant locally
+# companion-voice remains on dominus (RTX 3090, CUDA required)
 services:
   companion-core:
     build: ./docker/core
@@ -9,7 +9,7 @@ services:
       - "8300:8300"
     environment:
       # aichat services on amarillo (LAN via Docker network)
-      DATABASE_URL: "postgresql://aichat:${POSTGRES_PASSWORD:?}@aichat-db:5432/aichat"
+      DATABASE_URL: "postgresql://aichat:${POSTGRES_PASSWORD:?}@infra-postgres:5432/aichat"
       REDIS_URL: "redis://aichat-redis:6379/1"
       QDRANT_URL: "http://aichat-vector:6333"
       MCP_URL: "http://aichat-mcp:8096"
@@ -21,7 +21,7 @@ services:
       LM_STUDIO_URL: "http://192.168.50.2:1234"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       # ComfyUI on dominus (LAN)
-      COMFYUI_URL: "http://192.168.50.2:8188"
+      COMFYUI_URL: "http://192.168.50.2:8388"
       PERSONALITY_PATH: "/config/personality.yaml"
       VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY:-}"
       VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY:-}"
@@ -40,6 +40,7 @@ services:
     networks:
       - default
       - aichat
+      - infra
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8300/health"]
@@ -48,36 +49,16 @@ services:
       retries: 3
       start_period: 10s
 
-  companion-voice:
-    build: ./docker/voice
-    container_name: companion-voice
-    environment:
-      TTS_ENGINE: "xtts"
-      REFERENCE_WAV: "/app/reference/klukai_reference.wav"
-      WHISPER_MODEL: "${WHISPER_MODEL:-base.en}"
-      TTS_HOME: "/app/models/tts"
-    volumes:
-      - voice-models:/app/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8301/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
+  # companion-voice runs on dominus (RTX 3090, CUDA required)
+  # Compose: dominus:~/git/klukai/docker-compose.voice.yml
+  # Reachable at 192.168.50.2:8301
 
 volumes:
-  voice-models:
   companion-images:
 
 networks:
   aichat:
     external: true
     name: aichat_default
+  infra:
+    external: true

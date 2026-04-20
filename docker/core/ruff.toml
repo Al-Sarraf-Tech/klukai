@@ -1,0 +1,6 @@
+[lint]
+select = ["E", "F", "W"]
+ignore = ["E501", "F541", "F841"]
+
+[lint.per-file-ignores]
+"tests/*" = ["F811"]  # Allow fixture redefinition

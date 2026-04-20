@@ -149,7 +149,7 @@ class MemoryManager:
             r.raise_for_status()
             return r.json()["data"][0]["embedding"]
         except Exception as e:
-            logger.warning("Embedding failed: %s — returning zero vector", e)
+            logger.error("EMBEDDING FAILED — search quality degraded: %s", e)
             return [0.0] * EMBED_DIM
 
     async def store_episode(
@@ -162,6 +162,9 @@ class MemoryManager:
         conversation_id: str | None = None,
         user_id: str = "jalsarraf",
     ) -> str:
+        created_at = datetime.now().isoformat()
+
+        # Qdrant vector storage
         try:
             vector = await self.embed_text(summary)
             await self._http.put(
@@ -178,14 +181,30 @@ class MemoryManager:
                                 "importance": importance,
                                 "conversation_id": conversation_id,
                                 "user_id": user_id,
-                                "created_at": datetime.now().isoformat(),
+                                "created_at": created_at,
                             },
                         }
                     ]
                 },
             )
         except Exception as e:
-            logger.warning("Failed to store episode %s: %s", episode_id[:8], e)
+            logger.error("Failed to store episode %s in Qdrant: %s", episode_id[:8], e)
+
+        # PostgreSQL fallback — ensures episodes survive Qdrant outages
+        try:
+            from .db import get_conn_autocommit
+            async with get_conn_autocommit() as conn:
+                await conn.execute(
+                    "INSERT INTO companion_episodes "
+                    "(id, conversation_id, summary, keywords, emotion_tags, importance, embedding_id, user_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (id) DO NOTHING",
+                    (episode_id, conversation_id, summary, keywords,
+                     emotion_tags, importance, episode_id, user_id),
+                )
+        except Exception as e:
+            logger.error("Failed to store episode %s in DB: %s", episode_id[:8], e)
+
         return episode_id
 
     async def recall_episodes(

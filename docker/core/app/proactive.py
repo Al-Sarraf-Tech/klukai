@@ -15,6 +15,8 @@ from .events import publish as publish_event
 
 logger = logging.getLogger(__name__)
 
+
+
 # Guardrails
 MAX_PROACTIVE_PER_DAY = 23
 QUIET_HOUR_START = 23  # 2300 hours
@@ -401,24 +403,33 @@ class ProactiveEngine:
 
     def __init__(self) -> None:
         self._scheduler = AsyncIOScheduler()
-        self._proactive_count_today: int = 0
-        self._last_proactive_answered: bool = True
         self._muted_until: datetime | None = None
         self._on_message_callback = None
         self._on_recap_callback = None
-        self._affection_level: int = 0
-        # Random event state
+        self._session_getter = None  # callback to get current session state
+        # Per-user counters (shared counters caused cross-user blocking)
+        self._proactive_counts: dict[str, int] = {}
+        self._last_answered: dict[str, bool] = {}
+        self._random_event_counts: dict[str, int] = {}
+        self._moods: dict[str, str] = {}
+        self._affection_levels: dict[str, int] = {}
+        self._mission_timers: dict[str, MissionTimer] = {}
+        self._romance_delivered: dict[str, bool] = {}
+        self._dream_delivered: dict[str, bool] = {}
+        self._user_messaged: dict[str, bool] = {}
+        # Shared state (safe to share)
         self._last_random_event: datetime | None = None
-        self._random_events_today: int = 0
         self._last_message_time: datetime | None = None
+        # Legacy compat — used by scheduled jobs that broadcast
+        self._proactive_count_today: int = 0
+        self._last_proactive_answered: bool = True
+        self._random_events_today: int = 0
         self._last_mood: str = "composed"
-        # Mission timer
+        self._affection_level: int = 0
         self._mission_timer: MissionTimer | None = None
-        # Romance window
         self._romance_delivered_today: bool = False
         self._dream_delivered_today: bool = False
         self._user_messaged_today: bool = False
-        self._session_getter = None  # callback to get current session state
 
     def set_callback(self, callback) -> None:
         """Set callback for delivering proactive messages."""
@@ -428,13 +439,15 @@ class ProactiveEngine:
         """Set callback for generating daily recap (calls LLM)."""
         self._on_recap_callback = callback
 
-    def set_affection_level(self, level: int) -> None:
-        """Update the current affection level for message selection."""
-        self._affection_level = level
+    def set_affection_level(self, level: int, user_id: str = "jalsarraf") -> None:
+        """Update the current affection level for message selection (per-user)."""
+        self._affection_levels[user_id] = level
+        self._affection_level = level  # Legacy compat for scheduled jobs
 
-    def set_last_mood(self, mood: str) -> None:
-        """Track the last mood for context-aware event filtering."""
-        self._last_mood = mood
+    def set_last_mood(self, mood: str, user_id: str = "jalsarraf") -> None:
+        """Track the last mood for context-aware event filtering (per-user)."""
+        self._moods[user_id] = mood
+        self._last_mood = mood  # Legacy compat for scheduled jobs
 
     def set_session_getter(self, getter) -> None:
         """Set a callback to retrieve current session state (for romance context)."""
@@ -442,36 +455,40 @@ class ProactiveEngine:
 
     # ── Mission timer management ──────────────────────────────────────────
 
-    def start_mission(self, description: str, interval_minutes: int = 30) -> None:
-        """Start a mission timer with periodic LLM-generated field reports."""
-        if self._mission_timer and self._mission_timer.active:
-            self._mission_timer.stop()
-        self._mission_timer = MissionTimer()
-        self._mission_timer.start(
+    def start_mission(self, description: str, interval_minutes: int = 30,
+                       user_id: str = "jalsarraf") -> None:
+        """Start a per-user mission timer with periodic LLM-generated field reports."""
+        # Stop existing mission for this user if any
+        existing = self._mission_timers.get(user_id)
+        if existing and existing.active:
+            existing.stop()
+        timer = MissionTimer()
+        timer.start(
             description=description,
             interval_minutes=interval_minutes,
             callback=self._on_message_callback,
-            affection_level=self._affection_level,
+            affection_level=self._affection_levels.get(user_id, 0),
         )
+        self._mission_timers[user_id] = timer
+        self._mission_timer = timer  # Legacy compat
 
     def stop_mission(self, user_id: str = "jalsarraf", trigger_aftermath: bool = True) -> None:
-        """Stop the active mission timer. Triggers aftermath image + decompression."""
-        if self._mission_timer and self._mission_timer.active:
-            # Capture timer state BEFORE stopping — the async task needs it
-            timer_snapshot = self._mission_timer
+        """Stop the active mission timer for a user. Triggers aftermath image + decompression."""
+        timer = self._mission_timers.get(user_id) or self._mission_timer
+        if timer and timer.active:
+            timer_snapshot = timer
             had_injury = any("injured" in e for e in timer_snapshot.active_events)
             if trigger_aftermath:
                 asyncio.create_task(
                     self.trigger_mission_aftermath_image(user_id, timer=timer_snapshot)
                 )
-                # Schedule delayed decompression message (15-30 min later)
                 asyncio.create_task(
                     self._decompression_message(user_id, had_injury, timer_snapshot.update_count)
                 )
-            # Set physical state based on mission outcome
             asyncio.create_task(self._set_post_mission_physical(user_id, had_injury))
-            self._mission_timer.stop()
-        self._mission_timer = None
+            timer.stop()
+        self._mission_timers.pop(user_id, None)
+        self._mission_timer = None  # Legacy compat
 
     async def _set_post_mission_physical(self, user_id: str, had_injury: bool) -> None:
         """Set physical state after mission ends."""
@@ -532,9 +549,10 @@ class ProactiveEngine:
     def mission_active(self) -> bool:
         return self._mission_timer is not None and self._mission_timer.active
 
-    def mark_user_messaged_today(self) -> None:
+    def mark_user_messaged_today(self, user_id: str = "jalsarraf") -> None:
         """Record that the user sent at least one message today."""
-        self._user_messaged_today = True
+        self._user_messaged[user_id] = True
+        self._user_messaged_today = True  # Legacy compat
 
     def start(self) -> None:
         # Morning briefing at 0800
@@ -1424,9 +1442,17 @@ class ProactiveEngine:
             logger.warning("Mission aftermath failed: %s", e)
 
     async def _reset_daily(self) -> None:
+        # Reset legacy shared counters
         self._proactive_count_today = 0
         self._random_events_today = 0
         self._dream_delivered_today = False
         self._romance_delivered_today = False
         self._user_messaged_today = False
-        logger.info("Daily proactive, event, and romance counters reset")
+        # Reset per-user counters
+        self._proactive_counts.clear()
+        self._random_event_counts.clear()
+        self._romance_delivered.clear()
+        self._dream_delivered.clear()
+        self._user_messaged.clear()
+        self._last_answered.clear()
+        logger.info("Daily proactive, event, and romance counters reset (all users)")

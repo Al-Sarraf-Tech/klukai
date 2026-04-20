@@ -18,9 +18,9 @@ class TestSeedConfig:
         seed_path = Path(__file__).resolve().parent.parent / "seed_memories.py"
         return seed_path.read_text()
 
-    def test_selector_uses_gpt_oss(self, seed_module_text):
-        """Selection pass must use gpt-oss-20b for reliable JSON."""
-        assert 'SELECTOR_MODEL = "gpt-oss-20b' in seed_module_text
+    def test_selector_uses_dolphin(self, seed_module_text):
+        """Selection pass uses dolphin — gpt-oss returns garbage under VRAM pressure."""
+        assert 'SELECTOR_MODEL = "cognitivecomputations_dolphin' in seed_module_text
 
     def test_annotator_uses_dolphin(self, seed_module_text):
         """Annotation pass must use dolphin — gpt-oss-20b leaks chain-of-thought."""

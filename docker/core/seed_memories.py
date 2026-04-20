@@ -31,7 +31,7 @@ LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://host.docker.internal:123
 COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://host.docker.internal:8388")
 
 # gpt-oss-20b for selection: reliable structured JSON at low temperature
-SELECTOR_MODEL = "gpt-oss-20b-absolute-heresy-i1"
+SELECTOR_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 # dolphin-24b for annotation: clean creative text, no chain-of-thought leakage
 ANNOTATOR_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
@@ -246,6 +246,13 @@ async def main():
         elif arg.startswith("--user="):
             target_user = arg.split("=", 1)[1]
 
+    # Signal keepalive to back off during seeding (avoids VRAM fights)
+    try:
+        from app.llm_router import set_seeding_active
+        set_seeding_active(True)
+    except ImportError:
+        pass  # Running standalone outside container
+
     logger.info("=== Memory Seeder Starting (user: %s) ===", target_user)
     logger.info("Selector: %s | Annotator: %s", SELECTOR_MODEL, ANNOTATOR_MODEL)
 
@@ -293,6 +300,38 @@ async def main():
         logger.info("No new exchanges to process")
         await conn.close()
         return
+
+    # ── VRAM management: free ComfyUI before LLM-heavy passes ─────────
+    async def _free_comfyui_vram():
+        """Ask ComfyUI to unload models and release VRAM for LLM work."""
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                await c.post(f"{COMFYUI_URL}/free",
+                             json={"unload_models": True, "free_memory": True})
+                logger.info("ComfyUI VRAM freed for LLM passes")
+        except Exception:
+            logger.debug("ComfyUI not reachable (may not be running)")
+
+    async def _warm_model(model: str):
+        """Send a minimal request to ensure model is loaded before heavy use."""
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as c:
+                r = await c.post(f"{LM_STUDIO_URL}/v1/chat/completions", json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "."}],
+                    "max_tokens": 1, "temperature": 0, "stream": False,
+                })
+                if r.status_code == 200:
+                    logger.info("Model %s warmed up", model.split("/")[-1][:30])
+                else:
+                    logger.warning("Model warmup returned %d: %s", r.status_code, r.text[:100])
+        except Exception as e:
+            logger.warning("Model warmup failed: %s", e)
+
+    # Free ComfyUI VRAM and warm the selector model before Pass 1
+    await _free_comfyui_vram()
+    await asyncio.sleep(3)
+    await _warm_model(SELECTOR_MODEL)
 
     # ── PASS 1: Selection ────────────────────────────────────────────────
     logger.info("=== PASS 1: Selection (%s) ===", SELECTOR_MODEL)
@@ -377,6 +416,12 @@ async def main():
         return
 
     # ── PASS 3: Image Generation ─────────────────────────────────────────
+    # Free LLM VRAM before image gen — send a dummy request to let LM Studio
+    # know we're done with the model, then give ComfyUI room
+    logger.info("Freeing LLM VRAM for image generation...")
+    await _free_comfyui_vram()  # Also free ComfyUI's stale allocations
+    await asyncio.sleep(5)  # Let VRAM settle
+
     logger.info("=== PASS 3: Image Generation ===")
     sys.path.insert(0, "/app")
     from app.image_gen import build_prompt, generate_image
@@ -457,6 +502,14 @@ async def main():
 
     await close_pool()
     await conn.close()
+
+    # Release seeding lock so keepalive resumes
+    try:
+        from app.llm_router import set_seeding_active
+        set_seeding_active(False)
+    except ImportError:
+        pass
+
     logger.info("=== SEEDING COMPLETE: %d/%d memories saved ===", saved_count, len(selected))
 
 

@@ -15,6 +15,8 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from pydantic import BaseModel, Field
+
 from . import memory_archive
 from .context import ws, memory, router, affection
 from .db import get_pool
@@ -26,6 +28,33 @@ from .image_gen import generate_image
 from .models import SessionState
 from .personality import load_personality
 from .push import add_subscription, get_vapid_public_key
+
+
+# ── Request models ────────────────────────────────────────────────────────
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class TTSRequest(BaseModel):
+    text: str = Field(min_length=1)
+    language: str = "en"
+
+class STTRequest(BaseModel):
+    audio: str = Field(min_length=1)
+
+class ImageGenRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=2000)
+
+class GiftRequest(BaseModel):
+    gift: str = Field(min_length=1)
+
+class CostumeRequest(BaseModel):
+    costume: str
+
+class PushSubscription(BaseModel):
+    endpoint: str
+    keys: dict
 
 logger = logging.getLogger(__name__)
 
@@ -50,16 +79,14 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Authentication ─────────────────────────────────────────────────────
 
     @app.post("/api/auth/login")
-    async def login(req: dict, request: Request):
+    async def login(req: LoginRequest, request: Request):
         from .auth import authenticate, check_ip_banned
         ip = request.client.host if request.client else "unknown"
         if await check_ip_banned(ip):
             return JSONResponse({"error": "IP banned"}, status_code=403)
-        username = req.get("username", "")
-        password = req.get("password", "")
-        token = await authenticate(username, password, ip)
+        token = await authenticate(req.username, req.password, ip)
         if token:
-            return {"token": token, "user_id": username}
+            return {"token": token, "user_id": req.username}
         return JSONResponse({"error": "Invalid credentials"}, status_code=401)
 
     @app.get("/api/auth/verify")
@@ -116,6 +143,104 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             "qdrant": "ok" if qdrant_ok else "down",
         }
 
+    # ── Subsystem health (S+ feature: loud failure detection) ───────────
+
+    @app.get("/api/health/subsystems")
+    async def subsystem_health(request: Request):
+        """Deep health check of all external subsystems.
+
+        Returns per-subsystem status so the UI can show degradation clearly
+        instead of failures being silent.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+
+        import httpx as _hx
+
+        results = {}
+
+        # Database
+        try:
+            from .db import check_health as db_health
+            db = await db_health()
+            results["database"] = {"status": "ok" if db.get("status") == "ok" else "down", **db}
+        except Exception:
+            results["database"] = {"status": "down"}
+
+        # Redis
+        try:
+            from .memory import REDIS_URL
+            import redis.asyncio as aioredis
+            r = aioredis.from_url(REDIS_URL, decode_responses=True)
+            await r.ping()
+            await r.aclose()
+            results["redis"] = {"status": "ok"}
+        except Exception:
+            results["redis"] = {"status": "down"}
+
+        # Qdrant
+        try:
+            from .memory import QDRANT_URL
+            async with _hx.AsyncClient(timeout=3.0) as c:
+                resp = await c.get(f"{QDRANT_URL}/healthz")
+                results["qdrant"] = {"status": "ok" if resp.status_code == 200 else "degraded"}
+        except Exception:
+            results["qdrant"] = {"status": "down"}
+
+        # LM Studio
+        try:
+            lm_url = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
+            async with _hx.AsyncClient(timeout=5.0) as c:
+                resp = await c.get(f"{lm_url}/v1/models")
+                models = [m["id"] for m in resp.json().get("data", [])]
+                results["lm_studio"] = {"status": "ok", "models_loaded": len(models), "models": models}
+        except Exception:
+            results["lm_studio"] = {"status": "down"}
+
+        # ComfyUI
+        try:
+            comfy_url = os.environ.get("COMFYUI_URL", "http://192.168.50.2:8388")
+            async with _hx.AsyncClient(timeout=5.0) as c:
+                resp = await c.get(f"{comfy_url}/system_stats")
+                stats = resp.json()
+                gpu = stats.get("devices", [{}])[0]
+                vram_free_gb = round(gpu.get("vram_free", 0) / 1e9, 1)
+                results["comfyui"] = {"status": "ok", "gpu": gpu.get("name", "?"), "vram_free_gb": vram_free_gb}
+        except Exception:
+            results["comfyui"] = {"status": "down"}
+
+        # Embedding service
+        try:
+            from .memory import INFERENCE_URL
+            async with _hx.AsyncClient(timeout=5.0) as c:
+                resp = await c.get(f"{INFERENCE_URL}/health")
+                results["embeddings"] = {"status": "ok" if resp.status_code == 200 else "degraded"}
+        except Exception:
+            results["embeddings"] = {"status": "down"}
+
+        # Voice service
+        try:
+            voice_url = os.environ.get("VOICE_URL", "http://192.168.50.2:8301")
+            async with _hx.AsyncClient(timeout=5.0) as c:
+                resp = await c.get(f"{voice_url}/health")
+                results["voice"] = {"status": "ok" if resp.status_code == 200 else "degraded"}
+        except Exception:
+            results["voice"] = {"status": "down"}
+
+        # Overall
+        statuses = [v["status"] for v in results.values()]
+        if all(s == "ok" for s in statuses):
+            overall = "ok"
+        elif results["database"]["status"] == "down":
+            overall = "critical"
+        elif any(s == "down" for s in statuses):
+            overall = "degraded"
+        else:
+            overall = "ok"
+
+        return {"status": overall, "subsystems": results}
+
     # ── Push subscription ──────────────────────────────────────────────────
 
     @app.get("/api/vapid-key")
@@ -123,11 +248,11 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         return {"key": get_vapid_public_key()}
 
     @app.post("/api/push/subscribe")
-    async def push_subscribe(sub: dict, request: Request):
+    async def push_subscribe(sub: PushSubscription, request: Request):
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Not authenticated"}, status_code=401)
-        await add_subscription(user_id, sub)
+        await add_subscription(user_id, sub.model_dump())
         return {"ok": True}
 
     # ── Affection state ────────────────────────────────────────────────────
@@ -143,50 +268,43 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── TTS proxy ──────────────────────────────────────────────────────────
 
     @app.post("/api/tts")
-    async def api_tts(req: dict, request: Request):
+    async def api_tts(req: TTSRequest, request: Request):
         """Proxy TTS request to companion-voice and return base64 audio."""
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        text = req.get("text", "")
-        if not text:
-            return JSONResponse({"error": "No text"}, status_code=400)
 
         voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
-        tts_text = _strip_actions_for_tts(text)
+        tts_text = _strip_actions_for_tts(req.text)
         if not tts_text.strip():
             return JSONResponse({"error": "No speakable text"}, status_code=400)
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 r = await client.post(
                     f"{voice_url}/tts",
-                    json={"text": tts_text[:500], "language": req.get("language", "en")},
+                    json={"text": tts_text[:500], "language": req.language},
                 )
                 if r.status_code == 200:
                     import base64
                     return {"audio": base64.b64encode(r.content).decode()}
                 return JSONResponse({"error": "TTS failed"}, status_code=r.status_code)
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=503)
+        except Exception:
+            return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
 
     # ── Image generation ───────────────────────────────────────────────────
 
     @app.post("/api/generate-image")
-    async def api_generate_image(req: dict, request: Request):
+    async def api_generate_image(req: ImageGenRequest, request: Request):
         """Generate an image via ComfyUI and save to memory archive."""
-        prompt = req.get("prompt", "")
-        if not prompt:
-            return JSONResponse({"error": "No prompt"}, status_code=400)
-
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        img_bytes = await generate_image(prompt)
+        img_bytes = await generate_image(req.prompt)
         if img_bytes:
             import base64
             aff_state = await affection.get_state(user_id)
             mem_id = await memory_archive.save_image(
-                img_bytes, prompt, "api",
+                img_bytes, req.prompt, "api",
                 mood="composed", affection_level=aff_state.level,
                 user_id=user_id,
             )
@@ -200,14 +318,12 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Gift system ────────────────────────────────────────────────────────
 
     @app.post("/api/gift")
-    async def api_gift(req: dict, request: Request):
+    async def api_gift(req: GiftRequest, request: Request):
         """Send a gift to Klukai. Returns her reaction and affection change."""
-        gift_name = req.get("gift", "")
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        if not gift_name:
-            return JSONResponse({"error": "No gift specified"}, status_code=400)
+        gift_name = req.gift
 
         p = load_personality()
         prefs = p.get("gift_preferences", {})
@@ -236,7 +352,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Mission mode ───────────────────────────────────────────────────────
 
     @app.post("/api/mission")
-    async def api_mission(req: dict, request: Request):
+    async def api_mission(request: Request):
         """Send Klukai on a mission. She returns with a report and a gift."""
         user_id = await _get_user_id(request)
         if not user_id:
@@ -263,37 +379,39 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Costume ────────────────────────────────────────────────────────────
 
     @app.get("/api/costume")
-    async def api_get_costume():
+    async def api_get_costume(request: Request):
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
         return {"costume": _current_costume}
 
     @app.post("/api/costume")
-    async def api_set_costume(req: dict):
+    async def api_set_costume(req: CostumeRequest, request: Request):
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
         global _current_costume
-        costume = req.get("costume", "blazing_star")
         valid = ["blazing_star", "speed_star", "astral_luminous", "cerulean_breaker"]
-        if costume not in valid:
+        if req.costume not in valid:
             return JSONResponse({"error": f"Invalid. Choose from: {valid}"}, status_code=400)
-        _current_costume = costume
+        _current_costume = req.costume
         return {"costume": _current_costume}
 
     # ── STT proxy ──────────────────────────────────────────────────────────
 
     @app.post("/api/stt")
-    async def api_stt(req: dict, request: Request):
+    async def api_stt(req: STTRequest, request: Request):
         """Proxy STT request to companion-voice."""
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        audio = req.get("audio", "")
-        if not audio:
-            return JSONResponse({"error": "No audio"}, status_code=400)
         voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(f"{voice_url}/stt", json={"audio": audio})
+                r = await client.post(f"{voice_url}/stt", json={"audio": req.audio})
                 return r.json()
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=503)
+        except Exception:
+            return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
 
     # ── Conversation history ───────────────────────────────────────────────
 

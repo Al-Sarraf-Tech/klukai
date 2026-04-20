@@ -59,6 +59,13 @@ _model_last_used: dict[str, float] = {}
 # skip keepalive pings and let LM Studio evict models from VRAM.
 IDLE_TIMEOUT = 2 * 3600  # 2 hours
 _last_user_message: float = 0.0
+_seeding_active: bool = False  # Set by seed_memories.py to suppress keepalive
+
+
+def set_seeding_active(active: bool) -> None:
+    """Signal that memory seeding is running — suppresses keepalive to avoid VRAM fights."""
+    global _seeding_active
+    _seeding_active = active
 
 
 def mark_user_active() -> None:
@@ -338,11 +345,23 @@ class LLMRouter:
         if not self._lmstudio_available:
             return
 
-        # Auto-unload: skip keepalive when user is idle and no mission running
-        if _is_user_idle():
-            from .proactive import has_active_mission
-            if not has_active_mission():
-                logger.info("LLM idle unload: skipping keepalive, letting models evict")
+        # Skip keepalive during memory seeding — it fights for VRAM
+        if _seeding_active:
+            logger.debug("Keepalive skipped: memory seeding active")
+            return
+
+        # Auto-unload: skip keepalive when no users connected AND no mission running
+        # Exception: early AM (1-4) — proactive engine needs LLM for dreams/events
+        from datetime import datetime
+        hour = datetime.now().hour
+        early_am_window = 1 <= hour <= 4
+        from .context import ws
+        anyone_connected = bool(ws._connections)
+        from .proactive import has_active_mission
+
+        if not anyone_connected and not has_active_mission() and not early_am_window:
+            if _is_user_idle():
+                logger.info("LLM idle unload: no connections, no mission, letting models evict")
                 return
 
         gate = get_lm_gate()

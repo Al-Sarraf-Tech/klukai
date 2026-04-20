@@ -65,18 +65,16 @@ class AgentLoop:
         """Search Klukai's memory for the Commander."""
         query = args.get("query", "")
         try:
-            from .memory import CompanionMemory
-            memory = CompanionMemory.instance() if hasattr(CompanionMemory, 'instance') else None
-            if not memory:
-                return {"content": [{"type": "text", "text": "Memory system unavailable."}]}
+            from .context import memory
 
-            # Search facts
-            facts = await memory.recall_facts_by_pattern(f"*{query.replace(' ', '*')}*", user_id=user_id)
+            # Search facts — data API uses SQL LIKE patterns (% wildcard)
+            pattern = f"rel:%{query.replace(' ', '%')}%"
+            facts = await memory.recall_facts_by_pattern(pattern, user_id=user_id)
             fact_text = "\n".join(f"- {f.get('value', '')}" for f in facts[:5]) if facts else "No matching facts found."
 
-            # Search episodic
-            episodes = await memory.search_episodic(query, user_id=user_id, limit=3)
-            ep_text = "\n".join(f"- {e.get('content', '')[:150]}" for e in episodes) if episodes else ""
+            # Search episodic memories via Qdrant
+            episodes = await memory.recall_episodes(query, user_id=user_id, limit=3)
+            ep_text = "\n".join(f"- {e.get('summary', '')[:150]}" for e in episodes) if episodes else ""
 
             result = f"Facts:\n{fact_text}"
             if ep_text:
@@ -84,6 +82,7 @@ class AgentLoop:
 
             return {"content": [{"type": "text", "text": result}]}
         except Exception as e:
+            logger.error("recall_memory tool failed: %s", e)
             return {"content": [{"type": "text", "text": f"Memory search error: {e}"}]}
 
     async def _builtin_get_time(self) -> dict:

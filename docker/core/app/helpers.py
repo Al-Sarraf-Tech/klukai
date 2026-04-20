@@ -335,12 +335,12 @@ async def store_message(
     latency_ms: int | None = None,
     user_id: str = "jalsarraf",
 ) -> None:
-    """Store a message and update conversation turn count."""
+    """Store a message and update conversation turn count atomically."""
     import logging
-    from .db import get_conn_autocommit
+    from .db import get_conn
     logger = logging.getLogger(__name__)
     try:
-        async with get_conn_autocommit() as conn:
+        async with get_conn() as conn:
             await conn.execute(
                 "INSERT INTO companion_messages "
                 "(conversation_id, role, content, model, latency_ms, user_id) "
@@ -352,5 +352,6 @@ async def store_message(
                 "model_used = %s WHERE id = %s",
                 (model, conversation_id),
             )
+            await conn.commit()
     except Exception as e:
         logger.error("Failed to store message: %s", e)

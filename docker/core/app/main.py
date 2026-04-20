@@ -8,8 +8,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
 
 from .context import (
     affection,
@@ -173,7 +177,7 @@ async def lifespan(app: FastAPI):
     # Session token cleanup — runs every 6 hours
     async def _session_cleanup_loop():
         while True:
-            await asyncio.sleep(6 * 3600)
+            await asyncio.sleep(3600)
             try:
                 from .auth import cleanup_expired_sessions
                 await cleanup_expired_sessions()
@@ -181,7 +185,7 @@ async def lifespan(app: FastAPI):
                 pass
     asyncio.create_task(_session_cleanup_loop())
 
-    logger.info("Klukai companion core started (keepalive every 20 min, session cleanup every 6h)")
+    logger.info("Klukai companion core started (keepalive every 20 min, session cleanup every 1h)")
 
     yield
 
@@ -198,6 +202,37 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Companion Core", version="0.1.0", lifespan=lifespan)
+
+
+# ── Security middleware ─────────────────────────────────────────────────────
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://klukai.appnest.cc", "http://localhost:8300"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+
+class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: StarletteResponse = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+
+app.add_middleware(_SecurityHeadersMiddleware)
+
+
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled exception on %s: %s", request.url.path, exc, exc_info=True)
+    return JSONResponse({"error": "Internal server error"}, status_code=500)
+
 
 # Register all HTTP routes from routes.py
 register_routes(app)
