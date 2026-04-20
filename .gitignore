@@ -18,6 +18,8 @@ flutter_app/.flutter-plugins-dependencies
 .vscode/
 .superpowers/
 .playwright-mcp/
+.remember/
+.ruff_cache/
 companion-*.png
 assets/source-models/
 assets/textures/
