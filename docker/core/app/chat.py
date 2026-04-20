@@ -57,6 +57,106 @@ logger = logging.getLogger(__name__)
 # ── WebSocket ────────────────────────────────────────────────────────────────
 
 
+REFLECTION_MIN_HOURS_AWAY = 8
+REFLECTION_MAX_HOURS_AWAY = 72  # Over 3 days = too stale, skip
+
+
+async def _maybe_reflect_on_return(user_id: str) -> None:
+    """Greet the returning user with a reference to the last topic if away >8h.
+
+    Pulled from companion_messages. Silent fail on any error — this is a
+    best-effort nicety.
+    """
+    try:
+        from datetime import datetime, timezone, timedelta
+        from .db import get_pool
+
+        pool = get_pool()
+        last_at = None
+        recent_excerpts: list[tuple[str, str]] = []
+        async with pool.connection() as conn:
+            # Last message time
+            row = await (await conn.execute(
+                "SELECT MAX(created_at) FROM companion_messages WHERE user_id = %s",
+                (user_id,),
+            )).fetchone()
+            if not row or not row[0]:
+                return  # Brand new user — let them lead
+            last_at = row[0]
+
+            # Last 6 exchanges for context
+            rows = await (await conn.execute(
+                "SELECT role, content FROM companion_messages "
+                "WHERE user_id = %s ORDER BY created_at DESC LIMIT 6",
+                (user_id,),
+            )).fetchall()
+            recent_excerpts = [(r[0], r[1][:250]) for r in reversed(rows)]
+
+        # Compute hours away
+        now = datetime.now(timezone.utc)
+        if last_at.tzinfo is None:
+            last_at = last_at.replace(tzinfo=timezone.utc)
+        hours_away = (now - last_at).total_seconds() / 3600
+
+        if hours_away < REFLECTION_MIN_HOURS_AWAY:
+            return  # Still active — don't greet
+        if hours_away > REFLECTION_MAX_HOURS_AWAY:
+            return  # Too long — let user set tone when they come back
+
+        if not recent_excerpts:
+            return
+
+        # Small delay so the UI settles before the greeting arrives
+        import asyncio
+        await asyncio.sleep(3)
+
+        excerpt_text = "\n".join(f"{role}: {content}" for role, content in recent_excerpts)
+        from .personality import load_personality, build_character_preamble
+        p = load_personality()
+        aff_state = await affection.get_state(user_id)
+        system_prompt = build_character_preamble(p, aff_state.level)
+        user_prompt = (
+            f"Commander just reconnected after being away for about {int(hours_away)} hours. "
+            "Greet them warmly but briefly (1-2 sentences). Reference something specific "
+            "from the last exchanges below — a topic, a feeling, or something you'd been "
+            "curious about. Do not use bullet points. Stay in first-person.\n\n"
+            "Recent exchanges:\n" + excerpt_text
+        )
+
+        import os
+        from .models import LLMConfig
+        config = LLMConfig(
+            provider="lmstudio",
+            model="cognitivecomputations_dolphin-mistral-24b-venice-edition",
+            base_url=os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234"),
+            temperature=0.9,
+            max_tokens=180,
+        )
+        resp = await router.complete_local(
+            system_prompt=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+            config=config,
+        )
+        greeting = (
+            resp.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        if not greeting or len(greeting) < 10:
+            return
+
+        # Deliver via WS if still connected
+        if ws.is_connected(user_id):
+            await ws.send_proactive(user_id, greeting)
+            logger.info(
+                "Reflection-on-return sent to %s (away %dh): %s",
+                user_id, int(hours_away), greeting[:60]
+            )
+    except Exception as e:
+        logger.warning("Reflection-on-return failed: %s", e)
+
+
 async def _handle_tap_interact(user_id: str) -> None:
     """Handle tap interaction — deliver a short proactive comment."""
     if proactive and proactive._can_send():
@@ -478,6 +578,11 @@ def register_websocket(app: FastAPI) -> None:
                 "Mission timer restored from session: every %d min",
                 session.mission_interval,
             )
+
+        # Reflection-on-return: if user was away >8h, greet them referencing
+        # the last topic. Runs in background so it never blocks the connect.
+        import asyncio as _asyncio
+        _asyncio.create_task(_maybe_reflect_on_return(user_id))
 
         try:
             while True:
