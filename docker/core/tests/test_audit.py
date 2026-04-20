@@ -35,6 +35,10 @@ def _find_route(app: FastAPI, path: str, method: str):
 
 
 class _FakeConn:
+    """Fake connection that supports audit.log's 3-query flow:
+       (1) SELECT prev chain_hash; (2) INSERT RETURNING id, created_at;
+       (3) UPDATE SET chain_hash."""
+
     def __init__(self, rows=None):
         self._rows = rows or []
         self.executed_sqls: list[str] = []
@@ -44,6 +48,15 @@ class _FakeConn:
         self.executed_sqls.append(sql)
         self.executed_params.append(params or ())
         result = AsyncMock()
+        if "SELECT chain_hash" in sql:
+            result.fetchone = AsyncMock(return_value=None)  # no prior rows
+        elif "RETURNING" in sql:
+            from datetime import datetime, timezone
+            result.fetchone = AsyncMock(
+                return_value=(1, datetime(2026, 4, 20, tzinfo=timezone.utc))
+            )
+        else:
+            result.fetchone = AsyncMock(return_value=None)
         result.fetchall = AsyncMock(return_value=self._rows)
         return result
 
@@ -52,6 +65,14 @@ class _FakeConn:
 
     async def __aexit__(self, *a):
         return None
+
+    @property
+    def insert_params(self) -> tuple:
+        """Return the params tuple for the INSERT (the one with RETURNING)."""
+        for sql, params in zip(self.executed_sqls, self.executed_params):
+            if "INSERT INTO companion_audit_log" in sql and "RETURNING" in sql:
+                return params
+        return ()
 
 
 class _FakePool:
@@ -85,7 +106,8 @@ class TestAuditLog:
         pool = _FakePool(conn)
         with patch("app.audit.get_pool", return_value=pool):
             await log("test", metadata={"a": 1, "b": "x"})
-        params = conn.executed_params[0]
+        params = conn.insert_params
+        assert params, "no INSERT with RETURNING found"
         assert "a" in params[-1] and "1" in params[-1]
 
     @pytest.mark.asyncio
@@ -106,7 +128,8 @@ class TestAuditLog:
         pool = _FakePool(conn)
         with patch("app.audit.get_pool", return_value=pool):
             await log("login.failure", user_id=None, ip_address="1.2.3.4")
-        params = conn.executed_params[0]
+        params = conn.insert_params
+        assert params, "no INSERT with RETURNING found"
         # user_id is second param (event_type, user_id, ip, request_id, metadata)
         assert params[1] is None
 

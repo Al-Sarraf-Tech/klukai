@@ -678,6 +678,45 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             logger.error("Affection timeline failed: %s", e)
             return JSONResponse({"error": "Timeline unavailable"}, status_code=500)
 
+    # ── Audit chain integrity check (admin-only) ──────────────────────────
+
+    @app.get("/api/audit/verify-chain")
+    async def api_audit_verify_chain(request: Request, limit: int = 500):
+        """Verify the HMAC hash chain over the last N audit rows.
+
+        Admin-only. Returns {valid, break_at_id, checked}. A break means
+        a row was modified or deleted since insert.
+        """
+        from . import error_codes as ec
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        if user_id != "jalsarraf":
+            return ec.admin_only()
+        limit = max(1, min(limit, 5000))
+        try:
+            pool = get_pool()
+            async with pool.connection() as conn:
+                rows_raw = await (await conn.execute(
+                    "SELECT id, event_type, user_id, ip_address, request_id, "
+                    "metadata, created_at, chain_hash "
+                    "FROM companion_audit_log ORDER BY id ASC LIMIT %s",
+                    (limit,),
+                )).fetchall()
+            rows = [
+                {
+                    "id": r[0], "event_type": r[1], "user_id": r[2],
+                    "ip_address": r[3], "request_id": r[4], "metadata": r[5],
+                    "created_at": str(r[6] or ""), "chain_hash": r[7],
+                }
+                for r in rows_raw
+            ]
+            from . import audit_chain
+            return audit_chain.verify_chain(rows)
+        except Exception as e:
+            logger.error("Audit chain verify failed: %s", e)
+            return ec.err(ec.INTERNAL_ERROR, "Verify failed", status_code=500)
+
     # ── Audit log viewer (admin-only) ──────────────────────────────────────
 
     @app.get("/api/audit")

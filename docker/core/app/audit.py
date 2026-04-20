@@ -36,17 +36,53 @@ async def log(
     request_id: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
-    """Append one event to companion_audit_log. Never raises."""
+    """Append one event to companion_audit_log with HMAC chain hash.
+
+    Each row's chain_hash = HMAC(prev_row.chain_hash + canonical(this_row)).
+    Tamper-detection verifier can replay the chain and flag any breaks.
+    Never raises on DB failures.
+    """
     try:
         pool = get_pool()
         async with pool.connection() as conn:
-            await conn.execute(
+            # Fetch previous chain_hash (most recent row)
+            prev_row = await (await conn.execute(
+                "SELECT chain_hash FROM companion_audit_log "
+                "ORDER BY id DESC LIMIT 1"
+            )).fetchone()
+            prev_hash = prev_row[0] if prev_row else None
+
+            # Insert and get the new row id + timestamp
+            new_row = await (await conn.execute(
                 "INSERT INTO companion_audit_log "
                 "(event_type, user_id, ip_address, request_id, metadata) "
-                "VALUES (%s, %s, %s, %s, %s)",
+                "VALUES (%s, %s, %s, %s, %s) "
+                "RETURNING id, created_at",
                 (event_type, user_id, ip_address, request_id,
                  json.dumps(metadata) if metadata else None),
-            )
+            )).fetchone()
+            if not new_row:
+                return
+            row_id, created_at = new_row
+
+            try:
+                from . import audit_chain
+                chain_hash = audit_chain.compute_row_hash(
+                    row_id=row_id,
+                    event_type=event_type,
+                    user_id=user_id,
+                    ip_address=ip_address,
+                    request_id=request_id,
+                    metadata=metadata,
+                    created_at=str(created_at),
+                    prev_hash=prev_hash,
+                )
+                await conn.execute(
+                    "UPDATE companion_audit_log SET chain_hash = %s WHERE id = %s",
+                    (chain_hash, row_id),
+                )
+            except Exception as e:
+                logger.warning("Audit chain hash failed for row %s: %s", row_id, e)
     except Exception as e:
         logger.warning("Audit log write failed: event=%s err=%s", event_type, e)
 
