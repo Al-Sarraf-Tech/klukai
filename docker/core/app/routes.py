@@ -546,6 +546,212 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         ok = await memory_archive.update_kept(memory_id, kept=False, user_id=user_id)
         return {"ok": ok}
 
+    # ── Memory search (full-text over annotations + prompts) ───────────────
+
+    @app.get("/api/memories/search")
+    async def api_memories_search(request: Request, q: str, limit: int = 20):
+        """Search memory annotations by ILIKE substring. Scoped to user."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        if not q or len(q.strip()) < 2:
+            return JSONResponse({"error": "Query must be at least 2 characters"}, status_code=400)
+        limit = max(1, min(limit, 100))
+        try:
+            pool = get_pool()
+            async with pool.connection() as conn:
+                rows = await conn.execute(
+                    "SELECT id, filename, annotation, category, scene_tags, created_at "
+                    "FROM companion_memories "
+                    "WHERE user_id = %s "
+                    "  AND (annotation ILIKE %s OR prompt ILIKE %s) "
+                    "  AND kept = true "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (user_id, f"%{q}%", f"%{q}%", limit),
+                )
+                results = [
+                    {
+                        "id": str(r[0]),
+                        "filename": r[1],
+                        "annotation": r[2],
+                        "category": r[3],
+                        "scene_tags": r[4],
+                        "created_at": r[5].isoformat() if r[5] else None,
+                    }
+                    for r in await rows.fetchall()
+                ]
+            return {"query": q, "count": len(results), "results": results}
+        except Exception as e:
+            logger.error("Memory search failed: %s", e)
+            return JSONResponse({"error": "Search failed"}, status_code=500)
+
+    # ── User stats (Your Journey) ──────────────────────────────────────────
+
+    @app.get("/api/user/stats")
+    async def api_user_stats(request: Request):
+        """Aggregate per-user stats for 'Your Journey' dashboard.
+
+        Counts messages, distinct-day activity, memories kept, gifts given,
+        milestones reached, and current affection snapshot.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        try:
+            pool = get_pool()
+            async with pool.connection() as conn:
+                msg = await (await conn.execute(
+                    "SELECT COUNT(*), COUNT(DISTINCT DATE(created_at)), MIN(created_at), MAX(created_at) "
+                    "FROM companion_messages WHERE user_id = %s",
+                    (user_id,),
+                )).fetchone()
+                total_messages, days_active, first_msg, last_msg = (msg or (0, 0, None, None))
+
+                user_msg = await (await conn.execute(
+                    "SELECT COUNT(*) FROM companion_messages WHERE user_id = %s AND role = 'user'",
+                    (user_id,),
+                )).fetchone()
+                user_message_count = (user_msg or (0,))[0]
+
+                mem = await (await conn.execute(
+                    "SELECT COUNT(*), COUNT(*) FILTER (WHERE kept = true), "
+                    "COUNT(*) FILTER (WHERE filename IS NOT NULL) "
+                    "FROM companion_memories WHERE user_id = %s",
+                    (user_id,),
+                )).fetchone()
+                total_memories, memories_kept, memories_with_image = (mem or (0, 0, 0))
+
+                gift = await (await conn.execute(
+                    "SELECT COUNT(*) FROM companion_gifts WHERE user_id = %s",
+                    (user_id,),
+                )).fetchone()
+                gift_count = (gift or (0,))[0]
+
+                first = await (await conn.execute(
+                    "SELECT COUNT(*) FROM companion_firsts WHERE user_id = %s",
+                    (user_id,),
+                )).fetchone()
+                firsts_count = (first or (0,))[0]
+
+            aff = await affection.get_state(user_id)
+            return {
+                "user_id": user_id,
+                "total_messages": total_messages,
+                "user_messages": user_message_count,
+                "klukai_messages": total_messages - user_message_count,
+                "days_active": days_active,
+                "first_interaction": first_msg.isoformat() if first_msg else None,
+                "last_interaction": last_msg.isoformat() if last_msg else None,
+                "memories": {
+                    "total": total_memories,
+                    "kept": memories_kept,
+                    "with_image": memories_with_image,
+                },
+                "gifts_given": gift_count,
+                "milestones_reached": firsts_count,
+                "affection": {
+                    "score": aff.score,
+                    "level": aff.level,
+                    "level_name": aff.level_name,
+                    "consecutive_days": aff.consecutive_days,
+                    "total_interactions": aff.total_interactions,
+                },
+            }
+        except Exception as e:
+            logger.error("User stats failed: %s", e)
+            return JSONResponse({"error": "Stats unavailable"}, status_code=500)
+
+    # ── Conversation export (user data portability) ────────────────────────
+
+    @app.get("/api/user/export")
+    async def api_user_export(request: Request, include_memories: bool = True, include_messages: bool = True):
+        """Export the user's data as a single JSON bundle.
+
+        Respects scoping: only the authenticated user's own data is included.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        try:
+            pool = get_pool()
+            export: dict = {"user_id": user_id, "exported_at": None}
+            from datetime import datetime, timezone
+            export["exported_at"] = datetime.now(timezone.utc).isoformat()
+
+            async with pool.connection() as conn:
+                if include_messages:
+                    rows = await conn.execute(
+                        "SELECT role, content, content_type, mood, model, created_at "
+                        "FROM companion_messages WHERE user_id = %s "
+                        "ORDER BY created_at ASC",
+                        (user_id,),
+                    )
+                    export["messages"] = [
+                        {
+                            "role": r[0],
+                            "content": r[1],
+                            "content_type": r[2],
+                            "mood": r[3],
+                            "model": r[4],
+                            "created_at": r[5].isoformat() if r[5] else None,
+                        }
+                        for r in await rows.fetchall()
+                    ]
+
+                rows = await conn.execute(
+                    "SELECT event_type, event_date, metadata FROM companion_firsts "
+                    "WHERE user_id = %s ORDER BY event_date ASC",
+                    (user_id,),
+                )
+                export["milestones"] = [
+                    {"event_type": r[0], "event_date": r[1].isoformat() if r[1] else None, "metadata": r[2]}
+                    for r in await rows.fetchall()
+                ]
+
+                rows = await conn.execute(
+                    "SELECT item, description, sentiment, given_date FROM companion_gifts "
+                    "WHERE user_id = %s ORDER BY given_date ASC",
+                    (user_id,),
+                )
+                export["gifts"] = [
+                    {"item": r[0], "description": r[1], "sentiment": r[2],
+                     "given_date": r[3].isoformat() if r[3] else None}
+                    for r in await rows.fetchall()
+                ]
+
+                if include_memories:
+                    rows = await conn.execute(
+                        "SELECT annotation, category, scene_tags, prompt, created_at "
+                        "FROM companion_memories WHERE user_id = %s AND kept = true "
+                        "ORDER BY created_at ASC",
+                        (user_id,),
+                    )
+                    export["memories_kept"] = [
+                        {
+                            "annotation": r[0],
+                            "category": r[1],
+                            "scene_tags": r[2],
+                            "prompt": r[3],
+                            "created_at": r[4].isoformat() if r[4] else None,
+                        }
+                        for r in await rows.fetchall()
+                    ]
+
+            aff = await affection.get_state(user_id)
+            export["affection_snapshot"] = {
+                "score": aff.score,
+                "level": aff.level,
+                "level_name": aff.level_name,
+                "consecutive_days": aff.consecutive_days,
+                "total_interactions": aff.total_interactions,
+                "first_interaction": aff.first_interaction.isoformat() if aff.first_interaction else None,
+            }
+
+            return export
+        except Exception as e:
+            logger.error("Export failed: %s", e)
+            return JSONResponse({"error": "Export failed"}, status_code=500)
+
     # ── Root redirect ──────────────────────────────────────────────────────
 
     @app.get("/flutter_service_worker.js")
