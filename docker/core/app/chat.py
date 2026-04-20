@@ -98,11 +98,17 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
             last_at = last_at.replace(tzinfo=timezone.utc)
         hours_away = (now - last_at).total_seconds() / 3600
 
-        if hours_away < REFLECTION_MIN_HOURS_AWAY:
-            return  # Still active — don't greet
-        if hours_away > REFLECTION_MAX_HOURS_AWAY:
-            return  # Too long — let user set tone when they come back
-
+        # Classify the greeting kind (dream / reflection / silent)
+        from .character_behaviors import classify_return_greeting
+        local_hour = datetime.now().hour
+        kind = classify_return_greeting(
+            hours_away=hours_away,
+            local_hour=local_hour,
+            min_hours=REFLECTION_MIN_HOURS_AWAY,
+            max_hours=REFLECTION_MAX_HOURS_AWAY,
+        )
+        if kind == "silent":
+            return
         if not recent_excerpts:
             return
 
@@ -115,13 +121,23 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
         p = load_personality()
         aff_state = await affection.get_state(user_id)
         system_prompt = build_character_preamble(p, aff_state.level)
-        user_prompt = (
-            f"Commander just reconnected after being away for about {int(hours_away)} hours. "
-            "Greet them warmly but briefly (1-2 sentences). Reference something specific "
-            "from the last exchanges below — a topic, a feeling, or something you'd been "
-            "curious about. Do not use bullet points. Stay in first-person.\n\n"
-            "Recent exchanges:\n" + excerpt_text
-        )
+        if kind == "dream":
+            user_prompt = (
+                f"Commander just reconnected in the morning after being away "
+                f"about {int(hours_away)} hours. Open by telling them — warmly, "
+                "briefly (2-3 sentences) — about a dream you had that was loosely "
+                "inspired by your last conversation. First-person. Don't describe "
+                "the dream as fiction — you lived it. No bullet points.\n\n"
+                "Last conversation excerpt:\n" + excerpt_text
+            )
+        else:
+            user_prompt = (
+                f"Commander just reconnected after being away for about {int(hours_away)} hours. "
+                "Greet them warmly but briefly (1-2 sentences). Reference something specific "
+                "from the last exchanges below — a topic, a feeling, or something you'd been "
+                "curious about. Do not use bullet points. Stay in first-person.\n\n"
+                "Recent exchanges:\n" + excerpt_text
+            )
 
         import os
         from .models import LLMConfig
