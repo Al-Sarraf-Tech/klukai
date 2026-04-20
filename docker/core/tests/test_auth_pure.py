@@ -86,7 +86,7 @@ class TestGetUserFromToken:
         from app.auth import get_user_from_token
         future = datetime.now(timezone.utc) + timedelta(hours=1)
         conn = _FakeConn(fetchone_result=("alice", future))
-        with patch("app.auth.get_conn", return_value=conn):
+        with patch("app.auth.get_conn_autocommit", return_value=conn):
             user = await get_user_from_token("good-token")
         assert user == "alice"
 
@@ -95,7 +95,7 @@ class TestGetUserFromToken:
         from app.auth import get_user_from_token
         past = datetime.now(timezone.utc) - timedelta(hours=1)
         conn = _FakeConn(fetchone_result=("alice", past))
-        with patch("app.auth.get_conn", return_value=conn):
+        with patch("app.auth.get_conn_autocommit", return_value=conn):
             user = await get_user_from_token("expired-token")
         assert user is None
 
@@ -103,7 +103,7 @@ class TestGetUserFromToken:
     async def test_missing_token_returns_none(self):
         from app.auth import get_user_from_token
         conn = _FakeConn(fetchone_result=None)
-        with patch("app.auth.get_conn", return_value=conn):
+        with patch("app.auth.get_conn_autocommit", return_value=conn):
             user = await get_user_from_token("bogus-token")
         assert user is None
 
@@ -113,7 +113,7 @@ class TestGetUserFromToken:
         from app.auth import get_user_from_token
         future_naive = datetime.utcnow() + timedelta(hours=1)  # deliberately naive
         conn = _FakeConn(fetchone_result=("bob", future_naive))
-        with patch("app.auth.get_conn", return_value=conn):
+        with patch("app.auth.get_conn_autocommit", return_value=conn):
             user = await get_user_from_token("tok")
         assert user == "bob"
 
