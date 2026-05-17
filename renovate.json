@@ -1,0 +1,89 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "klukai dep update policy — Phase 3 S+ uplift",
+  "extends": [
+    "config:recommended",
+    ":semanticCommitTypeAll(chore)",
+    ":automergeDigest",
+    ":automergeMinor",
+    ":enableVulnerabilityAlertsWithLabel(security)"
+  ],
+  "timezone": "America/Denver",
+  "schedule": ["before 4am on monday"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "labels": ["dependencies"],
+  "rangeStrategy": "bump",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 4am on the first day of the month"]
+  },
+  "packageRules": [
+    {
+      "description": "Group all Python dev dependencies (pytest, ruff, mypy, etc)",
+      "matchFileNames": ["docker/core/requirements.txt"],
+      "matchPackageNames": ["pytest", "pytest-asyncio", "pytest-cov", "pytest-timeout", "ruff", "mypy", "bandit", "safety", "types-PyYAML"],
+      "groupName": "python dev tools",
+      "automerge": true
+    },
+    {
+      "description": "Group Python framework deps (fastapi, uvicorn, pydantic)",
+      "matchFileNames": ["docker/core/requirements.txt"],
+      "matchPackageNames": ["fastapi", "uvicorn", "pydantic", "starlette"],
+      "groupName": "python web framework",
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Group Python data deps (psycopg, redis, httpx)",
+      "matchFileNames": ["docker/core/requirements.txt"],
+      "matchPackageNames": ["psycopg", "psycopg-binary", "psycopg_pool", "redis", "httpx", "websockets"],
+      "groupName": "python data + http",
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Anthropic SDK — keep on a minor-version delay so breaking changes are caught upstream",
+      "matchPackageNames": ["anthropic"],
+      "minimumReleaseAge": "14 days"
+    },
+    {
+      "description": "Pillow + bcrypt — security-sensitive, prompt updates",
+      "matchPackageNames": ["Pillow", "bcrypt"],
+      "minimumReleaseAge": "3 days",
+      "labels": ["security"]
+    },
+    {
+      "description": "Docker base images — explicit review (one of these touches every klukai image)",
+      "matchManagers": ["dockerfile"],
+      "minimumReleaseAge": "14 days",
+      "labels": ["infra", "review-required"]
+    },
+    {
+      "description": "GitHub Actions — SHA-pin per S+ supply chain decision (ADR-0001 Q7)",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true,
+      "automerge": true
+    },
+    {
+      "description": "Major version bumps — require human review (no auto-merge)",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["major-update", "review-required"],
+      "minimumReleaseAge": "30 days"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security", "vulnerability"],
+    "automerge": true,
+    "minimumReleaseAge": "0 days"
+  },
+  "ignoreDeps": [],
+  "ignorePaths": [
+    "**/node_modules/**",
+    "flutter_app/build/**"
+  ],
+  "rebaseWhen": "behind-base-branch",
+  "platformAutomerge": true,
+  "prBodyDefinitions": {
+    "Why": "🛡 Security: {{#if hasNewVersion}}new version {{newVersion}}{{/if}}{{#unless hasNewVersion}}no version pinned{{/unless}}"
+  }
+}

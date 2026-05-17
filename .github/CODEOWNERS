@@ -1,0 +1,50 @@
+# CODEOWNERS for klukai
+#
+# These users / teams are auto-requested for review on any PR touching
+# the matched paths. Per the S+ uplift spec §6.6, CODEOWNERS is a
+# Process-dimension requirement for A+ tier ("required reviewers per
+# CODEOWNERS").
+#
+# Format: <path> <@owner1> <@owner2> ...
+# Last-matching pattern wins.
+
+# ── Default — every file requires review by @jalsarraf0 ──────────────────
+*                                       @jalsarraf0
+
+# ── Critical paths — character integrity, never silent-ship ──────────────
+# Per global CLAUDE.md feedback memories, these touch the core character
+# experience. Changes here MUST be reviewed and tested with the golden
+# prompt suite (Phase 4) before merge.
+config/personality.yaml                 @jalsarraf0
+docker/core/app/personality/**          @jalsarraf0
+docker/core/app/affection.py            @jalsarraf0
+docker/core/app/audit_chain.py          @jalsarraf0
+
+# ── Memory pipeline — sacred per feedback_never_delete_chat.md ───────────
+docker/core/app/memory.py               @jalsarraf0
+docker/core/app/memory_archive.py       @jalsarraf0
+docker/core/app/db.py                   @jalsarraf0
+docker/core/migrations/**               @jalsarraf0
+
+# ── Security-sensitive ──────────────────────────────────────────────────
+docker/core/app/auth.py                 @jalsarraf0
+docker/core/app/rate_limit.py           @jalsarraf0
+docker/core/app/signed_urls.py          @jalsarraf0
+.github/                                @jalsarraf0
+.github/workflows/                      @jalsarraf0
+renovate.json                           @jalsarraf0
+
+# ── Backup + DR — never quietly modified ────────────────────────────────
+scripts/backup-*.sh                     @jalsarraf0
+scripts/restore-*.sh                    @jalsarraf0
+scripts/offsite-backup.sh               @jalsarraf0
+scripts/audit-memories.sh               @jalsarraf0
+scripts/verify-backups.sh               @jalsarraf0
+
+# ── ADRs — append-only by convention; superseding ADRs cross-link ───────
+docs/adr/**                             @jalsarraf0
+
+# ── Runbooks — operator surface, accuracy matters ───────────────────────
+docs/runbooks/**                        @jalsarraf0
+docs/slos.md                            @jalsarraf0
+docs/perf-baseline.md                   @jalsarraf0
