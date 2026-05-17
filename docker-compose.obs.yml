@@ -27,17 +27,21 @@ services:
       - run
       - /etc/alloy/config.alloy
       - --server.http.listen-addr=0.0.0.0:12345
-      - --storage.path=/var/lib/alloy/data
+      - --storage.path=/tmp/alloy-data
     ports:
-      - "127.0.0.1:12345:12345"  # Alloy UI (local-only)
-      - "127.0.0.1:4317:4317"    # OTLP gRPC ingest
-      - "127.0.0.1:4318:4318"    # OTLP HTTP ingest
+      - "127.0.0.1:22345:12345"  # Alloy UI (local-only, +10000 to avoid host conflicts)
+      - "127.0.0.1:14317:4317"   # OTLP gRPC ingest
+      - "127.0.0.1:14318:4318"   # OTLP HTTP ingest
     volumes:
       - ./obs/alloy/config.alloy:/etc/alloy/config.alloy:ro
-      - /mnt/nvmeINT/obs/klukai/alloy:/var/lib/alloy/data
+      # Alloy data is ephemeral buffer state — no host bind needed;
+      # uses container-internal tmpfs equivalent. Restart-safe per the
+      # restart: unless-stopped policy below.
     restart: unless-stopped
+    # Alloy image has neither curl nor wget; use a process-liveness check
+    # instead. If alloy crashes the container exits and Docker restarts it.
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:12345/-/ready"]
+      test: ["CMD-SHELL", "kill -0 1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -56,7 +60,7 @@ services:
       - --web.enable-lifecycle
       - --web.external-url=http://localhost:9090/
     ports:
-      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:19090:9090"   # +10000 to avoid host conflicts
     volumes:
       - ./obs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - /mnt/nvmeINT/obs/klukai/prometheus:/prometheus
@@ -76,7 +80,7 @@ services:
     command:
       - -config.file=/etc/loki/loki.yml
     ports:
-      - "127.0.0.1:3100:3100"
+      - "127.0.0.1:13100:3100"   # +10000 to avoid host conflicts
     volumes:
       - ./obs/loki/loki.yml:/etc/loki/loki.yml:ro
       - /mnt/nvmeINT/obs/klukai/loki:/loki
@@ -96,7 +100,7 @@ services:
     command:
       - -config.file=/etc/tempo/tempo.yml
     ports:
-      - "127.0.0.1:3200:3200"
+      - "127.0.0.1:13200:3200"   # +10000 to avoid host conflicts
     volumes:
       - ./obs/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
       - /mnt/nvmeINT/obs/klukai/tempo:/tmp/tempo
@@ -119,7 +123,7 @@ services:
       GF_SERVER_ROOT_URL: "http://localhost:3000/"
       GF_INSTALL_PLUGINS: ""
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:13000:3000"   # Grafana UI — +10000 to avoid host conflicts
     volumes:
       - ./obs/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./docs/dashboards:/var/lib/grafana/dashboards:ro

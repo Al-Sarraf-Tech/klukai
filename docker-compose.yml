@@ -29,6 +29,11 @@ services:
       SEED_PASSWORD_RICKY: "${SEED_PASSWORD_RICKY:-}"
       SEED_PASSWORD_MIGUEL: "${SEED_PASSWORD_MIGUEL:-}"
       SEED_PASSWORD_BLACKMAN: "${SEED_PASSWORD_BLACKMAN:-}"
+      # OTel exporter — wired to the obs stack in docker-compose.obs.yml.
+      # If the obs stack isn't running, OTel init fail-soft (no-op) per
+      # app/observability/tracing.py.
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://klukai-alloy:4317}"
+      OTEL_SERVICE_NAME: "klukai-core"
     volumes:
       - ./config:/config:ro
       - ./web-build:/app/static:ro
@@ -41,6 +46,7 @@ services:
       - default
       - aichat
       - infra
+      - obs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8300/health"]
@@ -64,3 +70,6 @@ networks:
     name: aichat_default
   infra:
     external: true
+  obs:
+    external: true
+    name: klukai-obs

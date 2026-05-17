@@ -5,14 +5,14 @@
 
 server:
   http_listen_port: 3200
-  grpc_listen_port: 4317
+  grpc_listen_port: 9095   # Tempo's own gRPC API (not OTLP receiver)
 
 distributor:
   receivers:
     otlp:
       protocols:
         grpc:
-          endpoint: 0.0.0.0:4317
+          endpoint: 0.0.0.0:4317   # OTLP receiver from Alloy → Tempo
         http:
           endpoint: 0.0.0.0:4318
 
