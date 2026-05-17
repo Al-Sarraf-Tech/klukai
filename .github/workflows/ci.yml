@@ -84,3 +84,45 @@ jobs:
       - name: Dependency vulnerability — safety
         run: safety check --file requirements.txt --ignore 70612 || true
 
+  image-scan:
+    name: Image Scan (trivy)
+    runs-on: [self-hosted, python-slim]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check trivy availability
+        id: trivy_check
+        run: |
+          if command -v trivy >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            trivy --version
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "trivy not installed on runner — skipping image scan"
+            echo "Install instructions: https://aquasecurity.github.io/trivy/latest/getting-started/installation/"
+          fi
+
+      - name: Build image
+        if: steps.trivy_check.outputs.available == 'true'
+        run: docker build -t klukai-core:ci -f docker/core/Dockerfile docker/core/
+
+      - name: Trivy scan — HIGH + CRITICAL fail
+        if: steps.trivy_check.outputs.available == 'true'
+        run: |
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --no-progress \
+            klukai-core:ci
+
+      - name: Trivy scan — full report (informational)
+        if: steps.trivy_check.outputs.available == 'true'
+        run: |
+          trivy image \
+            --severity LOW,MEDIUM,HIGH,CRITICAL \
+            --no-progress \
+            klukai-core:ci || true
+
+

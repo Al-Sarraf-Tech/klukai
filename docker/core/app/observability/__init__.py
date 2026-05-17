@@ -1,7 +1,12 @@
-"""Observability primitives: structured logging, LLM token tracking, slow-query timer.
+"""Observability primitives for klukai.
 
-Kept small and standalone so new modules can opt into structured logging
-without touching the existing `logger.info("msg", ...)` pattern.
+Submodules:
+- :mod:`.health_cache` — TTL-cached subsystem pings (PG / Redis / Qdrant)
+
+Module-level helpers (re-exported for backward-compatibility):
+- :func:`structured_log` — single-line JSON log for indexable observability
+- :func:`slow_query_timer` — warn when a wrapped block exceeds threshold_ms
+- :func:`record_llm_usage` — push LLM token + latency counters to metrics
 """
 
 from __future__ import annotations
@@ -56,7 +61,7 @@ def slow_query_timer(logger: logging.Logger, name: str,
             )
             # Also bump a metric so /api/metrics can show slow query counts
             try:
-                from . import metrics
+                from .. import metrics
                 metrics.incr("slow_queries_total", query=name)
                 metrics.observe_latency("slow_query_ms", elapsed_ms, query=name)
             except Exception:
@@ -76,10 +81,13 @@ def record_llm_usage(
     + route shows which endpoint is consuming the most tokens.
     """
     try:
-        from . import metrics
+        from .. import metrics
         metrics.incr("llm_requests_total", model=model, route=route)
         metrics.incr("llm_tokens_in_total", model=model, route=route, by=max(0, tokens_in))
         metrics.incr("llm_tokens_out_total", model=model, route=route, by=max(0, tokens_out))
         metrics.observe_latency("llm_latency_ms", latency_ms, model=model, route=route)
     except Exception:
         pass  # metrics is best-effort
+
+
+__all__ = ["structured_log", "slow_query_timer", "record_llm_usage"]

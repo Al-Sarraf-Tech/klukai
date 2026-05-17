@@ -104,48 +104,43 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
     @app.get("/health")
     async def health():
-        from .db import check_health as db_health
-        db = await db_health()
+        """Cached health probe. Sub-ms on cache hit, ~PG+Redis+Qdrant RTT on miss.
 
-        # Check Redis
-        redis_ok = False
-        try:
-            from .memory import REDIS_URL
-            import redis.asyncio as aioredis
-            r = aioredis.from_url(REDIS_URL, decode_responses=True)
-            await r.ping()
-            await r.aclose()
-            redis_ok = True
-        except Exception:
-            pass
+        See app/observability/health_cache.py for TTL + refresh semantics.
+        SLO: p99 ≤ 30ms (per docs/slos.md).
+        """
+        from .observability.health_cache import get_cached_health
+        return await get_cached_health()
 
-        # Check Qdrant
-        qdrant_ok = False
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                from .memory import QDRANT_URL
-                resp = await client.get(f"{QDRANT_URL}/healthz")
-                qdrant_ok = resp.status_code == 200
-        except Exception:
-            pass
+    @app.get("/api/health/live")
+    async def health_live():
+        """Liveness probe — process-only, no backend pings.
 
-        db_ok = db.get("status") == "ok"
-        if db_ok and redis_ok and qdrant_ok:
-            status = "ok"
-        elif db_ok:
-            status = "degraded"
-        else:
-            status = "unhealthy"
+        Returns 200 unless the process itself is broken. K8s-friendly
+        liveness convention: liveness failures cause restart, so we
+        intentionally don't fail on a backend outage here.
+        """
+        from .observability.health_cache import get_live_health
+        return get_live_health()
 
-        return {
-            "status": status,
-            "service": "companion-core",
-            "version": "0.1.0",
-            "database": db,
-            "redis": "ok" if redis_ok else "down",
-            "qdrant": "ok" if qdrant_ok else "down",
-        }
+    @app.get("/api/health/ready")
+    async def health_ready():
+        """Readiness probe — full uncached deep check.
+
+        Forces cache refresh; reports unhealthy if any required backend
+        is down. K8s-friendly readiness convention: readiness failures
+        remove the pod from service rotation without restarting it.
+        """
+        from .observability.health_cache import get_fresh_health
+        result = await get_fresh_health()
+        # 503 if backends are down so load balancers / Cloudflare can
+        # short-circuit traffic instead of forwarding to a broken core.
+        if result.get("status") == "unhealthy":
+            from fastapi import Response
+            from fastapi.responses import JSONResponse
+            return JSONResponse(content=result, status_code=503)
+        return result
+
 
     # ── Subsystem health (S+ feature: loud failure detection) ───────────
 
