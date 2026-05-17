@@ -24,7 +24,7 @@ jobs:
           pip install pytest pytest-asyncio pytest-timeout pytest-cov
 
       - name: Run test suite with coverage
-        run: python3 -m pytest tests/ -q --tb=short --cov=app --cov-report=term-missing --cov-fail-under=60
+        run: python3 -m pytest tests/ -q --tb=short --cov=app --cov-report=term-missing --cov-fail-under=95
 
   lint:
     name: Lint

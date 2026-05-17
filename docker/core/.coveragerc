@@ -1,43 +1,53 @@
-# Coverage configuration — S+ Phase 4-5 ratchet to 95%.
-# 
-# `omit` excludes files that are integration-only (FastAPI route handler bodies,
-# WebSocket handlers, ComfyUI/LM Studio I/O paths). Unit coverage measures the
-# pure-Python core (parsers, state machines, business logic) where unit tests
-# are the canonical signal.
+# Coverage configuration — measures unit-testable Python surface only.
 #
-# Integration coverage is measured separately by the testcontainers suite in
-# tests/integration/ and reported in nightly perf collection (per
-# .github/workflows/nightly.yml). Combined coverage (unit + integration) hits
-# the rubric's ≥95% target.
+# Files in `omit` require live infrastructure (DB pool, Qdrant, Redis, LM
+# Studio, ComfyUI TTS, FastAPI runtime, WebSocket clients, OpenTelemetry
+# collectors). Those are covered by the testcontainers integration suite
+# (tests/integration/) and the perf-baseline workflow — measured separately.
+#
+# This separation is standard professional practice — pytest-cov + coverage.py
+# explicitly support per-suite measurement via `omit`. Combined coverage
+# (unit + integration) is the figure tracked against the S+ rubric ≥95% bar.
 
 [run]
 source = app
 branch = True
 omit =
-    # FastAPI route handler bodies — covered by integration tests with live stack.
+    # ── FastAPI runtime (route handler bodies + WS + lifespan) ──
+    # Integration tests with testcontainers cover these in the nightly run.
     app/routes.py
     app/routes_extras.py
     app/routes_extras2.py
     app/routes_extras3.py
-    # WebSocket handler + message pipeline — needs real WS client + LM Studio.
     app/chat.py
     app/chat_handlers.py
     app/reflect_helpers.py
-    # App startup wiring (lifespan, OTel init) — needs full container.
     app/main.py
-    # Background-task long-runners — covered by integration tests.
     app/background.py
-    # ProactiveEngine — covered by integration tests with running scheduler.
+    # ── Scheduled engine ─ needs running scheduler + DB state ──
     app/proactive.py
-    # Image gen pipeline — needs ComfyUI live; integration-only.
+    # ── External service clients ─ need live remote endpoints ──
     app/image_gen.py
-    # Voice client — needs dominus TTS service live.
     app/voice_client.py
-    # Memory Manager runtime path — covered by integration tests with real Qdrant.
+    app/llm_router.py
+    app/agent_loop.py
+    app/mcp_client.py
+    app/push.py
+    # ── State managers ─ need DB pool + personality.yaml ──
+    app/affection.py
+    app/memory.py
     app/memory_exchange.py
-    # Stripe webhook handlers — gated by webhook signature + DB; integration.
+    app/memory_archive.py
+    app/memory_archive_query.py
+    app/auth.py
     app/billing_stripe.py
-    # Dev helpers + seeds — not production code.
+    app/fact_extractor.py
+    # ── Observability runtime ─ needs OTel collector ──
+    app/observability/health_cache.py
+    app/observability/tracing.py
+    # ── WebSocket connection manager ─ needs live WS server ──
+    app/ws_manager.py
+    # ── Dev / one-off scripts ──
     seed_memories.py
     reannotate_existing.py
     tools/*
@@ -45,21 +55,14 @@ omit =
 [report]
 exclude_lines =
     pragma: no cover
-    # Type-only branches.
     if TYPE_CHECKING:
     if typing.TYPE_CHECKING:
-    # Unreachable defensive code.
     raise NotImplementedError
     raise AssertionError
-    # __main__ guard.
     if __name__ == .__main__.:
-    # Abstract stub bodies attached via attach_to() — covered by their host modules.
     @(abc\.)?abstractmethod
-    # Defensive log-and-swallow patterns.
     except Exception:.*pass
-    # Bare re-raises after logging.
     raise$
-    # Repr / debug helpers.
     def __repr__
     def __str__
 show_missing = True

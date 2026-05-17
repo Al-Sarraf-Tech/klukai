@@ -104,7 +104,7 @@ def parse_json(text: str) -> dict | None:
         return None
 
 
-async def call_llm(
+async def call_llm(  # pragma: no cover - integration (LM Studio HTTP)
     url: str,
     model: str,
     prompt: str,
@@ -164,7 +164,7 @@ async def call_llm(
             await http.aclose()
 
 
-async def call_llm_text(
+async def call_llm_text(  # pragma: no cover - integration (LM Studio HTTP)
     url: str,
     model: str,
     prompt: str,

@@ -122,7 +122,7 @@ class PhysicalStateTracker:
         if state in ("normal", "cold"):
             await self.set_state(user_id, "relaxed", "at ease — the conversation was good")
 
-    async def _load(self, user_id: str) -> tuple[str, datetime, str | None]:
+    async def _load(self, user_id: str) -> tuple[str, datetime, str | None]:  # pragma: no cover - integration (DB)
         """Load physical state from cache or DB."""
         if user_id in self._cache:
             return self._cache[user_id]

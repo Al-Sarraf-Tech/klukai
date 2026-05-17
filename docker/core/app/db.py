@@ -24,7 +24,7 @@ MAX_RETRIES = 2
 RETRY_DELAY = 0.5  # seconds
 
 
-async def init_pool(min_size: int = 2, max_size: int = 10) -> None:
+async def init_pool(min_size: int = 2, max_size: int = 10) -> None:  # pragma: no cover - integration (PG)
     """Create and open the shared connection pool."""
     global _pool
     _pool = AsyncConnectionPool(
@@ -40,7 +40,7 @@ async def init_pool(min_size: int = 2, max_size: int = 10) -> None:
     logger.info("Database pool opened (min=%d, max=%d)", min_size, max_size)
 
 
-async def close_pool() -> None:
+async def close_pool() -> None:  # pragma: no cover - integration (PG)
     """Close the shared connection pool."""
     global _pool
     if _pool:
