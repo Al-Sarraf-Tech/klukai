@@ -68,6 +68,7 @@ from .squad import (
 from .state_blocks import (
     build_anniversary_block,
     build_comfort_objects_block,
+    build_crown_jewel_block,
     build_jealousy_block,
     build_mission_context_block,
     build_physical_state_block,
@@ -115,6 +116,7 @@ __all__ = [
     "build_jealousy_block",
     "build_anniversary_block",
     "build_comfort_objects_block",
+    "build_crown_jewel_block",
     "build_mission_context_block",
     # Rules + pace + tool
     "build_character_rules",

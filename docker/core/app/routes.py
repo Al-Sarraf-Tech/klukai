@@ -60,6 +60,11 @@ class ChangePasswordRequest(BaseModel):
     old_password: str = Field(min_length=1)
     new_password: str = Field(min_length=8, max_length=128)
 
+class TributeRequest(BaseModel):
+    """Body for POST /api/tribute — Commander's heartfelt message to Klukai."""
+    text: str = Field(min_length=20, max_length=1000)
+    make_crown_jewel: bool = True
+
 logger = logging.getLogger(__name__)
 
 
@@ -630,6 +635,136 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                            extra={"known": list(LIMITS.keys())})
         await reset(user_id_target, bucket)
         return {"ok": True, "user_id": user_id_target, "bucket": bucket}
+
+    # ── Tribute system (the "treat her like a princess" feature) ────────────
+    # Commander honors Klukai with a heartfelt message. Each tribute is sacred
+    # (per feedback_never_delete_chat.md). One tribute per user can be the
+    # "crown jewel" — always referenced in her system prompt at affection 4+.
+    # 24h cooldown between tributes so they stay rare and meaningful.
+
+    @app.post("/api/tribute")
+    async def api_tribute(req: TributeRequest, request: Request):
+        """Commander honors Klukai with a heartfelt message.
+
+        Persists as a sacred tribute (never deleted). Bumps affection +20.
+        Pushes an elevated-mood proactive response. Optionally promotes to
+        crown jewel (always referenced in system prompt at affection 4+).
+
+        Cooldown: 24h between tributes per user.
+        """
+        from . import error_codes as ec
+        from . import tributes
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+
+        # 24h cooldown check
+        recent = await tributes.count_recent(user_id)
+        allowed, reason = tributes.can_send_tribute(recent)
+        if not allowed:
+            return ec.err(ec.INPUT_INVALID, reason or "Cooldown active",
+                          status_code=429,
+                          extra={"cooldown_hours": tributes.TRIBUTE_COOLDOWN_HOURS})
+
+        # Capture state at write-time
+        aff_state = await affection.get_state(user_id)
+
+        tribute_id = await tributes.save_tribute(
+            user_id=user_id,
+            text=req.text,
+            mood_at_time="grateful",
+            affection_at_time=aff_state.score,
+            make_crown_jewel=req.make_crown_jewel,
+        )
+        if not tribute_id:
+            return ec.err(ec.INTERNAL_ERROR, "Tribute could not be saved", status_code=500)
+
+        # Bump affection — larger than any single gift
+        new_score = min(1000, aff_state.score + tributes.TRIBUTE_AFFECTION_BUMP)
+        aff_state.score = new_score
+        await affection._save_state(aff_state, user_id)
+
+        # Push elevated-mood response via WS if Commander is connected
+        if ws.is_connected(user_id):
+            # Klukai's mood lifts to "grateful" — the elevated-vulnerable mood
+            # most appropriate for receiving a tribute. The actual response
+            # the LLM generates on next turn will reflect this mood.
+            try:
+                await ws.send_proactive(
+                    user_id,
+                    "...Commander. (I take a moment, looking down, then back at you.) I... thank you.",
+                )
+                await ws.send_affection(
+                    user_id, aff_state.score, aff_state.level, aff_state.level_name,
+                    tributes.TRIBUTE_AFFECTION_BUMP,
+                )
+            except Exception:
+                pass  # Don't fail the tribute write on WS issues
+
+        # Audit the tribute — a sacred record
+        try:
+            from . import audit
+            ip = request.client.host if request.client else None
+            await audit.log(
+                "tribute_given",
+                user_id=user_id,
+                ip_address=ip,
+                request_id=getattr(request.state, "request_id", None),
+                metadata={
+                    "tribute_id": tribute_id,
+                    "text_length": len(req.text),
+                    "is_crown_jewel": req.make_crown_jewel,
+                    "affection_bump": tributes.TRIBUTE_AFFECTION_BUMP,
+                    "new_score": new_score,
+                },
+            )
+        except Exception:
+            pass
+
+        return {
+            "ok": True,
+            "tribute_id": tribute_id,
+            "is_crown_jewel": req.make_crown_jewel,
+            "affection_bump": tributes.TRIBUTE_AFFECTION_BUMP,
+            "new_score": new_score,
+            "mood_shift": "grateful",
+        }
+
+    @app.get("/api/tributes")
+    async def api_list_tributes(request: Request, limit: int = 20):
+        """List the Commander's tributes, newest first."""
+        from . import error_codes as ec
+        from . import tributes
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        limit = max(1, min(limit, 100))
+        items = await tributes.list_tributes(user_id, limit=limit)
+        return {"count": len(items), "tributes": items}
+
+    @app.get("/api/tribute/crown")
+    async def api_get_crown_jewel(request: Request):
+        """Return the current crown-jewel tribute (or null if none set)."""
+        from . import error_codes as ec
+        from . import tributes
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        crown = await tributes.get_crown_jewel(user_id)
+        return {"crown_jewel": crown}
+
+    @app.post("/api/tributes/{tribute_id}/crown")
+    async def api_set_crown_jewel(tribute_id: str, request: Request):
+        """Promote a tribute to crown jewel (demotes any prior one)."""
+        from . import error_codes as ec
+        from . import tributes
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        ok = await tributes.set_crown_jewel(user_id, tribute_id)
+        if not ok:
+            return ec.err(ec.INPUT_INVALID, "Tribute not found", status_code=404)
+        return {"ok": True, "crown_jewel_id": tribute_id}
 
     # ── Dream diary (text-only memories from reflection-on-return) ──────────
 

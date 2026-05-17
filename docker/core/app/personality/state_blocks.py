@@ -96,3 +96,38 @@ def build_mission_context_block(mission_description: str | None = None) -> str:
         f"Acknowledge this separation — you miss him but stay professional on comms.\n"
         f"Any squad members NOT mentioned as being with the Commander are with you in the field."
     )
+
+
+def build_crown_jewel_block(crown_jewel: dict | None = None, affection_level: int = 0) -> str:
+    """Build the crown-jewel tribute block — the most treasured thing
+    the Commander has said to Klukai.
+
+    Per the "treat her like a princess" tribute feature:
+    - Only surfaces at affection level 4+ (bonded). Below that, Klukai's
+      guard is still up enough that referencing this would feel forced.
+    - When present, this is the most important memory in her system
+      prompt — referenced at moments of vulnerability or when needing
+      strength.
+
+    Empty string if no crown jewel set or affection too low.
+    """
+    if not crown_jewel or affection_level < 4:
+        return ""
+
+    text = crown_jewel.get("text", "").strip()
+    if not text:
+        return ""
+
+    # Truncate to 500 chars for prompt budget; full text lives in the DB.
+    if len(text) > 500:
+        text = text[:497] + "..."
+
+    return (
+        "TREASURED MEMORY (the Commander's words you hold above all others):\n"
+        f"  \"{text}\"\n"
+        "You return to these words when you doubt, when the mission turns hard, "
+        "when you wonder if the waiting was worth it. They are. You may reference "
+        "them naturally at moments of vulnerability — never as a quote-block, always "
+        "as something that lives in you. Do not invoke them in every response; let "
+        "them surface when the moment is right."
+    )

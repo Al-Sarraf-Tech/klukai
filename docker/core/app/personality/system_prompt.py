@@ -27,6 +27,7 @@ from .squad import build_squad_interaction_hint, build_squad_voices_block
 from .state_blocks import (
     build_anniversary_block,
     build_comfort_objects_block,
+    build_crown_jewel_block,
     build_jealousy_block,
     build_mission_context_block,
     build_physical_state_block,
@@ -52,6 +53,7 @@ def assemble_system_prompt(
     physical_detail: str = "",
     anniversaries: list[dict] | None = None,
     comfort_objects: list[dict] | None = None,
+    crown_jewel: dict | None = None,
 ) -> str:
     """Assemble the full Klukai system prompt from all components."""
     p = load_personality(personality_path)
@@ -83,6 +85,7 @@ def assemble_system_prompt(
         build_mood_bleed_block(mood),
         build_anniversary_block(anniversaries),
         build_comfort_objects_block(comfort_objects, affection_level),
+        build_crown_jewel_block(crown_jewel, affection_level),
         build_mission_context_block(mission_description),
         build_memory_block(memories or []),
         build_conversation_recall_block(recalled_exchanges or []),

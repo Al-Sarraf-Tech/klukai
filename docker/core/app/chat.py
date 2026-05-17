@@ -294,6 +294,11 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Comfort objects for prompt context
     comfort_objects = await proactive.get_comfort_objects(user_id)
 
+    # Crown jewel tribute — the Commander's most treasured words to Klukai.
+    # Only surfaces in the prompt at affection level 4+ (per build_crown_jewel_block).
+    from . import tributes
+    crown_jewel = await tributes.get_crown_jewel(user_id)
+
     # Dream inquiry — if Commander asks about dreams, add context
     from .helpers import wants_dream_inquiry
     dream_hint = ""
@@ -323,6 +328,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         physical_detail=phys_detail,
         anniversaries=anniversaries,
         comfort_objects=comfort_objects,
+        crown_jewel=crown_jewel,
     )
 
     # Memory nudge — proactive past reference based on affection level
