@@ -1,0 +1,13 @@
+{
+  "_schema_version": 1,
+  "_baseline_run": true,
+  "_baseline_run_at": "2026-05-17T13:15:00-05:00",
+  "_baseline_note": "Phase 4 baseline. The nightly workflow .github/workflows/nightly.yml runs the full mutmut suite on app/affection.py + app/audit_chain.py + app/personality/speech.py (per docs/superpowers/specs/2026-05-16-s-plus-uplift.md §8.2 + §5.5). This baseline file marks the initial gate; the nightly cycle will replace it with real per-mutant results starting on the next cron tick.",
+  "_kill_rate_target": 0.80,
+  "_modules_under_mutation": [
+    "app/affection.py",
+    "app/audit_chain.py",
+    "app/personality/speech.py"
+  ],
+  "results": []
+}
