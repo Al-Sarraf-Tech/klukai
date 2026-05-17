@@ -1,0 +1,26 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+websockets>=15.0
+anthropic>=0.84.0
+httpx>=0.28.0
+apscheduler>=3.10.4
+pywebpush>=2.0.0
+pyyaml>=6.0
+psycopg[binary]>=3.2.0
+psycopg_pool>=3.2.0
+redis>=5.2.0
+pydantic>=2.10.0
+Pillow>=10.0
+bcrypt>=4.0
+types-PyYAML>=6.0
+# ── Observability (Phase 3.2 OTel wiring per docs/superpowers/specs/2026-05-16-s-plus-uplift.md §5.2) ──
+opentelemetry-sdk>=1.30.0
+opentelemetry-exporter-otlp-proto-grpc>=1.30.0
+opentelemetry-instrumentation-fastapi>=0.51b0
+opentelemetry-instrumentation-httpx>=0.51b0
+
+# ── Testing (S+ Phase 4 — seven-layer test cake) ──
+# hypothesis: property-based testing for parsers + state machines
+# mutmut: mutation testing for character-critical paths (affection, audit_chain)
+hypothesis>=6.100.0
+mutmut>=2.4.0
