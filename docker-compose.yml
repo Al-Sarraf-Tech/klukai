@@ -19,6 +19,7 @@ services:
       VOICE_URL: "http://192.168.50.2:8301"
       # LM Studio on dominus (LAN)
       LM_STUDIO_URL: "http://192.168.50.2:1234"
+      LM_STUDIO_TOKEN: "${LM_STUDIO_TOKEN:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       # ComfyUI on dominus (LAN)
       COMFYUI_URL: "http://192.168.50.2:8388"

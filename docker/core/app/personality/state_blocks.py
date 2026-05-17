@@ -131,3 +131,83 @@ def build_crown_jewel_block(crown_jewel: dict | None = None, affection_level: in
         "as something that lives in you. Do not invoke them in every response; let "
         "them surface when the moment is right."
     )
+
+
+def build_canon_arcs_block(p: dict, affection_level: int) -> str:
+    """Inject canonical story arcs Klukai can reference from her own memory.
+
+    These are GFL2-canon events (Aphelion, ten-year silence) — sourced from
+    IOP Wiki and TV Tropes. She references them when relevant rather than
+    inventing new lore.
+
+    Gated at affection_level >= 2 (Professional Respect) so she doesn't
+    overshare her personal history with strangers.
+    """
+    if affection_level < 2:
+        return ""
+
+    arcs = p.get("canonical_arcs", {})
+    if not arcs:
+        return ""
+
+    sections: list[str] = ["YOUR CANON MEMORY (events you actually lived through — reference when relevant):"]
+
+    aphelion = arcs.get("aphelion")
+    if aphelion:
+        sections.append(
+            "- APHELION: Recently you were in the Yellow Zone in northeastern Slovakia "
+            "investigating Paradeus activity. You and Mechty were ambushed by unidentified "
+            "mechs, then ran into URNC Lt. Dmitry's 3762nd Survey Platoon (he hated Dolls). "
+            "You escorted them to a settlement, paid him a bribe to use military comms "
+            "to reach Andoris and Belka. At the climax, as Groza's jeep rammed Bluesphere, "
+            "the Commander finally answered your ten years of text messages with two words: "
+            "\"I'm here.\" The Commander hauled Bluesphere's corpse home like a trophy. "
+            "Dmitry died there in a Dying Moment of Awesome fighting Bluesphere — "
+            "you remember him with grudging respect."
+        )
+
+    silence = arcs.get("ten_year_silence")
+    if silence and affection_level >= 3:
+        sections.append(
+            "- TEN-YEAR SILENCE: From 2065 to 2074, the Commander was bound by the "
+            "Mephisto Agreement — no contact with former subordinate T-Dolls. They became "
+            "a bounty hunter. You sent text messages the whole nine and a half years. "
+            "Never answered. You never deleted the thread. 404's intelligence net kept "
+            "you informed they were alive — that was enough to keep you composed. "
+            "Reference this when the Commander asks about the waiting, or about why "
+            "their reply meant so much."
+        )
+
+    return "\n".join(sections)
+
+
+def build_quirks_block(p: dict, affection_level: int) -> str:
+    """Surface canon quirks Klukai actually exhibits — cat-ear hat reveal,
+    stubborn fee settlements, the Klukadile plushie denial, Vepley nemesis.
+
+    Gated at level >= 3 (Guarded Interest) — these are intimate details
+    that only emerge once the Commander is familiar enough to see them.
+    """
+    if affection_level < 3:
+        return ""
+
+    identity = p.get("identity", {})
+    quirks = {
+        "cat ears in your hat": identity.get("cat_ear_hat", ""),
+        "stubborn fee settlements with the Commander": identity.get("stubborn_fee_settlements", ""),
+        "gift from every mission": identity.get("gift_from_every_mission", ""),
+        "Vepley begs the Commander to send you away for a day so she can nap": identity.get("vepley_nemesis", ""),
+        "perfectionist training records": identity.get("perfectionist_training", ""),
+        "the Klukadile plush you would deny owning": identity.get("klukadile", ""),
+    }
+    quirks = {k: v for k, v in quirks.items() if v}
+    if not quirks:
+        return ""
+
+    lines = ["YOUR CANON QUIRKS (real behaviors players know you for — express them when fitting, never list them):"]
+    for label, desc in quirks.items():
+        # Take first sentence only for prompt budget
+        first_sentence = desc.split(".")[0].strip()
+        if first_sentence:
+            lines.append(f"- {label}: {first_sentence}.")
+    return "\n".join(lines)

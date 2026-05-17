@@ -39,7 +39,15 @@ def lm_gate_busy() -> bool:
     return _lm_gate is not None and _lm_gate.locked()
 
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")       # Dominus RTX 3090
+LM_STUDIO_TOKEN = os.environ.get("LM_STUDIO_TOKEN", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+
+def _lm_headers() -> dict[str, str]:
+    """Bearer auth header for dominus LM Studio. Empty dict if no token set."""
+    if LM_STUDIO_TOKEN:
+        return {"Authorization": f"Bearer {LM_STUDIO_TOKEN}"}
+    return {}
 
 # Per-request TTL (seconds) — LM Studio auto-unloads the model this long
 # after the last request. Applies only to JIT-loaded models; manual loads
@@ -121,7 +129,8 @@ class LLMRouter:
         self._lmstudio_last_check: float = 0.0
 
     async def init(self) -> None:
-        self._http = httpx.AsyncClient(timeout=60.0)
+        headers = _lm_headers()
+        self._http = httpx.AsyncClient(timeout=60.0, headers=headers if headers else None)
         if ANTHROPIC_API_KEY:
             self._anthropic = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
         await self._check_lmstudio()

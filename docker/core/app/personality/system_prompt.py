@@ -26,11 +26,13 @@ from .speech import (
 from .squad import build_squad_interaction_hint, build_squad_voices_block
 from .state_blocks import (
     build_anniversary_block,
+    build_canon_arcs_block,
     build_comfort_objects_block,
     build_crown_jewel_block,
     build_jealousy_block,
     build_mission_context_block,
     build_physical_state_block,
+    build_quirks_block,
 )
 
 
@@ -86,6 +88,8 @@ def assemble_system_prompt(
         build_anniversary_block(anniversaries),
         build_comfort_objects_block(comfort_objects, affection_level),
         build_crown_jewel_block(crown_jewel, affection_level),
+        build_canon_arcs_block(p, affection_level),
+        build_quirks_block(p, affection_level),
         build_mission_context_block(mission_description),
         build_memory_block(memories or []),
         build_conversation_recall_block(recalled_exchanges or []),
