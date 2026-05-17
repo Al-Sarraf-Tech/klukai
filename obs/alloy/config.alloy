@@ -36,8 +36,52 @@ otelcol.processor.batch "klukai" {
 
   output {
     metrics = [otelcol.exporter.prometheus.klukai.input]
-    logs    = [otelcol.exporter.loki.klukai.input]
+    logs    = [otelcol.processor.transform.redact.input]
     traces  = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Log ingest-time redaction (Phase 2, ADR-0087-pending).
+//
+// Per ENTROPY_session_133 the
+// service-side redaction in session-memory-mcp catches JSONL
+// transcripts but not live log lines. This transform runs regex
+// replacement against `body` for known credential shapes before
+// the log is exported to Loki. Same pattern set as
+// servers/session_memory_mcp/redactor.py so redaction lives in one
+// conceptual place (just executed at two stages).
+//
+// Replacement marker: <redacted:KIND>. The original bytes are NOT
+// retained — privacy > forensics for this use case. If a redacted
+// log needs investigation, fall back to the service's own structured
+// log (which already had its own redactor before emission).
+//
+// `error_mode = "ignore"` keeps the pipeline running on regex
+// engine errors (very rare) so a malformed log line doesn't drop
+// the batch.
+// ──────────────────────────────────────────────────────────────────
+
+otelcol.processor.transform "redact" {
+  error_mode = "ignore"
+
+  log_statements {
+    context = "log"
+    statements = [
+      `replace_all_patterns(body, "value", "AKIA[0-9A-Z]{16}", "<redacted:aws-access-key>")`,
+      `replace_all_patterns(body, "value", "ASIA[0-9A-Z]{16}", "<redacted:aws-session-key>")`,
+      `replace_all_patterns(body, "value", "ghp_[A-Za-z0-9]{36}", "<redacted:github-pat>")`,
+      `replace_all_patterns(body, "value", "gho_[A-Za-z0-9]{36}", "<redacted:github-oauth>")`,
+      `replace_all_patterns(body, "value", "ghs_[A-Za-z0-9]{36}", "<redacted:github-server>")`,
+      `replace_all_patterns(body, "value", "ghu_[A-Za-z0-9]{36}", "<redacted:github-user>")`,
+      `replace_all_patterns(body, "value", "mk_[a-z0-9]+_[A-Za-z0-9_-]{16,}", "<redacted:mcp-bearer>")`,
+      `replace_all_patterns(body, "value", "ey[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}", "<redacted:jwt>")`,
+      `replace_all_patterns(body, "value", "-----BEGIN [A-Z ]+PRIVATE KEY-----[\\s\\S]+?-----END [A-Z ]+PRIVATE KEY-----", "<redacted:pem-private-key>")`,
+    ]
+  }
+
+  output {
+    logs = [otelcol.exporter.loki.klukai.input]
   }
 }
 
