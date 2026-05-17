@@ -1,0 +1,22 @@
+# .gitleaksignore — known historical leaks with rotation status.
+#
+# Format: <commit_sha>:<file>:<rule>:<line>
+#
+# Per S+ Phase 4 audit: every entry here represents a TOKEN THAT HAS BEEN
+# ROTATED. The leak in git history is no longer valid; the entry below
+# tells gitleaks to acknowledge it instead of failing every scan.
+#
+# Adding an entry requires:
+#   1. The leaked credential has been rotated (token revoked at provider).
+#   2. A note below this header describes when + which credential.
+#   3. The current production credential is in systemd-creds, never in git.
+
+# Historical leaks (chronological):
+#
+# 2026-04-06 — docs/superpowers/plans/2026-04-06-telegram-bot.md line 71:
+#   A Telegram bot token leaked in a draft plan doc. Rotation: the bot in
+#   question was retired and replaced with the tg-poller systemd service
+#   (per feedback_tg_poller_persistent.md). Production tg-poller token is
+#   stored in /etc/credstore.encrypted/. The leaked token is non-functional.
+
+23c547b4d17739b38e54ed1717badb7f22e01075:docs/superpowers/plans/2026-04-06-telegram-bot.md:telegram-bot-api-token:71

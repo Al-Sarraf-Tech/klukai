@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "conversation_id": {
+          "type": "string"
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": [
+        "reply",
+        "affection"
+      ],
+      "properties": {
+        "reply": {
+          "type": "string"
+        },
+        "affection": {
+          "type": "object",
+          "required": [
+            "score",
+            "level"
+          ],
+          "properties": {
+            "score": {
+              "type": "number"
+            },
+            "level": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9
+            }
+          }
+        },
+        "mood": {
+          "type": "string"
+        },
+        "trace_id": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

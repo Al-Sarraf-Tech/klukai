@@ -1,0 +1,108 @@
+{
+  "annotations": {
+    "list": [],
+    "description": "Klukai — operational overview. RED metrics per endpoint + dependency health + affection-level histogram.",
+    "title": "Klukai Overview"
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Service status",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "up{job=\"klukai-core\"}", "refId": "A"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}
+            ]
+          },
+          "mappings": [
+            {"options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}, "type": "value"}
+          ]
+        }
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0}
+    },
+    {
+      "id": 2,
+      "title": "Request rate (RED — Rate)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (route) (rate(http_requests_total{job=\"klukai-core\"}[5m]))", "refId": "A", "legendFormat": "{{route}}"}
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 6, "y": 0}
+    },
+    {
+      "id": 3,
+      "title": "Error rate (RED — Errors)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "sum by (route) (rate(http_requests_total{job=\"klukai-core\",status=~\"5..\"}[5m])) / sum by (route) (rate(http_requests_total{job=\"klukai-core\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "max": 0.05}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4}
+    },
+    {
+      "id": 4,
+      "title": "Latency p99 (RED — Duration)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (route, le) (rate(http_request_duration_seconds_bucket{job=\"klukai-core\"}[5m])))",
+          "refId": "A",
+          "legendFormat": "{{route}} p99"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4}
+    },
+    {
+      "id": 5,
+      "title": "Circuit breaker state",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "klukai_circuit_state", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"options": {"0": {"text": "closed", "color": "green"}, "1": {"text": "half-open", "color": "yellow"}, "2": {"text": "open", "color": "red"}}, "type": "value"}
+          ]
+        }
+      },
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 12}
+    },
+    {
+      "id": 6,
+      "title": "Affection-level distribution",
+      "type": "bargauge",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "klukai_affection_level", "refId": "A", "legendFormat": "level {{level}}"}],
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 12}
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["klukai", "overview", "S+"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "title": "Klukai Overview",
+  "uid": "klukai-overview",
+  "version": 1
+}

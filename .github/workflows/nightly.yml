@@ -1,0 +1,128 @@
+name: Klukai Nightly
+
+# S+ Phase 3-4 hygiene (per docs/superpowers/specs/2026-05-16-s-plus-uplift.md §8.2, §8.5).
+#
+# Jobs:
+#   1. mutation-test    — mutmut on character-critical paths; kill rate ≥ 80% required
+#   2. perf-baseline    — captures latency baseline; uploads artifact
+#   3. trivy-deep       — full HIGH+CRITICAL+MEDIUM scan
+
+on:
+  schedule:
+    - cron: '7 4 * * *'   # 04:07 UTC, off the :00 mark per CronCreate guidance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  mutation:
+    name: Mutation test (mutmut)
+    runs-on: [self-hosted, python-slim]
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: docker/core
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov mutmut
+
+      - name: Run mutmut on character-critical paths
+        continue-on-error: true
+        run: |
+          mutmut run \
+            --paths-to-mutate app/affection.py,app/audit_chain.py,app/personality/speech.py \
+            --runner "python3 -m pytest tests/ -q -x --tb=no --no-header" \
+            --use-coverage
+
+      - name: Generate mutation summary
+        run: |
+          mkdir -p ../../docs/mutation
+          mutmut results > ../../docs/mutation/results-$(date -u +%Y%m%d).txt || true
+          mutmut json > ../../docs/mutation-results.json || true
+
+      - name: Enforce kill-rate gate
+        run: |
+          if [[ ! -s ../../docs/mutation-results.json ]]; then
+            echo "no mutation results produced"
+            exit 1
+          fi
+          killed=$(jq '[.[] | select(.status=="killed")] | length' ../../docs/mutation-results.json)
+          total=$(jq 'length' ../../docs/mutation-results.json)
+          [[ "$total" -gt 0 ]] || { echo "no mutants produced"; exit 1; }
+          rate=$(awk -v k="$killed" -v t="$total" 'BEGIN { printf "%.2f", (k*100)/t }')
+          echo "Mutation kill rate: ${rate}% (${killed}/${total})"
+          awk -v r="$rate" 'BEGIN { exit (r >= 80) ? 0 : 1 }'
+
+      - name: Upload mutation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-results-${{ github.run_number }}
+          path: docs/mutation/
+          if-no-files-found: ignore
+
+  perf-baseline:
+    name: Perf baseline capture
+    runs-on: [self-hosted, python-slim]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run probe against live stack
+        run: |
+          if curl -sf -m 3 http://localhost:8300/health >/dev/null 2>&1; then
+            python3 tools/load-test/probe.py \
+              --base http://localhost:8300 \
+              --requests 500 \
+              --concurrency 10 \
+              --out /tmp/perf-current.json
+          else
+            echo "klukai-core not reachable on runner — skipping live perf capture"
+          fi
+
+      - name: Compare to committed baseline
+        run: |
+          [[ -f /tmp/perf-current.json ]] || exit 0
+          diff -u docs/perf-baseline.json /tmp/perf-current.json > /tmp/perf-drift.diff || \
+            echo "Performance drift detected — see artifact"
+
+      - name: Upload perf artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-nightly-${{ github.run_number }}
+          path: |
+            /tmp/perf-current.json
+            /tmp/perf-drift.diff
+          if-no-files-found: ignore
+
+  trivy-deep:
+    name: Trivy deep scan
+    runs-on: [self-hosted, python-slim]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan
+        run: |
+          if command -v trivy >/dev/null 2>&1; then
+            trivy fs --severity HIGH,CRITICAL,MEDIUM --exit-code 0 \
+              --format json --output /tmp/trivy-deep.json .
+          else
+            echo "trivy not installed; skipping"
+          fi
+
+      - name: Upload trivy results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-nightly-${{ github.run_number }}
+          path: /tmp/trivy-deep.json
+          if-no-files-found: ignore

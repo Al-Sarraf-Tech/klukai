@@ -28,7 +28,11 @@ class WSManager:
         """
         bucket = self._user_tasks.setdefault(user_id, set())
         bucket.add(task)
-        task.add_done_callback(lambda t, _b=bucket: _b.discard(t))
+
+        def _discard(t: asyncio.Task, _b: set[asyncio.Task] = bucket) -> None:
+            _b.discard(t)
+
+        task.add_done_callback(_discard)
 
     @property
     def connected(self) -> bool:

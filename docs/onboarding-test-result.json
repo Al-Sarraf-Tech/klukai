@@ -1,0 +1,13 @@
+[
+  {
+    "drill_date": "2026-05-17",
+    "operator": "jalsarraf",
+    "method": "self-validation (audit harness baseline)",
+    "duration_minutes": null,
+    "drift": [
+      "Initial doc creation; first independent drill scheduled by 2026-08-15"
+    ],
+    "outcome": "baseline-recorded",
+    "note": "This is the *baseline* entry. Per docs/onboarding.md the quarterly drill requires someone other than the author. Until that drill happens, this entry exists to anchor the file but does NOT count as a passed drill for S+ certification."
+  }
+]
