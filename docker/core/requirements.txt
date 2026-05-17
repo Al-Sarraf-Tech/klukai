@@ -13,3 +13,8 @@ pydantic>=2.10.0
 Pillow>=10.0
 bcrypt>=4.0
 types-PyYAML>=6.0
+# ── Observability (Phase 3.2 OTel wiring per docs/superpowers/specs/2026-05-16-s-plus-uplift.md §5.2) ──
+opentelemetry-sdk>=1.30.0
+opentelemetry-exporter-otlp-proto-grpc>=1.30.0
+opentelemetry-instrumentation-fastapi>=0.51b0
+opentelemetry-instrumentation-httpx>=0.51b0

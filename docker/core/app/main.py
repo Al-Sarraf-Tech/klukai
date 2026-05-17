@@ -357,6 +357,18 @@ register_routes(app)
 # Register WebSocket endpoint from chat.py
 register_websocket(app)
 
+# ── OpenTelemetry instrumentation (Phase 3.2) ─────────────────────────────
+# Fail-soft: if OTEL_EXPORTER_OTLP_ENDPOINT is unset (dev / standalone),
+# all OTel paths become no-ops. If init fails, log warning and continue —
+# klukai never goes down because of observability misconfiguration.
+try:
+    from .observability.tracing import init_tracing, instrument_fastapi, instrument_httpx
+    if init_tracing():
+        instrument_fastapi(app)
+        instrument_httpx()
+except Exception as _otel_err:
+    logger.warning("OTel setup skipped: %s", _otel_err)
+
 # Serve Flutter PWA static files (mounted last so API routes take priority)
 static_dir = Path("/app/static")
 if static_dir.exists():

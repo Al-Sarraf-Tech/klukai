@@ -29,9 +29,21 @@ def structured_log(
     event  — short machine-readable name (e.g. 'chat.turn', 'llm.complete')
     fields — arbitrary key/value pairs; must be JSON-serializable
 
+    If OTel tracing is active, `trace_id` is auto-injected for Loki↔Tempo
+    correlation in Grafana.
+
     Falls back to plain logger.log if JSON serialization fails, so a bad
     field never drops the log line.
     """
+    # Auto-inject trace_id when an OTel span is active (Phase 3.2)
+    try:
+        from .tracing import get_current_trace_id
+        trace_id = get_current_trace_id()
+        if trace_id and "trace_id" not in fields:
+            fields["trace_id"] = trace_id
+    except Exception:
+        pass  # Never let observability of observability break the log line
+
     try:
         payload = json.dumps({"event": event, **fields}, default=str)
         logger.log(level, payload)
