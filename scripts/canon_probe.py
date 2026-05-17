@@ -60,12 +60,12 @@ async def probe():
             print(f"{'=' * 70}")
             await ws.send(json.dumps({"type": "message", "content": probe_text}))
 
-            # Read frames for up to 60 seconds, assembling streamed reply
+            # Read frames for up to 120 seconds, assembling streamed reply
             reply_chunks: list[str] = []
             start = time.time()
-            while time.time() - start < 60:
+            while time.time() - start < 120:
                 try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                    raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
                 except asyncio.TimeoutError:
                     if reply_chunks:
                         break
@@ -75,19 +75,17 @@ async def probe():
                 except Exception:
                     continue
                 t = frame.get("type", "")
-                if t == "stream_token":
-                    reply_chunks.append(frame.get("content", ""))
-                elif t == "stream_end":
+                if t == "token":
+                    # Real frame type: {"type":"token","text":"..."}
+                    reply_chunks.append(frame.get("text", ""))
+                elif t == "done":
                     break
-                elif t == "message":
-                    reply_chunks.append(frame.get("content", ""))
-                    break
-                elif t == "thinking":
-                    continue
-                elif t == "mood":
+                elif t in ("thinking", "mood", "read_receipt", "tool_use",
+                           "affection", "affection_level_change", "heartbeat_spike",
+                           "proactive", "voice_audio", "connected"):
                     continue
                 elif t == "error":
-                    print("[ERROR]", frame.get("content", ""))
+                    print("[ERROR]", frame.get("content", frame.get("message", "")))
                     break
 
             reply = "".join(reply_chunks).strip()
