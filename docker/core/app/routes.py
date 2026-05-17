@@ -136,7 +136,6 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         # 503 if backends are down so load balancers / Cloudflare can
         # short-circuit traffic instead of forwarding to a broken core.
         if result.get("status") == "unhealthy":
-            from fastapi import Response
             from fastapi.responses import JSONResponse
             return JSONResponse(content=result, status_code=503)
         return result
