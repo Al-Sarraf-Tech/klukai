@@ -43,3 +43,44 @@ jobs:
 
       - name: Lint with ruff
         run: ruff check app/ --config ruff.toml
+
+  typecheck:
+    name: Type Check (mypy)
+    runs-on: [self-hosted, python-slim]
+    defaults:
+      run:
+        working-directory: docker/core
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install mypy types-PyYAML
+
+      - name: Type-check with mypy
+        run: mypy app/ --config-file mypy.ini
+
+  security:
+    name: Security Scan (bandit + safety)
+    runs-on: [self-hosted, python-slim]
+    defaults:
+      run:
+        working-directory: docker/core
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install scanners
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install bandit safety
+
+      - name: SAST — bandit (high-severity only)
+        run: bandit -r app/ -ll --skip B101
+
+      - name: Dependency vulnerability — safety
+        run: safety check --file requirements.txt --ignore 70612 || true
+

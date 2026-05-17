@@ -11,6 +11,7 @@ import logging
 import os
 import time
 from datetime import datetime
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -248,7 +249,9 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Skip expensive memory recall for very short messages (hi, ok, yes, etc)
     is_short = len(content.strip()) <= 20
     if is_short:
-        episode_memories, rel_facts, recalled_exchanges = [], {}, []
+        episode_memories: list[Any] = []
+        rel_facts: dict[Any, Any] = {}
+        recalled_exchanges: list[Any] = []
     else:
         episode_memories, rel_facts, recalled_exchanges = await memory.recall_for_prompt(
             content, user_id=user_id

@@ -24,7 +24,7 @@ QUIET_HOUR_END = 8     # 0800 hours
 
 # ── Module-level mission state (for idle-unload check) ────────────────────
 # Forward-declared; MissionTimer class is defined below the templates.
-_active_mission_timer: MissionTimer | None = None  # type: ignore[name-defined]
+_active_mission_timer: MissionTimer | None = None
 
 
 def has_active_mission() -> bool:

@@ -20,7 +20,7 @@ _counters: Counter[str] = Counter()
 
 # Latency histograms: bucket lower-bound (ms) -> count
 _LATENCY_BUCKETS_MS = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
-_histograms: dict[str, dict[int, int]] = defaultdict(lambda: {b: 0 for b in _LATENCY_BUCKETS_MS + [float("inf")]})  # type: ignore[arg-type]
+_histograms: dict[str, dict[int, int]] = defaultdict(lambda: {b: 0 for b in _LATENCY_BUCKETS_MS + [float("inf")]})
 _histogram_totals: dict[str, tuple[int, float]] = defaultdict(lambda: (0, 0.0))  # (count, sum)
 
 # Process start for uptime reporting

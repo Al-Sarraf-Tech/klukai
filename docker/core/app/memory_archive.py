@@ -246,13 +246,13 @@ async def get_image_bytes(
             col = "thumb_filename" if thumbnail else "filename"
             if user_id:
                 row = await (await conn.execute(
-                    f"SELECT {col} FROM companion_memories WHERE id = %s AND user_id = %s",
+                    f"SELECT {col} FROM companion_memories WHERE id = %s AND user_id = %s",  # nosec B608 — `col` is one of two literal column names; values bound via %s
                     (memory_id, user_id),
                 )).fetchone()
             else:
                 # Internal calls (e.g., recall) may not have user context
                 row = await (await conn.execute(
-                    f"SELECT {col} FROM companion_memories WHERE id = %s", (memory_id,)
+                    f"SELECT {col} FROM companion_memories WHERE id = %s", (memory_id,)  # nosec B608 — same as above
                 )).fetchone()
             if not row or not row[0]:
                 return None
@@ -293,7 +293,7 @@ async def list_memories(
             rows = await (await conn.execute(
                 f"SELECT id, filename, thumb_filename, annotation, scene_tags, "
                 f"mood, affection_level, kept_by, category, created_at "
-                f"FROM companion_memories WHERE {where} "
+                f"FROM companion_memories WHERE {where} "  # nosec B608 — `where` is built from a fixed allow-list of column predicates; values bound via %s
                 f"ORDER BY created_at DESC LIMIT %s",
                 tuple(params),
             )).fetchall()
