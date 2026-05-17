@@ -22,6 +22,7 @@ status, consequences. Format follows [MADR-lite](https://adr.github.io/madr/).
 | [0013](0013-klukai-vs-kairi-separation.md) | klukai and kairi are separate characters, separate data | Accepted | 2026-04 |
 | [0014](0014-offsite-backup.md) | Off-site backup: amarillo → dominus nightly tar | Accepted | 2026-04 |
 | [0015](0015-wsl2-decommissioned.md) | wsl2 is NOT a klukai deployment target | Accepted | 2026-04 |
+| [0016](0016-tribute-system.md) | Tribute system — Commander's crown-jewel memories | Accepted | 2026-05 |
 
 ## Conventions
 
