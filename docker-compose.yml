@@ -34,6 +34,9 @@ services:
       # app/observability/tracing.py.
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://klukai-alloy:4317}"
       OTEL_SERVICE_NAME: "klukai-core"
+      # Personal mode — every user is elite, all features on, quotas disabled.
+      # Flip to "false" to honor companion_subscriptions tier rows. See ADR-0017.
+      KLUKAI_PERSONAL_MODE: "${KLUKAI_PERSONAL_MODE:-true}"
     volumes:
       - ./config:/config:ro
       - ./web-build:/app/static:ro

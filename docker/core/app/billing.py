@@ -1,4 +1,15 @@
-"""Monetization: tier model, quotas, Stripe webhook handling.
+"""Monetization SCAFFOLD — dormant by default.
+
+This module defines the data model and feature-gate primitives for a future
+paid tier structure. Activation surface (Stripe Checkout, Billing Portal,
+subscribe UI buttons) is intentionally absent from public API — billing is
+controlled entirely by:
+
+    - KLUKAI_PERSONAL_MODE=true  →  every user is elite, all features on,
+                                    quotas disabled. Default for self-hosted.
+    - KLUKAI_PERSONAL_MODE=false →  honor companion_subscriptions rows; tier
+                                    gates and quotas enforce.
+    - Future flip-on: add STRIPE_API_KEY + restore activation endpoints.
 
 SACRED invariants (CLAUDE.md):
 - Tier downgrade NEVER deletes chat memories, episodes, affection, Qdrant vectors.
@@ -20,6 +31,19 @@ from .db import get_conn, get_conn_autocommit
 
 
 logger = logging.getLogger(__name__)
+
+
+# ── Personal mode (default ON for self-hosted) ──────────────────────────────
+
+
+def _personal_mode() -> bool:
+    """When true: bypass tier gates, treat everyone as elite, disable quotas.
+
+    Read at every call (not cached) so tests can flip via monkeypatch.
+    """
+    return os.environ.get("KLUKAI_PERSONAL_MODE", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 # ── Tier feature matrix ──────────────────────────────────────────────────────
@@ -58,49 +82,44 @@ TIER_FEATURES: dict[str, dict[str, Any]] = {
 }
 
 
-# ── Pricing surface (public-facing) ─────────────────────────────────────────
+# ── Pricing surface (DORMANT — only used when activation is restored) ──────
+#
+# Kept as a constant so the data model + future activation know the intended
+# tier boundaries. Not exposed via any public API while
+# KLUKAI_PERSONAL_MODE=true (the self-hosted default).
 
 
 PRICING: dict[str, dict[str, Any]] = {
     "free": {
         "name": "Free",
-        "price_monthly_usd": 0,
-        "price_annual_usd": 0,
-        "stripe_price_id": None,
-        "headline": "Try Klukai — every memory still preserved forever.",
+        "headline": "Personal mode — every memory preserved forever.",
         "bullets": [
-            "50 messages/day",
-            "3 images/day",
-            "20-photo memory album",
+            "Daily chat budget",
+            "Limited image generation",
+            "Small photo album",
             "Affection + persistence (no time limit)",
         ],
     },
     "pro": {
         "name": "Pro",
-        "price_monthly_usd": 12,
-        "price_annual_usd": 120,
-        "stripe_price_id": os.environ.get("STRIPE_PRICE_PRO_MONTHLY"),
         "headline": "Unlimited chat, voice in Japanese, expanded memory.",
         "bullets": [
             "Unlimited messages",
-            "50 images/day",
+            "Generous image budget",
             "Japanese voice replies",
-            "500-photo memory album",
+            "Expanded photo album",
             "Dream diary + anniversary tracking",
         ],
     },
     "elite": {
         "name": "Elite",
-        "price_monthly_usd": 39,
-        "price_annual_usd": 390,
-        "stripe_price_id": os.environ.get("STRIPE_PRICE_ELITE_MONTHLY"),
         "headline": "Every feature, no limits, priority response queue.",
         "bullets": [
             "Everything in Pro",
-            "250 images/day",
+            "Largest image budget",
             "Unlimited memory archive",
-            "Priority response queue (no LLM wait)",
-            "Direct support line",
+            "Priority response queue",
+            "Direct support",
         ],
     },
 }
@@ -146,7 +165,13 @@ class QuotaExceeded(Exception):
 
 
 async def get_subscription(user_id: str) -> Subscription:
-    """Return the user's current subscription, defaulting to free if absent."""
+    """Return the user's current subscription.
+
+    Personal mode: always returns elite/active. Self-hosted default.
+    Otherwise: reads companion_subscriptions, falling back to free if absent.
+    """
+    if _personal_mode():
+        return Subscription(user_id=user_id, tier="elite", status="active")
     try:
         async with get_conn() as conn:
             row = await (
@@ -234,9 +259,13 @@ async def consume_quota(user_id: str, counter: str, amount: int = 1) -> int:
     """Atomically increment + check. Raises QuotaExceeded if over the tier cap.
 
     Returns remaining quota (or a large int if unlimited).
+
+    Personal mode: bypasses limits entirely, records usage for analytics.
     """
     sub = await get_subscription(user_id)
     limit = sub.features.get(counter)
+    if _personal_mode():
+        limit = None  # treat as unlimited; still record for telemetry
     window = COUNTER_WINDOWS.get(counter, "daily")
     period = _period_key(window)
     if limit is None:

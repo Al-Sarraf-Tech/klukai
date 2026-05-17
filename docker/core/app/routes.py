@@ -66,14 +66,6 @@ class TributeRequest(BaseModel):
     make_crown_jewel: bool = True
 
 
-class BillingCheckoutRequest(BaseModel):
-    """Body for POST /api/billing/checkout — request a Stripe checkout session."""
-    tier: str = Field(pattern=r"^(pro|elite)$")
-    cadence: str = Field(default="monthly", pattern=r"^(monthly|annual)$")
-    success_url: str | None = None
-    cancel_url: str | None = None
-
-
 class AccountDeactivateRequest(BaseModel):
     """Body for POST /api/account/deactivate — soft delete. SACRED chat
     data is preserved per CLAUDE.md absolute rule."""
@@ -1151,13 +1143,23 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             logger.error("Export failed: %s", e)
             return JSONResponse({"error": "Export failed"}, status_code=500)
 
-    # ── Billing + Subscriptions (monetization) ─────────────────────────────
+    # ── Tier scaffold (dormant — no activation surface) ───────────────────
+    #
+    # The companion_subscriptions table + tier-gating primitives exist for a
+    # potential future paywall. In personal-use mode (default), every user is
+    # elite and these endpoints simply report state — they do NOT charge
+    # anyone, link to Stripe, or expose any "Subscribe" action.
+    #
+    # To flip on monetization later:
+    #   1. set KLUKAI_PERSONAL_MODE=false
+    #   2. restore checkout + portal endpoints (see ADR-0017 history)
+    #   3. configure STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET, price IDs
 
     @app.get("/api/billing/tiers")
     async def billing_tiers():
-        """Public pricing surface. No auth required (marketing page reads it)."""
-        from .billing import PRICING, TIER_FEATURES
-        return {"pricing": PRICING, "features": TIER_FEATURES}
+        """Static tier feature matrix. Public — no monetization tied to it."""
+        from .billing import TIER_FEATURES
+        return {"features": TIER_FEATURES, "mode": "personal"}
 
     @app.get("/api/billing/subscription")
     async def get_my_subscription(request: Request):
@@ -1183,95 +1185,11 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             return JSONResponse({"error": "Unauthorized"}, status_code=401)
         return await get_usage_summary(user_id)
 
-    @app.post("/api/billing/checkout")
-    async def create_checkout(req: BillingCheckoutRequest, request: Request):
-        """Create a Stripe Checkout Session for tier upgrade.
-
-        Stripe SDK is imported lazily so the module loads even without it.
-        Returns a checkout URL or 503 if Stripe is not configured.
-        """
-        user_id = await _get_user_id(request)
-        if not user_id:
-            return JSONResponse({"error": "Unauthorized"}, status_code=401)
-        import os
-        api_key = os.environ.get("STRIPE_API_KEY", "")
-        if not api_key:
-            return JSONResponse(
-                {"error": "Billing not configured", "code": "stripe_not_configured"},
-                status_code=503,
-            )
-        try:
-            import stripe  # type: ignore
-        except ImportError:
-            return JSONResponse(
-                {"error": "Stripe SDK not installed", "code": "stripe_sdk_missing"},
-                status_code=503,
-            )
-        stripe.api_key = api_key
-        env_key = f"STRIPE_PRICE_{req.tier.upper()}_{req.cadence.upper()}"
-        price_id = os.environ.get(env_key)
-        if not price_id:
-            return JSONResponse(
-                {"error": f"No Stripe price configured for {req.tier}/{req.cadence}",
-                 "code": "missing_price_id", "env_var": env_key},
-                status_code=503,
-            )
-        try:
-            session = stripe.checkout.Session.create(
-                mode="subscription",
-                line_items=[{"price": price_id, "quantity": 1}],
-                success_url=req.success_url or "https://klukai.appnest.cc/app/?upgrade=success",
-                cancel_url=req.cancel_url or "https://klukai.appnest.cc/app/?upgrade=canceled",
-                client_reference_id=user_id,
-                subscription_data={"metadata": {"user_id": user_id}},
-                metadata={"user_id": user_id},
-            )
-            return {"url": session.url, "session_id": session.id}
-        except Exception as e:
-            logger.error("Stripe checkout creation failed: %s", e)
-            return JSONResponse({"error": "Checkout failed"}, status_code=502)
-
-    @app.post("/api/billing/portal")
-    async def billing_portal(request: Request):
-        """Return a Stripe billing portal URL where the user can manage their
-        subscription (upgrade/downgrade/cancel)."""
-        user_id = await _get_user_id(request)
-        if not user_id:
-            return JSONResponse({"error": "Unauthorized"}, status_code=401)
-        import os
-        api_key = os.environ.get("STRIPE_API_KEY", "")
-        if not api_key:
-            return JSONResponse(
-                {"error": "Billing not configured"}, status_code=503,
-            )
-        try:
-            import stripe  # type: ignore
-        except ImportError:
-            return JSONResponse({"error": "Stripe SDK not installed"}, status_code=503)
-        from .billing import get_subscription
-        sub = await get_subscription(user_id)
-        if not sub.stripe_customer_id:
-            return JSONResponse(
-                {"error": "No Stripe customer record",
-                 "hint": "Subscribe first via /api/billing/checkout"},
-                status_code=400,
-            )
-        stripe.api_key = api_key
-        try:
-            portal = stripe.billing_portal.Session.create(
-                customer=sub.stripe_customer_id,
-                return_url="https://klukai.appnest.cc/app/",
-            )
-            return {"url": portal.url}
-        except Exception as e:
-            logger.error("Stripe portal creation failed: %s", e)
-            return JSONResponse({"error": "Portal failed"}, status_code=502)
-
     @app.post("/api/billing/webhook")
     async def stripe_webhook(request: Request):
-        """Stripe webhook receiver. HMAC-verified, idempotent on event id.
-
-        SACRED: cancel events downgrade tier — never touch chat data.
+        """Stripe webhook receiver. Kept for future use — verifies signature
+        and records the event, but with no STRIPE_WEBHOOK_SECRET configured
+        all calls return 400 (signature invalid). Safe no-op in personal mode.
         """
         from .billing import handle_stripe_event, verify_stripe_signature
         body = await request.body()
@@ -1283,8 +1201,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             event = json.loads(body)
         except Exception:
             return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-        result = await handle_stripe_event(event)
-        return result
+        return await handle_stripe_event(event)
 
     # ── Account self-service ───────────────────────────────────────────────
 

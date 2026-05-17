@@ -28,6 +28,12 @@ MSG_MIN_SCORE = 0.35
 RECENCY_WEIGHT = 0.15
 
 
+class EmbeddingFailed(RuntimeError):
+    """Raised by MemoryManager.embed_text(raise_on_failure=True) when the
+    embedding service can't be reached. Store paths should propagate this
+    rather than indexing a zero vector that silently corrupts recall."""
+
+
 class MemoryManager:
     """Manages all three tiers of companion memory."""
 
@@ -140,8 +146,15 @@ class MemoryManager:
         except httpx.HTTPError:
             logger.warning("Failed to create Qdrant collection, will retry later")
 
-    async def embed_text(self, text: str) -> list[float]:
-        # Cache-first path — same text yields same vector
+    async def embed_text(self, text: str, *, raise_on_failure: bool = False) -> list[float]:
+        """Get embedding vector for text. Cache-first.
+
+        Args:
+            raise_on_failure: when True (used by store paths) raises EmbeddingFailed
+                instead of returning a zero vector. Search paths can pass False
+                to keep the existing degrade-quietly behavior, but they should
+                check is_zero_vector() and surface a UX signal to the user.
+        """
         try:
             from . import caches
             cached = await caches.get_embedding(text)
@@ -164,7 +177,14 @@ class MemoryManager:
             return vector
         except Exception as e:
             logger.error("EMBEDDING FAILED — search quality degraded: %s", e)
+            if raise_on_failure:
+                raise EmbeddingFailed(str(e)) from e
             return [0.0] * EMBED_DIM
+
+    @staticmethod
+    def is_zero_vector(vec: list[float]) -> bool:
+        """Detect the embed-failure sentinel so callers can surface a UX warning."""
+        return all(v == 0.0 for v in vec)
 
     async def store_episode(
         self,

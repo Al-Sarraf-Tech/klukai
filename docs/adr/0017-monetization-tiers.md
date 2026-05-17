@@ -1,36 +1,80 @@
-# ADR-0017: Monetization — subscription tiers + Stripe billing
+# ADR-0017: Monetization scaffold — tier model + Stripe webhook (dormant)
 
-**Status:** Accepted
+**Status:** Accepted (scaffold only — activation surface removed 2026-05-17)
 **Date:** 2026-05-17
 **Supersedes:** N/A
 
 ## Context
 
-Klukai is feature-complete enough to sell. To monetize without compromising
-existing users or violating CLAUDE.md SACRED-data rules, we need:
-
-1. **Subscription tier model** — pay-walling future feature growth without
-   ever revoking existing user memories, chat history, or affection state.
-2. **Per-user quotas** — enforcing tier caps on bandwidth-heavy operations
-   (image generation, voice synthesis) so the free tier stays sustainable.
-3. **Payment processor integration** — Stripe Checkout for purchases,
-   Stripe Billing Portal for self-service upgrade/cancel/payment-method.
-4. **Idempotent webhook receiver** — Stripe retries on 5xx; replay protection
-   via a unique `event_id` PRIMARY KEY in our event log.
+Klukai is feature-complete enough to sell, but the current deployment is for
+the operator's personal use. The author wants the *data model* and webhook
+plumbing ready so monetization can be activated later by setting a single
+environment variable — without rebuilding tables or rewriting routes.
 
 ## Decision
 
-Three tiers:
+**Dormant scaffold pattern.** Keep everything except the activation surface:
 
-| Tier | Price | Chat | Image/day | Voice | Memory cap | Dream | Anniv | Priority |
-|------|-------|------|-----------|-------|------------|-------|-------|----------|
-| Free | $0    | 50/d | 3         | off   | 20 photos  | off   | off   | off      |
-| Pro  | $12/mo| ∞    | 50        | on    | 500 photos | on    | on    | off      |
-| Elite| $39/mo| ∞    | 250       | on    | unlimited  | on    | on    | on       |
+| Layer                        | State    | Reason                                |
+|------------------------------|----------|---------------------------------------|
+| `companion_subscriptions`    | Present  | Tier model needs a home in the schema |
+| `companion_usage_counters`   | Present  | Quota infra needs a home in the schema |
+| `companion_stripe_events`    | Present  | Webhook idempotency must persist      |
+| `app/billing.py`             | Present  | TIER_FEATURES, quota helpers, sig verify |
+| `/api/billing/tiers`         | Present (info-only) | Public feature matrix view |
+| `/api/billing/subscription`  | Present  | Auth user reads own tier              |
+| `/api/billing/usage`         | Present  | Auth user reads own usage             |
+| `/api/billing/webhook`       | Present  | HMAC-verified, 400s without secret    |
+| `/api/billing/checkout`      | **REMOVED** | No user-facing "Subscribe" path now |
+| `/api/billing/portal`        | **REMOVED** | No Stripe portal redirect now       |
+| `BillingCheckoutRequest`     | Removed  | No longer wired to any route          |
+| Subscribe buttons in Flutter | Removed  | UI shows feature/usage only           |
+| `PRICING` ($USD constants)   | Anonymized | No price strings — generic bullets only |
 
-Annual pricing 10× monthly (16% discount).
+### KLUKAI_PERSONAL_MODE env flag (default: `true`)
 
-### Data model
+`app.billing.get_subscription(user_id)` short-circuits when personal mode is
+on, returning `Subscription(tier="elite", status="active")` without touching
+the database. `consume_quota` likewise bypasses all caps.
+
+This means:
+
+- Every authenticated user (the operator + family in personal mode) has
+  every feature on.
+- The `companion_subscriptions` rows still exist (backfilled to `free`) but
+  are inert until personal mode is flipped off.
+- Tests can flip the env via `monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")`
+  to exercise the tier-aware code paths.
+
+### What it takes to flip on monetization later
+
+1. `KLUKAI_PERSONAL_MODE=false`
+2. Provision `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, price IDs in env
+3. Restore `/api/billing/checkout` + `/api/billing/portal` endpoints
+   (see this ADR's git history for the original code)
+4. Restore `BillingCheckoutRequest` model
+5. Re-add Subscribe buttons in `subscription_screen.dart`
+6. Run `INSERT INTO companion_subscriptions ...` for any newly-paying user
+   (or let `_apply_subscription` webhook handler do it on first Stripe event)
+
+The webhook receiver is already live and signature-verified — it 400s today
+because no `STRIPE_WEBHOOK_SECRET` is set, but the handler dispatch table,
+the `companion_stripe_events` idempotency log, and the
+`_apply_subscription` / `_cancel_subscription` / `_record_payment` /
+`_mark_past_due` handlers are all in place.
+
+## Tier matrix (informational — dormant in personal mode)
+
+| Tier | Chat | Image/day | Voice | Memory cap | Dream | Anniv | Priority |
+|------|------|-----------|-------|------------|-------|-------|----------|
+| Free | 50/d | 3         | off   | 20 photos  | off   | off   | off      |
+| Pro  | ∞    | 50        | on    | 500 photos | on    | on    | off      |
+| Elite| ∞    | 250       | on    | unlimited  | on    | on    | on       |
+
+When personal mode is on, every user is treated as elite regardless of their
+`companion_subscriptions.tier` row.
+
+## Data model
 
 ```sql
 companion_subscriptions:
@@ -52,18 +96,7 @@ companion_usage_counters:
   last_used_at TIMESTAMPTZ
 ```
 
-### Stripe integration
-
-- `STRIPE_API_KEY` — server-side secret key for Checkout/Portal session creation
-- `STRIPE_WEBHOOK_SECRET` — for HMAC-SHA256 signature verification on webhooks
-- `STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_PRO_ANNUAL` — price IDs from Stripe Dashboard
-- `STRIPE_PRICE_ELITE_MONTHLY`, `STRIPE_PRICE_ELITE_ANNUAL` — same
-
-Without these env vars set, `/api/billing/checkout` returns `503` with a
-machine-readable error code (`stripe_not_configured` / `missing_price_id`).
-The rest of the API runs normally with all users defaulted to free tier.
-
-### Webhook signature verification
+## Webhook signature verification (preserved for future use)
 
 Per Stripe docs:
 1. Parse `Stripe-Signature` header: `t=<ts>,v1=<hex_sha256>`
@@ -74,61 +107,39 @@ Verified events are inserted with `INSERT ... ON CONFLICT (event_id) DO NOTHING
 RETURNING event_id`. A NULL return = duplicate, return `{"ok": true, "replay": true}`
 without invoking the handler. This makes Stripe's at-least-once delivery safe.
 
-### Handler map
+## SACRED-data invariant (CLAUDE.md absolute rule)
 
-| Stripe event                       | Handler             | Effect                                  |
-|------------------------------------|---------------------|-----------------------------------------|
-| `customer.subscription.created`    | `_apply_subscription` | UPSERT subscription row, set tier      |
-| `customer.subscription.updated`    | `_apply_subscription` | Same — re-upsert reflects new state    |
-| `customer.subscription.deleted`    | `_cancel_subscription`| Downgrade to free; **NO data deletion** |
-| `invoice.paid`                     | `_record_payment`     | Informational log entry                |
-| `invoice.payment_failed`           | `_mark_past_due`      | Status → past_due (features revoke)    |
-
-## Consequences
-
-### SACRED-data preservation
-
-`_cancel_subscription` is **explicit** about what it does NOT touch:
+`_cancel_subscription` is **explicit** about what it does NOT touch when
+monetization is eventually activated:
 
 - ✓ `companion_chat_messages` — preserved
 - ✓ `companion_episodes` — preserved
 - ✓ `companion_affection` — preserved
 - ✓ `companion_memory_archive` (photos) — preserved
 - ✓ Qdrant `companion_memories` vector points — preserved
-- ✓ `companion_dreams` — preserved (Pro/Elite-only feature, but data stays)
+- ✓ `companion_dreams` — preserved
 - ✓ `companion_anniversaries` — preserved
 - ✗ Only `companion_subscriptions.tier` flips to `free` and `status` to `canceled`
 
 A downgraded user re-upgrading to Pro/Elite gets every memory back instantly —
 nothing was ever deleted.
 
-### Quota enforcement points
-
-- `routes._handle_message` (chat path) — checks `chat_messages_per_day` before LLM call
-- `routes.generate_image` — checks `image_gen_per_day` before ComfyUI dispatch
-- `routes.tts` — checks `voice_enabled` flag (boolean, not a counter)
-- `routes.memory_archive` — count of stored items checked against `memory_archive_cap`
-
-Failing checks raise `QuotaExceeded` → 429 with `Retry-After: <seconds until reset>`.
-Free-tier counters reset at UTC midnight (day boundary); monthly counters at the
-1st of the month UTC.
-
-### Account deactivation flow
-
-`POST /api/account/deactivate` (with body `{"confirm": "DEACTIVATE"}`) sets
-`companion_users.deactivated_at = NOW()` and invalidates all sessions. It does
-NOT touch any SACRED data table. Reactivation is operator-only (no public
-endpoint) for now — prevents accidental re-auth.
-
-Hard deletion of an account row + cascaded subscription is admin-only and
-requires explicit instruction; CLAUDE.md forbids autonomous chat-data removal.
-
 ## Alternatives considered
 
-- **Usage-based metered billing** (rejected) — would penalize the heaviest users
-  who're our best advocates; flat tier subscriptions are predictable for budget.
-- **No free tier, paywalled from day 1** (rejected) — kills viral growth; new
-  users won't pay before they bond. Free 50 msgs/day exists to let affection grow.
-- **External billing platform (Paddle, LemonSqueezy)** (rejected for now) —
-  Stripe has the deepest tax automation and the lowest fees at our scale.
-  Switching later requires only handler-map changes, not data-model changes.
+- **Delete the scaffold entirely** (rejected) — would force a full migration
+  + rewrite when monetization is wanted later; cheap to keep dormant.
+- **Gate by feature flag library (Unleash, GrowthBook)** (rejected) — extra
+  service dependency for a single boolean.
+- **In-code constant** (rejected) — requires rebuild to flip; env var is
+  better-suited.
+- **Usage-based metered billing** (rejected) — would penalize the heaviest
+  users; flat tier subscriptions are predictable for budget.
+
+## Consequences
+
+- Self-hosted deployment defaults to `KLUKAI_PERSONAL_MODE=true` via compose env
+- Operator can flip the flag in one place to test tier-aware paths without
+  losing personal-use convenience
+- Stripe SDK is no longer imported anywhere — removes a heavy dependency at
+  runtime while activation is off
+- Future paying user does NOT need a schema migration — just env config

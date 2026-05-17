@@ -473,7 +473,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         # Recall detection takes priority over new image generation
         if _wants_recall(content):
             logger.info("Memory recall triggered for: %s", content[:80])
-            asyncio.create_task(background_recall(content, session, user_id))
+            ws.track_task(user_id, asyncio.create_task(background_recall(content, session, user_id)))
         elif needs_image(content):
             logger.info("Image generation triggered for: %s", content[:80])
             # Build chat context from last few turns for scene-aware prompting
@@ -485,10 +485,10 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             # Detect squad members mentioned for multi-character scenes
             from .image_gen import detect_squad_members
             mentioned_squad = detect_squad_members(f"{content} {chat_ctx}")
-            asyncio.create_task(background_image_gen(
+            ws.track_task(user_id, asyncio.create_task(background_image_gen(
                 content, chat_context=chat_ctx, squad_members=mentioned_squad,
                 user_id=user_id,
-            ))
+            )))
 
     # Background: extract facts and create episodes
     # Skip extraction for trivial messages (no facts to extract, saves a full LLM round-trip)
@@ -517,21 +517,33 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
 
 
 async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "default") -> None:
-    """Process voice: STT -> text -> LLM -> TTS -> audio."""
+    """Process voice: STT -> text -> LLM -> TTS -> audio.
+
+    Failure modes surface a UX signal — the user never gets ghosted.
+    """
     voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # STT
             await ws.send_thinking(user_id, "Listening...")
-            r = await client.post(
-                f"{voice_url}/stt",
-                json={"audio": audio_b64},
-            )
-            r.raise_for_status()
-            transcript = r.json().get("text", "")
+            try:
+                r = await client.post(f"{voice_url}/stt", json={"audio": audio_b64})
+                r.raise_for_status()
+                transcript = r.json().get("text", "")
+            except Exception as stt_err:
+                logger.error("STT failed: %s", stt_err)
+                await ws.send_proactive(
+                    user_id,
+                    "...Voice link garbled, Commander — I couldn't make out the transmission. "
+                    "Try again or switch to text.",
+                )
+                return
 
             if not transcript.strip():
+                await ws.send_proactive(
+                    user_id,
+                    "...I heard nothing on the channel, Commander. Try again, closer to the mic.",
+                )
                 return
 
             # Process as text message (which streams the text response)
@@ -542,17 +554,37 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
             if session and session.turns:
                 last_turn = session.turns[-1]
                 if last_turn["role"] == "assistant":
-                    # TTS
-                    r = await client.post(
-                        f"{voice_url}/tts",
-                        json={"text": last_turn["content"]},
-                    )
-                    if r.status_code == 200:
-                        import base64
-                        audio_out = base64.b64encode(r.content).decode()
-                        await ws.send_voice(user_id, audio_out, final=True)
+                    try:
+                        r = await client.post(
+                            f"{voice_url}/tts",
+                            json={"text": last_turn["content"]},
+                        )
+                        if r.status_code == 200:
+                            import base64
+                            audio_out = base64.b64encode(r.content).decode()
+                            await ws.send_voice(user_id, audio_out, final=True)
+                        else:
+                            logger.error("TTS HTTP %s: %s", r.status_code, r.text[:200])
+                            await ws.send_proactive(
+                                user_id,
+                                "...The voice synth is offline, Commander — "
+                                "I'm reading you in text instead.",
+                            )
+                    except Exception as tts_err:
+                        logger.error("TTS failed: %s", tts_err)
+                        await ws.send_proactive(
+                            user_id,
+                            "...Voice synth dropped, Commander — text reply only.",
+                        )
     except Exception as e:
-        logger.error("Voice processing failed: %s", e)
+        logger.error("Voice processing failed: %s", e, exc_info=True)
+        try:
+            await ws.send_proactive(
+                user_id,
+                "...Voice channel broke entirely, Commander. Switching to text.",
+            )
+        except Exception:
+            pass
 
 
 def register_websocket(app: FastAPI) -> None:
@@ -621,7 +653,7 @@ def register_websocket(app: FastAPI) -> None:
         # Reflection-on-return: if user was away >8h, greet them referencing
         # the last topic. Runs in background so it never blocks the connect.
         import asyncio as _asyncio
-        _asyncio.create_task(_maybe_reflect_on_return(user_id))
+        ws.track_task(user_id, _asyncio.create_task(_maybe_reflect_on_return(user_id)))
 
         try:
             while True:

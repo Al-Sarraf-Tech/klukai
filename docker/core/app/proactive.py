@@ -669,6 +669,37 @@ class ProactiveEngine:
             replace_existing=True,
         )
 
+        # Surface scheduled-job failures via audit log + structured logger.
+        # Without this, an anniversary check (or any other scheduled job) that
+        # raises gets swallowed by APScheduler's default handler — the user
+        # would silently lose a feature for days.
+        try:
+            from apscheduler.events import EVENT_JOB_ERROR
+
+            def _on_job_error(event):
+                logger.error(
+                    "SCHEDULED_JOB_FAILED: job=%s exception=%s traceback=%s",
+                    event.job_id, event.exception, event.traceback,
+                )
+                # Best-effort audit write — never let it block the listener.
+                try:
+                    import asyncio as _asyncio
+
+                    from . import audit
+                    _asyncio.create_task(audit.log(
+                        event_type="scheduled_job.failed",
+                        metadata={
+                            "job_id": event.job_id,
+                            "exception": str(event.exception)[:500],
+                        },
+                    ))
+                except Exception:
+                    pass
+
+            self._scheduler.add_listener(_on_job_error, EVENT_JOB_ERROR)
+        except Exception as e:
+            logger.warning("Could not wire scheduler error listener: %s", e)
+
         self._scheduler.start()
         logger.info("Klukai proactive engine started")
 

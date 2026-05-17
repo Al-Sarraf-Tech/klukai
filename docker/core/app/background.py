@@ -359,8 +359,20 @@ async def background_image_gen(
             await memory.record_milestone("first_image", user_id=user_id)
         else:
             await ws.send_proactive(user_id, "...Visualization failed. Interference in the rendering pipeline. I'll try again later.")
+            await ws.send(user_id, {"type": "thinking", "content": ""})  # clear thinking bubble
     except Exception as e:
-        logger.error("Background image gen failed: %s", e)
+        logger.error("Background image gen failed: %s", e, exc_info=True)
+        try:
+            # Mirror the empty-bytes fallback so the user never gets ghosted —
+            # always clear the thinking bubble and surface a graceful message.
+            await ws.send_proactive(
+                user_id,
+                "...The rendering pipeline broke mid-frame, Commander. "
+                "I'll attempt the visual again later.",
+            )
+            await ws.send(user_id, {"type": "thinking", "content": ""})
+        except Exception:
+            pass
 
 
 async def background_recall(content: str, session: SessionState, user_id: str) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -15,6 +16,19 @@ class WSManager:
 
     def __init__(self) -> None:
         self._connections: dict[str, set[WebSocket]] = {}
+        # Per-user background tasks (image gen, reflection, decompression,
+        # warmup timers). Cancelled on full-user disconnect so an old session
+        # can't write to a stale conn_id or send to a closed WS.
+        self._user_tasks: dict[str, set[asyncio.Task]] = {}
+
+    def track_task(self, user_id: str, task: asyncio.Task) -> None:
+        """Register a per-user background task. It will be cancelled when the
+        user's last device disconnects. Idempotent — auto-removes completed
+        tasks via add_done_callback.
+        """
+        bucket = self._user_tasks.setdefault(user_id, set())
+        bucket.add(task)
+        task.add_done_callback(lambda t, _b=bucket: _b.discard(t))
 
     @property
     def connected(self) -> bool:
@@ -40,6 +54,14 @@ class WSManager:
             conns.discard(ws)
         if not conns:
             self._connections.pop(user_id, None)
+            # Last device gone → cancel orphan background tasks for this user
+            tasks = self._user_tasks.pop(user_id, set())
+            if tasks:
+                logger.info("Cancelling %d background tasks for %s on disconnect",
+                            len(tasks), user_id)
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
         logger.info("WebSocket disconnected: user=%s (remaining=%d)", user_id, len(conns) if conns else 0)
 
     async def _send_one(self, ws: WebSocket, data: dict) -> bool:

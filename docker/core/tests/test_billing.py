@@ -55,16 +55,15 @@ class TestPricing:
     def test_all_tiers_priced(self):
         assert set(PRICING) == {"free", "pro", "elite"}
 
-    def test_free_is_zero(self):
-        assert PRICING["free"]["price_monthly_usd"] == 0
-
-    def test_pro_under_elite(self):
-        assert PRICING["pro"]["price_monthly_usd"] < PRICING["elite"]["price_monthly_usd"]
-
     def test_each_tier_has_bullets(self):
         for tier in PRICING.values():
             assert isinstance(tier["bullets"], list)
             assert len(tier["bullets"]) >= 3
+
+    def test_each_tier_has_name_and_headline(self):
+        for tier in PRICING.values():
+            assert isinstance(tier["name"], str) and tier["name"]
+            assert isinstance(tier["headline"], str) and tier["headline"]
 
 
 class TestSubscriptionDataclass:
@@ -210,7 +209,16 @@ def _mk_conn(fetchone=None, fetchall=None):
 
 class TestGetSubscription:
     @pytest.mark.asyncio
-    async def test_returns_db_row(self):
+    async def test_personal_mode_returns_elite(self, monkeypatch):
+        """Default self-hosted setting — everyone is elite, no DB lookup."""
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "true")
+        sub = await get_subscription("anyone")
+        assert sub.tier == "elite"
+        assert sub.is_active
+
+    @pytest.mark.asyncio
+    async def test_returns_db_row(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         conn = _mk_conn(fetchone=(
             "pro", "active", None,
             datetime.now(timezone.utc) + timedelta(days=30),
@@ -226,7 +234,8 @@ class TestGetSubscription:
         assert sub.stripe_customer_id == "cus_123"
 
     @pytest.mark.asyncio
-    async def test_no_row_returns_free_default(self):
+    async def test_no_row_returns_free_default(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         conn = _mk_conn(fetchone=None)
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=conn)
@@ -236,33 +245,38 @@ class TestGetSubscription:
         assert sub.tier == "free"
 
     @pytest.mark.asyncio
-    async def test_db_error_returns_free_default(self):
+    async def test_db_error_returns_free_default(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         with patch("app.billing.get_conn", side_effect=RuntimeError("pool dead")):
             sub = await get_subscription("alice")
         assert sub.tier == "free"
 
     @pytest.mark.asyncio
-    async def test_get_tier_helper(self):
+    async def test_get_tier_helper(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         with patch("app.billing.get_subscription",
                    new=AsyncMock(return_value=Subscription("u", "elite", "active"))):
             t = await get_tier("u")
         assert t == "elite"
 
     @pytest.mark.asyncio
-    async def test_get_tier_inactive_returns_free(self):
+    async def test_get_tier_inactive_returns_free(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         with patch("app.billing.get_subscription",
                    new=AsyncMock(return_value=Subscription("u", "pro", "canceled"))):
             t = await get_tier("u")
         assert t == "free"
 
     @pytest.mark.asyncio
-    async def test_has_feature_true_when_active(self):
+    async def test_has_feature_true_when_active(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         with patch("app.billing.get_subscription",
                    new=AsyncMock(return_value=Subscription("u", "pro", "active"))):
             assert await has_feature("u", "voice_enabled") is True
 
     @pytest.mark.asyncio
-    async def test_has_feature_false_when_canceled(self):
+    async def test_has_feature_false_when_canceled(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         with patch("app.billing.get_subscription",
                    new=AsyncMock(return_value=Subscription("u", "pro", "canceled"))):
             # Inactive falls back to free, where voice is off
@@ -271,7 +285,8 @@ class TestGetSubscription:
 
 class TestCheckQuota:
     @pytest.mark.asyncio
-    async def test_zero_used_when_no_row(self):
+    async def test_zero_used_when_no_row(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         conn = _mk_conn(fetchone=None)
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=conn)
@@ -284,7 +299,8 @@ class TestCheckQuota:
         assert limit == 3
 
     @pytest.mark.asyncio
-    async def test_returns_existing_count(self):
+    async def test_returns_existing_count(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         conn = _mk_conn(fetchone=(7,))
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=conn)
@@ -297,7 +313,8 @@ class TestCheckQuota:
         assert limit == 50
 
     @pytest.mark.asyncio
-    async def test_db_error_zero_used(self):
+    async def test_db_error_zero_used(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         with patch("app.billing.get_subscription",
                    new=AsyncMock(return_value=Subscription("u", "free", "active"))), \
              patch("app.billing.get_conn", side_effect=RuntimeError("down")):
@@ -308,7 +325,20 @@ class TestCheckQuota:
 
 class TestConsumeQuota:
     @pytest.mark.asyncio
-    async def test_unlimited_tier_returns_sentinel(self):
+    async def test_personal_mode_no_limit(self, monkeypatch):
+        """Personal mode bypasses all quotas."""
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "true")
+        conn = _mk_conn(fetchone=(99,))
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=conn)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("app.billing.get_conn_autocommit", return_value=cm):
+            remaining = await consume_quota("alice", "image_gen_per_day")
+        assert remaining >= 10**8  # sentinel for unlimited
+
+    @pytest.mark.asyncio
+    async def test_unlimited_tier_returns_sentinel(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         conn = _mk_conn(fetchone=(1,))
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=conn)
@@ -320,7 +350,8 @@ class TestConsumeQuota:
         assert remaining >= 10**8  # sentinel
 
     @pytest.mark.asyncio
-    async def test_under_limit_returns_remaining(self):
+    async def test_under_limit_returns_remaining(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         # free tier image_gen_per_day = 3. New count = 2 → remaining = 1
         conn = _mk_conn(fetchone=(2,))
         cm = MagicMock()
@@ -333,7 +364,8 @@ class TestConsumeQuota:
         assert remaining == 1
 
     @pytest.mark.asyncio
-    async def test_over_limit_raises(self):
+    async def test_over_limit_raises(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_PERSONAL_MODE", "false")
         # free image_gen = 3. New count = 4 → raises
         conn = _mk_conn(fetchone=(4,))
         cm = MagicMock()
