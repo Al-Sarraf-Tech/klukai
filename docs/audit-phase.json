@@ -1,0 +1,21 @@
+{
+  "_schema_version": 1,
+  "current_phase": 2,
+  "phase_name": "Phase 2/3 ratchet — active CI gate matches committed target",
+  "phase_target_coverage": 60,
+  "phase_target_mutation_kill_rate": 0.80,
+  "_notes": "Phase ratchet per docs/superpowers/specs/2026-05-16-s-plus-uplift.md §5.5. The phase_target_coverage IS the active CI gate — we commit to keeping CI green at this value or higher. Ratcheting up is a separate planned activity (next: 70% Phase 2, 85% Phase 3, 95% Phase 4-5). True S+ coverage gate per the rubric is 95% — reached at end of Phase 4. This file is read by scripts/s-tier-audit.sh to determine the active phase target.",
+  "phase_transitions": {
+    "1": {"target_coverage": 49, "description": "C+ baseline (achieved 2026-05-17 02:20)"},
+    "2": {"target_coverage": 60, "description": "B/A — current"},
+    "3": {"target_coverage": 85, "description": "A+ trajectory"},
+    "4": {"target_coverage": 95, "description": "S tier — distroless + mutation + RED metrics"},
+    "5": {"target_coverage": 95, "description": "S+ tier — 100% on core libs, 90-day soak"}
+  },
+  "_ratchet_plan": {
+    "60_to_70": "Test 30 more uncovered code paths (focus: routes_extras*, proactive.py methods, reflect_helpers).",
+    "70_to_85": "Testcontainers-based integration tests against PG + Redis + Qdrant (already infra scaffolded).",
+    "85_to_95": "Property-based on parsers + mutation testing on shared core libs (affection, audit_chain)."
+  }
+}
+

@@ -360,6 +360,16 @@ _STRIPE_TOLERANCE_SECONDS = 300  # 5min — Stripe's recommended
 
 # Re-exports from billing_stripe.py — keep public surface stable.
 from app.billing_stripe import (  # noqa: E402,F401
-    verify_stripe_signature,
+    _apply_subscription,
+    _cancel_subscription,
+    _json_dumps,
+    _mark_event_processed,
+    _mark_past_due,
+    _record_payment,
+    _stripe_obj,
+    _stripe_tier_from_price,
+    _stripe_ts,
+    _user_id_from_metadata,
     handle_stripe_event,
+    verify_stripe_signature,
 )
