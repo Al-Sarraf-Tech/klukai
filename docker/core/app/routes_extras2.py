@@ -1,0 +1,339 @@
+"""Split route handlers — group 2 from app/routes.py (S+ Phase 2 §6.1)."""
+
+from __future__ import annotations
+
+import logging
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from .context import ws, affection
+from .db import get_pool
+
+from .routes import (
+    TributeRequest,
+)
+
+logger = logging.getLogger(__name__)
+
+
+async def _get_user_id(request: Request) -> str | None:
+    """Local mirror of routes.py:_get_user_id."""
+    from .auth import get_user_from_token
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    return await get_user_from_token(auth[7:])
+
+
+def register_extras2(app: FastAPI) -> None:
+    """Register group-2 HTTP endpoints."""
+    @app.post("/api/tribute")
+    async def api_tribute(req: TributeRequest, request: Request):
+        """Commander honors Klukai with a heartfelt message.
+
+        Persists as a sacred tribute (never deleted). Bumps affection +20.
+        Pushes an elevated-mood proactive response. Optionally promotes to
+        crown jewel (always referenced in system prompt at affection 4+).
+
+        Cooldown: 24h between tributes per user.
+        """
+        from . import error_codes as ec
+        from . import tributes
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+
+        # 24h cooldown check
+        recent = await tributes.count_recent(user_id)
+        allowed, reason = tributes.can_send_tribute(recent)
+        if not allowed:
+            return ec.err(ec.INPUT_INVALID, reason or "Cooldown active",
+                          status_code=429,
+                          extra={"cooldown_hours": tributes.TRIBUTE_COOLDOWN_HOURS})
+
+        # Capture state at write-time
+        aff_state = await affection.get_state(user_id)
+
+        tribute_id = await tributes.save_tribute(
+            user_id=user_id,
+            text=req.text,
+            mood_at_time="grateful",
+            affection_at_time=aff_state.score,
+            make_crown_jewel=req.make_crown_jewel,
+        )
+        if not tribute_id:
+            return ec.err(ec.INTERNAL_ERROR, "Tribute could not be saved", status_code=500)
+
+        # Bump affection — larger than any single gift
+        new_score = min(1000, aff_state.score + tributes.TRIBUTE_AFFECTION_BUMP)
+        aff_state.score = new_score
+        await affection._save_state(aff_state, user_id)
+
+        # Push elevated-mood response via WS if Commander is connected
+        if ws.is_connected(user_id):
+            # Klukai's mood lifts to "grateful" — the elevated-vulnerable mood
+            # most appropriate for receiving a tribute. The actual response
+            # the LLM generates on next turn will reflect this mood.
+            try:
+                await ws.send_proactive(
+                    user_id,
+                    "...Commander. (I take a moment, looking down, then back at you.) I... thank you.",
+                )
+                await ws.send_affection(
+                    user_id, aff_state.score, aff_state.level, aff_state.level_name,
+                    tributes.TRIBUTE_AFFECTION_BUMP,
+                )
+            except Exception:
+                pass  # Don't fail the tribute write on WS issues
+
+        # Audit the tribute — a sacred record
+        try:
+            from . import audit
+            ip = request.client.host if request.client else None
+            await audit.log(
+                "tribute_given",
+                user_id=user_id,
+                ip_address=ip,
+                request_id=getattr(request.state, "request_id", None),
+                metadata={
+                    "tribute_id": tribute_id,
+                    "text_length": len(req.text),
+                    "is_crown_jewel": req.make_crown_jewel,
+                    "affection_bump": tributes.TRIBUTE_AFFECTION_BUMP,
+                    "new_score": new_score,
+                },
+            )
+        except Exception:
+            pass
+
+        return {
+            "ok": True,
+            "tribute_id": tribute_id,
+            "is_crown_jewel": req.make_crown_jewel,
+            "affection_bump": tributes.TRIBUTE_AFFECTION_BUMP,
+            "new_score": new_score,
+            "mood_shift": "grateful",
+        }
+
+    @app.get("/api/tributes")
+    async def api_list_tributes(request: Request, limit: int = 20):
+        """List the Commander's tributes, newest first."""
+        from . import error_codes as ec
+        from . import tributes
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        limit = max(1, min(limit, 100))
+        items = await tributes.list_tributes(user_id, limit=limit)
+        return {"count": len(items), "tributes": items}
+
+    @app.get("/api/tribute/crown")
+    async def api_get_crown_jewel(request: Request):
+        """Return the current crown-jewel tribute (or null if none set)."""
+        from . import error_codes as ec
+        from . import tributes
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        crown = await tributes.get_crown_jewel(user_id)
+        return {"crown_jewel": crown}
+
+    @app.post("/api/tributes/{tribute_id}/crown")
+    async def api_set_crown_jewel(tribute_id: str, request: Request):
+        """Promote a tribute to crown jewel (demotes any prior one)."""
+        from . import error_codes as ec
+        from . import tributes
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        ok = await tributes.set_crown_jewel(user_id, tribute_id)
+        if not ok:
+            return ec.err(ec.INPUT_INVALID, "Tribute not found", status_code=404)
+        return {"ok": True, "crown_jewel_id": tribute_id}
+
+    # ── Dream diary (text-only memories from reflection-on-return) ──────────
+
+    @app.get("/api/dreams")
+    async def api_dreams(request: Request, limit: int = 20):
+        """List the user's saved dreams (reflection-on-return 'dream' path).
+
+        Dreams are memory-archive rows with category='Dreams', text-only by
+        default (filename starts with 'dream-' sentinel). Returns newest-first.
+        """
+        from . import error_codes as ec
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        from . import dreams as dream_mod
+        items = await dream_mod.list_dreams(user_id=user_id, limit=limit)
+        total = await dream_mod.count_dreams(user_id=user_id)
+        return {"count": len(items), "total": total, "dreams": items}
+
+    # ── Affection timeline (Your Journey graph data) ────────────────────────
+
+    @app.get("/api/user/affection-timeline")
+    async def api_affection_timeline(request: Request, days: int = 30):
+        """Return the authenticated user's affection-score timeline over N days.
+
+        Pulls from companion_affection_log, bucketed by day. Useful for
+        graphing relationship progression in the Flutter UI.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        days = max(1, min(days, 365))
+        try:
+            pool = get_pool()
+            async with pool.connection() as conn:
+                rows = await (await conn.execute(
+                    "SELECT DATE(created_at) AS day, "
+                    "  MAX(new_score) AS end_score, "
+                    "  SUM(delta) AS net_delta, "
+                    "  COUNT(*) AS events "
+                    "FROM companion_affection_log "
+                    "WHERE user_id = %s AND created_at > NOW() - INTERVAL '%s days' "
+                    "GROUP BY DATE(created_at) "
+                    "ORDER BY day ASC",
+                    (user_id, days),
+                )).fetchall()
+            points = [
+                {
+                    "date": r[0].isoformat() if r[0] else None,
+                    "end_score": r[1],
+                    "net_delta": r[2],
+                    "events": r[3],
+                }
+                for r in rows
+            ]
+            return {"days": days, "count": len(points), "points": points}
+        except Exception as e:
+            logger.error("Affection timeline failed: %s", e)
+            return JSONResponse({"error": "Timeline unavailable"}, status_code=500)
+
+    # ── Audit chain integrity check (admin-only) ──────────────────────────
+
+    @app.get("/api/audit/verify-chain")
+    async def api_audit_verify_chain(request: Request, limit: int = 500):
+        """Verify the HMAC hash chain over the last N audit rows.
+
+        Admin-only. Returns {valid, break_at_id, checked}. A break means
+        a row was modified or deleted since insert.
+        """
+        from . import error_codes as ec
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        if user_id != "jalsarraf":
+            return ec.admin_only()
+        limit = max(1, min(limit, 5000))
+        try:
+            pool = get_pool()
+            async with pool.connection() as conn:
+                rows_raw = await (await conn.execute(
+                    "SELECT id, event_type, user_id, ip_address, request_id, "
+                    "metadata, created_at, chain_hash "
+                    "FROM companion_audit_log ORDER BY id ASC LIMIT %s",
+                    (limit,),
+                )).fetchall()
+            rows = [
+                {
+                    "id": r[0], "event_type": r[1], "user_id": r[2],
+                    "ip_address": r[3], "request_id": r[4], "metadata": r[5],
+                    "created_at": str(r[6] or ""), "chain_hash": r[7],
+                }
+                for r in rows_raw
+            ]
+            from . import audit_chain
+            return audit_chain.verify_chain(rows)
+        except Exception as e:
+            logger.error("Audit chain verify failed: %s", e)
+            return ec.err(ec.INTERNAL_ERROR, "Verify failed", status_code=500)
+
+    # ── Audit log viewer (admin-only) ──────────────────────────────────────
+
+    @app.get("/api/audit")
+    async def api_audit(
+        request: Request,
+        limit: int = 100,
+        event_type: str | None = None,
+        user_id_filter: str | None = None,
+    ):
+        """Read recent audit events. Admin only.
+
+        Query params: limit (1-1000), event_type, user_id_filter.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        if user_id != "jalsarraf":
+            return JSONResponse({"error": "Admin only"}, status_code=403)
+        from . import audit
+        events = await audit.recent(limit=limit, event_type=event_type,
+                                    user_id=user_id_filter)
+        return {"count": len(events), "events": events}
+
+    # ── Metrics (admin-only) ────────────────────────────────────────────────
+
+    @app.get("/api/metrics")
+    async def api_metrics(request: Request):
+        """In-process metrics snapshot (admin user only).
+
+        Returns counters, latency histograms, and uptime. Admin scoping:
+        user must be 'jalsarraf' (the operator). Other users get 403.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        if user_id != "jalsarraf":
+            return JSONResponse({"error": "Admin only"}, status_code=403)
+        from . import metrics as _m
+        snap = _m.snapshot()
+        try:
+            pool = get_pool()
+            snap["db_pool"] = {
+                "min_size": pool.min_size,
+                "max_size": pool.max_size,
+            }
+        except Exception:
+            snap["db_pool"] = {"status": "unavailable"}
+        return snap
+
+    # ── Memory search (full-text over annotations + prompts) ───────────────
+
+    @app.get("/api/memories/search")
+    async def api_memories_search(request: Request, q: str, limit: int = 20):
+        """Search memory annotations by ILIKE substring. Scoped to user."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        if not q or len(q.strip()) < 2:
+            return JSONResponse({"error": "Query must be at least 2 characters"}, status_code=400)
+        limit = max(1, min(limit, 100))
+        try:
+            pool = get_pool()
+            async with pool.connection() as conn:
+                rows = await conn.execute(
+                    "SELECT id, filename, annotation, category, scene_tags, created_at "
+                    "FROM companion_memories "
+                    "WHERE user_id = %s "
+                    "  AND (annotation ILIKE %s OR prompt ILIKE %s) "
+                    "  AND kept = true "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (user_id, f"%{q}%", f"%{q}%", limit),
+                )
+                results = [
+                    {
+                        "id": str(r[0]),
+                        "filename": r[1],
+                        "annotation": r[2],
+                        "category": r[3],
+                        "scene_tags": r[4],
+                        "created_at": r[5].isoformat() if r[5] else None,
+                    }
+                    for r in await rows.fetchall()
+                ]
+            return {"query": q, "count": len(results), "results": results}
+        except Exception as e:
+            logger.error("Memory search failed: %s", e)
+            return JSONResponse({"error": "Search failed"}, status_code=500)
