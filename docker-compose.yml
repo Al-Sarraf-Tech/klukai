@@ -6,7 +6,7 @@ services:
     build: ./docker/core
     container_name: companion-core
     ports:
-      - "8300:8300"
+      - "127.0.0.1:8300:8300"
     environment:
       # aichat services on amarillo (LAN via Docker network)
       DATABASE_URL: "postgresql://aichat:${POSTGRES_PASSWORD:?}@infra-postgres:5432/aichat"
@@ -48,6 +48,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    labels:
+      autoheal: "true"
 
   # companion-voice runs on dominus (RTX 3090, CUDA required)
   # Compose: dominus:~/git/klukai/docker-compose.voice.yml
