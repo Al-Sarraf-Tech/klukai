@@ -1,0 +1,18 @@
+# Grafana dashboard provisioning — auto-load any *.json under
+# /var/lib/grafana/dashboards/ (mounted from docs/dashboards/).
+#
+# Per S+ uplift spec §5.2: dashboards-as-code reviewed in PR.
+
+apiVersion: 1
+
+providers:
+  - name: klukai
+    orgId: 1
+    folder: klukai
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

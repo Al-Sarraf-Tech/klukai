@@ -1,0 +1,49 @@
+# Prometheus config for klukai observability stack.
+#
+# Scrape targets:
+#  - alloy itself (collector health)
+#  - companion-core /api/metrics (when wired in Phase 3.2)
+#
+# Per S+ uplift spec §5.2: 15d retention, configured at runtime via
+# --storage.tsdb.retention.time=15d flag.
+
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: klukai
+    host: amarillo
+
+scrape_configs:
+  - job_name: alloy
+    static_configs:
+      - targets:
+          - klukai-alloy:12345
+        labels:
+          service: alloy
+
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+        labels:
+          service: prometheus
+
+  # companion-core /api/metrics scrape — admin-token gated.
+  # Token lives in the alloy config block (env-substituted at runtime
+  # by Alloy's secret integration). For now scrape is disabled until
+  # Phase 3.2 wires the OTel SDK; uncomment when ready.
+  #
+  # - job_name: klukai-core
+  #   metrics_path: /api/metrics
+  #   bearer_token_file: /etc/prometheus/klukai-admin-token
+  #   static_configs:
+  #     - targets: [companion-core:8300]
+  #       labels:
+  #         service: klukai-core
+
+# Alert rules live in docs/alerts/klukai.yaml (Phase 3 wiring).
+# Reload Prometheus to pick up rule changes:
+#   curl -X POST http://localhost:9090/-/reload
+rule_files: []

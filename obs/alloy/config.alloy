@@ -1,0 +1,83 @@
+// Alloy config — receives OTLP from companion-core, fans to Prom + Loki + Tempo.
+//
+// Per S+ uplift spec §5.2 — single collector pattern keeps the
+// observability surface uniform: every klukai service talks one
+// protocol (OTLP) to one endpoint (alloy:4317) and Alloy handles
+// per-backend transport.
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// ──────────────────────────────────────────────────────────────────
+// OTLP ingest — companion-core points its OTel SDK here.
+// ──────────────────────────────────────────────────────────────────
+
+otelcol.receiver.otlp "klukai" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  output {
+    metrics = [otelcol.processor.batch.klukai.input]
+    logs    = [otelcol.processor.batch.klukai.input]
+    traces  = [otelcol.processor.batch.klukai.input]
+  }
+}
+
+otelcol.processor.batch "klukai" {
+  send_batch_size     = 1024
+  send_batch_max_size = 2048
+  timeout             = "5s"
+
+  output {
+    metrics = [otelcol.exporter.prometheus.klukai.input]
+    logs    = [otelcol.exporter.loki.klukai.input]
+    traces  = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Metrics → Prometheus (remote_write).
+// ──────────────────────────────────────────────────────────────────
+
+otelcol.exporter.prometheus "klukai" {
+  forward_to = [prometheus.remote_write.klukai.receiver]
+}
+
+prometheus.remote_write "klukai" {
+  endpoint {
+    url = "http://klukai-prometheus:9090/api/v1/write"
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Logs → Loki.
+// ──────────────────────────────────────────────────────────────────
+
+otelcol.exporter.loki "klukai" {
+  forward_to = [loki.write.klukai.receiver]
+}
+
+loki.write "klukai" {
+  endpoint {
+    url = "http://klukai-loki:3100/loki/api/v1/push"
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Traces → Tempo.
+// ──────────────────────────────────────────────────────────────────
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "klukai-tempo:4317"
+    tls {
+      insecure = true
+    }
+  }
+}

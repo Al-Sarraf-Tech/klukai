@@ -1,0 +1,145 @@
+# docker-compose.obs.yml — observability stack for klukai
+#
+# Per S+ uplift spec §5.2: Alloy + Prometheus + Loki + Tempo + Grafana.
+# All five containers run on amarillo, bound to loopback (Tailscale
+# reaches them by source-routing; Cloudflare does not).
+#
+# Bring up:    docker compose -f docker-compose.obs.yml up -d
+# Bring down:  docker compose -f docker-compose.obs.yml down
+# Logs:        docker compose -f docker-compose.obs.yml logs -f
+#
+# After bring-up, companion-core OTel exporters point at alloy:4317.
+# That wiring is Phase 3.2 work (companion-core needs OTel SDK init).
+# This file lands the *infrastructure*; the *instrumentation* follows.
+#
+# Storage layout (per host CLAUDE.md: logs/data on /mnt/nvmeINT):
+#   /mnt/nvmeINT/obs/klukai/{prometheus,loki,tempo,grafana,alloy}/
+#
+# Retention: prom 15d, loki 30d, tempo 7d. Tunable in each container's
+# config.
+
+services:
+  alloy:
+    image: grafana/alloy:v1.4.2
+    container_name: klukai-alloy
+    user: "1000:1000"
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+    ports:
+      - "127.0.0.1:12345:12345"  # Alloy UI (local-only)
+      - "127.0.0.1:4317:4317"    # OTLP gRPC ingest
+      - "127.0.0.1:4318:4318"    # OTLP HTTP ingest
+    volumes:
+      - ./obs/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /mnt/nvmeINT/obs/klukai/alloy:/var/lib/alloy/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:12345/-/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      autoheal: "true"
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    container_name: klukai-prometheus
+    user: "1000:1000"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.listen-address=0.0.0.0:9090
+      - --web.enable-lifecycle
+      - --web.external-url=http://localhost:9090/
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./obs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /mnt/nvmeINT/obs/klukai/prometheus:/prometheus
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      autoheal: "true"
+
+  loki:
+    image: grafana/loki:3.4.1
+    container_name: klukai-loki
+    user: "1000:1000"
+    command:
+      - -config.file=/etc/loki/loki.yml
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ./obs/loki/loki.yml:/etc/loki/loki.yml:ro
+      - /mnt/nvmeINT/obs/klukai/loki:/loki
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      autoheal: "true"
+
+  tempo:
+    image: grafana/tempo:2.7.1
+    container_name: klukai-tempo
+    user: "1000:1000"
+    command:
+      - -config.file=/etc/tempo/tempo.yml
+    ports:
+      - "127.0.0.1:3200:3200"
+    volumes:
+      - ./obs/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - /mnt/nvmeINT/obs/klukai/tempo:/tmp/tempo
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:3200/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      autoheal: "true"
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: klukai-grafana
+    user: "1000:1000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "http://localhost:3000/"
+      GF_INSTALL_PLUGINS: ""
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./obs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docs/dashboards:/var/lib/grafana/dashboards:ro
+      - /mnt/nvmeINT/obs/klukai/grafana:/var/lib/grafana
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      autoheal: "true"
+
+networks:
+  default:
+    name: klukai-obs
