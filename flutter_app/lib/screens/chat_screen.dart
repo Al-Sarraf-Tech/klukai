@@ -21,6 +21,7 @@ import '../widgets/heartbeat_sensor.dart';
 import '../widgets/exit_icon.dart';
 import 'profile_screen.dart';
 import 'memory_archive_screen.dart';
+import 'subscription_screen.dart';
 
 @JS('audioRecorder.start')
 external JSPromise<JSBoolean> _jsStartRecording();
@@ -724,6 +725,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     ));
   }
 
+  void _openSubscription() {
+    String? token;
+    try {
+      token = web.window.localStorage.getItem('klukai_token');
+    } catch (_) {}
+    Navigator.push(context, MaterialPageRoute(
+      builder: (_) => SubscriptionScreen(
+        serverUrl: widget.serverUrl,
+        authToken: token,
+      ),
+    ));
+  }
+
   void _playAudio(String base64Audio) {
     try {
       final dataUrl = 'data:audio/wav;base64,$base64Audio';
@@ -976,6 +990,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                           tooltip: 'Memory Archive',
+                        ),
+                        IconButton(
+                          onPressed: _openSubscription,
+                          icon: Icon(Icons.workspace_premium_outlined,
+                              color: GFL2Colors.primary.withValues(alpha: 0.5), size: 16),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                          tooltip: 'Subscription',
                         ),
                         GestureDetector(
                           onTap: _logout,
