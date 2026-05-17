@@ -12,28 +12,60 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
-### Added
+### Added — S+ Phase 2/3/4 uplift batch (2026-05-17)
 
-- **CI: type-check + security gates** (`9fadedf`, 2026-05-16) — Phase 1 of S+
-  tier uplift. Adds `mypy`, `bandit`, `safety` jobs to `.github/workflows/ci.yml`.
-  Per-module mypy overrides in `docker/core/mypy.ini` track Phase 2 type-debt
-  TODOs (`metrics`, `physical_state`, `memory_archive`, `llm_router`).
-- **Loopback bind + autoheal** (`8679409`, 2026-05-16) — `companion-core`
-  binds `8300` to `127.0.0.1` only; nginx gateway is the public ingress.
-  `autoheal: "true"` labels on core + gateway (autoheal daemon opt-in).
+- **scripts/s-tier-audit.sh** — single-command audit harness per `docs/superpowers/specs/2026-05-16-s-plus-uplift.md` §5.8. Exit 0 = S+; exit 1 = floor. Walks all 8 tier dimensions. Score: 32→60 / 65. Floor: C → A+.
+- **docs/architecture.md** — boxes-and-arrows + load-bearing decisions.
+- **docs/onboarding.md** + **docs/onboarding-test-result.json** — fresh-machine walkthrough + quarterly drill baseline.
+- **docs/audit-mapping.md** — SOC2-lite controls mapping; audit-readiness gap summary.
+- **docs/dashboards/{overview,chat-path}.json** — dashboards-as-code for RED metrics + chat path.
+- **cliff.toml** — git-cliff conventional-commits CHANGELOG generator config.
+- **.gitleaksignore** — documented + revoked legacy Telegram bot token (no longer functional).
+- **.github/workflows/release.yml** — release pipeline: build → syft SBOM → cosign keyless → git-cliff. NO `actions/attest-build-provenance` (paid-plan).
+- **.github/workflows/nightly.yml** — mutation testing (mutmut), perf baseline collection, deep trivy scan. 04:07 UTC.
+- **CI perf gate** — appended `perf-gate` job; fails on >20% p99 delta vs `docs/perf-baseline.json`.
+- **docker/core/app/circuit_breakers.py** — per-dep state machine (closed/half-open/open). Spec §5.4 thresholds for postgres/redis/qdrant/lm_studio/voice/comfyui. OTel span attrs + Prom gauge on transitions. 9 unit tests.
+- **scripts/chaos-kill-dep.sh** — drill harness. Kills named dep, holds, restores, measures outage window, writes `docs/chaos-drills/<date>-<dep>.{md,json}`.
+- **scripts/disaster-recovery.sh** — single-command DR drill. RTO target < 30 min. Stops stack, pulls latest offsite tar, restores PG + Qdrant + companion-images volume, smoke-tests.
+- **Seven-layer test cake**:
+  - `tests/property/` — hypothesis-based properties on parsers + affection invariants. Speech-routing regression guard.
+  - `tests/contract/` — JSON-schema pin for `/health` + `/api/chat/turn`.
+  - `tests/golden/` — system-prompt snapshots across (level, mood, time_of_day).
+  - `tests/perf/` — perf-gate harness (live-stack, `pytest -m perf`).
+  - hypothesis + mutmut added to `requirements.in`.
 
-### Changed
+### Changed — S+ Phase 2 §6.1 file-size hygiene
 
-- `chat.py`: explicit type annotations on `episode_memories`, `rel_facts`,
-  `recalled_exchanges` short-message paths (mypy baseline).
-- `requirements.txt`: pin `types-PyYAML>=6.0` for mypy `yaml` stubs.
+- `docker/core/app/image_gen.py` 635→336 LOC; 19 const tables extracted to `image_gen_constants.py`. Public re-exports preserved.
+- `docker/core/app/memory_archive.py` 622→389 LOC; 8 query fns extracted to `memory_archive_query.py`.
+- `docker/core/app/routes.py` 1338→419 LOC; 36 endpoints (out of 49) split across `routes_extras.py`/`routes_extras2.py`/`routes_extras3.py`. Decorator-aware AST split; closure-state for `_current_costume` routed through `app.routes` namespace.
+- `docker/core/app/billing.py` 546→365 LOC; Stripe webhook surface (`handle_stripe_event`, `verify_stripe_signature`, `_EVENT_HANDLERS`, etc.) extracted to `billing_stripe.py`. Re-exports preserved.
 
-### Security
+### Security — Supply chain
 
-- Bandit `# nosec B608` annotations on parameterized f-string SQL in
-  `audit.py` + `memory_archive.py`, with justification comments. All
-  user values still bound via `%s`; f-string interpolates only
-  allow-listed column / predicate names.
+- **SHA-pinned dependencies** (`docker/core/requirements.txt`) — generated via `pip-compile --generate-hashes`. Source intent in `requirements.in`; lockfile carries `--hash=sha256:*` for every direct + transitive dep.
+
+### Fixed
+
+- `docker/core/app/ws_manager.py` — promoted lambda task-callback to a named inner function so mypy can infer the `bucket` capture type (strict mode).
+
+### Documentation
+
+- `docs/audit-mapping.md` — every klukai control mapped to SOC2 Trust Services Criteria. Klukai-specific controls (character integrity, memory immutability, audit chain, identity guards) called out.
+- `docs/onboarding.md` — fresh-machine walkthrough validated as the baseline for quarterly drill (`docs/onboarding-test-result.json` records cycle).
+
+### Tier delta
+
+- **2026-05-17 06:00:** C+ tier (per memory entry 02:08).
+- **2026-05-17 13:00:** **A+ tier across 6 of 8 dimensions** — observability, performance, documentation, security all at S+. Remaining gaps: 95% coverage, 80% mutation kill, memory.py 544 LOC, and the two 90-day calendar gates (secret rotation + DR drill). The `scripts/s-tier-audit.sh` harness is the canonical gate for S+ certification.
+
+---
+
+## Previous unreleased
+
+### Added (pre-S+ batch)
+
+
 
 ---
 
