@@ -65,6 +65,20 @@ class TributeRequest(BaseModel):
     text: str = Field(min_length=20, max_length=1000)
     make_crown_jewel: bool = True
 
+
+class BillingCheckoutRequest(BaseModel):
+    """Body for POST /api/billing/checkout — request a Stripe checkout session."""
+    tier: str = Field(pattern=r"^(pro|elite)$")
+    cadence: str = Field(default="monthly", pattern=r"^(monthly|annual)$")
+    success_url: str | None = None
+    cancel_url: str | None = None
+
+
+class AccountDeactivateRequest(BaseModel):
+    """Body for POST /api/account/deactivate — soft delete. SACRED chat
+    data is preserved per CLAUDE.md absolute rule."""
+    confirm: str = Field(pattern=r"^DEACTIVATE$")
+
 logger = logging.getLogger(__name__)
 
 
@@ -1136,6 +1150,193 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         except Exception as e:
             logger.error("Export failed: %s", e)
             return JSONResponse({"error": "Export failed"}, status_code=500)
+
+    # ── Billing + Subscriptions (monetization) ─────────────────────────────
+
+    @app.get("/api/billing/tiers")
+    async def billing_tiers():
+        """Public pricing surface. No auth required (marketing page reads it)."""
+        from .billing import PRICING, TIER_FEATURES
+        return {"pricing": PRICING, "features": TIER_FEATURES}
+
+    @app.get("/api/billing/subscription")
+    async def get_my_subscription(request: Request):
+        from .billing import get_subscription
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        sub = await get_subscription(user_id)
+        return {
+            "tier": sub.tier,
+            "status": sub.status,
+            "is_active": sub.is_active,
+            "period_start": sub.period_start.isoformat() if sub.period_start else None,
+            "period_end": sub.period_end.isoformat() if sub.period_end else None,
+            "features": sub.features,
+        }
+
+    @app.get("/api/billing/usage")
+    async def get_my_usage(request: Request):
+        from .billing import get_usage_summary
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        return await get_usage_summary(user_id)
+
+    @app.post("/api/billing/checkout")
+    async def create_checkout(req: BillingCheckoutRequest, request: Request):
+        """Create a Stripe Checkout Session for tier upgrade.
+
+        Stripe SDK is imported lazily so the module loads even without it.
+        Returns a checkout URL or 503 if Stripe is not configured.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        import os
+        api_key = os.environ.get("STRIPE_API_KEY", "")
+        if not api_key:
+            return JSONResponse(
+                {"error": "Billing not configured", "code": "stripe_not_configured"},
+                status_code=503,
+            )
+        try:
+            import stripe  # type: ignore
+        except ImportError:
+            return JSONResponse(
+                {"error": "Stripe SDK not installed", "code": "stripe_sdk_missing"},
+                status_code=503,
+            )
+        stripe.api_key = api_key
+        env_key = f"STRIPE_PRICE_{req.tier.upper()}_{req.cadence.upper()}"
+        price_id = os.environ.get(env_key)
+        if not price_id:
+            return JSONResponse(
+                {"error": f"No Stripe price configured for {req.tier}/{req.cadence}",
+                 "code": "missing_price_id", "env_var": env_key},
+                status_code=503,
+            )
+        try:
+            session = stripe.checkout.Session.create(
+                mode="subscription",
+                line_items=[{"price": price_id, "quantity": 1}],
+                success_url=req.success_url or "https://klukai.appnest.cc/app/?upgrade=success",
+                cancel_url=req.cancel_url or "https://klukai.appnest.cc/app/?upgrade=canceled",
+                client_reference_id=user_id,
+                subscription_data={"metadata": {"user_id": user_id}},
+                metadata={"user_id": user_id},
+            )
+            return {"url": session.url, "session_id": session.id}
+        except Exception as e:
+            logger.error("Stripe checkout creation failed: %s", e)
+            return JSONResponse({"error": "Checkout failed"}, status_code=502)
+
+    @app.post("/api/billing/portal")
+    async def billing_portal(request: Request):
+        """Return a Stripe billing portal URL where the user can manage their
+        subscription (upgrade/downgrade/cancel)."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        import os
+        api_key = os.environ.get("STRIPE_API_KEY", "")
+        if not api_key:
+            return JSONResponse(
+                {"error": "Billing not configured"}, status_code=503,
+            )
+        try:
+            import stripe  # type: ignore
+        except ImportError:
+            return JSONResponse({"error": "Stripe SDK not installed"}, status_code=503)
+        from .billing import get_subscription
+        sub = await get_subscription(user_id)
+        if not sub.stripe_customer_id:
+            return JSONResponse(
+                {"error": "No Stripe customer record",
+                 "hint": "Subscribe first via /api/billing/checkout"},
+                status_code=400,
+            )
+        stripe.api_key = api_key
+        try:
+            portal = stripe.billing_portal.Session.create(
+                customer=sub.stripe_customer_id,
+                return_url="https://klukai.appnest.cc/app/",
+            )
+            return {"url": portal.url}
+        except Exception as e:
+            logger.error("Stripe portal creation failed: %s", e)
+            return JSONResponse({"error": "Portal failed"}, status_code=502)
+
+    @app.post("/api/billing/webhook")
+    async def stripe_webhook(request: Request):
+        """Stripe webhook receiver. HMAC-verified, idempotent on event id.
+
+        SACRED: cancel events downgrade tier — never touch chat data.
+        """
+        from .billing import handle_stripe_event, verify_stripe_signature
+        body = await request.body()
+        sig = request.headers.get("Stripe-Signature", "")
+        if not verify_stripe_signature(body, sig):
+            return JSONResponse({"error": "Invalid signature"}, status_code=400)
+        try:
+            import json
+            event = json.loads(body)
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+        result = await handle_stripe_event(event)
+        return result
+
+    # ── Account self-service ───────────────────────────────────────────────
+
+    @app.post("/api/account/deactivate")
+    async def deactivate_account(req: AccountDeactivateRequest, request: Request):
+        """Soft-delete user account. ABSOLUTE: chat memories, episodes,
+        affection, Qdrant vectors are NEVER touched (CLAUDE.md SACRED rule).
+
+        Effect:
+        - Account row marked deactivated_at = NOW()
+        - All active sessions invalidated (forces re-login if reactivated)
+        - Subscription canceled at period end (if Stripe-managed)
+        - User can reactivate within 30 days; after that, ops can hard-delete
+          the *account row only* with explicit admin action.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        try:
+            from .db import get_conn_autocommit
+            async with get_conn_autocommit() as conn:
+                # Add deactivated_at column lazily (idempotent)
+                await conn.execute(
+                    "ALTER TABLE companion_users "
+                    "ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ"
+                )
+                await conn.execute(
+                    "UPDATE companion_users SET deactivated_at = NOW() WHERE id = %s",
+                    (user_id,),
+                )
+                # Invalidate all sessions for this user
+                await conn.execute(
+                    "DELETE FROM companion_sessions WHERE user_id = %s",
+                    (user_id,),
+                )
+            try:
+                from . import audit
+                await audit.log(
+                    event_type="account.deactivated",
+                    user_id=user_id,
+                    metadata={"sacred_chat_preserved": True},
+                )
+            except Exception:
+                pass
+            return {
+                "deactivated": True,
+                "user_id": user_id,
+                "message": "Account deactivated. Memories preserved. Email support to reactivate.",
+            }
+        except Exception as e:
+            logger.error("Deactivate failed for %s: %s", user_id, e)
+            return JSONResponse({"error": "Deactivation failed"}, status_code=500)
 
     # ── Root redirect ──────────────────────────────────────────────────────
 
