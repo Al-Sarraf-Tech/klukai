@@ -1,0 +1,211 @@
+# Prometheus alert rules for klukai
+#
+# Per S+ uplift spec §5.2 + §10.4: alert annotations link to runbook
+# anchors. Each rule has a `runbook_url` pointing into
+# docs/runbooks/<name>.md so the on-call notification lands the
+# operator on the right runbook.
+#
+# Wiring: this file becomes `rule_files` for Prometheus once the
+# obs stack is up. Until then, it's documentation + a metrics contract
+# (the queries below name the metrics companion-core MUST emit in
+# Phase 3.2 OTel wiring).
+
+groups:
+  - name: klukai_health
+    interval: 30s
+    rules:
+      - alert: KlukaiCoreDown
+        expr: up{job="klukai-core"} == 0
+        for: 2m
+        labels:
+          severity: page
+          tier: P1
+        annotations:
+          summary: "companion-core is DOWN"
+          description: "Klukai core has been unreachable for 2m. Chat + memory + audit are offline."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/db-down.md"
+
+      - alert: KlukaiDatabaseDown
+        expr: klukai_subsystem_status{subsystem="database"} != 1
+        for: 2m
+        labels:
+          severity: page
+          tier: P1
+        annotations:
+          summary: "PostgreSQL unreachable from companion-core"
+          description: "PG check has failed for 2m. New chats won't persist."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/db-down.md"
+
+      - alert: KlukaiRedisDown
+        expr: klukai_subsystem_status{subsystem="redis"} != 1
+        for: 5m
+        labels:
+          severity: ticket
+          tier: P2
+        annotations:
+          summary: "Redis unreachable — sessions degraded"
+          description: "Redis health check failing for 5m. Users may be logged out."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/redis-down.md"
+
+      - alert: KlukaiQdrantDown
+        expr: klukai_subsystem_status{subsystem="qdrant"} != 1
+        for: 5m
+        labels:
+          severity: ticket
+          tier: P2
+        annotations:
+          summary: "Qdrant unreachable — semantic recall degraded"
+          description: "Qdrant health failing for 5m. Klukai chat continues without memory recall."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/qdrant-down.md"
+
+      - alert: KlukaiVoiceUnreachable
+        expr: klukai_subsystem_status{subsystem="voice"} != 1
+        for: 5m
+        labels:
+          severity: ticket
+          tier: P2
+        annotations:
+          summary: "Voice service (dominus) unreachable"
+          description: "TTS endpoint at 192.168.50.2:8301 has been down 5m. Chat is text-only."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/voice-unreachable.md"
+
+      - alert: KlukaiComfyUIDown
+        expr: klukai_subsystem_status{subsystem="comfyui"} != 1
+        for: 10m
+        labels:
+          severity: ticket
+          tier: P3
+        annotations:
+          summary: "ComfyUI down — image gen disabled"
+          description: "ComfyUI at 192.168.50.2:8388 has been down 10m. Chat continues without inline images."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/comfyui-down.md"
+
+  - name: klukai_slo_burn
+    interval: 30s
+    rules:
+      - alert: KlukaiHealthLatencySLOFastBurn
+        # /health SLO: p99 ≤ 30ms (docs/slos.md)
+        # Fast burn: 14d budget in 1h triggers a page
+        expr: |
+          (
+            histogram_quantile(0.99, sum by (le) (rate(http_request_duration_ms_bucket{job="klukai-core", route="/health"}[5m]))) > 30
+          ) and (
+            histogram_quantile(0.99, sum by (le) (rate(http_request_duration_ms_bucket{job="klukai-core", route="/health"}[1h]))) > 30
+          )
+        for: 5m
+        labels:
+          severity: page
+          tier: P2
+        annotations:
+          summary: "/health p99 latency SLO breach (fast burn)"
+          description: "/health p99 has exceeded the 30ms SLO at both 5m and 1h windows. Cache may not be working."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/high-latency.md"
+
+      - alert: KlukaiChatLatencySLOFastBurn
+        # /api/chat/turn SLO: full response p99 ≤ 8s
+        expr: |
+          histogram_quantile(0.99, sum by (le) (rate(http_request_duration_ms_bucket{job="klukai-core", route="/api/chat/turn"}[10m]))) > 8000
+        for: 10m
+        labels:
+          severity: page
+          tier: P2
+        annotations:
+          summary: "Chat p99 latency SLO breach"
+          description: "/api/chat/turn p99 > 8s for 10m. Likely LM Studio degraded (see lm-studio-cold runbook)."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/lm-studio-cold.md"
+
+      - alert: KlukaiAvailabilitySLOFastBurn
+        # Overall service availability SLO: 99.9% over 30d
+        # Fast burn: 5xx rate > 0.1% over 5m AND 0.1% over 1h
+        expr: |
+          (
+            sum(rate(http_requests_total{job="klukai-core", status=~"5.."}[5m]))
+            / sum(rate(http_requests_total{job="klukai-core"}[5m]))
+          ) > 0.001
+          and
+          (
+            sum(rate(http_requests_total{job="klukai-core", status=~"5.."}[1h]))
+            / sum(rate(http_requests_total{job="klukai-core"}[1h]))
+          ) > 0.001
+        for: 5m
+        labels:
+          severity: page
+          tier: P2
+        annotations:
+          summary: "klukai overall availability SLO breach"
+          description: "5xx rate > 0.1% sustained. Burn-rate alert per docs/slos.md."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/high-latency.md"
+
+  - name: klukai_resource
+    interval: 1m
+    rules:
+      - alert: KlukaiDiskSpaceLow
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/mnt/nvmeINT"} / node_filesystem_size_bytes{mountpoint="/mnt/nvmeINT"}) * 100 < 20
+        for: 30m
+        labels:
+          severity: ticket
+          tier: P2
+        annotations:
+          summary: "amarillo /mnt/nvmeINT under 20% free"
+          description: "Disk has been <20% free for 30m. Backups + WAL may begin failing."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/disk-space.md"
+
+      - alert: KlukaiMemoryGrowthSuspect
+        # RSS climbing > 50% over 24h
+        expr: |
+          (
+            (process_resident_memory_bytes{job="klukai-core"} - process_resident_memory_bytes{job="klukai-core"} offset 24h)
+            / process_resident_memory_bytes{job="klukai-core"} offset 24h
+          ) > 0.5
+        for: 1h
+        labels:
+          severity: ticket
+          tier: P2
+        annotations:
+          summary: "companion-core RSS grew >50% over 24h"
+          description: "Likely memory leak. Diagnose before OOM-kill per runbook."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/memory-leak.md"
+
+      - alert: KlukaiAuthFailureSpike
+        # Auth failure rate > 5%
+        expr: |
+          (
+            sum(rate(http_requests_total{job="klukai-core", route="/api/auth/login", status="401"}[10m]))
+            / sum(rate(http_requests_total{job="klukai-core", route="/api/auth/login"}[10m]))
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: ticket
+          tier: P2
+        annotations:
+          summary: "Auth failure rate > 5% on /api/auth/login"
+          description: "Either brute force or auth regression. Triage source distribution."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/auth-fail-spike.md"
+
+  - name: klukai_backup
+    interval: 5m
+    rules:
+      - alert: KlukaiBackupStale
+        # No fresh tar on dominus in 36h
+        expr: time() - klukai_backup_last_success_unix > 129600
+        for: 1h
+        labels:
+          severity: ticket
+          tier: P2
+        annotations:
+          summary: "Offsite backup hasn't run in >36h"
+          description: "Per scripts/verify-backups.sh + offsite-backup.sh. Check dominus reachability."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/disk-space.md"
+
+      - alert: KlukaiMemoryIntegrityDrop
+        # audit-memories.sh emits a metric on drop; if it fires, page
+        expr: klukai_memory_count_drop_pct > 5
+        for: 10m
+        labels:
+          severity: page
+          tier: P1
+        annotations:
+          summary: "Memory counts dropped > 5% — possible data loss"
+          description: "scripts/audit-memories.sh detected a counter drop. Per feedback_never_delete_chat.md, this is SACRED data — investigate immediately."
+          runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/qdrant-down.md"
