@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-pwa run stop logs health gateway gateway-stop deploy
+.PHONY: build build-backend build-pwa run stop logs health gateway gateway-stop deploy perf-baseline test-local lint-local type-check security-scan
 
 # ── Local (amarillo) commands ────────────────────────────────────────────────
 
@@ -70,3 +70,29 @@ deploy: gateway
 	@echo "  1. Copy repo to dominus:  rsync -avz --exclude .git . dominus:~/git/klukai/"
 	@echo "  2. SSH to dominus:        ssh dominus"
 	@echo "  3. Build and run:         cd ~/git/klukai && make build && make run"
+
+# ── Quality gates (mirror CI) ────────────────────────────────────────────────
+
+test-local:
+	cd docker/core && python3 -m pytest tests/ -q --tb=short --cov=app --cov-report=term-missing --cov-fail-under=49
+
+lint-local:
+	cd docker/core && ruff check app/ --config ruff.toml
+
+type-check:
+	cd docker/core && mypy app/ --config-file mypy.ini
+
+security-scan:
+	cd docker/core && bandit -r app/ -ll --skip B101
+	cd docker/core && safety check --file requirements.txt --ignore 70612 || true
+
+# ── Performance baseline ─────────────────────────────────────────────────────
+
+perf-baseline:
+	python3 tools/load-test/probe.py \
+		--base http://localhost:8300 \
+		--requests 200 --concurrency 10 \
+		--out docs/perf-baseline.json
+	@echo ""
+	@echo "Baseline written to docs/perf-baseline.json"
+	@echo "See docs/perf-baseline.md for SLO targets and methodology."

@@ -1,0 +1,36 @@
+{
+  "base_url": "http://localhost:8300",
+  "requests_per_endpoint": 200,
+  "concurrency": 10,
+  "captured_at": "2026-05-17T00:16:42Z",
+  "results": [
+    {
+      "label": "health",
+      "method": "GET",
+      "path": "/health",
+      "requests": 200,
+      "errors": 0,
+      "error_rate": 0.0,
+      "latency_ms": {
+        "p50": 118.99,
+        "p95": 126.3,
+        "p99": 130.74,
+        "mean": 119.02
+      }
+    },
+    {
+      "label": "health-subsystems",
+      "method": "GET",
+      "path": "/api/health/subsystems",
+      "requests": 200,
+      "errors": 0,
+      "error_rate": 0.0,
+      "latency_ms": {
+        "p50": 9.71,
+        "p95": 28.85,
+        "p99": 53.34,
+        "mean": 12.46
+      }
+    }
+  ]
+}
