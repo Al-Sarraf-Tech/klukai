@@ -15,11 +15,19 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
+
+# time_of_day → frozen hour, chosen to land in build_context_block's windows
+# (morning 5-12, evening 17-21, late_night = else). Freezing the clock makes the
+# prompt deterministic AND lets the parametrized time_of_day actually shape it,
+# instead of being a label that never reached the prompt.
+_TOD_HOUR = {"morning": 9, "evening": 19, "late_night": 1}
 
 
 def _snapshot_key(level: int, mood: str, time_of_day: str) -> str:
@@ -46,12 +54,19 @@ def test_system_prompt_stable(level: int, mood: str, time_of_day: str) -> None:
     except ImportError:
         pytest.skip("assemble_system_prompt not importable in dev env")
 
+    # Freeze the clock: build_context_block() embeds military time (HHMM),
+    # weekday, date, and time-window/outfit logic from datetime.now(). Without
+    # freezing, the snapshot sha256 drifts every minute and the golden guard is
+    # worthless. Fixed to a Thursday at the time_of_day's representative hour.
+    frozen = datetime(2026, 1, 15, _TOD_HOUR[time_of_day], 0, 0)
     try:
-        prompt = assemble_system_prompt(
-            mood=mood,
-            affection_level=level,
-            affection_score=level * 100,
-        )
+        with patch("app.personality.moods.datetime") as _mock_dt:
+            _mock_dt.now.return_value = frozen
+            prompt = assemble_system_prompt(
+                mood=mood,
+                affection_level=level,
+                affection_score=level * 100,
+            )
     except Exception as exc:  # pragma: no cover — config-dependent
         pytest.skip(f"assemble_system_prompt config-error: {exc!r}")
 
