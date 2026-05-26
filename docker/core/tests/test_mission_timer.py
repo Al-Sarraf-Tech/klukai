@@ -237,7 +237,7 @@ class TestMissionTimerCancellation:
 
         timer = MissionTimer()
         timer.start("Test", callback=AsyncMock())
-        assert proactive_mod._active_mission_timer is timer
+        assert proactive_mod.state._active_mission_timer is timer
 
         timer.stop()
-        assert proactive_mod._active_mission_timer is None
+        assert proactive_mod.state._active_mission_timer is None

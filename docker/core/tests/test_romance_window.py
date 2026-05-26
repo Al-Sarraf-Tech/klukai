@@ -81,7 +81,7 @@ class TestRomanceAffectionGate:
         engine._on_message_callback = callback
 
         with patch("asyncio.sleep", new_callable=AsyncMock), \
-             patch("app.proactive.publish_event", new_callable=AsyncMock):
+             patch("app.proactive.events.publish_event", new_callable=AsyncMock):
             await engine._romance_window()
 
         callback.assert_called_once()
@@ -94,7 +94,7 @@ class TestRomanceAffectionGate:
 
         # At level 9 (>= 5), the LLM path is used. Mock it.
         with patch("asyncio.sleep", new_callable=AsyncMock), \
-             patch("app.proactive.publish_event", new_callable=AsyncMock), \
+             patch("app.proactive.events.publish_event", new_callable=AsyncMock), \
              patch("app.fact_extractor.generate_romance_message", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = "The stars remind me of you, Commander."
             await engine._romance_window()
@@ -113,7 +113,7 @@ class TestRomanceMessageSource:
         engine._on_message_callback = callback
 
         with patch("asyncio.sleep", new_callable=AsyncMock), \
-             patch("app.proactive.publish_event", new_callable=AsyncMock):
+             patch("app.proactive.events.publish_event", new_callable=AsyncMock):
             await engine._romance_window()
 
         # The callback arg should be a string from the template pool
@@ -132,7 +132,7 @@ class TestRomanceMessageSource:
         engine._session_getter = None  # No session context
 
         with patch("asyncio.sleep", new_callable=AsyncMock), \
-             patch("app.proactive.publish_event", new_callable=AsyncMock), \
+             patch("app.proactive.events.publish_event", new_callable=AsyncMock), \
              patch("app.fact_extractor.generate_romance_message", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = "LLM-generated romance message."
             await engine._romance_window()
@@ -148,7 +148,7 @@ class TestRomanceMessageSource:
         engine._on_message_callback = callback
 
         with patch("asyncio.sleep", new_callable=AsyncMock), \
-             patch("app.proactive.publish_event", new_callable=AsyncMock), \
+             patch("app.proactive.events.publish_event", new_callable=AsyncMock), \
              patch("app.fact_extractor.generate_romance_message", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = "Evening warmth."
             await engine._romance_window()
@@ -163,7 +163,7 @@ class TestRomanceMessageSource:
         engine._on_message_callback = callback
 
         with patch("asyncio.sleep", new_callable=AsyncMock), \
-             patch("app.proactive.publish_event", new_callable=AsyncMock), \
+             patch("app.proactive.events.publish_event", new_callable=AsyncMock), \
              patch("app.fact_extractor.generate_romance_message", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = Exception("LLM down")
             await engine._romance_window()
@@ -198,7 +198,7 @@ class TestRomanceComfortWhenStressed:
         engine._on_message_callback = callback
 
         with patch("asyncio.sleep", new_callable=AsyncMock), \
-             patch("app.proactive.publish_event", new_callable=AsyncMock):
+             patch("app.proactive.events.publish_event", new_callable=AsyncMock):
             await engine._romance_window()
 
         callback.assert_called_once()
@@ -214,7 +214,7 @@ class TestRomanceComfortWhenStressed:
         engine._on_message_callback = callback
 
         with patch("asyncio.sleep", new_callable=AsyncMock), \
-             patch("app.proactive.publish_event", new_callable=AsyncMock):
+             patch("app.proactive.events.publish_event", new_callable=AsyncMock):
             await engine._romance_window()
 
         callback.assert_called_once()
@@ -246,7 +246,7 @@ class TestRomanceOneShot:
         assert engine._romance_delivered_today is False
 
         with patch("asyncio.sleep", new_callable=AsyncMock), \
-             patch("app.proactive.publish_event", new_callable=AsyncMock):
+             patch("app.proactive.events.publish_event", new_callable=AsyncMock):
             await engine._romance_window()
 
         assert engine._romance_delivered_today is True

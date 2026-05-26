@@ -85,13 +85,13 @@ class TestMissionTimerStartStop:
 
     @pytest.mark.asyncio
     async def test_stop_clears_global_active_timer(self):
-        proactive._active_mission_timer = None
+        proactive.state._active_mission_timer = None
         t = MissionTimer()
         with patch.object(t, "_tick_loop", AsyncMock()):
             t.start("x")
-            assert proactive._active_mission_timer is t
+            assert proactive.state._active_mission_timer is t
         t.stop()
-        assert proactive._active_mission_timer is None
+        assert proactive.state._active_mission_timer is None
 
 
 class TestMissionTimerEventTracking:
@@ -216,7 +216,7 @@ class TestCanSendGuards:
         e._muted_until = _dt(2099, 1, 1)  # far future
         e._proactive_count_today = 0
         e._last_proactive_answered = True
-        with patch("app.proactive.datetime") as mock_dt:
+        with patch("app.proactive.engine.datetime") as mock_dt:
             mock_dt.now.return_value = _dt(2026, 5, 17, 12, 0, 0)
             assert e._can_send() is False
 
@@ -225,7 +225,7 @@ class TestCanSendGuards:
         e._muted_until = None
         e._proactive_count_today = 0
         e._last_proactive_answered = True
-        with patch("app.proactive.datetime") as mock_dt:
+        with patch("app.proactive.engine.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2026, 5, 17, 5, 0, 0)  # 5am
             assert e._can_send() is False
 
@@ -234,7 +234,7 @@ class TestCanSendGuards:
         e._muted_until = None
         e._proactive_count_today = 0
         e._last_proactive_answered = True
-        with patch("app.proactive.datetime") as mock_dt:
+        with patch("app.proactive.engine.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2026, 5, 17, 23, 30, 0)
             assert e._can_send() is False
 
@@ -243,7 +243,7 @@ class TestCanSendGuards:
         e._muted_until = None
         e._proactive_count_today = proactive.MAX_PROACTIVE_PER_DAY
         e._last_proactive_answered = True
-        with patch("app.proactive.datetime") as mock_dt:
+        with patch("app.proactive.engine.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
             assert e._can_send() is False
 
@@ -252,7 +252,7 @@ class TestCanSendGuards:
         e._muted_until = None
         e._proactive_count_today = 5
         e._last_proactive_answered = False
-        with patch("app.proactive.datetime") as mock_dt:
+        with patch("app.proactive.engine.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
             assert e._can_send() is False
 
@@ -261,7 +261,7 @@ class TestCanSendGuards:
         e._muted_until = None
         e._proactive_count_today = 5
         e._last_proactive_answered = True
-        with patch("app.proactive.datetime") as mock_dt:
+        with patch("app.proactive.engine.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
             assert e._can_send() is True
 

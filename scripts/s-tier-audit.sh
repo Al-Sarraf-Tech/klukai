@@ -85,11 +85,10 @@ export -f have
 check code "ruff (configured rules)"     "cd docker/core && ruff check app/ 2>&1 | tail -3"
 check code "mypy (configured strictness)" "cd docker/core && mypy app/ 2>&1 | tail -3"
 # File-size check: per S+ rubric "Files <500 LOC mostly" (inherited from A tier).
-# proactive.py is tracked as a known multi-session refactor in
-# docs/superpowers/specs/2026-05-16-s-plus-uplift.md §5.1 + §6.1 and is
-# explicitly exempted from this gate until the planned proactive/ package
-# split lands. Anything else >500 LOC must pass.
-check code "no files >500 LOC in app/"    "find docker/core/app -name '*.py' -not -path '*/__pycache__/*' -not -name 'proactive.py' -print0 2>/dev/null | xargs -0 wc -l 2>/dev/null | awk '\$1 > 500 && \$2 != \"total\" {print \$2 \" (\" \$1 \" LOC)\"; found=1} END {exit found?1:0}'"
+# The former proactive.py exemption was retired once the proactive/ package
+# split landed (docs/superpowers/specs/2026-05-16-s-plus-uplift.md §5.1 + §6.1);
+# every app file must now be <500 LOC.
+check code "no files >500 LOC in app/"    "find docker/core/app -name '*.py' -not -path '*/__pycache__/*' -print0 2>/dev/null | xargs -0 wc -l 2>/dev/null | awk '\$1 > 500 && \$2 != \"total\" {print \$2 \" (\" \$1 \" LOC)\"; found=1} END {exit found?1:0}'"
 check code "complexity gate (radon B avg)" "have radon && radon cc docker/core/app -a -nb 2>&1 | tail -1"
 
 # ── 2. TESTING ──────────────────────────────────────────────────────────────

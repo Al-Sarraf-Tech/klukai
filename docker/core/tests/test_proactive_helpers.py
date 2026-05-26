@@ -15,26 +15,26 @@ from app import proactive
 class TestHasActiveMission:
     def test_returns_false_when_no_mission(self):
         # Module starts with no active mission (or is None'd by previous test)
-        proactive._active_mission_timer = None
+        proactive.state._active_mission_timer = None
         assert proactive.has_active_mission() is False
 
     def test_returns_false_when_timer_inactive(self):
         class _StubTimer:
             active = False
-        proactive._active_mission_timer = _StubTimer()
+        proactive.state._active_mission_timer = _StubTimer()
         try:
             assert proactive.has_active_mission() is False
         finally:
-            proactive._active_mission_timer = None
+            proactive.state._active_mission_timer = None
 
     def test_returns_true_when_timer_active(self):
         class _StubTimer:
             active = True
-        proactive._active_mission_timer = _StubTimer()
+        proactive.state._active_mission_timer = _StubTimer()
         try:
             assert proactive.has_active_mission() is True
         finally:
-            proactive._active_mission_timer = None
+            proactive.state._active_mission_timer = None
 
 
 class TestMajorEvents:

@@ -15,8 +15,8 @@ class TestDecompressionMessage:
         e = ProactiveEngine()
         e._on_message_callback = None
         # Should not raise — skips sleep + skips delivery via short-circuit
-        with patch("app.proactive.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.random.uniform", return_value=0):
+        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+             patch("app.proactive.mission.random.uniform", return_value=0):
             await e._decompression_message("alice", had_injury=False, update_count=0)
 
     @pytest.mark.asyncio
@@ -25,8 +25,8 @@ class TestDecompressionMessage:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 0
-        with patch("app.proactive.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.random.uniform", return_value=0):
+        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+             patch("app.proactive.mission.random.uniform", return_value=0):
             await e._decompression_message("alice", had_injury=True, update_count=2)
         cb.assert_awaited_once()
         message = cb.call_args.args[0]
@@ -42,8 +42,8 @@ class TestDecompressionMessage:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 0
-        with patch("app.proactive.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.random.uniform", return_value=0):
+        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+             patch("app.proactive.mission.random.uniform", return_value=0):
             await e._decompression_message("alice", had_injury=False, update_count=6)
         cb.assert_awaited_once()
         message = cb.call_args.args[0]
@@ -56,8 +56,8 @@ class TestDecompressionMessage:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 0
-        with patch("app.proactive.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.random.uniform", return_value=0):
+        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+             patch("app.proactive.mission.random.uniform", return_value=0):
             await e._decompression_message("alice", had_injury=False, update_count=2)
         cb.assert_awaited_once()
 
@@ -67,8 +67,8 @@ class TestDecompressionMessage:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 8  # >= 7 threshold
-        with patch("app.proactive.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.random.uniform", return_value=0):
+        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+             patch("app.proactive.mission.random.uniform", return_value=0):
             await e._decompression_message("alice", had_injury=False, update_count=2)
         cb.assert_awaited_once()
         message = cb.call_args.args[0]
@@ -81,8 +81,8 @@ class TestDecompressionMessage:
         cb = AsyncMock()
         e._on_message_callback = cb
         before_count = e._proactive_count_today
-        with patch("app.proactive.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.random.uniform", return_value=0):
+        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+             patch("app.proactive.mission.random.uniform", return_value=0):
             await e._decompression_message("alice", had_injury=False, update_count=2)
         assert e._proactive_count_today == before_count + 1
 

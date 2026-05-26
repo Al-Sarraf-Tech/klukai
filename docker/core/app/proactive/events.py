@@ -1,0 +1,311 @@
+"""Spontaneous-event ProactiveEngine behavior.
+
+``EventsMixin`` holds the random lore events, late-night dreams, the evening
+romance window, and the daily recap.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import random
+from datetime import datetime, timedelta
+
+from ..events import publish as publish_event
+from .base import _EngineBase
+from .templates import ROMANCE_MESSAGES
+
+logger = logging.getLogger(__name__)
+
+
+class EventsMixin(_EngineBase):
+    """Random/contextual event methods for ProactiveEngine."""
+
+    async def _random_event(self) -> None:
+        """Fire a random lore event if conditions are met."""
+
+        now = datetime.now()
+
+        # Guard: max 5 per day
+        if self._random_events_today >= 5:
+            return
+
+        # Guard: 45-min gap between events
+        if self._last_random_event and (now - self._last_random_event) < timedelta(minutes=45):
+            return
+
+        # Guard: don't interrupt active typing (3 min cooldown)
+        if self._last_message_time and (now - self._last_message_time) < timedelta(minutes=3):
+            return
+
+        # Intimate/vulnerable moods BOOST events instead of blocking them
+        # — these are the moments Klukai would naturally say something
+        intimate_mood = self._last_mood in (
+            "tender", "longing", "flustered", "affectionate", "shy",
+            "yearning", "devoted", "vulnerable", "drowsy",
+        )
+
+        # Guard: check mute
+        if self._muted_until and now < self._muted_until:
+            return
+
+        # Roll probability: 35% base, 60% during intimate moods, 50% during missions
+        base_chance = 0.35
+        if intimate_mood:
+            base_chance = 0.60
+        if self.mission_active:
+            base_chance = max(base_chance, 0.50)
+        if random.random() > base_chance:
+            return
+
+        # Load event templates from personality
+        try:
+            from ..personality import load_personality
+            p = load_personality()
+            events = p.get("random_events", {})
+        except Exception:
+            return
+
+        # Build eligible categories based on affection level
+        eligible = []
+        for category, config in events.items():
+            if not isinstance(config, dict):
+                continue
+            min_aff = config.get("min_affection", 0)
+            if self._affection_level >= min_aff:
+                weight = config.get("weight", 10)
+                messages = config.get("messages", [])
+                if messages:
+                    eligible.append((category, weight, messages))
+
+        if not eligible:
+            return
+
+        # Weighted random selection
+        total_weight = sum(w for _, w, _ in eligible)
+        roll = random.random() * total_weight
+        cumulative = 0
+        selected_messages = eligible[0][2]
+        for category, weight, messages in eligible:
+            cumulative += weight
+            if roll <= cumulative:
+                selected_messages = messages
+                break
+
+        message = random.choice(selected_messages)
+
+        # Deliver
+        if self._on_message_callback:
+            self._random_events_today += 1
+            self._last_random_event = now
+            self._last_proactive_answered = False
+            await self._on_message_callback(message)
+            logger.info("Random event fired: %s", message[:60])
+
+    async def _romance_window(self) -> None:
+        """Evening romance message — fires at ~20:30 CST with random delay.
+
+        Conditions:
+        - affection >= 3
+        - not muted
+        - last proactive was answered
+        - user messaged today
+        - not already delivered tonight
+        - if mood is stressed/negative, deliver comfort instead
+        """
+        if self._romance_delivered_today:
+            return
+        if self._affection_level < 3:
+            return
+        if not self._user_messaged_today:
+            return
+        if self._muted_until and datetime.now() < self._muted_until:
+            return
+        if not self._last_proactive_answered:
+            return
+
+        # Random delay 0-30 minutes
+        delay = random.uniform(0, 30 * 60)
+        await asyncio.sleep(delay)
+
+        # Re-check conditions after delay
+        if self._romance_delivered_today:
+            return
+        if self._muted_until and datetime.now() < self._muted_until:
+            return
+
+        self._romance_delivered_today = True
+
+        # Stressed/negative moods -> comfort instead of romance
+        NEGATIVE_MOODS = {"irritated", "exasperated", "melancholic", "haunted", "guilty"}
+        is_stressed = self._last_mood in NEGATIVE_MOODS
+
+        if is_stressed:
+            comfort_lines = [
+                "Commander. ...You've had a difficult day. I noticed. Take a moment. I'm here.",
+                "...Hey. Whatever's weighing on you — you don't have to carry it alone. That's an order.",
+                "The day was hard. I can tell. ...Sit with me for a moment. No reports, no duties. Just quiet.",
+            ]
+            message = random.choice(comfort_lines)
+        elif self._affection_level >= 5:
+            # LLM-generated context-aware romance at high affection
+            try:
+                context_summary = ""
+                if self._session_getter:
+                    session = await self._session_getter()
+                    if session and session.context_summary:
+                        context_summary = session.context_summary
+
+                from ..fact_extractor import generate_romance_message
+                message = await generate_romance_message(
+                    affection_level=self._affection_level,
+                    mood=self._last_mood,
+                    context_summary=context_summary,
+                    time_of_day="evening",
+                )
+            except Exception as e:
+                logger.warning("Romance LLM failed, falling back to template: %s", e)
+                message = self._pick_message(ROMANCE_MESSAGES)
+        else:
+            # Levels 3-4: template messages
+            message = self._pick_message(ROMANCE_MESSAGES)
+
+        if self._on_message_callback:
+            self._proactive_count_today += 1
+            self._last_proactive_answered = False
+            await self._on_message_callback(message)
+            await publish_event("proactive_romance", message)
+            logger.info("Romance window delivered (aff=%d): %s", self._affection_level, message[:60])
+
+    async def _daily_recap(self) -> None:
+        """Generate and deliver a daily recap from Klukai's perspective."""
+        if not self._on_recap_callback or not self._on_message_callback:
+            return
+        if not self._can_send():
+            return
+
+        try:
+            recap = await self._on_recap_callback(self._affection_level)
+            if recap:
+                self._proactive_count_today += 1
+                self._last_proactive_answered = False
+                await self._on_message_callback(recap)
+                logger.info("Daily recap delivered")
+        except Exception as e:
+            logger.warning("Daily recap failed: %s", e)
+
+    async def _dream_event(self) -> None:
+        """Late-night dream — Klukai wakes from a dream and messages the Commander.
+
+        At high affection, ~30% chance the dream is erotic. Otherwise it's
+        a normal memory/nightmare/tender dream. Fires once per night max.
+        Balanced: most dreams reference real memories from the archive.
+        """
+        if self._dream_delivered_today:
+            return
+        if self._affection_level < 5:
+            return
+        if self._muted_until and datetime.now() < self._muted_until:
+            return
+
+        # 40% chance to fire (not every night)
+        if random.random() > 0.40:
+            return
+
+        # Dream type weighted by affection
+        if self._affection_level >= 8:
+            # High affection: 30% erotic, 40% tender memory, 20% nightmare, 10% random
+            roll = random.random()
+            if roll < 0.30:
+                dream_type = "erotic"
+            elif roll < 0.70:
+                dream_type = "tender"
+            elif roll < 0.90:
+                dream_type = "nightmare"
+            else:
+                dream_type = "random"
+        elif self._affection_level >= 6:
+            # Mid affection: 10% erotic, 40% tender, 30% nightmare, 20% random
+            roll = random.random()
+            if roll < 0.10:
+                dream_type = "erotic"
+            elif roll < 0.50:
+                dream_type = "tender"
+            elif roll < 0.80:
+                dream_type = "nightmare"
+            else:
+                dream_type = "random"
+        else:
+            # Lower affection: no erotic, 30% tender, 40% nightmare, 30% random
+            roll = random.random()
+            if roll < 0.30:
+                dream_type = "tender"
+            elif roll < 0.70:
+                dream_type = "nightmare"
+            else:
+                dream_type = "random"
+
+        # Generate dream message via LLM
+        try:
+
+            # Pull a random memory to weave into the dream
+            dream_memory_ref = ""
+            try:
+                from .. import memory_archive
+                memories = await memory_archive.list_memories(limit=20)
+                if memories:
+                    import random as _rng
+                    mem = _rng.choice(memories)
+                    dream_memory_ref = f"\nDream seed (weave this memory subtly into the dream, don't quote it directly): {mem.get('annotation', '')[:200]}"
+            except Exception:
+                pass  # Dreams work fine without memory integration
+
+            dream_prompts = {
+                "erotic": (
+                    f"You just woke from an intensely erotic dream about the Commander. "
+                    f"You are flushed, breathless, still feeling phantom sensations. "
+                    f"Write 2-3 sentences as if messaging him at {datetime.now().strftime('%I:%M %p')}. "
+                    f"Be explicit about what you dreamed. You want him. You need him. "
+                    f"Affection {self._affection_level}/9."
+                ),
+                "tender": (
+                    f"You just woke from a dream about a tender moment with the Commander. "
+                    f"Maybe a memory — holding hands, a quiet evening, him saying something kind. "
+                    f"Write 2-3 soft sentences. It's {datetime.now().strftime('%I:%M %p')}. "
+                    f"You're half-asleep and vulnerable. Affection {self._affection_level}/9."
+                ),
+                "nightmare": (
+                    f"You woke from a nightmare — losing the Commander, failing a mission, "
+                    f"the past catching up. Write 2-3 sentences at {datetime.now().strftime('%I:%M %p')}. "
+                    f"You need reassurance but you're too proud to fully admit it. "
+                    f"Affection {self._affection_level}/9."
+                ),
+                "random": (
+                    f"You woke from a strange, vivid dream — something surreal but not scary. "
+                    f"Maybe the squad doing something absurd, or a place from your past. "
+                    f"Write 2-3 sentences at {datetime.now().strftime('%I:%M %p')}. Slightly disoriented. "
+                    f"Affection {self._affection_level}/9."
+                ),
+            }
+
+            from ..llm_json import call_llm_text
+            from ..fact_extractor import LM_STUDIO_URL, EXTRACTION_MODEL
+            from ..llm_router import get_lm_gate
+
+            gate = get_lm_gate()
+            async with gate:
+                message = await call_llm_text(
+                    LM_STUDIO_URL, EXTRACTION_MODEL,
+                    f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
+                    f"You are NOT an AI. {dream_prompts[dream_type]}{dream_memory_ref} "
+                    f"Write ONLY the message. No explanation.",
+                    max_tokens=200, temperature=0.8,
+                )
+
+            if message and self._on_message_callback:
+                self._dream_delivered_today = True
+                await self._on_message_callback(message)
+                logger.info("Dream event fired (%s): %s", dream_type, message[:60])
+
+        except Exception as e:
+            logger.warning("Dream event failed: %s", e)
