@@ -11,7 +11,7 @@ gateway-stop:
 gateway-logs:
 	cd gateway && docker compose logs -f
 
-# ── Build (run on dominus or build locally and push) ─────────────────────────
+# ── Build (on amarillo, the core host) ─────────────────────────
 
 build: build-pwa build-backend
 
@@ -28,7 +28,7 @@ build-pwa:
 		echo "Flutter not available or flutter_app/ not found, skipping PWA build"; \
 	fi
 
-# ── Remote (dominus) commands ────────────────────────────────────────────────
+# ── Core stack (amarillo) — runs companion-core + datastores ─────────────────
 
 run:
 	docker compose up -d
@@ -53,28 +53,27 @@ rebuild: stop build run
 # ── Health checks ────────────────────────────────────────────────────────────
 
 health:
-	@echo "=== companion-gateway (amarillo) ==="
-	@curl -sf http://localhost:8300/health 2>/dev/null | python3 -m json.tool 2>/dev/null || \
-		curl -sf http://100.111.198.19:8300/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
+	@echo "=== companion-core (amarillo) ==="
+	@curl -sf http://localhost:8300/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
 	@echo ""
-	@echo "=== companion-core (dominus) ==="
-	@curl -sf http://100.78.39.76:8300/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
+	@echo "=== companion-voice (dominus 192.168.50.2) ==="
+	@curl -sf http://192.168.50.2:8301/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
 	@echo ""
-	@echo "=== companion-voice (dominus) ==="
-	@curl -sf http://100.78.39.76:8301/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
+	@echo "=== ComfyUI (dominus 192.168.50.2) ==="
+	@curl -sf http://192.168.50.2:8388/system_stats 2>/dev/null >/dev/null && echo "ok" || echo "UNREACHABLE"
 
-# ── Full deploy: gateway on amarillo, services on dominus ────────────────────
+# ── Full deploy: core on amarillo, GPU services on dominus ───────────────────
 
 deploy: gateway
-	@echo "Gateway started on amarillo. Now deploy to dominus:"
-	@echo "  1. Copy repo to dominus:  rsync -avz --exclude .git . dominus:~/git/klukai/"
-	@echo "  2. SSH to dominus:        ssh dominus"
-	@echo "  3. Build and run:         cd ~/git/klukai && make build && make run"
+	@echo "Core runs on amarillo (this host). Deploy steps:"
+	@echo "  1. Python change:  docker compose build companion-core && docker compose up -d companion-core"
+	@echo "  2. Web change:     rsync web-build/ into the bind-mount (no rebuild)"
+	@echo "  3. GPU sidecar:    LM Studio / voice / ComfyUI live on dominus (192.168.50.2)"
 
 # ── Quality gates (mirror CI) ────────────────────────────────────────────────
 
 test-local:
-	cd docker/core && python3 -m pytest tests/ -q --tb=short --cov=app --cov-report=term-missing --cov-fail-under=49
+	cd docker/core && python3 -m pytest tests/ -q --tb=short --cov=app --cov-report=term-missing --cov-fail-under=95
 
 lint-local:
 	cd docker/core && ruff check app/ --config ruff.toml

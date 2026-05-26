@@ -139,13 +139,13 @@ companion/
 ├── docker/
 │   ├── core/
 │   │   ├── app/
-│   │   │   ├── main.py           # App setup + lifecycle (194 lines)
-│   │   │   ├── chat.py           # WebSocket handler + message pipeline
-│   │   │   ├── routes.py         # 21 HTTP API endpoints
+│   │   │   ├── main.py           # App setup + lifecycle
+│   │   │   ├── chat.py + chat_handlers.py  # WebSocket handler + message pipeline
+│   │   │   ├── routes.py + routes_extras{,2,3}.py  # HTTP API (register_routes)
 │   │   │   ├── background.py     # Extraction, compaction, image gen, recall
 │   │   │   ├── context.py        # Shared service instances
 │   │   │   ├── helpers.py        # Pure functions (narration, prompts, text)
-│   │   │   ├── personality.py    # System prompt assembly (hot-reload)
+│   │   │   ├── personality/      # System prompt assembly package (loader, speech, moods, squad, ...)
 │   │   │   ├── affection.py      # Score progression + level transitions
 │   │   │   ├── memory.py         # Three-tier memory management
 │   │   │   ├── memory_archive.py # Image curation + dedup + quality scoring
@@ -153,7 +153,7 @@ companion/
 │   │   │   ├── image_gen.py      # ComfyUI integration
 │   │   │   ├── llm_router.py     # LLM provider selection + circuit breaker
 │   │   │   └── ...
-│   │   ├── tests/                # 377 tests, 0 skipped
+│   │   ├── tests/                # 1,705 tests (unit/golden/property/contract) + integration/perf
 │   │   ├── migrations/           # PostgreSQL schema (6 migrations)
 │   │   └── seed_memories.py      # Retroactive memory seeding
 │   └── voice/                    # XTTS + Whisper container
@@ -166,7 +166,7 @@ companion/
 ## Test Suite
 
 ```
-377 passed, 0 skipped, 0 failures
+1,705 passed, 12 skipped (non-integration suite); integration + perf suites require a live stack
 
 Coverage:
 - Narration pipeline (think-tag stripping, POV correction, pipe removal)
@@ -184,17 +184,17 @@ Coverage:
 
 ## Deployment
 
-Klukai runs on two machines connected via Tailscale:
+Klukai runs across two hosts on a Tailscale + LAN data plane:
 
-- **dominus** (RTX 3090): companion-core, companion-voice, LM Studio, ComfyUI
-- **amarillo** (Intel Arc A380): PostgreSQL, Redis, Qdrant, gateway proxy
+- **amarillo** (core host): companion-core (FastAPI :8300), PostgreSQL, Qdrant, Redis, the nginx gateway, and the observability stack (Alloy/Prometheus/Loki/Tempo/Grafana).
+- **dominus** (GPU sidecar, `192.168.50.2`): LM Studio (RTX 3090 + Arc A380), companion-voice (:8301), ComfyUI (:8388). Reached over Tailscale for API calls and LAN `192.168.50.2` for bulk transfers.
 
 ```bash
-# Build and deploy
+# On amarillo (the core host)
 cd ~/git/klukai
-flutter build web --release --base-href /app/
-rsync -avz . wsl2:~/klukai/
-ssh wsl2 "cd ~/klukai && docker compose build && docker compose up -d"
+flutter build web --release --base-href /app/          # rebuild the PWA
+docker compose build companion-core && docker compose up -d companion-core   # Python changes
+# Static-only web changes: rsync into the web-build bind-mount — no rebuild needed
 
 # Health check
 curl -sf http://localhost:8300/health
