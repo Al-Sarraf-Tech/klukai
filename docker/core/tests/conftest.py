@@ -35,6 +35,19 @@ import pytest
 # Ensure the app package is importable from the repo root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Resolve personality.yaml to the repo copy when the in-container /config path
+# is absent (dev workstations, CI checkouts). app.personality.loader reads the
+# PERSONALITY_PATH default at call time, so setting it here — before any test
+# triggers a load — keeps prompt-assembly tests portable without per-test paths.
+import os as _os
+
+if not _os.environ.get("PERSONALITY_PATH"):
+    _repo_personality = (
+        Path(__file__).resolve().parent.parent.parent.parent / "config" / "personality.yaml"
+    )
+    if _repo_personality.exists():
+        _os.environ["PERSONALITY_PATH"] = str(_repo_personality)
+
 
 # ── LM Studio mock ──────────────────────────────────────────────────────────
 

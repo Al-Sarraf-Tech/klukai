@@ -192,7 +192,7 @@ class TestAuditEndpoint:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/audit", "GET")
-        with patch("app.routes._get_user_id", return_value=None):
+        with patch("app.routes_extras2._get_user_id", return_value=None):
             resp = await handler(_mk_request())
         assert resp.status_code == 401
 
@@ -200,7 +200,7 @@ class TestAuditEndpoint:
     async def test_non_admin_forbidden(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/audit", "GET")
-        with patch("app.routes._get_user_id", return_value="bob"):
+        with patch("app.routes_extras2._get_user_id", return_value="bob"):
             resp = await handler(_mk_request())
         assert resp.status_code == 403
 
@@ -210,7 +210,7 @@ class TestAuditEndpoint:
         handler = _find_route(app, "/api/audit", "GET")
 
         sample = [{"id": 1, "event_type": "login.success", "user_id": "alice"}]
-        with patch("app.routes._get_user_id", return_value="jalsarraf"), \
+        with patch("app.routes_extras2._get_user_id", return_value="jalsarraf"), \
              patch("app.audit.recent", new=AsyncMock(return_value=sample)):
             data = await handler(_mk_request())
         assert data["count"] == 1

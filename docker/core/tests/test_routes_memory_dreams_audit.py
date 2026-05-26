@@ -61,7 +61,7 @@ class TestMemoriesListRoute:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_unauth_request())
         assert resp.status_code == 401
 
@@ -71,8 +71,8 @@ class TestMemoriesListRoute:
         handler = _find_route(app, "/api/memories", "GET")
 
         list_mock = AsyncMock(return_value=[{"id": "abc"}])
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.memory_archive.list_memories", new=list_mock):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.memory_archive.list_memories", new=list_mock):
             await handler(_mk_request(), category="combat", limit=10, before=None, month="2026-04")
 
         list_mock.assert_called_once()
@@ -93,7 +93,7 @@ class TestMemoryCategoriesRoute:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/categories", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_unauth_request())
         assert resp.status_code == 401
 
@@ -105,9 +105,9 @@ class TestMemoryCategoriesRoute:
 
         cats_mock = AsyncMock(return_value={"core": 5, "romantic": 2})
         aff = SimpleNamespace(level=7)
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.affection.get_state", new=AsyncMock(return_value=aff)), \
-             patch("app.routes.memory_archive.get_categories", new=cats_mock):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state", new=AsyncMock(return_value=aff)), \
+             patch("app.routes_extras.memory_archive.get_categories", new=cats_mock):
             await handler(_mk_request())
 
         cats_mock.assert_called_once_with(7, user_id="alice")
@@ -123,7 +123,7 @@ class TestMemoryTimelineRoute:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/timeline", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_unauth_request())
         assert resp.status_code == 401
 
@@ -133,8 +133,8 @@ class TestMemoryTimelineRoute:
         handler = _find_route(app, "/api/memories/timeline", "GET")
 
         timeline = [{"month": "2026-04", "count": 12}]
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.memory_archive.get_timeline",
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.memory_archive.get_timeline",
                    new=AsyncMock(return_value=timeline)):
             result = await handler(_mk_request())
 
@@ -180,7 +180,7 @@ class TestMessagesRoute:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/messages", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_unauth_request())
         assert resp.status_code == 401
 
@@ -193,8 +193,8 @@ class TestMessagesRoute:
             def connection(self):
                 raise RuntimeError("db down")
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.get_pool", return_value=_BoomPool()):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.get_pool", return_value=_BoomPool()):
             result = await handler(_mk_request(), limit=10, before=None)
 
         # On DB error, route returns empty list (graceful degradation)

@@ -237,7 +237,7 @@ class TestDreamsEndpoint:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/dreams", "GET")
-        with patch("app.routes._get_user_id", return_value=None):
+        with patch("app.routes_extras2._get_user_id", return_value=None):
             resp = await handler(_mk_request(None))
         assert resp.status_code == 401
         body = json.loads(resp.body)
@@ -252,7 +252,7 @@ class TestDreamsEndpoint:
                    "affection_level": 5, "has_image": False,
                    "created_at": "2026-04-19T00:00:00+00:00"}]
 
-        with patch("app.routes._get_user_id", return_value="alice"), \
+        with patch("app.routes_extras2._get_user_id", return_value="alice"), \
              patch("app.dreams.list_dreams", new=AsyncMock(return_value=sample)), \
              patch("app.dreams.count_dreams", new=AsyncMock(return_value=5)):
             data = await handler(_mk_request())

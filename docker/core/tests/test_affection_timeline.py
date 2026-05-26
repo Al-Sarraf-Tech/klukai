@@ -64,7 +64,7 @@ class TestAffectionTimeline:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/affection-timeline", "GET")
-        with patch("app.routes._get_user_id", return_value=None):
+        with patch("app.routes_extras2._get_user_id", return_value=None):
             resp = await handler(_mk_request())
         assert resp.status_code == 401
 
@@ -74,13 +74,13 @@ class TestAffectionTimeline:
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/affection-timeline", "GET")
         pool = _FakePool(rows=[])
-        with patch("app.routes._get_user_id", return_value="alice"), \
-             patch("app.routes.get_pool", return_value=pool):
+        with patch("app.routes_extras2._get_user_id", return_value="alice"), \
+             patch("app.routes_extras2.get_pool", return_value=pool):
             data = await handler(_mk_request(), days=-5)
         assert data["days"] == 1
 
-        with patch("app.routes._get_user_id", return_value="alice"), \
-             patch("app.routes.get_pool", return_value=pool):
+        with patch("app.routes_extras2._get_user_id", return_value="alice"), \
+             patch("app.routes_extras2.get_pool", return_value=pool):
             data = await handler(_mk_request(), days=9999)
         assert data["days"] == 365
 
@@ -94,8 +94,8 @@ class TestAffectionTimeline:
             (date(2026, 4, 3), 125, 5,  2),
         ]
         pool = _FakePool(rows=rows)
-        with patch("app.routes._get_user_id", return_value="alice"), \
-             patch("app.routes.get_pool", return_value=pool):
+        with patch("app.routes_extras2._get_user_id", return_value="alice"), \
+             patch("app.routes_extras2.get_pool", return_value=pool):
             data = await handler(_mk_request(), days=30)
 
         assert data["days"] == 30
@@ -110,8 +110,8 @@ class TestAffectionTimeline:
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/affection-timeline", "GET")
         pool = _FakePool(rows=[])
-        with patch("app.routes._get_user_id", return_value="new_user"), \
-             patch("app.routes.get_pool", return_value=pool):
+        with patch("app.routes_extras2._get_user_id", return_value="new_user"), \
+             patch("app.routes_extras2.get_pool", return_value=pool):
             data = await handler(_mk_request(), days=30)
 
         assert data["count"] == 0
@@ -125,7 +125,7 @@ class TestAffectionTimeline:
         def broken():
             raise RuntimeError("db down")
 
-        with patch("app.routes._get_user_id", return_value="alice"), \
-             patch("app.routes.get_pool", side_effect=broken):
+        with patch("app.routes_extras2._get_user_id", return_value="alice"), \
+             patch("app.routes_extras2.get_pool", side_effect=broken):
             resp = await handler(_mk_request())
         assert resp.status_code == 500

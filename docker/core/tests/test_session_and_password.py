@@ -89,7 +89,7 @@ class TestChangePassword:
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/change-password", "POST")
         req_body = ChangePasswordRequest(old_password="old", new_password="a"*16)
-        with patch("app.routes._get_user_id", return_value=None):
+        with patch("app.routes_extras._get_user_id", return_value=None):
             resp = await handler(req_body, _mk_request())
         assert resp.status_code == 401
         import json
@@ -103,7 +103,7 @@ class TestChangePassword:
         handler = _find_route(app, "/api/user/change-password", "POST")
         req_body = ChangePasswordRequest(old_password="wrong", new_password="a"*16)
 
-        with patch("app.routes._get_user_id", return_value="alice"), \
+        with patch("app.routes_extras._get_user_id", return_value="alice"), \
              patch("app.auth.change_password", new=AsyncMock(return_value=False)):
             resp = await handler(req_body, _mk_request())
 
@@ -119,7 +119,7 @@ class TestChangePassword:
         handler = _find_route(app, "/api/user/change-password", "POST")
         req_body = ChangePasswordRequest(old_password="correct", new_password="a"*16)
 
-        with patch("app.routes._get_user_id", return_value="alice"), \
+        with patch("app.routes_extras._get_user_id", return_value="alice"), \
              patch("app.auth.change_password", new=AsyncMock(return_value=True)):
             data = await handler(req_body, _mk_request())
 
@@ -143,7 +143,7 @@ class TestAdminRateLimitReset:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
-        with patch("app.routes._get_user_id", return_value=None):
+        with patch("app.routes_extras._get_user_id", return_value=None):
             resp = await handler(_mk_request(), user_id_target="alice", bucket="stats")
         assert resp.status_code == 401
 
@@ -151,7 +151,7 @@ class TestAdminRateLimitReset:
     async def test_non_admin_forbidden(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
-        with patch("app.routes._get_user_id", return_value="bob"):
+        with patch("app.routes_extras._get_user_id", return_value="bob"):
             resp = await handler(_mk_request(), user_id_target="alice", bucket="stats")
         assert resp.status_code == 403
 
@@ -159,7 +159,7 @@ class TestAdminRateLimitReset:
     async def test_unknown_bucket_rejected(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
-        with patch("app.routes._get_user_id", return_value="jalsarraf"):
+        with patch("app.routes_extras._get_user_id", return_value="jalsarraf"):
             resp = await handler(_mk_request(), user_id_target="alice",
                                  bucket="nonexistent-bucket")
         assert resp.status_code == 400
@@ -172,7 +172,7 @@ class TestAdminRateLimitReset:
     async def test_admin_can_reset_known_bucket(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
-        with patch("app.routes._get_user_id", return_value="jalsarraf"), \
+        with patch("app.routes_extras._get_user_id", return_value="jalsarraf"), \
              patch("app.rate_limit.reset", new=AsyncMock()) as reset_mock:
             data = await handler(_mk_request(), user_id_target="alice", bucket="stats")
 

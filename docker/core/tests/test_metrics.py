@@ -125,7 +125,7 @@ class TestMetricsEndpoint:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/metrics", "GET")
-        with patch("app.routes._get_user_id", return_value=None):
+        with patch("app.routes_extras2._get_user_id", return_value=None):
             resp = await handler(_mk_request())
         assert resp.status_code == 401
 
@@ -133,7 +133,7 @@ class TestMetricsEndpoint:
     async def test_non_admin_forbidden(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/metrics", "GET")
-        with patch("app.routes._get_user_id", return_value="bob"):
+        with patch("app.routes_extras2._get_user_id", return_value="bob"):
             resp = await handler(_mk_request())
         assert resp.status_code == 403
 
@@ -150,8 +150,8 @@ class TestMetricsEndpoint:
         fake_pool.min_size = 2
         fake_pool.max_size = 10
 
-        with patch("app.routes._get_user_id", return_value="jalsarraf"), \
-             patch("app.routes.get_pool", return_value=fake_pool):
+        with patch("app.routes_extras2._get_user_id", return_value="jalsarraf"), \
+             patch("app.routes_extras2.get_pool", return_value=fake_pool):
             data = await handler(_mk_request())
 
         assert "uptime_seconds" in data

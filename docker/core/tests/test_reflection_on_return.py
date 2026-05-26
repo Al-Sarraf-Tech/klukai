@@ -78,7 +78,7 @@ class TestReflectionOnReturn:
         fake_router.complete_local = AsyncMock()
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.chat.router", fake_router):
+             patch("app.reflect_helpers.router", fake_router):
             await _maybe_reflect_on_return("alice")
 
         fake_router.complete_local.assert_not_called()
@@ -98,7 +98,7 @@ class TestReflectionOnReturn:
         fake_router.complete_local = AsyncMock()
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.chat.router", fake_router):
+             patch("app.reflect_helpers.router", fake_router):
             await _maybe_reflect_on_return("alice")
 
         fake_router.complete_local.assert_not_called()
@@ -127,9 +127,9 @@ class TestReflectionOnReturn:
         fake_aff.get_state = AsyncMock(return_value=_mk_affection())
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.chat.router", fake_router), \
-             patch("app.chat.ws", fake_ws), \
-             patch("app.chat.affection", fake_aff), \
+             patch("app.reflect_helpers.router", fake_router), \
+             patch("app.reflect_helpers.ws", fake_ws), \
+             patch("app.reflect_helpers.affection", fake_aff), \
              patch("app.chat.load_personality", return_value={"user_title": "Commander"}, create=True), \
              patch("app.personality.load_personality", return_value={"user_title": "Commander"}), \
              patch("app.personality.build_character_preamble", return_value="You are Klukai."), \
@@ -164,9 +164,9 @@ class TestReflectionOnReturn:
         fake_aff.get_state = AsyncMock(return_value=_mk_affection())
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.chat.router", fake_router), \
-             patch("app.chat.ws", fake_ws), \
-             patch("app.chat.affection", fake_aff), \
+             patch("app.reflect_helpers.router", fake_router), \
+             patch("app.reflect_helpers.ws", fake_ws), \
+             patch("app.reflect_helpers.affection", fake_aff), \
              patch("app.personality.load_personality", return_value={"user_title": "Commander"}), \
              patch("app.personality.build_character_preamble", return_value="You are Klukai."), \
              patch("asyncio.sleep", new=AsyncMock(return_value=None)):
@@ -198,9 +198,9 @@ class TestReflectionOnReturn:
         fake_aff.get_state = AsyncMock(return_value=_mk_affection())
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.chat.router", fake_router), \
-             patch("app.chat.ws", fake_ws), \
-             patch("app.chat.affection", fake_aff), \
+             patch("app.reflect_helpers.router", fake_router), \
+             patch("app.reflect_helpers.ws", fake_ws), \
+             patch("app.reflect_helpers.affection", fake_aff), \
              patch("app.personality.load_personality", return_value={"user_title": "Commander"}), \
              patch("app.personality.build_character_preamble", return_value="You are Klukai."), \
              patch("asyncio.sleep", new=AsyncMock(return_value=None)):

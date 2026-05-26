@@ -61,7 +61,7 @@ class TestListMemories:
     async def test_returns_empty_when_no_rows(self):
         from app.memory_archive import list_memories
         conn = _FakeConn(rows=[])
-        with patch("app.memory_archive.get_conn", _mk_get_conn(conn)):
+        with patch("app.memory_archive_query.get_conn", _mk_get_conn(conn)):
             result = await list_memories()
         assert result == []
 
@@ -76,7 +76,7 @@ class TestListMemories:
              datetime(2026, 4, 20, tzinfo=timezone.utc)),
         ]
         conn = _FakeConn(rows=rows)
-        with patch("app.memory_archive.get_conn", _mk_get_conn(conn)):
+        with patch("app.memory_archive_query.get_conn", _mk_get_conn(conn)):
             result = await list_memories(user_id="alice", limit=10)
         assert len(result) == 1
         assert result[0]["id"] == "mid1"
@@ -87,7 +87,7 @@ class TestListMemories:
     async def test_category_filter_adds_where_clause(self):
         from app.memory_archive import list_memories
         conn = _FakeConn(rows=[])
-        with patch("app.memory_archive.get_conn", _mk_get_conn(conn)):
+        with patch("app.memory_archive_query.get_conn", _mk_get_conn(conn)):
             await list_memories(user_id="alice", category="Dreams")
         # SQL should contain category filter
         assert any("category" in s for s in conn.executed_sqls)
@@ -104,7 +104,7 @@ class TestGetTimeline:
         from app.memory_archive import get_timeline
         rows = [("2026-04", 12), ("2026-03", 8), ("2026-02", 5)]
         conn = _FakeConn(rows=rows)
-        with patch("app.memory_archive.get_conn", _mk_get_conn(conn)):
+        with patch("app.memory_archive_query.get_conn", _mk_get_conn(conn)):
             result = await get_timeline(user_id="alice")
         assert len(result) == 3
         assert {r["month"] for r in result} == {"2026-04", "2026-03", "2026-02"}
@@ -117,7 +117,7 @@ class TestGetTimeline:
         def broken():
             raise RuntimeError("boom")
 
-        with patch("app.memory_archive.get_conn", side_effect=broken):
+        with patch("app.memory_archive_query.get_conn", side_effect=broken):
             assert await get_timeline() == []
 
 
@@ -133,7 +133,7 @@ class TestGetCategories:
         # DB returns 0 counts for each existing category
         rows = [("Mission Records", 0), ("Dreams", 0)]
         conn = _FakeConn(rows=rows)
-        with patch("app.memory_archive.get_conn", _mk_get_conn(conn)):
+        with patch("app.memory_archive_query.get_conn", _mk_get_conn(conn)):
             result = await get_categories(affection_level=0, user_id="alice")
         assert isinstance(result, list)
         assert all("name" in c and "count" in c for c in result)
@@ -145,7 +145,7 @@ class TestGetCategories:
         def broken():
             raise RuntimeError("down")
 
-        with patch("app.memory_archive.get_conn", side_effect=broken):
+        with patch("app.memory_archive_query.get_conn", side_effect=broken):
             assert await get_categories(0, "alice") == []
 
 
@@ -159,7 +159,7 @@ class TestUpdateKept:
     async def test_updates_and_returns_true(self):
         from app.memory_archive import update_kept
         conn = _FakeConn()
-        with patch("app.memory_archive.get_conn_autocommit", _mk_get_conn(conn)):
+        with patch("app.memory_archive_query.get_conn_autocommit", _mk_get_conn(conn)):
             result = await update_kept("mem-id", kept=True, user_id="alice")
         # Either True or dict — just ensure not crashed
         assert result is True or isinstance(result, bool)
@@ -172,7 +172,7 @@ class TestUpdateKept:
         def broken():
             raise RuntimeError("db")
 
-        with patch("app.memory_archive.get_conn_autocommit", side_effect=broken):
+        with patch("app.memory_archive_query.get_conn_autocommit", side_effect=broken):
             result = await update_kept("mem-id", kept=True)
         # Should not raise; return falsy
         assert not result

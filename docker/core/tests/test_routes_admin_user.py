@@ -53,7 +53,7 @@ class TestAuditEndpoint:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/audit", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401
 
@@ -61,7 +61,7 @@ class TestAuditEndpoint:
     async def test_non_admin_forbidden(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/audit", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")):
             resp = await handler(_mk_request())
         assert resp.status_code == 403
 
@@ -69,7 +69,7 @@ class TestAuditEndpoint:
     async def test_admin_can_read(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/audit", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="jalsarraf")), \
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="jalsarraf")), \
              patch("app.audit.recent", new=AsyncMock(return_value=[{"event_type": "login.success"}])):
             result = await handler(_mk_request())
         assert result["count"] == 1
@@ -81,7 +81,7 @@ class TestAuditVerifyChain:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/audit/verify-chain", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401
 
@@ -89,7 +89,7 @@ class TestAuditVerifyChain:
     async def test_non_admin_forbidden(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/audit/verify-chain", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")):
             resp = await handler(_mk_request())
         assert resp.status_code == 403
 
@@ -104,7 +104,7 @@ class TestMetricsEndpoint:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/metrics", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401
 
@@ -112,7 +112,7 @@ class TestMetricsEndpoint:
     async def test_non_admin_forbidden(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/metrics", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")):
             resp = await handler(_mk_request())
         assert resp.status_code == 403
 
@@ -120,9 +120,9 @@ class TestMetricsEndpoint:
     async def test_admin_returns_snapshot(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/metrics", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="jalsarraf")), \
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="jalsarraf")), \
              patch("app.metrics.snapshot", return_value={"counters": {}}), \
-             patch("app.routes.get_pool") as gp:
+             patch("app.routes_extras2.get_pool") as gp:
             gp.return_value = MagicMock(min_size=1, max_size=5)
             result = await handler(_mk_request())
         assert "counters" in result
@@ -139,7 +139,7 @@ class TestDreamsEndpoint:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/dreams", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401
 
@@ -147,7 +147,7 @@ class TestDreamsEndpoint:
     async def test_returns_list_and_total(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/dreams", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.dreams.list_dreams", new=AsyncMock(return_value=[{"id": "d1"}])), \
              patch("app.dreams.count_dreams", new=AsyncMock(return_value=5)):
             result = await handler(_mk_request())
@@ -165,7 +165,7 @@ class TestUserStatsEndpoint:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/stats", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras3._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401
 
@@ -175,7 +175,7 @@ class TestUserExportEndpoint:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/export", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras3._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401
 
@@ -185,7 +185,7 @@ class TestMemoriesSearchEndpoint:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/search", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_request(token=None), q="test")
         assert resp.status_code == 401
 
@@ -193,7 +193,7 @@ class TestMemoriesSearchEndpoint:
     async def test_rejects_short_query(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/search", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")):
             resp = await handler(_mk_request(), q="a")
         assert resp.status_code == 400
 
@@ -201,7 +201,7 @@ class TestMemoriesSearchEndpoint:
     async def test_rejects_empty_query(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/search", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")):
             resp = await handler(_mk_request(), q="")
         assert resp.status_code == 400
 
@@ -216,7 +216,7 @@ class TestAffectionTimelineEndpoint:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/affection-timeline", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401
 
@@ -246,8 +246,8 @@ class TestAffectionTimelineEndpoint:
 
                 return Conn()
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.get_pool", return_value=FakePool()):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras2.get_pool", return_value=FakePool()):
             await handler(_mk_request(), days=99999)
 
         assert captured_days[0] == 365  # clamped
@@ -279,7 +279,7 @@ class TestChangePasswordEndpoint:
         handler = _find_route(app, "/api/user/change-password", "POST")
         old_p, new_p = "fixture-a", "fixture-b-with-12"
         body = ChangePasswordRequest(**{"old_password": old_p, "new_password": new_p})
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(body, _mk_request(token=None))
         assert resp.status_code == 401
 
@@ -290,7 +290,7 @@ class TestChangePasswordEndpoint:
         handler = _find_route(app, "/api/user/change-password", "POST")
         old_p, new_p = "fixture-wrong", "fixture-new-with-12"
         body = ChangePasswordRequest(**{"old_password": old_p, "new_password": new_p})
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.auth.change_password", new=AsyncMock(return_value=False)):
             resp = await handler(body, _mk_request())
         assert resp.status_code == 400
@@ -306,7 +306,7 @@ class TestRateLimitResetEndpoint:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_request(token=None), user_id_target="x", bucket="login")
         assert resp.status_code == 401
 
@@ -314,7 +314,7 @@ class TestRateLimitResetEndpoint:
     async def test_non_admin_forbidden(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")):
             resp = await handler(_mk_request(), user_id_target="x", bucket="login")
         assert resp.status_code == 403
 
@@ -322,7 +322,7 @@ class TestRateLimitResetEndpoint:
     async def test_unknown_bucket_rejected(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="jalsarraf")):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="jalsarraf")):
             resp = await handler(_mk_request(), user_id_target="alice", bucket="bogus")
         assert resp.status_code == 400
 
@@ -353,7 +353,7 @@ class TestTributeRoutes:
         from app.routes import TributeRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/tribute", "POST")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(
                 TributeRequest(text="a" * 30, make_crown_jewel=False),
                 _mk_request(token=None),
@@ -366,7 +366,7 @@ class TestTributeRoutes:
         app = _app_with_routes()
         handler = _find_route(app, "/api/tribute", "POST")
         # Simulate "1 recent tribute" → blocks
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.tributes.count_recent", new=AsyncMock(return_value=1)):
             resp = await handler(
                 TributeRequest(text="a" * 30, make_crown_jewel=True),
@@ -378,6 +378,6 @@ class TestTributeRoutes:
     async def test_get_crown_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/tribute/crown", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401

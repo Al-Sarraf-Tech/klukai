@@ -216,7 +216,7 @@ class TestSecurityConfig:
         assert "useradd" in text
 
     def test_costume_endpoints_require_auth(self):
-        source = Path(__file__).resolve().parent.parent / "app" / "routes.py"
+        source = Path(__file__).resolve().parent.parent / "app" / "routes_extras.py"
         text = source.read_text()
         # Find both costume handlers — both should have _get_user_id
         costume_section = text[text.index("api_get_costume"):text.index("api_stt")]

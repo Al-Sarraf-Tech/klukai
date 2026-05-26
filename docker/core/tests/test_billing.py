@@ -393,7 +393,7 @@ class TestStripeEventDispatch:
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=conn)
         cm.__aexit__ = AsyncMock(return_value=None)
-        with patch("app.billing.get_conn_autocommit", return_value=cm):
+        with patch("app.billing_stripe.get_conn_autocommit", return_value=cm):
             result = await handle_stripe_event({
                 "id": "evt_replay",
                 "type": "customer.subscription.deleted",
@@ -408,7 +408,7 @@ class TestStripeEventDispatch:
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=conn)
         cm.__aexit__ = AsyncMock(return_value=None)
-        with patch("app.billing.get_conn_autocommit", return_value=cm):
+        with patch("app.billing_stripe.get_conn_autocommit", return_value=cm):
             result = await handle_stripe_event({
                 "id": "evt_unknown",
                 "type": "made.up.event",

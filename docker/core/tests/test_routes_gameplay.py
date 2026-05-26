@@ -170,7 +170,7 @@ class TestMissionRoute:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/mission", "POST")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_unauth_request())
         assert resp.status_code == 401
 
@@ -182,11 +182,11 @@ class TestMissionRoute:
         ws_mock = MagicMock()
         ws_mock.is_connected = MagicMock(return_value=False)
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.affection.get_state",
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
                    new=AsyncMock(return_value=_mk_aff_state())), \
-             patch("app.routes.asyncio.create_task"), \
-             patch("app.routes.ws", ws_mock):
+             patch("app.routes_extras.asyncio.create_task"), \
+             patch("app.routes_extras.ws", ws_mock):
             result = await handler(_mk_request())
 
         assert result == {"status": "deployed"}
@@ -207,7 +207,7 @@ class TestMilestonesRoute:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/milestones", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_unauth_request())
         assert resp.status_code == 401
 
@@ -216,8 +216,8 @@ class TestMilestonesRoute:
         app = _app_with_routes()
         handler = _find_route(app, "/api/milestones", "GET")
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.memory.get_milestones",
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.memory.get_milestones",
                    new=AsyncMock(return_value=[{"event": "first_meeting"}])):
             result = await handler(_mk_request())
 
@@ -239,7 +239,7 @@ class TestCostumeGetRoute:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_unauth_request())
         assert resp.status_code == 401
 
@@ -248,7 +248,7 @@ class TestCostumeGetRoute:
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "GET")
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")):
             result = await handler(_mk_request())
         assert "costume" in result
 
@@ -264,7 +264,7 @@ class TestCostumeSetRoute:
         from app.routes import CostumeRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "POST")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(CostumeRequest(costume="blazing_star"), _mk_unauth_request())
         assert resp.status_code == 401
 
@@ -274,7 +274,7 @@ class TestCostumeSetRoute:
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "POST")
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")):
             resp = await handler(CostumeRequest(costume="bogus"), _mk_request())
         assert resp.status_code == 400
 
@@ -284,6 +284,6 @@ class TestCostumeSetRoute:
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "POST")
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")):
             result = await handler(CostumeRequest(costume="astral_luminous"), _mk_request())
         assert result == {"costume": "astral_luminous"}

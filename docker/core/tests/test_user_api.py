@@ -84,7 +84,7 @@ class TestAuthGating:
     async def test_stats_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/stats", "GET")
-        with patch("app.routes._get_user_id", return_value=None):
+        with patch("app.routes_extras3._get_user_id", return_value=None):
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401
 
@@ -92,7 +92,7 @@ class TestAuthGating:
     async def test_export_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/export", "GET")
-        with patch("app.routes._get_user_id", return_value=None):
+        with patch("app.routes_extras3._get_user_id", return_value=None):
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401
 
@@ -100,7 +100,7 @@ class TestAuthGating:
     async def test_memory_search_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/search", "GET")
-        with patch("app.routes._get_user_id", return_value=None):
+        with patch("app.routes_extras2._get_user_id", return_value=None):
             resp = await handler(_mk_request(token=None), q="test")
         assert resp.status_code == 401
 
@@ -115,7 +115,7 @@ class TestInputValidation:
     async def test_memory_search_rejects_short_query(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/search", "GET")
-        with patch("app.routes._get_user_id", return_value="alice"):
+        with patch("app.routes_extras2._get_user_id", return_value="alice"):
             resp = await handler(_mk_request(), q="a")
         assert resp.status_code == 400
 
@@ -123,7 +123,7 @@ class TestInputValidation:
     async def test_memory_search_rejects_empty_query(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/search", "GET")
-        with patch("app.routes._get_user_id", return_value="alice"):
+        with patch("app.routes_extras2._get_user_id", return_value="alice"):
             resp = await handler(_mk_request(), q="")
         assert resp.status_code == 400
 
@@ -154,8 +154,8 @@ class TestInputValidation:
 
                 return Conn()
 
-        with patch("app.routes._get_user_id", return_value="alice"), \
-             patch("app.routes.get_pool", return_value=FakePool()):
+        with patch("app.routes_extras2._get_user_id", return_value="alice"), \
+             patch("app.routes_extras2.get_pool", return_value=FakePool()):
             await handler(_mk_request(), q="valid", limit=1000)
 
         assert captured_limit and captured_limit[0] <= 100
@@ -201,9 +201,9 @@ class TestUserStats:
             def connection(self):
                 return FakeConn()
 
-        with patch("app.routes._get_user_id", return_value="alice"), \
-             patch("app.routes.get_pool", return_value=FakePool()), \
-             patch("app.routes.affection") as aff:
+        with patch("app.routes_extras3._get_user_id", return_value="alice"), \
+             patch("app.routes_extras3.get_pool", return_value=FakePool()), \
+             patch("app.routes_extras3.affection") as aff:
             aff.get_state = AsyncMock(return_value=_mk_affection())
             data = await handler(_mk_request())
 
@@ -255,9 +255,9 @@ class TestUserStats:
             def connection(self):
                 return FakeConn()
 
-        with patch("app.routes._get_user_id", return_value="new_user"), \
-             patch("app.routes.get_pool", return_value=FakePool()), \
-             patch("app.routes.affection") as aff:
+        with patch("app.routes_extras3._get_user_id", return_value="new_user"), \
+             patch("app.routes_extras3.get_pool", return_value=FakePool()), \
+             patch("app.routes_extras3.affection") as aff:
             aff.get_state = AsyncMock(return_value=_mk_affection(score=0, level=0))
             data = await handler(_mk_request())
 
@@ -315,9 +315,9 @@ class TestUserExport:
             def connection(self):
                 return FakeConn()
 
-        with patch("app.routes._get_user_id", return_value="alice"), \
-             patch("app.routes.get_pool", return_value=FakePool()), \
-             patch("app.routes.affection") as aff:
+        with patch("app.routes_extras3._get_user_id", return_value="alice"), \
+             patch("app.routes_extras3.get_pool", return_value=FakePool()), \
+             patch("app.routes_extras3.affection") as aff:
             aff.get_state = AsyncMock(return_value=_mk_affection())
             data = await handler(_mk_request())
 
@@ -361,9 +361,9 @@ class TestUserExport:
             def connection(self):
                 return FakeConn()
 
-        with patch("app.routes._get_user_id", return_value="alice"), \
-             patch("app.routes.get_pool", return_value=FakePool()), \
-             patch("app.routes.affection") as aff:
+        with patch("app.routes_extras3._get_user_id", return_value="alice"), \
+             patch("app.routes_extras3.get_pool", return_value=FakePool()), \
+             patch("app.routes_extras3.affection") as aff:
             aff.get_state = AsyncMock(return_value=_mk_affection())
             data = await handler(_mk_request(), include_messages=False)
 
@@ -409,8 +409,8 @@ class TestMemorySearch:
             def connection(self):
                 return FakeConn()
 
-        with patch("app.routes._get_user_id", return_value="alice"), \
-             patch("app.routes.get_pool", return_value=FakePool()):
+        with patch("app.routes_extras2._get_user_id", return_value="alice"), \
+             patch("app.routes_extras2.get_pool", return_value=FakePool()):
             data = await handler(_mk_request(), q="smile")
 
         assert data["query"] == "smile"

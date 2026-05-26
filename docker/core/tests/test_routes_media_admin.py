@@ -94,7 +94,7 @@ class TestSTTRoute:
         from app.routes import STTRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/stt", "POST")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(STTRequest(audio="base64data"), _mk_unauth_request())
         assert resp.status_code == 401
 
@@ -152,7 +152,7 @@ class TestBackfillRoute:
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/backfill-annotations", "POST")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_unauth_request())
         assert resp.status_code == 401
 
@@ -161,8 +161,8 @@ class TestBackfillRoute:
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/backfill-annotations", "POST")
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.asyncio.create_task"):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.asyncio.create_task"):
             result = await handler(_mk_request())
         assert result["status"] == "started"
 
