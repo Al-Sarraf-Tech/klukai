@@ -93,15 +93,29 @@ check code "no files >500 LOC in app/"    "find docker/core/app -name '*.py' -no
 check code "complexity gate (radon B avg)" "have radon && radon cc docker/core/app -a -nb 2>&1 | tail -1"
 
 # ── 2. TESTING ──────────────────────────────────────────────────────────────
-# Coverage check: per spec §5.5, the gate ratchets through phases.
-# Phase 1=49%, Phase 2=70%, Phase 3=85%, Phase 4=95%, Phase 5=95%+mutation.
-# Read the current phase target from docs/audit-phase.json; passing requires
-# CI's `--cov-fail-under=N` value to be at least that target.
+# Coverage check: MEASURE real coverage — do NOT grep the --cov-fail-under
+# literal. The old check passed as long as the string "95" appeared in ci.yml,
+# regardless of what was actually covered, so a red suite behind a broad omit
+# list still scored "95% ✓". PYTHON may point at a venv with the pinned deps
+# for local verification (e.g. PYTHON=/path/to/venv/bin/python).
 PHASE_TARGET=95
-COV_GATE=$(grep -hE 'cov-fail-under|fail_under' .github/workflows/ci.yml docker/core/pyproject.toml docker/core/setup.cfg 2>/dev/null | grep -oE '[0-9]+' | sort -rn | head -1)
-COV_GATE=${COV_GATE:-0}
-# Per S+ rubric: ≥95% coverage. No phase-aware loosening — literal gate enforcement.
-check testing "coverage gate ≥95% (S+ rubric)"  "test \"${COV_GATE}\" -ge \"${PHASE_TARGET}\" 2>/dev/null"
+OMIT_CAP=6
+PYTHON="${PYTHON:-python3}"
+export PYTHON
+# (a) Measured coverage of the CONFIGURED surface (honors .coveragerc omit) —
+#     this is what CI gates on. pipefail (set in check()) propagates pytest's
+#     non-zero exit when coverage is under the threshold, so this is a REAL gate.
+check testing "coverage >=${PHASE_TARGET}% (measured, configured surface)" \
+  "cd docker/core && \"\$PYTHON\" -m pytest tests/ -q -m 'not integration' -p no:cacheprovider --cov=app --cov-report=term --cov-fail-under=${PHASE_TARGET} -o addopts='' 2>&1 | grep -E '^TOTAL|Required test coverage' | tail -1"
+# (b) TRUE full-codebase coverage (no omit) — informational, but always shown so
+#     the omit-narrowed headline can never hide the real denominator again.
+check testing "true coverage (no-omit) — informational" \
+  "cd docker/core && { \"\$PYTHON\" -m pytest tests/ -q -m 'not integration' -p no:cacheprovider --cov=app --cov-config=.coveragerc.full --cov-report=term -o addopts='' 2>&1 | grep -E '^TOTAL' | tail -1 || echo 'true-cov: unable to measure'; }"
+# (c) Omit-list cap — the gaming vector is adding MORE omits to keep the headline
+#     at 95%. This cap forces .coveragerc's omit list to ratchet DOWN, never up.
+OMIT_COUNT=$(awk '/^omit *=/{f=1;next} /^\[/{f=0} f && $1!~/^#/ && NF>0 {c++} END{print c+0}' docker/core/.coveragerc 2>/dev/null)
+check testing "omit-list <=${OMIT_CAP} entries (ratchet down only, now ${OMIT_COUNT})" \
+  "test \"${OMIT_COUNT:-99}\" -le \"${OMIT_CAP}\""
 check testing "unit tests dir present"    "test -d docker/core/tests/unit -o -d docker/core/tests"
 check testing "integration tests dir"     "test -d docker/core/tests/integration"
 check testing "contract tests dir"        "test -d docker/core/tests/contract"

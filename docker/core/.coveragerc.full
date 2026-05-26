@@ -1,0 +1,27 @@
+# Honest full-codebase coverage config — NO omit list.
+#
+# This measures the TRUE coverage denominator: every statement in app/,
+# including the route handlers, chat pipeline, and service clients that the
+# primary .coveragerc omits. The s-tier audit reports this number alongside
+# the omit-narrowed figure so the gap between "measured surface" and "whole
+# codebase" can never be hidden again (see the 2026-05 coverage-integrity fix).
+#
+# Use: pytest --cov=app --cov-config=.coveragerc.full
+[run]
+source = app
+branch = True
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    if typing.TYPE_CHECKING:
+    raise NotImplementedError
+    raise AssertionError
+    if __name__ == .__main__.:
+    @(abc\.)?abstractmethod
+    raise$
+    def __repr__
+    def __str__
+precision = 1
+show_missing = False

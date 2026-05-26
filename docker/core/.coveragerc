@@ -13,41 +13,15 @@
 source = app
 branch = True
 omit =
-    # ── FastAPI runtime (route handler bodies + WS + lifespan) ──
-    # Integration tests with testcontainers cover these in the nightly run.
-    app/routes.py
-    app/routes_extras.py
-    app/routes_extras2.py
-    app/routes_extras3.py
-    app/chat.py
-    app/chat_handlers.py
-    app/reflect_helpers.py
-    app/main.py
-    app/background.py
-    # ── Scheduled engine ─ needs running scheduler + DB state ──
-    app/proactive.py
-    # ── External service clients ─ need live remote endpoints ──
-    app/image_gen.py
-    app/voice_client.py
-    app/llm_router.py
-    app/agent_loop.py
-    app/mcp_client.py
-    app/push.py
-    # ── State managers ─ need DB pool + personality.yaml ──
-    app/affection.py
-    app/memory.py
-    app/memory_exchange.py
-    app/memory_archive.py
-    app/memory_archive_query.py
-    app/auth.py
-    app/billing_stripe.py
-    app/fact_extractor.py
-    # ── Observability runtime ─ needs OTel collector ──
-    app/observability/health_cache.py
-    app/observability/tracing.py
-    # ── WebSocket connection manager ─ needs live WS server ──
-    app/ws_manager.py
-    # ── Dev / one-off scripts ──
+    # Only non-runtime, one-off dev scripts are omitted now. Every module that
+    # is part of the served app surface is MEASURED.
+    #
+    # Coverage-integrity fix (2026-05): this omit list previously excluded ~73%
+    # of app/ (routes/chat/background/main/affection/memory/auth/llm_router/...),
+    # which let a red suite still report "95.8% ✓" over a tiny surface. Those
+    # modules now have real behavioral unit tests; true full-codebase coverage
+    # is ~96%. Do NOT re-add app/ modules here to prop up the headline — the
+    # audit caps this list and reports the true no-omit number alongside it.
     seed_memories.py
     reannotate_existing.py
     tools/*
