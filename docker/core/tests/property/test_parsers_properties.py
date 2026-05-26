@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     pass
 
 try:
-    from hypothesis import HealthCheck, given, settings
+    from hypothesis import HealthCheck, example, given, settings
     from hypothesis import strategies as st
 except ImportError:  # pragma: no cover — hypothesis is a test-only dep
     pytest.skip("hypothesis not installed", allow_module_level=True)
@@ -68,6 +68,14 @@ def test_fix_narration_returns_string(text: str) -> None:
 
 
 @given(text=st.text())
+# Explicit edge cases: st.text() almost never synthesizes the literal "(You "
+# trigger or a "| " tail, so pin the known-tricky inputs that previously broke
+# idempotence (double-space POV conversion; pipe-then-space trailing artifact).
+@example("(You  notice this)")
+@example("(Your  face)")
+@example("(your  hand)")
+@example("| ")
+@example("tail |  ")
 @settings(suppress_health_check=[HealthCheck.too_slow], max_examples=100)
 def test_fix_narration_idempotent(text: str) -> None:
     """Applying fix_narration twice yields the same string as applying it once."""

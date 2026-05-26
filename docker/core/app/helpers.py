@@ -20,20 +20,25 @@ def fix_narration(text: str) -> str:
     # Strip R1 reasoning blocks: <think>...</think>
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
     text = re.sub(r'<\|think\|>.*?<\|/think\|>', '', text, flags=re.DOTALL)
-    # Convert "(You verb...)" to "(I verb...)"
-    text = re.sub(r'\(You ([a-z])', lambda m: f'(I {m.group(1)}', text)
+    # Convert "(You verb...)" to "(I verb...)". Match one-or-more spaces so a
+    # later double-space collapse can't leave a "(You  verb)" that only converts
+    # on a second pass — keeps fix_narration idempotent.
+    text = re.sub(r'\(You +([a-z])', lambda m: f'(I {m.group(1)}', text)
     # Convert "(Your noun)" to "(My noun)"
-    text = re.sub(r'\(Your ', '(My ', text)
-    text = re.sub(r'\(your ', '(my ', text)
+    text = re.sub(r'\(Your +', '(My ', text)
+    text = re.sub(r'\(your +', '(my ', text)
     # Strip parentheticals that narrate Commander's actions/appearance
     text = re.sub(
         r'\([^)]*(?:your face|your eyes|your expression|your mouth|crosses your|touches your)[^)]*\)',
         '', text,
     )
-    # Strip trailing pipe characters (dolphin-glm reasoning artifact)
-    while text.endswith('|'):
-        text = text[:-1]
+    # Strip trailing pipe characters (dolphin-glm reasoning artifact) together
+    # with any surrounding spaces, looping so a "| " tail (pipe then space)
+    # collapses fully in a single call. Stripping spaces first keeps this
+    # idempotent — see tests/property/test_parsers_properties.py.
     text = text.rstrip(' ')
+    while text.endswith('|'):
+        text = text[:-1].rstrip(' ')
     # Clean up double spaces from removals
     text = re.sub(r'  +', ' ', text)
     return text
