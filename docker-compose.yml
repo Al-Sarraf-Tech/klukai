@@ -1,6 +1,10 @@
 # Run on amarillo: companion-core (consolidated with aichat infra)
 # Shares Docker networks with infra-postgres, redis, qdrant locally
 # companion-voice remains on dominus (RTX 3090, CUDA required)
+# Pin the compose project name so `docker compose` (and every Makefile target)
+# acts on the live stack instead of the directory-default `klukai` project.
+name: companion
+
 services:
   companion-core:
     build: ./docker/core

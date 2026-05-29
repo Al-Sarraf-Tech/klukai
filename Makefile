@@ -83,7 +83,7 @@ type-check:
 
 security-scan:
 	cd docker/core && bandit -r app/ -ll --skip B101
-	cd docker/core && safety check --file requirements.txt --ignore 70612 || true
+	cd docker/core && pip-audit --requirement requirements.txt
 
 # ── Performance baseline ─────────────────────────────────────────────────────
 

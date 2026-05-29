@@ -194,6 +194,7 @@ class TestRecallExchanges:
     async def test_maps_hits_and_scopes_to_user(self):
         results = {"result": [_hit("q1", "a1", 0.9, topics=["t"], mood="warm")]}
         obj = _make_self()
+        obj.embed_text = AsyncMock(return_value=[0.1, 0.2, 0.3])  # non-zero → recall proceeds
         obj._http.post = AsyncMock(return_value=_Resp(200, results))
         out = await recall_exchanges(obj, "find me", user_id="bob")
         assert len(out) == 1

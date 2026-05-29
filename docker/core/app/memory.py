@@ -219,7 +219,7 @@ class MemoryManager:
 
         # Qdrant vector storage
         try:
-            vector = await self.embed_text(summary)
+            vector = await self.embed_text(summary, raise_on_failure=True)
             await self._http.put(
                 f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points",
                 json={
@@ -265,6 +265,11 @@ class MemoryManager:
         user_id: str = "jalsarraf",
     ) -> list[dict]:
         vector = await self.embed_text(query)
+        if not vector or all(v == 0.0 for v in vector):
+            # Embedding failed — searching Qdrant with an all-zero vector returns
+            # meaningless (garbage-ranked) results. Return empty instead.
+            logger.warning("Episode recall skipped — embedding failed (zero vector)")
+            return []
         r = await self._http.post(
             f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points/search",
             json={

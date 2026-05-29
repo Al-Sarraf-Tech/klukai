@@ -291,18 +291,17 @@ def register_extras3(app: FastAPI) -> None:
         try:
             from .db import get_conn_autocommit
             async with get_conn_autocommit() as conn:
-                # Add deactivated_at column lazily (idempotent)
-                await conn.execute(
-                    "ALTER TABLE companion_users "
-                    "ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ"
-                )
+                # deactivated_at column is created by migration 130 — no DDL in
+                # the request path (it took an ACCESS EXCLUSIVE lock per call).
                 await conn.execute(
                     "UPDATE companion_users SET deactivated_at = NOW() WHERE id = %s",
                     (user_id,),
                 )
-                # Invalidate all sessions for this user
+                # Invalidate all sessions for this user. Tokens live in
+                # companion_auth_sessions — companion_sessions never existed, so
+                # the old DELETE silently no-op'd and never logged the user out.
                 await conn.execute(
-                    "DELETE FROM companion_sessions WHERE user_id = %s",
+                    "DELETE FROM companion_auth_sessions WHERE user_id = %s",
                     (user_id,),
                 )
             try:

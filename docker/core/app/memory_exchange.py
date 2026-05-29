@@ -80,7 +80,7 @@ async def store_exchange(
     """Store a user+assistant exchange pair with vector embedding, scoped to user."""
     try:
         combined = f"Commander: {user_content[:500]}\nKlukai: {assistant_content[:500]}"
-        vector = await self.embed_text(combined)
+        vector = await self.embed_text(combined, raise_on_failure=True)
         await self._http.put(
             f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points",
             json={
@@ -112,6 +112,10 @@ async def recall_exchanges(
 ) -> list[dict]:
     """Semantic search over past conversation exchanges, scoped to user."""
     vector = await self.embed_text(query)
+    if not vector or all(v == 0.0 for v in vector):
+        # Embedding failed — don't search Qdrant with an all-zero vector.
+        logger.warning("Exchange recall skipped — embedding failed (zero vector)")
+        return []
     r = await self._http.post(
         f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points/search",
         json={

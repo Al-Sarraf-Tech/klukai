@@ -126,7 +126,7 @@ check testing "hypothesis in deps"        "grep -qE 'hypothesis' docker/core/req
 
 # ── 3. SECURITY ─────────────────────────────────────────────────────────────
 check security "bandit clean (HIGH)"         "have bandit && cd docker/core && bandit -r app -ll -q 2>&1 | tail -3"
-check security "safety clean"                "have safety && (cd docker/core && safety check --file requirements.txt --short-report 2>&1 | tail -3)"
+check security "pip-audit clean"             "have pip-audit && (cd docker/core && pip-audit -r requirements.txt 2>&1 | tail -3)"
 check security "trivy in CI"                 "grep -q 'trivy' .github/workflows/*.yml"
 check security "no plaintext secrets (gitleaks)" "if command -v gitleaks >/dev/null 2>&1; then gitleaks detect --no-banner --redact 2>&1 | tail -3; else echo 'gitleaks not installed — skipped (informational)' && true; fi"
 check security "SBOM generated in release.yml" "grep -qE 'syft|sbom' .github/workflows/release.yml 2>/dev/null"

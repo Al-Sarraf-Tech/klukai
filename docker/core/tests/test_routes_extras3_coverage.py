@@ -427,11 +427,13 @@ class TestAccountDeactivate:
 
         assert result["deactivated"] is True
         assert result["user_id"] == "alice"
-        # Three statements: ALTER TABLE (lazy column), UPDATE deactivated_at, DELETE sessions.
+        # Two statements: UPDATE deactivated_at, DELETE sessions. The column is
+        # created by migration 130, NOT a per-request ALTER (which took an
+        # ACCESS EXCLUSIVE lock every call). Sessions live in the real table.
         joined = " ".join(executed)
-        assert "ADD COLUMN IF NOT EXISTS deactivated_at" in joined
+        assert "ADD COLUMN" not in joined  # DDL must stay out of the request path
         assert "UPDATE companion_users SET deactivated_at = NOW()" in joined
-        assert "DELETE FROM companion_sessions" in joined
+        assert "DELETE FROM companion_auth_sessions" in joined
         # Audit recorded with the SACRED-preserved flag.
         audit_log.assert_awaited_once()
         assert audit_log.await_args.kwargs["metadata"]["sacred_chat_preserved"] is True

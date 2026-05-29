@@ -62,6 +62,10 @@ jobs:
           SOURCE_DATE_EPOCH: ${{ steps.meta.outputs.epoch }}
           TAG: ${{ steps.meta.outputs.tag }}
         run: |
+          if ! docker info >/dev/null 2>&1; then
+            echo "::error title=Release needs Docker::This runner has no Docker socket — the release build/push/sign jobs require a Docker-enabled runner or host. Assign these jobs accordingly before tagging a release."
+            exit 1
+          fi
           docker build \
             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
             -t "${IMAGE}:${TAG}" \
