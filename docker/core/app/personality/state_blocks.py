@@ -133,6 +133,39 @@ def build_crown_jewel_block(crown_jewel: dict | None = None, affection_level: in
     )
 
 
+def build_growth_arc_block(p: dict, affection_level: int, turn_count: int = 0) -> str:
+    """Surface ONE thing Klukai is quietly working toward (growth arc).
+
+    A light touch: a single rotating goal she may reference the way a real
+    person mentions what they're working on — never a status report. Config in
+    ``growth_arc`` (enabled, min_affection_level, turn_interval, goals).
+
+    Appended as a per-message block AFTER assemble_system_prompt (not the
+    persistent prompt) so it never churns the golden snapshots. Returns empty
+    unless it's enabled, affection is high enough, there are goals, and the
+    turn lands on the configured cadence (so she doesn't harp on it every turn).
+    """
+    cfg = p.get("growth_arc", {})
+    if not cfg.get("enabled", False):
+        return ""
+    if affection_level < cfg.get("min_affection_level", 4):
+        return ""
+    goals = cfg.get("goals", [])
+    if not goals:
+        return ""
+    interval = max(1, int(cfg.get("turn_interval", 7)))
+    if turn_count <= 0 or turn_count % interval != 0:
+        return ""
+    # Rotate deterministically through the goals by turn slot — stable for a
+    # given turn_count (testable) yet varies across the conversation.
+    goal = goals[(turn_count // interval - 1) % len(goals)]
+    return (
+        "QUIET ASPIRATION (something you're privately working toward — you may "
+        "allude to it if the moment fits, the way a real person mentions what "
+        f"they're working on; never as a status report):\n  - {goal}"
+    )
+
+
 def build_canon_arcs_block(p: dict, affection_level: int) -> str:
     """Inject canonical story arcs Klukai can reference from her own memory.
 

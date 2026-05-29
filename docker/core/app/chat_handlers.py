@@ -48,7 +48,12 @@ from .helpers import (
 )
 from .image_gen import needs_image
 from .models import SessionState, new_id
-from .personality import assemble_system_prompt
+from .personality import (
+    assemble_system_prompt,
+    build_growth_arc_block,
+    build_inside_jokes_block,
+    load_personality,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +161,11 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Comfort objects for prompt context
     comfort_objects = await proactive.get_comfort_objects(user_id)
 
+    # Inside jokes / running references (feature: inside jokes). Surfaced as a
+    # per-message block below — NOT folded into assemble_system_prompt — so the
+    # golden system-prompt snapshots stay stable. Skipped for very short msgs.
+    inside_jokes = [] if is_short else await memory.get_inside_jokes(user_id)
+
     # Crown jewel tribute — the Commander's most treasured words to Klukai.
     # Only surfaces in the prompt at affection level 4+ (per build_crown_jewel_block).
     from . import tributes
@@ -197,6 +207,23 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     nudge = await memory.get_memory_nudge(session.turn_count, aff_state.level, user_id=user_id)
     if nudge:
         system_prompt += f"\n\n{nudge}"
+
+    # Inside jokes + growth arc — appended here (NOT in assemble_system_prompt)
+    # so the persistent prompt's golden snapshots stay stable. Both degrade to
+    # empty strings when not applicable (affection too low, no data, off-cadence).
+    _p = load_personality()
+    _jk_cfg = _p.get("inside_jokes", {})
+    if _jk_cfg.get("enabled", True):
+        jokes_block = build_inside_jokes_block(
+            inside_jokes, aff_state.level,
+            max_surfaced=_jk_cfg.get("max_surfaced", 2),
+            min_affection_level=_jk_cfg.get("min_affection_level", 3),
+        )
+        if jokes_block:
+            system_prompt += f"\n\n{jokes_block}"
+    growth_block = build_growth_arc_block(_p, aff_state.level, session.turn_count)
+    if growth_block:
+        system_prompt += f"\n\n{growth_block}"
 
     # Dream inquiry hint
     if dream_hint:

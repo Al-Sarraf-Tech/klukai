@@ -78,6 +78,16 @@ async def background_extraction(
             # Record as a "first" if it's the first gift
             await proactive.record_first(user_id, "first_gift")
 
+        # Store inside joke / running reference if detected (feature: inside
+        # jokes). Reuses the relationship-fact store under the rel:joke:*
+        # namespace — no new table. Surfaced later via a per-message block.
+        inside_joke = result.get("inside_joke")
+        if isinstance(inside_joke, dict):
+            jk_label = inside_joke.get("label")
+            jk_note = inside_joke.get("note")
+            if isinstance(jk_label, str) and isinstance(jk_note, str):
+                await memory.set_inside_joke(jk_label, jk_note, user_id=user_id)
+
         # Update mood in session + persist to PostgreSQL
         mood = result.get("mood", "composed")
 
@@ -179,11 +189,36 @@ async def background_extraction(
                 aff_config = personality.get("affection", {})
 
                 if aff_change.level_direction == "up":
+                    # ── PRIMARY: Level-9 "Oath Fulfilled" capstone ──────────
+                    # The first time affection reaches level 9, fire the one-time
+                    # oath scene (indigo_oath / wedding imagery, "Every day, I
+                    # choose you again."). Guarded by companion_firsts so it can
+                    # NEVER repeat — a later return to lv9 falls through to the
+                    # short level_up_messages[9] line. We deliver it as a
+                    # distinctive proactive scene because no UI costume-swap WS
+                    # event exists (verified ws_manager.py).
+                    oath_delivered = False
+                    if aff_change.new_level == 9:
+                        is_oath_first = await proactive.record_first(user_id, "oath_fulfilled")
+                        if is_oath_first:
+                            oath_scene = aff_config.get("oath_fulfilled_scene", [])
+                            if oath_scene:
+                                for line in oath_scene:
+                                    await ws.send_proactive(user_id, line)
+                                    await asyncio.sleep(3)  # weighty pacing
+                                oath_delivered = True
+                                logger.info("Oath Fulfilled capstone delivered (once-ever) for %s", user_id)
+
                     # Check for first-time milestone scene
                     milestone_key = f"affection_level_{aff_change.new_level}"
                     is_new = await memory.record_milestone(milestone_key)
 
-                    if is_new:
+                    if oath_delivered:
+                        # The oath scene IS the level-9 moment — record the
+                        # generic milestone too (so it isn't re-delivered later)
+                        # but suppress the ordinary scene/message this turn.
+                        await memory.record_milestone(milestone_key, user_id=user_id)
+                    elif is_new:
                         # Also record in user-scoped fact store
                         await memory.record_milestone(milestone_key, user_id=user_id)
                         # First time reaching this level — deliver milestone scene

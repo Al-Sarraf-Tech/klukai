@@ -93,6 +93,7 @@ def _patched_pipeline(
     memory.save_session = AsyncMock()
     memory.recall_for_prompt = AsyncMock(return_value=(["ep1"], {"name": "x"}, ["ex1"]))
     memory.get_memory_nudge = AsyncMock(return_value=nudge)
+    memory.get_inside_jokes = AsyncMock(return_value=[])  # inside-jokes feature
     ns.memory = memory
 
     # ── affection ──

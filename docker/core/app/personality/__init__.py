@@ -29,6 +29,7 @@ from .loader import (
 # Memory/recall blocks
 from .memory_blocks import (
     build_conversation_recall_block,
+    build_inside_jokes_block,
     build_memory_block,
     build_relationship_block,
 )
@@ -69,6 +70,7 @@ from .state_blocks import (
     build_anniversary_block,
     build_comfort_objects_block,
     build_crown_jewel_block,
+    build_growth_arc_block,
     build_jealousy_block,
     build_mission_context_block,
     build_physical_state_block,
@@ -108,6 +110,7 @@ __all__ = [
     "build_memory_block",
     "build_relationship_block",
     "build_conversation_recall_block",
+    "build_inside_jokes_block",
     # Squad
     "build_squad_voices_block",
     "build_squad_interaction_hint",
@@ -117,6 +120,7 @@ __all__ = [
     "build_anniversary_block",
     "build_comfort_objects_block",
     "build_crown_jewel_block",
+    "build_growth_arc_block",
     "build_mission_context_block",
     # Rules + pace + tool
     "build_character_rules",

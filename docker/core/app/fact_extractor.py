@@ -40,6 +40,7 @@ _DEFAULT_RESULT: dict = {
     "interaction": {"type": "neutral", "intensity": 5},
     "commander_details": {},
     "gift_item": None,
+    "inside_joke": None,
 }
 
 # ── Prompts ──────────────────────────────────────────────────────────────
@@ -51,7 +52,7 @@ and tender moods are natural responses to warmth. At low levels (0-2), composed 
 prideful moods dominate.
 
 Return ONLY valid JSON with these fields:
-{{"mood":"<one word from the list>","interaction":{{"type":"<type>","intensity":<1-10>}},"facts":[],"topics":[],"should_remember":false,"commander_details":{{}},"gift_item":null}}
+{{"mood":"<one word from the list>","interaction":{{"type":"<type>","intensity":<1-10>}},"facts":[],"topics":[],"should_remember":false,"commander_details":{{}},"gift_item":null,"inside_joke":null}}
 
 Moods: composed, focused, prideful, exasperated, protective, quietly_pleased, \
 competitive, tender, longing, battle_ready, flustered, affectionate, shy, yearning, \
@@ -71,6 +72,12 @@ Values are short strings. Only include keys that are explicitly mentioned. Empty
 
 gift_item: If the Commander is giving Klukai a gift/present, set this to a short description \
 of the item (e.g., "leather jacket", "coffee mug", "flowers"). null if no gift.
+
+inside_joke: If this exchange establishes or calls back to a RELATIONSHIP-SPECIFIC running \
+reference — a nickname, a recurring bit, a shared callback the two of them keep returning to \
+(e.g., the Klukadile plush they both pretend doesn't exist, a pet name, a recurring teasing line) \
+— return {{"label":"<3-5 word name for the bit>","note":"<one short sentence on what it means / how it's used>"}}. \
+Only for genuine recurring in-relationship references, NOT one-off facts or generic small talk. null if none.
 
 Commander: {user_message}
 Klukai: {assistant_message}"""
@@ -158,6 +165,18 @@ async def extract_facts(
     if not isinstance(interaction, dict) or "type" not in interaction:
         interaction = {"type": "neutral", "intensity": 5}
 
+    # Validate inside_joke — must be a dict carrying both a label and a note,
+    # else drop it (the LLM sometimes emits a bare string or partial object).
+    inside_joke = result.get("inside_joke")
+    if not (
+        isinstance(inside_joke, dict)
+        and isinstance(inside_joke.get("label"), str)
+        and inside_joke["label"].strip()
+        and isinstance(inside_joke.get("note"), str)
+        and inside_joke["note"].strip()
+    ):
+        inside_joke = None
+
     out = {
         "facts": result.get("facts", []),
         "mood": mood,
@@ -166,6 +185,7 @@ async def extract_facts(
         "interaction": interaction,
         "commander_details": result.get("commander_details", {}),
         "gift_item": result.get("gift_item"),
+        "inside_joke": inside_joke,
     }
 
     if image_generated and "memory_curation" in result:
