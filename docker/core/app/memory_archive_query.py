@@ -9,6 +9,7 @@ still works (re-exports below).
 
 from __future__ import annotations
 
+import os
 import random
 from pathlib import Path
 
@@ -22,7 +23,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-IMAGES_DIR = Path("/data/images")
+# Must match the WRITE path in memory_archive.py (and the companion-images volume
+# mount, /images). This was hardcoded to a nonexistent /data/images, so every
+# get_image_bytes() returned None and the memory archive showed no drawings.
+IMAGES_DIR = Path(os.environ.get("IMAGES_DIR", "/images"))
 
 async def get_image_bytes(
     memory_id: str, thumbnail: bool = False, user_id: str | None = None
