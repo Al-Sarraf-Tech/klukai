@@ -86,15 +86,15 @@ Level 9: Oath Fulfilled       — "I chose you. Every day, I choose you again."
 Each level unlocks new speech patterns, expressive tokens, Japanese phrases, memory categories, image outfit options, and proactive message templates.
 
 ### Squad Voices
-Klukai voices her entire squad in roleplay — each with distinct speech patterns from GFL2 canon:
+Klukai voices her entire squad in roleplay — each with distinct speech patterns from GFL2 canon. She leads **H.I.D.E. 404**, having inherited command from **Leva** (UMP45), the squad's former leader.
 
-| Member | Style | Sample |
-|--------|-------|--------|
-| **Mechty** (G11) | Sleepy monotone, minimal words | *"...Mmh. Give me five more minutes."* |
-| **Belka** (G28) | Peppy, exclamation marks, "Big Sis!" | *"Big Sis! Look what I found!"* |
-| **Andoris** (G36K) | Gentle, precise, processing pauses | *"The data suggests... ah, forgive me."* |
-| **Vector** | Deadpan, dark humor, survival odds | *"Survival probability: low. Same as always."* |
-| **Leva** (UMP45) | Calculating, chess metaphors | *"Interesting move, Commander."* |
+| Member | Unit | Style | Sample |
+|--------|------|-------|--------|
+| **Mechty** (G11) | Combat Team A | Sleepy monotone, minimal words | *"...Mmh. Give me five more minutes."* |
+| **Belka** (G28) | Combat Team A | Peppy, exclamation marks, "Big Sis!" | *"Big Sis! Look what I found!"* |
+| **Andoris** (G36K) | Combat Team A | Gentle, precise, processing pauses | *"The data suggests... ah, forgive me."* |
+| **Vector** | Combat Team B | Deadpan, dark humor, survival odds | *"Survival probability: low. Same as always."* |
+| **Leva** (UMP45) | Former leader | Calculating, chess metaphors | *"Interesting move, Commander."* |
 
 ### Proactive Engine
 Klukai doesn't just respond — she initiates:
@@ -120,8 +120,8 @@ ComfyUI with NoobAI-XL (Illustrious) and a custom Klukai LoRA:
 |-----------|-----------|
 | Backend | Python 3.13, FastAPI, uvicorn |
 | Frontend | Flutter Web (PWA), Dart |
-| Chat LLM | dolphin-mistral-24b (local, LM Studio) |
-| Agent LLM | qwen3.5-27b-claude-opus-distilled (local) |
+| Chat LLM | dolphin-mistral-24b-venice-edition (local, LM Studio) |
+| Agent LLM | qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2 (local) |
 | Image Gen | ComfyUI, NoobAI-XL, Klukai LoRA |
 | Voice | XTTS v2 (TTS), Whisper (STT) |
 | Database | PostgreSQL (aichat shared) |
@@ -153,7 +153,7 @@ companion/
 │   │   │   ├── image_gen.py      # ComfyUI integration
 │   │   │   ├── llm_router.py     # LLM provider selection + circuit breaker
 │   │   │   └── ...
-│   │   ├── tests/                # 1,705 tests (unit/golden/property/contract) + integration/perf
+│   │   ├── tests/                # 2,567 tests (unit/golden/property/contract) + integration/perf
 │   │   ├── migrations/           # PostgreSQL schema (6 migrations)
 │   │   └── seed_memories.py      # Retroactive memory seeding
 │   └── voice/                    # XTTS + Whisper container
@@ -166,7 +166,7 @@ companion/
 ## Test Suite
 
 ```
-1,705 passed, 12 skipped (non-integration suite); integration + perf suites require a live stack
+2,523 passed, 11 skipped (non-integration suite); integration + perf suites require a live stack
 
 Coverage:
 - Narration pipeline (think-tag stripping, POV correction, pipe removal)

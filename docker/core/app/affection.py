@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
 CLASSIFICATION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
-DAILY_POINTS_CAP = 8
+DAILY_POINTS_CAP = 8  # fallback only; config affection.scoring.daily_points_cap is authoritative
 MAX_SCORE = 1000
 
 CLASSIFICATION_PROMPT = """\
@@ -241,9 +241,16 @@ class AffectionManager:
         if user_id == "jalsarraf" and delta < 0:
             delta = 0
 
-        # Apply daily cap (only for positive changes)
+        # Apply daily cap (only for positive changes). Config-driven so the cap
+        # can be tuned in personality.yaml without a code change.
         if delta > 0:
-            remaining = DAILY_POINTS_CAP - state.daily_points_earned
+            cap = (
+                load_personality()
+                .get("affection", {})
+                .get("scoring", {})
+                .get("daily_points_cap", DAILY_POINTS_CAP)
+            )
+            remaining = cap - state.daily_points_earned
             if remaining <= 0:
                 delta = 0
             else:

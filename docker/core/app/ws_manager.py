@@ -145,9 +145,6 @@ class WSManager:
             task = asyncio.create_task(ws.receive_text())
             tasks[task] = ws
 
-        if not tasks:
-            return None
-
         try:
             done, pending = await asyncio.wait(tasks.keys(), return_when=asyncio.FIRST_COMPLETED)
 

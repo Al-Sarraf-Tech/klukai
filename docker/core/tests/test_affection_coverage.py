@@ -375,6 +375,29 @@ class TestApplyDelta:
         assert change.new_score == 100
 
     @pytest.mark.asyncio
+    async def test_daily_cap_is_config_driven(self, manager, freeze_time, monkeypatch):
+        """The cap reads affection.scoring.daily_points_cap from config; the
+        DAILY_POINTS_CAP constant is only a fallback. A lower config value must
+        clamp tighter than the constant's 8."""
+        import copy
+
+        from app.personality import load_personality as _load_real
+
+        cfg = copy.deepcopy(_load_real())
+        cfg["affection"]["scoring"]["daily_points_cap"] = 3
+        monkeypatch.setattr("app.affection.load_personality", lambda *a, **k: cfg)
+
+        manager._states["alice"] = AffectionState(
+            score=100, level=2, last_interaction_date=FIXED_TODAY,
+            consecutive_days=1, daily_points_earned=2,
+        )
+        with _patch_db():
+            change = await manager._apply_delta("compliment", 10, "alice")
+        # compliment@10 = +5, but config cap=3 with 2 already earned → only +1.
+        assert change.delta == 1
+        assert change.new_score == 101
+
+    @pytest.mark.asyncio
     async def test_jalsarraf_negative_delta_floored_to_zero(self, manager, freeze_time):
         # jalsarraf is pinned: a rude classification must not reduce score.
         with _patch_db():
