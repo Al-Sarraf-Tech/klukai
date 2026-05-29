@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 
 from . import memory_archive
 from .context import ws, memory, affection
+from .auth import is_admin
 from .db import get_pool
 
 from .routes import (
@@ -299,7 +300,7 @@ def register_extras(app: FastAPI) -> None:
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
-        if user_id != "jalsarraf":
+        if not is_admin(user_id):
             return ec.admin_only()
         from .rate_limit import reset, LIMITS
         if bucket not in LIMITS and bucket != "default":

@@ -20,7 +20,7 @@ build-backend:
 
 build-pwa:
 	@if command -v flutter >/dev/null 2>&1 && [ -d flutter_app ]; then \
-		cd flutter_app && flutter build web --release; \
+		cd flutter_app && flutter build web --release --base-href=/app/; \
 		rm -rf ../web-build/*; \
 		cp -r build/web/* ../web-build/; \
 		echo "PWA built and copied to web-build/"; \

@@ -93,24 +93,35 @@ mkdir -p /mnt/nvmeINT/restore/extracted
 tar -xzf "$TARBALL_LOCAL" -C /mnt/nvmeINT/restore/extracted
 
 step "5. Restore PG dump"
+# SAFETY: Klukai data lives as companion_* TABLES inside the SHARED `aichat`
+# database (infra-postgres) — kairi and other apps share that DB. So this must
+# NEVER drop the database. `pg_restore --clean --if-exists` drops/recreates only
+# the objects contained in THIS dump, restoring into the existing aichat DB
+# without touching other apps. The operator MUST confirm the dump's scope is
+# companion_* only before enabling the destructive restore.
 if [[ -f /mnt/nvmeINT/restore/extracted/companion-pg.dump ]]; then
-  docker compose up -d postgres
-  sleep 8
-  docker compose exec -T postgres psql -U companion -c "DROP DATABASE IF EXISTS companion;"
-  docker compose exec -T postgres psql -U companion -c "CREATE DATABASE companion;"
-  docker compose exec -T postgres pg_restore -U companion -d companion < /mnt/nvmeINT/restore/extracted/companion-pg.dump
+  if [[ "${DR_CONFIRM_RESTORE:-}" == "yes" ]]; then
+    docker exec -i infra-postgres pg_restore -U aichat -d aichat \
+      --clean --if-exists --no-owner --no-privileges \
+      < /mnt/nvmeINT/restore/extracted/companion-pg.dump \
+      || echo "[DR drill]   warn: pg_restore reported errors — review above"
+  else
+    echo "[DR drill]   PG restore is DESTRUCTIVE to companion_* objects in the shared aichat DB."
+    echo "[DR drill]   Set DR_CONFIRM_RESTORE=yes to run it (after verifying the dump scope). Skipping."
+  fi
 else
   echo "[DR drill]   no PG dump in backup; skipping"
 fi
 
 step "6. Restore Qdrant snapshots"
 if [[ -d /mnt/nvmeINT/restore/extracted/qdrant ]]; then
-  docker compose up -d qdrant
-  sleep 6
+  # aichat-vector (Qdrant) is external + already running — nothing to start here.
+  # Upload target is operator-configurable (host-reachable Qdrant port).
+  QDRANT_RESTORE_URL="${QDRANT_RESTORE_URL:-http://localhost:6333}"
   for snap in /mnt/nvmeINT/restore/extracted/qdrant/*.snapshot; do
     [[ -e "$snap" ]] || continue
     coll="$(basename "$snap" .snapshot)"
-    curl -sf -X POST "http://localhost:6333/collections/${coll}/snapshots/upload" \
+    curl -sf -X POST "${QDRANT_RESTORE_URL}/collections/${coll}/snapshots/upload" \
       -H "Content-Type: multipart/form-data" \
       -F "snapshot=@${snap}" || echo "[DR drill]   warn: failed to upload ${coll}"
   done

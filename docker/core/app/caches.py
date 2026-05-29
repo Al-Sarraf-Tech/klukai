@@ -34,6 +34,17 @@ async def _get() -> aioredis.Redis:
     return _redis
 
 
+async def close() -> None:
+    """Close the module Redis client + its pool (called on app shutdown)."""
+    global _redis
+    if _redis is not None:
+        try:
+            await _redis.aclose()
+        except Exception:
+            pass
+        _redis = None
+
+
 def _text_key(text: str) -> str:
     h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
     return f"cache:embed:{h}"

@@ -16,7 +16,7 @@ A production-grade AI companion built on [Girls' Frontline 2: Exilium](https://g
                     └──────┬──────┘
                            │
               ┌────────────┴────────────┐
-              │    companion-core       │  (FastAPI, Python 3.13)
+              │    companion-core       │  (FastAPI, Python 3.14)
               │                         │
               │  chat.py ─── message pipeline, WebSocket handler
               │  routes.py ── HTTP API (21 endpoints)
@@ -118,7 +118,7 @@ ComfyUI with NoobAI-XL (Illustrious) and a custom Klukai LoRA:
 
 | Component | Technology |
 |-----------|-----------|
-| Backend | Python 3.13, FastAPI, uvicorn |
+| Backend | Python 3.14, FastAPI, uvicorn |
 | Frontend | Flutter Web (PWA), Dart |
 | Chat LLM | dolphin-mistral-24b-venice-edition (local, LM Studio) |
 | Agent LLM | qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2 (local) |
@@ -153,7 +153,7 @@ companion/
 │   │   │   ├── image_gen.py      # ComfyUI integration
 │   │   │   ├── llm_router.py     # LLM provider selection + circuit breaker
 │   │   │   └── ...
-│   │   ├── tests/                # 2,567 tests (unit/golden/property/contract) + integration/perf
+│   │   ├── tests/                # 2,640+ tests (unit/golden/property/contract) + integration/perf
 │   │   ├── migrations/           # PostgreSQL schema (6 migrations)
 │   │   └── seed_memories.py      # Retroactive memory seeding
 │   └── voice/                    # XTTS + Whisper container
@@ -166,7 +166,7 @@ companion/
 ## Test Suite
 
 ```
-2,523 passed, 11 skipped (non-integration suite); integration + perf suites require a live stack
+2,640+ passed, 57 skipped (non-integration suite); integration + perf suites require a live stack
 
 Coverage:
 - Narration pipeline (think-tag stripping, POV correction, pipe removal)

@@ -30,6 +30,17 @@ async def _get_redis() -> aioredis.Redis:
     return _redis
 
 
+async def close() -> None:
+    """Close the module Redis client + its pool (called on app shutdown)."""
+    global _redis
+    if _redis is not None:
+        try:
+            await _redis.aclose()
+        except Exception:
+            pass
+        _redis = None
+
+
 @dataclass(frozen=True)
 class Limit:
     """A single rate limit: N requests per window_seconds."""

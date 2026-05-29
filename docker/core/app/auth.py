@@ -28,6 +28,16 @@ _SEED_USERS = [
 IP_BAN_THRESHOLD = 3
 IP_BAN_WINDOW_MINUTES = 60
 
+# The single privileged operator. Env-overridable so admin identity isn't a
+# magic string ("jalsarraf") scattered across route handlers.
+ADMIN_USER_ID = os.environ.get("KLUKAI_ADMIN_USER", "jalsarraf")
+
+
+def is_admin(user_id: str | None) -> bool:
+    """True iff user_id is the privileged operator (admin endpoints)."""
+    return user_id == ADMIN_USER_ID
+
+
 # Session tokens are stored HASHED at rest (sha256). The plaintext token is the
 # bearer returned to the client; the DB only holds its hash, so a DB read/backup
 # leak can't be replayed. SESSION_MAX_DAYS caps absolute lifetime regardless of

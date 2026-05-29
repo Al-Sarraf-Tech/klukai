@@ -7,6 +7,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from .auth import is_admin
 from .context import ws, affection
 from .db import get_pool
 
@@ -224,7 +225,7 @@ def register_extras2(app: FastAPI) -> None:
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
-        if user_id != "jalsarraf":
+        if not is_admin(user_id):
             return ec.admin_only()
         limit = max(1, min(limit, 5000))
         try:
@@ -266,7 +267,7 @@ def register_extras2(app: FastAPI) -> None:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        if user_id != "jalsarraf":
+        if not is_admin(user_id):
             return JSONResponse({"error": "Admin only"}, status_code=403)
         from . import audit
         events = await audit.recent(limit=limit, event_type=event_type,
@@ -285,7 +286,7 @@ def register_extras2(app: FastAPI) -> None:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        if user_id != "jalsarraf":
+        if not is_admin(user_id):
             return JSONResponse({"error": "Admin only"}, status_code=403)
         from . import metrics as _m
         snap = _m.snapshot()

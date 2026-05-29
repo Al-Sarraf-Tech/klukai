@@ -201,6 +201,10 @@ async def lifespan(app: FastAPI):
     await router.close()
     await mcp.close()
     await affection.close()
+    from .caches import close as _caches_close
+    from .rate_limit import close as _rate_limit_close
+    await _caches_close()
+    await _rate_limit_close()
     await close_pool()
     logger.info("Klukai companion core stopped")
 
