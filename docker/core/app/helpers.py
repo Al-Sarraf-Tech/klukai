@@ -5,9 +5,20 @@ No I/O, no state, no imports from other app modules.
 
 from __future__ import annotations
 
+import os
 import re
 
 from .image_gen import SQUAD_KEYWORDS, SITUATION_KEYWORDS
+
+
+def voice_auth_headers() -> dict[str, str]:
+    """Bearer header for calls to the voice service when VOICE_API_TOKEN is set.
+
+    Empty (no auth) when unset, so it stays a no-op until the token is
+    provisioned on the voice host — core->voice keeps working either way.
+    """
+    tok = os.environ.get("VOICE_API_TOKEN")
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
 
 
 def chunk_text(text: str, chunk_size: int = 8) -> list[str]:

@@ -56,14 +56,11 @@ LM_TTL_SECONDS = int(os.environ.get("LM_STUDIO_TTL", "600"))
 
 # Model aliases
 LOCAL_CASUAL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"  # Chat: uncensored, clean streaming, no thinking tags
-LOCAL_CASUAL_FALLBACK = "dolphin-mistral-glm-4.7-flash-24b-venice-edition-thinking-uncensored-i1"  # Previous chat model
 LOCAL_AGENT = "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2"     # Agent: Opus-level tool-use + reasoning
 LOCAL_TOOLS = LOCAL_AGENT                                               # Same as agent
-CLOUD_COMPLEX = "claude-sonnet-4-20250514"
 CLOUD_FALLBACK = "claude-haiku-4-5-20251001"
 
 # ── Model keep-alive ───────────────────────────────────────────────────────
-_MODEL_TTL = 25 * 60  # 25 minutes — keep models loaded at least this long
 _KEEPALIVE_INTERVAL = 20 * 60  # Ping every 20 minutes to prevent eviction
 _model_last_used: dict[str, float] = {}
 
@@ -357,15 +354,31 @@ class LLMRouter:
     async def _stream_anthropic(
         self, system_prompt: str, messages: list[dict], config: LLMConfig
     ) -> AsyncIterator[str]:
-        async with self._anthropic.messages.stream(
-            model=config.model,
-            max_tokens=config.max_tokens,
-            temperature=config.temperature,
-            system=system_prompt,
-            messages=messages,
-        ) as stream:
-            async for text in stream.text_stream:
-                yield text
+        import time as _time
+
+        from .observability import record_llm_usage
+
+        _start = _time.monotonic()
+        _in = (len(system_prompt) + sum(len(str(m.get("content", ""))) for m in messages)) // 4
+        _out_chars = 0
+        try:
+            async with self._anthropic.messages.stream(
+                model=config.model,
+                max_tokens=config.max_tokens,
+                temperature=config.temperature,
+                system=system_prompt,
+                messages=messages,
+            ) as stream:
+                async for text in stream.text_stream:
+                    _out_chars += len(text)
+                    yield text
+        finally:
+            # Stream paths previously recorded no metrics — /api/metrics was
+            # blind to interactive chat. Tokens are estimated (~4 chars/token).
+            record_llm_usage(
+                model=config.model, tokens_in=_in, tokens_out=_out_chars // 4,
+                latency_ms=(_time.monotonic() - _start) * 1000, route="chat",
+            )
 
     async def keepalive(self) -> None:
         """Ping primary chat model to keep it loaded in LM Studio VRAM.
@@ -433,43 +446,60 @@ class LLMRouter:
         reasoning_parts: list[str] = []
         yielded_content = False
 
-        async with self._http.stream(
-            "POST",
-            f"{config.base_url}/v1/chat/completions",
-            json={
-                "model": config.model,
-                "messages": oai_messages,
-                "max_tokens": config.max_tokens,
-                "temperature": config.temperature,
-                "stream": True,
-                "ttl": LM_TTL_SECONDS,
-            },
-            timeout=httpx.Timeout(connect=10.0, read=config.read_timeout, write=10.0, pool=10.0),
-        ) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:]
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                    delta = chunk["choices"][0].get("delta", {})
-                    content = delta.get("content")
-                    if content:
-                        yielded_content = True
-                        yield content
-                    elif not yielded_content:
-                        # Collect reasoning tokens; they become the response if no
-                        # content tokens ever arrive (thinking-only model output)
-                        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-                        if reasoning:
-                            reasoning_parts.append(reasoning)
-                except (json.JSONDecodeError, KeyError, IndexError):
-                    continue
+        import time as _time
 
-        # Thinking model path: surface the reasoning text as the response
-        if not yielded_content and reasoning_parts:
-            logger.debug("Thinking model: surfacing %d reasoning chars as response", sum(len(p) for p in reasoning_parts))
-            yield "".join(reasoning_parts)
+        from .observability import record_llm_usage
+
+        _start = _time.monotonic()
+        _in = (len(system_prompt) + sum(len(str(m.get("content", ""))) for m in messages)) // 4
+        _out_chars = 0
+        try:
+            async with self._http.stream(
+                "POST",
+                f"{config.base_url}/v1/chat/completions",
+                json={
+                    "model": config.model,
+                    "messages": oai_messages,
+                    "max_tokens": config.max_tokens,
+                    "temperature": config.temperature,
+                    "stream": True,
+                    "ttl": LM_TTL_SECONDS,
+                },
+                timeout=httpx.Timeout(connect=10.0, read=config.read_timeout, write=10.0, pool=10.0),
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        delta = chunk["choices"][0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            yielded_content = True
+                            _out_chars += len(content)
+                            yield content
+                        elif not yielded_content:
+                            # Collect reasoning tokens; they become the response if no
+                            # content tokens ever arrive (thinking-only model output)
+                            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                            if reasoning:
+                                reasoning_parts.append(reasoning)
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+
+            # Thinking model path: surface the reasoning text as the response
+            if not yielded_content and reasoning_parts:
+                logger.debug("Thinking model: surfacing %d reasoning chars as response", sum(len(p) for p in reasoning_parts))
+                text = "".join(reasoning_parts)
+                _out_chars += len(text)
+                yield text
+        finally:
+            # Record token/latency metrics for the streaming chat path (was blind).
+            record_llm_usage(
+                model=config.model, tokens_in=_in, tokens_out=_out_chars // 4,
+                latency_ms=(_time.monotonic() - _start) * 1000, route="chat",
+            )

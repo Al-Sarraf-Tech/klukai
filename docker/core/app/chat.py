@@ -59,7 +59,8 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
         async with httpx.AsyncClient(timeout=30.0) as client:
             await ws.send_thinking(user_id, "Listening...")
             try:
-                r = await client.post(f"{voice_url}/stt", json={"audio": audio_b64})
+                from .helpers import voice_auth_headers
+                r = await client.post(f"{voice_url}/stt", json={"audio": audio_b64}, headers=voice_auth_headers())
                 r.raise_for_status()
                 transcript = r.json().get("text", "")
             except Exception as stt_err:
@@ -87,9 +88,11 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
                 last_turn = session.turns[-1]
                 if last_turn["role"] == "assistant":
                     try:
+                        from .helpers import voice_auth_headers
                         r = await client.post(
                             f"{voice_url}/tts",
                             json={"text": last_turn["content"]},
+                            headers=voice_auth_headers(),
                         )
                         if r.status_code == 200:
                             import base64

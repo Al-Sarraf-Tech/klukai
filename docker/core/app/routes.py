@@ -287,10 +287,12 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         if not tts_text.strip():
             return JSONResponse({"error": "No speakable text"}, status_code=400)
         try:
+            from .helpers import voice_auth_headers
             async with httpx.AsyncClient(timeout=60.0) as client:
                 r = await client.post(
                     f"{voice_url}/tts",
                     json={"text": tts_text[:500], "language": req.language},
+                    headers=voice_auth_headers(),
                 )
                 if r.status_code == 200:
                     import base64

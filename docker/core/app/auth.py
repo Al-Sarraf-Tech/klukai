@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import secrets
@@ -26,6 +27,17 @@ _SEED_USERS = [
 # Failed login threshold — 3 failures from same IP within 1 hour = ban
 IP_BAN_THRESHOLD = 3
 IP_BAN_WINDOW_MINUTES = 60
+
+# Session tokens are stored HASHED at rest (sha256). The plaintext token is the
+# bearer returned to the client; the DB only holds its hash, so a DB read/backup
+# leak can't be replayed. SESSION_MAX_DAYS caps absolute lifetime regardless of
+# rolling refresh.
+SESSION_MAX_DAYS = 30
+
+
+def _hash_token(token: str) -> str:
+    """sha256 hex of a session token (high-entropy → a fast hash is sufficient)."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 async def init_users() -> None:
@@ -122,7 +134,7 @@ async def authenticate(username: str, password: str, ip: str) -> str | None:
                 await conn.execute(
                     "INSERT INTO companion_auth_sessions (token, user_id) "
                     "VALUES (%s, %s)",
-                    (token, row[0]),
+                    (_hash_token(token), row[0]),
                 )
                 # Record successful attempt
                 await conn.execute(
@@ -187,30 +199,37 @@ async def get_user_from_token(token: str) -> str | None:
     """
     try:
         async with get_conn_autocommit() as conn:
+            token_hash = _hash_token(token)
             row = await (
                 await conn.execute(
-                    "SELECT user_id, expires_at FROM companion_auth_sessions "
+                    "SELECT user_id, expires_at, created_at FROM companion_auth_sessions "
                     "WHERE token = %s",
-                    (token,),
+                    (token_hash,),
                 )
             ).fetchone()
             if row:
+                from datetime import timedelta
+                from datetime import timezone as tz
                 expires = row[1]
-                # Make both timezone-aware for comparison
+                created = row[2] if len(row) > 2 else None
+                # Make timestamps timezone-aware for comparison
                 now = datetime.now(timezone.utc)
                 if expires.tzinfo is None:
-                    from datetime import timezone as tz
                     expires = expires.replace(tzinfo=tz.utc)
-                if now < expires:
+                if created is not None and created.tzinfo is None:
+                    created = created.replace(tzinfo=tz.utc)
+                # Absolute lifetime cap — a token can't be rolled forward forever.
+                if created is not None and now - created > timedelta(days=SESSION_MAX_DAYS):
+                    logger.debug("Token exceeded absolute lifetime (%dd) for user %s", SESSION_MAX_DAYS, row[0])
+                elif now < expires:
                     # Roll the expiry forward on active use (within 3 days of expiry)
-                    from datetime import timedelta
                     if expires - now < timedelta(days=3):
                         try:
                             await conn.execute(
                                 "UPDATE companion_auth_sessions "
                                 "SET expires_at = NOW() + INTERVAL '7 days' "
                                 "WHERE token = %s",
-                                (token,),
+                                (token_hash,),
                             )
                         except Exception:
                             pass  # refresh is best-effort
@@ -230,7 +249,7 @@ async def get_session_info(token: str) -> dict | None:
                 await conn.execute(
                     "SELECT user_id, created_at, expires_at "
                     "FROM companion_auth_sessions WHERE token = %s",
-                    (token,),
+                    (_hash_token(token),),
                 )
             ).fetchone()
             if not row:

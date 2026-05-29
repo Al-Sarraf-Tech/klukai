@@ -113,8 +113,9 @@ def register_extras(app: FastAPI) -> None:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
         try:
+            from .helpers import voice_auth_headers
             async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(f"{voice_url}/stt", json={"audio": req.audio})
+                r = await client.post(f"{voice_url}/stt", json={"audio": req.audio}, headers=voice_auth_headers())
                 return r.json()
         except Exception:
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)

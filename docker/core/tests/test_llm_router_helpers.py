@@ -130,8 +130,5 @@ class TestModelAliases:
         assert llm_router.LOCAL_CASUAL
         assert isinstance(llm_router.LOCAL_CASUAL, str)
 
-    def test_cloud_complex_is_sonnet(self):
-        assert "sonnet" in llm_router.CLOUD_COMPLEX.lower()
-
     def test_cloud_fallback_is_haiku(self):
         assert "haiku" in llm_router.CLOUD_FALLBACK.lower()

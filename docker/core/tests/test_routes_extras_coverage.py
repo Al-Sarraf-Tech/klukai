@@ -402,10 +402,11 @@ class TestSTTProxy:
             async def __aexit__(self, *a):
                 return None
 
-            async def post(self, url, json):
+            async def post(self, url, json, headers=None):
                 # Confirms the audio payload is forwarded to the voice /stt path.
                 assert url.endswith("/stt")
                 assert json == {"audio": "abc"}
+                assert isinstance(headers, dict)  # voice auth header dict (empty when no token)
                 return fake_resp
 
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
