@@ -159,29 +159,29 @@ jobs:
         run: |
           [[ -f /tmp/perf-current.json ]] || { echo "no current snapshot"; exit 0; }
           python3 - <<'PY'
-import json, sys
-from pathlib import Path
+          import json, sys
+          from pathlib import Path
 
-base = json.loads(Path("../../docs/perf-baseline.json").read_text())
-cur  = json.loads(Path("/tmp/perf-current.json").read_text())
-P99_DELTA_THRESHOLD = 1.20  # 20% — per docs/superpowers/specs/2026-05-16-s-plus-uplift.md Q10
+          base = json.loads(Path("../../docs/perf-baseline.json").read_text())
+          cur  = json.loads(Path("/tmp/perf-current.json").read_text())
+          P99_DELTA_THRESHOLD = 1.20  # 20% — per docs/superpowers/specs/2026-05-16-s-plus-uplift.md Q10
 
-regressions = []
-for endpoint, base_stats in base.items():
-    if not isinstance(base_stats, dict):
-        continue
-    base_p99 = base_stats.get("p99_ms")
-    cur_stats = cur.get(endpoint, {})
-    cur_p99 = cur_stats.get("p99_ms") if isinstance(cur_stats, dict) else None
-    if base_p99 is None or cur_p99 is None:
-        continue
-    if cur_p99 > base_p99 * P99_DELTA_THRESHOLD:
-        regressions.append((endpoint, base_p99, cur_p99))
+          regressions = []
+          for endpoint, base_stats in base.items():
+              if not isinstance(base_stats, dict):
+                  continue
+              base_p99 = base_stats.get("p99_ms")
+              cur_stats = cur.get(endpoint, {})
+              cur_p99 = cur_stats.get("p99_ms") if isinstance(cur_stats, dict) else None
+              if base_p99 is None or cur_p99 is None:
+                  continue
+              if cur_p99 > base_p99 * P99_DELTA_THRESHOLD:
+                  regressions.append((endpoint, base_p99, cur_p99))
 
-if regressions:
-    print("PERF REGRESSION:")
-    for ep, bp, cp in regressions:
-        print(f"  {ep}: baseline {bp:.1f}ms  current {cp:.1f}ms  (>{(P99_DELTA_THRESHOLD-1)*100:.0f}% increase)")
-    sys.exit(1)
-print("perf within budget")
-PY
+          if regressions:
+              print("PERF REGRESSION:")
+              for ep, bp, cp in regressions:
+                  print(f"  {ep}: baseline {bp:.1f}ms  current {cp:.1f}ms  (>{(P99_DELTA_THRESHOLD-1)*100:.0f}% increase)")
+              sys.exit(1)
+          print("perf within budget")
+          PY
