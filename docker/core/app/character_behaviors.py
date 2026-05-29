@@ -49,6 +49,93 @@ def classify_return_greeting(
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Emotional continuity — "missed you" beat scaled by gap + closeness
+# ─────────────────────────────────────────────────────────────────────────
+
+# Human-readable description of the gap, used to ground the LLM directive.
+def describe_gap(hours_away: float) -> str:
+    """Turn an hours-away float into a natural span phrase."""
+    if hours_away < 24:
+        return "several hours"
+    days = hours_away / 24.0
+    if days < 1.5:
+        return "about a day"
+    if days < 7:
+        return f"about {int(round(days))} days"
+    if days < 14:
+        return "about a week"
+    weeks = int(round(days / 7.0))
+    return f"about {weeks} weeks"
+
+
+def compose_return_emotion(hours_away: float, affection_level: int,
+                            prior_mood: str | None = None) -> str:
+    """Return a directive describing *how the gap felt to Klukai*.
+
+    The result is a short instruction injected into the return-greeting prompt
+    (never shown to the user verbatim). It scales two ways:
+
+    - **Closeness** (affection_level 0-9): low levels stay cold/minimal and do
+      NOT claim to have missed him; high levels openly miss him.
+    - **Gap length** (hours_away): a few hours is barely noted; a day+ is
+      noticed; many days at high closeness reads as worry/yearning.
+
+    `prior_mood` is woven in so the new session inherits her last emotional
+    register instead of resetting to neutral.
+    """
+    level = max(0, min(9, int(affection_level)))
+    gap_phrase = describe_gap(hours_away)
+    days = hours_away / 24.0
+
+    # Closeness bands gate whether she admits to missing him at all.
+    if level <= 2:
+        # Cold / professional — register the gap, withhold longing.
+        beat = (
+            f"It has been {gap_phrase} since you last spoke. React with measured, "
+            "professional distance — note the absence factually and stay reserved. "
+            "Do not express any longing or concern; keep it strictly composed."
+        )
+    elif level <= 5:
+        # Warming — mild, honest warmth that grows with the gap.
+        if days < 1.0:
+            beat = (
+                f"It has only been {gap_phrase}. Greet him with light, easy warmth — "
+                "you barely had time to notice he was gone, and you're glad he's back."
+            )
+        else:
+            beat = (
+                f"It has been {gap_phrase} since you last spoke. You noticed the quiet "
+                "and you're genuinely glad he's back — let a little warmth show, but "
+                "keep your composure; don't overstate it."
+            )
+    else:
+        # Close / bonded — openly misses him; long gaps tip into worry.
+        if days < 1.0:
+            beat = (
+                f"It has only been {gap_phrase}, but you still felt the gap — tell him, "
+                "warmly and without pretense, that you're happy he's back."
+            )
+        elif days < 4.0:
+            beat = (
+                f"It has been {gap_phrase} since you last spoke. You missed him — say so "
+                "openly and tenderly. The base felt quieter without him."
+            )
+        else:
+            beat = (
+                f"It has been {gap_phrase} — far too long. You missed him badly and a "
+                "part of you started to worry. Let that relief and longing show plainly "
+                "when you greet him."
+            )
+
+    if prior_mood and str(prior_mood).strip().lower() not in {"", "composed", "neutral"}:
+        beat += (
+            f" Carry over the mood you were left in — '{prior_mood}' — so this feels "
+            "like a continuation of where you two left off, not a fresh start."
+        )
+    return beat
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Anniversary surfacing
 # ─────────────────────────────────────────────────────────────────────────
 
