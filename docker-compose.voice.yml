@@ -1,0 +1,46 @@
+# companion-voice — runs on DOMINUS (RTX 3090, CUDA required).
+# Deploy:  dominus:~/git/klukai $ docker compose -f docker-compose.voice.yml up -d --build
+# Reachable at 192.168.50.2:8301 (LAN); companion-core reaches it via VOICE_URL.
+#
+# SELF-HEAL — fixes the recurring :8301 port-loss. XTTS's GPU model load at
+# startup can leave the container "up" but not actually serving on 8301. The
+# /health healthcheck flips it to unhealthy and the restart policy + autoheal
+# label recover it automatically, instead of a manual `rm -f && compose up`.
+# (Mirrors the self-heal that companion-core already uses on amarillo.)
+#
+# NOTE: reconcile the GPU stanza + volume paths with the existing dominus setup
+# before deploying — if dominus already uses `runtime: nvidia` or `gpus: all`,
+# keep that; the deploy.devices form below is the Compose-v2 equivalent.
+services:
+  companion-voice:
+    build: ./docker/voice
+    container_name: companion-voice
+    ports:
+      - "8301:8301"            # LAN-exposed so amarillo reaches 192.168.50.2:8301
+    environment:
+      REFERENCE_WAV: "${REFERENCE_WAV:-/app/reference/klukai_reference.wav}"
+      WHISPER_MODEL: "${WHISPER_MODEL:-base.en}"
+      TTS_ENGINE: "${TTS_ENGINE:-xtts}"
+    volumes:
+      - voice-models:/app/models   # persist XTTS + whisper downloads across restarts
+    # GPU access (RTX 3090). Requires nvidia-container-toolkit on dominus.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      # XTTS load is slow — a generous start_period so it isn't killed mid-load.
+      test: ["CMD-SHELL", "curl -sf http://localhost:8301/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    labels:
+      autoheal: "true"          # picked up by an autoheal sidecar (as on amarillo)
+
+volumes:
+  voice-models:
