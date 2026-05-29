@@ -35,9 +35,6 @@ external void _jsSetAmbientMood(String mood);
 @JS('ambientAudio.toggleMute')
 external JSBoolean _jsToggleAmbientMute();
 
-@JS('ambientAudio.isMuted')
-external JSBoolean _jsIsAmbientMuted();
-
 /// Unregister all service workers so login.html loads from server, not cache.
 void _unregisterServiceWorker() {
   try {
@@ -50,16 +47,93 @@ void _unregisterServiceWorker() {
   } catch (_) {}
 }
 
+/// Canonical per-mood visuals: glow color + heartbeat BPM. Single source
+/// of truth so the two can never drift apart. Looked up by mood name with a
+/// shared [_defaultMoodVisual] fallback.
+class MoodVisual {
+  final Color glow;
+  final int bpm;
+  const MoodVisual(this.glow, this.bpm);
+}
+
+const MoodVisual _defaultMoodVisual = MoodVisual(Color(0xFF4FC3F7), 70);
+
+const Map<String, MoodVisual> _moodVisuals = {
+  // Core — blues and cyans
+  'composed': MoodVisual(Color(0xFF4FC3F7), 65), // calm cyan
+  'focused': MoodVisual(Color(0xFF3B82F6), 78), // sharp blue
+  'prideful': MoodVisual(Color(0xFFE8923E), 80), // proud orange
+  'exasperated': MoodVisual(Color(0xFFF59E0B), 90), // frustrated amber
+  'protective': MoodVisual(Color(0xFF10B981), 105), // guardian green
+  'quietly_pleased': MoodVisual(Color(0xFF6EE7B7), 72), // subtle mint
+  'competitive': MoodVisual(Color(0xFFFF6B35), 100), // fierce orange-red
+  'tender': MoodVisual(Color(0xFFE88CA5), 75), // soft pink
+  'longing': MoodVisual(Color(0xFF818CF8), 80), // wistful indigo
+  'battle_ready': MoodVisual(Color(0xFFEF4444), 130), // combat red
+  // Romantic — pinks, roses, magentas (each unique)
+  'flustered': MoodVisual(Color(0xFFF472B6), 95), // hot pink
+  'affectionate': MoodVisual(Color(0xFFFDA4AF), 78), // warm rose
+  'shy': MoodVisual(Color(0xFFFFB3C6), 88), // soft blush
+  'yearning': MoodVisual(Color(0xFFC084FC), 85), // aching purple
+  'devoted': MoodVisual(Color(0xFFFB7185), 82), // deep rose
+  'passionate': MoodVisual(Color(0xFFE11D48), 115), // burning crimson
+  'jealous': MoodVisual(Color(0xFFB91C1C), 108), // dark jealous red
+  'possessive': MoodVisual(Color(0xFFBE123C), 112), // possessive wine
+  'smitten': MoodVisual(Color(0xFFFF80AB), 92), // lovesick pink
+  'infatuated': MoodVisual(Color(0xFFEC4899), 98), // obsessive magenta
+  // Tactical — teals and steel
+  'vigilant': MoodVisual(Color(0xFF22D3EE), 95), // alert cyan
+  'calculating': MoodVisual(Color(0xFF94A3B8), 88), // cold steel
+  'hunting': MoodVisual(Color(0xFFD97706), 110), // predator amber
+  'adrenaline': MoodVisual(Color(0xFFEAB308), 145), // rush gold
+  // Mission stress — yellows through deep reds
+  'scared': MoodVisual(Color(0xFFFACC15), 140), // fear yellow
+  'terrified': MoodVisual(Color(0xFFEF4444), 165), // terror red
+  'panicked': MoodVisual(Color(0xFFFF2D2D), 180), // panic bright red
+  'desperate': MoodVisual(Color(0xFF991B1B), 175), // desperation dark red
+  'relieved': MoodVisual(Color(0xFF5EEAD4), 62), // relief teal
+  // Relaxed — greens and soft purples
+  'content': MoodVisual(Color(0xFF86EFAC), 60), // peaceful green
+  'playful': MoodVisual(Color(0xFFA78BFA), 76), // mischief purple
+  'drowsy': MoodVisual(Color(0xFF64748B), 55), // sleepy grey
+  'amused': MoodVisual(Color(0xFF34D399), 74), // laughing emerald
+  'bored': MoodVisual(Color(0xFF78716C), 58), // dull stone
+  'excited': MoodVisual(Color(0xFFFB923C), 105), // excited tangerine
+  // Dark — deep blues, purples, blacks
+  'melancholic': MoodVisual(Color(0xFF6366F1), 68), // sad indigo
+  'haunted': MoodVisual(Color(0xFF7C3AED), 78), // ghost violet
+  'conflicted': MoodVisual(Color(0xFFD97706), 85), // torn amber
+  'guilty': MoodVisual(Color(0xFF78350F), 82), // guilt brown
+  'determined': MoodVisual(Color(0xFFF97316), 95), // resolute orange
+  'grieving': MoodVisual(Color(0xFF312E81), 72), // mourning navy
+  'furious': MoodVisual(Color(0xFF7F1D1D), 120), // cold fury maroon
+  // Additional — each distinct
+  'nostalgic': MoodVisual(Color(0xFF8B5CF6), 70), // memory violet
+  'curious': MoodVisual(Color(0xFF06B6D4), 72), // inquisitive cyan
+  'irritated': MoodVisual(Color(0xFFEA580C), 92), // annoyed burnt orange
+  'defiant': MoodVisual(Color(0xFFDC2626), 98), // defiance red
+  'vulnerable': MoodVisual(Color(0xFFDDD6FE), 88), // exposed lavender
+  'grateful': MoodVisual(Color(0xFF2DD4BF), 73), // thankful turquoise
+  'worried': MoodVisual(Color(0xFFFCD34D), 88), // anxious yellow
+  'embarrassed': MoodVisual(Color(0xFFFF6B9D), 96), // mortified coral
+};
+
 class ChatScreen extends StatefulWidget {
   final String serverUrl;
-  const ChatScreen({super.key, required this.serverUrl});
+
+  /// WebSocket transport. Defaults to a real [WebSocketService] in production;
+  /// tests may inject a fake so the screen can be pumped without a live backend.
+  final WebSocketService? webSocketService;
+
+  const ChatScreen({super.key, required this.serverUrl, this.webSocketService});
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
-  final _ws = WebSocketService();
+  late final WebSocketService _ws =
+      widget.webSocketService ?? WebSocketService();
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
@@ -76,149 +150,35 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _ambientMuted = true;
 
   bool _showScrollFAB = false;
-  int? _heartbeatSpikeOverride;  // Temporary BPM override from heartbeat_spike
+  int? _heartbeatSpikeOverride; // Temporary BPM override from heartbeat_spike
   Timer? _spikeDecayTimer;
-  Timer? _inputLockTimer;  // Safety timeout to auto-unlock input
-
-  DateTime? _lastTapTime;
+  Timer? _inputLockTimer; // Safety timeout to auto-unlock input
 
   bool get _isDormMode {
     final hour = DateTime.now().hour;
     return hour >= 21 && _state.affectionLevel >= 2;
   }
 
-  Color get _bgColor => _isDormMode ? const Color(0xFF16131E) : GFL2Colors.background;
+  Color get _bgColor =>
+      _isDormMode ? const Color(0xFF16131E) : GFL2Colors.background;
 
-  Color get _moodGlowColor {
-    return switch (_state.mood) {
-      // Core — blues and cyans
-      'composed'        => const Color(0xFF4FC3F7), // calm cyan
-      'focused'         => const Color(0xFF3B82F6), // sharp blue
-      'prideful'        => const Color(0xFFE8923E), // proud orange
-      'exasperated'     => const Color(0xFFF59E0B), // frustrated amber
-      'protective'      => const Color(0xFF10B981), // guardian green
-      'quietly_pleased' => const Color(0xFF6EE7B7), // subtle mint
-      'competitive'     => const Color(0xFFFF6B35), // fierce orange-red
-      'tender'          => const Color(0xFFE88CA5), // soft pink
-      'longing'         => const Color(0xFF818CF8), // wistful indigo
-      'battle_ready'    => const Color(0xFFEF4444), // combat red
-      // Romantic — pinks, roses, magentas (each unique)
-      'flustered'       => const Color(0xFFF472B6), // hot pink
-      'affectionate'    => const Color(0xFFFDA4AF), // warm rose
-      'shy'             => const Color(0xFFFFB3C6), // soft blush
-      'yearning'        => const Color(0xFFC084FC), // aching purple
-      'devoted'         => const Color(0xFFFB7185), // deep rose
-      'passionate'      => const Color(0xFFE11D48), // burning crimson
-      'jealous'         => const Color(0xFFB91C1C), // dark jealous red
-      'possessive'      => const Color(0xFFBE123C), // possessive wine
-      'smitten'         => const Color(0xFFFF80AB), // lovesick pink
-      'infatuated'      => const Color(0xFFEC4899), // obsessive magenta
-      // Tactical — teals and steel
-      'vigilant'        => const Color(0xFF22D3EE), // alert cyan
-      'calculating'     => const Color(0xFF94A3B8), // cold steel
-      'hunting'         => const Color(0xFFD97706), // predator amber
-      'adrenaline'      => const Color(0xFFEAB308), // rush gold
-      // Mission stress — yellows through deep reds
-      'scared'          => const Color(0xFFFACC15), // fear yellow
-      'terrified'       => const Color(0xFFEF4444), // terror red
-      'panicked'        => const Color(0xFFFF2D2D), // panic bright red
-      'desperate'       => const Color(0xFF991B1B), // desperation dark red
-      'relieved'        => const Color(0xFF5EEAD4), // relief teal
-      // Relaxed — greens and soft purples
-      'content'         => const Color(0xFF86EFAC), // peaceful green
-      'playful'         => const Color(0xFFA78BFA), // mischief purple
-      'drowsy'          => const Color(0xFF64748B), // sleepy grey
-      'amused'          => const Color(0xFF34D399), // laughing emerald
-      'bored'           => const Color(0xFF78716C), // dull stone
-      'excited'         => const Color(0xFFFB923C), // excited tangerine
-      // Dark — deep blues, purples, blacks
-      'melancholic'     => const Color(0xFF6366F1), // sad indigo
-      'haunted'         => const Color(0xFF7C3AED), // ghost violet
-      'conflicted'      => const Color(0xFFD97706), // torn amber
-      'guilty'          => const Color(0xFF78350F), // guilt brown
-      'determined'      => const Color(0xFFF97316), // resolute orange
-      'grieving'        => const Color(0xFF312E81), // mourning navy
-      'furious'         => const Color(0xFF7F1D1D), // cold fury maroon
-      // Additional — each distinct
-      'nostalgic'       => const Color(0xFF8B5CF6), // memory violet
-      'curious'         => const Color(0xFF06B6D4), // inquisitive cyan
-      'irritated'       => const Color(0xFFEA580C), // annoyed burnt orange
-      'defiant'         => const Color(0xFFDC2626), // defiance red
-      'vulnerable'      => const Color(0xFFDDD6FE), // exposed lavender
-      'grateful'        => const Color(0xFF2DD4BF), // thankful turquoise
-      'worried'         => const Color(0xFFFCD34D), // anxious yellow
-      'embarrassed'     => const Color(0xFFFF6B9D), // mortified coral
-      _                 => const Color(0xFF4FC3F7), // default cyan
-    };
-  }
+  /// Glow color for the current mood (shared source of truth: [_moodVisuals]).
+  Color get _moodGlowColor =>
+      (_moodVisuals[_state.mood] ?? _defaultMoodVisual).glow;
 
-  /// Heartbeat BPM mapped to mood — reflects Klukai's emotional/physical state.
-  /// A heartbeat_spike event temporarily overrides this with a higher BPM.
+  /// Heartbeat BPM mapped to mood — reflects Klukai's emotional/physical state
+  /// (shared source of truth: [_moodVisuals]). A heartbeat_spike event
+  /// temporarily overrides this with a higher BPM.
   int get _moodBPM {
     if (_heartbeatSpikeOverride != null) return _heartbeatSpikeOverride!;
-    return switch (_state.mood) {
-      // Relaxed (55-70 BPM)
-      'composed'        => 65,
-      'content'         => 60,
-      'drowsy'          => 55,
-      'bored'           => 58,
-      'relieved'        => 62,
-      // Warm (70-85 BPM)
-      'quietly_pleased' => 72,
-      'tender'          => 75,
-      'affectionate'    => 78,
-      'grateful'        => 73,
-      'amused'          => 74,
-      'playful'         => 76,
-      'nostalgic'       => 70,
-      'curious'         => 72,
-      // Emotional (85-105 BPM)
-      'flustered'       => 95,
-      'shy'             => 88,
-      'yearning'        => 85,
-      'devoted'         => 82,
-      'smitten'         => 92,
-      'infatuated'      => 98,
-      'longing'         => 80,
-      'vulnerable'      => 88,
-      'embarrassed'     => 96,
-      'melancholic'     => 68,
-      'haunted'         => 78,
-      'conflicted'      => 85,
-      'guilty'          => 82,
-      'grieving'        => 72,
-      'worried'         => 88,
-      // Intense (105-130 BPM)
-      'passionate'      => 115,
-      'jealous'         => 108,
-      'possessive'      => 112,
-      'prideful'        => 80,
-      'exasperated'     => 90,
-      'protective'      => 105,
-      'competitive'     => 100,
-      'focused'         => 78,
-      'determined'      => 95,
-      'irritated'       => 92,
-      'defiant'         => 98,
-      'furious'         => 120,
-      'excited'         => 105,
-      // Combat (130-180 BPM)
-      'vigilant'        => 95,
-      'calculating'     => 88,
-      'hunting'         => 110,
-      'adrenaline'      => 145,
-      'battle_ready'    => 130,
-      // Mission stress (140-180 BPM)
-      'scared'          => 140,
-      'terrified'       => 165,
-      'panicked'        => 180,
-      'desperate'       => 175,
-      _                 => 70,
-    };
+    return (_moodVisuals[_state.mood] ?? _defaultMoodVisual).bpm;
   }
 
   /// Lock input with a reason string and auto-unlock safety timeout.
-  void _lockInput(String reason, {Duration timeout = const Duration(seconds: 30)}) {
+  void _lockInput(
+    String reason, {
+    Duration timeout = const Duration(seconds: 30),
+  }) {
     _inputLockTimer?.cancel();
     setState(() {
       _state = _state.copyWith(isInputLocked: true, inputLockReason: reason);
@@ -245,16 +205,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _scrollController.addListener(() {
-      final show = _scrollController.hasClients &&
-          _scrollController.position.maxScrollExtent - _scrollController.position.pixels > 300;
+      final show =
+          _scrollController.hasClients &&
+          _scrollController.position.maxScrollExtent -
+                  _scrollController.position.pixels >
+              300;
       if (show != _showScrollFAB) setState(() => _showScrollFAB = show);
     });
     _loadHistory();
     _loadAffection();
     _connectWS();
   }
-
-
 
   @override
   void didChangeMetrics() {
@@ -267,28 +228,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (!_scrollController.hasClients) return true;
     final pos = _scrollController.position;
     return pos.maxScrollExtent - pos.pixels < 150;
-  }
-
-  Future<void> _playTTS(String text) async {
-    try {
-      final response = await http.post(
-        Uri.parse('${widget.serverUrl}/api/tts'),
-        headers: _authHeaders,
-        body: jsonEncode({'text': text, 'language': 'en'}),
-      );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final audioData = data['audio'] as String?;
-        if (audioData != null) {
-          final dataUrl = 'data:audio/wav;base64,$audioData';
-          final audio = web.HTMLAudioElement()..src = dataUrl;
-          audio.play();
-          return;
-        }
-      }
-    } catch (e) {
-      debugPrint('TTS failed: $e');
-    }
   }
 
   Map<String, String> get _authHeaders {
@@ -371,22 +310,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       case 'token':
         final text = msg['text'] as String? ?? '';
         if (!_state.isInputLocked) {
-          _lockInput('RECEIVING TRANSMISSION', timeout: const Duration(seconds: 60));
+          _lockInput(
+            'RECEIVING TRANSMISSION',
+            timeout: const Duration(seconds: 60),
+          );
         }
         setState(() {
           _streamingBuffer += text;
           if (_streamingId == null) {
             _streamingId = 'streaming-${DateTime.now().millisecondsSinceEpoch}';
-            _messages.add(ChatMessage(
-              id: _streamingId!,
-              role: 'assistant',
-              content: _streamingBuffer,
-              isStreaming: true,
-            ));
+            _messages.add(
+              ChatMessage(
+                id: _streamingId!,
+                role: 'assistant',
+                content: _streamingBuffer,
+                isStreaming: true,
+              ),
+            );
           } else {
             final idx = _messages.indexWhere((m) => m.id == _streamingId);
             if (idx >= 0) {
-              _messages[idx] = _messages[idx].copyWith(content: _streamingBuffer);
+              _messages[idx] = _messages[idx].copyWith(
+                content: _streamingBuffer,
+              );
             }
           }
         });
@@ -425,7 +371,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         setState(() {
           _state = _state.copyWith(mood: msg['mood'] as String? ?? 'composed');
         });
-        try { _jsSetAmbientMood(msg['mood'] as String? ?? 'composed'); } catch (_) {}
+        try {
+          _jsSetAmbientMood(msg['mood'] as String? ?? 'composed');
+        } catch (_) {}
 
       case 'thinking':
         setState(() {
@@ -465,52 +413,68 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final levelName = msg['level_name'] as String? ?? '';
         final direction = msg['direction'] as String? ?? 'up';
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Row(children: [
-              Icon(
-                direction == 'up' ? Icons.arrow_upward : Icons.arrow_downward,
-                color: direction == 'up' ? GFL2Colors.success : GFL2Colors.danger,
-                size: 16,
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  Icon(
+                    direction == 'up'
+                        ? Icons.arrow_upward
+                        : Icons.arrow_downward,
+                    color: direction == 'up'
+                        ? GFL2Colors.success
+                        : GFL2Colors.danger,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'TRUST LEVEL: $levelName',
+                    style: const TextStyle(
+                      color: GFL2Colors.textPrimary,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 8),
-              Text('TRUST LEVEL: $levelName',
-                  style: const TextStyle(
-                    color: GFL2Colors.textPrimary,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                  )),
-            ]),
-            backgroundColor: GFL2Colors.surface,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(4),
-              side: BorderSide(
-                color: direction == 'up'
-                    ? GFL2Colors.primary.withValues(alpha: 0.4)
-                    : GFL2Colors.danger.withValues(alpha: 0.4),
+              backgroundColor: GFL2Colors.surface,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(4),
+                side: BorderSide(
+                  color: direction == 'up'
+                      ? GFL2Colors.primary.withValues(alpha: 0.4)
+                      : GFL2Colors.danger.withValues(alpha: 0.4),
+                ),
               ),
+              duration: const Duration(seconds: 4),
             ),
-            duration: const Duration(seconds: 4),
-          ));
+          );
         }
 
       case 'proactive':
         final message = msg['message'] as String? ?? '';
-        _lockInput('INCOMING TRANSMISSION', timeout: const Duration(milliseconds: 1500));
+        _lockInput(
+          'INCOMING TRANSMISSION',
+          timeout: const Duration(milliseconds: 1500),
+        );
         setState(() {
-          _messages.add(ChatMessage(
-            id: 'proactive-${DateTime.now().millisecondsSinceEpoch}',
-            role: 'assistant',
-            content: message,
-          ));
+          _messages.add(
+            ChatMessage(
+              id: 'proactive-${DateTime.now().millisecondsSinceEpoch}',
+              role: 'assistant',
+              content: message,
+            ),
+          );
         });
         _scrollToBottom();
         _playNotificationSound();
         // Auto-unlock after brief pause
         Timer(const Duration(milliseconds: 1500), () {
-          if (mounted && _state.inputLockReason == 'INCOMING TRANSMISSION') _unlockInput();
+          if (mounted && _state.inputLockReason == 'INCOMING TRANSMISSION')
+            _unlockInput();
         });
 
       case 'voice_audio':
@@ -524,18 +488,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         if (imgData != null) {
           _lockInput('IMAGE INCOMING', timeout: const Duration(seconds: 2));
           setState(() {
-            _messages.add(ChatMessage(
-              id: 'image-${DateTime.now().millisecondsSinceEpoch}',
-              role: 'assistant',
-              content: '[IMAGE]',
-              imageData: imgData,
-            ));
+            _messages.add(
+              ChatMessage(
+                id: 'image-${DateTime.now().millisecondsSinceEpoch}',
+                role: 'assistant',
+                content: '[IMAGE]',
+                imageData: imgData,
+              ),
+            );
           });
           // Retry scroll 3 times to catch image decode layout shifts
           _scrollToBottom(retries: 3);
           _playNotificationSound();
           Timer(const Duration(seconds: 2), () {
-            if (mounted && _state.inputLockReason == 'IMAGE INCOMING') _unlockInput();
+            if (mounted && _state.inputLockReason == 'IMAGE INCOMING')
+              _unlockInput();
           });
         }
 
@@ -563,11 +530,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final text = _textController.text.trim();
     if (text.isEmpty) return;
     setState(() {
-      _messages.add(ChatMessage(
-        id: 'user-${DateTime.now().millisecondsSinceEpoch}',
-        role: 'user',
-        content: text,
-      ));
+      _messages.add(
+        ChatMessage(
+          id: 'user-${DateTime.now().millisecondsSinceEpoch}',
+          role: 'user',
+          content: text,
+        ),
+      );
     });
     _ws.sendMessage(text);
     _textController.clear();
@@ -575,30 +544,46 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _scrollToBottom();
   }
 
-  void _handleKeyScroll(KeyEvent event) {
-    if (event is! KeyDownEvent) return;
-    if (!_scrollController.hasClients) return;
+  /// Keyboard scroll-navigation for the message list: PageUp/PageDown jump a
+  /// near-viewport, Home/End jump to the extremes. Returns
+  /// [KeyEventResult.handled] when it consumes a nav key (so the keystroke is
+  /// swallowed) and [KeyEventResult.ignored] otherwise — letting every other
+  /// key (including typing) fall through untouched. Wired to the [Focus] that
+  /// wraps the message list in [_buildMessageList].
+  KeyEventResult _handleKeyScroll(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (!_scrollController.hasClients) return KeyEventResult.ignored;
 
     final pos = _scrollController.position;
     final pageSize = pos.viewportDimension * 0.8;
-    final key = event.logicalKey.keyLabel;
-    // Only handle navigation keys — these don't conflict with text input
-    if (!{'Page Down', 'Page Up', 'Home', 'End'}.contains(key)) return;
+    final key = event.logicalKey;
 
     double? target;
-    if (key == 'Page Down') {
-      target = (pos.pixels + pageSize).clamp(pos.minScrollExtent, pos.maxScrollExtent);
-    } else if (key == 'Page Up') {
-      target = (pos.pixels - pageSize).clamp(pos.minScrollExtent, pos.maxScrollExtent);
-    } else if (key == 'Home') {
+    if (key == LogicalKeyboardKey.pageDown) {
+      target = (pos.pixels + pageSize).clamp(
+        pos.minScrollExtent,
+        pos.maxScrollExtent,
+      );
+    } else if (key == LogicalKeyboardKey.pageUp) {
+      target = (pos.pixels - pageSize).clamp(
+        pos.minScrollExtent,
+        pos.maxScrollExtent,
+      );
+    } else if (key == LogicalKeyboardKey.home) {
       target = pos.minScrollExtent;
-    } else if (key == 'End') {
+    } else if (key == LogicalKeyboardKey.end) {
       target = pos.maxScrollExtent;
+    } else {
+      // Not a navigation key — let it propagate (e.g. so typing still works).
+      return KeyEventResult.ignored;
     }
 
-    if (target != null) {
-      _scrollController.animateTo(target, duration: const Duration(milliseconds: 400), curve: Curves.easeOutCubic);
-    }
+    _scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeOutCubic,
+    );
+    return KeyEventResult.handled;
   }
 
   Future<void> _transcribeAndSend(String audioBase64) async {
@@ -614,11 +599,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final text = (data['text'] as String? ?? '').trim();
         if (text.isNotEmpty) {
           setState(() {
-            _messages.add(ChatMessage(
-              id: 'user-${DateTime.now().millisecondsSinceEpoch}',
-              role: 'user',
-              content: text,
-            ));
+            _messages.add(
+              ChatMessage(
+                id: 'user-${DateTime.now().millisecondsSinceEpoch}',
+                role: 'user',
+                content: text,
+              ),
+            );
           });
           _ws.sendMessage(text);
           _scrollToBottom();
@@ -644,21 +631,36 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       ];
     } else if (level <= 4) {
       return [
-        if (isMorning) 'Good morning' else if (isEvening) 'Good evening' else "How's your day?",
+        if (isMorning)
+          'Good morning'
+        else if (isEvening)
+          'Good evening'
+        else
+          "How's your day?",
         'Tell me about Belka',
         "How's the squad?",
         "Let's go for a ride",
       ];
     } else if (level <= 6) {
       return [
-        if (isMorning) 'Good morning, Klukai' else if (isEvening) "Can't sleep?" else 'I was thinking about you',
+        if (isMorning)
+          'Good morning, Klukai'
+        else if (isEvening)
+          "Can't sleep?"
+        else
+          'I was thinking about you',
         'Tell me about Mechty',
         "What's on your mind?",
         "I missed you",
       ];
     } else {
       return [
-        if (isMorning) 'Good morning, beautiful' else if (isEvening) 'Come sit with me' else 'I love you',
+        if (isMorning)
+          'Good morning, beautiful'
+        else if (isEvening)
+          'Come sit with me'
+        else
+          'I love you',
         "What are you thinking about?",
         "Tell me a memory",
         "I'm here",
@@ -679,10 +681,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           borderRadius: BorderRadius.circular(4),
           border: Border.all(color: GFL2Colors.primary.withValues(alpha: 0.3)),
         ),
-        child: Text(text, style: TextStyle(
-          color: GFL2Colors.primary.withValues(alpha: 0.7),
-          fontSize: 12, fontFamily: 'monospace',
-        )),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: GFL2Colors.primary.withValues(alpha: 0.7),
+            fontSize: 12,
+            fontFamily: 'monospace',
+          ),
+        ),
       ),
     );
   }
@@ -690,19 +696,26 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void _playNotificationSound() {
     if (_soundMuted) return;
     try {
-      final audio = web.HTMLAudioElement()..src = 'audio/comm_beep.wav'..volume = 0.3;
+      final audio = web.HTMLAudioElement()
+        ..src = 'audio/comm_beep.wav'
+        ..volume = 0.3;
       audio.play();
     } catch (_) {}
   }
 
   void _openProfile() {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => ProfileScreen(
-      serverUrl: widget.serverUrl,
-      affectionScore: _state.affectionScore,
-      affectionLevel: _state.affectionLevel,
-      affectionLevelName: _state.affectionLevelName,
-      totalInteractions: 0,
-    )));
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProfileScreen(
+          serverUrl: widget.serverUrl,
+          affectionScore: _state.affectionScore,
+          affectionLevel: _state.affectionLevel,
+          affectionLevelName: _state.affectionLevelName,
+          totalInteractions: 0,
+        ),
+      ),
+    );
   }
 
   void _logout() {
@@ -716,13 +729,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _openArchive() {
-    Navigator.push(context, MaterialPageRoute(
-      builder: (_) => MemoryArchiveScreen(
-        serverUrl: widget.serverUrl,
-        affectionLevel: _state.affectionLevel,
-        affectionLevelName: _state.affectionLevelName,
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MemoryArchiveScreen(
+          serverUrl: widget.serverUrl,
+          affectionLevel: _state.affectionLevel,
+          affectionLevelName: _state.affectionLevelName,
+        ),
       ),
-    ));
+    );
   }
 
   void _openSubscription() {
@@ -730,12 +746,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     try {
       token = web.window.localStorage.getItem('klukai_token');
     } catch (_) {}
-    Navigator.push(context, MaterialPageRoute(
-      builder: (_) => SubscriptionScreen(
-        serverUrl: widget.serverUrl,
-        authToken: token,
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            SubscriptionScreen(serverUrl: widget.serverUrl, authToken: token),
       ),
-    ));
+    );
   }
 
   void _playAudio(String base64Audio) {
@@ -802,9 +819,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _bgColor,
-      body: SafeArea(
-        child: _buildMobileLayout(),
-      ),
+      body: SafeArea(child: _buildMobileLayout()),
     );
   }
 
@@ -828,7 +843,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             child: FloatingActionButton.small(
               onPressed: () => _scrollToBottom(),
               backgroundColor: GFL2Colors.surface,
-              child: const Icon(Icons.keyboard_arrow_down, color: GFL2Colors.primary),
+              child: const Icon(
+                Icons.keyboard_arrow_down,
+                color: GFL2Colors.primary,
+              ),
             ),
           ),
       ],
@@ -853,42 +871,44 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               GestureDetector(
                 onTap: _openProfile,
                 child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 600),
-                      curve: Curves.easeInOut,
-                      width: 52,
-                      height: 52,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                          color: _moodGlowColor.withValues(alpha: 0.6),
-                          width: 1.5,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: _moodGlowColor.withValues(alpha: 0.2),
-                            blurRadius: 12,
-                            spreadRadius: 2,
-                          ),
-                        ],
+                  duration: const Duration(milliseconds: 600),
+                  curve: Curves.easeInOut,
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: _moodGlowColor.withValues(alpha: 0.6),
+                      width: 1.5,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _moodGlowColor.withValues(alpha: 0.2),
+                        blurRadius: 12,
+                        spreadRadius: 2,
                       ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(3),
-                        child: Image.asset(
-                          'assets/klukai_portrait.png',
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, e, s) => Container(
-                            color: GFL2Colors.panel,
-                            child: const Center(
-                              child: Text('K',
-                                  style: TextStyle(
-                                    color: GFL2Colors.primary,
-                                    fontSize: 22,
-                                    fontWeight: FontWeight.w700,
-                                  )),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: Image.asset(
+                      'assets/klukai_portrait.png',
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, e, s) => Container(
+                        color: GFL2Colors.panel,
+                        child: const Center(
+                          child: Text(
+                            'K',
+                            style: TextStyle(
+                              color: GFL2Colors.primary,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ),
                       ),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -938,10 +958,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                 : GFL2Colors.danger,
                             boxShadow: [
                               BoxShadow(
-                                color: (_state.isConnected
-                                        ? GFL2Colors.success
-                                        : GFL2Colors.danger)
-                                    .withValues(alpha: 0.6),
+                                color:
+                                    (_state.isConnected
+                                            ? GFL2Colors.success
+                                            : GFL2Colors.danger)
+                                        .withValues(alpha: 0.6),
                                 blurRadius: 6,
                                 spreadRadius: 1,
                               ),
@@ -980,23 +1001,40 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                             size: 16,
                           ),
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                          tooltip: _ambientMuted ? 'Enable ambient audio' : 'Mute ambient audio',
+                          constraints: const BoxConstraints(
+                            minWidth: 28,
+                            minHeight: 28,
+                          ),
+                          tooltip: _ambientMuted
+                              ? 'Enable ambient audio'
+                              : 'Mute ambient audio',
                         ),
                         IconButton(
                           onPressed: _openArchive,
-                          icon: Icon(Icons.photo_library_outlined,
-                              color: GFL2Colors.primary.withValues(alpha: 0.5), size: 16),
+                          icon: Icon(
+                            Icons.photo_library_outlined,
+                            color: GFL2Colors.primary.withValues(alpha: 0.5),
+                            size: 16,
+                          ),
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                          constraints: const BoxConstraints(
+                            minWidth: 28,
+                            minHeight: 28,
+                          ),
                           tooltip: 'Memory Archive',
                         ),
                         IconButton(
                           onPressed: _openSubscription,
-                          icon: Icon(Icons.workspace_premium_outlined,
-                              color: GFL2Colors.primary.withValues(alpha: 0.5), size: 16),
+                          icon: Icon(
+                            Icons.workspace_premium_outlined,
+                            color: GFL2Colors.primary.withValues(alpha: 0.5),
+                            size: 16,
+                          ),
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                          constraints: const BoxConstraints(
+                            minWidth: 28,
+                            minHeight: 28,
+                          ),
                           tooltip: 'Subscription',
                         ),
                         GestureDetector(
@@ -1021,7 +1059,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                         HeartbeatSensor(
                           bpm: _moodBPM,
                           color: _heartbeatSpikeOverride != null
-                              ? const Color(0xFFFF1744)  // Red flash during spike
+                              ? const Color(
+                                  0xFFFF1744,
+                                ) // Red flash during spike
                               : _moodGlowColor,
                         ),
                       ],
@@ -1075,11 +1115,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   errorBuilder: (_, e, s) => Container(
                     color: GFL2Colors.panel,
                     child: const Center(
-                      child: Text('K',
-                          style: TextStyle(
-                              color: GFL2Colors.primary,
-                              fontSize: 36,
-                              fontWeight: FontWeight.w700)),
+                      child: Text(
+                        'K',
+                        style: TextStyle(
+                          color: GFL2Colors.primary,
+                          fontSize: 36,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -1118,7 +1161,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             const SizedBox(height: 20),
             // Conversation starters — adapt to affection level
             Wrap(
-              spacing: 8, runSpacing: 8,
+              spacing: 8,
+              runSpacing: 8,
               alignment: WrapAlignment.center,
               children: _getStarters().map(_starterChip).toList(),
             ),
@@ -1127,34 +1171,55 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       );
     }
 
-    return ListView.builder(
-      controller: _scrollController,
-      physics: const ClampingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: _messages.length,
-      itemBuilder: (context, index) {
-        final msg = _messages[index];
-        final msgDate = DateTime(msg.createdAt.year, msg.createdAt.month, msg.createdAt.day);
-        bool showDivider = false;
-        if (index == 0) {
-          showDivider = true;
-        } else {
-          final prev = _messages[index - 1];
-          final prevDate = DateTime(prev.createdAt.year, prev.createdAt.month, prev.createdAt.day);
-          if (msgDate != prevDate) showDivider = true;
-        }
-        // Use canvas bubble for finalized Klukai messages (markdown rendering)
-        final bubble = (msg.role == 'assistant' && !msg.isStreaming && PretextService.isReady)
-            ? CanvasMessageBubble(message: msg)
-            : MessageBubble(message: msg);
-        if (showDivider) {
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [DateDivider(date: msg.createdAt), bubble],
+    return Focus(
+      // Keyboard scroll-nav (PageUp/PageDown/Home/End) for the message list.
+      // Non-nav keys are returned as ignored so typing/shortcuts still work.
+      onKeyEvent: _handleKeyScroll,
+      child: ListView.builder(
+        controller: _scrollController,
+        physics: const ClampingScrollPhysics(
+          parent: AlwaysScrollableScrollPhysics(),
+        ),
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        itemCount: _messages.length,
+        itemBuilder: (context, index) {
+          final msg = _messages[index];
+          final msgDate = DateTime(
+            msg.createdAt.year,
+            msg.createdAt.month,
+            msg.createdAt.day,
           );
-        }
-        return bubble;
-      },
+          bool showDivider = false;
+          if (index == 0) {
+            showDivider = true;
+          } else {
+            final prev = _messages[index - 1];
+            final prevDate = DateTime(
+              prev.createdAt.year,
+              prev.createdAt.month,
+              prev.createdAt.day,
+            );
+            if (msgDate != prevDate) showDivider = true;
+          }
+          // Use canvas bubble for finalized Klukai messages (markdown rendering)
+          final bubble =
+              (msg.role == 'assistant' &&
+                  !msg.isStreaming &&
+                  PretextService.isReady)
+              ? CanvasMessageBubble(message: msg)
+              : MessageBubble(message: msg);
+          if (showDivider) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DateDivider(date: msg.createdAt),
+                bubble,
+              ],
+            );
+          }
+          return bubble;
+        },
+      ),
     );
   }
 
@@ -1218,7 +1283,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             enabled: !_inputDisabled,
             onTapDown: () async {
               setState(() => _isRecording = true);
-              try { await _jsStartRecording().toDart; } catch (_) {}
+              try {
+                await _jsStartRecording().toDart;
+              } catch (_) {}
             },
             onTapUp: () async {
               setState(() => _isRecording = false);
@@ -1227,7 +1294,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 if (b64 != null) {
                   _transcribeAndSend(b64.toDart);
                 }
-              } catch (e) { debugPrint('Recording failed: $e'); }
+              } catch (e) {
+                debugPrint('Recording failed: $e');
+              }
             },
           ),
           const SizedBox(width: 8),
@@ -1246,36 +1315,42 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               minLines: 1,
               textInputAction: TextInputAction.send,
               onSubmitted: _inputDisabled ? null : (_) => _sendMessage(),
-                decoration: InputDecoration(
-                  hintText: _state.isInputLocked
-                      ? '// ${_state.inputLockReason ?? "STANDBY"}...'
-                      : '// ENTER COMMAND...',
-                  hintStyle: TextStyle(
-                    color: _state.isInputLocked
-                        ? _moodGlowColor.withValues(alpha: 0.4)
-                        : GFL2Colors.textDim.withValues(alpha: 0.35),
-                    fontFamily: 'monospace',
-                    fontSize: 13,
+              decoration: InputDecoration(
+                hintText: _state.isInputLocked
+                    ? '// ${_state.inputLockReason ?? "STANDBY"}...'
+                    : '// ENTER COMMAND...',
+                hintStyle: TextStyle(
+                  color: _state.isInputLocked
+                      ? _moodGlowColor.withValues(alpha: 0.4)
+                      : GFL2Colors.textDim.withValues(alpha: 0.35),
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                ),
+                filled: true,
+                fillColor: GFL2Colors.background,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(4),
+                  borderSide: BorderSide(
+                    color: GFL2Colors.border.withValues(alpha: 0.3),
                   ),
-                  filled: true,
-                  fillColor: GFL2Colors.background,
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(4),
-                    borderSide: BorderSide(color: GFL2Colors.border.withValues(alpha: 0.3)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(4),
+                  borderSide: BorderSide(
+                    color: GFL2Colors.border.withValues(alpha: 0.3),
                   ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(4),
-                    borderSide: BorderSide(color: GFL2Colors.border.withValues(alpha: 0.3)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(4),
-                    borderSide: const BorderSide(color: GFL2Colors.primary),
-                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(4),
+                  borderSide: const BorderSide(color: GFL2Colors.primary),
                 ),
               ),
             ),
+          ),
           const SizedBox(width: 8),
           IconButton(
             onPressed: _inputDisabled ? null : _sendMessage,
