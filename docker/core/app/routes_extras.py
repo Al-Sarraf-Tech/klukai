@@ -224,7 +224,12 @@ def register_extras(app: FastAPI) -> None:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         data = await memory_archive.get_image_bytes(memory_id, thumbnail=False, user_id=user_id)
         if data:
-            return Response(content=data, media_type="image/png")
+            return Response(
+                content=data, media_type="image/png",
+                # Images are immutable (content-hash filenames) — let the browser
+                # cache them so an album view fetches each once, not on every scroll.
+                headers={"Cache-Control": "private, max-age=604800, immutable"},
+            )
         return JSONResponse({"error": "Not found"}, status_code=404)
 
     @app.get("/api/memories/{memory_id}/thumbnail")
@@ -235,7 +240,12 @@ def register_extras(app: FastAPI) -> None:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         data = await memory_archive.get_image_bytes(memory_id, thumbnail=True, user_id=user_id)
         if data:
-            return Response(content=data, media_type="image/png")
+            return Response(
+                content=data, media_type="image/png",
+                # Images are immutable (content-hash filenames) — let the browser
+                # cache them so an album view fetches each once, not on every scroll.
+                headers={"Cache-Control": "private, max-age=604800, immutable"},
+            )
         return JSONResponse({"error": "Not found"}, status_code=404)
 
     @app.post("/api/memories/{memory_id}/keep")

@@ -9,6 +9,7 @@ still works (re-exports below).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import random
 from pathlib import Path
@@ -49,7 +50,10 @@ async def get_image_bytes(
                 return None
             path = IMAGES_DIR / row[0]
             if path.exists():
-                return path.read_bytes()
+                # Offload the file read to a thread — a blocking read_bytes() in
+                # this async path serializes concurrent image loads on the event
+                # loop (a 540-image album would stall and starve chat/WS).
+                return await asyncio.to_thread(path.read_bytes)
     except Exception as e:
         logger.error("Failed to read image %s: %s", memory_id, e)
     return None
