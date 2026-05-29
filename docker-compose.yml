@@ -29,6 +29,11 @@ services:
       PERSONALITY_PATH: "/config/personality.yaml"
       VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY:-}"
       VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY:-}"
+      # Signing secrets for HMAC URL signing + audit-chain. If unset, the app
+      # self-generates a strong ephemeral one (never the old guessable default).
+      # Set in .env for cross-restart stability (audit-chain continuity).
+      SIGNED_URL_SECRET: "${SIGNED_URL_SECRET:-}"
+      AUDIT_CHAIN_SECRET: "${AUDIT_CHAIN_SECRET:-}"
       SEED_PASSWORD_JALSARRAF: "${SEED_PASSWORD_JALSARRAF:-}"
       SEED_PASSWORD_RICKY: "${SEED_PASSWORD_RICKY:-}"
       SEED_PASSWORD_MIGUEL: "${SEED_PASSWORD_MIGUEL:-}"

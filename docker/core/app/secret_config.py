@@ -1,28 +1,35 @@
-"""Centralised secret resolution — fail-closed in production.
+"""Centralised secret resolution — never a predictable fallback.
 
-A missing signing secret must NEVER silently fall back to a predictable
-literal. The old ``"dev-secret"`` / ``"dev-audit-chain-secret"`` fallbacks meant
-that a deployment which forgot to set the env var would happily sign URLs and
-compute audit-chain hashes with a value anyone could read in the source —
-making signed URLs forgeable and defeating the audit chain's tamper-evidence.
+A missing signing secret must NEVER fall back to a value baked into the source.
+The old ``"dev-secret"`` / ``"dev-audit-chain-secret"`` fallbacks meant a
+deployment that forgot to set the env var would sign URLs and compute
+audit-chain hashes with a value anyone could read in the repo — making signed
+URLs forgeable and defeating the audit chain's tamper-evidence.
 
 Resolution rules:
   * Return the first env var (in priority order) that is actually set.
   * If none are set:
-      - in an explicitly non-production context (running under pytest, or
+      - in an explicitly non-production context (pytest, or
         ``KLUKAI_ALLOW_DEV_SECRETS=1``), return a deterministic placeholder so
-        the test suite / local dev can run, and log a loud warning;
-      - otherwise raise ``RuntimeError`` — a production process with no signing
-        secret should fail loudly, not sign with a guessable key.
+        the suite / local dev can sign+verify;
+      - otherwise generate a STRONG random secret once per process. It is never
+        the guessable literal and never crashes the service; the only tradeoff
+        is that signed URLs / audit-chain continuity reset on restart, so set a
+        real env secret for cross-restart or multi-instance stability.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import secrets
 import sys
 
 logger = logging.getLogger(__name__)
+
+# Per-process cache of generated secrets (keyed by purpose) so sign/verify
+# round-trips within one process when no env secret is configured.
+_GENERATED: dict[str, str] = {}
 
 
 def dev_secrets_allowed() -> bool:
@@ -37,10 +44,12 @@ def dev_secrets_allowed() -> bool:
 
 
 def resolve_secret(*env_names: str, purpose: str) -> str:
-    """Return the first set env var among *env_names*.
+    """Return the first set env var among *env_names*, else a safe fallback.
 
-    Raises ``RuntimeError`` if none are set and dev secrets are not allowed.
-    Reads the environment on every call (no caching) so tests can monkeypatch.
+    Reads the environment on every call (no caching of env values) so tests can
+    monkeypatch. When nothing is configured it never returns a predictable
+    literal: a deterministic placeholder under pytest/dev, otherwise a strong
+    random secret generated once per process.
     """
     for name in env_names:
         value = os.environ.get(name)
@@ -49,15 +58,24 @@ def resolve_secret(*env_names: str, purpose: str) -> str:
 
     if dev_secrets_allowed():
         logger.warning(
-            "No secret configured for %s (tried: %s). Using an INSECURE dev "
+            "No secret configured for %s (tried: %s). Using a deterministic dev "
             "placeholder — set one of these env vars before production use.",
             purpose,
             ", ".join(env_names),
         )
         return f"dev-insecure-{purpose}"
 
-    raise RuntimeError(
-        f"No secret configured for {purpose}. Set one of: {', '.join(env_names)}. "
-        "Refusing to fall back to a predictable value. "
-        "(Set KLUKAI_ALLOW_DEV_SECRETS=1 only for local/dev/test.)"
-    )
+    # Production with nothing configured: generate a strong random secret once
+    # per process. Never the guessable literal, never a crash. Stable for this
+    # process so sign/verify round-trips; resets on restart (set an env var for
+    # cross-restart / multi-instance stability).
+    if purpose not in _GENERATED:
+        _GENERATED[purpose] = secrets.token_urlsafe(48)
+        logger.warning(
+            "No secret configured for %s (tried: %s). Generated a strong "
+            "ephemeral per-process secret; signed-URL / audit-chain continuity "
+            "resets on restart. Set one of these env vars for stability.",
+            purpose,
+            ", ".join(env_names),
+        )
+    return _GENERATED[purpose]
