@@ -16,8 +16,11 @@
 #
 # Phase 4 stretch: switch runtime stage to `gcr.io/distroless/python3-debian12`.
 
-# python:3.13-slim @ 2026-05-16 (pin updated by Renovate in Phase 3)
-ARG PYTHON_IMAGE=python:3.13-slim@sha256:dc1546eefcbe8caaa1f004f16ab76b204b5e1dbd58ff81b899f21cd40541232f
+# python:3.14-slim @ 2026-05-29 — aligned to the Python that requirements.txt is
+# pip-compiled for (and that the full test suite runs on). Previously 3.13, which
+# mismatched the 3.14 hash file: on 3.13 libcst pulls a transitive pyyaml-ft that
+# --require-hashes then rejects. SHA-pinned (manifest-list digest) for reproducibility.
+ARG PYTHON_IMAGE=python:3.14-slim@sha256:c845af9399020c7e562969a13689e929074a10fd057acd1b1fad06a2fb068e97
 
 # ───────────────────────────────────────────────────────────────────
 # Stage 1: builder
