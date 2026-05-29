@@ -20,6 +20,10 @@ class WSManager:
         # warmup timers). Cancelled on full-user disconnect so an old session
         # can't write to a stale conn_id or send to a closed WS.
         self._user_tasks: dict[str, set[asyncio.Task]] = {}
+        # Per-user inbound buffer: when several devices send simultaneously,
+        # asyncio.wait can report >1 completed receive in one pass. We return
+        # the first and stash the rest here so a concurrent frame is never lost.
+        self._recv_buffer: dict[str, list[dict]] = {}
 
     def track_task(self, user_id: str, task: asyncio.Task) -> None:
         """Register a per-user background task. It will be cancelled when the
@@ -58,6 +62,9 @@ class WSManager:
             conns.discard(ws)
         if not conns:
             self._connections.pop(user_id, None)
+            # Last device gone → drop any buffered inbound frames so they can't
+            # leak into a future reconnected session.
+            self._recv_buffer.pop(user_id, None)
             # Last device gone → cancel orphan background tasks for this user
             tasks = self._user_tasks.pop(user_id, set())
             if tasks:
@@ -133,13 +140,31 @@ class WSManager:
         })
 
     async def receive(self, user_id: str = "default") -> dict | None:
-        """Receive from ANY connected device for this user using asyncio.wait."""
+        """Receive from ANY connected device for this user.
+
+        Devices race via ``asyncio.wait(FIRST_COMPLETED)``. When more than one
+        device sends at the same time, ``wait`` can report several completed
+        receives in a single pass — we return the first valid message and buffer
+        the rest (drained on the next call) so a concurrent frame is never
+        silently dropped. Still-pending receives (no frame has arrived yet) are
+        cancelled, which is safe and avoids leaking tasks across calls.
+        """
         import asyncio
+
+        # Serve anything buffered from a previous multi-device pass first.
+        buffered = self._recv_buffer.get(user_id)
+        if buffered:
+            msg = buffered.pop(0)
+            if not buffered:
+                self._recv_buffer.pop(user_id, None)
+            return msg
+
         conns = self._connections.get(user_id)
         if not conns:
             return None
 
-        # Create receive tasks for all connected devices — first one to respond wins
+        # Create receive tasks for all connected devices — first one(s) to
+        # respond win; the rest are cancelled (no frame yet, so nothing lost).
         tasks = {}
         for ws in list(conns):
             task = asyncio.create_task(ws.receive_text())
@@ -148,21 +173,29 @@ class WSManager:
         try:
             done, pending = await asyncio.wait(tasks.keys(), return_when=asyncio.FIRST_COMPLETED)
 
-            # Cancel pending tasks
+            # Cancel still-pending receives (no data arrived on them).
             for task in pending:
                 task.cancel()
 
-            # Process the first completed result
+            # Collect EVERY completed receive — not just the first — so a
+            # simultaneous frame from a second device isn't discarded.
+            results: list[dict] = []
             for task in done:
                 try:
-                    text = task.result()
-                    return json.loads(text)
+                    results.append(json.loads(task.result()))
                 except json.JSONDecodeError:
-                    return None
+                    continue  # malformed frame — skip it, keep the connection
                 except Exception:
-                    # This connection died — remove it
-                    ws = tasks[task]
-                    conns.discard(ws)
+                    conns.discard(tasks[task])  # this connection died
+
+            if not conns:
+                self._connections.pop(user_id, None)
+
+            if not results:
+                return None
+            if len(results) > 1:
+                self._recv_buffer.setdefault(user_id, []).extend(results[1:])
+            return results[0]
 
         except Exception:
             pass

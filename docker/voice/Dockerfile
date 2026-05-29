@@ -36,6 +36,17 @@ ENV TORCH_FORCE_WEIGHTS_ONLY_LOAD=0
 COPY app/ ./app/
 COPY reference/ ./reference/
 
+# Run as a non-root user. Pre-create the dirs it writes to: /app/models
+# (whisper download target) and the HOME caches XTTS/HF/torch use.
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin voice \
+    && mkdir -p /app/models /home/voice/.cache /home/voice/.local/share/tts \
+    && chown -R voice:voice /app /home/voice
+USER voice
+ENV HOME=/home/voice
+
 EXPOSE 8301
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8301", "--log-level", "info"]
+# Bind host is env-configurable (default 0.0.0.0). Set VOICE_BIND_HOST to a
+# specific interface (e.g. the Tailscale IP) to narrow exposure. Shell form so
+# the env var expands. Also set VOICE_API_TOKEN to require bearer auth.
+CMD ["sh", "-c", "uvicorn app.main:app --host ${VOICE_BIND_HOST:-0.0.0.0} --port 8301 --log-level info"]

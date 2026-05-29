@@ -10,7 +10,9 @@ import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File
+import hmac
+
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -24,6 +26,20 @@ REFERENCE_WAV = os.environ.get("REFERENCE_WAV", "/app/reference/klukai_reference
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base.en")
 MODEL_DIR = Path("/app/models")
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "xtts")
+
+# Opt-in bearer auth: enforced ONLY when VOICE_API_TOKEN is set, so existing
+# deployments keep working until a token is provisioned. Once set, the TTS/STT
+# endpoints require `Authorization: Bearer <token>` (constant-time compared).
+VOICE_API_TOKEN = os.environ.get("VOICE_API_TOKEN", "")
+
+
+def require_token(authorization: str | None = Header(default=None)) -> None:
+    if not VOICE_API_TOKEN:
+        return  # auth disabled until a token is configured (non-breaking)
+    expected = f"Bearer {VOICE_API_TOKEN}"
+    if not authorization or not hmac.compare_digest(authorization, expected):
+        raise HTTPException(status_code=401, detail="invalid or missing voice API token")
+
 
 _tts_model = None
 _whisper_model = None
@@ -43,13 +59,19 @@ def _load_xtts():
         def _patched_load(*a, **kw):
             kw["weights_only"] = False
             return _orig_load(*a, **kw)
+        # Scope the unsafe-pickle override to ONLY the trusted XTTS checkpoint
+        # load, then restore torch's safe default so weights_only=False can't
+        # silently apply to any later (potentially untrusted) torch.load call.
         torch.load = _patched_load
-        from TTS.api import TTS
-        logger.info("Loading XTTS v2 model...")
-        _tts_model = TTS(
-            model_name="tts_models/multilingual/multi-dataset/xtts_v2",
-            gpu=True,
-        )
+        try:
+            from TTS.api import TTS
+            logger.info("Loading XTTS v2 model...")
+            _tts_model = TTS(
+                model_name="tts_models/multilingual/multi-dataset/xtts_v2",
+                gpu=True,
+            )
+        finally:
+            torch.load = _orig_load
         _tts_ready = True
         logger.info("XTTS v2 loaded (GPU)")
         return _tts_model
@@ -105,7 +127,7 @@ class TTSRequest(BaseModel):
     language: str = "en"
 
 
-@app.post("/tts")
+@app.post("/tts", dependencies=[Depends(require_token)])
 async def text_to_speech(req: TTSRequest):
     """Convert text to speech using XTTS v2 voice cloning."""
     model = _load_xtts()
@@ -145,7 +167,7 @@ class STTRequest(BaseModel):
     audio: str
 
 
-@app.post("/stt")
+@app.post("/stt", dependencies=[Depends(require_token)])
 async def speech_to_text(req: STTRequest):
     """Convert speech to text using faster-whisper."""
     model = _load_whisper()
@@ -168,7 +190,7 @@ async def speech_to_text(req: STTRequest):
         return {"text": "", "error": str(e)}
 
 
-@app.post("/stt/upload")
+@app.post("/stt/upload", dependencies=[Depends(require_token)])
 async def stt_upload(audio: UploadFile = File(...)):
     """STT from file upload."""
     model = _load_whisper()

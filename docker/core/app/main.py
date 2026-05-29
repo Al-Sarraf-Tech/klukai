@@ -210,9 +210,18 @@ app = FastAPI(title="Companion Core", version="0.1.0", lifespan=lifespan)
 
 # ── Security middleware ─────────────────────────────────────────────────────
 
+# Allowed CORS origins are env-driven so dev origins (e.g. http://localhost:8300)
+# are never shipped to production. Default is the production web origin only;
+# set KLUKAI_CORS_ORIGINS (comma-separated) to add others for local dev.
+_CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("KLUKAI_CORS_ORIGINS", "https://klukai.appnest.cc").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://klukai.appnest.cc", "http://localhost:8300"],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],

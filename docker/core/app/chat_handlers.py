@@ -351,10 +351,13 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Commander save/discard overrides — operate on the most recent memory
     content_lower = content.lower()
     user_last_mem = context.get_last_memory_id(user_id)
+    # Track all post-response background tasks so a full user disconnect cancels
+    # them — otherwise a stale task (extraction/compaction) can wake after the
+    # user reconnects and clobber the fresh session's write.
     if any(kw in content_lower for kw in SAVE_KEYWORDS) and user_last_mem:
-        asyncio.create_task(do_memory_keep(user_last_mem, kept=True))
+        ws.track_task(user_id, asyncio.create_task(do_memory_keep(user_last_mem, kept=True)))
     elif any(kw in content_lower for kw in DISCARD_KEYWORDS) and user_last_mem:
-        asyncio.create_task(do_memory_keep(user_last_mem, kept=False))
+        ws.track_task(user_id, asyncio.create_task(do_memory_keep(user_last_mem, kept=False)))
 
     # Track whether image gen was triggered (for extraction curation pass)
     image_triggered = False
@@ -399,10 +402,10 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             except Exception as e:
                 import traceback
                 logger.error("EXTRACTION CRASH: %s\n%s", e, traceback.format_exc())
-        asyncio.create_task(_safe_extraction())
+        ws.track_task(user_id, asyncio.create_task(_safe_extraction()))
     else:
         logger.info("Trivial message, skipping extraction: %s", content[:40])
 
     # Background: compact session if turns exceed threshold
     if len(session.turns) >= COMPACT_THRESHOLD:
-        asyncio.create_task(background_compaction(session, user_id))
+        ws.track_task(user_id, asyncio.create_task(background_compaction(session, user_id)))

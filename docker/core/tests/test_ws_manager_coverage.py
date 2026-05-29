@@ -197,6 +197,46 @@ class TestReceive:
         assert result == {"from": "fast"}
 
     @pytest.mark.asyncio
+    async def test_simultaneous_frames_both_delivered(self):
+        """Two devices sending at once: both frames are delivered across calls
+        (the second is buffered or re-received) — never silently dropped."""
+        m = WSManager()
+        d1, d2 = _mk_ws(), _mk_ws()
+        d1.receive_text = AsyncMock(return_value=json.dumps({"from": "d1"}))
+        d2.receive_text = AsyncMock(return_value=json.dumps({"from": "d2"}))
+        await m.connect(d1, user_id="alice")
+        await m.connect(d2, user_id="alice")
+
+        first = await m.receive("alice")
+        second = await m.receive("alice")
+        assert {first["from"], second["from"]} == {"d1", "d2"}
+
+    @pytest.mark.asyncio
+    async def test_buffered_frames_served_in_order_then_cleared(self):
+        """A buffered frame is served (in order) before any new receive_text,
+        and the buffer key is removed once drained."""
+        m = WSManager()
+        ws = _mk_ws()
+        ws.receive_text = AsyncMock(side_effect=AssertionError("must drain buffer first"))
+        await m.connect(ws, user_id="alice")
+        m._recv_buffer["alice"] = [{"n": 1}, {"n": 2}]
+
+        assert await m.receive("alice") == {"n": 1}
+        assert await m.receive("alice") == {"n": 2}
+        assert "alice" not in m._recv_buffer
+
+    @pytest.mark.asyncio
+    async def test_buffer_cleared_on_full_disconnect(self):
+        """Buffered frames must not leak into a future reconnected session."""
+        m = WSManager()
+        ws = _mk_ws()
+        await m.connect(ws, user_id="alice")
+        m._recv_buffer["alice"] = [{"n": 1}]
+
+        await m.disconnect("alice", ws)  # last device gone
+        assert "alice" not in m._recv_buffer
+
+    @pytest.mark.asyncio
     async def test_dead_connection_pruned_then_none(self):
         """A device whose receive_text raises is discarded from the pool and
         receive returns None (lines 166-168)."""
