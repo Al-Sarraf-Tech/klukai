@@ -17,6 +17,7 @@ from ..events import publish as publish_event
 from .events import EventsMixin
 from .milestones import MilestonesMixin
 from .mission import MissionMixin, MissionTimer
+from .patterns import PatternsMixin
 from .state import (
     MAX_PROACTIVE_PER_DAY,
     QUIET_HOUR_END,
@@ -31,7 +32,7 @@ from .templates import (
 logger = logging.getLogger(__name__)
 
 
-class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin):
+class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin):
     """Manages scheduled and contextual proactive messages, themed to Klukai."""
 
     def __init__(self) -> None:
@@ -64,6 +65,10 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin):
         self._dream_delivered_today: bool = False
         self._memory_recall_delivered_today: bool = False
         self._user_messaged_today: bool = False
+        # Smarter-proactivity flags
+        self._quiet_day_delivered_today: bool = False
+        # Seasonal greetings fire once per occurrence; keyed by event:YYYY-MM-DD.
+        self._seasonal_delivered: dict[str, bool] = {}
 
     def set_callback(self, callback) -> None:
         """Set callback for delivering proactive messages."""
@@ -213,6 +218,25 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin):
             self._anniversary_check,
             CronTrigger(hour=13, minute=58),
             id="anniversary_check",
+            replace_existing=True,
+        )
+
+        # Seasonal/holiday greeting check: daily at 09:00. Matches today's
+        # month/day against seasonal_events; fires once per occurrence.
+        self._scheduler.add_job(
+            self._seasonal_check,
+            CronTrigger(hour=9, minute=0),
+            id="seasonal_check",
+            replace_existing=True,
+        )
+
+        # Pattern-aware "quiet day" check-in: early afternoon, after the day's
+        # activity (or lack of it) is established. Once/day, gated on a strong
+        # low-activity weekday pattern matching today.
+        self._scheduler.add_job(
+            self._quiet_day_check,
+            CronTrigger(hour=15, minute=10),
+            id="quiet_day_check",
             replace_existing=True,
         )
 
@@ -398,6 +422,8 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin):
         self._romance_delivered_today = False
         self._memory_recall_delivered_today = False
         self._user_messaged_today = False
+        self._quiet_day_delivered_today = False
+        self._seasonal_delivered.clear()
         # Reset per-user counters
         self._proactive_counts.clear()
         self._random_event_counts.clear()

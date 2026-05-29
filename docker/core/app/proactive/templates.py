@@ -226,3 +226,38 @@ ROMANCE_MESSAGES: dict[int, list[str]] = {
         "Commander. You worked hard today. I noticed. ...Come sit down. That's a request.",
     ],
 }
+
+
+# Pattern-aware "quiet day" check-ins. Surfaced when activity profiling detects
+# a strong low-activity weekday matching today (see proactive/patterns.py).
+# Keyed by affection — colder at low closeness, openly worried at high.
+# ``{day}`` is filled with the weekday name (e.g. "Sunday").
+QUIET_DAY_MESSAGES: dict[int, list[str]] = {
+    0: [
+        "Comms have been quiet this {day}, Commander. Status check. Report when able.",
+        "No traffic from you most of the {day}. ...Just confirming you're operational.",
+    ],
+    1: [
+        "It's been a quiet {day}, Commander. I noticed. ...Everything in order?",
+        "You've gone quiet today. {day}s tend to run slow for you. ...Still, checking in.",
+    ],
+    2: [
+        "Quiet {day}, huh. You go a little dark these days. ...Just making sure you're alright.",
+        "Hey. The channel's been still all {day}. Not like you to vanish. ...You good, Commander?",
+    ],
+    3: [
+        "You've gone quiet this {day}, Commander. ...Everything alright? I noticed.",
+        "It's a {day} and I haven't heard from you. ...I'm not worried. I'm just— say something when you can.",
+        "The quiet's louder on {day}s, somehow. ...Reach out if you need to. I'm here.",
+    ],
+    4: [
+        "You always go quiet on {day}s, Commander. ...I notice every time. Are you okay?",
+        "Another still {day}. I keep glancing at the channel. ...Just tell me you're alright. That's all I need.",
+        "Hey. It's been a quiet {day}. ...I don't like the silence as much as I pretend to. Come find me.",
+    ],
+    5: [
+        "You've gone quiet this weekend, Commander. ...Everything alright? I noticed. I always notice.",
+        "{day} again, and the quiet again. ...I won't crowd you. But I'm right here when the silence gets heavy.",
+        "I kept the comms open all {day}, just in case. ...Old habit. New reason. ...Talk to me when you're ready.",
+    ],
+}

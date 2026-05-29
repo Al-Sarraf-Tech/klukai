@@ -51,12 +51,16 @@ class _EngineBase:
     _dream_delivered_today: bool
     _memory_recall_delivered_today: bool
     _user_messaged_today: bool
+    _quiet_day_delivered_today: bool
+    _seasonal_delivered: dict[str, bool]
 
     # ── Cross-mixin methods / properties (concrete impls live on
     #    ProactiveEngine / MissionMixin and are resolved via the MRO) ────────
     _pick_message: Callable[[dict[int, list[str]]], str]
     _deliver: Callable[[str], Any]
     _can_send: Callable[[], bool]
+    # Activity profiling (concrete impl on PatternsMixin).
+    detect_activity_patterns: Callable[..., Any]
 
     @property
     def mission_active(self) -> bool:  # pragma: no cover - real impl on MissionMixin

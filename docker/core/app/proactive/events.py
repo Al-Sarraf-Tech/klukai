@@ -13,9 +13,12 @@ from datetime import datetime, timedelta
 
 from ..events import publish as publish_event
 from .base import _EngineBase
-from .templates import ROMANCE_MESSAGES
+from .templates import QUIET_DAY_MESSAGES, ROMANCE_MESSAGES
 
 logger = logging.getLogger(__name__)
+
+# A quiet-day pattern must be at least this confident to warrant a check-in.
+_QUIET_DAY_CONFIDENCE_FLOOR = 0.6
 
 
 class EventsMixin(_EngineBase):
@@ -408,3 +411,112 @@ class EventsMixin(_EngineBase):
             self._last_proactive_answered = False
             await self._on_message_callback(message)
             logger.info("Memory recall delivered (aff=%d): %s", self._affection_level, message[:60])
+
+    async def _quiet_day_check(self, user_id: str = "jalsarraf") -> None:
+        """Pattern-aware check-in for a low-activity day.
+
+        If the activity profiler (``detect_activity_patterns``) finds a strong
+        "quiet day" pattern that matches *today's* weekday, and the usual guards
+        pass (affection gate, mute, daily cap, last-answered, once/day), Klukai
+        gently acknowledges the lull — scaled by closeness. Template-driven so
+        it's cheap and deterministic to test; no LLM call.
+
+        Fires at most once per day (``_quiet_day_delivered_today``).
+        """
+        if self._quiet_day_delivered_today:
+            return
+        # Needs at least a little warmth before she comments on your silence.
+        if self._affection_level < 1:
+            return
+        if not self._can_send():
+            return
+
+        try:
+            patterns = await self.detect_activity_patterns(user_id)
+        except Exception as e:
+            logger.debug("Quiet-day pattern lookup failed: %s", e)
+            return
+        if not patterns:
+            return
+
+        today_dow = datetime.now().weekday()  # Mon=0..Sun=6
+        # Translate Python weekday() -> our DOW index (Sun=0..Sat=6) used by
+        # the pattern dict, so "today" lines up with the detected pattern.
+        today_dow_sunday0 = (today_dow + 1) % 7
+
+        match = None
+        for pat in patterns.values():
+            if (
+                pat.get("type") == "quiet_day"
+                and pat.get("dow") == today_dow_sunday0
+                and pat.get("confidence", 0.0) >= _QUIET_DAY_CONFIDENCE_FLOOR
+            ):
+                match = pat
+                break
+        if not match:
+            return
+
+        day_name = match["day"].capitalize()
+        message = self._pick_message(QUIET_DAY_MESSAGES).format(day=day_name)
+
+        if self._on_message_callback:
+            self._quiet_day_delivered_today = True
+            self._proactive_count_today += 1
+            self._last_proactive_answered = False
+            await self._on_message_callback(message)
+            await publish_event("proactive", message)
+            logger.info(
+                "Quiet-day check-in delivered (day=%s conf=%.2f aff=%d): %s",
+                day_name, match.get("confidence", 0.0), self._affection_level,
+                message[:60],
+            )
+
+    async def _seasonal_check(self) -> None:
+        """Deliver a holiday/seasonal greeting when today matches a config event.
+
+        Matches today's (month, day) against ``seasonal_events`` in
+        personality.yaml. Fires once per matching occurrence — guarded by a
+        per-event delivered key in ``_seasonal_delivered`` (cleared at the daily
+        reset), so it sends a single greeting on the day and never repeats it.
+        Respects mute + the per-event ``min_affection`` gate. In-character,
+        affection-aware templates; no LLM call.
+        """
+        if self._muted_until and datetime.now() < self._muted_until:
+            return
+        if not self._on_message_callback:
+            return
+
+        try:
+            from ..personality import load_personality
+            p = load_personality()
+            events = p.get("seasonal_events", {})
+        except Exception as e:
+            logger.debug("Seasonal config load failed: %s", e)
+            return
+        if not isinstance(events, dict) or not events:
+            return
+
+        now = datetime.now()
+        for key, cfg in events.items():
+            if not isinstance(cfg, dict):
+                continue
+            if cfg.get("month") != now.month or cfg.get("day") != now.day:
+                continue
+            if self._affection_level < int(cfg.get("min_affection", 0)):
+                continue
+            # Once per occurrence: skip if already delivered this calendar day.
+            guard_key = f"{key}:{now.year}-{now.month:02d}-{now.day:02d}"
+            if self._seasonal_delivered.get(guard_key):
+                continue
+            messages = cfg.get("messages") or []
+            if not messages:
+                continue
+
+            message = random.choice(messages)
+            self._seasonal_delivered[guard_key] = True
+            self._proactive_count_today += 1
+            self._last_proactive_answered = False
+            await self._on_message_callback(message)
+            await publish_event("proactive_seasonal", message)
+            logger.info("Seasonal greeting delivered (%s): %s", key, message[:60])
+            return  # one holiday per day is plenty

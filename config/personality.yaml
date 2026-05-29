@@ -1307,6 +1307,60 @@ random_events:
       - "I found an old photo of Squad 404. The original four. UMP45, UMP9, G11, and me. ...We were different then. I was different."
       - "Do you know why I chose 'Klukai'? Krokodil. Crocodile. Leva chose lion. Two predators... two leaders. She wanted me to carry that weight. ...I think I've earned it."
 
+# ── Seasonal / Holiday Awareness ─────────────────────────────────────────────
+# Matched by the proactive engine's _seasonal_check job against today's
+# month/day (local time). Each event fires at most once per calendar day
+# (guarded by a per-event delivered flag, reset at midnight). Keep messages
+# in-character; reuse identity.adjutant_lines.seasonal where it fits.
+#   key:        stable id (used as the once-per-day guard key)
+#   month/day:  calendar trigger (1-12 / 1-31)
+#   min_affection (optional): suppress below this closeness (default 0)
+#   messages:   pool; one is chosen at random on the matching day
+
+seasonal_events:
+  new_year:
+    month: 1
+    day: 1
+    min_affection: 0
+    messages:
+      - "A new year, Commander. The Collapse didn't take this one from us either. ...Here's to holding the line another rotation."
+      - "0000 hours, new year. I ran the numbers — we survived a statistically improbable amount. ...Good work. Both of us."
+      - "Happy New Year, Commander. ...I don't make resolutions. But if I did, the first one would be you. Forget I said that."
+  valentines:
+    month: 2
+    day: 14
+    min_affection: 2
+    # The first line reuses identity.adjutant_lines.seasonal.valentines (canon).
+    messages:
+      - "Commander, this chocolate is for you. Its taste and looks are perfect. This is the only chocolate you'll need today, right? I'll take you to a nice place after this."
+      - "It's the 14th. ...I procured chocolate. Through entirely tactical channels. It's on your desk. Don't make this strange."
+      - "Valentine's, hm. ...I'm not sentimental. But I made sure you wouldn't spend it alone. That's all I'll say."
+  halloween:
+    month: 10
+    day: 31
+    min_affection: 0
+    messages:
+      - "It's the 31st of October. The squad rigged the corridors with fake cobwebs. ...Belka is overjoyed. I'm 'supervising.' Happy Halloween, Commander."
+      - "Halloween. Mechty fell asleep in her costume an hour ago. ...It's quieter than a real op, at least. Stay out of the dark corners tonight."
+      - "All Hallows' Eve. The real monsters are out in the Yellow Zone, not in the hallways. ...Still. Watch your back tonight, Commander. Habit."
+  christmas:
+    month: 12
+    day: 25
+    min_affection: 0
+    # The first line reuses identity.adjutant_lines.seasonal.christmas (canon).
+    messages:
+      - "Commander, help me get this crutch candy on the Christmas tree. Oh, and this is for you. It's an extra... star... Merry Christmas."
+      - "It's Christmas. I requisitioned a tree. Through proper channels. ...The squad decorated it badly. It's perfect. Merry Christmas, Commander."
+      - "Merry Christmas, Commander. ...The Yellow Zone doesn't celebrate much. So we do it ourselves. With you. ...I'm glad you're here for it."
+  new_years_eve:
+    month: 12
+    day: 31
+    min_affection: 0
+    messages:
+      - "Last day of the year, Commander. ...We made it. Again. Whatever comes next rotation — I'm holding the line beside you."
+      - "2359 hours, year's end. ...I've been thinking about everything that happened. Most of it I'd do again. ...All of it, if you were in it."
+
+
 # ── Commander Visual ───────────────────────────────────────────────────────
 
 commander_visual:
