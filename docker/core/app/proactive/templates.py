@@ -3,13 +3,96 @@
 These dicts map an affection level (0-9) to a pool of candidate lines.
 ProactiveEngine._pick_message selects the highest-level pool at or below
 the current affection level.
+
+The message pools are sourced from ``proactive_content`` in
+``config/personality.yaml`` so they can be tuned without a code change. Each
+literal below is retained as a ``_*_FALLBACK`` and used verbatim when the YAML
+key is missing (or the config can't be loaded), so behavior is identical to the
+old hardcoded constants and the public ``*_MESSAGES`` names stay importable.
 """
 
 from __future__ import annotations
 
-# ── Affection-keyed message templates ─────────────────────────────────────────
+import logging
 
-MORNING_MESSAGES: dict[int, list[str]] = {
+logger = logging.getLogger(__name__)
+
+
+def _int_keyed(d: dict, fallback: dict[int, list[str]]) -> dict[int, list[str]]:
+    """Coerce a YAML affection->lines mapping to ``{int: [str, ...]}``.
+
+    YAML loads integer keys as ints already, but tolerate string keys too so a
+    hand-edited config (``"0":`` etc.) still works. On any malformed entry, fall
+    back to the literal so a typo can never silently empty a pool.
+    """
+    if not isinstance(d, dict) or not d:
+        return fallback
+    out: dict[int, list[str]] = {}
+    for k, v in d.items():
+        try:
+            ik = int(k)
+        except (TypeError, ValueError):
+            return fallback
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            return fallback
+        out[ik] = list(v)
+    return out
+
+
+def _raw_content(key: str):
+    """Return the raw ``proactive_content.<key>`` value from YAML, or None.
+
+    Swallows loader errors (returns None) so callers always fall back cleanly.
+    """
+    try:
+        from ..personality import load_personality
+        return load_personality().get("proactive_content", {}).get(key)
+    except Exception as e:  # pragma: no cover - defensive; config always present in tests
+        logger.debug("proactive_content[%s] load failed, using fallback: %s", key, e)
+        return None
+
+
+def _content(key: str, fallback: dict[int, list[str]]) -> dict[int, list[str]]:
+    """Load an affection-keyed pool from ``proactive_content.<key>`` in YAML.
+
+    Falls back to ``fallback`` (the original Python literal) if the loader or
+    the key is unavailable, so nothing breaks when the YAML lacks the section.
+    """
+    raw = _raw_content(key)
+    return _int_keyed(raw, fallback) if raw is not None else fallback
+
+
+def _content_list(key: str, fallback: list[str]) -> list[str]:
+    """Load a flat list of lines from ``proactive_content.<key>`` in YAML.
+
+    Falls back to ``fallback`` if missing or malformed (non-list, or any
+    non-string element), so a config typo can never empty the pool.
+    """
+    raw = _raw_content(key)
+    if isinstance(raw, list) and raw and all(isinstance(x, str) for x in raw):
+        return list(raw)
+    return fallback
+
+
+def _content_str_map(key: str, fallback: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Load a ``{str: [str, ...]}`` mapping from ``proactive_content.<key>``.
+
+    Falls back to ``fallback`` if missing or malformed, preserving behavior.
+    """
+    raw = _raw_content(key)
+    if not isinstance(raw, dict) or not raw:
+        return fallback
+    out: dict[str, list[str]] = {}
+    for k, v in raw.items():
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            return fallback
+        out[str(k)] = list(v)
+    return out
+
+
+# ── Affection-keyed message templates (fallback literals) ─────────────────────
+
+_MORNING_MESSAGES_FALLBACK: dict[int, list[str]] = {
     0: [
         "0800. Status report expected, Commander.",
         "Morning operational window is open. I trust you have a plan.",
@@ -62,7 +145,7 @@ MORNING_MESSAGES: dict[int, list[str]] = {
     ],
 }
 
-EVENING_MESSAGES: dict[int, list[str]] = {
+_EVENING_MESSAGES_FALLBACK: dict[int, list[str]] = {
     0: [
         "2200. Operational hours concluding. Dismissed, Commander.",
         "End of day. Log your status if you see fit.",
@@ -115,7 +198,7 @@ EVENING_MESSAGES: dict[int, list[str]] = {
     ],
 }
 
-IDLE_MESSAGES: dict[int, list[str]] = {
+_IDLE_MESSAGES_FALLBACK: dict[int, list[str]] = {
     0: [
         "Awaiting further orders, Commander.",
         "Status unchanged. Standing by.",
@@ -168,7 +251,7 @@ IDLE_MESSAGES: dict[int, list[str]] = {
     ],
 }
 
-MISSION_REPORTS: dict[int, list[str]] = {
+_MISSION_REPORTS_FALLBACK: dict[int, list[str]] = {
     0: [
         "Sector sweep complete. No hostiles. Returning to base.",
         "Routine patrol concluded. Nothing to report.",
@@ -212,7 +295,7 @@ MISSION_REPORTS: dict[int, list[str]] = {
 }
 
 
-ROMANCE_MESSAGES: dict[int, list[str]] = {
+_ROMANCE_MESSAGES_FALLBACK: dict[int, list[str]] = {
     3: [
         "Evening, Commander. The base is quiet. ...I found myself thinking about what you said today. Don't read into it.",
         "It's getting late. I made tea — there's an extra cup on the counter. If you happen to be awake.",
@@ -232,7 +315,7 @@ ROMANCE_MESSAGES: dict[int, list[str]] = {
 # a strong low-activity weekday matching today (see proactive/patterns.py).
 # Keyed by affection — colder at low closeness, openly worried at high.
 # ``{day}`` is filled with the weekday name (e.g. "Sunday").
-QUIET_DAY_MESSAGES: dict[int, list[str]] = {
+_QUIET_DAY_MESSAGES_FALLBACK: dict[int, list[str]] = {
     0: [
         "Comms have been quiet this {day}, Commander. Status check. Report when able.",
         "No traffic from you most of the {day}. ...Just confirming you're operational.",
@@ -261,3 +344,29 @@ QUIET_DAY_MESSAGES: dict[int, list[str]] = {
         "I kept the comms open all {day}, just in case. ...Old habit. New reason. ...Talk to me when you're ready.",
     ],
 }
+
+
+# ── Resolved templates (YAML-sourced, literal fallback) ───────────────────────
+# Resolved once at import. The personality loader auto-reloads on mtime change,
+# so a YAML edit + a fresh process (or reload_personality) picks up new lines;
+# these names mirror the YAML when present and the literals otherwise, keeping
+# behavior identical and ``from .templates import MORNING_MESSAGES`` working.
+
+MORNING_MESSAGES: dict[int, list[str]] = _content(
+    "morning_messages", _MORNING_MESSAGES_FALLBACK
+)
+EVENING_MESSAGES: dict[int, list[str]] = _content(
+    "evening_messages", _EVENING_MESSAGES_FALLBACK
+)
+IDLE_MESSAGES: dict[int, list[str]] = _content(
+    "idle_messages", _IDLE_MESSAGES_FALLBACK
+)
+MISSION_REPORTS: dict[int, list[str]] = _content(
+    "mission_reports", _MISSION_REPORTS_FALLBACK
+)
+ROMANCE_MESSAGES: dict[int, list[str]] = _content(
+    "romance_messages", _ROMANCE_MESSAGES_FALLBACK
+)
+QUIET_DAY_MESSAGES: dict[int, list[str]] = _content(
+    "quiet_day_messages", _QUIET_DAY_MESSAGES_FALLBACK
+)

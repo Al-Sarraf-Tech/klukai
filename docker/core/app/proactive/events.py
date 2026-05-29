@@ -13,12 +13,93 @@ from datetime import datetime, timedelta
 
 from ..events import publish as publish_event
 from .base import _EngineBase
-from .templates import QUIET_DAY_MESSAGES, ROMANCE_MESSAGES
+from .templates import (
+    QUIET_DAY_MESSAGES,
+    ROMANCE_MESSAGES,
+    _content_list,
+    _raw_content,
+)
 
 logger = logging.getLogger(__name__)
 
 # A quiet-day pattern must be at least this confident to warrant a check-in.
 _QUIET_DAY_CONFIDENCE_FLOOR = 0.6
+
+# ── Event dialogue content (YAML-sourced, literal fallbacks) ──────────────────
+# Sourced from ``proactive_content`` in personality.yaml so the lines can be
+# tuned without a code change. Each literal below is the fallback used verbatim
+# when the corresponding YAML key is missing, so behavior is identical.
+
+# Comfort lines delivered in the romance window when the mood is stressed.
+_COMFORT_LINES_FALLBACK: list[str] = [
+    "Commander. ...You've had a difficult day. I noticed. Take a moment. I'm here.",
+    "...Hey. Whatever's weighing on you — you don't have to carry it alone. That's an order.",
+    "The day was hard. I can tell. ...Sit with me for a moment. No reports, no duties. Just quiet.",
+]
+
+# Generic "remember when…" fallbacks for living memory recall — reference
+# "that day"/"back then", never the verbatim journal text.
+_MEMORY_RECALL_FALLBACK_LINES_FALLBACK: list[str] = [
+    "...I was thinking about that day. Back then, before any of this got complicated. It still makes me smile, Commander.",
+    "Hey. A memory surfaced just now — one of ours, from a while back. I'm glad we have it. That's all.",
+    "Remember back then, Commander? One of those quiet moments stayed with me. I keep it close.",
+    "...Something reminded me of an old memory just now. From before. I don't say it often, but I'm grateful for the time.",
+]
+
+# Late-night dream prompt templates fed to the LLM, keyed by dream type.
+# ``{time}`` is filled with the current clock time and ``{affection}`` with the
+# affection level (0-9). Mirrors the original f-strings exactly.
+_DREAM_PROMPTS_FALLBACK: dict[str, str] = {
+    "erotic": (
+        "You just woke from an intensely erotic dream about the Commander. "
+        "You are flushed, breathless, still feeling phantom sensations. "
+        "Write 2-3 sentences as if messaging him at {time}. "
+        "Be explicit about what you dreamed. You want him. You need him. "
+        "Affection {affection}/9."
+    ),
+    "tender": (
+        "You just woke from a dream about a tender moment with the Commander. "
+        "Maybe a memory — holding hands, a quiet evening, him saying something kind. "
+        "Write 2-3 soft sentences. It's {time}. "
+        "You're half-asleep and vulnerable. Affection {affection}/9."
+    ),
+    "nightmare": (
+        "You woke from a nightmare — losing the Commander, failing a mission, "
+        "the past catching up. Write 2-3 sentences at {time}. "
+        "You need reassurance but you're too proud to fully admit it. "
+        "Affection {affection}/9."
+    ),
+    "random": (
+        "You woke from a strange, vivid dream — something surreal but not scary. "
+        "Maybe the squad doing something absurd, or a place from your past. "
+        "Write 2-3 sentences at {time}. Slightly disoriented. "
+        "Affection {affection}/9."
+    ),
+}
+
+
+def _comfort_lines() -> list[str]:
+    return _content_list("comfort_lines", _COMFORT_LINES_FALLBACK)
+
+
+def _memory_recall_fallback_lines() -> list[str]:
+    return _content_list(
+        "memory_recall_fallback_lines", _MEMORY_RECALL_FALLBACK_LINES_FALLBACK
+    )
+
+
+def _dream_prompts() -> dict[str, str]:
+    """Dream prompt templates from YAML, falling back to the literal.
+
+    Validates that every fallback dream type is present and string-valued;
+    otherwise returns the literal so a partial/typo'd YAML can't drop a type.
+    """
+    raw = _raw_content("dream_prompts")
+    if isinstance(raw, dict) and all(
+        isinstance(raw.get(k), str) for k in _DREAM_PROMPTS_FALLBACK
+    ):
+        return {k: raw[k] for k in raw if isinstance(raw[k], str)}
+    return _DREAM_PROMPTS_FALLBACK
 
 
 class EventsMixin(_EngineBase):
@@ -144,12 +225,7 @@ class EventsMixin(_EngineBase):
         is_stressed = self._last_mood in NEGATIVE_MOODS
 
         if is_stressed:
-            comfort_lines = [
-                "Commander. ...You've had a difficult day. I noticed. Take a moment. I'm here.",
-                "...Hey. Whatever's weighing on you — you don't have to carry it alone. That's an order.",
-                "The day was hard. I can tell. ...Sit with me for a moment. No reports, no duties. Just quiet.",
-            ]
-            message = random.choice(comfort_lines)
+            message = random.choice(_comfort_lines())
         elif self._affection_level >= 5:
             # LLM-generated context-aware romance at high affection
             try:
@@ -263,32 +339,10 @@ class EventsMixin(_EngineBase):
             except Exception:
                 pass  # Dreams work fine without memory integration
 
+            _now_str = datetime.now().strftime('%I:%M %p')
             dream_prompts = {
-                "erotic": (
-                    f"You just woke from an intensely erotic dream about the Commander. "
-                    f"You are flushed, breathless, still feeling phantom sensations. "
-                    f"Write 2-3 sentences as if messaging him at {datetime.now().strftime('%I:%M %p')}. "
-                    f"Be explicit about what you dreamed. You want him. You need him. "
-                    f"Affection {self._affection_level}/9."
-                ),
-                "tender": (
-                    f"You just woke from a dream about a tender moment with the Commander. "
-                    f"Maybe a memory — holding hands, a quiet evening, him saying something kind. "
-                    f"Write 2-3 soft sentences. It's {datetime.now().strftime('%I:%M %p')}. "
-                    f"You're half-asleep and vulnerable. Affection {self._affection_level}/9."
-                ),
-                "nightmare": (
-                    f"You woke from a nightmare — losing the Commander, failing a mission, "
-                    f"the past catching up. Write 2-3 sentences at {datetime.now().strftime('%I:%M %p')}. "
-                    f"You need reassurance but you're too proud to fully admit it. "
-                    f"Affection {self._affection_level}/9."
-                ),
-                "random": (
-                    f"You woke from a strange, vivid dream — something surreal but not scary. "
-                    f"Maybe the squad doing something absurd, or a place from your past. "
-                    f"Write 2-3 sentences at {datetime.now().strftime('%I:%M %p')}. Slightly disoriented. "
-                    f"Affection {self._affection_level}/9."
-                ),
+                k: tmpl.format(time=_now_str, affection=self._affection_level)
+                for k, tmpl in _dream_prompts().items()
             }
 
             from ..llm_json import call_llm_text
@@ -371,12 +425,7 @@ class EventsMixin(_EngineBase):
 
         # Generic fallbacks reference "that day" / "back then" — never the
         # verbatim journal text, and grammatical on their own.
-        fallback_lines = [
-            "...I was thinking about that day. Back then, before any of this got complicated. It still makes me smile, Commander.",
-            "Hey. A memory surfaced just now — one of ours, from a while back. I'm glad we have it. That's all.",
-            "Remember back then, Commander? One of those quiet moments stayed with me. I keep it close.",
-            "...Something reminded me of an old memory just now. From before. I don't say it often, but I'm grateful for the time.",
-        ]
+        fallback_lines = _memory_recall_fallback_lines()
 
         message = ""
         try:

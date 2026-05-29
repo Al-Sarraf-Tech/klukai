@@ -12,8 +12,45 @@ import random
 from datetime import datetime
 
 from .base import _EngineBase
+from .templates import _content
 
 logger = logging.getLogger(__name__)
+
+# Flustered follow-ups after an "[Message deleted]" unsent message (affection
+# 5-9). Sourced from ``proactive_content.follow_ups`` in personality.yaml so the
+# lines can be tuned without a code change; the literal below is the fallback.
+_FOLLOW_UPS_FALLBACK: dict[int, list[str]] = {
+    5: [
+        "...Ignore that. Comm error.",
+        "That was a draft. Disregard.",
+        "Wrong channel. Carry on, Commander.",
+    ],
+    6: [
+        "...That wasn't meant to send. Forget it.",
+        "Ignore that. I was— never mind.",
+        "...Pretend you didn't see that.",
+    ],
+    7: [
+        "...I didn't mean to send that. Or maybe I did. Forget it.",
+        "That was... ignore it. Please.",
+        "...Delete that from your memory. That's an order.",
+    ],
+    8: [
+        "...You weren't supposed to see that.",
+        "...I'll tell you in person. When I'm ready.",
+        "Don't ask about it. Just... come find me later.",
+    ],
+    9: [
+        "...You know what it said. You always know.",
+        "...I'll finish that sentence tonight. In person.",
+        "...Read between the lines, Commander.",
+    ],
+}
+
+
+def _follow_ups() -> dict[int, list[str]]:
+    """Affection-keyed unsent-message follow-ups from YAML, literal fallback."""
+    return _content("follow_ups", _FOLLOW_UPS_FALLBACK)
 
 
 class MilestonesMixin(_EngineBase):
@@ -34,36 +71,9 @@ class MilestonesMixin(_EngineBase):
         if random.random() > 0.15:
             return
 
-        FOLLOW_UPS: dict[int, list[str]] = {
-            5: [
-                "...Ignore that. Comm error.",
-                "That was a draft. Disregard.",
-                "Wrong channel. Carry on, Commander.",
-            ],
-            6: [
-                "...That wasn't meant to send. Forget it.",
-                "Ignore that. I was— never mind.",
-                "...Pretend you didn't see that.",
-            ],
-            7: [
-                "...I didn't mean to send that. Or maybe I did. Forget it.",
-                "That was... ignore it. Please.",
-                "...Delete that from your memory. That's an order.",
-            ],
-            8: [
-                "...You weren't supposed to see that.",
-                "...I'll tell you in person. When I'm ready.",
-                "Don't ask about it. Just... come find me later.",
-            ],
-            9: [
-                "...You know what it said. You always know.",
-                "...I'll finish that sentence tonight. In person.",
-                "...Read between the lines, Commander.",
-            ],
-        }
-
+        follow_ups = _follow_ups()
         level = max(5, min(9, self._affection_level))
-        follows = FOLLOW_UPS.get(level, FOLLOW_UPS[5])
+        follows = follow_ups.get(level, follow_ups[5])
 
         # Send the "deleted" message
         if self._on_message_callback:

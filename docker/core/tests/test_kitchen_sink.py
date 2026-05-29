@@ -589,11 +589,12 @@ class TestUnsentMessages:
 
     def test_follow_ups_exist_for_levels_5_through_9(self):
         """Ensure follow-up messages exist for affection levels 5-9."""
-        import inspect
-        from app.proactive import ProactiveEngine
-        src = inspect.getsource(ProactiveEngine._unsent_message_check)
+        # Follow-up pools now live in proactive_content.follow_ups (YAML) with an
+        # in-code literal fallback; assert directly against the resolved pool.
+        from app.proactive.milestones import _follow_ups
+        follows = _follow_ups()
         for level in [5, 6, 7, 8, 9]:
-            assert f"{level}: [" in src, f"Missing follow-ups for level {level}"
+            assert level in follows and follows[level], f"Missing follow-ups for level {level}"
 
     def test_unsent_gates_on_low_affection(self):
         """At affection < 5, unsent messages should never fire."""
@@ -634,13 +635,14 @@ class TestUnsentMessages:
 
     def test_follow_up_content_tone_scales(self):
         """Level 5 follow-ups are professional, level 9 are intimate."""
-        import inspect
-        from app.proactive import ProactiveEngine
-        src = inspect.getsource(ProactiveEngine._unsent_message_check)
+        from app.proactive.milestones import _follow_ups
+        follows = _follow_ups()
+        lvl5 = " ".join(follows[5])
+        lvl9 = " ".join(follows[9])
         # Level 5: deflective/professional
-        assert "Comm error" in src and "Wrong channel" in src
+        assert "Comm error" in lvl5 and "Wrong channel" in lvl5
         # Level 9: raw/intimate
-        assert "You always know" in src and "tonight" in src
+        assert "You always know" in lvl9 and "tonight" in lvl9
 
     def test_dream_delivered_today_initialized(self):
         """_dream_delivered_today should be in __init__, not relying on hasattr."""

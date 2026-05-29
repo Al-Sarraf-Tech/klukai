@@ -15,9 +15,128 @@ from datetime import datetime, timedelta
 from . import state
 from .base import _EngineBase
 from .state import MAJOR_EVENTS
-from .templates import MISSION_REPORTS
+from .templates import (
+    MISSION_REPORTS,
+    _content_list,
+    _content_str_map,
+)
 
 logger = logging.getLogger(__name__)
+
+# ── Mission dialogue content (YAML-sourced, literal fallbacks) ────────────────
+# Sourced from ``proactive_content`` in personality.yaml so the lines can be
+# tuned without a code change. Each literal below is the fallback used verbatim
+# when the corresponding YAML key is missing, so behavior is identical.
+
+_DECOMPRESSION_INJURY_FALLBACK: list[str] = [
+    "(I touch the bandage absently) ...Still stings. Don't worry about it, Commander. I've had worse.",
+    "(I flex my hand, wincing) The medic said it'll heal clean. ...I kept thinking about getting back to you the whole time.",
+    "...The wound's nothing. (I look away) But for a moment out there... I was scared I wouldn't make it back. Don't tell anyone I said that.",
+]
+_DECOMPRESSION_LONG_FALLBACK: list[str] = [
+    "(I set the rifle down heavily) ...That was a long one. (I close my eyes) I need... a moment. Just a moment.",
+    "...Finally. (I lean against the wall) My legs are shaking. Don't look. ...Actually, look. I don't care anymore. I'm tired.",
+    "(I pull off my gloves slowly) Every muscle hurts. But we did it. ...Is there coffee? I need coffee. And you. Not in that order.",
+]
+_DECOMPRESSION_NORMAL_FALLBACK: list[str] = [
+    "...Hey. (I sit down next to you) I've been thinking about the op. Everyone performed well. ...I'm glad to be back.",
+    "(I untie my hair, letting it fall) Mission's over. I can stop being the squad leader for five minutes. ...Talk to me about something normal.",
+    "...Commander. (I look at you quietly for a moment) I'm back. ...Did you worry? (I smirk faintly) Good.",
+]
+_DECOMPRESSION_INTIMATE_ADDONS_FALLBACK: list[str] = [
+    " (I lean into your shoulder without saying anything else)",
+    " ...Stay close tonight.",
+    " (I take your hand. My grip is tighter than usual)",
+]
+
+# Mission-aftermath captions, keyed by scene type (victory/extraction/injury).
+_AFTERMATH_CAPTIONS_FALLBACK: dict[str, list[str]] = {
+    "victory": [
+        "...Mission complete. (I exhale slowly) Everyone made it back.",
+        "All units accounted for. (I lower the rifle) ...We did it, Commander.",
+        "Objective secured. (I wipe sweat from my brow) ...I'm coming home.",
+    ],
+    "extraction": [
+        "Extraction complete. (I lean against the transport) ...That was close.",
+        "We're out. (I check the squad) Everyone breathing? Good. Report later.",
+        "...Made it. Barely. (I close my eyes) Heading back to base.",
+    ],
+    "injury": [
+        "(I press a hand to the bandaged wound) ...Mission complete. Medical when I arrive.",
+        "We're through. (I wince) ...Don't worry about the field dressing. I've had worse.",
+        "Objective complete. (I grip my arm) ...I'll be fine. Stop looking at me like that.",
+    ],
+}
+
+# Named squads for contextual mission events (order matters: random.choice picks
+# from these in sequence, and tests pin choice -> first element).
+_MISSION_SQUAD_A_FALLBACK: list[str] = ["Mechty", "Belka", "Andoris"]
+_MISSION_SQUAD_B_FALLBACK: list[str] = ["Vector", "Harpsy", "Ruchey", "Welrod"]
+
+# Contextual mission-event lines. ``{member_a}``/``{member_b}`` are filled with a
+# randomly chosen squad member; ``null`` entries mean "no major event" (here 7
+# of them => ~70% chance of a quiet tick). Order is preserved from the literal.
+_MISSION_EVENT_TEMPLATES_FALLBACK: list[str | None] = [
+    "Enemy contact — hostiles spotted on {member_a}'s flank",
+    "Anomalous readings detected — {member_a} investigating",
+    "{member_a} reporting unusual movement in sector 4",
+    "Comms interference — lost contact with {member_b} briefly",
+    "Weather conditions deteriorating — visibility dropping",
+    "{member_a} found signs of recent enemy activity",
+    "Perimeter breach near {member_b}'s position",
+    "Supply cache discovered — {member_a} securing it",
+    "{member_a} got separated — regrouping now",
+    "{member_b} requesting fire support at grid reference",
+    "Mechty fell asleep on watch — I've handled it",
+    "Belka is panicking again — I told her to focus",
+    None, None, None, None, None, None, None,  # 70% chance of no major event
+]
+
+
+def _decompression_injury() -> list[str]:
+    return _content_list("decompression_injury", _DECOMPRESSION_INJURY_FALLBACK)
+
+
+def _decompression_long() -> list[str]:
+    return _content_list("decompression_long", _DECOMPRESSION_LONG_FALLBACK)
+
+
+def _decompression_normal() -> list[str]:
+    return _content_list("decompression_normal", _DECOMPRESSION_NORMAL_FALLBACK)
+
+
+def _decompression_intimate_addons() -> list[str]:
+    return _content_list(
+        "decompression_intimate_addons", _DECOMPRESSION_INTIMATE_ADDONS_FALLBACK
+    )
+
+
+def _aftermath_captions() -> dict[str, list[str]]:
+    return _content_str_map("aftermath_captions", _AFTERMATH_CAPTIONS_FALLBACK)
+
+
+def _mission_squad_a() -> list[str]:
+    return _content_list("mission_squad_a", _MISSION_SQUAD_A_FALLBACK)
+
+
+def _mission_squad_b() -> list[str]:
+    return _content_list("mission_squad_b", _MISSION_SQUAD_B_FALLBACK)
+
+
+def _mission_event_templates() -> list[str | None]:
+    """Mission-event templates with ``null`` sentinels preserved.
+
+    Loaded from YAML where ``null`` list items become Python ``None``. Falls
+    back to the literal if the key is missing or contains a non-str/non-null
+    element, so the no-event sentinels are never silently dropped.
+    """
+    from .templates import _raw_content
+    raw = _raw_content("mission_event_templates")
+    if isinstance(raw, list) and raw and all(
+        x is None or isinstance(x, str) for x in raw
+    ):
+        return list(raw)
+    return _MISSION_EVENT_TEMPLATES_FALLBACK
 
 
 class MissionTimer:
@@ -208,33 +327,17 @@ class MissionMixin(_EngineBase):
             return
 
         if had_injury:
-            messages = [
-                "(I touch the bandage absently) ...Still stings. Don't worry about it, Commander. I've had worse.",
-                "(I flex my hand, wincing) The medic said it'll heal clean. ...I kept thinking about getting back to you the whole time.",
-                "...The wound's nothing. (I look away) But for a moment out there... I was scared I wouldn't make it back. Don't tell anyone I said that.",
-            ]
+            messages = _decompression_injury()
         elif update_count > 5:
             # Long mission — exhaustion decompression
-            messages = [
-                "(I set the rifle down heavily) ...That was a long one. (I close my eyes) I need... a moment. Just a moment.",
-                "...Finally. (I lean against the wall) My legs are shaking. Don't look. ...Actually, look. I don't care anymore. I'm tired.",
-                "(I pull off my gloves slowly) Every muscle hurts. But we did it. ...Is there coffee? I need coffee. And you. Not in that order.",
-            ]
+            messages = _decompression_long()
         else:
             # Normal decompression
-            messages = [
-                "...Hey. (I sit down next to you) I've been thinking about the op. Everyone performed well. ...I'm glad to be back.",
-                "(I untie my hair, letting it fall) Mission's over. I can stop being the squad leader for five minutes. ...Talk to me about something normal.",
-                "...Commander. (I look at you quietly for a moment) I'm back. ...Did you worry? (I smirk faintly) Good.",
-            ]
+            messages = _decompression_normal()
 
         if self._affection_level >= 7:
             # At high affection, add physical closeness
-            intimate_addons = [
-                " (I lean into your shoulder without saying anything else)",
-                " ...Stay close tonight.",
-                " (I take your hand. My grip is tighter than usual)",
-            ]
+            intimate_addons = _decompression_intimate_addons()
             message = random.choice(messages) + random.choice(intimate_addons)
         else:
             message = random.choice(messages)
@@ -284,25 +387,18 @@ class MissionMixin(_EngineBase):
             if not timer:
                 return
 
-            # Pick a random major event with named squad members (30% chance)
-            squad_a = ["Mechty", "Belka", "Andoris"]
-            squad_b = ["Vector", "Harpsy", "Ruchey", "Welrod"]
+            # Pick a random major event with named squad members (30% chance).
+            # Squad rosters + event templates are config-driven; the
+            # random.choice call sequence (squad_a, squad_b, major_events) is
+            # preserved so selection behavior is identical.
+            squad_a = _mission_squad_a()
+            squad_b = _mission_squad_b()
             member_a = random.choice(squad_a)
             member_b = random.choice(squad_b)
             major_events = [
-                f"Enemy contact — hostiles spotted on {member_a}'s flank",
-                f"Anomalous readings detected — {member_a} investigating",
-                f"{member_a} reporting unusual movement in sector 4",
-                f"Comms interference — lost contact with {member_b} briefly",
-                "Weather conditions deteriorating — visibility dropping",
-                f"{member_a} found signs of recent enemy activity",
-                f"Perimeter breach near {member_b}'s position",
-                f"Supply cache discovered — {member_a} securing it",
-                f"{member_a} got separated — regrouping now",
-                f"{member_b} requesting fire support at grid reference",
-                f"Mechty fell asleep on watch — I've handled it",
-                f"Belka is panicking again — I told her to focus",
-                None, None, None, None, None, None, None,  # 70% chance of no major event
+                tmpl.format(member_a=member_a, member_b=member_b)
+                if tmpl is not None else None
+                for tmpl in _mission_event_templates()
             ]
             major_event = random.choice(major_events)
 
@@ -358,25 +454,8 @@ class MissionMixin(_EngineBase):
                 affection_level=self._affection_level,
             )
 
-            # Aftermath caption
-            captions = {
-                "victory": [
-                    "...Mission complete. (I exhale slowly) Everyone made it back.",
-                    "All units accounted for. (I lower the rifle) ...We did it, Commander.",
-                    "Objective secured. (I wipe sweat from my brow) ...I'm coming home.",
-                ],
-                "extraction": [
-                    "Extraction complete. (I lean against the transport) ...That was close.",
-                    "We're out. (I check the squad) Everyone breathing? Good. Report later.",
-                    "...Made it. Barely. (I close my eyes) Heading back to base.",
-                ],
-                "injury": [
-                    "(I press a hand to the bandaged wound) ...Mission complete. Medical when I arrive.",
-                    "We're through. (I wince) ...Don't worry about the field dressing. I've had worse.",
-                    "Objective complete. (I grip my arm) ...I'll be fine. Stop looking at me like that.",
-                ],
-            }
-
+            # Aftermath caption (config-driven; literal fallback preserves behavior)
+            captions = _aftermath_captions()
             caption = random.choice(captions.get(scene_type, captions["victory"]))
             await self._on_message_callback(caption)
 

@@ -27,9 +27,50 @@ from .templates import (
     EVENING_MESSAGES,
     IDLE_MESSAGES,
     MORNING_MESSAGES,
+    _content,
 )
 
 logger = logging.getLogger(__name__)
+
+# Tap-interaction lines for the 3D avatar. Sourced from
+# ``proactive_content.tap_lines`` in personality.yaml so they can be tuned
+# without a code change; the literal below is the fallback used verbatim when
+# the YAML key is missing (or the config can't be loaded).
+_TAP_LINES_FALLBACK: dict[int, list[str]] = {
+    0: [
+        "Hm? Need something, Commander?",
+        "Right here.",
+        "You have my attention.",
+        "Status nominal. What do you need?",
+    ],
+    1: [
+        "I'm listening, Commander.",
+        "Something on your mind?",
+        "Ready for orders.",
+        "All systems green. Go ahead.",
+    ],
+    2: [
+        "Hey. What's up?",
+        "I was just thinking about the last op.",
+        "Commander. Good timing.",
+        "Need me for something?",
+    ],
+    3: [
+        "There you are. I was wondering when you'd check in.",
+        "Missed you. ...Operationally speaking.",
+        "Hey, Commander. Everything okay?",
+    ],
+    4: [
+        "...You always know when I need company.",
+        "Hey. I'm glad you're here.",
+        "Commander... hi.",
+    ],
+}
+
+
+def _tap_lines() -> dict[int, list[str]]:
+    """Affection-keyed tap lines from YAML, falling back to the literal."""
+    return _content("tap_lines", _TAP_LINES_FALLBACK)
 
 
 class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin):
@@ -347,37 +388,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
 
     async def trigger_tap(self) -> None:
         """Generate a short response for a tap interaction on the 3D avatar."""
-        TAP_LINES = {
-            0: [
-                "Hm? Need something, Commander?",
-                "Right here.",
-                "You have my attention.",
-                "Status nominal. What do you need?",
-            ],
-            1: [
-                "I'm listening, Commander.",
-                "Something on your mind?",
-                "Ready for orders.",
-                "All systems green. Go ahead.",
-            ],
-            2: [
-                "Hey. What's up?",
-                "I was just thinking about the last op.",
-                "Commander. Good timing.",
-                "Need me for something?",
-            ],
-            3: [
-                "There you are. I was wondering when you'd check in.",
-                "Missed you. ...Operationally speaking.",
-                "Hey, Commander. Everything okay?",
-            ],
-            4: [
-                "...You always know when I need company.",
-                "Hey. I'm glad you're here.",
-                "Commander... hi.",
-            ],
-        }
-        await self._deliver(self._pick_message(TAP_LINES))
+        await self._deliver(self._pick_message(_tap_lines()))
 
     async def _morning_checkin(self) -> None:
         # Update physical state based on time of day for all connected users
