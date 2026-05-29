@@ -28,14 +28,21 @@ class _HeartbeatSensorState extends State<HeartbeatSensor>
   void didUpdateWidget(HeartbeatSensor oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.bpm != widget.bpm) {
-      _controller.stop();
-      _setupAnimation();
+      // Reuse the single controller — recreating it would allocate a second
+      // ticker (illegal for SingleTickerProviderStateMixin) and leak the old
+      // one. Just retarget its duration and restart the pulse.
+      _controller.duration = _beatDuration();
+      _controller
+        ..stop()
+        ..repeat();
     }
   }
 
+  Duration _beatDuration() =>
+      Duration(milliseconds: (60000 / max(1, widget.bpm)).round());
+
   void _setupAnimation() {
-    final duration = Duration(milliseconds: (60000 / widget.bpm).round());
-    _controller = AnimationController(vsync: this, duration: duration)
+    _controller = AnimationController(vsync: this, duration: _beatDuration())
       ..repeat();
     _pulseAnimation = TweenSequence<double>([
       TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.3), weight: 15),
