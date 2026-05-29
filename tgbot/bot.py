@@ -35,12 +35,22 @@ logger = logging.getLogger(__name__)
 
 
 def _is_authorized(update: Update) -> bool:
-    """Check if the sender is in the allowlist. Empty list = open (pairing mode)."""
+    """Check if the sender is in the allowlist.
+
+    Fail CLOSED: an empty/unset allowlist denies everyone. This bot can run
+    privileged host operations (/deploy, /restart, /db) and forwards free text
+    to a Claude Code agent, so an empty ALLOWED_USER_IDS is a misconfiguration,
+    never an invitation to authorize the whole world.
+    """
     user = update.effective_user
     if not user:
         return False
     if not ALLOWED_USER_IDS:
-        return True  # Open during initial pairing
+        logger.error(
+            "ALLOWED_USER_IDS is empty — denying all requests (fail-closed). "
+            "Set ALLOWED_USER_IDS to enable the bot."
+        )
+        return False
     return user.id in ALLOWED_USER_IDS
 
 
@@ -81,7 +91,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def post_init(application: Application) -> None:
     """Start notification manager after bot is ready."""
     if not ALLOWED_USER_IDS:
-        logger.warning("ALLOWED_USER_IDS empty — auth OPEN. Set after pairing.")
+        logger.warning(
+            "ALLOWED_USER_IDS empty — bot is DENYING all requests (fail-closed) "
+            "and notifications are disabled. Set ALLOWED_USER_IDS to enable."
+        )
         return
 
     chat_id = next(iter(ALLOWED_USER_IDS))

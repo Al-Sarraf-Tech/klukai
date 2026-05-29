@@ -346,9 +346,9 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         else:
             tier, bonus = "disliked", -1
 
-        aff_state = await affection.get_state(user_id)
-        aff_state.score = max(0, min(1000, aff_state.score + bonus))
-        await affection._save_state(aff_state, user_id)
+        # Flat gift bonus — add_score clamps and recomputes the level so the
+        # value pushed to the client below reflects the real, current level.
+        aff_state = await affection.add_score(bonus, user_id)
 
         reaction = reactions.get(tier, "...Noted.")
         if ws.is_connected(user_id):
@@ -410,9 +410,9 @@ async def _run_mission(user_id: str, affection_level: int) -> None:
         if ws.is_connected(user_id):
             await ws.send_proactive(user_id, report)
 
-        aff = await affection.get_state(user_id)
-        aff.score = min(100, aff.score + 3)
-        await affection._save_state(aff, user_id)
+        # Flat mission reward — clamps to MAX_SCORE and recomputes the level.
+        # (Previously capped at 100, which truncated any score above 100.)
+        await affection.add_score(3, user_id)
     except Exception as e:
         logger.warning("Mission narrative failed: %s", e)
         if ws.is_connected(user_id):

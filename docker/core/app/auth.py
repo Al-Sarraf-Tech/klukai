@@ -166,7 +166,7 @@ async def check_ip_banned(ip: str) -> bool:
                 await conn.execute(
                     "SELECT COUNT(*) FROM companion_login_attempts "
                     "WHERE ip_address = %s AND success = FALSE "
-                    "AND attempted_at > NOW() - INTERVAL '%s minutes'",
+                    "AND attempted_at > NOW() - make_interval(mins => %s)",
                     (ip, IP_BAN_WINDOW_MINUTES),
                 )
             ).fetchone()

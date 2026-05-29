@@ -43,7 +43,7 @@ async def count_recent(user_id: str, hours: int = TRIBUTE_COOLDOWN_HOURS) -> int
         async with pool.connection() as conn:
             row = await (await conn.execute(
                 "SELECT COUNT(*) FROM companion_tributes "
-                "WHERE user_id = %s AND created_at > now() - INTERVAL '%s hours'",
+                "WHERE user_id = %s AND created_at > now() - make_interval(hours => %s)",
                 (user_id, hours),
             )).fetchone()
         return (row or (0,))[0]

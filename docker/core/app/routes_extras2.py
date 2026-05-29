@@ -192,7 +192,7 @@ def register_extras2(app: FastAPI) -> None:
                     "  SUM(delta) AS net_delta, "
                     "  COUNT(*) AS events "
                     "FROM companion_affection_log "
-                    "WHERE user_id = %s AND created_at > NOW() - INTERVAL '%s days' "
+                    "WHERE user_id = %s AND created_at > NOW() - make_interval(days => %s) "
                     "GROUP BY DATE(created_at) "
                     "ORDER BY day ASC",
                     (user_id, days),

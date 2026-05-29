@@ -124,7 +124,7 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
                 "inspired by your last conversation. First-person. Don't describe "
                 "the dream as fiction — you lived it. No bullet points.\n\n"
                 f"How the time apart felt to you: {emotion_beat}\n\n"
-                "Last conversation excerpt:\n" + excerpt_text
+                "Last exchanges (resume from here):\n" + excerpt_text
             )
         else:
             user_prompt = (

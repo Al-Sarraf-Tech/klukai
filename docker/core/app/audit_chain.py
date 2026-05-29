@@ -14,17 +14,23 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 from typing import Any
+
+from .secret_config import resolve_secret
 
 logger = logging.getLogger(__name__)
 
 
 def _chain_secret() -> bytes:
-    return (
-        os.environ.get("AUDIT_CHAIN_SECRET")
-        or os.environ.get("SIGNED_URL_SECRET")
-        or "dev-audit-chain-secret"
+    # VAPID_PRIVATE_KEY is included as a final real-secret fallback so a
+    # deployment that has push configured always has a stable, non-predictable
+    # chain key (rather than the old guessable literal). Set AUDIT_CHAIN_SECRET
+    # explicitly for proper key separation from signed URLs.
+    return resolve_secret(
+        "AUDIT_CHAIN_SECRET",
+        "SIGNED_URL_SECRET",
+        "VAPID_PRIVATE_KEY",
+        purpose="audit-chain",
     ).encode("utf-8")
 
 

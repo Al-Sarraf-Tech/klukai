@@ -1155,12 +1155,23 @@ class TestAuthSecurity:
             assert "display_name" in user
 
     def test_gift_score_uses_1000_scale(self):
-        """The gift endpoint must use 0-1000 scale, not 0-100."""
+        """Affection rewards (gift, mission) must use the 0-1000 scale, not 0-100.
+
+        Both reward handlers now route through AffectionManager.add_score, which
+        clamps to MAX_SCORE (behaviourally verified in TestAddScore). This guard
+        ensures the old `min(100, ...)` truncation can never return to a route
+        handler and that the scale constant stays at 1000.
+        """
+        from app.affection import MAX_SCORE
+        assert MAX_SCORE == 1000
+
         import inspect
         from app.routes import register_routes
         src = inspect.getsource(register_routes)
-        assert "min(1000," in src, "Gift endpoint should use min(1000, ...) not min(100, ...)"
-        assert "min(100," not in src or "min(1000," in src
+        assert "min(100," not in src, (
+            "reward handlers must not cap affection at 100 — use add_score "
+            "(clamps to MAX_SCORE) instead"
+        )
 
 
 class TestLeapYearSafety:

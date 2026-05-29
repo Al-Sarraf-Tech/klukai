@@ -189,6 +189,28 @@ class AffectionManager:
                 result_name = lv.get("name", "Unknown")
         return result_level, result_name
 
+    async def add_score(
+        self, points: int, user_id: str = "jalsarraf"
+    ) -> AffectionState:
+        """Apply a flat score adjustment, clamp to [0, MAX_SCORE], recompute
+        level/level_name, and persist.
+
+        Used by fixed-reward paths (gifts, missions) that grant a flat number
+        of points rather than a classified interaction with a daily cap. Always
+        recomputes the level so the persisted level can never drift from the
+        score, and clamps to MAX_SCORE so a reward can never destroy progress.
+
+        jalsarraf is pinned at max trust, so a negative adjustment is ignored
+        for the Commander — affection is SACRED and is never silently reduced.
+        """
+        state = await self.get_state(user_id)
+        if user_id == "jalsarraf" and points < 0:
+            points = 0
+        state.score = max(0, min(MAX_SCORE, state.score + points))
+        state.level, state.level_name = self._compute_level(state.score)
+        await self._save_state(state, user_id)
+        return state
+
     async def apply_classification(
         self, interaction_type: str, intensity: int, user_id: str = "jalsarraf"
     ) -> AffectionChange:

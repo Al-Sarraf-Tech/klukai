@@ -887,3 +887,62 @@ class TestStateProperty:
         manager._states["jalsarraf"] = AffectionState(score=7)
         manager._state = None  # no-op per implementation
         assert manager._states["jalsarraf"].score == 7
+
+
+# ── add_score: flat reward path (gifts, missions) ────────────────────────────
+
+
+class TestAddScore:
+    """add_score clamps to [0, MAX_SCORE] and always recomputes the level.
+
+    Regression guard for the mission reward that capped at 100 (truncating any
+    score above 100) and for reward handlers that bumped score without
+    recomputing the level (shipping a stale level to the client).
+    """
+
+    async def test_does_not_truncate_score_above_100(self, manager):
+        # The bug: min(100, score + 3) slammed any score > 100 down to 100.
+        manager._states["alice"] = AffectionState(
+            score=500, level=5, level_name="Trusted Operator"
+        )
+        manager._save_state = AsyncMock()
+        with patch.object(manager, "_load_state", new=AsyncMock()):
+            state = await manager.add_score(3, "alice")
+        assert state.score == 503
+        manager._save_state.assert_awaited_once()
+
+    async def test_clamps_at_max_score(self, manager):
+        manager._states["alice"] = AffectionState(
+            score=990, level=9, level_name="Oath Fulfilled"
+        )
+        manager._save_state = AsyncMock()
+        with patch.object(manager, "_load_state", new=AsyncMock()):
+            state = await manager.add_score(50, "alice")
+        assert state.score == MAX_SCORE
+
+    async def test_recomputes_level_on_promotion(self, manager):
+        # 79 -> level 1; +1 crosses the 80 threshold -> level 2.
+        manager._states["alice"] = AffectionState(
+            score=79, level=1, level_name="Acknowledged"
+        )
+        manager._save_state = AsyncMock()
+        with patch.object(manager, "_load_state", new=AsyncMock()):
+            state = await manager.add_score(1, "alice")
+        assert state.score == 80
+        assert (state.level, state.level_name) == (2, "Professional Respect")
+
+    async def test_never_goes_negative(self, manager):
+        manager._states["alice"] = AffectionState(
+            score=2, level=0, level_name="Cold Assessment"
+        )
+        manager._save_state = AsyncMock()
+        with patch.object(manager, "_load_state", new=AsyncMock()):
+            state = await manager.add_score(-50, "alice")
+        assert state.score == 0
+
+    async def test_jalsarraf_negative_adjustment_ignored(self, manager):
+        # Commander is pinned at max trust — affection is SACRED, never reduced.
+        manager._save_state = AsyncMock()
+        state = await manager.add_score(-100, "jalsarraf")
+        assert state.score == MAX_SCORE
+        assert state.level == 9

@@ -54,36 +54,69 @@ def test_speech_pattern_lookup_never_defaults_to_cold_for_high_levels(level: int
 
 
 # ── Affection state invariants ────────────────────────────────────────────────
+# Canonical 0-9 taxonomy (config/personality.yaml, ADR-0005). Defined inline so
+# the properties exercise the REAL _compute_level / add_score logic without
+# depending on personality-config file resolution in the test environment.
+_CANON_LEVELS = [
+    {"index": 0, "threshold": 0, "name": "Cold Assessment"},
+    {"index": 1, "threshold": 30, "name": "Acknowledged"},
+    {"index": 2, "threshold": 80, "name": "Professional Respect"},
+    {"index": 3, "threshold": 150, "name": "Guarded Interest"},
+    {"index": 4, "threshold": 250, "name": "Trusted Ally"},
+    {"index": 5, "threshold": 380, "name": "Unguarded"},
+    {"index": 6, "threshold": 530, "name": "Deep Devotion"},
+    {"index": 7, "threshold": 680, "name": "Vulnerable"},
+    {"index": 8, "threshold": 830, "name": "Bonded"},
+    {"index": 9, "threshold": 950, "name": "Oath Fulfilled"},
+]
+
+
+def _manager_with_levels():
+    try:
+        from app.affection import AffectionManager
+    except ImportError:  # pragma: no cover
+        pytest.skip("app.affection not importable in dev env")
+    mgr = AffectionManager()
+    mgr._levels = [dict(lv) for lv in _CANON_LEVELS]
+    return mgr
+
+
 @given(
     starting_score=st.integers(min_value=0, max_value=10000),
     delta=st.integers(min_value=-100, max_value=100),
 )
-@settings(suppress_health_check=[HealthCheck.too_slow], max_examples=200)
-def test_affection_score_non_negative(starting_score: int, delta: int) -> None:
-    """Applying any AffectionChange (positive or negative) leaves the score
-    in [0, ∞). Negative-going changes clamp at 0, not below."""
-    try:
-        from app.affection import AffectionState
-    except ImportError:
-        pytest.skip("AffectionState not importable in dev env")
+@settings(suppress_health_check=[HealthCheck.too_slow], max_examples=150)
+def test_add_score_clamps_to_valid_range(starting_score: int, delta: int) -> None:
+    """The REAL reward path (AffectionManager.add_score) clamps the result to
+    [0, MAX_SCORE] and recomputes a valid level for ANY starting score / delta.
 
-    # AffectionState is a pydantic model with int score + int level.
-    state = AffectionState(score=starting_score, level=0)
-    assert state.score >= 0
-    new_score = max(0, starting_score + delta)
-    assert new_score >= 0
+    Exercises production clamping rather than re-implementing max()/min() in the
+    test body (the prior version proved nothing about the code under test).
+    """
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from app.affection import MAX_SCORE, AffectionState
+
+    mgr = _manager_with_levels()
+    mgr._save_state = AsyncMock()
+    mgr._load_state = AsyncMock()  # no-op: get_state returns the seeded state
+    mgr._states["alice"] = AffectionState(score=starting_score, level=0)
+
+    result = asyncio.run(mgr.add_score(delta, "alice"))
+
+    assert result.score == max(0, min(MAX_SCORE, starting_score + delta))
+    assert 0 <= result.score <= MAX_SCORE
+    assert 0 <= result.level <= 9
 
 
 @given(score=st.integers(min_value=0, max_value=1_000_000))
 @settings(suppress_health_check=[HealthCheck.too_slow], max_examples=200)
-def test_affection_level_in_range(score: int) -> None:
-    """Score-to-level mapping is always in [0, 9]."""
-    try:
-        from app.affection import AffectionState
-    except ImportError:
-        pytest.skip("AffectionState not importable in dev env")
-
-    state = AffectionState(score=score, level=0)
-    # Default level is 0 unless explicitly set. Field constraint: levels
-    # are bounded by the canonical 0-9 taxonomy (ADR-0005).
-    assert 0 <= state.level <= 9
+def test_compute_level_always_in_range(score: int) -> None:
+    """_compute_level maps ANY score (incl. far above MAX_SCORE) to a level in
+    [0, 9] with a non-empty name. Exercises the real mapping, not a constructor
+    default."""
+    mgr = _manager_with_levels()
+    level, name = mgr._compute_level(score)
+    assert 0 <= level <= 9
+    assert isinstance(name, str) and name

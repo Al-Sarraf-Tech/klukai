@@ -223,18 +223,18 @@ async def background_extraction(
                     if aff_change.new_level == 9:
                         oath_delivered = await maybe_deliver_oath(user_id)
 
-                    # Check for first-time milestone scene
+                    # Check for first-time milestone scene — scoped to THIS user
+                    # so one user's progress can't suppress (or steal) another
+                    # user's milestone. record_milestone is idempotent per user.
                     milestone_key = f"affection_level_{aff_change.new_level}"
-                    is_new = await memory.record_milestone(milestone_key)
+                    is_new = await memory.record_milestone(milestone_key, user_id=user_id)
 
                     if oath_delivered:
-                        # The oath scene IS the level-9 moment — record the
-                        # generic milestone too (so it isn't re-delivered later)
-                        # but suppress the ordinary scene/message this turn.
-                        await memory.record_milestone(milestone_key, user_id=user_id)
+                        # The oath scene IS the level-9 moment — the milestone is
+                        # already recorded above, so just suppress the ordinary
+                        # scene/message this turn.
+                        pass
                     elif is_new:
-                        # Also record in user-scoped fact store
-                        await memory.record_milestone(milestone_key, user_id=user_id)
                         # First time reaching this level — deliver milestone scene
                         scenes = aff_config.get("milestone_scenes", {})
                         scene_lines = scenes.get(aff_change.new_level, [])

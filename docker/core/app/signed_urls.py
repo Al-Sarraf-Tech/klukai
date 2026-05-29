@@ -4,8 +4,10 @@ Use-case: prevent hotlinking of user-specific image/memory endpoints by
 issuing short-lived, signed tokens embedded in URLs. The server verifies
 the signature + expiry before serving.
 
-Secret is read from SIGNED_URL_SECRET env; falls back to VAPID_PRIVATE_KEY
-so there's always a stable secret in a deployed environment.
+Secret is read from SIGNED_URL_SECRET env, falling back to VAPID_PRIVATE_KEY
+(a stable secret present in every deployed environment). If neither is set in
+production the signer fails closed rather than using a predictable key — see
+app/secret_config.py.
 """
 
 from __future__ import annotations
@@ -13,13 +15,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import os
 import time
+
+from .secret_config import resolve_secret
 
 
 def _secret() -> bytes:
-    s = os.environ.get("SIGNED_URL_SECRET") or os.environ.get("VAPID_PRIVATE_KEY") or "dev-secret"
-    return s.encode("utf-8")
+    return resolve_secret(
+        "SIGNED_URL_SECRET", "VAPID_PRIVATE_KEY", purpose="signed-urls"
+    ).encode("utf-8")
 
 
 def sign(resource_id: str, ttl_seconds: int = 300, user_id: str | None = None) -> str:

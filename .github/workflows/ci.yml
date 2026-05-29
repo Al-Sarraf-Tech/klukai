@@ -76,13 +76,16 @@ jobs:
       - name: Install scanners
         run: |
           python3 -m pip install --upgrade pip
-          pip install bandit safety
+          pip install bandit pip-audit
 
       - name: SAST — bandit (high-severity only)
         run: bandit -r app/ -ll --skip B101
 
-      - name: Dependency vulnerability — safety
-        run: safety check --file requirements.txt --ignore 70612 || true
+      - name: Dependency vulnerability — pip-audit (BLOCKING)
+        # Fails the build on any known-vulnerable pinned dependency. Replaces
+        # the old `safety check ... || true`, which could never fail the job.
+        # For a triaged false positive, add a documented `--ignore-vuln <ID>`.
+        run: pip-audit --requirement requirements.txt
 
   image-scan:
     name: Image Scan (trivy)
@@ -91,24 +94,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check trivy availability
-        id: trivy_check
+      - name: Ensure trivy is installed (pinned)
+        # No silent skip: if trivy is absent, install a pinned version; if that
+        # fails, the job fails loudly. A green image-scan must mean the image
+        # was actually scanned — not that the scanner happened to be missing.
         run: |
-          if command -v trivy >/dev/null 2>&1; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-            trivy --version
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "trivy not installed on runner — skipping image scan"
-            echo "Install instructions: https://aquasecurity.github.io/trivy/latest/getting-started/installation/"
+          if ! command -v trivy >/dev/null 2>&1; then
+            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.58.1/contrib/install.sh \
+              | sh -s -- -b /usr/local/bin v0.58.1
           fi
+          trivy --version
 
       - name: Build image
-        if: steps.trivy_check.outputs.available == 'true'
         run: docker build -t klukai-core:ci -f docker/core/Dockerfile docker/core/
 
       - name: Trivy scan — HIGH + CRITICAL fail
-        if: steps.trivy_check.outputs.available == 'true'
         run: |
           trivy image \
             --severity HIGH,CRITICAL \
@@ -118,7 +118,6 @@ jobs:
             klukai-core:ci
 
       - name: Trivy scan — full report (informational)
-        if: steps.trivy_check.outputs.available == 'true'
         run: |
           trivy image \
             --severity LOW,MEDIUM,HIGH,CRITICAL \
