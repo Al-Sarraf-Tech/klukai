@@ -155,7 +155,7 @@ async def save_image(
     try:
         memory_id = str(uuid.uuid4())
         filename = f"{memory_id}.png"
-        thumb_filename = f"{memory_id}_thumb.png"
+        thumb_filename = f"{memory_id}_thumb.webp"
 
         # Save full image
         img_path = IMAGES_DIR / filename
@@ -225,13 +225,15 @@ async def save_image(
 
 
 def _generate_thumbnail(src: Path, dst: Path, width: int = 320) -> None:
-    """Generate a thumbnail with the given width, preserving aspect ratio."""
+    """Generate a small WebP thumbnail (efficient for the grid), preserving
+    aspect ratio. WebP is ~7x smaller than PNG for these photos; the full
+    image is served separately at full resolution when a memory is opened."""
     try:
         with Image.open(src) as img:
             ratio = width / img.width
             height = int(img.height * ratio)
-            thumb = img.resize((width, height), Image.LANCZOS)
-            thumb.save(dst, "PNG", optimize=True)
+            thumb = img.convert("RGB").resize((width, height), Image.LANCZOS)
+            thumb.save(dst, "WEBP", quality=80, method=6)
     except Exception as e:
         logger.warning("Thumbnail generation failed: %s", e)
 

@@ -25,6 +25,16 @@ from .routes import (
 logger = logging.getLogger(__name__)
 
 
+def _img_media_type(data: bytes) -> str:
+    """Sniff image content-type from magic bytes. Thumbnails are WebP now; full
+    images are PNG; older thumbnails may still be PNG/JPEG until regenerated."""
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    return "image/png"
+
+
 async def _get_user_id(request: Request) -> str | None:
     """Local mirror of routes.py:_get_user_id."""
     from .auth import get_user_from_token
@@ -225,7 +235,7 @@ def register_extras(app: FastAPI) -> None:
         data = await memory_archive.get_image_bytes(memory_id, thumbnail=False, user_id=user_id)
         if data:
             return Response(
-                content=data, media_type="image/png",
+                content=data, media_type=_img_media_type(data),
                 # Images are immutable (content-hash filenames) — let the browser
                 # cache them so an album view fetches each once, not on every scroll.
                 headers={"Cache-Control": "private, max-age=604800, immutable"},
@@ -241,7 +251,7 @@ def register_extras(app: FastAPI) -> None:
         data = await memory_archive.get_image_bytes(memory_id, thumbnail=True, user_id=user_id)
         if data:
             return Response(
-                content=data, media_type="image/png",
+                content=data, media_type=_img_media_type(data),
                 # Images are immutable (content-hash filenames) — let the browser
                 # cache them so an album view fetches each once, not on every scroll.
                 headers={"Cache-Control": "private, max-age=604800, immutable"},

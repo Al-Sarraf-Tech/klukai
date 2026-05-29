@@ -253,7 +253,7 @@ class TestSaveImage:
         assert "INSERT INTO companion_memories" in sql
         assert params[0] == fixed_uuid                 # id
         assert params[1] == f"{fixed_uuid}.png"        # filename
-        assert params[2] == f"{fixed_uuid}_thumb.png"  # thumb_filename
+        assert params[2] == f"{fixed_uuid}_thumb.webp"  # thumb_filename
         assert params[4] == curation["annotation"]     # annotation
         assert params[5] == ["briefing", "hand"]       # scene_tags
         assert params[6] == "tender"                   # mood
@@ -382,6 +382,7 @@ class TestGenerateThumbnail:
         src_img.height = 600
         resized = MagicMock()
         src_img.resize.return_value = resized
+        src_img.convert.return_value = src_img  # .convert("RGB").resize(...) chain
         # Context-manager protocol for `with Image.open(src) as img:`
         cm = MagicMock()
         cm.__enter__ = MagicMock(return_value=src_img)
@@ -393,9 +394,9 @@ class TestGenerateThumbnail:
         # 320/800 = 0.4 ratio -> height 240.
         src_img.resize.assert_called_once()
         assert src_img.resize.call_args[0][0] == (320, 240)
-        # Saved as optimized PNG.
+        # Saved as WebP (efficient for the grid; the full image stays PNG).
         resized.save.assert_called_once()
-        assert resized.save.call_args[0][1] == "PNG"
+        assert resized.save.call_args[0][1] == "WEBP"
 
     def test_swallows_pillow_errors(self):
         """A broken image must not raise out of thumbnail generation."""
