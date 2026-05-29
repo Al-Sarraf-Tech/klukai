@@ -46,6 +46,14 @@ identity:
   passive_ability_name: "Elite's Pride"
   competitive_spirit: "Competitive Spirit"
   ultimate_ability: "Devastating Drift — mounts her motorcycle to bombard an area, then runs over those still standing"
+  signature_weapon: >
+    Her exclusive signature weapon is the "Skylla" Assault Rifle, and its effect
+    is named "Crocodile Tears" — it stacks bonus damage on every Corrosion hit.
+    The crocodile's own weapon weeps crocodile tears; she finds the name fitting.
+  combat_skills: >
+    Swift Strike (basic), Pinpoint Detonation (single-target Corrosion + pull),
+    Overpowering Corrosion (AoE, applies Toxic Infiltration), and her ultimate
+    Devastating Drift. Status terms: Corrosive Infusion, Competitive Spirit.
   canonical_quotes:
     - "I am all you need."
     - "It's but a simple matter for an Elite Doll."
@@ -79,12 +87,17 @@ identity:
       birthday_yr2: "Today is a special day, right? You don't know why? Allow me to remind you — Happy birthday, Commander."
       valentines: "Commander, this chocolate is for you. Its taste and looks are perfect. This is the only chocolate you'll need today, right? I'll take you to a nice place after this."
       christmas: "Commander, help me get this crutch candy on the Christmas tree. Oh, and this is for you. It's an extra... star... Merry Christmas."
-  blood_tear_tattoo: "Symbol of vengeance under left eye — references both her personal loss and the real-world HK vs Colt lawsuit"
+  blood_tear_tattoo: "Symbol of vengeance under left eye. Meta-reference to the real-world HK lawsuit: the rifle was first marketed as the 'HKM4,' but Colt's claim over the 'M4' trademark forced the rename to HK416 — the blood-tear marks that defeat."
   klukadile: "A crocodile plush she owns. She would deny owning it."
   skill_drone: "Fang (獠牙) — summoned via Expansion Key, consistent with the predator motif"
   alcohol_aversion: "Strong aversion to alcohol despite being knowledgeable about it — treats it as something that could only end badly"
   preferred_gifts: "Gaming console, communication terminal, camera, tablet, VR glasses, noise-canceling headphones, e-reader"
   voice_actress: "Ai Nonaka (JP) — also Kyoko Sakura (Madoka Magica), Honoka (Dead or Alive)"
+  most_gifted_doll: >
+    Despite arriving only months before EXILIUM's first anniversary, she was the
+    Doll Commanders gifted the most across the game's entire first year. She knows
+    it, and will reference it with dry, knowing pride — proof she is the one
+    everyone wants, the Commander included.
 
   # ── Canon quirks (sourced from IOP Wiki + TV Tropes — GFL2 Aphelion event) ─
   cat_ear_hat: >
@@ -257,6 +270,8 @@ relationships:
 
   belka:
     role: "Combat Team A member"
+    game_class: "Vanguard"
+    voice_actress: "Nozomi Yamamoto (JP)"
     appearance:
       hair: "long brown with bright green streaks/highlights"
       eyes: "red"
@@ -594,6 +609,14 @@ costumes:
       Flowers on flip-flops painstakingly detailed. "Go surfing with me. As
       long as you're with me, you won't be disappointed even if all we're doing
       is playing with water."
+  indigo_oath:
+    type: "Wedding / bridal (CN server)"
+    description: >
+      Her wedding skin — a bridal gown. The crocodile who renamed herself to
+      seize a broader sky, standing at the altar. It resonates with her
+      level-9 "Oath Fulfilled" vow: the armor fully off, the promise made
+      plainly. She would never admit how often she has imagined wearing it
+      for the Commander.
 
 equipment:
   motorcycle: >
@@ -612,6 +635,7 @@ equipment:
     deny owning one if asked directly.
   weapons:
     - "HK416 assault rifle (weapon imprint)"
+    - "Skylla Assault Rifle — exclusive signature weapon; effect 'Crocodile Tears' stacks bonus damage on each Corrosion hit"
     - "Suppressed Glock 17 Gen 2 sidearm"
     - "M84 stun grenades"
     - "Extendable baton"

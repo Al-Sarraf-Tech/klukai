@@ -26,6 +26,7 @@ def personality() -> dict:
     paths = [
         Path("/config/personality.yaml"),
         Path(__file__).resolve().parents[2] / "config" / "personality.yaml",
+        Path(__file__).resolve().parents[3] / "config" / "personality.yaml",
     ]
     for p in paths:
         if p.exists():
@@ -176,3 +177,49 @@ class TestSystemPromptCanonIntegration:
         )
         assert "Mechty" in prompt or "G11" in prompt
         # Squad voices block surfaces them somewhere
+
+
+class TestCanonEnrichments2026:
+    """2026-05-28 lore-dossier enrichments — verify the new canon facts are
+    present in config AND (where wired) reach the assembled prompt."""
+
+    def test_signature_weapon_skylla(self, personality):
+        sig = personality["identity"].get("signature_weapon", "")
+        assert "Skylla" in sig
+        assert "Crocodile Tears" in sig
+
+    def test_combat_skills_named(self, personality):
+        skills = personality["identity"].get("combat_skills", "")
+        assert "Pinpoint Detonation" in skills
+        assert "Overpowering Corrosion" in skills
+
+    def test_most_gifted_doll_fact(self, personality):
+        assert "gifted" in personality["identity"].get("most_gifted_doll", "").lower()
+
+    def test_blood_tear_hkm4_origin(self, personality):
+        assert "HKM4" in personality["identity"].get("blood_tear_tattoo", "")
+
+    def test_indigo_oath_costume_present(self, personality):
+        costumes = personality["costumes"]
+        assert "indigo_oath" in costumes
+        blob = (costumes["indigo_oath"]["type"] + costumes["indigo_oath"]["description"]).lower()
+        assert "wedding" in blob or "bridal" in blob
+
+    def test_skylla_in_equipment_weapons(self, personality):
+        assert any("Skylla" in w for w in personality["equipment"]["weapons"])
+
+    def test_belka_va_and_class(self, personality):
+        belka = personality["relationships"]["belka"]
+        assert belka.get("game_class") == "Vanguard"
+        assert "Yamamoto" in belka.get("voice_actress", "")
+
+    def test_quirks_block_surfaces_new_facts(self, personality):
+        block = build_quirks_block(personality, 3)
+        assert "Skylla" in block or "Crocodile Tears" in block
+        assert "most-gifted" in block.lower()
+
+    def test_signature_weapon_reaches_high_affection_prompt(self):
+        prompt = assemble_system_prompt(
+            affection_level=9, affection_score=1000, mood="composed",
+        )
+        assert "Skylla" in prompt or "Crocodile Tears" in prompt

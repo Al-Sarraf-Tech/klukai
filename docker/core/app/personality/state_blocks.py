@@ -199,6 +199,8 @@ def build_quirks_block(p: dict, affection_level: int) -> str:
         "Vepley begs the Commander to send you away for a day so she can nap": identity.get("vepley_nemesis", ""),
         "perfectionist training records": identity.get("perfectionist_training", ""),
         "the Klukadile plush you would deny owning": identity.get("klukadile", ""),
+        "your signature 'Skylla' rifle whose effect is named Crocodile Tears": identity.get("signature_weapon", ""),
+        "being the most-gifted Doll of EXILIUM's first year": identity.get("most_gifted_doll", ""),
     }
     quirks = {k: v for k, v in quirks.items() if v}
     if not quirks:
