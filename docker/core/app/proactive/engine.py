@@ -62,6 +62,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin):
         self._mission_timer: MissionTimer | None = None
         self._romance_delivered_today: bool = False
         self._dream_delivered_today: bool = False
+        self._memory_recall_delivered_today: bool = False
         self._user_messaged_today: bool = False
 
     def set_callback(self, callback) -> None:
@@ -162,6 +163,15 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin):
             self._dream_event,
             CronTrigger(hour="1-4", minute=37),
             id="dream_event",
+            replace_existing=True,
+        )
+
+        # Living memory recall — warm "remember when…" from the real archive.
+        # Fires at two daytime hours; each tick rolls ~35% so it isn't every day.
+        self._scheduler.add_job(
+            self._memory_recall_tick,
+            CronTrigger(hour="11,17", minute=20),
+            id="memory_recall",
             replace_existing=True,
         )
 
@@ -386,6 +396,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin):
         self._random_events_today = 0
         self._dream_delivered_today = False
         self._romance_delivered_today = False
+        self._memory_recall_delivered_today = False
         self._user_messaged_today = False
         # Reset per-user counters
         self._proactive_counts.clear()

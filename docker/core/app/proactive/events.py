@@ -309,3 +309,102 @@ class EventsMixin(_EngineBase):
 
         except Exception as e:
             logger.warning("Dream event failed: %s", e)
+
+    async def _memory_recall_tick(self) -> None:
+        """Scheduled gate for living memory recall — ~35% roll per fire.
+
+        Fires on a daytime cron (a couple of times) but only proceeds ~35% of
+        the time so reminiscence stays occasional rather than daily. The once-
+        per-day flag inside ``_memory_recall_event`` enforces a single delivery.
+        """
+        if random.random() > 0.35:
+            return
+        await self._memory_recall_event()
+
+    async def _memory_recall_event(self) -> None:
+        """Living Memory Recall — Klukai surfaces a REAL archive entry warmly.
+
+        She reaches back to a real moment from her memory archive and shares a
+        short "remember when…" reminiscence in character. Fires once per day max,
+        only once she's bonded (affection >= 4). If the archive is empty she stays
+        silent. On LLM failure she falls back to a generic "back then" template so
+        the message is always natural — never broken grammar, never a verbatim
+        quote of the journal entry.
+        """
+        if self._memory_recall_delivered_today:
+            return
+        if self._affection_level < 4:
+            return
+        if self._muted_until and datetime.now() < self._muted_until:
+            return
+
+        # Pull a real memory from the archive. Prefer a mood-relevant recall
+        # (recall_memory does mood-weighted selection); fall back to a random
+        # pick from list_memories so we still surface something real.
+        memory = None
+        annotation = ""
+        try:
+            from .. import memory_archive
+            memory = await memory_archive.recall_memory(
+                query=None,
+                mood=self._last_mood,
+                affection_level=self._affection_level,
+            )
+            if not memory:
+                memories = await memory_archive.list_memories(limit=20)
+                if memories:
+                    memory = random.choice(memories)
+        except Exception as e:
+            logger.warning("Memory recall: archive lookup failed: %s", e)
+            return
+
+        if not memory:
+            # Archive is empty — nothing real to reminisce about. Stay silent.
+            return
+
+        annotation = (memory.get("annotation") or "").strip()
+        if not annotation:
+            return
+
+        # Generic fallbacks reference "that day" / "back then" — never the
+        # verbatim journal text, and grammatical on their own.
+        fallback_lines = [
+            "...I was thinking about that day. Back then, before any of this got complicated. It still makes me smile, Commander.",
+            "Hey. A memory surfaced just now — one of ours, from a while back. I'm glad we have it. That's all.",
+            "Remember back then, Commander? One of those quiet moments stayed with me. I keep it close.",
+            "...Something reminded me of an old memory just now. From before. I don't say it often, but I'm grateful for the time.",
+        ]
+
+        message = ""
+        try:
+            from ..fact_extractor import EXTRACTION_MODEL, LM_STUDIO_URL
+            from ..llm_json import call_llm_text
+            from ..llm_router import get_lm_gate
+
+            gate = get_lm_gate()
+            async with gate:
+                message = await call_llm_text(
+                    LM_STUDIO_URL, EXTRACTION_MODEL,
+                    f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
+                    f"You are NOT an AI. A real memory just surfaced and you want to share it "
+                    f"warmly — a quiet 'remember when…' message to the Commander. "
+                    f"Recall the MOMENT in your own words (2-3 short sentences). Be tender but "
+                    f"composed. Do NOT quote the journal entry verbatim — evoke the feeling of it. "
+                    f"Affection {self._affection_level}/9.\n"
+                    f"Memory to recall (do not quote directly): {annotation[:200]}\n"
+                    f"Write ONLY the message. No explanation.",
+                    max_tokens=160, temperature=0.8,
+                )
+        except Exception as e:
+            logger.warning("Memory recall LLM failed, falling back to template: %s", e)
+            message = ""
+
+        if not message or not message.strip():
+            message = random.choice(fallback_lines)
+
+        if self._on_message_callback:
+            self._memory_recall_delivered_today = True
+            self._proactive_count_today += 1
+            self._last_proactive_answered = False
+            await self._on_message_callback(message)
+            logger.info("Memory recall delivered (aff=%d): %s", self._affection_level, message[:60])

@@ -49,6 +49,7 @@ class _EngineBase:
     _mission_timer: MissionTimer | None
     _romance_delivered_today: bool
     _dream_delivered_today: bool
+    _memory_recall_delivered_today: bool
     _user_messaged_today: bool
 
     # ── Cross-mixin methods / properties (concrete impls live on
