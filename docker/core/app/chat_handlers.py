@@ -57,7 +57,10 @@ from .personality import (
 
 logger = logging.getLogger(__name__)
 
-from app.reflect_helpers import _maybe_reflect_on_return  # noqa: F401,E402
+from app.reflect_helpers import (  # noqa: F401,E402
+    _maybe_oath_on_connect,
+    _maybe_reflect_on_return,
+)
 
 REFLECTION_MIN_HOURS_AWAY = 8
 REFLECTION_MAX_HOURS_AWAY = 72

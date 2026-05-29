@@ -17,6 +17,20 @@ logger = logging.getLogger(__name__)
 REFLECTION_MIN_HOURS_AWAY = 8
 REFLECTION_MAX_HOURS_AWAY = 72
 
+async def _maybe_oath_on_connect(user_id: str) -> None:
+    """On connect, if the Commander is already at the level-9 "Oath Fulfilled"
+    tier and the one-time oath has never fired (e.g. they reached lv9 before the
+    capstone feature existed), deliver it now. Self-guarded — fires once ever.
+    """
+    try:
+        if (await affection.get_state(user_id)).level < 9:
+            return
+        from .background import maybe_deliver_oath
+        await maybe_deliver_oath(user_id)
+    except Exception as e:
+        logger.debug("Oath-on-connect skipped: %s", e)
+
+
 async def _maybe_reflect_on_return(user_id: str) -> None:
     """Greet the returning user with a reference to the last topic if away >8h.
 

@@ -24,6 +24,28 @@ from .personality import load_personality
 logger = logging.getLogger(__name__)
 
 
+async def maybe_deliver_oath(user_id: str) -> bool:
+    """Deliver the one-time level-9 "Oath Fulfilled" capstone if it has never
+    fired for this user. Guarded by companion_firsts('oath_fulfilled') so it
+    fires EXACTLY once ever — safe to call both on the level-up-to-9 transition
+    and on connect (for a Commander who reached lv9 before this feature existed).
+
+    The once-ever "first" is only consumed when there is actually a scene to
+    deliver, so a missing/empty config can't silently burn the trigger.
+    Returns True iff the scene was delivered this call.
+    """
+    oath_scene = load_personality().get("affection", {}).get("oath_fulfilled_scene", [])
+    if not oath_scene:
+        return False
+    if not await proactive.record_first(user_id, "oath_fulfilled"):
+        return False  # already fired once — never repeat
+    for line in oath_scene:
+        await ws.send_proactive(user_id, line)
+        await asyncio.sleep(3)  # weighty pacing
+    logger.info("Oath Fulfilled capstone delivered (once-ever) for %s", user_id)
+    return True
+
+
 async def background_extraction(
     user_msg: str,
     assistant_msg: str,
@@ -199,15 +221,7 @@ async def background_extraction(
                     # event exists (verified ws_manager.py).
                     oath_delivered = False
                     if aff_change.new_level == 9:
-                        is_oath_first = await proactive.record_first(user_id, "oath_fulfilled")
-                        if is_oath_first:
-                            oath_scene = aff_config.get("oath_fulfilled_scene", [])
-                            if oath_scene:
-                                for line in oath_scene:
-                                    await ws.send_proactive(user_id, line)
-                                    await asyncio.sleep(3)  # weighty pacing
-                                oath_delivered = True
-                                logger.info("Oath Fulfilled capstone delivered (once-ever) for %s", user_id)
+                        oath_delivered = await maybe_deliver_oath(user_id)
 
                     # Check for first-time milestone scene
                     milestone_key = f"affection_level_{aff_change.new_level}"

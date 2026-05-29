@@ -186,6 +186,9 @@ def register_websocket(app: FastAPI) -> None:
         # the last topic. Runs in background so it never blocks the connect.
         import asyncio as _asyncio
         ws.track_task(user_id, _asyncio.create_task(_maybe_reflect_on_return(user_id)))
+        # Level-9 Oath capstone for an already-maxed Commander who reached lv9
+        # before this feature existed — fires once ever, self-guarded.
+        ws.track_task(user_id, _asyncio.create_task(_maybe_oath_on_connect(user_id)))
 
         try:
             while True:
@@ -216,5 +219,6 @@ def register_websocket(app: FastAPI) -> None:
 # Handlers moved to chat_handlers.py (S+ Phase 2 §6.1).
 from app.chat_handlers import (  # noqa: E402,F401
     _maybe_reflect_on_return,
+    _maybe_oath_on_connect,
     _handle_message,
 )
