@@ -162,7 +162,7 @@ REQUIRED_TABLES=(
   "companion_memories"
   "companion_users"
   "companion_audit_log"
-  "companion_affection_state"
+  "companion_affection"
 )
 
 TABLES_COUNT=0

@@ -131,7 +131,7 @@ fi
 
 step "7. Restore companion-images volume"
 if [[ -f /mnt/nvmeINT/restore/extracted/companion-images.tar ]]; then
-  docker run --rm -v klukai_companion-images:/dst -v /mnt/nvmeINT/restore/extracted:/src alpine \
+  docker run --rm -v companion_companion-images:/dst -v /mnt/nvmeINT/restore/extracted:/src alpine \
     sh -c "cd /dst && tar -xf /src/companion-images.tar"
 fi
 
