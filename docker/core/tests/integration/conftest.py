@@ -147,6 +147,10 @@ async def _create_test_user(test_user_id: str, test_password: str) -> AsyncItera
     yield
     try:
         async with get_conn_autocommit() as conn:
+            # Delete sessions first: companion_auth_sessions has a FK to
+            # companion_users, so deleting the user while a test created a
+            # session (any login) would FK-violate and orphan the test account.
+            await conn.execute("DELETE FROM companion_auth_sessions WHERE user_id = %s", (test_user_id,))
             await conn.execute("DELETE FROM companion_users WHERE id = %s", (test_user_id,))
     except Exception:
         pass
