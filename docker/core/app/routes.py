@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from . import memory_archive
 from .context import ws, router, affection
 from .helpers import (
+    client_ip,
     fix_narration as _fix_narration,
     strip_actions_for_tts as _strip_actions_for_tts,
 )
@@ -95,7 +96,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     @app.post("/api/auth/login")
     async def login(req: LoginRequest, request: Request):
         from .auth import authenticate, check_ip_banned
-        ip = request.client.host if request.client else "unknown"
+        ip = client_ip(request)
         if await check_ip_banned(ip):
             return JSONResponse({"error": "IP banned"}, status_code=403)
         token = await authenticate(req.username, req.password, ip)

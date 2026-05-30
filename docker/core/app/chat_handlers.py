@@ -123,9 +123,16 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         rel_facts: dict[Any, Any] = {}
         recalled_exchanges: list[Any] = []
     else:
-        episode_memories, rel_facts, recalled_exchanges = await memory.recall_for_prompt(
-            content, user_id=user_id
-        )
+        try:
+            episode_memories, rel_facts, recalled_exchanges = await memory.recall_for_prompt(
+                content, user_id=user_id
+            )
+        except Exception as e:
+            # Defense in depth: recall_for_prompt already fails open, but never let
+            # a memory-layer surprise tear down the chat/WS — degrade to no recalled
+            # context and keep replying.
+            logger.warning("recall_for_prompt failed, continuing with empty context: %s", e)
+            episode_memories, rel_facts, recalled_exchanges = [], {}, []
 
     # Get affection state for prompt modulation
     aff_state = await affection.get_state(user_id)

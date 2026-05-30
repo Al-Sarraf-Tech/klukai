@@ -103,7 +103,9 @@ def annotation_quality_score(text: str) -> float:
     return max(0.0, min(1.0, score))
 
 
-async def _is_duplicate_annotation(annotation: str, threshold: float = 0.7) -> bool:
+async def _is_duplicate_annotation(
+    annotation: str, user_id: str = "jalsarraf", threshold: float = 0.7
+) -> bool:
     """Check if a substantially similar annotation already exists.
 
     Uses simple word overlap ratio — fast, no LLM or embedding needed.
@@ -115,8 +117,9 @@ async def _is_duplicate_annotation(annotation: str, threshold: float = 0.7) -> b
         async with get_conn() as conn:
             rows = await (await conn.execute(
                 "SELECT annotation FROM companion_memories "
-                "WHERE kept = true AND annotation IS NOT NULL "
-                "ORDER BY created_at DESC LIMIT 30"
+                "WHERE kept = true AND annotation IS NOT NULL AND user_id = %s "
+                "ORDER BY created_at DESC LIMIT 30",
+                (user_id,),
             )).fetchall()
 
         target_words = set(annotation.lower().split())
@@ -192,7 +195,7 @@ async def save_image(
             annotation = "Uncaptioned moment."
 
         # Deduplication — skip if a very similar annotation already exists
-        if await _is_duplicate_annotation(annotation):
+        if await _is_duplicate_annotation(annotation, user_id=user_id):
             logger.info("Skipping duplicate memory: %s", annotation[:60])
             # Clean up the already-written image files
             img_path.unlink(missing_ok=True)

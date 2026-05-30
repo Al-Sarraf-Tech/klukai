@@ -133,7 +133,8 @@ async def authenticate(username: str, password: str, ip: str) -> str | None:
         async with get_conn_autocommit() as conn:
             row = await (
                 await conn.execute(
-                    "SELECT id, password_hash FROM companion_users WHERE username = %s",
+                    "SELECT id, password_hash FROM companion_users "
+                    "WHERE username = %s AND deactivated_at IS NULL",
                     (username,),
                 )
             ).fetchone()
@@ -212,8 +213,10 @@ async def get_user_from_token(token: str) -> str | None:
             token_hash = _hash_token(token)
             row = await (
                 await conn.execute(
-                    "SELECT user_id, expires_at, created_at FROM companion_auth_sessions "
-                    "WHERE token = %s",
+                    "SELECT s.user_id, s.expires_at, s.created_at "
+                    "FROM companion_auth_sessions s "
+                    "JOIN companion_users u ON u.id = s.user_id "
+                    "WHERE s.token = %s AND u.deactivated_at IS NULL",
                     (token_hash,),
                 )
             ).fetchone()

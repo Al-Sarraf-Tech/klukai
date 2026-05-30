@@ -111,38 +111,44 @@ async def recall_exchanges(
     user_id: str = "jalsarraf",
 ) -> list[dict]:
     """Semantic search over past conversation exchanges, scoped to user."""
-    vector = await self.embed_text(query)
-    if not vector or all(v == 0.0 for v in vector):
-        # Embedding failed — don't search Qdrant with an all-zero vector.
-        logger.warning("Exchange recall skipped — embedding failed (zero vector)")
-        return []
-    r = await self._http.post(
-        f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points/search",
-        json={
-            "vector": vector,
-            "limit": limit,
-            "score_threshold": min_score,
-            "with_payload": True,
-            "filter": {
-                "must": [{"key": "user_id", "match": {"value": user_id}}]
+    try:
+        vector = await self.embed_text(query)
+        if not vector or all(v == 0.0 for v in vector):
+            # Embedding failed — don't search Qdrant with an all-zero vector.
+            logger.warning("Exchange recall skipped — embedding failed (zero vector)")
+            return []
+        r = await self._http.post(
+            f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points/search",
+            json={
+                "vector": vector,
+                "limit": limit,
+                "score_threshold": min_score,
+                "with_payload": True,
+                "filter": {
+                    "must": [{"key": "user_id", "match": {"value": user_id}}]
+                },
             },
-        },
-    )
-    if r.status_code != 200:
-        logger.warning("Exchange recall failed: %s", r.text)
+        )
+        if r.status_code != 200:
+            logger.warning("Exchange recall failed: %s", r.text)
+            return []
+        results = r.json().get("result", [])
+        return [
+            {
+                "user_content": hit["payload"]["user_content"],
+                "assistant_content": hit["payload"]["assistant_content"],
+                "topics": hit["payload"].get("topics", []),
+                "mood": hit["payload"].get("mood", "composed"),
+                "score": hit["score"],
+                "created_at": hit["payload"].get("created_at", ""),
+            }
+            for hit in results
+        ]
+    except Exception as e:
+        # Fail open: recall feeds the live chat read path; a backing-store
+        # hiccup must degrade context, not drop the reply or kill the WS.
+        logger.warning("Exchange recall failed: %s", e)
         return []
-    results = r.json().get("result", [])
-    return [
-        {
-            "user_content": hit["payload"]["user_content"],
-            "assistant_content": hit["payload"]["assistant_content"],
-            "topics": hit["payload"].get("topics", []),
-            "mood": hit["payload"].get("mood", "composed"),
-            "score": hit["score"],
-            "created_at": hit["payload"].get("created_at", ""),
-        }
-        for hit in results
-    ]
 
 
 async def recall_exchanges_with_recency(

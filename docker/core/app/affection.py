@@ -428,15 +428,16 @@ class AffectionManager:
         state.level, state.level_name = self._compute_level(state.score)
         logger.info("Absence decay: %d points for %d days (capped), score %d→%d", total_decay, days_absent - 1, old_score, state.score)
 
-        await self._save_state(state)
+        await self._save_state(state, user_id)
         if total_decay != 0:
             await self._log_change(
                 total_decay,
                 f"absence_decay ({days_absent - 1} days)",
                 old_score, state.score, old_level, state.level,
+                user_id,
             )
 
-        self._state = state
+        self._states[user_id] = state
         logger.info(
             "Applied absence decay: %d points for %d days absent (score: %d -> %d)",
             total_decay, days_absent - 1, old_score, state.score,

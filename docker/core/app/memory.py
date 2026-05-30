@@ -264,37 +264,44 @@ class MemoryManager:
         self, query: str, limit: int = 5, min_score: float = 0.3,
         user_id: str = "jalsarraf",
     ) -> list[dict]:
-        vector = await self.embed_text(query)
-        if not vector or all(v == 0.0 for v in vector):
-            # Embedding failed — searching Qdrant with an all-zero vector returns
-            # meaningless (garbage-ranked) results. Return empty instead.
-            logger.warning("Episode recall skipped — embedding failed (zero vector)")
-            return []
-        r = await self._http.post(
-            f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points/search",
-            json={
-                "vector": vector,
-                "limit": limit,
-                "score_threshold": min_score,
-                "with_payload": True,
-                "filter": {
-                    "must": [{"key": "user_id", "match": {"value": user_id}}]
+        try:
+            vector = await self.embed_text(query)
+            if not vector or all(v == 0.0 for v in vector):
+                # Embedding failed — searching Qdrant with an all-zero vector returns
+                # meaningless (garbage-ranked) results. Return empty instead.
+                logger.warning("Episode recall skipped — embedding failed (zero vector)")
+                return []
+            r = await self._http.post(
+                f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points/search",
+                json={
+                    "vector": vector,
+                    "limit": limit,
+                    "score_threshold": min_score,
+                    "with_payload": True,
+                    "filter": {
+                        "must": [{"key": "user_id", "match": {"value": user_id}}]
+                    },
                 },
-            },
-        )
-        if r.status_code != 200:
-            logger.warning("Qdrant search failed: %s", r.text)
+            )
+            if r.status_code != 200:
+                logger.warning("Qdrant search failed: %s", r.text)
+                return []
+            results = r.json().get("result", [])
+            return [
+                {
+                    "summary": hit["payload"]["summary"],
+                    "score": hit["score"],
+                    "keywords": hit["payload"].get("keywords", []),
+                    "emotion_tags": hit["payload"].get("emotion_tags", []),
+                }
+                for hit in results
+            ]
+        except Exception as e:
+            # Fail open: this runs inside the live chat read path (WS message
+            # handler). A Qdrant/embed hiccup must degrade context, never crash
+            # the reply or tear down the socket.
+            logger.warning("Episode recall failed: %s", e)
             return []
-        results = r.json().get("result", [])
-        return [
-            {
-                "summary": hit["payload"]["summary"],
-                "score": hit["score"],
-                "keywords": hit["payload"].get("keywords", []),
-                "emotion_tags": hit["payload"].get("emotion_tags", []),
-            }
-            for hit in results
-        ]
 
     # ── Conversation Exchange Memory (Qdrant — per-exchange vectors) ────
 
@@ -328,12 +335,20 @@ class MemoryManager:
 
     async def recall_facts_by_pattern(self, pattern: str,
                                        user_id: str = "jalsarraf") -> list[dict]:
-        r = await self._http.get(
-            f"{DATA_URL}/memory/recall",
-            params={"pattern": f"companion:{user_id}:{pattern}"},
-        )
-        data = r.json()
-        return data.get("entries", [])
+        # Fail open like recall_fact/store_fact — this backs inside-jokes, the
+        # Commander dossier, and milestones on the live chat read path, so a
+        # data-service hiccup must return empty, not raise.
+        try:
+            r = await self._http.get(
+                f"{DATA_URL}/memory/recall",
+                params={"pattern": f"companion:{user_id}:{pattern}"},
+            )
+            r.raise_for_status()
+            data = r.json()
+            return data.get("entries", [])
+        except Exception as e:
+            logger.warning("recall_facts_by_pattern failed (%s): %s", pattern, e)
+            return []
 
     # ── Relationship facts (convenience) ─────────────────────────────────
 
@@ -437,8 +452,20 @@ class MemoryManager:
         )
 
         episodes, facts, exchanges = await asyncio.gather(
-            episodes_task, facts_task, exchanges_task
+            episodes_task, facts_task, exchanges_task, return_exceptions=True,
         )
+        # Each sub-call already fails open; return_exceptions is belt-and-suspenders
+        # so an unexpected error in one path can never propagate out of the chat
+        # read path and drop the reply/WS.
+        if isinstance(episodes, BaseException):
+            logger.warning("recall_for_prompt: episodes failed: %s", episodes)
+            episodes = []
+        if isinstance(facts, BaseException):
+            logger.warning("recall_for_prompt: facts failed: %s", facts)
+            facts = {}
+        if isinstance(exchanges, BaseException):
+            logger.warning("recall_for_prompt: exchanges failed: %s", exchanges)
+            exchanges = []
         episode_texts = [ep["summary"] for ep in episodes]
         return episode_texts, facts, exchanges
 

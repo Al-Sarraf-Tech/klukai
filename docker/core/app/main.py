@@ -209,7 +209,13 @@ async def lifespan(app: FastAPI):
     logger.info("Klukai companion core stopped")
 
 
-app = FastAPI(title="Companion Core", version="0.1.0", lifespan=lifespan)
+# docs_url/redoc_url/openapi_url disabled: this is a private single-owner app
+# behind Cloudflare; the interactive docs + schema would hand an attacker the
+# full endpoint map (incl. admin routes) for free. No auth gate needed when off.
+app = FastAPI(
+    title="Companion Core", version="0.1.0", lifespan=lifespan,
+    docs_url=None, redoc_url=None, openapi_url=None,
+)
 
 
 # ── Security middleware ─────────────────────────────────────────────────────
@@ -311,7 +317,8 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
             except Exception:
                 identity = None
         if not identity:
-            identity = request.client.host if request.client else "anon"
+            from .helpers import client_ip
+            identity = client_ip(request)
 
         from .rate_limit import check_and_consume, RateLimitExceeded
         try:
