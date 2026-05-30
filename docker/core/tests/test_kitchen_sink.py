@@ -349,7 +349,7 @@ class TestPersonalityConfig:
 
     def test_affection_levels_ordered(self, p):
         levels = p.get("affection", {}).get("levels", [])
-        thresholds = [l["threshold"] for l in levels]
+        thresholds = [lvl["threshold"] for lvl in levels]
         assert thresholds == sorted(thresholds)
 
     def test_has_speech_patterns(self, p):
@@ -844,10 +844,26 @@ class TestHeartbeatSpikeAlerts:
         assert hasattr(mgr, 'send_heartbeat_spike')
 
     def test_spike_requires_high_intensity(self):
-        """Intensity threshold is >= 7 for spike to fire."""
-        # This tests the logic documented in background.py:
-        # only intensity >= 7 triggers a spike
-        assert 7 <= 10  # The threshold is documented and tested in integration
+        """The spike gate in background.py fires only at intensity >= 7."""
+        import inspect
+
+        from app import background
+        src = inspect.getsource(background)
+        # The real gate combines the mood-map membership with the >= 7 floor.
+        assert "if mood in HIGH_INTENSITY_MOODS and intensity >= 7:" in src
+
+    def test_spike_map_matches_source(self):
+        """This test's BPM map must mirror the literal one in background.py.
+
+        Guards against drift: if someone retunes a BPM in the source, this
+        test (which other assertions in the class rely on) must be updated too.
+        """
+        import inspect
+
+        from app import background
+        src = inspect.getsource(background)
+        for mood, bpm in self.HIGH_INTENSITY_MOODS.items():
+            assert f'"{mood}": {bpm}' in src, f"{mood}:{bpm} not in background.py spike map"
 
     def test_bpm_ordering_by_danger(self):
         """More dangerous moods should have higher BPM."""
@@ -902,11 +918,14 @@ class TestNewFeatureIntegration:
     def test_physical_state_tracker_importable(self):
         from app.physical_state import PhysicalStateTracker
         tracker = PhysicalStateTracker()
-        assert tracker is not None
+        # A fresh tracker starts with an empty per-user cache.
+        assert tracker._cache == {}
 
     def test_context_has_physical(self):
         from app.context import physical
-        assert physical is not None
+        from app.physical_state import PhysicalStateTracker
+        # The shared context.physical is a real PhysicalStateTracker instance.
+        assert isinstance(physical, PhysicalStateTracker)
 
 
 # ── Caching + DB Behavior Tests ───────────────────────────────────────────────
@@ -1323,8 +1342,9 @@ class TestBuildMoodBleedBlock:
 
     def test_returns_string(self):
         from app.personality import build_mood_bleed_block
+        # 'composed' is an OPERATIONAL-category mood; its block names that category.
         result = build_mood_bleed_block("composed")
-        assert isinstance(result, str)
+        assert "MOOD BLEED — OPERATIONAL" in result
 
     def test_contains_category_rule(self):
         from app.personality import build_mood_bleed_block

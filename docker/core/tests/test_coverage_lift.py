@@ -7,7 +7,6 @@ modules. No DB / network / FastAPI / file I/O.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 
 import pytest
 
@@ -32,7 +31,9 @@ class TestAffectionState:
         from app.affection import AffectionState
         for lvl in range(0, 10):
             s = AffectionState(score=lvl * 100, level=lvl)
-            assert 0 <= s.level <= 9
+            # The model preserves the exact level + score it was constructed with.
+            assert s.level == lvl
+            assert s.score == lvl * 100
 
 
 # ── llm_json parsers ──────────────────────────────────────────────────────────
@@ -44,11 +45,13 @@ class TestLlmJsonExtraction:
 
     def test_extract_text_empty_dict(self) -> None:
         from app.llm_json import extract_text
-        assert isinstance(extract_text({}), str)
+        # No "choices" key → empty string (the documented default).
+        assert extract_text({}) == ""
 
     def test_extract_text_empty_choices(self) -> None:
         from app.llm_json import extract_text
-        assert isinstance(extract_text({"choices": []}), str)
+        # Empty choices list → empty string, never raises.
+        assert extract_text({"choices": []}) == ""
 
     def test_extract_text_nested_message(self) -> None:
         from app.llm_json import extract_text
@@ -61,8 +64,8 @@ class TestLlmJsonExtraction:
 
     def test_parse_json_array(self) -> None:
         from app.llm_json import parse_json
-        result = parse_json("[1, 2, 3]")
-        assert result == [1, 2, 3] or result is None
+        # Top-level JSON arrays parse to the exact list.
+        assert parse_json("[1, 2, 3]") == [1, 2, 3]
 
     def test_parse_json_bool(self) -> None:
         from app.llm_json import parse_json
@@ -75,8 +78,8 @@ class TestLlmJsonExtraction:
 
     def test_parse_json_int(self) -> None:
         from app.llm_json import parse_json
-        result = parse_json("42")
-        assert result == 42 or result is None
+        # Bare integer literal parses to the int 42.
+        assert parse_json("42") == 42
 
     def test_parse_json_invalid(self) -> None:
         from app.llm_json import parse_json
@@ -88,62 +91,80 @@ class TestLlmJsonExtraction:
 
     def test_parse_json_extracts_from_text(self) -> None:
         from app.llm_json import parse_json
+        # The _JSON_OBJECT regex extracts the embedded object out of prose.
         result = parse_json('Sure! Here is: {"key": "value"} as requested.')
-        assert result is None or result == {"key": "value"}
+        assert result == {"key": "value"}
 
     def test_parse_json_array_brackets(self) -> None:
         from app.llm_json import parse_json
-        result = parse_json('[{"a": 1}, {"b": 2}]')
-        assert result is None or isinstance(result, list)
+        # Top-level array of objects parses to the exact list of dicts.
+        assert parse_json('[{"a": 1}, {"b": 2}]') == [{"a": 1}, {"b": 2}]
 
 
 # ── helpers detectors ────────────────────────────────────────────────────────
 class TestHelperDetectors:
     def test_detect_jealousy_trigger(self) -> None:
         from app.helpers import detect_jealousy_trigger
-        for msg in ("My ex called me", "Another woman", "hello"):
-            result = detect_jealousy_trigger(msg)
-            assert result is None or isinstance(result, str)
+        # A squad name + a compliment fires and returns the canonical name.
+        assert detect_jealousy_trigger("Mechty is amazing") == "Mechty"
+        # No squad member named → no jealousy, even with "ex"/"another woman".
+        assert detect_jealousy_trigger("My ex called me") is None
+        assert detect_jealousy_trigger("Another woman") is None
+        assert detect_jealousy_trigger("hello") is None
 
     def test_detect_gift_giving(self) -> None:
         from app.helpers import detect_gift_giving
-        assert isinstance(detect_gift_giving("I bought you flowers"), bool)
-        assert isinstance(detect_gift_giving("hello"), bool)
+        # "bought you X" matches the gifting pattern; greetings do not.
+        assert detect_gift_giving("I bought you flowers") is True
+        assert detect_gift_giving("hello") is False
 
     def test_detect_commander_details(self) -> None:
         from app.helpers import detect_commander_details
-        result = detect_commander_details("My birthday is in June")
-        assert isinstance(result, dict)
+        # "My birthday is in June" matches NO detail category (birthday is not
+        # a tracked category) → empty dict, NOT a populated one.
+        assert detect_commander_details("My birthday is in June") == {}
+        # A wearing phrase produces exactly the 'wearing' flag.
+        assert detect_commander_details("I'm wearing a coat") == {"wearing": True}
 
     def test_wants_dream_inquiry(self) -> None:
         from app.helpers import wants_dream_inquiry
-        assert isinstance(wants_dream_inquiry("did you dream?"), bool)
-        assert isinstance(wants_dream_inquiry("hello"), bool)
+        assert wants_dream_inquiry("did you dream?") is True
+        assert wants_dream_inquiry("hello") is False
 
     def test_wants_recall(self) -> None:
         from app.helpers import wants_recall
-        assert isinstance(wants_recall("remember when?"), bool)
-        assert isinstance(wants_recall("hello"), bool)
+        assert wants_recall("remember when?") is True
+        assert wants_recall("hello") is False
 
     def test_wants_mission_start(self) -> None:
         from app.helpers import wants_mission_start
-        assert isinstance(wants_mission_start("start a mission"), bool)
-        assert isinstance(wants_mission_start("hello"), bool)
+        # Real trigger phrases come from MISSION_START_KEYWORDS — note that a
+        # bare "start a mission" is NOT a trigger; "keep me posted" is.
+        assert wants_mission_start("keep me posted") is True
+        assert wants_mission_start("updates every 30 min") is True
+        assert wants_mission_start("start a mission") is False
+        assert wants_mission_start("hello") is False
 
     def test_wants_mission_cancel(self) -> None:
         from app.helpers import wants_mission_cancel
-        assert isinstance(wants_mission_cancel("cancel mission"), bool)
+        # "cancel mission" is NOT a keyword; "stop updates"/"stand down" are.
+        assert wants_mission_cancel("stop updates") is True
+        assert wants_mission_cancel("stand down") is True
+        assert wants_mission_cancel("cancel mission") is False
+        assert wants_mission_cancel("hello") is False
 
     def test_parse_interval_minutes_default(self) -> None:
         from app.helpers import parse_interval_minutes
-        result = parse_interval_minutes("hello")
-        assert isinstance(result, int)
-        assert result >= 0
+        # No "every N" pattern → the 30-minute default.
+        assert parse_interval_minutes("hello") == 30
 
     def test_parse_interval_minutes_explicit(self) -> None:
         from app.helpers import parse_interval_minutes
-        result = parse_interval_minutes("update me in 30 minutes")
-        assert isinstance(result, int)
+        # Explicit minute and hour patterns parse to exact values.
+        assert parse_interval_minutes("every 45 minutes") == 45
+        assert parse_interval_minutes("every 2 hours") == 120
+        # Below the 5-minute floor clamps up to 5.
+        assert parse_interval_minutes("every 3 min") == 5
 
     def test_fix_narration_empty(self) -> None:
         from app.helpers import fix_narration
@@ -151,8 +172,8 @@ class TestHelperDetectors:
 
     def test_fix_narration_normal(self) -> None:
         from app.helpers import fix_narration
-        result = fix_narration("She said hello.")
-        assert isinstance(result, str)
+        # First-person, artifact-free text passes through unchanged.
+        assert fix_narration("She said hello.") == "She said hello."
 
     def test_chunk_text_empty(self) -> None:
         from app.helpers import chunk_text
@@ -160,15 +181,26 @@ class TestHelperDetectors:
 
     def test_chunk_text_short(self) -> None:
         from app.helpers import chunk_text
-        result = chunk_text("hello world")
-        assert len(result) >= 1
+        # Default chunk size is 8 → "hello world" (11 chars) splits into 2.
+        assert chunk_text("hello world") == ["hello wo", "rld"]
 
 
 # ── llm_router pure helpers ───────────────────────────────────────────────────
 class TestLlmRouterHelpers:
-    def test_router_module_importable(self) -> None:
+    def test_lm_gate_is_shared_singleton(self) -> None:
         from app import llm_router
-        assert llm_router is not None
+        # get_lm_gate returns a real asyncio.Lock and the SAME instance each call
+        # (single shared gate across all LM Studio callers).
+        gate = llm_router.get_lm_gate()
+        assert isinstance(gate, asyncio.Lock)
+        assert llm_router.get_lm_gate() is gate
+        # An unlocked gate is not busy.
+        assert llm_router.lm_gate_busy() is False
+
+    def test_local_tools_aliases_agent_model(self) -> None:
+        from app import llm_router
+        # LOCAL_TOOLS is defined as an alias of LOCAL_AGENT — they must be equal.
+        assert llm_router.LOCAL_TOOLS == llm_router.LOCAL_AGENT
 
     def test_session_state_construction(self) -> None:
         from app.models import SessionState
@@ -188,15 +220,23 @@ class TestMemoryPure:
 
     def test_is_zero_vector_empty(self) -> None:
         from app.memory import MemoryManager
-        result = MemoryManager.is_zero_vector([])
-        assert isinstance(result, bool)
+        # all([]) is True → an empty vector is treated as a zero vector.
+        assert MemoryManager.is_zero_vector([]) is True
 
 
 # ── physical_state coverage ───────────────────────────────────────────────────
 class TestPhysicalState:
-    def test_module_importable(self) -> None:
+    def test_normal_state_has_empty_description(self) -> None:
         from app import physical_state
-        assert physical_state is not None
+        # 'normal' is the resting state and renders no prompt text.
+        assert physical_state.get_description("normal") == ""
+        assert physical_state.STATES["normal"]["decay_hours"] is None
+
+    def test_sore_state_description_and_decay(self) -> None:
+        from app import physical_state
+        # Concrete copy + decay window for the 'sore' state.
+        assert physical_state.get_description("sore") == "muscles ache from recent combat"
+        assert physical_state.STATES["sore"]["decay_hours"] == 4
 
 
 # ── billing pure ──────────────────────────────────────────────────────────────
@@ -209,19 +249,36 @@ class TestBillingPure:
 
     def test_quota_exceeded_exception(self) -> None:
         from app.billing import QuotaExceeded
-        # QuotaExceeded extends Exception; constructor may take a tier or message.
-        try:
-            e = QuotaExceeded("free", "messages", 100)
-        except TypeError:
-            e = QuotaExceeded()
+        # Signature is (counter, tier, limit); it stores them and builds a
+        # human-readable message.
+        e = QuotaExceeded("chat_messages_per_day", "free", 50)
         assert isinstance(e, Exception)
+        assert e.counter == "chat_messages_per_day"
+        assert e.tier == "free"
+        assert e.limit == 50
+        assert str(e) == "Quota exceeded: chat_messages_per_day (tier=free, limit=50/period)"
 
 
 # ── caches ────────────────────────────────────────────────────────────────────
 class TestCaches:
-    def test_module_importable(self) -> None:
+    def test_cosine_identical_and_orthogonal(self) -> None:
         from app import caches
-        assert caches is not None
+        # Identical unit vectors → 1.0; orthogonal → 0.0.
+        assert caches.cosine([1.0, 0.0], [1.0, 0.0]) == 1.0
+        assert caches.cosine([1.0, 0.0], [0.0, 1.0]) == 0.0
+
+    def test_cosine_zero_and_mismatched_return_zero(self) -> None:
+        from app import caches
+        # Zero-magnitude or length-mismatched inputs fail safe to 0.0.
+        assert caches.cosine([0.0, 0.0], [1.0, 1.0]) == 0.0
+        assert caches.cosine([1.0], [1.0, 0.0]) == 0.0
+
+    def test_text_key_is_namespaced_and_stable(self) -> None:
+        from app import caches
+        # Embedding cache keys are namespaced and deterministic per text.
+        assert caches._text_key("hello").startswith("cache:embed:")
+        assert caches._text_key("hello") == caches._text_key("hello")
+        assert caches._text_key("hello") != caches._text_key("world")
 
 
 # ── circuit_breakers extended ─────────────────────────────────────────────────
@@ -273,6 +330,15 @@ class TestCircuitBreakerEdges:
 
 # ── tributes coverage ─────────────────────────────────────────────────────────
 class TestTributesPure:
-    def test_module_importable(self) -> None:
+    def test_can_send_when_none_recent(self) -> None:
         from app import tributes
-        assert tributes is not None
+        # No recent tributes → allowed, no block reason.
+        assert tributes.can_send_tribute(0) == (True, None)
+
+    def test_blocked_during_cooldown(self) -> None:
+        from app import tributes
+        # One in the window → blocked with the sacred-cooldown reason.
+        allowed, reason = tributes.can_send_tribute(1)
+        assert allowed is False
+        assert reason is not None
+        assert str(tributes.TRIBUTE_COOLDOWN_HOURS) in reason
