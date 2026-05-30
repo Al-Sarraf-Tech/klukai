@@ -6,6 +6,7 @@ class WebSocketService {
   WebSocketChannel? _channel;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   final _connectionController = StreamController<bool>.broadcast();
+  final _authFailureController = StreamController<void>.broadcast();
   Timer? _reconnectTimer;
   String _url = '';
   bool _intentionalClose = false;
@@ -13,6 +14,10 @@ class WebSocketService {
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<bool> get connectionState => _connectionController.stream;
+
+  /// Fires when the server rejects the token (WS close 4001/4003). The UI should
+  /// clear the stale token and return to login rather than reconnect forever.
+  Stream<void> get authFailure => _authFailureController.stream;
   bool get isConnected => _channel != null;
 
   void connect(String url, {String? token}) {
@@ -47,7 +52,15 @@ class WebSocketService {
         },
         onDone: () {
           _connectionController.add(false);
+          // The server closes with 4001 (and 4003) on a bad/expired token.
+          // Reconnecting forever would soft-lock the app (LINK DOWN, empty
+          // history, no path back to login) — signal auth failure instead.
+          final closeCode = _channel?.closeCode;
           _channel = null;
+          if (closeCode == 4001 || closeCode == 4003) {
+            _authFailureController.add(null);
+            return;
+          }
           if (!_intentionalClose) {
             _scheduleReconnect();
           }
@@ -105,5 +118,6 @@ class WebSocketService {
     disconnect();
     _messageController.close();
     _connectionController.close();
+    _authFailureController.close();
   }
 }

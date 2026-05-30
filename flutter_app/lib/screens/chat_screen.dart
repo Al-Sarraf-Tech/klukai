@@ -301,6 +301,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       setState(() => _state = _state.copyWith(isConnected: connected));
     });
     _ws.messages.listen(_handleWSMessage);
+    _ws.authFailure.listen((_) => _handleAuthExpired());
+  }
+
+  void _handleAuthExpired() {
+    // Server rejected the token (expired/invalid). Don't loop reconnecting —
+    // clear the stale token and return to login.
+    try {
+      web.window.localStorage.removeItem('klukai_token');
+    } catch (_) {}
+    web.window.location.href = '/';
   }
 
   void _handleWSMessage(Map<String, dynamic> msg) {

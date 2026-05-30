@@ -35,6 +35,7 @@ import 'package:companion_app/widgets/heartbeat_sensor.dart';
 class FakeWebSocketService implements WebSocketService {
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   final _connectionController = StreamController<bool>.broadcast();
+  final _authFailureController = StreamController<void>.broadcast();
 
   /// Frames the screen sent outbound (so tests can assert send-side behavior).
   final List<Map<String, dynamic>> sent = [];
@@ -46,6 +47,9 @@ class FakeWebSocketService implements WebSocketService {
 
   @override
   Stream<bool> get connectionState => _connectionController.stream;
+
+  @override
+  Stream<void> get authFailure => _authFailureController.stream;
 
   @override
   bool get isConnected => _connected;
@@ -89,6 +93,7 @@ class FakeWebSocketService implements WebSocketService {
   void dispose() {
     _messageController.close();
     _connectionController.close();
+    _authFailureController.close();
   }
 }
 
