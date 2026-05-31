@@ -353,6 +353,17 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         # value pushed to the client below reflects the real, current level.
         aff_state = await affection.add_score(bonus, user_id)
 
+        # Record the gift so it counts in stats / "Your Journey" / anniversaries
+        # (previously only gifts the LLM detected mid-chat were stored). A disliked
+        # gift still bumps affection but isn't kept as a treasured comfort object.
+        if tier != "disliked":
+            try:
+                from .context import proactive
+                await proactive.store_gift(user_id, gift_name, sentiment=tier)
+                await proactive.record_first(user_id, "first_gift")
+            except Exception:
+                pass
+
         reaction = reactions.get(tier, "...Noted.")
         if ws.is_connected(user_id):
             await ws.send_proactive(user_id, reaction)

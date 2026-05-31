@@ -66,10 +66,10 @@ def register_extras2(app: FastAPI) -> None:
         if not tribute_id:
             return ec.err(ec.INTERNAL_ERROR, "Tribute could not be saved", status_code=500)
 
-        # Bump affection — larger than any single gift
-        new_score = min(1000, aff_state.score + tributes.TRIBUTE_AFFECTION_BUMP)
-        aff_state.score = new_score
-        await affection._save_state(aff_state, user_id)
+        # Bump affection via add_score: it clamps, recomputes the level from the
+        # new score, and writes the affection-log row (so the tribute shows on the
+        # journey graph). Manual score+_save_state left the level stale + unlogged.
+        aff_state = await affection.add_score(tributes.TRIBUTE_AFFECTION_BUMP, user_id)
 
         # Push elevated-mood response via WS if Commander is connected
         if ws.is_connected(user_id):
@@ -102,7 +102,7 @@ def register_extras2(app: FastAPI) -> None:
                     "text_length": len(req.text),
                     "is_crown_jewel": req.make_crown_jewel,
                     "affection_bump": tributes.TRIBUTE_AFFECTION_BUMP,
-                    "new_score": new_score,
+                    "new_score": aff_state.score,
                 },
             )
         except Exception:
@@ -113,7 +113,7 @@ def register_extras2(app: FastAPI) -> None:
             "tribute_id": tribute_id,
             "is_crown_jewel": req.make_crown_jewel,
             "affection_bump": tributes.TRIBUTE_AFFECTION_BUMP,
-            "new_score": new_score,
+            "new_score": aff_state.score,
             "mood_shift": "grateful",
         }
 

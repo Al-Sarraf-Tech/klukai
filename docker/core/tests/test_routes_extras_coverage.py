@@ -342,14 +342,18 @@ class TestCostumeSetSuccess:
         from app.routes import CostumeRequest
 
         audit_log = AsyncMock()
+        store_fact = AsyncMock()
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.memory.store_fact", store_fact), \
              patch("app.audit.log", audit_log):
             result = await handler(CostumeRequest(costume="speed_star"), _mk_request())
 
         assert result == {"costume": "speed_star"}
-        # Module-level state mutated.
-        from app import routes as _routes_main
-        assert _routes_main._current_costume == "speed_star"
+        # Persisted per-user via the fact store (survives restart) — not a global.
+        store_fact.assert_awaited_once()
+        assert store_fact.await_args.args[0] == "costume"
+        assert store_fact.await_args.args[1] == "speed_star"
+        assert store_fact.await_args.kwargs["user_id"] == "alice"
         # Audit recorded the change with the costume metadata.
         audit_log.assert_awaited_once()
         assert audit_log.await_args.kwargs["metadata"]["costume"] == "speed_star"

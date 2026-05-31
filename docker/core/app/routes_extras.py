@@ -86,22 +86,23 @@ def register_extras(app: FastAPI) -> None:
 
     @app.get("/api/costume")
     async def api_get_costume(request: Request):
-        from . import routes as _routes_main
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        return {"costume": _routes_main._current_costume}
+        # Persisted per-user in the fact store so the choice survives restarts
+        # (was a single in-process global that reset on every redeploy).
+        costume = await memory.recall_fact("costume", user_id=user_id)
+        return {"costume": costume or "blazing_star"}
 
     @app.post("/api/costume")
     async def api_set_costume(req: CostumeRequest, request: Request):
-        from . import routes as _routes_main
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         valid = ["blazing_star", "speed_star", "astral_luminous", "cerulean_breaker"]
         if req.costume not in valid:
             return JSONResponse({"error": f"Invalid. Choose from: {valid}"}, status_code=400)
-        _routes_main._current_costume = req.costume
+        await memory.store_fact("costume", req.costume, user_id=user_id)
         try:
             from . import audit
             ip = request.client.host if request.client else None
@@ -112,7 +113,7 @@ def register_extras(app: FastAPI) -> None:
             )
         except Exception:
             pass
-        return {"costume": _routes_main._current_costume}
+        return {"costume": req.costume}
 
     # ── STT proxy ──────────────────────────────────────────────────────────
 
