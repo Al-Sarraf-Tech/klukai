@@ -686,7 +686,7 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
       final response = await http.get(
         Uri.parse(_imageUrl),
         headers: {'Authorization': 'Bearer ${widget.authToken}'},
-      );
+      ).timeout(const Duration(seconds: 20));
       if (response.statusCode == 200 && mounted) {
         setState(() => _imageBytes = response.bodyBytes);
       } else if (mounted) {

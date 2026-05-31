@@ -157,12 +157,19 @@ async def save_image(
     """
     try:
         memory_id = str(uuid.uuid4())
-        filename = f"{memory_id}.png"
+        png_filename = f"{memory_id}.png"          # lossless original (archive)
+        filename = f"{memory_id}.webp"             # served full image (full-res WebP)
         thumb_filename = f"{memory_id}_thumb.webp"
 
-        # Save full image
+        # Keep the lossless PNG as an archive, but serve a full-resolution WebP:
+        # a ~1MB PNG opens slowly through the tunnel, while WebP q95 at the same
+        # dimensions is visually identical and ~8x smaller, so it opens fast.
+        png_path = IMAGES_DIR / png_filename
+        png_path.write_bytes(image_bytes)
         img_path = IMAGES_DIR / filename
-        img_path.write_bytes(image_bytes)
+        from io import BytesIO
+        with Image.open(BytesIO(image_bytes)) as _full:
+            _full.convert("RGB").save(img_path, "WEBP", quality=95, method=6)
 
         # Generate thumbnail (320px wide)
         thumb_path = IMAGES_DIR / thumb_filename
@@ -198,6 +205,7 @@ async def save_image(
         if await _is_duplicate_annotation(annotation, user_id=user_id):
             logger.info("Skipping duplicate memory: %s", annotation[:60])
             # Clean up the already-written image files
+            png_path.unlink(missing_ok=True)
             img_path.unlink(missing_ok=True)
             thumb_path.unlink(missing_ok=True)
             return None

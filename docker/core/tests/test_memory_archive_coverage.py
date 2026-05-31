@@ -207,8 +207,14 @@ async def _save_image_env(conn, *, is_dup=False, fixed_uuid="11111111-2222-3333-
 
     Yields (uuid, write_bytes_mock, thumbnail_mock).
     """
+    # save_image now also encodes a full-res WebP via Image.open(BytesIO(bytes));
+    # fake test bytes won't parse, so stub the open/convert/save chain.
+    _full_cm = MagicMock()
+    _full_cm.__enter__ = MagicMock(return_value=MagicMock())
+    _full_cm.__exit__ = MagicMock(return_value=False)
     with patch("app.memory_archive.uuid.uuid4", return_value=fixed_uuid), \
          patch("app.memory_archive.Path.write_bytes") as write_bytes, \
+         patch("app.memory_archive.Image.open", return_value=_full_cm), \
          patch("app.memory_archive._generate_thumbnail") as thumb, \
          patch("app.memory_archive._is_duplicate_annotation",
                AsyncMock(return_value=is_dup)), \
@@ -252,7 +258,7 @@ class TestSaveImage:
         sql, params = conn.calls[0]
         assert "INSERT INTO companion_memories" in sql
         assert params[0] == fixed_uuid                 # id
-        assert params[1] == f"{fixed_uuid}.png"        # filename
+        assert params[1] == f"{fixed_uuid}.webp"       # filename (full-res WebP served)
         assert params[2] == f"{fixed_uuid}_thumb.webp"  # thumb_filename
         assert params[4] == curation["annotation"]     # annotation
         assert params[5] == ["briefing", "hand"]       # scene_tags
@@ -316,8 +322,12 @@ class TestSaveImage:
         conn = _RecordingConn()
         fixed_uuid = "99999999-0000-0000-0000-000000000000"
 
+        _full_cm = MagicMock()
+        _full_cm.__enter__ = MagicMock(return_value=MagicMock())
+        _full_cm.__exit__ = MagicMock(return_value=False)
         with patch("app.memory_archive.uuid.uuid4", return_value=fixed_uuid), \
              patch("app.memory_archive.Path.write_bytes"), \
+             patch("app.memory_archive.Image.open", return_value=_full_cm), \
              patch("app.memory_archive._generate_thumbnail"), \
              patch("app.memory_archive._is_duplicate_annotation",
                    AsyncMock(return_value=True)), \
@@ -330,7 +340,7 @@ class TestSaveImage:
 
         assert result is None
         assert len(conn.calls) == 0          # NO insert for a duplicate
-        assert unlink.call_count == 2        # full + thumbnail cleaned up
+        assert unlink.call_count == 3        # png + webp + thumbnail cleaned up
 
     @pytest.mark.asyncio
     async def test_keep_false_is_persisted(self):
