@@ -722,7 +722,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           affectionScore: _state.affectionScore,
           affectionLevel: _state.affectionLevel,
           affectionLevelName: _state.affectionLevelName,
-          totalInteractions: 0,
         ),
       ),
     );

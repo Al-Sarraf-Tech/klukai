@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:js_interop';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:web/web.dart' as web;
@@ -697,38 +698,65 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
     }
   }
 
+  void _showSnack(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          text,
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            letterSpacing: 1.0,
+            fontSize: 12,
+          ),
+        ),
+        backgroundColor: GFL2Colors.surface,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+          side: BorderSide(color: GFL2Colors.primary.withValues(alpha: 0.4)),
+        ),
+      ),
+    );
+  }
+
   Future<void> _download() async {
     setState(() => _downloading = true);
     try {
-      final response = await http.get(Uri.parse(_imageUrl), headers: {
-        'Authorization': 'Bearer ${widget.authToken}',
-      });
-      if (response.statusCode == 200) {
-        // Web download via anchor element not available in pure Flutter web
-        // without dart:html; signal success instead.
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text(
-                'MEMORY DOWNLOADED',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  letterSpacing: 1.0,
-                  fontSize: 12,
-                ),
-              ),
-              backgroundColor: GFL2Colors.surface,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(4),
-                side: BorderSide(color: GFL2Colors.primary.withValues(alpha: 0.4)),
-              ),
-            ),
-          );
-        }
+      // Reuse the already-loaded full image when present; otherwise fetch it.
+      Uint8List? bytes = _imageBytes;
+      if (bytes == null) {
+        final response = await http.get(
+          Uri.parse(_imageUrl),
+          headers: {'Authorization': 'Bearer ${widget.authToken}'},
+        ).timeout(const Duration(seconds: 30));
+        if (response.statusCode == 200) bytes = response.bodyBytes;
       }
-    } catch (_) {
-      // no-op
+      if (bytes == null) {
+        _showSnack('DOWNLOAD FAILED');
+        return;
+      }
+      // Real browser download via blob + anchor (same path the chat image
+      // bubble uses). The full image is served as WebP; sniff the RIFF magic
+      // so the saved file gets the right extension/MIME.
+      final isWebp = bytes.length > 12 &&
+          bytes[0] == 0x52 && bytes[1] == 0x49 &&
+          bytes[2] == 0x46 && bytes[3] == 0x46; // "RIFF"
+      final ext = isWebp ? 'webp' : 'png';
+      final mime = isWebp ? 'image/webp' : 'image/png';
+      final idShort =
+          widget.memory.id.substring(0, widget.memory.id.length.clamp(0, 8));
+      final blob = web.Blob([bytes.toJS].toJS, web.BlobPropertyBag(type: mime));
+      final url = web.URL.createObjectURL(blob);
+      final a = web.document.createElement('a') as web.HTMLAnchorElement
+        ..href = url
+        ..download = 'klukai_memory_$idShort.$ext';
+      a.click();
+      web.URL.revokeObjectURL(url);
+      _showSnack('MEMORY DOWNLOADED');
+    } catch (e) {
+      debugPrint('Download failed: $e');
+      _showSnack('DOWNLOAD FAILED');
     } finally {
       if (mounted) setState(() => _downloading = false);
     }

@@ -10,7 +10,6 @@ class ProfileScreen extends StatefulWidget {
   final int affectionScore;
   final int affectionLevel;
   final String affectionLevelName;
-  final int totalInteractions;
 
   const ProfileScreen({
     super.key,
@@ -18,7 +17,6 @@ class ProfileScreen extends StatefulWidget {
     required this.affectionScore,
     required this.affectionLevel,
     required this.affectionLevelName,
-    required this.totalInteractions,
   });
 
   @override
@@ -28,6 +26,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   String _costume = 'blazing_star';
   Map<String, String> _milestones = {};
+  int _interactions = 0;
 
   Map<String, String> get _authHeaders {
     String token = '';
@@ -50,12 +49,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final costumeR = await http.get(Uri.parse('${widget.serverUrl}/api/costume'), headers: _authHeaders);
       final milestonesR = await http.get(Uri.parse('${widget.serverUrl}/api/milestones'), headers: _authHeaders);
+      final statsR = await http.get(Uri.parse('${widget.serverUrl}/api/user/stats'), headers: _authHeaders);
       if (costumeR.statusCode == 200) {
         setState(() => _costume = jsonDecode(costumeR.body)['costume'] ?? 'blazing_star');
       }
       if (milestonesR.statusCode == 200) {
         final data = jsonDecode(milestonesR.body)['milestones'] as Map<String, dynamic>? ?? {};
         setState(() => _milestones = data.map((k, v) => MapEntry(k, v.toString())));
+      }
+      if (statsR.statusCode == 200) {
+        final aff = jsonDecode(statsR.body)['affection'] as Map<String, dynamic>?;
+        final ti = aff?['total_interactions'];
+        if (ti is int && mounted) setState(() => _interactions = ti);
       }
     } catch (_) {}
   }
@@ -154,7 +159,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const SizedBox(height: 8),
           _statRow('TRUST LEVEL', widget.affectionLevelName.toUpperCase()),
           _statRow('AFFECTION', '${widget.affectionScore}/100'),
-          _statRow('INTERACTIONS', '${widget.totalInteractions}'),
+          _statRow('INTERACTIONS', '$_interactions'),
           _statRow('MILESTONES', '${_milestones.length}'),
           _statRow('CURRENT OUTFIT', _costumeLabel(_costume)),
         ],
