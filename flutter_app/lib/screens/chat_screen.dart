@@ -252,10 +252,35 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           _prepareMessageLayout(i);
         }
         _scrollToBottom(instant: true);
+      } else if (response.statusCode != 401 && mounted) {
+        // Don't render an empty conversation when the server actually errored —
+        // history is sacred; offer a retry so it can't be mistaken for "wiped".
+        // (401 is handled by the auth-expiry redirect, not a retry.)
+        _showHistoryError();
       }
     } catch (e) {
       debugPrint('Failed to load history: $e');
+      if (mounted) _showHistoryError();
     }
+  }
+
+  void _showHistoryError() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text("COULDN'T LOAD HISTORY",
+            style: TextStyle(
+                fontFamily: 'monospace', letterSpacing: 1.0, fontSize: 12)),
+        backgroundColor: GFL2Colors.surface,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(
+          label: 'RETRY',
+          textColor: GFL2Colors.primary,
+          onPressed: _loadHistory,
+        ),
+      ),
+    );
   }
 
   Future<void> _loadAffection() async {

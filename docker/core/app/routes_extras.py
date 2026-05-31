@@ -173,7 +173,10 @@ def register_extras(app: FastAPI) -> None:
             return {"messages": messages}
         except Exception as e:
             logger.error("Failed to fetch messages: %s", e)
-            return {"messages": []}
+            # Never mask a backend failure as an empty history — SACRED chat must
+            # not falsely appear wiped. Signal the error so the client shows a
+            # retry instead of a fake-empty conversation.
+            return JSONResponse({"error": "Could not load messages"}, status_code=503)
 
     # ── Memory archive API ─────────────────────────────────────────────────
     # NOTE: /api/memories/categories MUST be defined before /api/memories/{memory_id}

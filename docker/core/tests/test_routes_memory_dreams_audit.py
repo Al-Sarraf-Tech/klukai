@@ -185,7 +185,7 @@ class TestMessagesRoute:
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_db_error(self):
+    async def test_returns_503_on_db_error(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/messages", "GET")
 
@@ -197,8 +197,9 @@ class TestMessagesRoute:
              patch("app.routes_extras.get_pool", return_value=_BoomPool()):
             result = await handler(_mk_request(), limit=10, before=None)
 
-        # On DB error, route returns empty list (graceful degradation)
-        assert result == {"messages": []}
+        # On DB error the route returns 503 (not a fake-empty list) so the client
+        # can show a retry instead of a conversation that looks wiped.
+        assert result.status_code == 503
 
 
 # ═══════════════════════════════════════════════════════════════════════════

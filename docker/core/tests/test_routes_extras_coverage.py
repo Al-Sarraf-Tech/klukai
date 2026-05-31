@@ -484,8 +484,9 @@ class TestMessagesHappyPath:
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_db_error_returns_empty_list(self):
-        """Lines 161-163: pool failure degrades to an empty message list."""
+    async def test_db_error_returns_503(self):
+        """A pool/DB failure returns 503 — never a fake-empty history that could
+        be mistaken for wiped SACRED chat."""
         app = _app_with_routes()
         handler = _find_route(app, "/api/messages", "GET")
 
@@ -496,7 +497,7 @@ class TestMessagesHappyPath:
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.routes_extras.get_pool", return_value=_BoomPool()):
             result = await handler(_mk_request(), limit=10, before=None)
-        assert result == {"messages": []}
+        assert result.status_code == 503
 
     @pytest.mark.asyncio
     async def test_returns_messages_reversed_no_before(self):
