@@ -127,6 +127,9 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
         memory: memory,
         serverUrl: widget.serverUrl,
         authToken: _authToken,
+        onDiscarded: (id) {
+          if (mounted) setState(() => _memories.removeWhere((m) => m.id == id));
+        },
       ),
     );
   }
@@ -657,11 +660,13 @@ class _MemoryDetailDialog extends StatefulWidget {
   final Memory memory;
   final String serverUrl;
   final String authToken;
+  final void Function(String id)? onDiscarded;
 
   const _MemoryDetailDialog({
     required this.memory,
     required this.serverUrl,
     required this.authToken,
+    this.onDiscarded,
   });
 
   @override
@@ -670,6 +675,7 @@ class _MemoryDetailDialog extends StatefulWidget {
 
 class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
   bool _downloading = false;
+  bool _discarding = false;
   Uint8List? _imageBytes;
   bool _imageFailed = false;
 
@@ -762,6 +768,51 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
     }
   }
 
+  Future<void> _confirmDiscard() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: GFL2Colors.surface,
+        title: const Text('Discard memory?',
+            style: TextStyle(
+                color: GFL2Colors.textPrimary, fontSize: 14, fontFamily: 'monospace')),
+        content: const Text('It will be hidden from the album. Nothing is deleted.',
+            style: TextStyle(color: GFL2Colors.textDim, fontSize: 12)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('CANCEL', style: TextStyle(color: GFL2Colors.textDim)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('DISCARD', style: TextStyle(color: GFL2Colors.primary)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await _discard();
+  }
+
+  Future<void> _discard() async {
+    setState(() => _discarding = true);
+    try {
+      final r = await http.post(
+        Uri.parse('${widget.serverUrl}/api/memories/${widget.memory.id}/discard'),
+        headers: {'Authorization': 'Bearer ${widget.authToken}'},
+      ).timeout(const Duration(seconds: 15));
+      if (r.statusCode == 200 && mounted) {
+        widget.onDiscarded?.call(widget.memory.id);
+        Navigator.of(context).pop();
+      } else if (mounted) {
+        _showSnack('DISCARD FAILED');
+      }
+    } catch (_) {
+      if (mounted) _showSnack('DISCARD FAILED');
+    } finally {
+      if (mounted) setState(() => _discarding = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Dialog(
@@ -810,6 +861,21 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
                             ),
                           ),
                           const Spacer(),
+                          IconButton(
+                            onPressed: _discarding ? null : _confirmDiscard,
+                            tooltip: 'Discard (hide from album)',
+                            icon: _discarding
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 1.5, color: GFL2Colors.textDim),
+                                  )
+                                : const Icon(Icons.delete_outline,
+                                    color: GFL2Colors.textDim, size: 18),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          ),
                           IconButton(
                             onPressed: () => Navigator.of(context).pop(),
                             icon: const Icon(Icons.close, color: GFL2Colors.textDim, size: 18),

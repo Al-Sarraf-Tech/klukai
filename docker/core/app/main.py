@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +40,25 @@ logging.basicConfig(
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class _RedactTokenLogFilter(logging.Filter):
+    """Scrub ``?token=...`` from access logs. The WS auth token is passed as a
+    query param, so uvicorn's access log would otherwise persist 30-day bearer
+    tokens in plaintext. (Tokens are already hashed at rest in the DB.)"""
+
+    _pat = re.compile(r"token=[^&\s\"']+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                self._pat.sub("token=***", a) if isinstance(a, str) and "token=" in a else a
+                for a in record.args
+            )
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_RedactTokenLogFilter())
 
 
 # ── Lifecycle ────────────────────────────────────────────────────────────────
