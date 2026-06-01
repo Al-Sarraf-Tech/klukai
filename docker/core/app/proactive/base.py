@@ -41,6 +41,7 @@ class _EngineBase:
     _muted_until: datetime | None
     _last_random_event: datetime | None
     _last_message_time: datetime | None
+    _last_spontaneous_art: datetime | None
     _proactive_count_today: int
     _last_proactive_answered: bool
     _random_events_today: int

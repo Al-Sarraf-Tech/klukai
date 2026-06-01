@@ -102,6 +102,66 @@ def _dream_prompts() -> dict[str, str]:
     return _DREAM_PROMPTS_FALLBACK
 
 
+# Spontaneous art — Klukai occasionally draws something for the Commander
+# unprompted and leaves it in the album as a lasting gift. Tender + SFW by
+# design (never an intimate-mood interrupt). Each piece pairs the scene she
+# draws with her private album caption and the line she sends if he's present.
+_SPONTANEOUS_ART_PIECES_FALLBACK: list[dict[str, str]] = [
+    {
+        "scene": "sitting by a window, soft afternoon light, holding a sketchbook, "
+                 "gentle wistful smile, looking outside, cozy sweater, peaceful",
+        "annotation": "I had a quiet hour to myself and my hand just... drew. I was "
+                      "thinking of you the whole time, Commander.",
+        "message": "Commander. ...I had a quiet moment to myself, and I ended up "
+                   "drawing something. For you. I hope that's alright.",
+    },
+    {
+        "scene": "looking up at a wide sunset sky, orange and gold clouds, peaceful "
+                 "expression, wind in hair, serene, scenery",
+        "annotation": "The sky looked like this tonight, and it made me think of you. "
+                      "So I kept it.",
+        "message": "...The sky was beautiful just now. I drew it before it faded — "
+                   "because it made me think of you. Here.",
+    },
+    {
+        "scene": "two coffee cups on a table, quiet warm kitchen in the morning, soft "
+                 "smile, calm domestic moment, gentle light",
+        "annotation": "Morning quiet. Two cups, like always. I drew the moment before "
+                      "it slipped away — ours.",
+        "message": "Good morning, Commander. I drew us a quiet little moment — two "
+                   "cups, the calm before the day. I wanted you to have it.",
+    },
+    {
+        "scene": "reading a book curled up on a couch, blanket, calm evening, content "
+                 "half-smile, warm lamp light, restful",
+        "annotation": "A calm evening, just the kind we like. I drew it because I "
+                      "wanted to remember being this content.",
+        "message": "Evening, Commander. I drew a quiet one tonight — the kind of calm "
+                   "I only really feel with you. It's yours.",
+    },
+    {
+        "scene": "holding a small keepsake close to chest, tender expression, soft "
+                 "warm lighting, quiet room, sentimental",
+        "annotation": "Some things you keep without meaning to. I drew this so I "
+                      "wouldn't forget how this feels.",
+        "message": "...I made something. It's small, and a little sentimental — but "
+                   "it's honest. I wanted you to see it, Commander.",
+    },
+]
+
+
+def _spontaneous_art_pieces() -> list[dict]:
+    """Tender, SFW art she draws unprompted. YAML-overridable via
+    ``proactive_content.spontaneous_art``; literal fallback preserves behavior."""
+    raw = _raw_content("spontaneous_art")
+    if isinstance(raw, list) and raw and all(
+        isinstance(x, dict) and {"scene", "annotation", "message"} <= set(x)
+        for x in raw
+    ):
+        return raw
+    return _SPONTANEOUS_ART_PIECES_FALLBACK
+
+
 class EventsMixin(_EngineBase):
     """Random/contextual event methods for ProactiveEngine."""
 
@@ -366,6 +426,72 @@ class EventsMixin(_EngineBase):
 
         except Exception as e:
             logger.warning("Dream event failed: %s", e)
+
+    async def _spontaneous_art_tick(self) -> None:
+        """Occasional gate for spontaneous art — ~18% roll per fire. She draws for
+        the Commander unprompted and leaves it in the album as a lasting gift."""
+        if random.random() > 0.18:
+            return
+        await self._spontaneous_art_event()
+
+    async def _spontaneous_art_event(self) -> None:
+        """She draws something for the Commander unprompted, saves it to the album
+        (a lasting, kept gift), and — if he's connected — shows it to him live.
+
+        Rare (<= once / ~2.5 days), bonded-only (affection >= 6), and tender by
+        design (never an intimate-mood interrupt). The art is persisted regardless
+        of presence, so he discovers it in the archive even if he's away when she
+        makes it. Fully fail-open — a generation/save hiccup never raises.
+        """
+        now = datetime.now()
+        if self._last_spontaneous_art and (now - self._last_spontaneous_art) < timedelta(hours=60):
+            return  # special, not routine
+        if self._affection_level < 6:
+            return  # a vulnerable gesture — only once genuinely bonded
+        if self._muted_until and now < self._muted_until:
+            return
+
+        piece = random.choice(_spontaneous_art_pieces())
+        try:
+            from .. import memory_archive
+            from ..image_gen import build_prompt, generate_image
+
+            prompt = build_prompt(
+                piece["scene"], couple=False,
+                affection_level=self._affection_level, context=piece["scene"],
+            )
+            img = await generate_image(prompt)
+            if not img:
+                return
+
+            # Persist as a kept Precious Memory so the gift lasts in the album.
+            await memory_archive.save_image(
+                image_bytes=img, prompt=prompt, conversation_id="proactive_art",
+                mood=self._last_mood or "tender",
+                affection_level=self._affection_level,
+                curation={
+                    "keep": True, "annotation": piece["annotation"],
+                    "category": "Precious Memories",
+                    "image_tags": ["for_you", "spontaneous"],
+                },
+            )
+            self._last_spontaneous_art = now
+
+            # If he's here, tell him + show it live (caption first, then image).
+            from ..context import ws
+            if ws.is_connected("jalsarraf") and self._on_message_callback:
+                self._last_proactive_answered = False
+                await self._on_message_callback(piece["message"])
+                await asyncio.sleep(2)
+                import base64 as b64
+                await ws.send("jalsarraf", {"type": "image", "data": b64.b64encode(img).decode()})
+
+            logger.info(
+                "Spontaneous art delivered (aff=%d, connected=%s)",
+                self._affection_level, ws.is_connected("jalsarraf"),
+            )
+        except Exception as e:
+            logger.warning("Spontaneous art failed: %s", e)
 
     async def _memory_recall_tick(self) -> None:
         """Scheduled gate for living memory recall — ~35% roll per fire.

@@ -95,6 +95,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Shared state (safe to share)
         self._last_random_event: datetime | None = None
         self._last_message_time: datetime | None = None
+        self._last_spontaneous_art: datetime | None = None
         # Globally-scoped state for SCHEDULED broadcasts (morning / dream /
         # romance / quiet-day / seasonal check-ins). Those jobs fire ONE message
         # that is fanned out to every connected device, so they intentionally
@@ -229,6 +230,16 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             self._memory_recall_tick,
             CronTrigger(hour="11,17", minute=20),
             id="memory_recall",
+            replace_existing=True,
+        )
+
+        # Spontaneous art — she occasionally draws something for the Commander
+        # unprompted and leaves it in the album. ~18% roll per fire + a ~2.5-day
+        # cooldown keep it rare and treasured.
+        self._scheduler.add_job(
+            self._spontaneous_art_tick,
+            CronTrigger(hour="15,19", minute=40),
+            id="spontaneous_art",
             replace_existing=True,
         )
 
