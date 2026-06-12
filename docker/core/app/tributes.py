@@ -36,8 +36,23 @@ MIN_TRIBUTE_LENGTH = 20
 MAX_TRIBUTE_LENGTH = 1000
 
 
-async def count_recent(user_id: str, hours: int = TRIBUTE_COOLDOWN_HOURS) -> int:
-    """Count tributes the user has sent in the last `hours`. Used for cooldown."""
+# Advisory-lock namespace (key1) for per-user tribute serialization.
+_TRIBUTE_LOCK_NS = 815_201_138
+
+
+class TributeCooldownActive(Exception):
+    """Raised by save_tribute when the atomic 24h-cooldown guard blocks the
+    insert (another tribute landed inside the window — including races that
+    slipped past the advisory count_recent pre-check)."""
+
+
+async def count_recent(user_id: str, hours: int = TRIBUTE_COOLDOWN_HOURS) -> int | None:
+    """Count tributes the user has sent in the last `hours`. Used for cooldown.
+
+    Returns None on DB error — FAIL CLOSED. Returning 0 here used to let a
+    DB outage bypass the cooldown and grant repeatable +20 affection; callers
+    must treat None as "cooldown state unknown → reject".
+    """
     try:
         pool = get_pool()
         async with pool.connection() as conn:
@@ -48,8 +63,8 @@ async def count_recent(user_id: str, hours: int = TRIBUTE_COOLDOWN_HOURS) -> int
             )).fetchone()
         return (row or (0,))[0]
     except Exception as e:
-        logger.warning("Tribute count failed: %s", e)
-        return 0  # Fail-open: a count failure shouldn't block the Commander.
+        logger.error("Tribute count failed (failing closed): %s", e)
+        return None
 
 
 async def save_tribute(
@@ -61,12 +76,24 @@ async def save_tribute(
 ) -> str | None:
     """Insert a new tribute. Returns the new tribute_id (UUID str) or None on error.
 
+    The 24h cooldown is enforced ATOMICALLY here via INSERT ... SELECT ...
+    WHERE NOT EXISTS (recent tribute in window) — the route's count_recent
+    pre-check is advisory UX only and races under concurrency. Raises
+    TributeCooldownActive when the guard blocks the insert.
+
     If make_crown_jewel=True, this tribute becomes the new crown jewel
     (any existing crown jewel for the user is demoted first).
     """
     try:
         pool = get_pool()
         async with pool.connection() as conn:
+            # Per-user advisory lock: WHERE NOT EXISTS can't see a concurrent
+            # uncommitted insert under READ COMMITTED, so serialize tribute
+            # writers per user. Released automatically at transaction end.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+                (_TRIBUTE_LOCK_NS, user_id),
+            )
             # Demote existing crown jewel if we're promoting this one
             if make_crown_jewel:
                 await conn.execute(
@@ -78,18 +105,30 @@ async def save_tribute(
             row = await (await conn.execute(
                 "INSERT INTO companion_tributes "
                 "(user_id, text, mood_at_time, affection_at_time, is_crown_jewel) "
-                "VALUES (%s, %s, %s, %s, %s) "
+                "SELECT %s, %s, %s, %s, %s "
+                "WHERE NOT EXISTS ("
+                "  SELECT 1 FROM companion_tributes "
+                "  WHERE user_id = %s "
+                "    AND created_at > now() - make_interval(hours => %s)"
+                ") "
                 "RETURNING id",
-                (user_id, text, mood_at_time, affection_at_time, make_crown_jewel),
+                (user_id, text, mood_at_time, affection_at_time,
+                 make_crown_jewel, user_id, TRIBUTE_COOLDOWN_HOURS),
             )).fetchone()
+            if not row:
+                # Cooldown guard blocked the insert — undo the crown-jewel
+                # demotion (same transaction) and signal the caller.
+                await conn.rollback()
+                raise TributeCooldownActive()
             await conn.commit()
-        if row:
-            tribute_id = str(row[0])
-            logger.info(
-                "Tribute saved: user=%s id=%s crown=%s len=%d",
-                user_id, tribute_id, make_crown_jewel, len(text),
-            )
-            return tribute_id
+        tribute_id = str(row[0])
+        logger.info(
+            "Tribute saved: user=%s id=%s crown=%s len=%d",
+            user_id, tribute_id, make_crown_jewel, len(text),
+        )
+        return tribute_id
+    except TributeCooldownActive:
+        raise
     except Exception as e:
         logger.error("Tribute save failed: %s", e)
     return None

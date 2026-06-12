@@ -269,7 +269,12 @@ def register_extras3(app: FastAPI) -> None:
             event = json.loads(body)
         except Exception:
             return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-        return await handle_stripe_event(event)
+        result = await handle_stripe_event(event)
+        if not result.get("ok"):
+            # 500 → Stripe retries with backoff; a 200 here would silently
+            # drop the event forever even though the handler failed.
+            return JSONResponse(result, status_code=500)
+        return result
 
     # ── Account self-service ───────────────────────────────────────────────
 

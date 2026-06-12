@@ -45,8 +45,15 @@ def register_extras2(app: FastAPI) -> None:
         if not user_id:
             return ec.auth_required()
 
-        # 24h cooldown check
+        # 24h cooldown pre-check (advisory UX; the authoritative guard is the
+        # atomic WHERE NOT EXISTS inside save_tribute). FAIL CLOSED: if the
+        # cooldown state is unknown (DB error → None), reject instead of
+        # granting repeatable +20 affection.
         recent = await tributes.count_recent(user_id)
+        if recent is None:
+            return ec.err(ec.INTERNAL_ERROR,
+                          "Tribute cooldown check unavailable — try again later",
+                          status_code=503)
         allowed, reason = tributes.can_send_tribute(recent)
         if not allowed:
             return ec.err(ec.INPUT_INVALID, reason or "Cooldown active",
@@ -56,13 +63,22 @@ def register_extras2(app: FastAPI) -> None:
         # Capture state at write-time
         aff_state = await affection.get_state(user_id)
 
-        tribute_id = await tributes.save_tribute(
-            user_id=user_id,
-            text=req.text,
-            mood_at_time="grateful",
-            affection_at_time=aff_state.score,
-            make_crown_jewel=req.make_crown_jewel,
-        )
+        try:
+            tribute_id = await tributes.save_tribute(
+                user_id=user_id,
+                text=req.text,
+                mood_at_time="grateful",
+                affection_at_time=aff_state.score,
+                make_crown_jewel=req.make_crown_jewel,
+            )
+        except tributes.TributeCooldownActive:
+            # Lost the race to a concurrent tribute inside the window —
+            # the atomic guard blocked the insert. No affection granted.
+            return ec.err(ec.INPUT_INVALID,
+                          f"Tributes are sacred — please wait "
+                          f"{tributes.TRIBUTE_COOLDOWN_HOURS}h between them",
+                          status_code=429,
+                          extra={"cooldown_hours": tributes.TRIBUTE_COOLDOWN_HOURS})
         if not tribute_id:
             return ec.err(ec.INTERNAL_ERROR, "Tribute could not be saved", status_code=500)
 
@@ -216,10 +232,13 @@ def register_extras2(app: FastAPI) -> None:
 
     @app.get("/api/audit/verify-chain")
     async def api_audit_verify_chain(request: Request, limit: int = 500):
-        """Verify the HMAC hash chain over the last N audit rows.
+        """Verify the HMAC hash chain over the MOST RECENT N audit rows.
 
-        Admin-only. Returns {valid, break_at_id, checked}. A break means
-        a row was modified or deleted since insert.
+        Admin-only. Fetches the newest N rows plus one extra anchor row
+        (whose stored chain_hash seeds the verification) and replays the
+        chain forward. Returns {valid, break_at_id, checked}. A break means
+        a row was modified, deleted, or left without a chain hash since
+        insert. For a full-chain audit, raise `limit` to cover the table.
         """
         from . import error_codes as ec
         user_id = await _get_user_id(request)
@@ -231,11 +250,12 @@ def register_extras2(app: FastAPI) -> None:
         try:
             pool = get_pool()
             async with pool.connection() as conn:
+                # Newest first; +1 row to use as the chain trust anchor.
                 rows_raw = await (await conn.execute(
                     "SELECT id, event_type, user_id, ip_address, request_id, "
                     "metadata, created_at, chain_hash "
-                    "FROM companion_audit_log ORDER BY id ASC LIMIT %s",
-                    (limit,),
+                    "FROM companion_audit_log ORDER BY id DESC LIMIT %s",
+                    (limit + 1,),
                 )).fetchall()
             rows = [
                 {
@@ -243,10 +263,16 @@ def register_extras2(app: FastAPI) -> None:
                     "ip_address": r[3], "request_id": r[4], "metadata": r[5],
                     "created_at": str(r[6] or ""), "chain_hash": r[7],
                 }
-                for r in rows_raw
+                for r in reversed(rows_raw)  # oldest-first for verification
             ]
+            anchor_prev: str | None = None
+            if len(rows) > limit:
+                # Oldest fetched row is the anchor: its stored hash seeds
+                # the chain; the row itself is verified by a wider run.
+                anchor_prev = rows[0]["chain_hash"]
+                rows = rows[1:]
             from . import audit_chain
-            return audit_chain.verify_chain(rows)
+            return audit_chain.verify_chain(rows, prev_hash=anchor_prev)
         except Exception as e:
             logger.error("Audit chain verify failed: %s", e)
             return ec.err(ec.INTERNAL_ERROR, "Verify failed", status_code=500)

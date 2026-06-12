@@ -28,6 +28,12 @@ EVENT_PUSH_SUBSCRIBED = "push.subscribed"
 EVENT_MEMORY_KEPT = "memory.kept"
 EVENT_MEMORY_DISCARDED = "memory.discarded"
 
+# Fixed advisory-lock key serializing audit-chain writers. Without it the
+# SELECT-last-hash → INSERT sequence races under concurrency and forks the
+# hash chain (two rows chained off the same prev_hash). pg_advisory_xact_lock
+# is released automatically at transaction end (pool.connection() commit).
+_CHAIN_WRITE_LOCK_KEY = 815_201_137
+
 
 async def log(
     event_type: str,
@@ -45,6 +51,12 @@ async def log(
     try:
         pool = get_pool()
         async with pool.connection() as conn:
+            # Serialize chain writers for this transaction — the read-then-
+            # insert below would otherwise fork the chain under concurrency.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(%s)",
+                (_CHAIN_WRITE_LOCK_KEY,),
+            )
             # Fetch previous chain_hash (most recent row)
             prev_row = await (await conn.execute(
                 "SELECT chain_hash FROM companion_audit_log "
@@ -82,7 +94,16 @@ async def log(
                     (chain_hash, row_id),
                 )
             except Exception as e:
-                logger.warning("Audit chain hash failed for row %s: %s", row_id, e)
+                # Fail LOUDLY: the row is kept (audit data > chain integrity)
+                # but its chain_hash stays NULL, which verify_chain now
+                # surfaces as a break (reason=missing_chain_hash). This must
+                # be an operator-visible error, not a silent warning.
+                logger.error(
+                    "AUDIT CHAIN HASH FAILED for row %s (event=%s): %s — "
+                    "row inserted with NULL chain_hash; verify-chain will "
+                    "flag it as a break",
+                    row_id, event_type, e,
+                )
     except Exception as e:
         logger.warning("Audit log write failed: event=%s err=%s", event_type, e)
 

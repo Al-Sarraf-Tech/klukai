@@ -388,8 +388,15 @@ class TestStripeEventDispatch:
 
     @pytest.mark.asyncio
     async def test_replay_returns_replay_flag(self):
-        # INSERT ... ON CONFLICT DO NOTHING returns no row when duplicate
-        conn = _mk_conn(fetchone=None)
+        # INSERT ... ON CONFLICT DO NOTHING returns no row when duplicate;
+        # the follow-up SELECT must see processed=TRUE for a true replay
+        # (processed=FALSE conflicts are re-dispatched instead of dropped).
+        conn = MagicMock()
+        insert_result = MagicMock()
+        insert_result.fetchone = AsyncMock(return_value=None)
+        processed_result = MagicMock()
+        processed_result.fetchone = AsyncMock(return_value=(True,))
+        conn.execute = AsyncMock(side_effect=[insert_result, processed_result])
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=conn)
         cm.__aexit__ = AsyncMock(return_value=None)

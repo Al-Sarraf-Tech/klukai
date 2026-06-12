@@ -16,6 +16,9 @@ from app import audit
 
 def _make_pool(prev_hash=None, new_row=(1, datetime(2026, 5, 17, tzinfo=timezone.utc))):
     """Build a mocked pg pool that supports audit.log's call pattern."""
+    lock_result = AsyncMock()
+    lock_result.fetchone = AsyncMock(return_value=None)
+
     prev_result = AsyncMock()
     prev_result.fetchone = AsyncMock(return_value=(prev_hash,) if prev_hash else None)
 
@@ -26,9 +29,10 @@ def _make_pool(prev_hash=None, new_row=(1, datetime(2026, 5, 17, tzinfo=timezone
     update_result.fetchone = AsyncMock(return_value=None)
 
     conn = AsyncMock()
-    # Each execute call gets a different mock result; the first is the SELECT,
-    # second is the INSERT, third is the UPDATE.
-    conn.execute = AsyncMock(side_effect=[prev_result, insert_result, update_result])
+    # Each execute call gets a different mock result: advisory lock, SELECT
+    # prev hash, INSERT, UPDATE chain_hash.
+    conn.execute = AsyncMock(
+        side_effect=[lock_result, prev_result, insert_result, update_result])
 
     ctx = AsyncMock()
     ctx.__aenter__ = AsyncMock(return_value=conn)
@@ -76,8 +80,8 @@ class TestLog:
         with patch("app.audit.get_pool", return_value=pool), \
              patch("app.audit_chain.compute_row_hash", return_value="new-hash"):
             await audit.log("gift.given", user_id="alice", metadata={"gift": "flowers"})
-        # 3 executes expected: SELECT prev, INSERT, UPDATE chain_hash
-        assert conn.execute.call_count == 3
+        # 4 executes expected: advisory lock, SELECT prev, INSERT, UPDATE
+        assert conn.execute.call_count == 4
 
     @pytest.mark.asyncio
     async def test_metadata_serialized_to_json(self):
@@ -87,7 +91,8 @@ class TestLog:
             await audit.log("login.success", user_id="alice",
                             metadata={"key": "value", "n": 42})
         # The INSERT call should have a stringified JSON in the params
-        insert_call = conn.execute.call_args_list[1]
+        # (call 0 = advisory lock, 1 = SELECT prev, 2 = INSERT)
+        insert_call = conn.execute.call_args_list[2]
         params = insert_call.args[1]
         # Last param before metadata is request_id; metadata is index 4 in
         # (event_type, user_id, ip_address, request_id, metadata)

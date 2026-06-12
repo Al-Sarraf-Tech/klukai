@@ -59,18 +59,28 @@ def compute_row_hash(
                     hashlib.sha256).hexdigest()
 
 
-def verify_chain(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def verify_chain(
+    rows: list[dict[str, Any]],
+    prev_hash: str | None = None,
+) -> dict[str, Any]:
     """Re-compute the hash chain over an ordered row list and report breaks.
 
     Rows should be oldest-first. Each dict must contain all fields used
     by compute_row_hash PLUS a `chain_hash` field holding the previously-
     stored hash.
 
-    Returns: {"valid": bool, "break_at_id": int | None,
-              "checked": int, "expected_hash": str | None}.
+    `prev_hash` optionally seeds the chain from a trust anchor (the stored
+    chain_hash of the row immediately preceding rows[0]); None means rows[0]
+    is treated as the genesis row.
+
+    A missing/NULL chain_hash on ANY row is a chain break: an attacker could
+    otherwise tamper a row and NULL its hash to make verification skip it.
+    The chain is NEVER re-anchored from a recomputed hash on a NULL row.
+
+    Returns: {"valid": bool, "break_at_id": int | None, "checked": int,
+              "expected_hash": str | None, "reason": str (only on break)}.
     """
-    prev_hash: str | None = None
-    for r in rows:
+    for idx, r in enumerate(rows):
         computed = compute_row_hash(
             row_id=r["id"],
             event_type=r["event_type"],
@@ -82,14 +92,23 @@ def verify_chain(rows: list[dict[str, Any]]) -> dict[str, Any]:
             prev_hash=prev_hash,
         )
         stored = r.get("chain_hash")
-        if stored and stored != computed:
+        if not stored:
             return {
                 "valid": False,
                 "break_at_id": r["id"],
-                "checked": rows.index(r),
+                "checked": idx,
                 "expected_hash": computed,
+                "reason": "missing_chain_hash",
             }
-        prev_hash = stored or computed
+        if stored != computed:
+            return {
+                "valid": False,
+                "break_at_id": r["id"],
+                "checked": idx,
+                "expected_hash": computed,
+                "reason": "hash_mismatch",
+            }
+        prev_hash = stored
     return {
         "valid": True,
         "break_at_id": None,

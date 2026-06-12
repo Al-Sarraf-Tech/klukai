@@ -76,10 +76,13 @@ def _make_pool(execute_result=None, fetchone_result="UNSET", fetchall_result="UN
 
 class TestCountRecent:
     @pytest.mark.asyncio
-    async def test_returns_zero_on_db_error(self):
+    async def test_returns_none_on_db_error(self):
+        """FAIL CLOSED: a DB error must not look like 'no recent tributes'
+        (the old 0 return let an outage bypass the cooldown → repeatable
+        +20 affection)."""
         with patch("app.tributes.get_pool", side_effect=RuntimeError("db down")):
             count = await tributes.count_recent("jalsarraf")
-        assert count == 0  # Fail-open: don't block Commander on DB error
+        assert count is None
 
     @pytest.mark.asyncio
     async def test_returns_count_from_db(self):
@@ -123,11 +126,14 @@ class TestSaveTribute:
             await tributes.save_tribute(
                 user_id="alice", text="x" * 30, make_crown_jewel=True
             )
-        # Should have called execute twice: first to demote, then to insert
-        assert conn.execute.call_count >= 2
-        # First call should be the UPDATE that demotes
-        first_sql = conn.execute.call_args_list[0].args[0]
-        assert "UPDATE" in first_sql and "is_crown_jewel = false" in first_sql
+        # Executes: advisory lock, demote UPDATE, then the atomic INSERT
+        assert conn.execute.call_count >= 3
+        sqls = [c.args[0] for c in conn.execute.call_args_list]
+        assert "pg_advisory_xact_lock" in sqls[0]
+        demote_idx = next(i for i, s in enumerate(sqls)
+                          if "UPDATE" in s and "is_crown_jewel = false" in s)
+        insert_idx = next(i for i, s in enumerate(sqls) if "INSERT" in s)
+        assert demote_idx < insert_idx
 
 
 class TestGetCrownJewel:

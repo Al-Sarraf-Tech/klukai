@@ -65,7 +65,11 @@ async def handle_stripe_event(event: dict[str, Any]) -> dict[str, Any]:
     if not event_id:
         return {"ok": False, "reason": "missing event id"}
 
-    # Idempotency check
+    # Idempotency check. The row is inserted processed=FALSE BEFORE handling,
+    # so a conflict does NOT mean the event was handled — it may be a Stripe
+    # retry of an attempt that crashed mid-handler. Only processed=TRUE rows
+    # are true replays; processed=FALSE conflicts must be re-dispatched or
+    # the event is dropped forever.
     try:
         async with get_conn_autocommit() as conn:
             row = await (
@@ -78,8 +82,25 @@ async def handle_stripe_event(event: dict[str, Any]) -> dict[str, Any]:
                     (event_id, event_type, _json_dumps(event)),
                 )
             ).fetchone()
-        if not row:
-            return {"ok": True, "replay": True}
+            if not row:
+                prior = await (
+                    await conn.execute(
+                        "SELECT processed FROM companion_stripe_events "
+                        "WHERE event_id = %s",
+                        (event_id,),
+                    )
+                ).fetchone()
+                if prior is None:
+                    # Conflict yet no row found — inconsistent; fail so
+                    # Stripe retries rather than silently dropping the event.
+                    logger.error(
+                        "Stripe idempotency lookup found no row for %s", event_id)
+                    return {"ok": False, "reason": "idempotency lookup failed"}
+                if prior[0]:
+                    return {"ok": True, "replay": True}
+                logger.warning(
+                    "Stripe event %s retried with processed=FALSE — "
+                    "re-dispatching handler", event_id)
     except Exception as e:
         logger.error("Stripe event insert failed: %s", e)
         return {"ok": False, "reason": str(e)}
