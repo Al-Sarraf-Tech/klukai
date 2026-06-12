@@ -58,7 +58,10 @@ jobs:
         run: |
           . "${RUNNER_TEMP}/mutenv/bin/activate"
           export PERSONALITY_PATH="${GITHUB_WORKSPACE}/config/personality.yaml"
-          mutmut run || true   # gate on parsed results, not exit code
+          # --max-children 2: the python-slim runner is a 3-CPU/4GB container
+          # on amarillo (70C thermal ceiling); an uncapped run (one pytest
+          # worker per CPU) killed the runner with exit 137 on 2026-06-12.
+          mutmut run --max-children 2 || true   # gate on parsed results, not exit code
           mutmut results --all true > /tmp/mutmut-results.txt
           grep -oE ': [a-z ]+$' /tmp/mutmut-results.txt | sort | uniq -c
 
