@@ -738,3 +738,36 @@ class TestGetMemoryNudge:
         assert "A" * 201 not in nudge
         # Empty topics -> default phrase.
         assert "a past conversation" in nudge
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# store_episode — Qdrant PUT status-check (httpx doesn't raise on 4xx/5xx)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestStoreEpisodeStatusCheck:
+    @pytest.mark.asyncio
+    async def test_qdrant_error_status_routes_to_failure_path(self, caplog):
+        """A 5xx PUT response must be detected (raise_for_status) so the lost
+        vector is logged via the Qdrant-failure path — not silently ignored —
+        while the PG fallback still preserves the episode."""
+        import logging
+
+        m = _mk_manager()
+        m.embed_text = AsyncMock(return_value=[0.1] * 768)
+        m._http.put = AsyncMock(return_value=_Resp(503, text="qdrant overloaded"))
+        conn = _RecordingConn()
+
+        with patch("app.db.get_conn_autocommit", _conn_ctx(conn)), \
+             caplog.at_level(logging.ERROR, logger="app.memory"):
+            result = await m.store_episode(
+                episode_id="ep-9", summary="s", keywords=[], emotion_tags=[],
+                importance=0.5,
+            )
+
+        assert result == "ep-9"
+        # The error status surfaced through the Qdrant exception handler.
+        assert any("Failed to store episode" in r.getMessage() for r in caplog.records)
+        # PG fallback still ran — the episode is not lost.
+        assert len(conn.calls) == 1
+        assert "INSERT INTO companion_episodes" in conn.calls[0][0]

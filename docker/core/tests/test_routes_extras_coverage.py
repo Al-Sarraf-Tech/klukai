@@ -800,3 +800,44 @@ class TestRateLimitResetSuccess:
             result = await handler(_mk_request(), user_id_target="bob", bucket="default")
         assert result == {"ok": True, "user_id": "bob", "bucket": "default"}
         reset_mock.assert_awaited_once_with("bob", "default")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Memory album fail-closed (2026-06-11) — a DB outage must return 503, never
+# a 200 with [] that looks like a wiped archive (mirrors /api/messages).
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestMemoryArchiveFailClosed:
+    @pytest.mark.asyncio
+    async def test_memories_list_db_error_returns_503(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/memories", "GET")
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.memory_archive.list_memories",
+                   new=AsyncMock(side_effect=RuntimeError("db down"))):
+            resp = await handler(_mk_request())
+        assert resp.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_memory_categories_db_error_returns_503(self):
+        from types import SimpleNamespace
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/memories/categories", "GET")
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=SimpleNamespace(level=7))), \
+             patch("app.routes_extras.memory_archive.get_categories",
+                   new=AsyncMock(side_effect=RuntimeError("db down"))):
+            resp = await handler(_mk_request())
+        assert resp.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_memory_timeline_db_error_returns_503(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/memories/timeline", "GET")
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.memory_archive.get_timeline",
+                   new=AsyncMock(side_effect=RuntimeError("db down"))):
+            resp = await handler(_mk_request())
+        assert resp.status_code == 503

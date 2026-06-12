@@ -18,8 +18,9 @@ Behaviors asserted:
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -46,6 +47,10 @@ class _Resp:
 
     def json(self):
         return self._json
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError("err", request=None, response=None)
 
 
 def _make_self(get_resp=None, embed_vec=None):
@@ -322,3 +327,92 @@ class TestRecallWithRecency:
         # affection<=2 adds (1.0 - importance)*0.1 = 0.1 for importance 0.0.
         base = (1 - 0.15) * 0.5 + 0.15 * 1.0  # created_at ~now → recency_factor≈1
         assert out[0]["final_score"] == pytest.approx(base + 0.1, abs=1e-3)
+
+
+# ── store_exchange: status-check + Postgres fallback (SACRED, 2026-06-11) ────
+#
+# httpx does NOT raise on 4xx/5xx — the Qdrant PUT must be status-checked, and
+# on ANY Qdrant/embed failure the exchange must land in the companion_exchanges
+# Postgres fallback (mirroring the episodes fallback in app/memory.py) instead
+# of being stored NOWHERE.
+
+
+class _RecordingConn:
+    """Async connection recording every SQL string + params it executes."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, tuple]] = []
+
+    async def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+        return MagicMock()
+
+    async def commit(self):
+        pass
+
+    async def rollback(self):
+        pass
+
+
+def _conn_ctx(conn):
+    @asynccontextmanager
+    async def _ctx():
+        yield conn
+
+    return _ctx
+
+
+class TestStoreExchangePGFallback:
+    @pytest.mark.asyncio
+    async def test_qdrant_error_status_falls_back_to_pg(self):
+        obj = _make_self()
+        obj._http.put = AsyncMock(return_value=_Resp(500, text="qdrant down"))
+        conn = _RecordingConn()
+        with patch("app.db.get_conn_autocommit", _conn_ctx(conn)):
+            await store_exchange(
+                obj, "ex-9", "hello", "hi there", topics=["t"], mood="warm",
+                importance=0.7, conversation_id="conv-9", user_id="alice",
+            )
+        assert len(conn.calls) == 1
+        sql, params = conn.calls[0]
+        assert "INSERT INTO companion_exchanges" in sql
+        assert "ON CONFLICT (id) DO NOTHING" in sql
+        # Insert-only — never destructive on a memory path.
+        assert "DELETE" not in sql.upper() and "UPDATE" not in sql.upper()
+        assert params[0] == "ex-9"
+        assert "hello" in params and "hi there" in params
+        assert params[-1] == "alice"
+
+    @pytest.mark.asyncio
+    async def test_embed_failure_still_persists_to_pg(self):
+        """Embedding outage must not lose the exchange — the raw text pair
+        still lands in Postgres (a later job can re-vectorize)."""
+        obj = _make_self()
+        obj.embed_text = AsyncMock(side_effect=RuntimeError("embed down"))
+        conn = _RecordingConn()
+        with patch("app.db.get_conn_autocommit", _conn_ctx(conn)):
+            await store_exchange(obj, "ex-10", "u-text", "a-text", topics=[])
+        obj._http.put.assert_not_called()
+        assert len(conn.calls) == 1
+        assert "INSERT INTO companion_exchanges" in conn.calls[0][0]
+
+    @pytest.mark.asyncio
+    async def test_qdrant_success_skips_pg_fallback(self):
+        obj = _make_self()
+        conn = _RecordingConn()
+        with patch("app.db.get_conn_autocommit", _conn_ctx(conn)):
+            await store_exchange(obj, "ex-11", "u", "a", topics=[])
+        obj._http.put.assert_called_once()
+        assert conn.calls == []  # primary store succeeded → no fallback write
+
+    @pytest.mark.asyncio
+    async def test_both_stores_failing_is_swallowed(self):
+        obj = _make_self()
+        obj._http.put = AsyncMock(side_effect=RuntimeError("qdrant down"))
+
+        def broken():
+            raise RuntimeError("pg down")
+
+        with patch("app.db.get_conn_autocommit", side_effect=broken):
+            # Must not raise — chat path stays alive even on double failure.
+            await store_exchange(obj, "ex-12", "u", "a", topics=[])

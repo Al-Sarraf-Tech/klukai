@@ -201,19 +201,41 @@ def register_websocket(app: FastAPI) -> None:
 
                 msg_type = data.get("type")
 
-                if msg_type == "message":
-                    content = data.get("content", "")
-                    if isinstance(content, str):
-                        content = content[:4000]  # Input length limit
-                    await _handle_message(content, session, user_id)
-                elif msg_type == "typing":
-                    pass
-                elif msg_type == "voice_end":
-                    audio = data.get("audio")
-                    if audio:
-                        await _handle_voice(audio, session, user_id)
-                elif msg_type == "tap_interact":
-                    await _handle_tap_interact(user_id)
+                try:
+                    if msg_type == "message":
+                        content = data.get("content", "")
+                        if isinstance(content, str):
+                            content = content[:4000]  # Input length limit
+                        await _handle_message(content, session, user_id)
+                    elif msg_type == "typing":
+                        pass
+                    elif msg_type == "voice_end":
+                        audio = data.get("audio")
+                        if audio:
+                            await _handle_voice(audio, session, user_id)
+                    elif msg_type == "tap_interact":
+                        await _handle_tap_interact(user_id)
+                except WebSocketDisconnect:
+                    # A real disconnect during handling exits via the normal
+                    # disconnect path — it is not an application error.
+                    raise
+                except Exception as e:
+                    # A handler crash must not tear down the socket: the user
+                    # message was already persisted before streaming, so tell
+                    # the client and keep receiving.
+                    logger.error(
+                        "Message handler crashed (type=%s): %s", msg_type, e,
+                        exc_info=True,
+                    )
+                    try:
+                        await ws.send(user_id, {
+                            "type": "error",
+                            "message": "...Something glitched on my end, Commander. "
+                                       "Your message is safe — try again.",
+                        })
+                    except Exception:
+                        logger.warning("Could not deliver error event; closing loop")
+                        break
         except WebSocketDisconnect:
             pass
         finally:

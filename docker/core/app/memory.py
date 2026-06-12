@@ -220,7 +220,7 @@ class MemoryManager:
         # Qdrant vector storage
         try:
             vector = await self.embed_text(summary, raise_on_failure=True)
-            await self._http.put(
+            r = await self._http.put(
                 f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points",
                 json={
                     "points": [
@@ -240,6 +240,9 @@ class MemoryManager:
                     ]
                 },
             )
+            # httpx does NOT raise on 4xx/5xx — without this a Qdrant error
+            # status silently dropped the vector with no failure-path logging.
+            r.raise_for_status()
         except Exception as e:
             logger.error("Failed to store episode %s in Qdrant: %s", episode_id[:8], e)
 

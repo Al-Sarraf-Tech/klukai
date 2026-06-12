@@ -116,6 +116,22 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     sid = session_id(user_id)
     session = await memory.add_turn(sid, "user", content, session)
 
+    # Persist the user message BEFORE streaming — a mid-stream crash can
+    # never lose the Commander's message (SACRED). If the store fails, warn
+    # the Commander instead of silently swallowing the loss.
+    user_stored = await _store_message(
+        session.conversation_id, "user", content, user_id=user_id
+    )
+    if user_stored is False:
+        try:
+            await ws.send(user_id, {
+                "type": "warning",
+                "message": "...Commander, my memory banks glitched — that message "
+                           "may not have been recorded. I'm still listening.",
+            })
+        except Exception as e:
+            logger.warning("Could not deliver store-failure warning: %s", e)
+
     # Skip expensive memory recall for very short messages (hi, ok, yes, etc)
     is_short = len(content.strip()) <= 20
     if is_short:
@@ -264,6 +280,8 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Check if this needs the agentic tool-use loop
     use_agent = await router.needs_agent(content)
     msg_id = new_id()
+    from .llm_router import LLMStreamFailed
+    stream_failed = False
 
     if use_agent:
         # Agentic path: think, use tools, then respond (agent loop sends its own thinking events)
@@ -305,19 +323,31 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         full_response = []
         buffer = ""
         first_flush = True
-        async for token in router.stream(system_prompt, messages, config):
-            # Cancel warmup message once first token arrives
-            if warmup_timer and not warmup_timer.done():
-                warmup_timer.cancel()
-                warmup_timer = None
-            full_response.append(token)
-            buffer += token
-            # First flush after 20 chars for fast perceived response, then sentence boundaries
-            flush_threshold = 20 if first_flush else 80
-            if any(c in buffer for c in '.!?\n)') or len(buffer) > flush_threshold:
-                await ws.send_token(user_id, buffer)
-                buffer = ""
-                first_flush = False
+        try:
+            async for token in router.stream(system_prompt, messages, config):
+                # Cancel warmup message once first token arrives
+                if warmup_timer and not warmup_timer.done():
+                    warmup_timer.cancel()
+                    warmup_timer = None
+                full_response.append(token)
+                buffer += token
+                # First flush after 20 chars for fast perceived response, then sentence boundaries
+                flush_threshold = 20 if first_flush else 80
+                if any(c in buffer for c in '.!?\n)') or len(buffer) > flush_threshold:
+                    await ws.send_token(user_id, buffer)
+                    buffer = ""
+                    first_flush = False
+        except LLMStreamFailed as e:
+            # Mid-stream death: don't propagate (it would kill the WS). The
+            # user message is already persisted; surface an explicit error,
+            # finalize the truncated reply for the UI, and skip follow-ups.
+            stream_failed = True
+            logger.error("LLM stream failed mid-response: %s", e)
+            await ws.send(user_id, {
+                "type": "error",
+                "message": "...Connection to my core dropped mid-sentence, "
+                           "Commander. Say that again?",
+            })
         if warmup_timer and not warmup_timer.done():
             warmup_timer.cancel()
         if buffer:
@@ -336,8 +366,8 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Add assistant turn to session
     session = await memory.add_turn(sid, "assistant", response_text, session)
 
-    # Store messages in PostgreSQL + mark as read
-    await _store_message(session.conversation_id, "user", content, model_name, user_id=user_id)
+    # Mark user messages as read (the user message itself was already
+    # persisted before streaming — never stored twice).
     try:
         async with get_conn_autocommit() as conn:
             await conn.execute(
@@ -368,10 +398,10 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
 
     # Track whether image gen was triggered (for extraction curation pass)
     image_triggered = False
-    triggered_memory_id: str | None = None
 
-    # Background tasks — only if main LLM succeeded (not a fallback error)
-    if not response_text.startswith("Communications disrupted"):
+    # Background tasks — only if main LLM succeeded (not a fallback error
+    # and not a truncated mid-stream failure)
+    if not stream_failed and not response_text.startswith("Communications disrupted"):
         # Recall detection takes priority over new image generation
         if _wants_recall(content):
             logger.info("Memory recall triggered for: %s", content[:80])
@@ -398,6 +428,11 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     is_trivial = content_stripped in TRIVIAL_PATTERNS or (
         len(content_stripped) <= 5 and not image_triggered
     )
+
+    if stream_failed:
+        # Truncated reply — never extract facts/episodes from a partial answer.
+        logger.info("Stream failed mid-response, skipping extraction/compaction")
+        return
 
     if not is_trivial:
         async def _safe_extraction():

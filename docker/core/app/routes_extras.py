@@ -193,17 +193,27 @@ def register_extras(app: FastAPI) -> None:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        return await memory_archive.list_memories(
-            category=category, limit=limit, before=before, month=month, user_id=user_id
-        )
+        try:
+            return await memory_archive.list_memories(
+                category=category, limit=limit, before=before, month=month, user_id=user_id
+            )
+        except Exception as e:
+            logger.error("Failed to list memories: %s", e)
+            # Fail closed (mirrors /api/messages): never mask a backend outage
+            # as an empty album that looks like a wiped archive.
+            return JSONResponse({"error": "Could not load memories"}, status_code=503)
 
     @app.get("/api/memories/categories")
     async def api_memory_categories(request: Request):
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        aff = await affection.get_state(user_id)
-        return await memory_archive.get_categories(aff.level, user_id=user_id)
+        try:
+            aff = await affection.get_state(user_id)
+            return await memory_archive.get_categories(aff.level, user_id=user_id)
+        except Exception as e:
+            logger.error("Failed to get memory categories: %s", e)
+            return JSONResponse({"error": "Could not load categories"}, status_code=503)
 
     @app.get("/api/memories/timeline")
     async def api_memory_timeline(request: Request):
@@ -211,7 +221,11 @@ def register_extras(app: FastAPI) -> None:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        return await memory_archive.get_timeline(user_id=user_id)
+        try:
+            return await memory_archive.get_timeline(user_id=user_id)
+        except Exception as e:
+            logger.error("Failed to get memory timeline: %s", e)
+            return JSONResponse({"error": "Could not load timeline"}, status_code=503)
 
     @app.post("/api/memories/backfill-annotations")
     async def api_backfill_annotations(request: Request):

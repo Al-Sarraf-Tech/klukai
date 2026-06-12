@@ -137,6 +137,10 @@ class AffectionManager:
                                 "WHERE user_id=%s",
                                 (cached.score, cached.level, cached.level_name, user_id),
                             )
+                            # get_conn() is a manual-commit connection — without
+                            # this the restore silently rolls back and the
+                            # anomalous low score stays in the DB.
+                            await conn.commit()
                             return
 
                     self._states[user_id] = AffectionState(
@@ -164,14 +168,16 @@ class AffectionManager:
         Other users load from DB normally. Each user gets isolated state.
         """
         if user_id == "jalsarraf":
-            from datetime import date as _date, datetime as _dt
-            state = AffectionState(
-                score=1000, level=9, level_name="Oath Fulfilled",
-                last_interaction_date=_date.today(),
-                consecutive_days=7, daily_points_earned=0,
-                total_interactions=338,
-                first_interaction=_dt(2026, 4, 6),
-            )
+            # SACRED pin: score/level/level_name only. The interaction
+            # counters (total_interactions, consecutive_days, streak date,
+            # daily cap, first_interaction) come from the real DB row — the
+            # old hardcoded snapshot was persisted back on every message,
+            # permanently clobbering the real counters.
+            await self._load_state(user_id)
+            state = self._states.get(user_id) or AffectionState()
+            state.score = MAX_SCORE
+            state.level = 9
+            state.level_name = "Oath Fulfilled"
             self._states[user_id] = state
             return state
 

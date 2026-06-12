@@ -63,7 +63,11 @@ async def save_dream(
 
 
 async def list_dreams(user_id: str = "jalsarraf", limit: int = 20) -> list[dict]:
-    """Return the user's saved dreams ordered newest-first."""
+    """Return the user's saved dreams ordered newest-first.
+
+    Fails closed: a DB outage surfaces as a 503 (matching /api/messages)
+    instead of masquerading as an empty dream diary.
+    """
     limit = max(1, min(limit, 200))
     try:
         pool = get_pool()
@@ -89,7 +93,8 @@ async def list_dreams(user_id: str = "jalsarraf", limit: int = 20) -> list[dict]
         ]
     except Exception as e:
         logger.error("list_dreams failed: %s", e)
-        return []
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Could not load dreams") from e
 
 
 async def count_dreams(user_id: str = "jalsarraf") -> int:

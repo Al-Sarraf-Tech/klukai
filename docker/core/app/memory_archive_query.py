@@ -112,7 +112,11 @@ async def list_memories(
         return []
 
 async def get_timeline(user_id: str = "jalsarraf") -> list[dict]:
-    """Return month/year groups with memory counts for the archive timeline."""
+    """Return month/year groups with memory counts for the archive timeline.
+
+    Fails closed: a DB outage propagates (the route returns 503) instead of
+    returning a fake-empty timeline that looks like a wiped archive.
+    """
     try:
         async with get_conn() as conn:
             rows = await (await conn.execute(
@@ -125,10 +129,13 @@ async def get_timeline(user_id: str = "jalsarraf") -> list[dict]:
             return [{"month": r[0], "count": r[1]} for r in rows]
     except Exception as e:
         logger.error("Failed to get timeline: %s", e)
-        return []
+        raise
 
 async def get_categories(affection_level: int, user_id: str = "jalsarraf") -> list[dict]:
-    """Return available categories with memory counts, scoped to user."""
+    """Return available categories with memory counts, scoped to user.
+
+    Fails closed — mirror of get_timeline: surface the outage.
+    """
     try:
         valid = available_categories(affection_level)
         async with get_conn() as conn:
@@ -145,7 +152,7 @@ async def get_categories(affection_level: int, user_id: str = "jalsarraf") -> li
             return result
     except Exception as e:
         logger.error("Failed to get categories: %s", e)
-        return []
+        raise
 
 async def update_kept(
     memory_id: str, kept: bool, kept_by: str = "commander", user_id: str | None = None

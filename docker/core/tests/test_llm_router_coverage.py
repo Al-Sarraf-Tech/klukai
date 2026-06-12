@@ -805,3 +805,131 @@ class TestIdleAndKeepaliveHelpers:
         assert lr._seeding_active is True
         lr.set_seeding_active(False)
         assert lr._seeding_active is False
+
+
+# ── stream(): mid-stream failure semantics (data-loss fixes 2026-06-11) ─────
+#
+# Contract: a failure BEFORE any token degrades to the failure sentinel (or
+# the cloud fallback); a failure AFTER tokens were yielded raises
+# LLMStreamFailed so callers never see a partial answer silently glued to a
+# second full response.
+
+
+class _FailingAnthropicStreamCtx:
+    """Anthropic stream CM that yields some tokens then dies mid-stream."""
+
+    def __init__(self, tokens, exc):
+        self._tokens = tokens
+        self._exc = exc
+
+    async def __aenter__(self):
+        stream = MagicMock()
+
+        async def _txt():
+            for t in self._tokens:
+                yield t
+            raise self._exc
+
+        stream.text_stream = _txt()
+        return stream
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class TestStreamMidStreamFailure:
+    @pytest.mark.asyncio
+    async def test_local_midstream_failure_raises_no_cloud_concat(self):
+        """Partial local tokens followed by a crash must NOT be glued to a
+        second full cloud answer — the failure surfaces as LLMStreamFailed."""
+        from app.llm_router import LLMStreamFailed
+
+        r = LLMRouter()
+        r._lmstudio_available = True
+        r._anthropic = MagicMock()  # must NOT be consulted
+        cfg = LLMConfig(provider="lmstudio", model=LOCAL_CASUAL, base_url=LM_STUDIO_URL)
+
+        async def _partial(sp, msgs, c):
+            yield "partial "
+            raise RuntimeError("died mid-stream")
+
+        r._stream_lmstudio = _partial
+        out = []
+        with pytest.raises(LLMStreamFailed):
+            async for tok in r.stream("sys", [], cfg):
+                out.append(tok)
+        # Partial tokens were delivered before the failure, nothing appended.
+        assert out == ["partial "]
+        r._anthropic.messages.stream.assert_not_called()
+        # Breaker still opens so the next request reroutes.
+        assert r._lmstudio_available is False
+
+    @pytest.mark.asyncio
+    async def test_anthropic_direct_failure_before_tokens_yields_sentinel(self):
+        """Direct-anthropic failure before any token must NOT propagate (it
+        used to kill the WebSocket) — it degrades to the failure sentinel."""
+        from app.llm_router import FAILURE_SENTINEL
+
+        r = LLMRouter()
+        r._anthropic = MagicMock()
+        r._anthropic.messages.stream = MagicMock(side_effect=RuntimeError("api down"))
+        cfg = LLMConfig(provider="anthropic", model="claude-x")
+        out = [t async for t in r.stream("sys", [], cfg)]
+        assert out == [FAILURE_SENTINEL]
+
+    @pytest.mark.asyncio
+    async def test_anthropic_direct_midstream_failure_raises(self):
+        from app.llm_router import LLMStreamFailed
+
+        r = LLMRouter()
+        r._anthropic = MagicMock()
+        r._anthropic.messages.stream = MagicMock(
+            return_value=_FailingAnthropicStreamCtx(["tok"], RuntimeError("mid"))
+        )
+        cfg = LLMConfig(provider="anthropic", model="claude-x")
+        out = []
+        with pytest.raises(LLMStreamFailed):
+            async for t in r.stream("sys", [], cfg):
+                out.append(t)
+        assert out == ["tok"]
+
+    @pytest.mark.asyncio
+    async def test_cloud_fallback_midstream_failure_raises(self):
+        from app.llm_router import LLMStreamFailed
+
+        r = LLMRouter()
+        r._lmstudio_available = True
+        r._anthropic = MagicMock()
+        r._anthropic.messages.stream = MagicMock(
+            return_value=_FailingAnthropicStreamCtx(["cloud"], RuntimeError("mid"))
+        )
+        cfg = LLMConfig(provider="lmstudio", model=LOCAL_CASUAL, base_url=LM_STUDIO_URL)
+
+        async def _boom(sp, msgs, c):
+            raise RuntimeError("dead")
+            yield  # pragma: no cover
+
+        r._stream_lmstudio = _boom
+        out = []
+        with pytest.raises(LLMStreamFailed):
+            async for t in r.stream("sys", [], cfg):
+                out.append(t)
+        assert out == ["cloud"]
+
+    @pytest.mark.asyncio
+    async def test_cloud_fallback_failure_before_tokens_yields_sentinel(self):
+        from app.llm_router import FAILURE_SENTINEL
+
+        r = LLMRouter()
+        r._lmstudio_available = True
+        r._anthropic = MagicMock()
+        r._anthropic.messages.stream = MagicMock(side_effect=RuntimeError("api down"))
+        cfg = LLMConfig(provider="lmstudio", model=LOCAL_CASUAL, base_url=LM_STUDIO_URL)
+
+        async def _boom(sp, msgs, c):
+            raise RuntimeError("dead")
+            yield  # pragma: no cover
+
+        r._stream_lmstudio = _boom
+        out = [t async for t in r.stream("sys", [], cfg)]
+        assert out == [FAILURE_SENTINEL]

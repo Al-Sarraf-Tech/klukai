@@ -164,14 +164,20 @@ class TestListDreams:
         assert params[-1] <= 200  # clamp
 
     @pytest.mark.asyncio
-    async def test_db_error_returns_empty(self):
+    async def test_db_error_raises_503(self):
+        """Fail closed: a DB outage must NOT masquerade as an empty dream
+        diary — it surfaces as a 503 (matching the /api/messages pattern)."""
+        from fastapi import HTTPException
+
         from app.dreams import list_dreams
 
         def broken():
             raise RuntimeError("db down")
 
         with patch("app.dreams.get_pool", side_effect=broken):
-            assert await list_dreams("alice") == []
+            with pytest.raises(HTTPException) as exc_info:
+                await list_dreams("alice")
+        assert exc_info.value.status_code == 503
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -163,8 +163,8 @@ def _patched_pipeline(
     ns.do_memory_keep = do_memory_keep
     ns.background_compaction = background_compaction
 
-    # ── store_message ──
-    store_message = AsyncMock(side_effect=_noop)
+    # ── store_message (returns True = persisted, mirroring helpers.store_message) ──
+    store_message = AsyncMock(return_value=True)
     ns.store_message = store_message
 
     # ── context module (get_last_memory_id) ──
@@ -791,3 +791,74 @@ class TestErrorResilience:
             await _drain_tasks()
 
         ns.background_extraction.assert_awaited_once()
+
+
+# ── Tests: stream-failure + persistence-before-streaming (2026-06-11) ────────
+
+
+class TestStreamFailureHandling:
+    @pytest.mark.asyncio
+    async def test_user_message_persisted_before_streaming(self):
+        """The user turn must hit PostgreSQL BEFORE streaming starts, so a
+        mid-stream crash can never lose the Commander's message."""
+        from app.chat_handlers import _handle_message
+
+        with _patched_pipeline() as ns:
+            seen = {}
+
+            async def _stream(system_prompt, messages, config):
+                seen["user_stored_before_stream"] = any(
+                    c.args[1] == "user" for c in ns.store_message.call_args_list
+                )
+                yield "Reply."
+
+            ns.router.stream = _stream
+            await _handle_message("A meaningful question for you", _fresh_session())
+            await _drain_tasks()
+
+        assert seen["user_stored_before_stream"] is True
+        # And it is not stored twice.
+        user_stores = [c for c in ns.store_message.call_args_list if c.args[1] == "user"]
+        assert len(user_stores) == 1
+
+    @pytest.mark.asyncio
+    async def test_midstream_failure_surfaces_error_and_keeps_message(self):
+        """LLMStreamFailed mid-response must not propagate (it would kill the
+        WS): the client gets an error event, the user message stays stored,
+        and no background extraction runs on the truncated reply."""
+        from app.chat_handlers import _handle_message
+        from app.llm_router import LLMStreamFailed
+
+        with _patched_pipeline() as ns:
+            async def _stream(system_prompt, messages, config):
+                yield "Partial sentence."
+                raise LLMStreamFailed("upstream died")
+
+            ns.router.stream = _stream
+            await _handle_message("Tell me something long enough", _fresh_session())
+            await _drain_tasks()
+
+        # User message persisted (before streaming) despite the failure.
+        stored_roles = [c.args[1] for c in ns.store_message.call_args_list]
+        assert "user" in stored_roles
+        # Client got an explicit error event…
+        types = [c.args[1].get("type") for c in ns.ws.send.call_args_list]
+        assert "error" in types
+        # …and the stream still finalized for the UI.
+        ns.ws.send_done.assert_awaited_once()
+        # Truncated reply: no extraction/compaction follow-ups.
+        ns.background_extraction.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_user_store_failure_sends_warning_event(self):
+        """If the user message could not be persisted, the Commander is warned
+        instead of the failure being silently swallowed."""
+        from app.chat_handlers import _handle_message
+
+        with _patched_pipeline(stream_tokens=["Understood, Commander."]) as ns:
+            ns.store_message.return_value = False
+            await _handle_message("A meaningful question for you", _fresh_session())
+            await _drain_tasks()
+
+        types = [c.args[1].get("type") for c in ns.ws.send.call_args_list]
+        assert "warning" in types

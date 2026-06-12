@@ -946,3 +946,69 @@ class TestAddScore:
         state = await manager.add_score(-100, "jalsarraf")
         assert state.score == MAX_SCORE
         assert state.level == 9
+
+
+# ── Data-loss fixes (2026-06-11): anomaly-restore commit + real counters ─────
+
+
+class TestAnomalyRestoreCommit:
+    @pytest.mark.asyncio
+    async def test_anomaly_writeback_is_committed(self, manager):
+        """The hard-floor restore UPDATE runs on a manual-commit connection —
+        without an explicit commit it silently rolls back and the restored
+        score never reaches the DB."""
+        manager._states["dan"] = AffectionState(score=400, level=5, level_name="Unguarded")
+        with _patch_db(fetchone_result=(100, 2, "Professional Respect",
+                                        FIXED_TODAY, 1, 0, 5, FIXED_NOW)) as conn:
+            await manager._load_state("dan")
+        sqls = [c.args[0] for c in conn.execute.call_args_list]
+        assert any("UPDATE companion_affection SET score" in s for s in sqls)
+        conn.commit.assert_awaited()
+
+
+class TestJalsarrafRealCounters:
+    """get_state must pin ONLY score/level/level_name (SACRED) for jalsarraf.
+
+    The interaction counters (total_interactions, consecutive_days,
+    first_interaction, daily cap, streak date) must come from the DB row —
+    the old hardcoded 338/7/2026-04-06 snapshot was persisted back on every
+    message, permanently clobbering the real counters.
+    """
+
+    @pytest.mark.asyncio
+    async def test_pins_score_but_loads_real_counters_from_db(self, manager):
+        row = (1000, 9, "Oath Fulfilled", FIXED_TODAY, 3, 2, 42, FIXED_NOW)
+        with _patch_db(fetchone_result=row):
+            state = await manager.get_state("jalsarraf")
+        # SACRED pin intact.
+        assert state.score == 1000
+        assert state.level == 9
+        assert state.level_name == "Oath Fulfilled"
+        # Real counters from the DB row — NOT the old hardcoded snapshot.
+        assert state.total_interactions == 42
+        assert state.consecutive_days == 3
+        assert state.first_interaction == FIXED_NOW
+        assert state.last_interaction_date == FIXED_TODAY
+        assert state.daily_points_earned == 2
+
+    @pytest.mark.asyncio
+    async def test_low_db_score_still_pinned_to_max(self, manager):
+        # Even if the DB row drifted low, the SACRED pin holds.
+        row = (120, 3, "Guarded Interest", FIXED_TODAY, 1, 0, 7, FIXED_NOW)
+        with _patch_db(fetchone_result=row):
+            state = await manager.get_state("jalsarraf")
+        assert (state.score, state.level, state.level_name) == (1000, 9, "Oath Fulfilled")
+        assert state.total_interactions == 7  # counter still real
+
+    @pytest.mark.asyncio
+    async def test_apply_delta_increments_real_counter(self, manager, freeze_time):
+        """A message must increment the REAL total_interactions (42→43), not
+        re-persist the hardcoded 338."""
+        row = (1000, 9, "Oath Fulfilled", FIXED_TODAY, 3, 0, 42, FIXED_NOW)
+        with _patch_db(fetchone_result=row), \
+             patch.object(manager, "_save_state", new=AsyncMock()) as save:
+            await manager._apply_delta("greeting", 2, "jalsarraf")
+        saved_state = save.await_args.args[0]
+        assert saved_state.total_interactions == 43
+        assert saved_state.total_interactions != 338
+        assert saved_state.score == 1000  # pin survives the delta

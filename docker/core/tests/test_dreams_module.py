@@ -85,10 +85,15 @@ class TestSaveDream:
 
 class TestListDreams:
     @pytest.mark.asyncio
-    async def test_returns_empty_on_db_error(self):
+    async def test_db_error_raises_503(self):
+        """Fail closed (2026-06-11): a DB outage surfaces as a 503 instead of
+        masquerading as an empty dream diary — mirrors /api/messages."""
+        from fastapi import HTTPException
+
         with patch("app.dreams.get_pool", side_effect=RuntimeError("db down")):
-            result = await dreams.list_dreams()
-        assert result == []
+            with pytest.raises(HTTPException) as exc_info:
+                await dreams.list_dreams()
+        assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
     async def test_formats_rows(self):

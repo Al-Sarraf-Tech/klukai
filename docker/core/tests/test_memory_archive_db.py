@@ -111,14 +111,17 @@ class TestGetTimeline:
         assert {r["count"] for r in result} == {12, 8, 5}
 
     @pytest.mark.asyncio
-    async def test_empty_on_db_error(self):
+    async def test_raises_on_db_error(self):
+        """Fail closed: a DB outage must surface (route returns 503), never a
+        fake-empty timeline that looks like a wiped archive."""
         from app.memory_archive import get_timeline
 
         def broken():
             raise RuntimeError("boom")
 
         with patch("app.memory_archive_query.get_conn", side_effect=broken):
-            assert await get_timeline() == []
+            with pytest.raises(RuntimeError):
+                await get_timeline()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -139,14 +142,16 @@ class TestGetCategories:
         assert all("name" in c and "count" in c for c in result)
 
     @pytest.mark.asyncio
-    async def test_empty_on_db_error(self):
+    async def test_raises_on_db_error(self):
+        """Fail closed — mirror of get_timeline: surface the outage."""
         from app.memory_archive import get_categories
 
         def broken():
             raise RuntimeError("down")
 
         with patch("app.memory_archive_query.get_conn", side_effect=broken):
-            assert await get_categories(0, "alice") == []
+            with pytest.raises(RuntimeError):
+                await get_categories(0, "alice")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

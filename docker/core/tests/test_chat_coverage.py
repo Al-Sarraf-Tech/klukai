@@ -665,3 +665,82 @@ class TestWebSocketEndpoint:
         # composed default -> no mood push to client.
         ws.send_mood.assert_not_called()
         ws.disconnect.assert_awaited_once()
+
+
+# ── WS loop: generic handler crash must not kill the socket (2026-06-11) ─────
+
+
+class TestWSLoopErrorHandling:
+    @pytest.mark.asyncio
+    async def test_handler_crash_sends_error_and_keeps_socket(self):
+        """A generic _handle_message crash must not tear down the WebSocket:
+        an error event is sent to the client and the receive loop continues
+        (the user message was already persisted before streaming)."""
+        endpoint, _ = _capture_endpoint()
+        sock = _FakeWebSocket(token="good")
+        ws = _fake_ws_manager([
+            {"type": "message", "content": "first"},
+            {"type": "message", "content": "second"},
+        ])
+        ws.send = AsyncMock()
+
+        memory = MagicMock()
+        memory.get_session = AsyncMock(
+            return_value=SessionState(conversation_id="c1", mood="composed")
+        )
+        memory.save_session = AsyncMock()
+        proactive = MagicMock()
+        proactive.mission_active = False
+        handle_message = AsyncMock(side_effect=[RuntimeError("LLM blew up"), None])
+
+        with patch("app.chat.ws", ws), patch("app.chat.memory", memory), patch(
+            "app.chat.proactive", proactive
+        ), patch("app.auth.get_user_from_token", AsyncMock(return_value="u1")), patch(
+            "app.chat.get_conn", return_value=_FakeConn(("composed",))
+        ), patch(
+            "app.chat._maybe_reflect_on_return", AsyncMock()
+        ), patch(
+            "app.chat._handle_message", handle_message
+        ):
+            # Must not propagate the crash.
+            await endpoint(sock)
+
+        # Loop survived the crash and processed the second message.
+        assert handle_message.await_count == 2
+        types = [c.args[1].get("type") for c in ws.send.call_args_list]
+        assert "error" in types
+        ws.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_during_handling_still_exits_cleanly(self):
+        """WebSocketDisconnect raised inside _handle_message is NOT converted
+        into an error event — the loop exits via the normal disconnect path."""
+        from fastapi import WebSocketDisconnect
+
+        endpoint, _ = _capture_endpoint()
+        sock = _FakeWebSocket(token="good")
+        ws = _fake_ws_manager([{"type": "message", "content": "hi"}])
+        ws.send = AsyncMock()
+
+        memory = MagicMock()
+        memory.get_session = AsyncMock(
+            return_value=SessionState(conversation_id="c1", mood="composed")
+        )
+        memory.save_session = AsyncMock()
+        proactive = MagicMock()
+        proactive.mission_active = False
+        handle_message = AsyncMock(side_effect=WebSocketDisconnect(code=1001))
+
+        with patch("app.chat.ws", ws), patch("app.chat.memory", memory), patch(
+            "app.chat.proactive", proactive
+        ), patch("app.auth.get_user_from_token", AsyncMock(return_value="u1")), patch(
+            "app.chat.get_conn", return_value=_FakeConn(("composed",))
+        ), patch(
+            "app.chat._maybe_reflect_on_return", AsyncMock()
+        ), patch(
+            "app.chat._handle_message", handle_message
+        ):
+            await endpoint(sock)
+
+        ws.send.assert_not_called()  # no error event for a plain disconnect
+        ws.disconnect.assert_awaited_once()

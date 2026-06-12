@@ -77,11 +77,17 @@ async def store_exchange(
     conversation_id: str | None = None,
     user_id: str = "jalsarraf",
 ) -> None:
-    """Store a user+assistant exchange pair with vector embedding, scoped to user."""
+    """Store a user+assistant exchange pair with vector embedding, scoped to user.
+
+    SACRED: on ANY Qdrant/embed failure the exchange falls back to the
+    companion_exchanges Postgres table (mirroring the episodes fallback in
+    app/memory.py) instead of being stored nowhere. Insert-only — a later
+    job can re-vectorize from the raw text pair.
+    """
     try:
         combined = f"Commander: {user_content[:500]}\nKlukai: {assistant_content[:500]}"
         vector = await self.embed_text(combined, raise_on_failure=True)
-        await self._http.put(
+        r = await self._http.put(
             f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points",
             json={
                 "points": [
@@ -102,8 +108,29 @@ async def store_exchange(
                 ]
             },
         )
+        # httpx does NOT raise on 4xx/5xx — a Qdrant error status must route
+        # to the PG fallback, not be silently treated as a success.
+        r.raise_for_status()
+        return
     except Exception as e:
-        logger.warning("Failed to store exchange %s: %s", exchange_id[:8], e)
+        logger.warning("Failed to store exchange %s in Qdrant: %s", exchange_id[:8], e)
+
+    # PostgreSQL fallback — ensures exchanges survive Qdrant/embed outages.
+    try:
+        from .db import get_conn_autocommit
+        async with get_conn_autocommit() as conn:
+            await conn.execute(
+                "INSERT INTO companion_exchanges "
+                "(id, conversation_id, user_content, assistant_content, "
+                "topics, mood, importance, user_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (id) DO NOTHING",
+                (exchange_id, conversation_id, user_content, assistant_content,
+                 topics, mood, importance, user_id),
+            )
+    except Exception as e:
+        # Double failure: never let a memory write kill the chat path.
+        logger.error("Failed to store exchange %s in DB: %s", exchange_id[:8], e)
 
 
 async def recall_exchanges(

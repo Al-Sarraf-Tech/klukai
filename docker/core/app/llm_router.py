@@ -107,6 +107,22 @@ def model_needs_keepalive(model: str) -> bool:
     last = _model_last_used.get(model, 0)
     return last == 0 or (time.monotonic() - last > _KEEPALIVE_INTERVAL)
 
+# Yielded as the whole response when every backend failed BEFORE any token
+# was produced. Callers key off this prefix to skip background follow-ups.
+FAILURE_SENTINEL = "Communications disrupted, Commander. Standby for reconnection."
+
+
+class LLMStreamFailed(Exception):
+    """The LLM stream died AFTER tokens were already yielded.
+
+    Raised instead of yielding a sentinel or a cloud fallback so callers never
+    see a partial answer silently concatenated with a second full response —
+    and so the sentinel prefix check can't be defeated by leading partial
+    tokens. Failures before the first token still degrade in-band (fallback
+    or FAILURE_SENTINEL) and never raise.
+    """
+
+
 # Signals that the message needs tool use (agent loop)
 AGENT_SIGNALS = [
     "search", "look up", "find out", "what's happening", "current",
@@ -252,12 +268,29 @@ class LLMRouter:
         queue pile-up when the server is slow or swapping models.
         On local failure, falls back directly to Claude — no cascading
         local retries that would just pile more requests onto a stuck server.
+
+        Failure semantics: a failure BEFORE any token degrades in-band (cloud
+        fallback, or FAILURE_SENTINEL as the whole response). A failure AFTER
+        tokens were yielded raises LLMStreamFailed so a partial answer is
+        never silently concatenated with a second full response.
         """
+        yielded = False
+
         if config.provider == "anthropic":
-            async for token in self._stream_anthropic(
-                system_prompt, messages, config
-            ):
-                yield token
+            try:
+                async for token in self._stream_anthropic(
+                    system_prompt, messages, config
+                ):
+                    yielded = True
+                    yield token
+            except Exception as e:
+                if yielded:
+                    raise LLMStreamFailed(
+                        f"anthropic stream died mid-response: {e}"
+                    ) from e
+                logger.error("Anthropic stream failed before any token: %s", e)
+                yield FAILURE_SENTINEL
+                return
             mark_model_used(config.model)
             return
 
@@ -268,6 +301,7 @@ class LLMRouter:
                 async for token in self._stream_lmstudio(
                     system_prompt, messages, config
                 ):
+                    yielded = True
                     yield token
                 mark_model_used(config.model)
                 return
@@ -278,6 +312,7 @@ class LLMRouter:
                 )
                 self._lmstudio_available = False
                 self._lmstudio_last_check = time.monotonic()
+                local_error: Exception | None = None
             except Exception as e:
                 error_msg = str(e) or type(e).__name__
                 logger.warning(
@@ -286,16 +321,33 @@ class LLMRouter:
                 )
                 self._lmstudio_available = False
                 self._lmstudio_last_check = time.monotonic()
+                local_error = e
         # ── Gate released ──
+
+        if yielded:
+            # Mid-stream death after partial local tokens: never glue a second
+            # full cloud answer onto a partial one — surface the failure.
+            raise LLMStreamFailed(
+                "local stream died mid-response"
+            ) from local_error
 
         # Cloud fallback (outside gate — Anthropic is a different server)
         if self._anthropic:
             logger.info("Fast-fallback to Claude after local failure")
             cloud = LLMConfig(provider="anthropic", model=CLOUD_FALLBACK, temperature=0.7)
-            async for token in self._stream_anthropic(system_prompt, messages, cloud):
-                yield token
+            try:
+                async for token in self._stream_anthropic(system_prompt, messages, cloud):
+                    yielded = True
+                    yield token
+            except Exception as e:
+                if yielded:
+                    raise LLMStreamFailed(
+                        f"cloud fallback stream died mid-response: {e}"
+                    ) from e
+                logger.error("Cloud fallback failed before any token: %s", e)
+                yield FAILURE_SENTINEL
         else:
-            yield "Communications disrupted, Commander. Standby for reconnection."
+            yield FAILURE_SENTINEL
 
     async def complete_local(
         self,

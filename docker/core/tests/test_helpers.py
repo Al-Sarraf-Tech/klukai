@@ -268,3 +268,46 @@ class TestDreamDetection:
     def test_dream_inquiry_negative(self):
         from app.helpers import wants_dream_inquiry
         assert not wants_dream_inquiry("What's for dinner?")
+
+
+# ── store_message: success/failure signalling (2026-06-11) ───────────────────
+
+
+class TestStoreMessage:
+    """store_message used to swallow every DB exception and return None — the
+    chat path could not react to a lost message. It now reports success."""
+
+    @pytest.mark.asyncio
+    async def test_returns_true_on_success(self):
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, patch
+
+        from app.helpers import store_message
+
+        conn = AsyncMock()
+
+        @asynccontextmanager
+        async def _ctx():
+            yield conn
+
+        with patch("app.db.get_conn", _ctx):
+            ok = await store_message("conv-1", "user", "hello", user_id="alice")
+        assert ok is True
+        conn.commit.assert_awaited_once()
+        # Message INSERT + conversation turn-count UPDATE both issued.
+        sqls = [c.args[0] for c in conn.execute.call_args_list]
+        assert any("INSERT INTO companion_messages" in s for s in sqls)
+        assert any("UPDATE companion_conversations" in s for s in sqls)
+
+    @pytest.mark.asyncio
+    async def test_returns_false_on_db_error(self):
+        from unittest.mock import patch
+
+        from app.helpers import store_message
+
+        def broken():
+            raise RuntimeError("db down")
+
+        with patch("app.db.get_conn", side_effect=broken):
+            ok = await store_message("conv-1", "user", "hello")
+        assert ok is False

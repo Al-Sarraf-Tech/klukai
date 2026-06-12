@@ -371,8 +371,12 @@ async def store_message(
     model: str = "",
     latency_ms: int | None = None,
     user_id: str = "jalsarraf",
-) -> None:
-    """Store a message and update conversation turn count atomically."""
+) -> bool:
+    """Store a message and update conversation turn count atomically.
+
+    Returns True when the message was persisted, False on DB failure so the
+    chat path can warn the Commander instead of silently losing the message.
+    """
     import logging
     from .db import get_conn
     logger = logging.getLogger(__name__)
@@ -390,5 +394,7 @@ async def store_message(
                 (model, conversation_id),
             )
             await conn.commit()
+        return True
     except Exception as e:
         logger.error("Failed to store message: %s", e)
+        return False
