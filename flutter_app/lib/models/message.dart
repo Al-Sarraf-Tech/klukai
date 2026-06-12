@@ -32,6 +32,7 @@ class ChatMessage {
     bool? isStreaming,
     int? pretextHandle,
     double? tightBubbleWidth,
+    String? imageData,
     String? status,
   }) {
     return ChatMessage(
@@ -44,6 +45,7 @@ class ChatMessage {
       isStreaming: isStreaming ?? this.isStreaming,
       pretextHandle: pretextHandle ?? this.pretextHandle,
       tightBubbleWidth: tightBubbleWidth ?? this.tightBubbleWidth,
+      imageData: imageData ?? this.imageData,
       status: status ?? this.status,
     );
   }

@@ -50,6 +50,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final costumeR = await http.get(Uri.parse('${widget.serverUrl}/api/costume'), headers: _authHeaders);
       final milestonesR = await http.get(Uri.parse('${widget.serverUrl}/api/milestones'), headers: _authHeaders);
       final statsR = await http.get(Uri.parse('${widget.serverUrl}/api/user/stats'), headers: _authHeaders);
+      if (!mounted) return;
       if (costumeR.statusCode == 200) {
         setState(() => _costume = jsonDecode(costumeR.body)['costume'] ?? 'blazing_star');
       }
@@ -72,6 +73,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         headers: _authHeaders,
         body: jsonEncode({'costume': costume}),
       );
+      if (!mounted) return;
       setState(() => _costume = costume);
     } catch (_) {}
   }
@@ -158,7 +160,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _sectionTitle('OPERATIONAL STATUS'),
           const SizedBox(height: 8),
           _statRow('TRUST LEVEL', widget.affectionLevelName.toUpperCase()),
-          _statRow('AFFECTION', '${widget.affectionScore}/100'),
+          // Affection is on a 0–1000 scale (the gauge fills score/1000).
+          _statRow('AFFECTION', '${widget.affectionScore}/1000'),
           _statRow('INTERACTIONS', '$_interactions'),
           _statRow('MILESTONES', '${_milestones.length}'),
           _statRow('CURRENT OUTFIT', _costumeLabel(_costume)),

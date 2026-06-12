@@ -40,6 +40,9 @@ class FakeWebSocketService implements WebSocketService {
   /// Frames the screen sent outbound (so tests can assert send-side behavior).
   final List<Map<String, dynamic>> sent = [];
 
+  /// When false, send() refuses frames (simulates a dead channel mid-reconnect).
+  bool sendShouldSucceed = true;
+
   bool _connected = false;
 
   @override
@@ -73,17 +76,21 @@ class FakeWebSocketService implements WebSocketService {
   }
 
   @override
-  void send(Map<String, dynamic> data) => sent.add(data);
+  bool send(Map<String, dynamic> data) {
+    if (!sendShouldSucceed) return false;
+    sent.add(data);
+    return true;
+  }
 
   @override
-  void sendMessage(String content) =>
+  bool sendMessage(String content) =>
       send({'type': 'message', 'content': content, 'attachments': []});
 
   @override
-  void sendTyping() => send({'type': 'typing'});
+  bool sendTyping() => send({'type': 'typing'});
 
   @override
-  void sendVoiceEnd(String audioBase64) =>
+  bool sendVoiceEnd(String audioBase64) =>
       send({'type': 'voice_end', 'audio': audioBase64});
 
   @override
@@ -235,6 +242,62 @@ void main() {
       expect(fake.sent, isNotEmpty);
       expect(fake.sent.last['type'], 'message');
       expect(fake.sent.last['content'], 'status report');
+      fake.dispose();
+    });
+
+    testWidgets(
+        'a failed send is NOT echoed as sent — error surfaces, draft kept', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+      // The channel dies under us, but the connectionState event hasn't
+      // landed yet (the silent no-op window the old void send() hid).
+      fake.sendShouldSucceed = false;
+
+      await tester.enterText(find.byType(TextField), 'status report');
+      await tester.pump();
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      // No fake echo in the transcript...
+      expect(find.byType(MessageBubble), findsNothing);
+      // ...nothing reached the transport...
+      expect(fake.sent, isEmpty);
+      // ...the failure is surfaced...
+      expect(
+        find.text('TRANSMISSION FAILED // LINK DOWN'),
+        findsOneWidget,
+      );
+      // ...and the draft stays in the composer for retry.
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'status report',
+      );
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — reconnect', () {
+    testWidgets('a false→true link transition is handled without errors', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+      await tester.pump();
+      expect(find.text('LINK ACTIVE'), findsOneWidget);
+
+      // Drop the link, then restore it. The screen refetches history on the
+      // false→true edge (merged by id, so this can never duplicate messages);
+      // with no backend in tests the fetch fails into the retry snackbar path.
+      fake.setConnected(false);
+      await tester.pump();
+      expect(find.text('LINK DOWN'), findsOneWidget);
+
+      fake.setConnected(true);
+      await tester.pump();
+      expect(find.text('LINK ACTIVE'), findsOneWidget);
+      // Allow the (failing) refetch future to settle.
+      await tester.pump(const Duration(seconds: 1));
+      expect(tester.takeException(), isNull);
       fake.dispose();
     });
   });

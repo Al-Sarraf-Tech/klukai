@@ -56,19 +56,39 @@ class _MemoryTimelineEntryState extends State<MemoryTimelineEntry> {
     _loadThumbnail();
   }
 
+  @override
+  void didUpdateWidget(MemoryTimelineEntry oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The framework may reuse this State for a different memory (e.g. on a
+    // filter switch). Drop the stale thumbnail and fetch the right one.
+    if (oldWidget.memory.id != widget.memory.id) {
+      setState(() {
+        _thumbBytes = null;
+        _thumbFailed = false;
+      });
+      _loadThumbnail();
+    }
+  }
+
   Future<void> _loadThumbnail() async {
+    final requestedId = widget.memory.id;
     try {
       final response = await http.get(
         Uri.parse(_thumbnailUrl),
         headers: {'Authorization': 'Bearer ${widget.authToken}'},
       );
-      if (response.statusCode == 200 && mounted) {
+      // The entry may have been recycled onto another memory while this
+      // request was in flight — never paint a stale thumbnail.
+      if (!mounted || widget.memory.id != requestedId) return;
+      if (response.statusCode == 200) {
         setState(() => _thumbBytes = response.bodyBytes);
-      } else if (mounted) {
+      } else {
         setState(() => _thumbFailed = true);
       }
     } catch (_) {
-      if (mounted) setState(() => _thumbFailed = true);
+      if (mounted && widget.memory.id == requestedId) {
+        setState(() => _thumbFailed = true);
+      }
     }
   }
 

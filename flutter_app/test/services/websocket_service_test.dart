@@ -7,7 +7,6 @@
 // mocking. This exercises connect/send/receive/disconnect against actual
 // web_socket_channel wiring without touching any real backend.
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -254,11 +253,52 @@ void main() {
   group('WebSocketService.send when not connected', () {
     test('is a no-op (does not throw) before connect', () {
       final svc = WebSocketService();
-      // No channel yet -> guarded by `if (_channel != null)`.
+      // No channel yet -> guarded by the null-channel check.
       expect(() => svc.send({'type': 'x'}), returnsNormally);
       expect(() => svc.sendMessage('hi'), returnsNormally);
       expect(() => svc.sendTyping(), returnsNormally);
       svc.dispose();
+    });
+
+    test('returns false before connect (no silent drop)', () {
+      // A dropped frame must be observable: send() reports failure so the UI
+      // can avoid echoing a message that never left.
+      final svc = WebSocketService();
+      expect(svc.send({'type': 'x'}), isFalse);
+      expect(svc.sendMessage('hi'), isFalse);
+      expect(svc.sendTyping(), isFalse);
+      expect(svc.sendVoiceEnd('QUJDRA=='), isFalse);
+      svc.dispose();
+    });
+
+    test('returns false again after disconnect()', () async {
+      final server = _EchoServer();
+      await server.start();
+      final svc = WebSocketService();
+      final connected = svc.connectionState.firstWhere((c) => c == true);
+      svc.connect(server.wsUrl);
+      await server.firstSocket;
+      expect(svc.send({'type': 'ping'}), isTrue);
+      await connected.timeout(const Duration(seconds: 5));
+
+      svc.disconnect();
+      expect(svc.sendMessage('too late'), isFalse);
+
+      svc.dispose();
+      await server.stop();
+    });
+  });
+
+  group('WebSocketService.send when connected', () {
+    test('returns true once the channel is open', () async {
+      final server = _EchoServer();
+      await server.start();
+      final svc = WebSocketService();
+      svc.connect(server.wsUrl);
+      await server.firstSocket;
+      expect(svc.sendMessage('hello'), isTrue);
+      svc.dispose();
+      await server.stop();
     });
   });
 }

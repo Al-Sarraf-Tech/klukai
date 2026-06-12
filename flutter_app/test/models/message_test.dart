@@ -148,5 +148,25 @@ void main() {
       expect(c.isStreaming, isFalse);
       expect(c.mood, 'tender');
     });
+
+    test('PRESERVES imageData (regression: copyWith used to drop it)', () {
+      final withImage = ChatMessage(
+        id: 'img',
+        role: 'assistant',
+        content: '[IMAGE]',
+        imageData: 'base64payload==',
+      );
+      // Any unrelated copyWith (e.g. the done-frame finalization) must not
+      // silently strip the image off an image message.
+      final c = withImage.copyWith(isStreaming: false, model: 'venice');
+      expect(c.imageData, 'base64payload==');
+    });
+
+    test('can set imageData via copyWith', () {
+      final c = base.copyWith(imageData: 'newimg==');
+      expect(c.imageData, 'newimg==');
+      // base remains image-free
+      expect(base.imageData, isNull);
+    });
   });
 }

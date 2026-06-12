@@ -36,9 +36,13 @@ class _AffectionGaugeState extends State<AffectionGauge>
   @override
   void didUpdateWidget(AffectionGauge oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // Re-animate when the delta changes OR the score moves again with the
+    // same delta (e.g. two consecutive +5s) — keying only off the delta value
+    // used to swallow repeated identical deltas.
     if (widget.lastDelta != null &&
         widget.lastDelta != 0 &&
-        widget.lastDelta != oldWidget.lastDelta) {
+        (widget.lastDelta != oldWidget.lastDelta ||
+            widget.score != oldWidget.score)) {
       _showDelta = widget.lastDelta;
       _deltaController.forward(from: 0.0).then((_) {
         if (mounted) setState(() => _showDelta = null);

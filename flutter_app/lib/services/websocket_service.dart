@@ -10,7 +10,6 @@ class WebSocketService {
   Timer? _reconnectTimer;
   String _url = '';
   bool _intentionalClose = false;
-  String? _token;
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<bool> get connectionState => _connectionController.stream;
@@ -21,7 +20,6 @@ class WebSocketService {
   bool get isConnected => _channel != null;
 
   void connect(String url, {String? token}) {
-    _token = token;
     // Append token as query param for WebSocket auth
     if (token != null && token.isNotEmpty) {
       final uri = Uri.parse(url);
@@ -88,22 +86,30 @@ class WebSocketService {
     });
   }
 
-  void send(Map<String, dynamic> data) {
-    if (_channel != null) {
-      _channel!.sink.add(jsonEncode(data));
+  /// Sends [data] over the channel. Returns false when the channel is gone
+  /// (mid-reconnect) so callers can surface the failure instead of silently
+  /// dropping the frame.
+  bool send(Map<String, dynamic> data) {
+    final channel = _channel;
+    if (channel == null) return false;
+    try {
+      channel.sink.add(jsonEncode(data));
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
-  void sendMessage(String content) {
-    send({'type': 'message', 'content': content, 'attachments': []});
+  bool sendMessage(String content) {
+    return send({'type': 'message', 'content': content, 'attachments': []});
   }
 
-  void sendTyping() {
-    send({'type': 'typing'});
+  bool sendTyping() {
+    return send({'type': 'typing'});
   }
 
-  void sendVoiceEnd(String audioBase64) {
-    send({'type': 'voice_end', 'audio': audioBase64});
+  bool sendVoiceEnd(String audioBase64) {
+    return send({'type': 'voice_end', 'audio': audioBase64});
   }
 
   void disconnect() {

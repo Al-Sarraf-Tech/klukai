@@ -13,11 +13,16 @@ class MemoryArchiveScreen extends StatefulWidget {
   final int affectionLevel;
   final String affectionLevelName;
 
+  /// Archive transport. Defaults to a real [MemoryService] in production;
+  /// tests may inject a fake so the screen can be pumped without a backend.
+  final MemoryService? memoryService;
+
   const MemoryArchiveScreen({
     super.key,
     required this.serverUrl,
     this.affectionLevel = 0,
     this.affectionLevelName = 'Cold Assessment',
+    this.memoryService,
   });
 
   @override
@@ -35,6 +40,12 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
   String? _selectedMonth;  // null = all months
   bool _loadingCategories = true;
   bool _loadingMemories = true;
+  bool _memoriesError = false;
+
+  /// Request-generation counter: each _loadMemories call bumps it, and
+  /// responses for any generation other than the latest are discarded — so a
+  /// slow response for an old filter can never clobber a quick filter switch.
+  int _loadGeneration = 0;
 
   @override
   void initState() {
@@ -42,10 +53,20 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
     try {
       _authToken = web.window.localStorage.getItem('klukai_token') ?? '';
     } catch (_) {}
-    _service = MemoryService(serverUrl: widget.serverUrl);
+    _service =
+        widget.memoryService ?? MemoryService(serverUrl: widget.serverUrl);
     _loadCategories();
     _loadTimeline();
     _loadMemories();
+  }
+
+  /// Mirrors ChatScreen's _handleAuthExpired: the token is dead, so clear it
+  /// and return to login instead of rendering a fake-empty archive.
+  void _handleAuthExpired() {
+    try {
+      web.window.localStorage.removeItem('klukai_token');
+    } catch (_) {}
+    web.window.location.href = '/';
   }
 
   Future<void> _loadCategories() async {
@@ -57,6 +78,12 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
           _loadingCategories = false;
         });
       }
+    } on MemoryServiceException catch (e) {
+      if (e.isAuthExpired) {
+        _handleAuthExpired();
+        return;
+      }
+      if (mounted) setState(() => _loadingCategories = false);
     } catch (_) {
       if (mounted) setState(() => _loadingCategories = false);
     }
@@ -66,26 +93,53 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
     try {
       final tl = await _service.fetchTimeline();
       if (mounted) setState(() => _timeline = tl);
+    } on MemoryServiceException catch (e) {
+      if (e.isAuthExpired) _handleAuthExpired();
     } catch (_) {}
   }
 
   Future<void> _loadMemories({String? category, String? month}) async {
-    setState(() => _loadingMemories = true);
+    final generation = ++_loadGeneration;
+    setState(() {
+      _loadingMemories = true;
+      _memoriesError = false;
+    });
     try {
       final mems = await _service.fetchMemories(
         category: category == 'All' ? null : category,
         month: month,
         limit: 50,
       );
-      if (mounted) {
-        setState(() {
-          _memories = mems;
-          _loadingMemories = false;
-        });
+      // Stale response (the filter changed since this request left) — drop it.
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _memories = mems;
+        _loadingMemories = false;
+      });
+    } on MemoryServiceException catch (e) {
+      if (e.isAuthExpired) {
+        _handleAuthExpired();
+        return;
       }
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _loadingMemories = false;
+        _memoriesError = true;
+      });
     } catch (_) {
-      if (mounted) setState(() => _loadingMemories = false);
+      // Network failure etc. — surface a retry, never a fake-empty archive.
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _loadingMemories = false;
+        _memoriesError = true;
+      });
     }
+  }
+
+  void _retryLoad() {
+    _loadCategories();
+    _loadTimeline();
+    _loadMemories(category: _selectedCategory, month: _selectedMonth);
   }
 
   void _selectCategory(String cat) {
@@ -597,24 +651,90 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
           Container(height: 1, color: GFL2Colors.border.withValues(alpha: 0.3)),
         // Memory list
         Expanded(
-          child: _memories.isEmpty
-              ? _buildEmptyState()
-              : ListView.builder(
-                  physics: const ClampingScrollPhysics(
-                    parent: AlwaysScrollableScrollPhysics(),
-                  ),
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                  itemCount: _memories.length,
-                  itemBuilder: (_, i) => MemoryTimelineEntry(
-                    memory: _memories[i],
-                    serverUrl: widget.serverUrl,
-                    authToken: _authToken,
-                    isCompact: isCompact,
-                    onTap: () => _openMemoryDetail(_memories[i]),
-                  ),
-                ),
+          child: _memoriesError
+              ? _buildErrorState()
+              : _memories.isEmpty
+                  ? _buildEmptyState()
+                  : ListView.builder(
+                      physics: const ClampingScrollPhysics(
+                        parent: AlwaysScrollableScrollPhysics(),
+                      ),
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                      itemCount: _memories.length,
+                      itemBuilder: (_, i) => MemoryTimelineEntry(
+                        // Keyed by memory id so a filter switch never reuses
+                        // a recycled State (and its stale thumbnail) for a
+                        // different memory.
+                        key: ValueKey(_memories[i].id),
+                        memory: _memories[i],
+                        serverUrl: widget.serverUrl,
+                        authToken: _authToken,
+                        isCompact: isCompact,
+                        onTap: () => _openMemoryDetail(_memories[i]),
+                      ),
+                    ),
         ),
       ],
+    );
+  }
+
+  Widget _buildErrorState() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.sensors_off,
+            color: GFL2Colors.danger.withValues(alpha: 0.35),
+            size: 48,
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'SIGNAL LOST // ARCHIVE UNREACHABLE',
+            style: TextStyle(
+              color: GFL2Colors.danger.withValues(alpha: 0.7),
+              fontSize: 11,
+              fontFamily: 'monospace',
+              letterSpacing: 1.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '...the memories are still there. The link is not.',
+            style: TextStyle(
+              color: GFL2Colors.textDim.withValues(alpha: 0.3),
+              fontSize: 12,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextButton(
+            onPressed: _retryLoad,
+            style: TextButton.styleFrom(
+              backgroundColor: GFL2Colors.background,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(4),
+                side: BorderSide(
+                  color: GFL2Colors.primary.withValues(alpha: 0.4),
+                ),
+              ),
+            ),
+            child: const Text(
+              'RETRY',
+              style: TextStyle(
+                color: GFL2Colors.primary,
+                fontSize: 11,
+                fontFamily: 'monospace',
+                letterSpacing: 1.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

@@ -50,6 +50,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
           usage = jsonDecode(usageResp.body);
         }
       }
+      if (!mounted) return;
       setState(() {
         _tiersInfo = jsonDecode(tiersResp.body);
         _currentSub = sub;
@@ -57,6 +58,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         _loading = false;
       });
     } catch (_) {
+      if (!mounted) return;
       setState(() => _loading = false);
     }
   }
