@@ -2,8 +2,9 @@
 #
 # Files in `omit` require live infrastructure (DB pool, Qdrant, Redis, LM
 # Studio, ComfyUI TTS, FastAPI runtime, WebSocket clients, OpenTelemetry
-# collectors). Those are covered by the testcontainers integration suite
-# (tests/integration/) and the perf-baseline workflow — measured separately.
+# collectors). Those are exercised by the live-stack integration suite
+# (tests/integration/, `pytest -m integration` against the running compose
+# stack — NOT testcontainers) and the perf probes — measured separately.
 #
 # This separation is standard professional practice — pytest-cov + coverage.py
 # explicitly support per-suite measurement via `omit`. Combined coverage

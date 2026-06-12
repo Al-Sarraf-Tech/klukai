@@ -1,6 +1,9 @@
 [lint]
-select = ["E", "F", "W"]
-ignore = ["E501", "F541", "F841"]
+select = ["E", "F", "W", "B"]
+# E501: long lines (style; enforced loosely elsewhere). F541: f-string without
+# placeholders (cosmetic). F841 is deliberately NOT ignored — unused locals have
+# hidden computed-but-never-used silent-failure bugs in this codebase before.
+ignore = ["E501", "F541"]
 
 [lint.per-file-ignores]
 "tests/*" = ["F811"]  # Allow fixture redefinition

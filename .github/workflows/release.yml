@@ -74,7 +74,8 @@ jobs:
 
       - name: Login to GHCR
         if: github.event.inputs.dry_run != 'true'
-        uses: docker/login-action@v3
+        # SHA-pinned (tag v3): tags are mutable and this runs on a self-hosted runner
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -170,13 +171,14 @@ jobs:
           if command -v git-cliff >/dev/null 2>&1; then
             git-cliff --tag "$TAG" --unreleased > RELEASE_NOTES.md
           else
-            echo "git-cliff not available; using last commit message"
+            echo "::warning title=Degraded release notes::git-cliff unavailable — release notes are just the last commit message."
             git log -1 --format=%B > RELEASE_NOTES.md
           fi
 
       - name: Create GitHub release
         if: github.event.inputs.dry_run != 'true'
-        uses: softprops/action-gh-release@v2
+        # SHA-pinned (tag v2): tags are mutable and this runs on a self-hosted runner
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           tag_name: ${{ needs.build.outputs.image_tag }}
           body_path: RELEASE_NOTES.md

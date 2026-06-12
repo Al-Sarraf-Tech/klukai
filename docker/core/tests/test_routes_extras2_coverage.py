@@ -508,8 +508,8 @@ class TestAuditVerifyChain:
             result = await handler(_mk_request(), limit=999999)
 
         assert result == {"valid": True, "break_at_id": None, "checked": 1}
-        # limit clamped to 5000.
-        assert captured[0][0] == 5000
+        # limit clamped to 5000, +1 anchor row fetched for the chain seed.
+        assert captured[0][0] == 5001
         # verify_chain received the normalized row dicts.
         passed_rows = verify.call_args.args[0]
         assert passed_rows[0]["id"] == 1

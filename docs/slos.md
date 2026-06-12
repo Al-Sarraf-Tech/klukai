@@ -35,7 +35,7 @@ instead of a vibe.
 
 | Endpoint | Latency target | Availability | Notes |
 |---|---|---|---|
-| `/health` | p99 ≤ **30ms** | 99.99% | Cached (5s TTL). Phase 1 baseline 119ms p50 — must improve via `health_cache.py` |
+| `/health` | p99 ≤ **30ms** | 99.99% | Cached (5s TTL). 2026-06-12 measured p50 13ms / p99 36ms (was 119ms p50 pre-cache) — p99 still ~6ms over target under 10-way concurrency |
 | `/api/health/live` | p99 ≤ **5ms** | 99.999% | Process-only, no backend ping. Sub-ms expected |
 | `/api/health/ready` | p99 ≤ **500ms** | 99.9% | Uncached deep check; readiness probes only |
 | `/api/health/subsystems` | p99 ≤ **100ms** | 99.9% | Operator/dashboard endpoint, less hot than `/health` |

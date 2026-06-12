@@ -26,3 +26,8 @@ htmlcov/
 companion-*.png
 assets/source-models/
 assets/textures/
+
+# mutation-testing artifacts (nightly mutmut job)
+docker/core/mutants/
+docker/core/.mutmut-cache
+.claude/

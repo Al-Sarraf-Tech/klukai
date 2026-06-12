@@ -18,15 +18,32 @@ build: build-pwa build-backend
 build-backend:
 	docker compose build
 
+# Fails when Flutter is missing so `make build` can't silently ship a stale
+# web bundle. Opt out explicitly with SKIP_PWA=1 on backend-only hosts.
 build-pwa:
-	@if command -v flutter >/dev/null 2>&1 && [ -d flutter_app ]; then \
+	@if [ "$(SKIP_PWA)" = "1" ]; then \
+		echo "SKIP_PWA=1 — skipping PWA build (web-build/ may be stale)"; \
+	elif command -v flutter >/dev/null 2>&1 && [ -d flutter_app ]; then \
 		cd flutter_app && flutter build web --release --base-href=/app/; \
 		rm -rf ../web-build/*; \
 		cp -r build/web/* ../web-build/; \
 		echo "PWA built and copied to web-build/"; \
 	else \
-		echo "Flutter not available or flutter_app/ not found, skipping PWA build"; \
+		echo "ERROR: flutter not available (or flutter_app/ missing) — refusing to silently skip."; \
+		echo "       Use SKIP_PWA=1 to build backend-only on purpose."; \
+		exit 1; \
 	fi
+
+# Runs the live-stack integration suite (the 58 tests CI skips) inside the
+# companion-core image on the real compose network — this is what makes the
+# "integration-covered" justification for coverage omits/pragmas executable
+# instead of a label. Requires the stack to be up (`make run`).
+test-integration:
+	docker compose run --rm --no-deps \
+		-v $(CURDIR)/docker/core/tests:/app/tests:ro \
+		-v $(CURDIR)/docker/core/pytest.ini:/app/pytest.ini:ro \
+		--entrypoint sh companion-core \
+		-c "pip install -q --user pytest-asyncio && python3 -m pytest tests/integration -m integration -q"
 
 # ── Core stack (amarillo) — runs companion-core + datastores ─────────────────
 

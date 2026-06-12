@@ -4,13 +4,22 @@ S+ Phase 4 — perf gate target per docs/superpowers/specs/2026-05-16-s-plus-upl
 
 Run mode: explicit. `pytest -m perf` against a live stack.
 Default test runs skip this file.
+
+Schema note: docs/perf-baseline.json and `probe.py --json` both use the probe
+payload schema ``{"results": [{"path", "latency_ms": {"p99"}, ...}]}``. The
+first version of this gate read a ``{endpoint: {"p99_ms"}}`` schema that the
+probe never produced, so it skipped unconditionally — a hollow gate. The
+parsing now goes through tools/load-test/perf_compare.py, the single source
+of truth shared with CI.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,51 +27,54 @@ import pytest
 pytestmark = pytest.mark.perf
 
 
+def _repo_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "tools" / "load-test" / "probe.py").exists():
+            return parent
+    pytest.skip("repo root with tools/load-test not found")
+
+
+def _load_perf_compare():
+    path = _repo_root() / "tools" / "load-test" / "perf_compare.py"
+    spec = importlib.util.spec_from_file_location("perf_compare", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 @pytest.fixture(scope="module")
 def baseline() -> dict:
     """Load the committed perf baseline."""
-    repo_root = Path(__file__).parent.parent.parent.parent.parent
-    baseline_path = repo_root / "docs" / "perf-baseline.json"
+    baseline_path = _repo_root() / "docs" / "perf-baseline.json"
     if not baseline_path.exists():
         pytest.skip("perf-baseline.json missing — run `make perf-baseline` first")
     return json.loads(baseline_path.read_text())
 
 
 def test_health_endpoint_p99_within_budget(baseline: dict) -> None:
-    """/health p99 within 20% of baseline. Per docs/slos.md the SLO is ≤30ms."""
-    base = baseline.get("/health", {}) if isinstance(baseline.get("/health"), dict) else {}
-    base_p99 = base.get("p99_ms")
-    if base_p99 is None:
-        pytest.skip("baseline /health.p99_ms not recorded")
+    """/health p99 within 20% of baseline."""
+    pc = _load_perf_compare()
+    base_p99 = pc.p99_by_path(baseline).get("/health")
+    assert base_p99 is not None, (
+        "baseline has no /health p99 — schema drift; regenerate with `make perf-baseline`"
+    )
     budget = base_p99 * 1.20
-    repo_root = Path(__file__).parent.parent.parent.parent.parent
-    probe = repo_root / "tools" / "load-test" / "probe.py"
-    if not probe.exists():
-        pytest.skip("tools/load-test/probe.py missing")
+
+    probe = _repo_root() / "tools" / "load-test" / "probe.py"
     base_url = os.environ.get("KLUKAI_PERF_TARGET", "http://localhost:8300")
     proc = subprocess.run(
-        [
-            "python3",
-            str(probe),
-            "--base",
-            base_url,
-            "--requests",
-            "100",
-            "--concurrency",
-            "5",
-            "--json",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
+        [sys.executable, str(probe), "--base", base_url,
+         "--requests", "100", "--concurrency", "5", "--json"],
+        capture_output=True, text=True, check=False, timeout=120,
     )
     if proc.returncode != 0:
-        pytest.skip(f"probe failed: {proc.stderr.strip()[:200]}")
-    report = json.loads(proc.stdout) if proc.stdout.strip().startswith("{") else {}
-    current = report.get("/health", {}).get("p99_ms") if isinstance(report, dict) else None
-    if current is None:
-        pytest.skip("probe didn't emit /health p99 — incompatible output format")
-    assert current <= budget, (
-        f"/health p99 regression: current={current}ms > 1.20×baseline={budget}ms"
+        pytest.skip(f"probe failed (stack unreachable?): {proc.stderr.strip()[:200]}")
+
+    current = pc.p99_by_path(json.loads(proc.stdout))
+    cur_p99 = current.get("/health")
+    assert cur_p99 is not None, (
+        f"probe emitted no /health p99 — schema drift; stdout: {proc.stdout[:200]}"
+    )
+    assert cur_p99 <= budget, (
+        f"/health p99 regression: current={cur_p99}ms > 1.20×baseline={budget}ms"
     )

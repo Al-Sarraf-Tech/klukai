@@ -116,13 +116,16 @@ async def run_target(base: str, label: str, method: str, path: str,
 
 
 async def main_async(args: argparse.Namespace) -> int:
-    print(f"Probing {args.base} — {args.requests} req @ concurrency {args.concurrency}")
+    # With --json, stdout must carry only the payload; progress goes to stderr.
+    info = sys.stderr if args.json else sys.stdout
+    print(f"Probing {args.base} — {args.requests} req @ concurrency {args.concurrency}",
+          file=info)
     results: list[EndpointResult] = []
     for label, method, path in TARGETS:
         r = await run_target(args.base, label, method, path, args.requests, args.concurrency)
         results.append(r)
         print(f"  {label:24s} p50={r.p50:6.2f}ms  p95={r.p95:6.2f}ms  "
-              f"p99={r.p99:6.2f}ms  errors={r.errors}/{r.requests}")
+              f"p99={r.p99:6.2f}ms  errors={r.errors}/{r.requests}", file=info)
 
     payload = {
         "base_url": args.base,
@@ -135,7 +138,10 @@ async def main_async(args: argparse.Namespace) -> int:
     if args.out:
         with open(args.out, "w") as f:
             json.dump(payload, f, indent=2)
-        print(f"Wrote baseline → {args.out}")
+        print(f"Wrote baseline → {args.out}", file=info)
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
 
     # Exit 1 if any endpoint had >5% error rate (smoke gate)
     for r in results:
@@ -157,6 +163,8 @@ def main() -> int:
                    help="Concurrent in-flight requests (default: 10)")
     p.add_argument("--out", default=None,
                    help="Write baseline JSON to this path")
+    p.add_argument("--json", action="store_true",
+                   help="Print the payload JSON to stdout (progress moves to stderr)")
     args = p.parse_args()
     return asyncio.run(main_async(args))
 
