@@ -60,8 +60,8 @@ def test_system_prompt_stable(level: int, mood: str, time_of_day: str) -> None:
     # worthless. Fixed to a Thursday at the time_of_day's representative hour.
     frozen = datetime(2026, 1, 15, _TOD_HOUR[time_of_day], 0, 0)
     try:
-        with patch("app.personality.moods.datetime") as _mock_dt:
-            _mock_dt.now.return_value = frozen
+        with patch("app.personality.moods.now_local") as _mock_dt:
+            _mock_dt.return_value = frozen
             prompt = assemble_system_prompt(
                 mood=mood,
                 affection_level=level,

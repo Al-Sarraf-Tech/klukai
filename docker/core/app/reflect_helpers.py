@@ -11,6 +11,7 @@ from .context import (
     router,
     ws,
 )
+from .proactive.state import now_local
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,8 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
             classify_return_greeting,
             compose_return_emotion,
         )
-        local_hour = datetime.now().hour
+        # The Commander's wall-clock hour (America/Chicago) — the server runs UTC.
+        local_hour = now_local().hour
         kind = classify_return_greeting(
             hours_away=hours_away,
             local_hour=local_hour,

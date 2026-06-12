@@ -11,7 +11,7 @@ milestones, outfit by hour + affection level.
 
 from __future__ import annotations
 
-from datetime import datetime
+from ..proactive.state import now_local
 
 MOOD_CATEGORIES: dict[str, str] = {
     # Core/operational
@@ -156,8 +156,11 @@ def build_mood_bleed_block(mood: str = "composed") -> str:
 
 
 def build_context_block(mood: str = "composed", affection_level: int = 0, days_together: int = 0) -> str:
-    """Build current context: military time, day, operational status, outfit."""
-    now = datetime.now()
+    """Build current context: military time, day, operational status, outfit.
+
+    Times are the Commander's wall clock (America/Chicago via ``now_local``),
+    not the server's UTC clock."""
+    now = now_local()
     hour = now.hour
 
     if 5 <= hour < 12:

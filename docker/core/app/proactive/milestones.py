@@ -12,6 +12,7 @@ import random
 from datetime import datetime
 
 from .base import _EngineBase
+from .state import now_local
 from .templates import _content
 
 logger = logging.getLogger(__name__)
@@ -96,16 +97,14 @@ class MilestonesMixin(_EngineBase):
         """
         # TTL cache: avoid DB query per message
         cache_key = f"ann:{user_id}"
-        now = datetime.now()
+        now = now_local()
         if hasattr(self, '_ann_cache') and cache_key in self._ann_cache:
             cached_at, cached_result = self._ann_cache[cache_key]
             if (now - cached_at).total_seconds() < 300:  # 5 min TTL
                 return cached_result
 
         from ..db import get_conn
-        from datetime import date
-
-        today = date.today()
+        today = now_local().date()
         results = []
 
         try:
@@ -157,7 +156,6 @@ class MilestonesMixin(_EngineBase):
     ) -> bool:
         """Record a relationship 'first'. Returns True if new, False if already recorded."""
         from ..db import get_conn_autocommit
-        from datetime import date
         import json as _json
 
         try:
@@ -165,7 +163,7 @@ class MilestonesMixin(_EngineBase):
                 result = await conn.execute(
                     "INSERT INTO companion_firsts (user_id, event_type, event_date, metadata) "
                     "VALUES (%s, %s, %s, %s) ON CONFLICT (user_id, event_type) DO NOTHING",
-                    (user_id, event_type, date.today(), _json.dumps(metadata or {})),
+                    (user_id, event_type, now_local().date(), _json.dumps(metadata or {})),
                 )
                 if result.rowcount and result.rowcount > 0:
                     logger.info("New first recorded: %s for %s", event_type, user_id)
@@ -179,7 +177,7 @@ class MilestonesMixin(_EngineBase):
     async def get_comfort_objects(self, user_id: str = "jalsarraf") -> list[dict]:
         """Get all gifts/comfort objects for a user. Cached for 5 minutes."""
         cache_key = f"gifts:{user_id}"
-        now = datetime.now()
+        now = now_local()
         if hasattr(self, '_gifts_cache') and cache_key in self._gifts_cache:
             cached_at, cached_result = self._gifts_cache[cache_key]
             if (now - cached_at).total_seconds() < 300:

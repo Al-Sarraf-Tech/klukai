@@ -22,15 +22,14 @@ from app.proactive import ProactiveEngine
 
 _NOON = datetime(2026, 5, 17, 14, 0, 0)
 _DATETIME_TARGETS = (
-    "app.proactive.engine.datetime",
-    "app.proactive.events.datetime",
+    "app.proactive.engine.now_local",
+    "app.proactive.events.now_local",
 )
 
 
 @contextlib.contextmanager
 def _patch_now(value: datetime = _NOON):
-    mock_dt = MagicMock(wraps=datetime)
-    mock_dt.now.return_value = value
+    mock_dt = MagicMock(return_value=value)
     with contextlib.ExitStack() as stack:
         for target in _DATETIME_TARGETS:
             stack.enter_context(patch(target, mock_dt))

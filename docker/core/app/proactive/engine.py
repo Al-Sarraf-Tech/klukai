@@ -19,9 +19,11 @@ from .milestones import MilestonesMixin
 from .mission import MissionMixin, MissionTimer
 from .patterns import PatternsMixin
 from .state import (
+    LOCAL_TZ,
     MAX_PROACTIVE_PER_DAY,
     QUIET_HOUR_END,
     QUIET_HOUR_START,
+    now_local,
 )
 from .templates import (
     EVENING_MESSAGES,
@@ -73,11 +75,22 @@ def _tap_lines() -> dict[int, list[str]]:
     return _content("tap_lines", _TAP_LINES_FALLBACK)
 
 
+def _cron(**fields) -> CronTrigger:
+    """A CronTrigger pinned to the Commander's timezone (America/Chicago).
+
+    CronTrigger resolves its timezone at construction, so every trigger must
+    carry it explicitly — hours below are local wall-clock, never UTC.
+    """
+    return CronTrigger(timezone=LOCAL_TZ, **fields)
+
+
 class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin):
     """Manages scheduled and contextual proactive messages, themed to Klukai."""
 
     def __init__(self) -> None:
-        self._scheduler = AsyncIOScheduler()
+        # All scheduling happens on the Commander's wall clock — the container
+        # runs UTC, so the zone is set explicitly (DST handled by zoneinfo).
+        self._scheduler = AsyncIOScheduler(timezone=LOCAL_TZ)
         self._muted_until: datetime | None = None
         self._on_message_callback = None
         self._on_recap_callback = None
@@ -154,7 +167,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Morning briefing at 0800
         self._scheduler.add_job(
             self._morning_checkin,
-            CronTrigger(hour=8, minute=0),
+            _cron(hour=8, minute=0),
             id="morning_checkin",
             replace_existing=True,
         )
@@ -162,7 +175,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Daily challenge at 09:00
         self._scheduler.add_job(
             self._daily_challenge,
-            CronTrigger(hour=9, minute=0),
+            _cron(hour=9, minute=0),
             id="daily_challenge",
             replace_existing=True,
         )
@@ -170,7 +183,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Evening wind-down at 2200
         self._scheduler.add_job(
             self._evening_checkin,
-            CronTrigger(hour=22, minute=0),
+            _cron(hour=22, minute=0),
             id="evening_checkin",
             replace_existing=True,
         )
@@ -178,7 +191,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Idle check every 2 hours during operational hours
         self._scheduler.add_job(
             self._idle_check,
-            CronTrigger(hour="9-21/2", minute=30),
+            _cron(hour="9-21/2", minute=30),
             id="idle_check",
             replace_existing=True,
         )
@@ -186,7 +199,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Unsent messages — fires on same schedule as idle, separate roll
         self._scheduler.add_job(
             self._unsent_message_check,
-            CronTrigger(hour="10-22/3", minute=15),
+            _cron(hour="10-22/3", minute=15),
             id="unsent_message_check",
             replace_existing=True,
         )
@@ -194,7 +207,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Mission report — once per day, random afternoon
         self._scheduler.add_job(
             self._mission_report,
-            CronTrigger(hour=14, minute=45),
+            _cron(hour=14, minute=45),
             id="mission_report",
             replace_existing=True,
         )
@@ -202,7 +215,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Random lore events — every 30 min during normal hours
         self._scheduler.add_job(
             self._random_event,
-            CronTrigger(hour="9-23", minute="15,45"),
+            _cron(hour="9-23", minute="15,45"),
             id="random_event",
             replace_existing=True,
         )
@@ -219,7 +232,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Late-night dreams — fires once between 1-4 AM if conditions are right
         self._scheduler.add_job(
             self._dream_event,
-            CronTrigger(hour="1-4", minute=37),
+            _cron(hour="1-4", minute=37),
             id="dream_event",
             replace_existing=True,
         )
@@ -228,7 +241,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Fires at two daytime hours; each tick rolls ~35% so it isn't every day.
         self._scheduler.add_job(
             self._memory_recall_tick,
-            CronTrigger(hour="11,17", minute=20),
+            _cron(hour="11,17", minute=20),
             id="memory_recall",
             replace_existing=True,
         )
@@ -238,7 +251,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # cooldown keep it rare and treasured.
         self._scheduler.add_job(
             self._spontaneous_art_tick,
-            CronTrigger(hour="15,19", minute=40),
+            _cron(hour="15,19", minute=40),
             id="spontaneous_art",
             replace_existing=True,
         )
@@ -246,16 +259,15 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Daily recap at 2100
         self._scheduler.add_job(
             self._daily_recap,
-            CronTrigger(hour=21, minute=0),
+            _cron(hour=21, minute=0),
             id="daily_recap",
             replace_existing=True,
         )
 
-        # Evening romance window at 20:30 CST (01:30 UTC next day)
-        # CST = UTC-6, so 20:30 CST = 02:30 UTC
+        # Evening romance window at 20:30 local
         self._scheduler.add_job(
             self._romance_window,
-            CronTrigger(hour=2, minute=30),  # 20:30 CST in UTC
+            _cron(hour=20, minute=30),
             id="romance_window",
             replace_existing=True,
         )
@@ -263,23 +275,24 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Reset daily counter at midnight
         self._scheduler.add_job(
             self._reset_daily,
-            CronTrigger(hour=0, minute=0),
+            _cron(hour=0, minute=0),
             id="daily_reset",
             replace_existing=True,
         )
 
-        # Weekly reflection: Sunday 21:00 CST (03:00 UTC Monday)
+        # Weekly reflection: Sunday 21:00 local
         self._scheduler.add_job(
             self._weekly_reflection,
-            CronTrigger(day_of_week="mon", hour=3, minute=0),
+            _cron(day_of_week="sun", hour=21, minute=0),
             id="weekly_reflection",
             replace_existing=True,
         )
 
-        # Daily anniversary check: 14:00 UTC (~08:00 CST) — before morning greeting sends
+        # Daily anniversary check: 07:58 local — just before the 08:00 morning
+        # greeting sends
         self._scheduler.add_job(
             self._anniversary_check,
-            CronTrigger(hour=13, minute=58),
+            _cron(hour=7, minute=58),
             id="anniversary_check",
             replace_existing=True,
         )
@@ -288,7 +301,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # month/day against seasonal_events; fires once per occurrence.
         self._scheduler.add_job(
             self._seasonal_check,
-            CronTrigger(hour=9, minute=0),
+            _cron(hour=9, minute=0),
             id="seasonal_check",
             replace_existing=True,
         )
@@ -298,7 +311,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # low-activity weekday pattern matching today.
         self._scheduler.add_job(
             self._quiet_day_check,
-            CronTrigger(hour=15, minute=10),
+            _cron(hour=15, minute=10),
             id="quiet_day_check",
             replace_existing=True,
         )
@@ -348,7 +361,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             self._muted_until = datetime(9999, 12, 31)
         else:
             from datetime import timedelta
-            self._muted_until = datetime.now() + timedelta(hours=hours)
+            self._muted_until = now_local() + timedelta(hours=hours)
         logger.info("Proactive muted until %s", self._muted_until)
 
     def unmute(self) -> None:
@@ -357,16 +370,16 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
     def mark_responded(self) -> None:
         """Mark that the Commander responded to the last proactive message."""
         self._last_proactive_answered = True
-        self._last_message_time = datetime.now()
+        self._last_message_time = now_local()
 
-    def _can_send(self) -> bool:
-        now = datetime.now()
+    def _can_send(self, *, ignore_unanswered: bool = False) -> bool:
+        now = now_local()
 
         # Check mute
         if self._muted_until and now < self._muted_until:
             return False
 
-        # Quiet hours
+        # Quiet hours (local wall clock)
         if QUIET_HOUR_START <= now.hour or now.hour < QUIET_HOUR_END:
             return False
 
@@ -374,8 +387,10 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         if self._proactive_count_today >= MAX_PROACTIVE_PER_DAY:
             return False
 
-        # Don't pile up unanswered proactives
-        if not self._last_proactive_answered:
+        # Don't pile up unanswered proactives. Callers whose whole point is a
+        # silent day (quiet-day check-in) pass ignore_unanswered=True — there an
+        # unanswered earlier proactive is the signal, not a reason to stay mute.
+        if not ignore_unanswered and not self._last_proactive_answered:
             return False
 
         return True
@@ -405,7 +420,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Update physical state based on time of day for all connected users
         try:
             from ..context import physical, ws
-            hour = datetime.now().hour
+            hour = now_local().hour
             for uid in list(ws._connections.keys()):
                 await physical.on_time_of_day(uid, hour)
         except Exception as e:
@@ -437,7 +452,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Update physical state for late watch for all connected users
         try:
             from ..context import physical, ws
-            hour = datetime.now().hour
+            hour = now_local().hour
             for uid in list(ws._connections.keys()):
                 await physical.on_time_of_day(uid, hour)
         except Exception as e:
@@ -450,6 +465,9 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
     async def _reset_daily(self) -> None:
         # Reset legacy shared counters
         self._proactive_count_today = 0
+        # New day, fresh opening line — without this, one unanswered proactive
+        # would silence the engine on every later day until the user wrote.
+        self._last_proactive_answered = True
         self._random_events_today = 0
         self._dream_delivered_today = False
         self._romance_delivered_today = False

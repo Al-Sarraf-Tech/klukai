@@ -56,10 +56,10 @@ _NOON = datetime(2026, 5, 17, 14, 0, 0)
 
 # Submodules that bind `datetime` after the proactive.py -> proactive/ split.
 _DATETIME_TARGETS = (
-    "app.proactive.engine.datetime",
-    "app.proactive.events.datetime",
-    "app.proactive.mission.datetime",
-    "app.proactive.milestones.datetime",
+    "app.proactive.engine.now_local",
+    "app.proactive.events.now_local",
+    "app.proactive.mission.now_local",
+    "app.proactive.milestones.now_local",
 )
 
 
@@ -73,8 +73,7 @@ def _patch_now(value: datetime = _NOON):
     method that calls engine._can_send), so the same mock is installed on
     each module that binds `datetime`.
     """
-    mock_dt = MagicMock(wraps=datetime)
-    mock_dt.now.return_value = value
+    mock_dt = MagicMock(return_value=value)
     with contextlib.ExitStack() as stack:
         for target in _DATETIME_TARGETS:
             stack.enter_context(patch(target, mock_dt))

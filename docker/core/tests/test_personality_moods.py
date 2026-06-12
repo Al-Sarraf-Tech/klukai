@@ -76,48 +76,48 @@ class TestContextBlock:
         return datetime(2026, 5, 16, hour, 0, 0)
 
     def test_morning_window(self):
-        with patch("app.personality.moods.datetime") as mock_dt:
-            mock_dt.now.return_value = self._at_hour(8)
+        with patch("app.personality.moods.now_local") as mock_dt:
+            mock_dt.return_value = self._at_hour(8)
             mock_dt.strftime = datetime.strftime
             out = build_context_block(mood="composed", affection_level=2)
         assert "morning operational window" in out
         assert "Blazing Star" in out
 
     def test_afternoon_window(self):
-        with patch("app.personality.moods.datetime") as mock_dt:
-            mock_dt.now.return_value = self._at_hour(14)
+        with patch("app.personality.moods.now_local") as mock_dt:
+            mock_dt.return_value = self._at_hour(14)
             out = build_context_block(mood="composed")
         assert "afternoon operations" in out
 
     def test_evening_high_affection_relaxes_outfit(self):
-        with patch("app.personality.moods.datetime") as mock_dt:
-            mock_dt.now.return_value = self._at_hour(19)
+        with patch("app.personality.moods.now_local") as mock_dt:
+            mock_dt.return_value = self._at_hour(19)
             out = build_context_block(mood="composed", affection_level=3)
         assert "evening wind-down" in out
         assert "Light tactical" in out
 
     def test_evening_low_affection_keeps_full_tactical(self):
-        with patch("app.personality.moods.datetime") as mock_dt:
-            mock_dt.now.return_value = self._at_hour(19)
+        with patch("app.personality.moods.now_local") as mock_dt:
+            mock_dt.return_value = self._at_hour(19)
             out = build_context_block(mood="composed", affection_level=0)
         assert "Blazing Star" in out
 
     def test_late_night_high_affection_dorm_mode(self):
-        with patch("app.personality.moods.datetime") as mock_dt:
-            mock_dt.now.return_value = self._at_hour(23)
+        with patch("app.personality.moods.now_local") as mock_dt:
+            mock_dt.return_value = self._at_hour(23)
             out = build_context_block(mood="composed", affection_level=5)
         assert "Dorm casual" in out
         assert "softer in these hours" in out
 
     def test_late_night_mid_affection_light_tactical(self):
-        with patch("app.personality.moods.datetime") as mock_dt:
-            mock_dt.now.return_value = self._at_hour(23)
+        with patch("app.personality.moods.now_local") as mock_dt:
+            mock_dt.return_value = self._at_hour(23)
             out = build_context_block(mood="composed", affection_level=2)
         assert "Light tactical — off-duty" in out
 
     def test_late_night_low_affection_full_gear(self):
-        with patch("app.personality.moods.datetime") as mock_dt:
-            mock_dt.now.return_value = self._at_hour(23)
+        with patch("app.personality.moods.now_local") as mock_dt:
+            mock_dt.return_value = self._at_hour(23)
             out = build_context_block(mood="composed", affection_level=0)
         assert "Full tactical gear" in out
 

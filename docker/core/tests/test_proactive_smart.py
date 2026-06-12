@@ -20,17 +20,16 @@ from app.proactive import ProactiveEngine
 _AFTERNOON = datetime(2026, 5, 17, 15, 0, 0)  # 2026-05-17 is a Sunday
 
 _DATETIME_TARGETS = (
-    "app.proactive.engine.datetime",
-    "app.proactive.events.datetime",
-    "app.proactive.patterns.datetime",
+    "app.proactive.engine.now_local",
+    "app.proactive.events.now_local",
+    "app.proactive.patterns.now_local",
 )
 
 
 @contextlib.contextmanager
 def _patch_now(value: datetime):
     """Freeze datetime.now() across the proactive submodules that bind it."""
-    mock_dt = MagicMock(wraps=datetime)
-    mock_dt.now.return_value = value
+    mock_dt = MagicMock(return_value=value)
     with contextlib.ExitStack() as stack:
         for target in _DATETIME_TARGETS:
             stack.enter_context(patch(target, mock_dt))
@@ -136,11 +135,11 @@ class TestDetectActivityPatterns:
         gc = MagicMock(return_value=_db_ctx(conn))
         base = datetime(2026, 5, 17, 12, 0, 0)
         with patch("app.db.get_conn", gc), \
-             patch("app.proactive.patterns.datetime") as mock_dt:
-            mock_dt.now.return_value = base
+             patch("app.proactive.patterns.now_local") as mock_dt:
+            mock_dt.return_value = base
             await e.detect_activity_patterns("alice")
             # Jump >1h forward → cache stale → re-query.
-            mock_dt.now.return_value = datetime(2026, 5, 17, 13, 30, 0)
+            mock_dt.return_value = datetime(2026, 5, 17, 13, 30, 0)
             await e.detect_activity_patterns("alice")
         assert gc.call_count == 2
 
@@ -301,10 +300,10 @@ class TestSeasonalCheck:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 5
-        with patch("app.proactive.events.datetime") as mock_dt, \
+        with patch("app.proactive.events.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG), \
              patch("app.proactive.events.publish_event", new=AsyncMock()):
-            mock_dt.now.return_value = datetime(2026, 12, 25, 9, 0, 0)
+            mock_dt.return_value = datetime(2026, 12, 25, 9, 0, 0)
             await e._seasonal_check()
         cb.assert_awaited_once()
         assert "Christmas" in cb.call_args.args[0]
@@ -315,9 +314,9 @@ class TestSeasonalCheck:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 5
-        with patch("app.proactive.events.datetime") as mock_dt, \
+        with patch("app.proactive.events.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG):
-            mock_dt.now.return_value = datetime(2026, 7, 4, 9, 0, 0)  # July 4
+            mock_dt.return_value = datetime(2026, 7, 4, 9, 0, 0)  # July 4
             await e._seasonal_check()
         cb.assert_not_awaited()
 
@@ -327,9 +326,9 @@ class TestSeasonalCheck:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 1  # below valentines min_affection=2
-        with patch("app.proactive.events.datetime") as mock_dt, \
+        with patch("app.proactive.events.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG):
-            mock_dt.now.return_value = datetime(2026, 2, 14, 9, 0, 0)
+            mock_dt.return_value = datetime(2026, 2, 14, 9, 0, 0)
             await e._seasonal_check()
         cb.assert_not_awaited()
 
@@ -339,10 +338,10 @@ class TestSeasonalCheck:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 5
-        with patch("app.proactive.events.datetime") as mock_dt, \
+        with patch("app.proactive.events.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG), \
              patch("app.proactive.events.publish_event", new=AsyncMock()):
-            mock_dt.now.return_value = datetime(2026, 12, 25, 9, 0, 0)
+            mock_dt.return_value = datetime(2026, 12, 25, 9, 0, 0)
             await e._seasonal_check()
             await e._seasonal_check()  # same day → guarded
         cb.assert_awaited_once()
@@ -356,9 +355,9 @@ class TestSeasonalCheck:
         e._on_message_callback = cb
         e._affection_level = 5
         e._muted_until = datetime(2099, 1, 1)
-        with patch("app.proactive.events.datetime") as mock_dt, \
+        with patch("app.proactive.events.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG):
-            mock_dt.now.return_value = datetime(2026, 12, 25, 9, 0, 0)
+            mock_dt.return_value = datetime(2026, 12, 25, 9, 0, 0)
             await e._seasonal_check()
         cb.assert_not_awaited()
 
@@ -368,9 +367,9 @@ class TestSeasonalCheck:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 5
-        with patch("app.proactive.events.datetime") as mock_dt, \
+        with patch("app.proactive.events.now_local") as mock_dt, \
              patch("app.personality.load_personality", side_effect=RuntimeError("no cfg")):
-            mock_dt.now.return_value = datetime(2026, 12, 25, 9, 0, 0)
+            mock_dt.return_value = datetime(2026, 12, 25, 9, 0, 0)
             await e._seasonal_check()  # must not raise
         cb.assert_not_awaited()
 

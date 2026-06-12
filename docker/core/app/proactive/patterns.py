@@ -19,6 +19,7 @@ import logging
 from datetime import datetime
 
 from .base import _EngineBase
+from .state import now_local
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class PatternsMixin(_EngineBase):
         Cached for ~1h per user. On any DB error returns ``{}`` (logged debug).
         """
         cache_key = f"patterns:{user_id}"
-        now = datetime.now()
+        now = now_local()
         if hasattr(self, "_pattern_cache") and cache_key in self._pattern_cache:
             cached_at, cached_result = self._pattern_cache[cache_key]
             if (now - cached_at).total_seconds() < _PATTERN_CACHE_TTL_SECONDS:

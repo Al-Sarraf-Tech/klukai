@@ -216,8 +216,8 @@ class TestCanSendGuards:
         e._muted_until = _dt(2099, 1, 1)  # far future
         e._proactive_count_today = 0
         e._last_proactive_answered = True
-        with patch("app.proactive.engine.datetime") as mock_dt:
-            mock_dt.now.return_value = _dt(2026, 5, 17, 12, 0, 0)
+        with patch("app.proactive.engine.now_local") as mock_dt:
+            mock_dt.return_value = _dt(2026, 5, 17, 12, 0, 0)
             assert e._can_send() is False
 
     def test_blocked_during_quiet_hours_morning(self):
@@ -225,8 +225,8 @@ class TestCanSendGuards:
         e._muted_until = None
         e._proactive_count_today = 0
         e._last_proactive_answered = True
-        with patch("app.proactive.engine.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 5, 17, 5, 0, 0)  # 5am
+        with patch("app.proactive.engine.now_local") as mock_dt:
+            mock_dt.return_value = datetime(2026, 5, 17, 5, 0, 0)  # 5am
             assert e._can_send() is False
 
     def test_blocked_during_quiet_hours_late_night(self):
@@ -234,8 +234,8 @@ class TestCanSendGuards:
         e._muted_until = None
         e._proactive_count_today = 0
         e._last_proactive_answered = True
-        with patch("app.proactive.engine.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 5, 17, 23, 30, 0)
+        with patch("app.proactive.engine.now_local") as mock_dt:
+            mock_dt.return_value = datetime(2026, 5, 17, 23, 30, 0)
             assert e._can_send() is False
 
     def test_blocked_at_daily_cap(self):
@@ -243,8 +243,8 @@ class TestCanSendGuards:
         e._muted_until = None
         e._proactive_count_today = proactive.MAX_PROACTIVE_PER_DAY
         e._last_proactive_answered = True
-        with patch("app.proactive.engine.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
+        with patch("app.proactive.engine.now_local") as mock_dt:
+            mock_dt.return_value = datetime(2026, 5, 17, 14, 0, 0)
             assert e._can_send() is False
 
     def test_blocked_when_prior_proactive_unanswered(self):
@@ -252,8 +252,8 @@ class TestCanSendGuards:
         e._muted_until = None
         e._proactive_count_today = 5
         e._last_proactive_answered = False
-        with patch("app.proactive.engine.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
+        with patch("app.proactive.engine.now_local") as mock_dt:
+            mock_dt.return_value = datetime(2026, 5, 17, 14, 0, 0)
             assert e._can_send() is False
 
     def test_allowed_when_all_clear(self):
@@ -261,8 +261,8 @@ class TestCanSendGuards:
         e._muted_until = None
         e._proactive_count_today = 5
         e._last_proactive_answered = True
-        with patch("app.proactive.engine.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
+        with patch("app.proactive.engine.now_local") as mock_dt:
+            mock_dt.return_value = datetime(2026, 5, 17, 14, 0, 0)
             assert e._can_send() is True
 
 

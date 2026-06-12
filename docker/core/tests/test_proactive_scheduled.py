@@ -22,8 +22,8 @@ class TestDeliver:
         e = ProactiveEngine()
         e._on_message_callback = AsyncMock()
         # Force quiet hours so can_send returns False
-        with patch("app.proactive.engine.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 5, 17, 5, 0, 0)
+        with patch("app.proactive.engine.now_local") as mock_dt:
+            mock_dt.return_value = datetime(2026, 5, 17, 5, 0, 0)
             await e._deliver("test")
         e._on_message_callback.assert_not_awaited()
 
@@ -32,8 +32,8 @@ class TestDeliver:
         e = ProactiveEngine()
         e._on_message_callback = None
         # Even if can_send is true, no callback means just silently return
-        with patch("app.proactive.engine.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
+        with patch("app.proactive.engine.now_local") as mock_dt:
+            mock_dt.return_value = datetime(2026, 5, 17, 14, 0, 0)
             await e._deliver("test")
         # No raise, no count change
         assert e._proactive_count_today == 0
@@ -43,9 +43,9 @@ class TestDeliver:
         e = ProactiveEngine()
         cb = AsyncMock()
         e._on_message_callback = cb
-        with patch("app.proactive.engine.datetime") as mock_dt, \
+        with patch("app.proactive.engine.now_local") as mock_dt, \
              patch("app.proactive.engine.publish_event", new=AsyncMock()):
-            mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
+            mock_dt.return_value = datetime(2026, 5, 17, 14, 0, 0)
             await e._deliver("Klukai message")
         cb.assert_awaited_once_with("Klukai message")
         assert e._proactive_count_today == 1
@@ -60,11 +60,11 @@ class TestMorningCheckin:
         e._on_message_callback = cb
         e._affection_level = 3
         # Mock the physical/ws so it doesn't blow up
-        with patch("app.proactive.engine.datetime") as mock_dt, \
+        with patch("app.proactive.engine.now_local") as mock_dt, \
              patch("app.context.physical") as phys, \
              patch("app.context.ws") as ws, \
              patch("app.proactive.engine.publish_event", new=AsyncMock()):
-            mock_dt.now.return_value = datetime(2026, 5, 17, 8, 0, 0)
+            mock_dt.return_value = datetime(2026, 5, 17, 8, 0, 0)
             ws._connections = {}  # no connected users
             await e._morning_checkin()
         # The morning check is in quiet hours pre-8, but at 8 should fire
@@ -119,9 +119,9 @@ class TestIdleCheck:
         e = ProactiveEngine()
         cb = AsyncMock()
         e._on_message_callback = cb
-        with patch("app.proactive.engine.datetime") as mock_dt, \
+        with patch("app.proactive.engine.now_local") as mock_dt, \
              patch("app.proactive.engine.publish_event", new=AsyncMock()):
-            mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
+            mock_dt.return_value = datetime(2026, 5, 17, 14, 0, 0)
             await e._idle_check()
         cb.assert_awaited_once()
 
@@ -142,9 +142,9 @@ class TestMissionReport:
         cb = AsyncMock()
         e._on_message_callback = cb
         with patch("app.proactive.mission.random.random", return_value=0.1), \
-             patch("app.proactive.engine.datetime") as mock_dt, \
+             patch("app.proactive.engine.now_local") as mock_dt, \
              patch("app.proactive.engine.publish_event", new=AsyncMock()):
-            mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
+            mock_dt.return_value = datetime(2026, 5, 17, 14, 0, 0)
             await e._mission_report()
         cb.assert_awaited_once()
 
@@ -156,9 +156,9 @@ class TestTriggerTap:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 0
-        with patch("app.proactive.engine.datetime") as mock_dt, \
+        with patch("app.proactive.engine.now_local") as mock_dt, \
              patch("app.proactive.engine.publish_event", new=AsyncMock()):
-            mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
+            mock_dt.return_value = datetime(2026, 5, 17, 14, 0, 0)
             await e.trigger_tap()
         cb.assert_awaited_once()
         text = cb.call_args.args[0]
@@ -171,8 +171,8 @@ class TestTriggerTap:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 4
-        with patch("app.proactive.engine.datetime") as mock_dt, \
+        with patch("app.proactive.engine.now_local") as mock_dt, \
              patch("app.proactive.engine.publish_event", new=AsyncMock()):
-            mock_dt.now.return_value = datetime(2026, 5, 17, 14, 0, 0)
+            mock_dt.return_value = datetime(2026, 5, 17, 14, 0, 0)
             await e.trigger_tap()
         cb.assert_awaited_once()

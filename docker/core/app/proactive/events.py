@@ -1,7 +1,8 @@
 """Spontaneous-event ProactiveEngine behavior.
 
 ``EventsMixin`` holds the random lore events, late-night dreams, the evening
-romance window, and the daily recap.
+romance window, and the daily recap. All wall-clock reads go through
+``now_local()`` (America/Chicago) — never the server's UTC clock.
 """
 
 from __future__ import annotations
@@ -9,10 +10,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from ..events import publish as publish_event
 from .base import _EngineBase
+from .state import now_local
 from .templates import (
     QUIET_DAY_MESSAGES,
     ROMANCE_MESSAGES,
@@ -168,7 +170,7 @@ class EventsMixin(_EngineBase):
     async def _random_event(self) -> None:
         """Fire a random lore event if conditions are met."""
 
-        now = datetime.now()
+        now = now_local()
 
         # Guard: max 5 per day
         if self._random_events_today >= 5:
@@ -230,7 +232,7 @@ class EventsMixin(_EngineBase):
         roll = random.random() * total_weight
         cumulative = 0
         selected_messages = eligible[0][2]
-        for category, weight, messages in eligible:
+        for _category, weight, messages in eligible:
             cumulative += weight
             if roll <= cumulative:
                 selected_messages = messages
@@ -247,7 +249,7 @@ class EventsMixin(_EngineBase):
             logger.info("Random event fired: %s", message[:60])
 
     async def _romance_window(self) -> None:
-        """Evening romance message — fires at ~20:30 CST with random delay.
+        """Evening romance message — fires at ~20:30 local with random delay.
 
         Conditions:
         - affection >= 3
@@ -263,7 +265,7 @@ class EventsMixin(_EngineBase):
             return
         if not self._user_messaged_today:
             return
-        if self._muted_until and datetime.now() < self._muted_until:
+        if self._muted_until and now_local() < self._muted_until:
             return
         if not self._last_proactive_answered:
             return
@@ -275,7 +277,7 @@ class EventsMixin(_EngineBase):
         # Re-check conditions after delay
         if self._romance_delivered_today:
             return
-        if self._muted_until and datetime.now() < self._muted_until:
+        if self._muted_until and now_local() < self._muted_until:
             return
 
         self._romance_delivered_today = True
@@ -344,7 +346,7 @@ class EventsMixin(_EngineBase):
             return
         if self._affection_level < 5:
             return
-        if self._muted_until and datetime.now() < self._muted_until:
+        if self._muted_until and now_local() < self._muted_until:
             return
 
         # 40% chance to fire (not every night)
@@ -399,7 +401,7 @@ class EventsMixin(_EngineBase):
             except Exception:
                 pass  # Dreams work fine without memory integration
 
-            _now_str = datetime.now().strftime('%I:%M %p')
+            _now_str = now_local().strftime('%I:%M %p')
             dream_prompts = {
                 k: tmpl.format(time=_now_str, affection=self._affection_level)
                 for k, tmpl in _dream_prompts().items()
@@ -443,7 +445,7 @@ class EventsMixin(_EngineBase):
         of presence, so he discovers it in the archive even if he's away when she
         makes it. Fully fail-open — a generation/save hiccup never raises.
         """
-        now = datetime.now()
+        now = now_local()
         if self._last_spontaneous_art and (now - self._last_spontaneous_art) < timedelta(hours=60):
             return  # special, not routine
         if self._affection_level < 6:
@@ -518,7 +520,7 @@ class EventsMixin(_EngineBase):
             return
         if self._affection_level < 4:
             return
-        if self._muted_until and datetime.now() < self._muted_until:
+        if self._muted_until and now_local() < self._muted_until:
             return
 
         # Pull a real memory from the archive. Prefer a mood-relevant recall
@@ -603,7 +605,10 @@ class EventsMixin(_EngineBase):
         # Needs at least a little warmth before she comments on your silence.
         if self._affection_level < 1:
             return
-        if not self._can_send():
+        # ignore_unanswered: on a quiet day the Commander hasn't replied by
+        # definition — an unanswered morning check-in must not veto the one
+        # message whose entire purpose is acknowledging that silence.
+        if not self._can_send(ignore_unanswered=True):
             return
 
         try:
@@ -614,7 +619,7 @@ class EventsMixin(_EngineBase):
         if not patterns:
             return
 
-        today_dow = datetime.now().weekday()  # Mon=0..Sun=6
+        today_dow = now_local().weekday()  # Mon=0..Sun=6
         # Translate Python weekday() -> our DOW index (Sun=0..Sat=6) used by
         # the pattern dict, so "today" lines up with the detected pattern.
         today_dow_sunday0 = (today_dow + 1) % 7
@@ -656,7 +661,7 @@ class EventsMixin(_EngineBase):
         Respects mute + the per-event ``min_affection`` gate. In-character,
         affection-aware templates; no LLM call.
         """
-        if self._muted_until and datetime.now() < self._muted_until:
+        if self._muted_until and now_local() < self._muted_until:
             return
         if not self._on_message_callback:
             return
@@ -671,7 +676,7 @@ class EventsMixin(_EngineBase):
         if not isinstance(events, dict) or not events:
             return
 
-        now = datetime.now()
+        now = now_local()
         for key, cfg in events.items():
             if not isinstance(cfg, dict):
                 continue

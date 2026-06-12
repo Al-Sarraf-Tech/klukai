@@ -50,17 +50,16 @@ _AFTERNOON_SUNDAY = datetime(2026, 5, 17, 15, 0, 0)
 # datetime.now() is bound separately inside each proactive submodule; freeze all
 # the ones the dispatch paths in this file actually touch.
 _DATETIME_TARGETS = (
-    "app.proactive.engine.datetime",
-    "app.proactive.events.datetime",
-    "app.proactive.patterns.datetime",
+    "app.proactive.engine.now_local",
+    "app.proactive.events.now_local",
+    "app.proactive.patterns.now_local",
 )
 
 
 @contextlib.contextmanager
 def _patch_now(value: datetime = _AFTERNOON_SUNDAY):
     """Freeze datetime.now() across the proactive submodules that bind it."""
-    mock_dt = MagicMock(wraps=datetime)
-    mock_dt.now.return_value = value
+    mock_dt = MagicMock(return_value=value)
     with contextlib.ExitStack() as stack:
         for target in _DATETIME_TARGETS:
             stack.enter_context(patch(target, mock_dt))
@@ -304,10 +303,10 @@ class TestQuietDayAndSeasonalDispatchE2E:
         per-occurrence guard key is recorded."""
         e = _ready_engine(affection=5)
         christmas = datetime(2026, 12, 25, 9, 0, 0)
-        with patch("app.proactive.events.datetime") as mock_dt, \
+        with patch("app.proactive.events.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG), \
              patch("app.proactive.events.publish_event", new=AsyncMock()):
-            mock_dt.now.return_value = christmas
+            mock_dt.return_value = christmas
             await e._seasonal_check()
 
         e._on_message_callback.assert_awaited_once()
@@ -318,9 +317,9 @@ class TestQuietDayAndSeasonalDispatchE2E:
     async def test_seasonal_no_dispatch_on_non_matching_date(self):
         """A non-holiday date must not dispatch anything."""
         e = _ready_engine(affection=5)
-        with patch("app.proactive.events.datetime") as mock_dt, \
+        with patch("app.proactive.events.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG):
-            mock_dt.now.return_value = datetime(2026, 7, 4, 9, 0, 0)  # July 4
+            mock_dt.return_value = datetime(2026, 7, 4, 9, 0, 0)  # July 4
             await e._seasonal_check()
         e._on_message_callback.assert_not_awaited()
 

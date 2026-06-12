@@ -10,11 +10,11 @@ import asyncio
 import logging
 import random
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from . import state
 from .base import _EngineBase
-from .state import MAJOR_EVENTS
+from .state import MAJOR_EVENTS, now_local
 from .templates import (
     MISSION_REPORTS,
     _content_list,
@@ -363,7 +363,7 @@ class MissionMixin(_EngineBase):
         if not self.mission_active:
             return
 
-        now = datetime.now()
+        now = now_local()
 
         # Guard: 15-min gap between mission events
         if self._last_random_event and (now - self._last_random_event) < timedelta(minutes=15):

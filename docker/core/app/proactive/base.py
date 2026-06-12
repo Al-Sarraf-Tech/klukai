@@ -59,7 +59,7 @@ class _EngineBase:
     #    ProactiveEngine / MissionMixin and are resolved via the MRO) ────────
     _pick_message: Callable[[dict[int, list[str]]], str]
     _deliver: Callable[[str], Any]
-    _can_send: Callable[[], bool]
+    _can_send: Callable[..., bool]
     # Activity profiling (concrete impl on PatternsMixin).
     detect_activity_patterns: Callable[..., Any]
 
