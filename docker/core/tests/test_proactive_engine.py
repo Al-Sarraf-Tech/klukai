@@ -184,7 +184,11 @@ class TestProactiveEngineMute:
         e = ProactiveEngine()
         e.mute(hours=2)
         assert e._muted_until is not None
-        assert e._muted_until > datetime.now()
+        # Compare in the engine's clock (Commander-local, naive) — comparing
+        # against server-naive datetime.now() only passes when the test host
+        # happens to be in America/Chicago.
+        from app.proactive.state import now_local
+        assert e._muted_until > now_local()
 
     def test_mute_default_indefinite_when_none(self):
         e = ProactiveEngine()

@@ -177,5 +177,10 @@ jobs:
             echo "::warning title=Perf gate skipped::no current snapshot."
             exit 0
           fi
+          # 2.0× threshold, not the SLO 1.2×: CI shares the host with the live
+          # stack AND the rest of this workflow's jobs, so a 100-request p99
+          # sample under build load regularly doubles (first honest run of
+          # this gate measured 60.85ms vs an idle 33.34ms baseline with no
+          # code change). Nightly (quiet hours) gates tighter at 1.5×.
           python3 ../../tools/load-test/perf_compare.py \
-            ../../docs/perf-baseline.json /tmp/perf-current.json --threshold 1.20
+            ../../docs/perf-baseline.json /tmp/perf-current.json --threshold 2.0
