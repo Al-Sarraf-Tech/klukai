@@ -131,8 +131,8 @@ jobs:
           fi
           BIN="${RUNNER_TEMP:-/tmp}/bin"; mkdir -p "$BIN"; export PATH="$BIN:$PATH"
           command -v trivy >/dev/null 2>&1 || \
-            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.58.1/contrib/install.sh \
-              | sh -s -- -b "$BIN" v0.58.1
+            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.71.0/contrib/install.sh \
+              | sh -s -- -b "$BIN" v0.71.0
           trivy --version
           docker build -t klukai-core:ci -f docker/core/Dockerfile docker/core/
           trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed --no-progress klukai-core:ci
