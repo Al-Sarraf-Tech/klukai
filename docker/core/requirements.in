@@ -21,6 +21,7 @@ opentelemetry-instrumentation-httpx>=0.51b0
 
 # ── Testing (S+ Phase 4 — seven-layer test cake) ──
 # hypothesis: property-based testing for parsers + state machines
-# mutmut: mutation testing for character-critical paths (affection, audit_chain)
+# (mutmut is NOT pinned here: it's a nightly-CI-only tool installed by
+#  .github/workflows/nightly.yml — keeping it out of the runtime lock keeps
+#  pip-audit's surface to what actually ships)
 hypothesis>=6.100.0
-mutmut>=2.4.0
