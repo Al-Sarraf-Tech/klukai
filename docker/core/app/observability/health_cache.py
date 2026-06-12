@@ -201,5 +201,14 @@ def get_live_health() -> dict[str, Any]:
 
 
 def clear_cache() -> None:
-    """Test helper: drop all cached entries so the next read forces a refresh."""
+    """Test helper: drop all cached entries so the next read forces a refresh.
+
+    Also recreates the per-subsystem refresh locks: asyncio.Lock binds to the
+    event loop that first acquires it, and pytest-asyncio gives each test a
+    fresh loop — a lock carried over from a previous test's loop makes the
+    double-check-lock path nondeterministic (seen as a flaky
+    test_concurrent_stale_callers_refresh_once under mutmut's runner).
+    """
     _cache.clear()
+    for subsystem in _refresh_locks:
+        _refresh_locks[subsystem] = asyncio.Lock()

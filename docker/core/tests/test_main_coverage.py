@@ -36,13 +36,20 @@ from app.models import SessionState
 
 
 def _request(path: str = "/health", headers: dict | None = None,
-             client_host: str = "1.2.3.4"):
-    """Minimal stand-in for starlette Request used by the middlewares."""
+             client_host: str = "1.2.3.4", routes: list | None = None):
+    """Minimal stand-in for starlette Request used by the middlewares.
+
+    `routes` populates request.app.routes for the metrics middleware's
+    route-template lookup; default is a single route matching `path`.
+    """
     req = MagicMock()
     req.url = SimpleNamespace(path=path)
     req.headers = headers or {}
     req.client = SimpleNamespace(host=client_host)
     req.state = SimpleNamespace()
+    if routes is None:
+        routes = [SimpleNamespace(path=path, path_regex=None)]
+    req.app = SimpleNamespace(routes=routes)
     return req
 
 
@@ -227,6 +234,36 @@ class TestMetricsMiddleware:
         # Even on failure, a 500 metric + latency are recorded before re-raise.
         assert incr.call_args.kwargs["status"] == "500"
         obs.assert_called_once()
+
+    async def test_unmatched_path_collapses_to_constant_label(self):
+        """Scan/404 paths must not mint unbounded metric label values."""
+        mw = main._MetricsMiddleware(app=MagicMock())
+        resp = _response_factory(status_code=404)
+        with patch("app.metrics.incr") as incr, \
+             patch("app.metrics.observe_latency") as obs:
+            await mw.dispatch(
+                _request(path="/wp-admin/setup.php", routes=[]),
+                AsyncMock(return_value=resp),
+            )
+        assert incr.call_args.kwargs["path"] == "_unmatched"
+        assert obs.call_args.kwargs["path"] == "_unmatched"
+
+    async def test_templated_route_label_uses_route_path(self):
+        """Parameterised routes label by template, not per-id raw path."""
+        import re
+        route = SimpleNamespace(
+            path="/api/memories/{memory_id}/image",
+            path_regex=re.compile(r"^/api/memories/[^/]+/image$"),
+        )
+        mw = main._MetricsMiddleware(app=MagicMock())
+        resp = _response_factory(status_code=200)
+        with patch("app.metrics.incr") as incr, \
+             patch("app.metrics.observe_latency"):
+            await mw.dispatch(
+                _request(path="/api/memories/abc123/image", routes=[route]),
+                AsyncMock(return_value=resp),
+            )
+        assert incr.call_args.kwargs["path"] == "/api/memories/{memory_id}/image"
 
 
 # ── Global exception handler ─────────────────────────────────────────────────

@@ -293,6 +293,9 @@ app.add_middleware(_RequestIdMiddleware)
 # Map path prefix -> rate limit bucket. Longest match wins.
 _RATE_LIMIT_BUCKETS: dict[str, str] = {
     "/api/auth/login":         "login",
+    # change-password shares the login bucket — both are password-guessing
+    # surfaces and its docstring promises brute-force protection.
+    "/api/user/change-password": "login",
     "/api/user/export":        "export",
     "/api/user/stats":         "stats",
     "/api/tts":                "tts",
@@ -365,6 +368,19 @@ app.add_middleware(_RateLimitMiddleware)
 class _MetricsMiddleware(BaseHTTPMiddleware):
     """Count requests and record latency for every handled request."""
 
+    def _metric_path(self, request: Request, status: int | None = None) -> str:
+        """Label paths only for registered routes — raw URL paths from scans
+        and 404s would otherwise grow metric label cardinality without bound."""
+        path = request.url.path
+        for route in request.app.routes:
+            route_path = getattr(route, "path", None)
+            if not isinstance(route_path, str):
+                continue
+            regex = getattr(route, "path_regex", None)
+            if route_path == path or (regex is not None and regex.match(path)):
+                return route_path
+        return "_unmatched"
+
     async def dispatch(self, request: Request, call_next):
         import time
         from . import metrics
@@ -373,12 +389,14 @@ class _MetricsMiddleware(BaseHTTPMiddleware):
             response: StarletteResponse = await call_next(request)
         except Exception:
             elapsed_ms = (time.monotonic() - start) * 1000
-            metrics.incr("requests_total", path=request.url.path, status="500")
-            metrics.observe_latency("request_latency_ms", elapsed_ms, path=request.url.path)
+            path_label = self._metric_path(request)
+            metrics.incr("requests_total", path=path_label, status="500")
+            metrics.observe_latency("request_latency_ms", elapsed_ms, path=path_label)
             raise
         elapsed_ms = (time.monotonic() - start) * 1000
-        metrics.incr("requests_total", path=request.url.path, status=str(response.status_code))
-        metrics.observe_latency("request_latency_ms", elapsed_ms, path=request.url.path)
+        path_label = self._metric_path(request)
+        metrics.incr("requests_total", path=path_label, status=str(response.status_code))
+        metrics.observe_latency("request_latency_ms", elapsed_ms, path=path_label)
         return response
 
 

@@ -1,5 +1,9 @@
 """HMAC-signed URL helpers for protecting resource endpoints.
 
+STATUS: utility module, NOT currently wired to any route — image/memory
+endpoints are protected by bearer auth instead. Do not assume hotlink
+protection is active anywhere until a route actually calls these helpers.
+
 Use-case: prevent hotlinking of user-specific image/memory endpoints by
 issuing short-lived, signed tokens embedded in URLs. The server verifies
 the signature + expiry before serving.
