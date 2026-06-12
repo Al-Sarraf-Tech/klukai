@@ -66,10 +66,13 @@ jobs:
           grep -oE ': [a-z ]+$' /tmp/mutmut-results.txt | sort | uniq -c
 
       - name: Enforce kill-rate ratchet gate
-        # Measured baseline 2026-06-12 (local, full suite): 417 killed / 831
-        # checked = 50.2%. Ratchet: raise as kill rate improves, never lower.
+        # Measured 2026-06-12 on the runner: 417 killed / 831 checked = 50.18%.
+        # Ratchet: raise as kill rate improves, never lower. NOTE the margin to
+        # the floor is currently only 0.18pp — any new surviving mutant in
+        # affection/audit_chain/speech will turn nightly red until its test
+        # lands. That is intentional: kill the mutant, don't lower the floor.
         env:
-          MIN_KILL_RATE: "45"
+          MIN_KILL_RATE: "50"
         run: |
           . "${RUNNER_TEMP}/mutenv/bin/activate"
           python3 - <<'PY'
