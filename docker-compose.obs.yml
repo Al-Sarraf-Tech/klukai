@@ -38,10 +38,12 @@ services:
       # uses container-internal tmpfs equivalent. Restart-safe per the
       # restart: unless-stopped policy below.
     restart: unless-stopped
-    # Alloy image has neither curl nor wget; use a process-liveness check
-    # instead. If alloy crashes the container exits and Docker restarts it.
+    # Alloy image has neither curl nor wget, but it ships bash (+ head/grep):
+    # do a real HTTP readiness probe against :12345/-/ready via /dev/tcp.
+    # (The old `kill -0 1` was a tautology — PID 1 is always alive in a
+    # running container, so it could never fail.)
     healthcheck:
-      test: ["CMD-SHELL", "kill -0 1 || exit 1"]
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/12345 && printf \"GET /-/ready HTTP/1.0\\r\\n\\r\\n\" >&3 && head -n1 <&3 | grep -q \" 200 \"'"]
       interval: 30s
       timeout: 5s
       retries: 3

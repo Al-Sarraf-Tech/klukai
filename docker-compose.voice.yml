@@ -21,6 +21,11 @@ services:
       REFERENCE_WAV: "${REFERENCE_WAV:-/app/reference/klukai_reference.wav}"
       WHISPER_MODEL: "${WHISPER_MODEL:-base.en}"
       TTS_ENGINE: "${TTS_ENGINE:-xtts}"
+      # Opt-in bearer auth (app/main.py). Empty = auth off (current behavior).
+      # Must match VOICE_API_TOKEN on companion-core (docker-compose.yml).
+      VOICE_API_TOKEN: "${VOICE_API_TOKEN:-}"
+      # Uvicorn bind address (docker/voice/Dockerfile CMD). Default 0.0.0.0.
+      VOICE_BIND_HOST: "${VOICE_BIND_HOST:-0.0.0.0}"
     volumes:
       - voice-models:/app/models   # persist XTTS + whisper downloads across restarts
     # GPU access (RTX 3090). Requires nvidia-container-toolkit on dominus.

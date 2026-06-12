@@ -10,7 +10,9 @@
 #   2. Today's klukai DB dump exists and > 1 KB
 #   3. Klukai dumps are valid gzip
 #   4. Klukai dumps contain at least one INSERT line (non-empty schema export)
-#   5. klukai images dir is non-empty (if the volume has data)
+#   5. Qdrant snapshots for SACRED collections (companion_episodes,
+#      companion_exchanges) exist, are non-empty, and were refreshed today
+#   6. klukai images dir is non-empty (if the volume has data)
 #
 # Exits:
 #   0 — all checks passed
@@ -57,7 +59,22 @@ if ! zgrep -qE '^(INSERT|COPY)' "$klukai_dump" 2>/dev/null; then
   fail "klukai dump contains no INSERT/COPY data: $klukai_dump"
 fi
 
-# -- 5. Images dir non-empty check (warn-only, non-fatal)
+# -- 5. Qdrant snapshots present + fresh (SACRED: episodes + exchanges)
+# backup-companions.sh downloads collection snapshots to $BACKUP_DIR/qdrant/
+# as <collection>.snapshot (overwritten nightly), and offsite-backup.sh ships
+# that dir inside the tar. If episodes/exchanges snapshots are missing or
+# stale, Klukai's SACRED vector memory is NOT in tonight's offsite archive.
+for coll in companion_episodes companion_exchanges; do
+  snap="$BACKUP_DIR/qdrant/${coll}.snapshot"
+  if [ ! -s "$snap" ]; then
+    fail "Qdrant snapshot missing/empty for SACRED collection: $coll ($snap)"
+  fi
+  if [ -z "$(find "$snap" -newermt "$(date +%Y-%m-%d)" -print -quit 2>/dev/null)" ]; then
+    fail "Qdrant snapshot is STALE (not refreshed today): $snap"
+  fi
+done
+
+# -- 6. Images dir non-empty check (warn-only, non-fatal)
 if [ -d "$BACKUP_DIR/klukai/images-latest" ]; then
   image_count=$(find "$BACKUP_DIR/klukai/images-latest" -type f 2>/dev/null | wc -l)
   if [ "$image_count" -lt 1 ]; then

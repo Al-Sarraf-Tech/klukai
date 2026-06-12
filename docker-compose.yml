@@ -21,6 +21,9 @@ services:
       INFERENCE_URL: "http://aichat-inference:8105"
       # Voice on dominus (LAN)
       VOICE_URL: "http://192.168.50.2:8301"
+      # Bearer token for the voice service (app/helpers.py). Empty = auth off
+      # (current behavior). Must match VOICE_API_TOKEN in docker-compose.voice.yml.
+      VOICE_API_TOKEN: "${VOICE_API_TOKEN:-}"
       # LM Studio backend. Default: dominus RTX 3090 over LAN (auth required).
       # Override LM_STUDIO_URL in .env to point at the local llama.cpp/LM Studio
       # on amarillo (e.g. http://host.docker.internal:1235) for auth-free local

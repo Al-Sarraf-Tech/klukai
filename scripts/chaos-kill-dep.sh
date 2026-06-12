@@ -30,11 +30,37 @@ HOLD="${2:-30}"
 DRY_RUN=0
 [[ "${3:-}" == "--dry-run" ]] && DRY_RUN=1
 
+# Real production container names (these are SHARED aichat infra on amarillo,
+# NOT klukai-owned compose services — see docker-compose.yml `external` nets):
+#   postgres → infra-postgres        (SHARED: kairi + aichat live here too!)
+#   redis    → aichat-aichat-redis-1 (network alias aichat-redis)
+#   qdrant   → aichat-aichat-vector-1 (alias aichat-vector; kairi_memory too)
+#   voice    → companion-voice on dominus
+# Override with CHAOS_CONTAINER for non-default layouts.
 case "$DEP" in
-  postgres|redis|qdrant) HOST=amarillo  CONTAINER="klukai-${DEP}-1" ;;
-  voice|comfyui|lm_studio) HOST=dominus CONTAINER="klukai-${DEP}-1" ;;
+  postgres) HOST=amarillo CONTAINER="${CHAOS_CONTAINER:-infra-postgres}" ;;
+  redis)    HOST=amarillo CONTAINER="${CHAOS_CONTAINER:-aichat-aichat-redis-1}" ;;
+  qdrant)   HOST=amarillo CONTAINER="${CHAOS_CONTAINER:-aichat-aichat-vector-1}" ;;
+  voice)    HOST=dominus  CONTAINER="${CHAOS_CONTAINER:-companion-voice}" ;;
+  comfyui|lm_studio)
+    HOST=dominus
+    if [[ -z "${CHAOS_CONTAINER:-}" ]]; then
+      echo "ERROR: ${DEP} container name on dominus is not standardized — set CHAOS_CONTAINER" >&2
+      exit 2
+    fi
+    CONTAINER="$CHAOS_CONTAINER" ;;
   *) echo "usage: $0 <postgres|redis|qdrant|voice|comfyui|lm_studio> [hold_seconds] [--dry-run]" >&2; exit 2 ;;
 esac
+
+if [[ "$DEP" == "postgres" || "$DEP" == "redis" || "$DEP" == "qdrant" ]]; then
+  cat >&2 <<WARN
+╔════════════════════════════════════════════════════════════════════════╗
+║  WARNING: '${CONTAINER}' is SHARED infrastructure.
+║  Stopping it takes down klukai AND kairi AND the rest of the aichat
+║  stack for the full hold window (${HOLD}s). Keep the hold SHORT.
+╚════════════════════════════════════════════════════════════════════════╝
+WARN
+fi
 
 OUT_DIR="${REPO_ROOT}/docs/chaos-drills"
 mkdir -p "$OUT_DIR"
