@@ -178,10 +178,39 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
 
         # Deliver via WS if still connected
         if ws.is_connected(user_id):
-            await ws.send_proactive(user_id, greeting)
+            # Voice letter: try to synthesize the greeting as a JP voice note she
+            # "left" while he was away. On success, send a voice_letter payload so
+            # the client can play the audio; on failure (voice service down, disk,
+            # DB) save_voice_note returns None and we fall back to the unchanged
+            # plain-text proactive path below. Wrapped so a voice-path error can
+            # never suppress the text greeting.
+            voice_id = None
+            try:
+                from .voice_archive import save_voice_note
+                mood_now = prior_mood or getattr(aff_state, "mood", None)
+                voice_id = await save_voice_note(
+                    greeting,
+                    user_id=user_id,
+                    kind="reflection",
+                    mood=mood_now,
+                    affection_level=aff_state.level,
+                )
+            except Exception as ve:
+                logger.warning("Voice letter attempt failed for %s: %s", user_id, ve)
+                voice_id = None
+
+            if voice_id:
+                await ws.send(user_id, {
+                    "type": "voice_letter",
+                    "voice_id": voice_id,
+                    "message": greeting,
+                })
+            else:
+                # Fallback — existing text path, unchanged.
+                await ws.send_proactive(user_id, greeting)
             logger.info(
-                "Reflection-on-return sent to %s (away %dh kind=%s): %s",
-                user_id, int(hours_away), kind, greeting[:60]
+                "Reflection-on-return sent to %s (away %dh kind=%s voice=%s): %s",
+                user_id, int(hours_away), kind, bool(voice_id), greeting[:60]
             )
     except Exception as e:
         logger.warning("Reflection-on-return failed: %s", e)

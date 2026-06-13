@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .auth import is_admin
 from .context import ws, affection
@@ -364,3 +364,67 @@ def register_extras2(app: FastAPI) -> None:
         except Exception as e:
             logger.error("Memory search failed: %s", e)
             return JSONResponse({"error": "Search failed"}, status_code=500)
+
+    # ── Voice letters (async JP voice notes left while the Commander is away) ─
+
+    @app.get("/api/voice-notes/latest")
+    async def api_voice_note_latest(request: Request):
+        """Return metadata for the user's most recent voice letter (or null).
+
+        Lets the client surface an unheard letter. Audio is fetched separately
+        via /api/voice-notes/{id}/audio. Scoped to the authenticated user.
+        """
+        from . import error_codes as ec
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        from . import voice_archive
+        note = await voice_archive.latest_voice_note(user_id)
+        return {"voice_note": note}
+
+    @app.get("/api/voice-notes/{note_id}/audio")
+    async def api_voice_note_audio(note_id: str, request: Request):
+        """Stream a voice letter's WAV bytes. Owner-scoped; 404 otherwise.
+
+        Auth via the same _get_user_id pattern as every other endpoint here.
+        The note is fetched with the caller's user_id, so a non-owner (or a
+        missing note / missing file) yields 404 — never another user's audio.
+        Served immutable: the audio for a given id never changes.
+        """
+        from . import error_codes as ec
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        from . import voice_archive
+        result = await voice_archive.get_voice_note(note_id, user_id)
+        if result is None:
+            return ec.err(ec.NOT_FOUND, "Voice note not found", status_code=404)
+        audio_bytes, _filename = result
+        return Response(
+            content=audio_bytes,
+            media_type="audio/wav",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    @app.post("/api/voice-notes/{note_id}/played")
+    async def api_voice_note_played(note_id: str, request: Request):
+        """Mark a voice letter as played. Owner-scoped; 404 if not owner/missing.
+
+        Idempotent: only the first call stamps played_at, so a re-play won't
+        reset the timestamp. Returns {ok, already_played}.
+        """
+        from . import error_codes as ec
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        from . import voice_archive
+        updated = await voice_archive.mark_played(note_id, user_id)
+        if not updated:
+            # Either it was already played, or it doesn't belong to this user /
+            # doesn't exist. Disambiguate with an ownership check so a genuine
+            # re-play returns 200 (already_played) while a missing note is 404.
+            existing = await voice_archive.get_voice_note(note_id, user_id)
+            if existing is None:
+                return ec.err(ec.NOT_FOUND, "Voice note not found", status_code=404)
+            return {"ok": True, "already_played": True}
+        return {"ok": True, "already_played": False}

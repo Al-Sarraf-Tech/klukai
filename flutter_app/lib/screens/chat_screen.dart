@@ -490,6 +490,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           _playAudio(audioData);
         }
 
+      case 'voice_letter':
+        // A voice note she left while you were away. Show the text like a
+        // proactive line, then fetch + play the audio (fail-soft: text stands
+        // on its own if the audio can't be fetched).
+        final letter = msg['message'] as String? ?? '';
+        final voiceId = msg['voice_id'] as String?;
+        if (letter.isNotEmpty) {
+          setState(() {
+            _messages.add(
+              ChatMessage(
+                id: 'voice-letter-${DateTime.now().millisecondsSinceEpoch}',
+                role: 'assistant',
+                content: letter,
+              ),
+            );
+          });
+          _scrollToBottom();
+          _playNotificationSound();
+        }
+        if (voiceId != null && voiceId.isNotEmpty) {
+          _fetchAndPlayVoiceNote(voiceId);
+        }
+
       case 'image':
         final imgData = msg['data'] as String?;
         if (imgData != null) {
@@ -801,6 +824,24 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       audio.play();
     } catch (e) {
       debugPrint('Audio playback failed: $e');
+    }
+  }
+
+  Future<void> _fetchAndPlayVoiceNote(String voiceId) async {
+    // Image.network(headers:) is ignored on web, and the same applies to audio
+    // src — so fetch the bytes with the bearer token and play them inline.
+    try {
+      final uri = Uri.parse('${widget.serverUrl}/api/voice-notes/$voiceId/audio');
+      final resp = await http
+          .get(uri, headers: _authHeaders)
+          .timeout(const Duration(seconds: 20));
+      if (resp.statusCode == 200 && resp.bodyBytes.isNotEmpty) {
+        _playAudio(base64Encode(resp.bodyBytes));
+      } else {
+        debugPrint('Voice note fetch failed: HTTP ${resp.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('Voice note fetch failed: $e');
     }
   }
 
