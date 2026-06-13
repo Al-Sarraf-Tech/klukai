@@ -107,13 +107,18 @@ class PatternsMixin(_EngineBase):
 
         # Per-weekday average messages *per occurrence of that weekday* in the
         # window. Using active_days as the denominator (min 1) keeps a single
-        # very chatty Saturday from masking many silent ones.
+        # very chatty Saturday from masking many silent ones. ``per_day_obs``
+        # records each weekday's active-day count so the min-observations guard
+        # below can reason per weekday, not against a dead window constant.
         per_day_avg: dict[int, float] = {}
         per_day_count: dict[int, int] = {}
+        per_day_obs: dict[int, int] = {}
         for dow, msgs, active_days in rows:
-            occurrences = max(int(active_days or 0), 1)
+            obs = int(active_days or 0)
+            occurrences = max(obs, 1)
             per_day_avg[int(dow)] = float(msgs) / occurrences
             per_day_count[int(dow)] = int(msgs)
+            per_day_obs[int(dow)] = obs
 
         # Overall daily average across the weekdays we actually saw activity on.
         if not per_day_avg:
@@ -124,13 +129,21 @@ class PatternsMixin(_EngineBase):
 
         # A weekday is "quiet" if its average is well below the overall average.
         # Days with zero messages in the window are the strongest signal — but we
-        # only trust them once ~30 days has given us at least a couple of that
-        # weekday's occurrences (>= _MIN_WEEKS_OBSERVED implied by the window).
-        weeks_in_window = _PATTERN_WINDOW_DAYS / 7.0
+        # only trust a verdict once that weekday has actually been OBSERVED enough
+        # times. The number of weeks of history we can see is bounded by the data
+        # itself (the busiest weekday's active-day count), NOT the nominal 30-day
+        # window: a brand-new user with a single busy day must not yield a
+        # confidence-1.0 quiet day for every other (never-seen) weekday.
+        observed_weeks = max(per_day_obs.values(), default=0)
         patterns: dict[str, dict] = {}
         for dow in range(7):
             day_avg = per_day_avg.get(dow, 0.0)
-            if weeks_in_window < _MIN_WEEKS_OBSERVED:
+            # Per-weekday observation count: an active weekday is trusted by its
+            # own active-day tally; a weekday with no activity is credited the
+            # observed span (it occurred on the calendar, just silently). Either
+            # way, skip it until it clears the minimum-observations floor.
+            occurrences = per_day_obs.get(dow, observed_weeks)
+            if occurrences < _MIN_WEEKS_OBSERVED:
                 continue
             if day_avg <= overall_avg * _QUIET_RATIO:
                 # Confidence: how far below average, clamped to 0..1. A fully

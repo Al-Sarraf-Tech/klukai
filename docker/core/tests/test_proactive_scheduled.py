@@ -8,11 +8,10 @@ to exercise the code paths in isolation.
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app import proactive
 from app.proactive import ProactiveEngine
 
 
@@ -94,7 +93,8 @@ class TestDailyChallenge:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 5
-        with patch("app.personality.load_personality") as load:
+        with patch("app.proactive.engine.now_local", return_value=datetime(2026, 5, 17, 14, 0, 0)), \
+             patch("app.personality.load_personality") as load:
             load.return_value = {"daily_challenges": {"challenges": []}}
             await e._daily_challenge()
         cb.assert_not_awaited()
@@ -105,12 +105,61 @@ class TestDailyChallenge:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 5
-        with patch("app.personality.load_personality") as load:
+        # Afternoon (outside 23-08 quiet hours), nothing muting the engine.
+        with patch("app.proactive.engine.now_local", return_value=datetime(2026, 5, 17, 14, 0, 0)), \
+             patch("app.personality.load_personality") as load:
             load.return_value = {"daily_challenges": {"challenges": [
                 {"type": "creative", "prompt": "Write a haiku."},
             ]}}
             await e._daily_challenge()
         cb.assert_awaited_once()
+        assert e._proactive_count_today == 1  # counts against the daily cap
+
+    @pytest.mark.asyncio
+    async def test_quiet_hours_block_challenge(self):
+        e = ProactiveEngine()
+        cb = AsyncMock()
+        e._on_message_callback = cb
+        e._affection_level = 5
+        with patch("app.proactive.engine.now_local", return_value=datetime(2026, 5, 17, 3, 0, 0)), \
+             patch("app.personality.load_personality") as load:
+            load.return_value = {"daily_challenges": {"challenges": [
+                {"type": "creative", "prompt": "Write a haiku."},
+            ]}}
+            await e._daily_challenge()
+        cb.assert_not_awaited()
+        assert e._proactive_count_today == 0
+
+    @pytest.mark.asyncio
+    async def test_mute_blocks_challenge(self):
+        e = ProactiveEngine()
+        cb = AsyncMock()
+        e._on_message_callback = cb
+        e._affection_level = 5
+        e._muted_until = datetime(2099, 1, 1)
+        with patch("app.proactive.engine.now_local", return_value=datetime(2026, 5, 17, 14, 0, 0)), \
+             patch("app.personality.load_personality") as load:
+            load.return_value = {"daily_challenges": {"challenges": [
+                {"type": "creative", "prompt": "Write a haiku."},
+            ]}}
+            await e._daily_challenge()
+        cb.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_daily_cap_blocks_challenge(self):
+        from app.proactive.state import MAX_PROACTIVE_PER_DAY
+        e = ProactiveEngine()
+        cb = AsyncMock()
+        e._on_message_callback = cb
+        e._affection_level = 5
+        e._proactive_count_today = MAX_PROACTIVE_PER_DAY
+        with patch("app.proactive.engine.now_local", return_value=datetime(2026, 5, 17, 14, 0, 0)), \
+             patch("app.personality.load_personality") as load:
+            load.return_value = {"daily_challenges": {"challenges": [
+                {"type": "creative", "prompt": "Write a haiku."},
+            ]}}
+            await e._daily_challenge()
+        cb.assert_not_awaited()
 
 
 class TestIdleCheck:

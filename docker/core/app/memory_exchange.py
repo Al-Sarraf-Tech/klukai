@@ -168,6 +168,10 @@ async def recall_exchanges(
                 "mood": hit["payload"].get("mood", "composed"),
                 "score": hit["score"],
                 "created_at": hit["payload"].get("created_at", ""),
+                # Carry the stored importance through so the affection-weighted
+                # re-rank in recall_exchanges_with_recency biases on a real value
+                # instead of a constant 0.5 (which made the bias a no-op).
+                "importance": hit["payload"].get("importance", 0.5),
             }
             for hit in results
         ]

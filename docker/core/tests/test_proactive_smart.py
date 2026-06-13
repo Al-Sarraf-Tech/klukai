@@ -98,6 +98,59 @@ class TestDetectActivityPatterns:
         assert patterns == {}
 
     @pytest.mark.asyncio
+    async def test_sparse_window_does_not_flag_quiet_day(self):
+        """A weekday seen on fewer than _MIN_WEEKS_OBSERVED occurrences must NOT
+        be flagged quiet — even at zero activity. Here the whole history spans a
+        single week (max active_days == 1), so a fully-silent Sunday has only
+        ~1 observed occurrence, below the floor: no confidence-1.0 from thin air.
+        """
+        e = ProactiveEngine()
+        rows = [
+            (1, 10, 1),  # Mon — one busy day
+            (2, 10, 1),  # Tue
+            (3, 10, 1),  # Wed
+            (4, 10, 1),  # Thu
+            (5, 10, 1),  # Fri
+            (6, 8, 1),   # Sat
+            # Sunday (0) absent → 0 messages, but only ~1 week observed
+        ]
+        conn = _conn_returning(rows)
+        with patch("app.db.get_conn", return_value=_db_ctx(conn)):
+            patterns = await e.detect_activity_patterns("alice")
+        assert "quiet_on_sunday" not in patterns
+        assert patterns == {}
+
+    @pytest.mark.asyncio
+    async def test_well_observed_low_activity_weekday_is_flagged(self):
+        """A weekday observed enough times (>= _MIN_WEEKS_OBSERVED) with clearly
+        below-average activity DOES produce a quiet_day, with the expected
+        confidence derived from its deficit vs. the overall average."""
+        e = ProactiveEngine()
+        # 4 weeks of history. Sunday is active on 3 distinct dates (>= 2) but
+        # very low volume: 3 msgs over 3 days → per-occurrence avg 1.0.
+        rows = [
+            (0, 3, 3),   # Sun — observed 3x, low volume
+            (1, 40, 4),  # Mon
+            (2, 40, 4),  # Tue
+            (3, 40, 4),  # Wed
+            (4, 40, 4),  # Thu
+            (5, 40, 4),  # Fri
+            (6, 40, 4),  # Sat
+        ]
+        conn = _conn_returning(rows)
+        with patch("app.db.get_conn", return_value=_db_ctx(conn)):
+            patterns = await e.detect_activity_patterns("alice")
+        assert "quiet_on_sunday" in patterns
+        p = patterns["quiet_on_sunday"]
+        assert p["dow"] == 0
+        # per-day avgs: Sun=1.0, others=10.0 → overall_avg = (1+10*6)/7 ≈ 8.714.
+        # Sun avg 1.0 <= 0.5*8.714 → quiet. deficit = (8.714-1.0)/8.714 ≈ 0.885.
+        overall = (1.0 + 10.0 * 6) / 7
+        expected_conf = round((overall - 1.0) / overall, 3)
+        assert p["confidence"] == pytest.approx(expected_conf, abs=1e-3)
+        assert p["user_msgs"] == 3
+
+    @pytest.mark.asyncio
     async def test_empty_history_returns_empty(self):
         e = ProactiveEngine()
         conn = _conn_returning([])

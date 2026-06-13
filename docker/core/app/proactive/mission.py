@@ -326,6 +326,14 @@ class MissionMixin(_EngineBase):
         if not self._on_message_callback:
             return
 
+        # Respect the same send gate as every other proactive message. The
+        # check is AFTER the 15-30 min delay so a mute/quiet-hour boundary or a
+        # daily-cap hit reached *during* the wait is honoured — a mission ending
+        # is no licence to message through mute, quiet hours, or the daily cap.
+        if not self._can_send():
+            logger.info("Decompression suppressed by send gate (mute/quiet/cap)")
+            return
+
         if had_injury:
             messages = _decompression_injury()
         elif update_count > 5:

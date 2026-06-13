@@ -181,17 +181,17 @@ class TestStoreExchange:
 
 # ── recall_exchanges ─────────────────────────────────────────────────────────
 
-def _hit(uc, ac, score, topics=None, mood="composed", created_at=""):
-    return {
-        "score": score,
-        "payload": {
-            "user_content": uc,
-            "assistant_content": ac,
-            "topics": topics or [],
-            "mood": mood,
-            "created_at": created_at,
-        },
+def _hit(uc, ac, score, topics=None, mood="composed", created_at="", importance=None):
+    payload = {
+        "user_content": uc,
+        "assistant_content": ac,
+        "topics": topics or [],
+        "mood": mood,
+        "created_at": created_at,
     }
+    if importance is not None:
+        payload["importance"] = importance
+    return {"score": score, "payload": payload}
 
 
 class TestRecallExchanges:
@@ -212,6 +212,29 @@ class TestRecallExchanges:
         body = obj._http.post.call_args.kwargs["json"]
         assert body["filter"]["must"][0]["match"]["value"] == "bob"
         assert body["with_payload"] is True
+
+    @pytest.mark.asyncio
+    async def test_projects_stored_importance_from_payload(self):
+        """The recall projection must carry the Qdrant-stored importance through
+        so the affection-weighted re-rank has a real value to bias on (not the
+        0.5 default it falls back to when the key is absent)."""
+        results = {"result": [_hit("q1", "a1", 0.9, importance=0.87)]}
+        obj = _make_self()
+        obj.embed_text = AsyncMock(return_value=[0.1, 0.2, 0.3])
+        obj._http.post = AsyncMock(return_value=_Resp(200, results))
+        out = await recall_exchanges(obj, "find me")
+        assert out[0]["importance"] == 0.87
+
+    @pytest.mark.asyncio
+    async def test_importance_defaults_to_half_when_absent(self):
+        """A point stored before importance was tracked has no key — recall must
+        default it to 0.5 rather than raising or dropping the field."""
+        results = {"result": [_hit("q1", "a1", 0.9)]}  # no importance in payload
+        obj = _make_self()
+        obj.embed_text = AsyncMock(return_value=[0.1, 0.2, 0.3])
+        obj._http.post = AsyncMock(return_value=_Resp(200, results))
+        out = await recall_exchanges(obj, "find me")
+        assert out[0]["importance"] == 0.5
 
     @pytest.mark.asyncio
     async def test_non_200_returns_empty(self):
@@ -327,6 +350,38 @@ class TestRecallWithRecency:
         # affection<=2 adds (1.0 - importance)*0.1 = 0.1 for importance 0.0.
         base = (1 - 0.15) * 0.5 + 0.15 * 1.0  # created_at ~now → recency_factor≈1
         assert out[0]["final_score"] == pytest.approx(base + 0.1, abs=1e-3)
+
+    @pytest.mark.asyncio
+    async def test_stored_importance_flows_through_real_recall_and_changes_order(self):
+        """End-to-end: the recency re-rank must read the IMPORTANCE that the real
+        recall_exchanges projection pulls from the Qdrant payload — not a constant
+        0.5. Two same-age, same-score hits with different stored importance must
+        get different final_score contributions, and at high affection the more
+        important one must sort first even though it was listed second.
+        """
+        now = datetime.now().isoformat()
+        # Same recency + same base score → recency math is identical, so any
+        # ordering difference comes purely from the importance bias.
+        results = {"result": [
+            _hit("low", "a", 0.7, created_at=now, importance=0.1),
+            _hit("high", "a", 0.7, created_at=now, importance=0.9),
+        ]}
+        obj = _make_self()
+        obj.embed_text = AsyncMock(return_value=[0.1, 0.2, 0.3])
+        obj._http.post = AsyncMock(return_value=_Resp(200, results))
+        # Bind the REAL recall_exchanges so the re-rank consumes its actual
+        # projection (the bug lived in that projection, not the re-rank math).
+        import types
+        obj.recall_exchanges = types.MethodType(recall_exchanges, obj)
+        out = await recall_exchanges_with_recency(obj, "q", limit=2, affection_level=9)
+
+        by_uc = {e["user_content"]: e for e in out}
+        # The bias is importance*0.2: 0.9 vs 0.1 → a 0.16 gap in final_score.
+        assert by_uc["high"]["final_score"] == pytest.approx(
+            by_uc["low"]["final_score"] + (0.9 - 0.1) * 0.2, abs=1e-6
+        )
+        # And that real differentiation flips the order: high importance wins.
+        assert [e["user_content"] for e in out] == ["high", "low"]
 
 
 # ── store_exchange: status-check + Postgres fallback (SACRED, 2026-06-11) ────

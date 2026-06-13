@@ -2,11 +2,34 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+import contextlib
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.proactive import MissionTimer, ProactiveEngine
+from app.proactive import MAX_PROACTIVE_PER_DAY, MissionTimer, ProactiveEngine
+
+# A "safe" send window: 15:00 local, outside quiet hours (23:00-08:00). The
+# decompression tests freeze the clock here so the now-live _can_send() gate
+# (mute / quiet-hours / daily-cap) is evaluated deterministically rather than
+# against the wall clock at test time.
+_AFTERNOON = datetime(2026, 5, 17, 15, 0, 0)
+
+_DECOMP_NOW_TARGETS = (
+    "app.proactive.engine.now_local",
+    "app.proactive.mission.now_local",
+)
+
+
+@contextlib.contextmanager
+def _freeze(value: datetime):
+    """Freeze now_local() across the modules the decompression gate reads."""
+    mock_dt = MagicMock(return_value=value)
+    with contextlib.ExitStack() as stack:
+        for target in _DECOMP_NOW_TARGETS:
+            stack.enter_context(patch(target, mock_dt))
+        yield mock_dt
 
 
 class TestDecompressionMessage:
@@ -25,7 +48,8 @@ class TestDecompressionMessage:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 0
-        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+        with _freeze(_AFTERNOON), \
+             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
              patch("app.proactive.mission.random.uniform", return_value=0):
             await e._decompression_message("alice", had_injury=True, update_count=2)
         cb.assert_awaited_once()
@@ -42,7 +66,8 @@ class TestDecompressionMessage:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 0
-        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+        with _freeze(_AFTERNOON), \
+             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
              patch("app.proactive.mission.random.uniform", return_value=0):
             await e._decompression_message("alice", had_injury=False, update_count=6)
         cb.assert_awaited_once()
@@ -56,7 +81,8 @@ class TestDecompressionMessage:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 0
-        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+        with _freeze(_AFTERNOON), \
+             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
              patch("app.proactive.mission.random.uniform", return_value=0):
             await e._decompression_message("alice", had_injury=False, update_count=2)
         cb.assert_awaited_once()
@@ -67,7 +93,8 @@ class TestDecompressionMessage:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 8  # >= 7 threshold
-        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+        with _freeze(_AFTERNOON), \
+             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
              patch("app.proactive.mission.random.uniform", return_value=0):
             await e._decompression_message("alice", had_injury=False, update_count=2)
         cb.assert_awaited_once()
@@ -81,10 +108,58 @@ class TestDecompressionMessage:
         cb = AsyncMock()
         e._on_message_callback = cb
         before_count = e._proactive_count_today
-        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+        with _freeze(_AFTERNOON), \
+             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
              patch("app.proactive.mission.random.uniform", return_value=0):
             await e._decompression_message("alice", had_injury=False, update_count=2)
         assert e._proactive_count_today == before_count + 1
+
+
+class TestDecompressionGating:
+    """The post-mission decompression message must respect the same send gate
+    (mute / quiet-hours / daily-cap) as every other proactive send — it must not
+    bypass it just because a mission ended."""
+
+    @pytest.mark.asyncio
+    async def test_muted_blocks_decompression(self):
+        e = ProactiveEngine()
+        cb = AsyncMock()
+        e._on_message_callback = cb
+        e._muted_until = datetime(2099, 1, 1)  # muted far into the future
+        before = e._proactive_count_today
+        with _freeze(_AFTERNOON), \
+             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+             patch("app.proactive.mission.random.uniform", return_value=0):
+            await e._decompression_message("alice", had_injury=False, update_count=2)
+        cb.assert_not_awaited()
+        # A blocked send must not consume the daily proactive budget either.
+        assert e._proactive_count_today == before
+
+    @pytest.mark.asyncio
+    async def test_quiet_hours_block_decompression(self):
+        e = ProactiveEngine()
+        cb = AsyncMock()
+        e._on_message_callback = cb
+        # 02:00 local is inside quiet hours (23:00-08:00) — no send.
+        with _freeze(datetime(2026, 5, 17, 2, 0, 0)), \
+             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+             patch("app.proactive.mission.random.uniform", return_value=0):
+            await e._decompression_message("alice", had_injury=False, update_count=2)
+        cb.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_daily_cap_blocks_decompression(self):
+        e = ProactiveEngine()
+        cb = AsyncMock()
+        e._on_message_callback = cb
+        e._proactive_count_today = MAX_PROACTIVE_PER_DAY  # cap already hit
+        with _freeze(_AFTERNOON), \
+             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
+             patch("app.proactive.mission.random.uniform", return_value=0):
+            await e._decompression_message("alice", had_injury=False, update_count=2)
+        cb.assert_not_awaited()
+        # Counter stays pinned at the cap — no overshoot.
+        assert e._proactive_count_today == MAX_PROACTIVE_PER_DAY
 
 
 class TestStopMission:

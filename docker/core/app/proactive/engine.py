@@ -433,6 +433,8 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             return
         if self._affection_level < 2:
             return  # Don't challenge a stranger
+        if not self._can_send():
+            return  # Respect mute, quiet hours, and the daily proactive cap
 
         try:
             from ..personality import load_personality
@@ -443,6 +445,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
 
             import random
             challenge = random.choice(challenges)
+            self._proactive_count_today += 1
             await self._on_message_callback(challenge["prompt"])
             logger.info("Daily challenge issued: %s", challenge["type"])
         except Exception as e:
