@@ -73,8 +73,15 @@ jobs:
         # The remaining ~394 survivors are overwhelmingly string-literal mutants
         # (prompt/log wording, deliberately not pinned) plus documented
         # equivalent mutants. Ratchet: raise as kill rate improves, never lower.
+        #
+        # Floor 67 sits ~1 mutant under the measured 67.11% (804/1198): losing a
+        # single killed mutant (803/1198 = 67.03%) still passes; losing two
+        # (66.94%) goes red. This is intentionally the strictest possible ratchet
+        # — effectively "any new logic regression in these modules fails nightly."
+        # If it ever flakes from equivalent-mutant churn, drop to 66, never lower
+        # the work; kill the mutant instead.
         env:
-          MIN_KILL_RATE: "65"
+          MIN_KILL_RATE: "67"
         run: |
           . "${RUNNER_TEMP}/mutenv/bin/activate"
           python3 - <<'PY'
