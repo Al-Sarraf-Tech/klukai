@@ -34,16 +34,19 @@ build-pwa:
 		exit 1; \
 	fi
 
-# Runs the live-stack integration suite (the 58 tests CI skips) inside the
-# companion-core image on the real compose network — this is what makes the
-# "integration-covered" justification for coverage omits/pragmas executable
-# instead of a label. Requires the stack to be up (`make run`).
+# Runs the live-stack integration suite against the RUNNING companion-core
+# container (requires `make run`). Uses `docker exec` rather than
+# `docker compose run` on purpose: a run-container inherits the service's
+# /health healthcheck + autoheal label, so autoheal reaps it mid-test (it
+# serves pytest, not /health). exec'ing into the already-healthy container
+# avoids that. Tests are copied in and pytest installed to a writable target
+# (the image venv rejects --user).
+# NOTE: a subset currently errors on a pytest-asyncio strict-mode
+# async-fixture incompatibility in the older integration tests — tracked as a
+# separate harness cleanup; the live read/write smoke covers the new features.
 test-integration:
-	docker compose run --rm --no-deps \
-		-v $(CURDIR)/docker/core/tests:/app/tests:ro \
-		-v $(CURDIR)/docker/core/pytest.ini:/app/pytest.ini:ro \
-		--entrypoint sh companion-core \
-		-c "pip install -q --user pytest-asyncio && python3 -m pytest tests/integration -m integration -q"
+	docker cp docker/core/tests companion-core:/app/tests
+	docker exec companion-core sh -c "pip install -q --target=/tmp/pylibs pytest pytest-asyncio && PYTHONPATH=/tmp/pylibs:/app python3 -m pytest /app/tests/integration -m integration -q"
 
 # ── Core stack (amarillo) — runs companion-core + datastores ─────────────────
 

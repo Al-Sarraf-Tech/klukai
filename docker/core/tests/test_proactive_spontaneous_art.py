@@ -41,6 +41,14 @@ def _gen_patches(img=b"IMGBYTES", save=None):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_wardrobe(monkeypatch):
+    """Default: no selected outfit. Keeps the spontaneous-art tests hermetic —
+    otherwise recall_fact makes a real (slow, failing) network call."""
+    import app.context as _ctx
+    monkeypatch.setattr(_ctx.memory, "recall_fact", AsyncMock(return_value=None))
+
+
 class TestSpontaneousArt:
     @pytest.mark.asyncio
     async def test_draws_saves_and_delivers_when_connected(self):
@@ -140,3 +148,25 @@ class TestSpontaneousArt:
         # Malformed YAML (missing keys) falls back to the literal.
         with patch.object(ev, "_raw_content", return_value=[{"scene": "only"}]):
             assert ev._spontaneous_art_pieces() is ev._SPONTANEOUS_ART_PIECES_FALLBACK
+
+
+class TestSpontaneousArtWardrobe:
+    @pytest.mark.asyncio
+    async def test_unlocked_costume_flows_into_prompt(self):
+        import app.context as _ctx
+        e = _engine(aff=9)
+        _ctx.memory.recall_fact = AsyncMock(return_value="starlit_vow")  # unlocks at 8
+        gen, bp, save, slp = _gen_patches()
+        with gen, bp as build, save, slp, patch("app.context.ws", _ws()):
+            await e._spontaneous_art_event()
+        assert build.call_args.kwargs.get("costume") == "starlit_vow"
+
+    @pytest.mark.asyncio
+    async def test_locked_costume_is_not_applied(self):
+        import app.context as _ctx
+        e = _engine(aff=6)  # passes the >=6 art gate, but below starlit_vow's level 8
+        _ctx.memory.recall_fact = AsyncMock(return_value="starlit_vow")
+        gen, bp, save, slp = _gen_patches()
+        with gen, bp as build, save, slp, patch("app.context.ws", _ws()):
+            await e._spontaneous_art_event()
+        assert build.call_args.kwargs.get("costume") is None

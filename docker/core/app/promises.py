@@ -83,7 +83,7 @@ async def due_promises(user_id: str, now: datetime) -> list[dict]:
                 "SELECT id, promise_text, commitment, made_at, scheduled_followup "
                 "FROM companion_promises "
                 "WHERE user_id = %s AND scheduled_followup <= %s "
-                "AND resolved_at IS NULL "
+                "AND resolved_at IS NULL AND followup_sent_at IS NULL "
                 "ORDER BY scheduled_followup ASC",
                 (user_id, now),
             )).fetchall()
@@ -163,23 +163,26 @@ async def mark_followup_sent(promise_id: str) -> bool:
 
 
 async def resolve_promise(
-    promise_id: str, sentiment: str, response_text: str | None = None
+    promise_id: str, sentiment: str, response_text: str | None = None,
+    user_id: str = "jalsarraf",
 ) -> bool:
     """Close a promise with the Commander's response + a sentiment.
 
-    Only touches still-open rows (resolved_at IS NULL) so a double-resolve is
-    a safe no-op and can't clobber the original resolution timestamp.
+    Scoped to the owning user_id so one authenticated user can't resolve
+    another's promise (IDOR). Only touches still-open rows (resolved_at IS NULL)
+    so a double-resolve is a safe no-op and can't clobber the original timestamp.
+    Returns True only if a row was actually updated.
     """
     try:
         async with get_conn() as conn:
-            await conn.execute(
+            cur = await conn.execute(
                 "UPDATE companion_promises "
                 "SET resolved_at = NOW(), sentiment = %s, response_text = %s "
-                "WHERE id = %s AND resolved_at IS NULL",
-                (sentiment, response_text, promise_id),
+                "WHERE id = %s AND user_id = %s AND resolved_at IS NULL",
+                (sentiment, response_text, promise_id, user_id),
             )
             await conn.commit()
-        return True
+            return getattr(cur, "rowcount", 0) > 0
     except Exception as e:
         logger.warning("resolve_promise failed for %s: %s", promise_id, e)
         return False

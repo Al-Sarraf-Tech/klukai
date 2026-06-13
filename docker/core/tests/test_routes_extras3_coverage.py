@@ -574,4 +574,5 @@ class TestPromisesEndpoints:
              patch("app.promises.resolve_promise", new=AsyncMock(return_value=True)) as rp:
             result = await handler("p1", req)
         assert result == {"resolved": True}
-        rp.assert_awaited_once_with("p1", "confirmed", "did it")
+        # Owner-scoped: the authenticated user_id is threaded into the resolve.
+        rp.assert_awaited_once_with("p1", "confirmed", "did it", user_id="alice")

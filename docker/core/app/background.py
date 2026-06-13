@@ -382,9 +382,16 @@ async def background_image_gen(
         aff_level = aff_state.level
 
         scene_tags = _enhance_image_prompt(full_context, couple=couple)
+        # Apply her selected wardrobe outfit — but re-check the unlock here, since
+        # build_prompt does no gating and a since-dropped affection level must not
+        # leak a locked costume's tags into the render.
+        from .image_gen import is_outfit_unlocked
+        costume = await memory.recall_fact("costume", user_id)
+        if not (costume and is_outfit_unlocked(costume, aff_level)):
+            costume = None
         full_prompt = build_prompt(
             scene_tags, couple=couple, affection_level=aff_level,
-            context=full_context, squad_members=squad_members,
+            context=full_context, squad_members=squad_members, costume=costume,
         )
         logger.info("Image prompt (aff=%d): %s", aff_level, full_prompt[:300])
 

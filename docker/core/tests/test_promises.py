@@ -25,16 +25,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 class _FakeConn:
     """Records executed SQL + params; serves a queue of fetch results."""
 
-    def __init__(self, fetchone=None, fetchall=None):
+    def __init__(self, fetchone=None, fetchall=None, rowcount=1):
         self.executed: list[tuple] = []
         self._fetchone = fetchone
         self._fetchall = fetchall or []
+        self._rowcount = rowcount
 
     async def execute(self, sql, params=None):
         self.executed.append((sql, params))
         cur = MagicMock()
         cur.fetchone = AsyncMock(return_value=self._fetchone)
         cur.fetchall = AsyncMock(return_value=self._fetchall)
+        cur.rowcount = self._rowcount
         return cur
 
     async def commit(self):
@@ -177,6 +179,8 @@ class TestDuePromises:
         # ordered ascending (oldest first).
         sql, params = conn.executed[0]
         assert "resolved_at IS NULL" in sql
+        # Already-nudged promises are excluded so we don't re-spam every tick.
+        assert "followup_sent_at IS NULL" in sql
         assert "scheduled_followup <= %s" in sql
         assert "ORDER BY scheduled_followup ASC" in sql
         assert params == ("jalsarraf", now)
@@ -247,9 +251,31 @@ class TestMarkAndResolve:
         assert "resolved_at = NOW()" in sql
         assert "sentiment = %s" in sql
         assert "response_text = %s" in sql
-        # Only updates rows that aren't already resolved (idempotent).
+        # Only updates rows that aren't already resolved (idempotent)...
         assert "resolved_at IS NULL" in sql
-        assert params == ("kept", "Done it!", "id-9")
+        # ...and only the owner's row (IDOR guard).
+        assert "user_id = %s" in sql
+        assert params == ("kept", "Done it!", "id-9", "jalsarraf")
+
+    @pytest.mark.asyncio
+    async def test_resolve_promise_is_owner_scoped(self):
+        from app import promises
+
+        conn = _FakeConn()
+        with _patch_get_conn(conn):
+            await promises.resolve_promise("id-9", "kept", None, user_id="alice")
+        # The caller's user_id is bound into the WHERE clause, not ignored.
+        assert conn.executed[0][1] == ("kept", None, "id-9", "alice")
+
+    @pytest.mark.asyncio
+    async def test_resolve_promise_not_found_returns_false(self):
+        from app import promises
+
+        # rowcount 0 → no matching open row for this user → not resolved.
+        conn = _FakeConn(rowcount=0)
+        with _patch_get_conn(conn):
+            ok = await promises.resolve_promise("missing", "kept", user_id="bob")
+        assert ok is False
 
     @pytest.mark.asyncio
     async def test_resolve_promise_allows_null_response(self):
@@ -259,7 +285,7 @@ class TestMarkAndResolve:
         with _patch_get_conn(conn):
             ok = await promises.resolve_promise("id-9", "broken")
         assert ok is True
-        assert conn.executed[0][1] == ("broken", None, "id-9")
+        assert conn.executed[0][1] == ("broken", None, "id-9", "jalsarraf")
 
     @pytest.mark.asyncio
     async def test_resolve_promise_db_failure_returns_false(self):

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -410,15 +410,20 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         pool = messages.get(level, messages.get(0, ["..."]))
         return random.choice(pool)
 
-    async def _deliver(self, message: str) -> None:
+    async def _deliver(self, message: str) -> bool:
+        """Deliver a proactive message. Returns True iff it was actually sent
+        (callers that must record a side effect — e.g. promise follow-ups —
+        gate on this so they don't mark work done that _can_send() suppressed)."""
         if not self._can_send():
-            return
+            return False
         if self._on_message_callback:
             self._proactive_count_today += 1
             self._last_proactive_answered = False
             await self._on_message_callback(message)
             await publish_event("proactive", message)
             logger.info("Klukai proactive: %s", message[:60])
+            return True
+        return False
 
     async def trigger_tap(self) -> None:
         """Generate a short response for a tap interaction on the 3D avatar."""
@@ -458,12 +463,17 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             return
         try:
             from ..promises import due_promises, followup_message, mark_followup_sent
-            due = await due_promises("jalsarraf", now_local())
+            # UTC: scheduled_followup is stored as a real instant (timestamptz);
+            # comparing against now_local() (naive Chicago) made Postgres read it
+            # as UTC and fire ~5-6h off, drifting with DST.
+            due = await due_promises("jalsarraf", datetime.now(timezone.utc))
             if not due:
                 return
             promise = due[0]
-            await self._deliver(followup_message(promise, self._affection_level))
-            await mark_followup_sent(promise["id"])
+            # Only stamp the follow-up sent if it actually went out — otherwise a
+            # quiet-hours/cap suppression would silently bury the promise.
+            if await self._deliver(followup_message(promise, self._affection_level)):
+                await mark_followup_sent(promise["id"])
         except Exception as e:
             logger.warning("Promise follow-up check failed: %s", e)
 

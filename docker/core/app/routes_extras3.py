@@ -356,7 +356,7 @@ def register_extras3(app: FastAPI) -> None:
             )
         from . import promises
         ok = await promises.resolve_promise(
-            promise_id, sentiment, (body or {}).get("response_text")
+            promise_id, sentiment, (body or {}).get("response_text"), user_id=user_id
         )
         return {"resolved": ok}
 

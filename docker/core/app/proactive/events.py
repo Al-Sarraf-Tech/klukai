@@ -470,12 +470,18 @@ class EventsMixin(_EngineBase):
         piece = random.choice(_spontaneous_art_pieces())
         try:
             from .. import memory_archive
-            from ..image_gen import build_prompt, generate_image
+            from ..context import memory
+            from ..image_gen import build_prompt, generate_image, is_outfit_unlocked
 
+            # Honor her selected outfit if it's still unlocked at this level.
+            costume = await memory.recall_fact("costume", "jalsarraf")
+            if not (costume and is_outfit_unlocked(costume, self._affection_level)):
+                costume = None
             prompt = build_prompt(
                 piece["scene"], couple=False,
                 affection_level=self._affection_level, context=piece["scene"],
                 mood=self._last_mood, time_of_day=_time_of_day(now.hour),
+                costume=costume,
             )
             img = await generate_image(prompt)
             if not img:
