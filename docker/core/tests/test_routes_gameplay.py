@@ -279,11 +279,40 @@ class TestCostumeSetRoute:
         assert resp.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_accepts_valid_costume(self):
+    async def test_accepts_unlocked_costume(self):
+        # astral_luminous unlocks at affection level 4; a level-9 Commander can wear it.
         from app.routes import CostumeRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "POST")
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=SimpleNamespace(level=9))):
             result = await handler(CostumeRequest(costume="astral_luminous"), _mk_request())
         assert result == {"costume": "astral_luminous"}
+
+    @pytest.mark.asyncio
+    async def test_rejects_locked_costume(self):
+        # A costume gated above the Commander's current affection level is refused.
+        from app.routes import CostumeRequest
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/costume", "POST")
+
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=SimpleNamespace(level=0))):
+            resp = await handler(CostumeRequest(costume="astral_luminous"), _mk_request())
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_accepts_level_zero_costume_without_unlock(self):
+        # blazing_star is unlock-level 0 — always wearable.
+        from app.routes import CostumeRequest
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/costume", "POST")
+
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=SimpleNamespace(level=0))):
+            result = await handler(CostumeRequest(costume="blazing_star"), _mk_request())
+        assert result == {"costume": "blazing_star"}

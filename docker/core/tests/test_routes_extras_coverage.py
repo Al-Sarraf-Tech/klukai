@@ -344,6 +344,8 @@ class TestCostumeSetSuccess:
         audit_log = AsyncMock()
         store_fact = AsyncMock()
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=_mk_aff_state(level=9))), \
              patch("app.routes_extras.memory.store_fact", store_fact), \
              patch("app.audit.log", audit_log):
             result = await handler(CostumeRequest(costume="speed_star"), _mk_request())
@@ -366,10 +368,107 @@ class TestCostumeSetSuccess:
         from app.routes import CostumeRequest
 
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=_mk_aff_state(level=9))), \
+             patch("app.routes_extras.memory.store_fact", new=AsyncMock()), \
              patch("app.audit.log", new=AsyncMock(side_effect=RuntimeError("boom"))):
             result = await handler(CostumeRequest(costume="cerulean_breaker"), _mk_request())
 
         assert result == {"costume": "cerulean_breaker"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Unlockable wardrobe — GET /api/outfits + POST /api/costume affection gating
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestOutfitsList:
+    @pytest.mark.asyncio
+    async def test_unauth_401(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/outfits", "GET")
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
+            resp = await handler(_mk_request(token=None))
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_returns_shape_and_derived_unlock(self):
+        from app.image_gen_constants import OUTFIT_UNLOCK_LEVELS
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/outfits", "GET")
+        # At level 3: anything with unlock_level <= 3 is unlocked, else locked.
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=_mk_aff_state(level=3))):
+            result = await handler(_mk_request())
+
+        outfits = result["outfits"]
+        # One entry per known costume, each with the required keys.
+        assert len(outfits) == len(OUTFIT_UNLOCK_LEVELS)
+        for o in outfits:
+            assert set(o.keys()) == {"id", "unlock_level", "unlocked"}
+            assert o["unlocked"] == (3 >= o["unlock_level"])
+        by_id = {o["id"]: o for o in outfits}
+        # blazing_star (0) unlocked; starlit_vow (8) locked at level 3.
+        assert by_id["blazing_star"]["unlocked"] is True
+        assert by_id["starlit_vow"]["unlocked"] is False
+        assert by_id["starlit_vow"]["unlock_level"] == 8
+
+
+class TestCostumeUnlockGate:
+    @pytest.mark.asyncio
+    async def test_locked_costume_rejected_403(self):
+        """A costume above the user's affection level is rejected and NOT stored."""
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/costume", "POST")
+        from app.routes import CostumeRequest
+
+        store_fact = AsyncMock()
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=_mk_aff_state(level=1))), \
+             patch("app.routes_extras.memory.store_fact", store_fact):
+            # starlit_vow needs level 8; user is at 1 -> locked.
+            resp = await handler(CostumeRequest(costume="starlit_vow"), _mk_request())
+
+        assert resp.status_code == 403
+        # Rejected costume must not be persisted.
+        store_fact.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unlocked_costume_accepted_and_stored(self):
+        """A costume at/above the unlock level is accepted, stored, and audited."""
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/costume", "POST")
+        from app.routes import CostumeRequest
+
+        store_fact = AsyncMock()
+        audit_log = AsyncMock()
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=_mk_aff_state(level=6))), \
+             patch("app.routes_extras.memory.store_fact", store_fact), \
+             patch("app.audit.log", audit_log):
+            # midnight_sovereign needs level 6; user is exactly at 6 -> unlocked.
+            result = await handler(CostumeRequest(costume="midnight_sovereign"), _mk_request())
+
+        assert result == {"costume": "midnight_sovereign"}
+        store_fact.assert_awaited_once()
+        assert store_fact.await_args.args[1] == "midnight_sovereign"
+        audit_log.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_invalid_costume_still_400_before_gate(self):
+        """Unknown costume id is rejected 400 even with a high affection level."""
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/costume", "POST")
+        from app.routes import CostumeRequest
+
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=_mk_aff_state(level=9))):
+            resp = await handler(CostumeRequest(costume="not_a_real_skin"), _mk_request())
+        assert resp.status_code == 400
 
 
 # ═══════════════════════════════════════════════════════════════════════════

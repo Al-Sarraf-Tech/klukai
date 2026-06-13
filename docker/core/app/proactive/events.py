@@ -152,6 +152,20 @@ _SPONTANEOUS_ART_PIECES_FALLBACK: list[dict[str, str]] = [
 ]
 
 
+def _time_of_day(hour: int) -> str:
+    """Map a 24h local hour to a coarse time-of-day bucket for scene lighting.
+
+    morning 5-11, afternoon 12-16, evening 17-20, otherwise night.
+    """
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 17:
+        return "afternoon"
+    if 17 <= hour < 21:
+        return "evening"
+    return "night"
+
+
 def _spontaneous_art_pieces() -> list[dict]:
     """Tender, SFW art she draws unprompted. YAML-overridable via
     ``proactive_content.spontaneous_art``; literal fallback preserves behavior."""
@@ -461,6 +475,7 @@ class EventsMixin(_EngineBase):
             prompt = build_prompt(
                 piece["scene"], couple=False,
                 affection_level=self._affection_level, context=piece["scene"],
+                mood=self._last_mood, time_of_day=_time_of_day(now.hour),
             )
             img = await generate_image(prompt)
             if not img:

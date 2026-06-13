@@ -27,11 +27,15 @@ from app.image_gen_constants import (
     KLUKAI_LORA_TRIGGER,
     LANDSCAPE_KEYWORDS,
     MISSION_SCENE_TAGS,
+    MOOD_EXPRESSION_TAGS,
     NEGATIVE_TAGS,
+    OUTFIT_COSTUME_TAGS,
     OUTFIT_MAP,
+    OUTFIT_UNLOCK_LEVELS,
     QUALITY_TAGS,
     SITUATION_KEYWORDS,
     SQUAD_KEYWORDS,
+    TIME_OF_DAY_TAGS,
     WORKFLOW_TEMPLATE,
 )
 
@@ -50,11 +54,15 @@ __all__ = [
     "KLUKAI_LORA_TRIGGER",
     "LANDSCAPE_KEYWORDS",
     "MISSION_SCENE_TAGS",
+    "MOOD_EXPRESSION_TAGS",
     "NEGATIVE_TAGS",
+    "OUTFIT_COSTUME_TAGS",
     "OUTFIT_MAP",
+    "OUTFIT_UNLOCK_LEVELS",
     "QUALITY_TAGS",
     "SITUATION_KEYWORDS",
     "SQUAD_KEYWORDS",
+    "TIME_OF_DAY_TAGS",
     "WORKFLOW_TEMPLATE",
     "build_mission_prompt",
     "build_prompt",
@@ -63,6 +71,7 @@ __all__ = [
     "generate_image",
     "is_couple_scene",
     "is_landscape",
+    "is_outfit_unlocked",
     "needs_image",
 ]
 
@@ -197,12 +206,27 @@ def _select_outfit(context: str, outfit_map: dict[str, str], default: str) -> st
     return default
 
 
+def is_outfit_unlocked(costume: str, affection_level: int) -> bool:
+    """Return whether ``costume`` is unlocked at the given affection level.
+
+    "Unlocked" is DERIVED on read — there is no wardrobe table. An unknown
+    costume id is treated as locked (fail-closed). Outfits with an unlock
+    level of 0 are always available.
+    """
+    if costume not in OUTFIT_UNLOCK_LEVELS:
+        return False
+    return affection_level >= OUTFIT_UNLOCK_LEVELS[costume]
+
+
 def build_prompt(
     scene_tags: str,
     couple: bool = False,
     affection_level: int = 0,
     context: str = "",
     squad_members: list[str] | None = None,
+    mood: str = "composed",
+    time_of_day: str | None = None,
+    costume: str | None = None,
 ) -> str:
     """Build the full positive prompt with quality tags, LoRA trigger, and character identities.
 
@@ -212,6 +236,15 @@ def build_prompt(
         affection_level: 0-9, affects mood expression tags.
         context: Recent conversation text for outfit selection.
         squad_members: Optional list of squad member names to include in the scene.
+        mood: Session mood (e.g. "tender", "playful") — adds a concise expression
+            cue before the scene tags. Defaults to "composed". Unknown moods are
+            ignored (no descriptor injected).
+        time_of_day: One of morning/afternoon/evening/night, or None. When set,
+            injects a short lighting/time cue before the scene tags.
+        costume: Optional unlockable-wardrobe id (see OUTFIT_COSTUME_TAGS). When
+            provided and recognized, its tag block REPLACES the keyword-matched
+            outfit so the chosen skin actually drives the render. Unknown ids
+            fall through to the existing keyword-context outfit logic.
     """
     parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
 
@@ -220,9 +253,25 @@ def build_prompt(
     if mood_tags:
         parts.append(mood_tags)
 
+    # Scene-aware descriptors — concise mood expression + time/lighting cue,
+    # injected BEFORE the scene tags so they colour the moment without bloat.
+    expression = MOOD_EXPRESSION_TAGS.get(mood or "")
+    if expression:
+        parts.append(expression)
+    if time_of_day:
+        lighting = TIME_OF_DAY_TAGS.get(time_of_day)
+        if lighting:
+            parts.append(lighting)
+
     # Context for outfit matching: use full context (conversation + scene tags)
     outfit_context = f"{context} {scene_tags}" if context else scene_tags
-    klukai_outfit = _select_outfit(outfit_context, OUTFIT_MAP, KLUKAI_DEFAULT_OUTFIT)
+    # A selected (unlocked) wardrobe costume overrides the keyword-matched
+    # outfit so the chosen skin actually changes the image; otherwise fall back
+    # to the existing keyword-context outfit selection.
+    if costume and costume in OUTFIT_COSTUME_TAGS:
+        klukai_outfit = OUTFIT_COSTUME_TAGS[costume]
+    else:
+        klukai_outfit = _select_outfit(outfit_context, OUTFIT_MAP, KLUKAI_DEFAULT_OUTFIT)
 
     if couple:
         commander_outfit = _select_outfit(outfit_context, COMMANDER_OUTFIT_MAP, COMMANDER_DEFAULT_OUTFIT)

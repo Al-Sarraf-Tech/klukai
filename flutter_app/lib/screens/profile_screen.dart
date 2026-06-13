@@ -27,6 +27,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _costume = 'blazing_star';
   Map<String, String> _milestones = {};
   int _interactions = 0;
+  // outfit id -> {unlock_level:int, unlocked:bool} from GET /api/outfits.
+  Map<String, Map<String, dynamic>> _outfits = {};
 
   Map<String, String> get _authHeaders {
     String token = '';
@@ -54,6 +56,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (costumeR.statusCode == 200) {
         setState(() => _costume = jsonDecode(costumeR.body)['costume'] ?? 'blazing_star');
       }
+      final outfitsR = await http.get(Uri.parse('${widget.serverUrl}/api/outfits'), headers: _authHeaders);
+      if (outfitsR.statusCode == 200 && mounted) {
+        final list = jsonDecode(outfitsR.body)['outfits'] as List<dynamic>? ?? [];
+        setState(() => _outfits = {
+              for (final o in list)
+                (o as Map<String, dynamic>)['id'] as String: {
+                  'unlock_level': o['unlock_level'] ?? 0,
+                  'unlocked': o['unlocked'] ?? false,
+                },
+            });
+      }
       if (milestonesR.statusCode == 200) {
         final data = jsonDecode(milestonesR.body)['milestones'] as Map<String, dynamic>? ?? {};
         setState(() => _milestones = data.map((k, v) => MapEntry(k, v.toString())));
@@ -68,13 +81,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _setCostume(String costume) async {
     try {
-      await http.post(
+      final resp = await http.post(
         Uri.parse('${widget.serverUrl}/api/costume'),
         headers: _authHeaders,
         body: jsonEncode({'costume': costume}),
       );
       if (!mounted) return;
-      setState(() => _costume = costume);
+      // Only adopt the costume if the server accepted it; a locked outfit
+      // returns 403 and must not change the displayed selection.
+      if (resp.statusCode == 200) {
+        setState(() => _costume = costume);
+      }
     } catch (_) {}
   }
 
@@ -202,8 +219,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     const costumes = [
       ('blazing_star', 'Blazing Star', 'Default tactical gear'),
       ('speed_star', 'Speed Star', 'Silver-white rider suit'),
-      ('astral_luminous', 'Astral Luminous', 'Blue lightning tactical rider'),
       ('cerulean_breaker', 'Cerulean Breaker', 'Beach / surfing outfit'),
+      ('astral_luminous', 'Astral Luminous', 'Blue lightning tactical rider'),
+      ('midnight_sovereign', 'Midnight Sovereign', 'Formal midnight gown'),
+      ('starlit_vow', 'Starlit Vow', 'Bridal — only at the deepest bond'),
     ];
 
     return Container(
@@ -215,36 +234,61 @@ class _ProfileScreenState extends State<ProfileScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _sectionTitle('OUTFIT SELECTION'),
+          _sectionTitle('WARDROBE'),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8, runSpacing: 8,
-            children: costumes.map((c) => GestureDetector(
-              onTap: () => _setCostume(c.$1),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _costume == c.$1 ? GFL2Colors.primary.withValues(alpha: 0.15) : GFL2Colors.background,
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(
-                    color: _costume == c.$1 ? GFL2Colors.primary : GFL2Colors.border.withValues(alpha: 0.3),
-                    width: _costume == c.$1 ? 1.5 : 1,
+            children: costumes.map((c) {
+              final info = _outfits[c.$1];
+              // Default to unlocked if /api/outfits hasn't loaded, so the base
+              // outfits stay usable; locked state only hides what the server says.
+              final unlocked = info == null ? true : (info['unlocked'] == true);
+              final unlockLevel = info == null ? 0 : (info['unlock_level'] as int? ?? 0);
+              final selected = _costume == c.$1;
+              return GestureDetector(
+                onTap: unlocked ? () => _setCostume(c.$1) : null,
+                child: Opacity(
+                  opacity: unlocked ? 1.0 : 0.4,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: selected ? GFL2Colors.primary.withValues(alpha: 0.15) : GFL2Colors.background,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: selected ? GFL2Colors.primary : GFL2Colors.border.withValues(alpha: 0.3),
+                        width: selected ? 1.5 : 1,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (!unlocked)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Icon(Icons.lock_outline,
+                                    size: 10, color: GFL2Colors.textDim.withValues(alpha: 0.7)),
+                              ),
+                            Text(c.$2, style: TextStyle(
+                              color: selected ? GFL2Colors.primary : GFL2Colors.textPrimary,
+                              fontSize: 11, fontWeight: FontWeight.w700, fontFamily: 'monospace',
+                            )),
+                          ],
+                        ),
+                        Text(
+                          unlocked ? c.$3 : 'Unlocks at affection Lv $unlockLevel',
+                          style: TextStyle(
+                            color: GFL2Colors.textDim.withValues(alpha: 0.5), fontSize: 9,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(c.$2, style: TextStyle(
-                      color: _costume == c.$1 ? GFL2Colors.primary : GFL2Colors.textPrimary,
-                      fontSize: 11, fontWeight: FontWeight.w700, fontFamily: 'monospace',
-                    )),
-                    Text(c.$3, style: TextStyle(
-                      color: GFL2Colors.textDim.withValues(alpha: 0.5), fontSize: 9,
-                    )),
-                  ],
-                ),
-              ),
-            )).toList(),
+              );
+            }).toList(),
           ),
         ],
       ),
@@ -346,7 +390,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       'speed_star' => 'SPEED STAR',
       'astral_luminous' => 'ASTRAL LUMINOUS',
       'cerulean_breaker' => 'CERULEAN BREAKER',
-      _ => id.toUpperCase(),
+      'midnight_sovereign' => 'MIDNIGHT SOVEREIGN',
+      'starlit_vow' => 'STARLIT VOW',
+      _ => id.toUpperCase().replaceAll('_', ' '),
     };
   }
 }

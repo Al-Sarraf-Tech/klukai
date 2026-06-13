@@ -347,3 +347,64 @@ AFFECTION_MOOD_TAGS = {
     9: "peaceful, loving, serene, together",
 }
 
+# ── Scene-aware descriptors ───────────────────────────────────────────────
+# Short expression cues keyed by the *session* mood (distinct from the
+# affection level above). Kept terse on purpose — SDXL/Illustrious prompts
+# degrade with bloat, so each is a single concise facial/posture descriptor.
+# Injected just before the scene tags in build_prompt when a mood is passed.
+MOOD_EXPRESSION_TAGS = {
+    "composed": "calm composed expression",
+    "tender": "tender soft expression",
+    "longing": "longing gaze, wistful",
+    "flustered": "flustered, light blush, averted eyes",
+    "affectionate": "affectionate warm smile",
+    "shy": "shy bashful expression, blush",
+    "yearning": "yearning expression, parted lips",
+    "devoted": "devoted gentle gaze",
+    "vulnerable": "vulnerable open expression",
+    "drowsy": "drowsy half-lidded eyes, sleepy",
+    "playful": "playful smirk, mischievous",
+    "happy": "bright happy smile",
+    "irritated": "irritated frown, narrowed eyes",
+    "exasperated": "exasperated sigh, raised brow",
+    "melancholic": "melancholic distant look",
+    "haunted": "haunted shadowed eyes, somber",
+    "guilty": "guilty downcast eyes",
+}
+
+# Lighting / time-of-day cues. One of morning/afternoon/evening/night (or
+# None to omit). Concise lighting descriptors so the scene reads at the
+# right hour without crowding the positive prompt.
+TIME_OF_DAY_TAGS = {
+    "morning": "morning light, soft sunrise glow, fresh dawn",
+    "afternoon": "bright afternoon sunlight, clear daylight",
+    "evening": "golden hour, warm evening light, sunset glow",
+    "night": "night, moonlight, soft ambient lamplight",
+}
+
+# ── Unlockable wardrobe ───────────────────────────────────────────────────
+# Affection level (0-9) required to unlock each costume. "Unlocked" is DERIVED
+# on read (affection_level >= unlock_level) — there is no wardrobe table and no
+# affection mutation. Some outfits are free from the start (0); the more
+# intimate / special skins gate behind a closer bond.
+OUTFIT_UNLOCK_LEVELS: dict[str, int] = {
+    "blazing_star": 0,
+    "speed_star": 0,
+    "astral_luminous": 4,
+    "cerulean_breaker": 2,
+    "midnight_sovereign": 6,
+    "starlit_vow": 8,
+}
+
+# Danbooru-style tag block for each unlockable costume. Injected into the
+# positive prompt (just before the scene tags) when a costume is selected, so
+# the chosen skin actually changes the rendered outfit. Kept concise.
+OUTFIT_COSTUME_TAGS: dict[str, str] = {
+    "blazing_star": "red and gold battle dress, ornate gold trim, flowing skirt, elegant",
+    "speed_star": "white racing bodysuit, blue accents, sporty, sleek, aerodynamic",
+    "astral_luminous": "shimmering star-patterned gown, celestial motifs, glowing accents, ethereal",
+    "cerulean_breaker": "cerulean blue tactical suit, silver plating, sleek armor, futuristic",
+    "midnight_sovereign": "midnight black evening gown, silver embroidery, regal, refined",
+    "starlit_vow": "white bridal gown, lace veil, delicate, luminous, intimate",
+}
+

@@ -94,14 +94,44 @@ def register_extras(app: FastAPI) -> None:
         costume = await memory.recall_fact("costume", user_id=user_id)
         return {"costume": costume or "blazing_star"}
 
+    @app.get("/api/outfits")
+    async def api_get_outfits(request: Request):
+        """List the unlockable wardrobe with derived unlock state.
+
+        "Unlocked" is computed on read from the user's current affection level
+        (no wardrobe table): unlocked == affection_level >= unlock_level.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from .image_gen_constants import OUTFIT_UNLOCK_LEVELS
+        aff = await affection.get_state(user_id)
+        level = aff.level
+        outfits = [
+            {"id": oid, "unlock_level": unlock, "unlocked": level >= unlock}
+            for oid, unlock in OUTFIT_UNLOCK_LEVELS.items()
+        ]
+        return {"outfits": outfits}
+
     @app.post("/api/costume")
     async def api_set_costume(req: CostumeRequest, request: Request):
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        valid = ["blazing_star", "speed_star", "astral_luminous", "cerulean_breaker"]
+        from .image_gen_constants import OUTFIT_UNLOCK_LEVELS
+        valid = list(OUTFIT_UNLOCK_LEVELS.keys())
         if req.costume not in valid:
             return JSONResponse({"error": f"Invalid. Choose from: {valid}"}, status_code=400)
+        # Wardrobe gating: a costume can only be worn once its affection unlock
+        # level is reached. Derived on read — no affection mutation here.
+        aff = await affection.get_state(user_id)
+        unlock_level = OUTFIT_UNLOCK_LEVELS[req.costume]
+        if aff.level < unlock_level:
+            return JSONResponse(
+                {"error": f"'{req.costume}' is locked. Requires affection level {unlock_level} "
+                          f"(you are at {aff.level})."},
+                status_code=403,
+            )
         await memory.store_fact("costume", req.costume, user_id=user_id)
         try:
             from . import audit
