@@ -1384,13 +1384,16 @@ class TestCheckAnniversaries:
     @pytest.mark.asyncio
     async def test_exact_anniversary_match_returns_years_ago(self):
         e = ProactiveEngine()
-        today = date.today()
+        # Freeze the clock: check_anniversaries uses now_local() (America/Chicago),
+        # so building dates from date.today() (server UTC) is off by a day in the
+        # evening-Chicago window. Pin both to _NOON.
+        today = _NOON.date()
         # Same month/day, 2 years ago -> exact anniversary.
         past = date(today.year - 2, today.month, today.day)
         row = ("first_kiss", past)
         conn = AsyncMock()
         conn.execute = AsyncMock(return_value=_result_with_fetchall([row]))
-        with patch("app.db.get_conn", return_value=_db_ctx(conn)):
+        with _patch_now(), patch("app.db.get_conn", return_value=_db_ctx(conn)):
             results = await e.check_anniversaries("alice")
 
         assert len(results) == 1
@@ -1401,18 +1404,15 @@ class TestCheckAnniversaries:
     @pytest.mark.asyncio
     async def test_near_anniversary_within_three_days(self):
         e = ProactiveEngine()
-        today = date.today()
-        # An event 1 year + 2 days off — should be picked up as a "near" match
-        # (delta 1..3). Build a date that maps to today+2 this year, last year.
+        # Frozen clock (see exact-match test). _NOON is mid-May, so +2 days
+        # never crosses a month/year boundary — the old skip is unnecessary.
+        today = _NOON.date()
         target = today + timedelta(days=2)
-        # Guard against year-boundary edge cases by skipping if month rolled.
-        if target.year != today.year:
-            pytest.skip("near-anniversary window crosses year boundary today")
         past = date(today.year - 1, target.month, target.day)
         row = ("first_mission", past)
         conn = AsyncMock()
         conn.execute = AsyncMock(return_value=_result_with_fetchall([row]))
-        with patch("app.db.get_conn", return_value=_db_ctx(conn)):
+        with _patch_now(), patch("app.db.get_conn", return_value=_db_ctx(conn)):
             results = await e.check_anniversaries("alice")
         assert len(results) == 1
         assert results[0]["days_ago"] == 2
@@ -1421,13 +1421,13 @@ class TestCheckAnniversaries:
     @pytest.mark.asyncio
     async def test_far_date_not_matched(self):
         e = ProactiveEngine()
-        today = date.today()
+        today = _NOON.date()
         # ~6 months away — neither exact nor within 3 days.
         far = date(today.year - 1, ((today.month + 5 - 1) % 12) + 1, 15)
         row = ("first_argument", far)
         conn = AsyncMock()
         conn.execute = AsyncMock(return_value=_result_with_fetchall([row]))
-        with patch("app.db.get_conn", return_value=_db_ctx(conn)):
+        with _patch_now(), patch("app.db.get_conn", return_value=_db_ctx(conn)):
             results = await e.check_anniversaries("alice")
         # The far date should not produce a match (delta > 3, not exact).
         assert results == [] or all(r["days_ago"] <= 3 for r in results)
@@ -1435,11 +1435,11 @@ class TestCheckAnniversaries:
     @pytest.mark.asyncio
     async def test_results_are_cached_for_five_minutes(self):
         e = ProactiveEngine()
-        today = date.today()
+        today = _NOON.date()
         past = date(today.year - 1, today.month, today.day)
         conn = AsyncMock()
         conn.execute = AsyncMock(return_value=_result_with_fetchall([("first_kiss", past)]))
-        with patch("app.db.get_conn", return_value=_db_ctx(conn)) as gc:
+        with _patch_now(), patch("app.db.get_conn", return_value=_db_ctx(conn)) as gc:
             first = await e.check_anniversaries("alice")
             second = await e.check_anniversaries("alice")  # served from cache
         assert first == second
@@ -1461,14 +1461,12 @@ class TestCheckAnniversaries:
         year is not a leap year — the replace() fallback to day=28 handles it.
         Only meaningful in non-leap years; skip otherwise."""
         e = ProactiveEngine()
-        today = date.today()
-        is_leap = (today.year % 4 == 0 and today.year % 100 != 0) or today.year % 400 == 0
-        if is_leap:
-            pytest.skip("current year is a leap year — Feb 29 replace path not exercised")
+        # Frozen to 2026 (a non-leap year), so the Feb-28 fallback path is always
+        # exercised deterministically rather than skipped in leap years.
         past = date(2020, 2, 29)  # 2020 is a leap year
         conn = AsyncMock()
         conn.execute = AsyncMock(return_value=_result_with_fetchall([("first_snow", past)]))
-        with patch("app.db.get_conn", return_value=_db_ctx(conn)):
+        with _patch_now(), patch("app.db.get_conn", return_value=_db_ctx(conn)):
             results = await e.check_anniversaries("alice")  # must not raise
         assert isinstance(results, list)
 
