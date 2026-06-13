@@ -34,6 +34,13 @@ services:
       # ComfyUI on dominus (LAN)
       COMFYUI_URL: "http://192.168.50.2:8388"
       PERSONALITY_PATH: "/config/personality.yaml"
+      # Commander's location for weather-driven mood (Open-Meteo, keyless).
+      # Defaults to Chicago; override in .env. Weather is fail-soft — if unset
+      # or the API is unreachable, mood/greeting just ignore weather.
+      COMMANDER_LATITUDE: "${COMMANDER_LATITUDE:-41.8781}"
+      COMMANDER_LONGITUDE: "${COMMANDER_LONGITUDE:--87.6298}"
+      # Where Klukai's voice letters (async JP voice notes) are stored.
+      AUDIO_DIR: "/audio"
       VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY:-}"
       VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY:-}"
       # Signing secrets for HMAC URL signing + audit-chain. If unset, the app
@@ -57,6 +64,7 @@ services:
       - ./config:/config:ro
       - ./web-build:/app/static:ro
       - companion-images:/images
+      - companion-audio:/audio
     deploy:
       resources:
         limits:
@@ -82,6 +90,7 @@ services:
 
 volumes:
   companion-images:
+  companion-audio:
 
 networks:
   aichat:
