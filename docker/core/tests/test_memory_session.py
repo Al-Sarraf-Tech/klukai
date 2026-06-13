@@ -42,7 +42,6 @@ class TestRedisOp:
     async def test_reconnects_on_connection_error(self):
         """Only redis.ConnectionError/TimeoutError are caught — others propagate."""
         import redis as _redis_mod
-        from app.memory import MemoryManager
 
         m = _mk_manager()
         call_count = {"n": 0}

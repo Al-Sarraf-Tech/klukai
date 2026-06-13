@@ -4,9 +4,9 @@ Mocks the pool so we exercise SQL shape + result parsing without a real DB."""
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

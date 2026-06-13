@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
 
-import pytest
 
 from app.llm_json import extract_text, parse_json
 

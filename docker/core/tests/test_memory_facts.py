@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.memory import MemoryManager
-from app.models import SessionState
 
 
 def _mk_http_resp(body=None, status=200):

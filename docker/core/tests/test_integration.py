@@ -6,10 +6,9 @@ These test the message processing flow end-to-end with mocked external services
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

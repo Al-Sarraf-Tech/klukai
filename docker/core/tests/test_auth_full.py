@@ -5,7 +5,7 @@ Mocks DB + bcrypt to exercise the auth flow without real Postgres.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

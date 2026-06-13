@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from app.observability import record_llm_usage, slow_query_timer, structured_log
 

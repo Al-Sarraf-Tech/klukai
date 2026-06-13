@@ -4,7 +4,6 @@ Per S+ Phase 4 (docs/superpowers/specs/2026-05-16-s-plus-uplift.md §5.4)."""
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 

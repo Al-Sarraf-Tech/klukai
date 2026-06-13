@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -20,7 +20,6 @@ class TestExtractFacts:
     @pytest.mark.asyncio
     async def test_returns_defaults_when_llm_returns_none(self):
         from app.fact_extractor import extract_facts, _DEFAULT_RESULT
-        from app import llm_router
 
         class _FakeGate:
             async def __aenter__(self): return None
