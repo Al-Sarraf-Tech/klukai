@@ -6,7 +6,6 @@ Tests run without any network or infrastructure dependencies.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from typing import Any
@@ -210,11 +209,22 @@ def make_session():
 
 @pytest.fixture
 def personality_config_path():
-    """Resolve personality.yaml path — works in container and repo."""
+    """Resolve personality.yaml path — works in container, repo, and the
+    mutmut `mutants/` sandbox.
+
+    The PERSONALITY_PATH env var is checked FIRST: mutmut copies the tests into
+    a `mutants/` tree where the repo-relative `__file__` walk resolves to a
+    nonexistent path, which used to skip every fixture-dependent test (and so
+    silently under-measured the mutation kill rate on affection.py). CI/mutmut
+    set PERSONALITY_PATH to an absolute path; honour it.
+    """
+    env_path = _os.environ.get("PERSONALITY_PATH")
+    if env_path and Path(env_path).exists():
+        return env_path
     container = Path("/config/personality.yaml")
     if container.exists():
         return str(container)
-    # __file__ is .../docker/core/tests/conftest.py — 4 parents up = companion/
+    # __file__ is .../docker/core/tests/conftest.py — 4 parents up = repo root
     repo = Path(__file__).resolve().parent.parent.parent.parent / "config" / "personality.yaml"
     if repo.exists():
         return str(repo)
