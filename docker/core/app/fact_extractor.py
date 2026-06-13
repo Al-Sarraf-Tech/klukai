@@ -117,6 +117,25 @@ state, promises/decisions, current scene. Third person past tense. Be concise.
 
 {conversation}"""
 
+PROMISE_PROMPT = """\
+Read this message from the Commander (HUMAN male) to Klukai. Detect any concrete \
+COMMITMENT he makes about something HE will do — phrasings like "I'll…", "I'm going \
+to…", "tomorrow I'll…", "I promise to…", "I need to…", "later I'll…".
+
+Return ONLY valid JSON:
+{{"promises":[{{"action":"<what he will do, short imperative phrase>","target":"<who/what it's for, or null>","deadline_hint":"<when, e.g. tomorrow / tonight / next week, or null>","confidence":<0.0-1.0>}}]}}
+
+Rules:
+- Only genuine future commitments BY the Commander. NOT questions, NOT things \
+Klukai will do, NOT vague musings ("maybe someday"), NOT past events.
+- "action" is a brief phrase that completes "you said you'd ___" (e.g. "fix the \
+door", "call your mother", "finish the report").
+- confidence reflects how clearly it's a real commitment (1.0 = explicit promise, \
+0.5 = soft/ambiguous).
+- Empty list if there are no commitments.
+
+Commander: {user_message}"""
+
 
 # ── Public API ───────────────────────────────────────────────────────────
 
@@ -192,6 +211,55 @@ async def extract_facts(
         out["memory_curation"] = result["memory_curation"]
 
     return out
+
+
+async def extract_promises(user_message: str, affection_level: int) -> dict:
+    """Detect commitments the Commander makes ("I'll…", "tomorrow I'll…").
+
+    Returns ``{"promises": [{action, target, deadline_hint, confidence}, ...]}``
+    keeping only high-confidence detections (confidence >= 0.7). Never raises —
+    returns ``{"promises": []}`` on any failure or malformed output, so the
+    background extraction path stays fail-soft.
+    """
+    from .llm_router import get_lm_gate
+
+    prompt = PROMISE_PROMPT.format(user_message=user_message[:800])
+
+    gate = get_lm_gate()
+    async with gate:
+        result = await call_llm(
+            LM_STUDIO_URL, EXTRACTION_MODEL, prompt,
+            max_tokens=512, temperature=0.1,
+        )
+
+    if not result or not isinstance(result, dict):
+        return {"promises": []}
+
+    raw = result.get("promises")
+    if not isinstance(raw, list):
+        return {"promises": []}
+
+    kept: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        action = item.get("action")
+        if not isinstance(action, str) or not action.strip():
+            continue
+        try:
+            confidence = float(item.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if confidence < 0.7:
+            continue
+        kept.append({
+            "action": action.strip(),
+            "target": item.get("target"),
+            "deadline_hint": item.get("deadline_hint"),
+            "confidence": confidence,
+        })
+
+    return {"promises": kept}
 
 
 async def create_episode_summary(turns: list[dict], max_turns: int = 10) -> str | None:

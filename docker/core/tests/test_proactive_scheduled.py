@@ -62,6 +62,7 @@ class TestMorningCheckin:
         with patch("app.proactive.engine.now_local") as mock_dt, \
              patch("app.context.physical") as phys, \
              patch("app.context.ws") as ws, \
+             patch("app.weather_client.fetch_weather", new=AsyncMock(return_value=None)), \
              patch("app.proactive.engine.publish_event", new=AsyncMock()):
             mock_dt.return_value = datetime(2026, 5, 17, 8, 0, 0)
             ws._connections = {}  # no connected users

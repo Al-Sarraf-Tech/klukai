@@ -327,6 +327,39 @@ def register_extras3(app: FastAPI) -> None:
             logger.error("Deactivate failed for %s: %s", user_id, e)
             return JSONResponse({"error": "Deactivation failed"}, status_code=500)
 
+    # ── Promises / accountability ───────────────────────────────────────────
+
+    @app.get("/api/promises")
+    async def api_promises(request: Request):
+        """List the Commander's still-open promises (newest first)."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from . import promises
+        return {"promises": await promises.open_promises(user_id)}
+
+    @app.post("/api/promises/{promise_id}/resolve")
+    async def api_resolve_promise(promise_id: str, request: Request):
+        """Close a promise with a sentiment ('confirmed'|'failed'|'deferred')."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        sentiment = (body or {}).get("sentiment")
+        if sentiment not in {"confirmed", "failed", "deferred"}:
+            return JSONResponse(
+                {"error": "sentiment must be one of: confirmed, failed, deferred"},
+                status_code=400,
+            )
+        from . import promises
+        ok = await promises.resolve_promise(
+            promise_id, sentiment, (body or {}).get("response_text")
+        )
+        return {"resolved": ok}
+
     # ── Root redirect ──────────────────────────────────────────────────────
 
     @app.get("/flutter_service_worker.js")

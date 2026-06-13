@@ -180,6 +180,14 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             replace_existing=True,
         )
 
+        # Promise follow-ups — check thrice daily (10:00 / 14:00 / 18:00 local)
+        self._scheduler.add_job(
+            self._promise_followup_check,
+            _cron(hour="10,14,18", minute=0),
+            id="promise_followup",
+            replace_existing=True,
+        )
+
         # Evening wind-down at 2200
         self._scheduler.add_job(
             self._evening_checkin,
@@ -425,7 +433,39 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
                 await physical.on_time_of_day(uid, hour)
         except Exception as e:
             logger.debug("Physical time-of-day update failed: %s", e)
-        await self._deliver(self._pick_message(MORNING_MESSAGES))
+
+        message = self._pick_message(MORNING_MESSAGES)
+        # Weather-aware coloring. Fail-soft: if the weather API is unreachable
+        # (or coords unset), weather_to_mood/weather_phrase return None/"" and
+        # the greeting is the plain morning line — weather NEVER blocks it.
+        try:
+            from ..weather_client import fetch_weather
+            from ..weather_mood import weather_phrase, weather_to_mood
+            weather = await fetch_weather()
+            mood = weather_to_mood(weather, self._affection_level)
+            if mood:
+                self.set_last_mood(mood)  # colors the rest of the day's events
+            phrase = weather_phrase(weather)
+            if phrase:
+                message = f"{message} {phrase}"
+        except Exception as e:
+            logger.debug("Weather-aware greeting skipped: %s", e)
+        await self._deliver(message)
+
+    async def _promise_followup_check(self) -> None:
+        """Gently follow up on the oldest promise that's due. Fail-soft."""
+        if not self._can_send():
+            return
+        try:
+            from ..promises import due_promises, followup_message, mark_followup_sent
+            due = await due_promises("jalsarraf", now_local())
+            if not due:
+                return
+            promise = due[0]
+            await self._deliver(followup_message(promise, self._affection_level))
+            await mark_followup_sent(promise["id"])
+        except Exception as e:
+            logger.warning("Promise follow-up check failed: %s", e)
 
     async def _daily_challenge(self) -> None:
         """Issue a daily challenge to the Commander."""

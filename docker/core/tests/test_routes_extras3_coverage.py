@@ -533,3 +533,45 @@ class TestServiceWorkerAndRoot:
             result = await handler()
         assert result["status"] == "companion-core running"
         assert "login page not deployed" in result["auth"]
+
+
+class TestPromisesEndpoints:
+    @pytest.mark.asyncio
+    async def test_list_requires_auth(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/promises", "GET")
+        with patch("app.routes_extras3._get_user_id", new=AsyncMock(return_value=None)):
+            resp = await handler(_mk_request(token=None))
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_list_returns_open_promises(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/promises", "GET")
+        sample = [{"id": "p1", "promise_text": "I'll rest", "commitment": {}}]
+        with patch("app.routes_extras3._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.promises.open_promises", new=AsyncMock(return_value=sample)):
+            result = await handler(_mk_request())
+        assert result == {"promises": sample}
+
+    @pytest.mark.asyncio
+    async def test_resolve_rejects_bad_sentiment(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/promises/{promise_id}/resolve", "POST")
+        req = _mk_request()
+        req.json = AsyncMock(return_value={"sentiment": "nonsense"})
+        with patch("app.routes_extras3._get_user_id", new=AsyncMock(return_value="alice")):
+            resp = await handler("p1", req)
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_resolve_confirms(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/promises/{promise_id}/resolve", "POST")
+        req = _mk_request()
+        req.json = AsyncMock(return_value={"sentiment": "confirmed", "response_text": "did it"})
+        with patch("app.routes_extras3._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.promises.resolve_promise", new=AsyncMock(return_value=True)) as rp:
+            result = await handler("p1", req)
+        assert result == {"resolved": True}
+        rp.assert_awaited_once_with("p1", "confirmed", "did it")

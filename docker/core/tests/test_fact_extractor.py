@@ -149,6 +149,103 @@ class TestExtractFacts:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# extract_promises — commitment detection + confidence filtering
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _FakeGate:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *a):
+        return None
+
+
+class TestExtractPromises:
+    @pytest.mark.asyncio
+    async def test_none_result_returns_empty(self):
+        from app.fact_extractor import extract_promises
+
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate(), create=True), \
+             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=None)):
+            out = await extract_promises("I'll fix it tomorrow", affection_level=5)
+        assert out == {"promises": []}
+
+    @pytest.mark.asyncio
+    async def test_keeps_high_confidence_promises(self):
+        from app.fact_extractor import extract_promises
+
+        result = {"promises": [
+            {"action": "fix the door", "target": "the door",
+             "deadline_hint": "tomorrow", "confidence": 0.9},
+        ]}
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
+             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+            out = await extract_promises("I'll fix the door tomorrow", affection_level=3)
+
+        assert len(out["promises"]) == 1
+        p = out["promises"][0]
+        assert p["action"] == "fix the door"
+        assert p["deadline_hint"] == "tomorrow"
+        assert p["confidence"] == 0.9
+
+    @pytest.mark.asyncio
+    async def test_drops_low_confidence(self):
+        """confidence < 0.7 must be filtered out."""
+        from app.fact_extractor import extract_promises
+
+        result = {"promises": [
+            {"action": "maybe call someday", "confidence": 0.4},
+            {"action": "submit the report", "confidence": 0.7},  # boundary kept
+            {"action": "finish painting", "confidence": 0.95},
+        ]}
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
+             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+            out = await extract_promises("...", affection_level=5)
+
+        actions = {p["action"] for p in out["promises"]}
+        assert actions == {"submit the report", "finish painting"}
+
+    @pytest.mark.asyncio
+    async def test_skips_malformed_items(self):
+        """Non-dict items, blank actions, and non-numeric confidence are dropped."""
+        from app.fact_extractor import extract_promises
+
+        result = {"promises": [
+            "not a dict",
+            {"action": "   ", "confidence": 0.9},          # blank action
+            {"target": "x", "confidence": 0.9},            # no action key
+            {"action": "do it", "confidence": "high"},     # bad confidence
+            {"action": "real one", "confidence": 0.8},     # the only keeper
+        ]}
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
+             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+            out = await extract_promises("...", affection_level=5)
+
+        assert [p["action"] for p in out["promises"]] == ["real one"]
+
+    @pytest.mark.asyncio
+    async def test_promises_not_a_list_returns_empty(self):
+        from app.fact_extractor import extract_promises
+
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
+             patch("app.fact_extractor.call_llm",
+                   new=AsyncMock(return_value={"promises": "nope"})):
+            out = await extract_promises("...", affection_level=5)
+        assert out == {"promises": []}
+
+    @pytest.mark.asyncio
+    async def test_non_dict_result_returns_empty(self):
+        from app.fact_extractor import extract_promises
+
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
+             patch("app.fact_extractor.call_llm",
+                   new=AsyncMock(return_value=["unexpected"])):
+            out = await extract_promises("...", affection_level=5)
+        assert out == {"promises": []}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # create_episode_summary — length gating + LLM call
 # ═══════════════════════════════════════════════════════════════════════════
 

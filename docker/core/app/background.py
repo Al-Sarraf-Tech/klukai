@@ -110,6 +110,19 @@ async def background_extraction(
             if isinstance(jk_label, str) and isinstance(jk_note, str):
                 await memory.set_inside_joke(jk_label, jk_note, user_id=user_id)
 
+        # Promises & gentle accountability: detect commitments the Commander
+        # makes ("I'll…", "tomorrow I'll…") and schedule a caring follow-up.
+        # A separate LLM call (the merged extraction prompt is already large),
+        # fully fail-soft so it can never break the rest of extraction.
+        try:
+            from .fact_extractor import extract_promises
+            from . import promises as promises_store
+            promise_result = await extract_promises(user_msg, aff_state_bg.level)
+            for commitment in promise_result.get("promises", []):
+                await promises_store.store_promise(commitment, user_id=user_id)
+        except Exception as e:
+            logger.warning("Promise extraction failed: %s", e)
+
         # Update mood in session + persist to PostgreSQL
         mood = result.get("mood", "composed")
 

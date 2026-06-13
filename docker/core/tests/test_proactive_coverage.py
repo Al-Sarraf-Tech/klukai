@@ -532,6 +532,7 @@ class TestCheckinPhysicalLoop:
         with _patch_now(datetime(2026, 5, 17, 8, 0, 0)), \
              patch("app.context.physical", fake_phys), \
              patch("app.context.ws", fake_ws), \
+             patch("app.weather_client.fetch_weather", new=AsyncMock(return_value=None)), \
              patch("app.proactive.engine.publish_event", new=AsyncMock()):
             await e._morning_checkin()
 
@@ -555,6 +556,7 @@ class TestCheckinPhysicalLoop:
 
         with _patch_now(datetime(2026, 5, 17, 8, 0, 0)), \
              patch("app.context.ws", fake_ws), \
+             patch("app.weather_client.fetch_weather", new=AsyncMock(return_value=None)), \
              patch("app.proactive.engine.publish_event", new=AsyncMock()):
             await e._morning_checkin()
         cb.assert_awaited_once()  # delivery still happens after the swallowed error
