@@ -535,31 +535,31 @@ class TestPhysicalAwareness:
 
     def test_normal_never_decays(self):
         from app.physical_state import should_decay
-        from datetime import datetime, timedelta
-        old = datetime.now() - timedelta(hours=100)
+        from datetime import datetime, timedelta, timezone
+        old = datetime.now(timezone.utc) - timedelta(hours=100)
         assert not should_decay("normal", old)
 
     def test_sore_decays_after_4_hours(self):
         from app.physical_state import should_decay
-        from datetime import datetime, timedelta
-        recent = datetime.now() - timedelta(hours=2)
-        old = datetime.now() - timedelta(hours=5)
+        from datetime import datetime, timedelta, timezone
+        recent = datetime.now(timezone.utc) - timedelta(hours=2)
+        old = datetime.now(timezone.utc) - timedelta(hours=5)
         assert not should_decay("sore", recent)
         assert should_decay("sore", old)
 
     def test_wounded_decays_after_8_hours(self):
         from app.physical_state import should_decay
-        from datetime import datetime, timedelta
-        recent = datetime.now() - timedelta(hours=4)
-        old = datetime.now() - timedelta(hours=9)
+        from datetime import datetime, timedelta, timezone
+        recent = datetime.now(timezone.utc) - timedelta(hours=4)
+        old = datetime.now(timezone.utc) - timedelta(hours=9)
         assert not should_decay("wounded", recent)
         assert should_decay("wounded", old)
 
     def test_cold_decays_after_2_hours(self):
         from app.physical_state import should_decay
-        from datetime import datetime, timedelta
-        recent = datetime.now() - timedelta(hours=1)
-        old = datetime.now() - timedelta(hours=3)
+        from datetime import datetime, timedelta, timezone
+        recent = datetime.now(timezone.utc) - timedelta(hours=1)
+        old = datetime.now(timezone.utc) - timedelta(hours=3)
         assert not should_decay("cold", recent)
         assert should_decay("cold", old)
 
@@ -978,8 +978,8 @@ class TestPhysicalStateTracker:
     def test_should_decay_all_states(self):
         """Every non-normal state should eventually decay."""
         from app.physical_state import STATES, should_decay
-        from datetime import datetime, timedelta
-        very_old = datetime.now() - timedelta(hours=100)
+        from datetime import datetime, timedelta, timezone
+        very_old = datetime.now(timezone.utc) - timedelta(hours=100)
         for state, info in STATES.items():
             if state == "normal":
                 assert not should_decay(state, very_old)
@@ -989,12 +989,12 @@ class TestPhysicalStateTracker:
     def test_decay_respects_time(self):
         """States should NOT decay before their decay_hours."""
         from app.physical_state import STATES, should_decay
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         for state, info in STATES.items():
             if info["decay_hours"] is None:
                 continue
             # Half the decay time — should NOT decay
-            half = datetime.now() - timedelta(hours=info["decay_hours"] / 2)
+            half = datetime.now(timezone.utc) - timedelta(hours=info["decay_hours"] / 2)
             assert not should_decay(state, half), f"{state} should not decay at half-life"
 
 

@@ -8,7 +8,7 @@ survives restarts.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .db import get_conn, get_conn_autocommit
 
@@ -39,7 +39,13 @@ def should_decay(state: str, since: datetime) -> bool:
     info = STATES.get(state)
     if not info or info["decay_hours"] is None:
         return False
-    elapsed = datetime.now() - since
+    # `since` is read from a TIMESTAMPTZ column (tz-aware UTC via psycopg).
+    # Compare in UTC, and tolerate a naive `since` (treat it as UTC) so a
+    # subtraction can never crash the chat path with "can't subtract
+    # offset-naive and offset-aware datetimes".
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    elapsed = datetime.now(timezone.utc) - since
     return elapsed > timedelta(hours=info["decay_hours"])
 
 
@@ -75,7 +81,9 @@ class PhysicalStateTracker:
             logger.warning("Unknown physical state '%s', defaulting to normal", state)
             state = "normal"
 
-        now = datetime.now()
+        # Aware UTC so the cached `since` matches the tz-aware value read back
+        # from the TIMESTAMPTZ column (keeps should_decay's comparison consistent).
+        now = datetime.now(timezone.utc)
         self._cache[user_id] = (state, now, detail)
 
         try:
