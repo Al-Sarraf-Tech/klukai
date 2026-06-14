@@ -84,6 +84,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   int? _heartbeatSpikeOverride; // Temporary BPM override from heartbeat_spike
   Timer? _spikeDecayTimer;
   Timer? _inputLockTimer; // Safety timeout to auto-unlock input
+  Timer? _warmupTimer; // Shows a "waking up" hint when the first reply is slow
+  // Seconds of silence after sending before we assume the model is cold-loading
+  // (load-on-demand evicts after idle; the first reply then waits on a load).
+  static const _warmupHintAfter = Duration(seconds: 7);
 
   bool get _isDormMode {
     final hour = DateTime.now().hour;
@@ -316,6 +320,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     switch (type) {
       case 'token':
         final text = msg['text'] as String? ?? '';
+        _clearWarmupHint(); // she's replying — drop any "waking up" notice
         if (!_state.isInputLocked) {
           _lockInput(
             'RECEIVING TRANSMISSION',
@@ -325,6 +330,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         setState(() {
           _streamingBuffer += text;
           if (_streamingId == null) {
+            _thinkingText = null;
             _streamingId = 'streaming-${DateTime.now().millisecondsSinceEpoch}';
             _messages.add(
               ChatMessage(
@@ -364,6 +370,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           _activeTools.clear();
           _state = _state.copyWith(isTyping: false, currentModel: model);
         });
+        _clearWarmupHint();
         _unlockInput();
         if (completedIdx != null && completedIdx! >= 0) {
           _prepareMessageLayout(completedIdx!);
@@ -383,6 +390,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         } catch (_) {}
 
       case 'thinking':
+        _clearWarmupHint(); // a real status arrived; don't overwrite it later
         setState(() {
           _state = _state.copyWith(isTyping: true);
           _thinkingText = msg['text'] as String?;
@@ -552,6 +560,30 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             if (_state.inputLockReason == 'HEARTBEAT SURGE') _unlockInput();
           }
         });
+
+      case 'error':
+        // Backend hit a snag (handler crash / stream failure). Clear all the
+        // in-flight indicators — including the warmup hint — so the UI never
+        // sticks on "WAKING UP", and show her message as a normal bubble.
+        _clearWarmupHint();
+        final errText = msg['message'] as String? ??
+            '...Something glitched on my end, Commander. Try again.';
+        setState(() {
+          _streamingBuffer = '';
+          _streamingId = null;
+          _thinkingText = null;
+          _activeTools.clear();
+          _state = _state.copyWith(isTyping: false);
+          _messages.add(
+            ChatMessage(
+              id: 'error-${DateTime.now().millisecondsSinceEpoch}',
+              role: 'assistant',
+              content: errText,
+            ),
+          );
+        });
+        _unlockInput();
+        _scrollToBottom();
     }
   }
 
@@ -577,6 +609,26 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _textController.clear();
     _focusNode.requestFocus();
     _scrollToBottom();
+    _startWarmupHint();
+  }
+
+  // If she stays silent for a few seconds after a send, it's almost always the
+  // local model cold-loading (load-on-demand mode). Surface a gentle heads-up so
+  // a slow first reply doesn't read as a hang. Cleared the instant she responds.
+  void _startWarmupHint() {
+    _warmupTimer?.cancel();
+    _warmupTimer = Timer(_warmupHintAfter, () {
+      if (!mounted || _streamingId != null) return;
+      setState(() {
+        _state = _state.copyWith(isTyping: true);
+        _thinkingText = 'WAKING UP // first reply after idle can take a moment';
+      });
+    });
+  }
+
+  void _clearWarmupHint() {
+    _warmupTimer?.cancel();
+    _warmupTimer = null;
   }
 
   void _showSendError() {
@@ -888,6 +940,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _spikeDecayTimer?.cancel();
     _inputLockTimer?.cancel();
+    _warmupTimer?.cancel();
     _ws.dispose();
     _textController.dispose();
     _scrollController.dispose();
