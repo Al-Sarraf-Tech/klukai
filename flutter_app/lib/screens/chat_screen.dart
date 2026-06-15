@@ -85,6 +85,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Timer? _spikeDecayTimer;
   Timer? _inputLockTimer; // Safety timeout to auto-unlock input
   Timer? _warmupTimer; // Phased "waking up" status while a cold model loads + warms
+  bool _warming = false; // True during a cold-start wait — drives the loading bar
 
   bool get _isDormMode {
     final hour = DateTime.now().hour;
@@ -623,6 +624,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (!mounted || _streamingId != null) return;
       setState(() {
         _state = _state.copyWith(isTyping: true);
+        _warming = true;
         _thinkingText = 'WAKING HER UP // loading the model from cold';
       });
       _warmupTimer = Timer(const Duration(seconds: 15), () {
@@ -637,6 +639,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void _clearWarmupHint() {
     _warmupTimer?.cancel();
     _warmupTimer = null;
+    _warming = false;
   }
 
   void _showSendError() {
@@ -1378,31 +1381,53 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Widget _buildProcessingIndicator() {
     final displayText = _thinkingText ?? 'PROCESSING';
     return Padding(
-      padding: const EdgeInsets.only(left: 14, bottom: 4),
-      child: Row(
+      padding: const EdgeInsets.only(left: 14, right: 14, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox(
-            width: 12,
-            height: 12,
-            child: CircularProgressIndicator(
-              strokeWidth: 1.5,
-              color: GFL2Colors.primary.withValues(alpha: 0.5),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              displayText.toUpperCase(),
-              style: TextStyle(
-                color: GFL2Colors.primary.withValues(alpha: 0.5),
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'monospace',
-                letterSpacing: 0.8,
+          Row(
+            children: [
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: GFL2Colors.primary.withValues(alpha: 0.5),
+                ),
               ),
-              overflow: TextOverflow.ellipsis,
-            ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  displayText.toUpperCase(),
+                  style: TextStyle(
+                    color: GFL2Colors.primary.withValues(alpha: 0.5),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'monospace',
+                    letterSpacing: 0.8,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
+          // Cold-start loading bar. Indeterminate on purpose: JIT-load + prefill
+          // time genuinely varies (we've seen seconds to minutes), so a guessed
+          // percentage would mislead. Only shows while the model is warming.
+          if (_warming) ...[
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(2),
+              child: LinearProgressIndicator(
+                minHeight: 2,
+                backgroundColor: GFL2Colors.primary.withValues(alpha: 0.12),
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  GFL2Colors.primary.withValues(alpha: 0.6),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
