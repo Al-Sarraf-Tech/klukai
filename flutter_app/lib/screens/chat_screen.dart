@@ -84,10 +84,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   int? _heartbeatSpikeOverride; // Temporary BPM override from heartbeat_spike
   Timer? _spikeDecayTimer;
   Timer? _inputLockTimer; // Safety timeout to auto-unlock input
-  Timer? _warmupTimer; // Shows a "waking up" hint when the first reply is slow
-  // Seconds of silence after sending before we assume the model is cold-loading
-  // (load-on-demand evicts after idle; the first reply then waits on a load).
-  static const _warmupHintAfter = Duration(seconds: 7);
+  Timer? _warmupTimer; // Phased "waking up" status while a cold model loads + warms
 
   bool get _isDormMode {
     final hour = DateTime.now().hour;
@@ -612,16 +609,27 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _startWarmupHint();
   }
 
-  // If she stays silent for a few seconds after a send, it's almost always the
-  // local model cold-loading (load-on-demand mode). Surface a gentle heads-up so
-  // a slow first reply doesn't read as a hang. Cleared the instant she responds.
+  // When she's been idle the local model evicts (load-on-demand), so the first
+  // message waits on a JIT model load and then a prefill ("processing prompt")
+  // pass before the first token. Narrate that sequence so a slow first reply
+  // reads as progress, not a hang. Two phases, keyed to elapsed silence — they
+  // only ever surface on a genuinely cold turn, because a warm reply streams its
+  // first token within a second or two and clears them. Phase 1 (~7s): the model
+  // is JIT-loading from cold. Phase 2 (~22s): it's loaded and warming/prefilling
+  // your message. Cleared the instant she responds (token/thinking/done/error).
   void _startWarmupHint() {
-    _warmupTimer?.cancel();
-    _warmupTimer = Timer(_warmupHintAfter, () {
+    _clearWarmupHint();
+    _warmupTimer = Timer(const Duration(seconds: 7), () {
       if (!mounted || _streamingId != null) return;
       setState(() {
         _state = _state.copyWith(isTyping: true);
-        _thinkingText = 'WAKING UP // first reply after idle can take a moment';
+        _thinkingText = 'WAKING HER UP // loading the model from cold';
+      });
+      _warmupTimer = Timer(const Duration(seconds: 15), () {
+        if (!mounted || _streamingId != null) return;
+        setState(() {
+          _thinkingText = 'WARMING UP // processing your message';
+        });
       });
     });
   }
