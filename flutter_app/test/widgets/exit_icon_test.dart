@@ -1,10 +1,14 @@
 @TestOn('browser')
+library;
+
 // Widget tests for ExitIcon (a CustomPainter). No main.dart dependency.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:companion_app/widgets/exit_icon.dart';
 
-Widget _wrap(Widget child) => MaterialApp(home: Scaffold(body: Center(child: child)));
+Widget _wrap(Widget child) => MaterialApp(
+  home: Scaffold(body: Center(child: child)),
+);
 
 void main() {
   group('ExitIcon', () {
@@ -32,7 +36,8 @@ void main() {
 
     testWidgets('renders without throwing for a custom color', (tester) async {
       await tester.pumpWidget(
-          _wrap(const ExitIcon(size: 48, color: Color(0xFF00FF00))));
+        _wrap(const ExitIcon(size: 48, color: Color(0xFF00FF00))),
+      );
       expect(find.byType(ExitIcon), findsOneWidget);
       expect(tester.takeException(), isNull);
     });

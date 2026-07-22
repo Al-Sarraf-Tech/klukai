@@ -1,4 +1,6 @@
 @TestOn('browser')
+library;
+
 // Unit tests for Memory, MemoryCategory and MonthGroup models.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:companion_app/models/memory.dart';
@@ -24,8 +26,10 @@ void main() {
       expect(m.affectionLevel, 6);
       expect(m.keptBy, 'commander');
       expect(m.category, 'Combat Logs');
-      expect(m.createdAt.toUtc(),
-          DateTime.parse('2026-04-20T09:15:00.000Z').toUtc());
+      expect(
+        m.createdAt.toUtc(),
+        DateTime.parse('2026-04-20T09:15:00.000Z').toUtc(),
+      );
     });
 
     test('applies defaults for empty json', () {

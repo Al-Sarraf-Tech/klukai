@@ -35,16 +35,22 @@ void main() {
         'grateful', 'worried', 'embarrassed',
       ];
       for (final mood in expectedMoods) {
-        expect(kMoodVisuals.containsKey(mood), isTrue,
-            reason: 'mood "$mood" missing from kMoodVisuals');
+        expect(
+          kMoodVisuals.containsKey(mood),
+          isTrue,
+          reason: 'mood "$mood" missing from kMoodVisuals',
+        );
       }
       expect(kMoodVisuals.length, expectedMoods.length);
     });
 
     test('every entry has a plausible BPM (40..200)', () {
       kMoodVisuals.forEach((mood, visual) {
-        expect(visual.bpm, inInclusiveRange(40, 200),
-            reason: 'mood "$mood" has implausible BPM ${visual.bpm}');
+        expect(
+          visual.bpm,
+          inInclusiveRange(40, 200),
+          reason: 'mood "$mood" has implausible BPM ${visual.bpm}',
+        );
       });
     });
 
@@ -62,11 +68,13 @@ void main() {
       expect(moodVisualFor('tender'), same(kMoodVisuals['tender']));
     });
 
-    test('unknown mood falls back to the default visual (never grey-holes)',
-        () {
-      expect(moodVisualFor('totally_new_mood'), same(kDefaultMoodVisual));
-      expect(moodVisualFor(''), same(kDefaultMoodVisual));
-    });
+    test(
+      'unknown mood falls back to the default visual (never grey-holes)',
+      () {
+        expect(moodVisualFor('totally_new_mood'), same(kDefaultMoodVisual));
+        expect(moodVisualFor(''), same(kDefaultMoodVisual));
+      },
+    );
 
     test('the default visual is itself sane', () {
       expect(kDefaultMoodVisual.bpm, 70);

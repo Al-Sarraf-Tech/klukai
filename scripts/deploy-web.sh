@@ -6,7 +6,7 @@ set -euo pipefail
 # so Cloudflare serves fresh files on every deploy.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-FLUTTER="${FLUTTER:-/home/jalsarraf/flutter/bin/flutter}"
+FLUTTER="${FLUTTER:-/home/jalsarraf/.local/share/flutter/bin/flutter}"
 WEB_BUILD="$REPO_ROOT/web-build"
 FLUTTER_APP="$REPO_ROOT/flutter_app"
 

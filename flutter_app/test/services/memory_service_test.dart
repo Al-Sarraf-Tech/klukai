@@ -1,4 +1,6 @@
 @TestOn('browser')
+library;
+
 // Tests for MemoryService URL construction.
 //
 // memory_service.dart imports package:web (localStorage for auth), so it only
@@ -37,39 +39,54 @@ void main() {
       expect(mems.first.id, 'm1');
     });
 
-    test('fetchMemories THROWS on a server error instead of returning []',
-        () async {
-      final svc = _serviceReturning(500, 'boom');
-      expect(
-        () => svc.fetchMemories(),
-        throwsA(isA<MemoryServiceException>()
-            .having((e) => e.statusCode, 'statusCode', 500)
-            .having((e) => e.isAuthExpired, 'isAuthExpired', isFalse)),
-      );
-    });
+    test(
+      'fetchMemories THROWS on a server error instead of returning []',
+      () async {
+        final svc = _serviceReturning(500, 'boom');
+        expect(
+          () => svc.fetchMemories(),
+          throwsA(
+            isA<MemoryServiceException>()
+                .having((e) => e.statusCode, 'statusCode', 500)
+                .having((e) => e.isAuthExpired, 'isAuthExpired', isFalse),
+          ),
+        );
+      },
+    );
 
-    test('fetchMemories flags 401 as auth-expired (login bounce, not retry)',
-        () async {
-      final svc = _serviceReturning(401, 'expired');
-      expect(
-        () => svc.fetchMemories(),
-        throwsA(isA<MemoryServiceException>()
-            .having((e) => e.isAuthExpired, 'isAuthExpired', isTrue)),
-      );
-    });
+    test(
+      'fetchMemories flags 401 as auth-expired (login bounce, not retry)',
+      () async {
+        final svc = _serviceReturning(401, 'expired');
+        expect(
+          () => svc.fetchMemories(),
+          throwsA(
+            isA<MemoryServiceException>().having(
+              (e) => e.isAuthExpired,
+              'isAuthExpired',
+              isTrue,
+            ),
+          ),
+        );
+      },
+    );
 
     test('fetchTimeline throws on non-200', () async {
       final svc = _serviceReturning(503);
-      expect(() => svc.fetchTimeline(),
-          throwsA(isA<MemoryServiceException>()));
+      expect(() => svc.fetchTimeline(), throwsA(isA<MemoryServiceException>()));
     });
 
     test('fetchCategories throws on non-200', () async {
       final svc = _serviceReturning(401);
       expect(
         () => svc.fetchCategories(),
-        throwsA(isA<MemoryServiceException>()
-            .having((e) => e.isAuthExpired, 'isAuthExpired', isTrue)),
+        throwsA(
+          isA<MemoryServiceException>().having(
+            (e) => e.isAuthExpired,
+            'isAuthExpired',
+            isTrue,
+          ),
+        ),
       );
     });
 

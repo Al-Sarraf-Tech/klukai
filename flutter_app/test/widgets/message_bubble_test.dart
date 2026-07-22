@@ -1,4 +1,6 @@
 @TestOn('browser')
+library;
+
 // Widget tests for MessageBubble: user vs companion styling, read/sent status
 // ticks, streaming cursor, comm tag, and image-vs-text content.
 //
@@ -11,10 +13,8 @@ import 'package:companion_app/widgets/message_bubble.dart';
 import 'package:companion_app/models/message.dart';
 
 Widget _wrap(Widget child) => MaterialApp(
-      home: Scaffold(
-        body: SizedBox(width: 400, child: child),
-      ),
-    );
+  home: Scaffold(body: SizedBox(width: 400, child: child)),
+);
 
 // 1x1 transparent PNG.
 const _pngB64 =
@@ -40,8 +40,9 @@ ChatMessage _msg({
 
 void main() {
   group('MessageBubble — companion (assistant) messages', () {
-    testWidgets('shows the KLUKAI comm tag and a voice (speaker) control',
-        (tester) async {
+    testWidgets('shows the KLUKAI comm tag and a voice (speaker) control', (
+      tester,
+    ) async {
       await tester.pumpWidget(_wrap(MessageBubble(message: _msg())));
       await tester.pump();
       expect(find.text('KLUKAI // SST-05'), findsOneWidget);
@@ -52,10 +53,12 @@ void main() {
       expect(find.byIcon(Icons.done), findsNothing);
     });
 
-    testWidgets('renders the message content as selectable text',
-        (tester) async {
+    testWidgets('renders the message content as selectable text', (
+      tester,
+    ) async {
       await tester.pumpWidget(
-          _wrap(MessageBubble(message: _msg(content: 'Mission ready.'))));
+        _wrap(MessageBubble(message: _msg(content: 'Mission ready.'))),
+      );
       await tester.pump();
       expect(find.text('Mission ready.'), findsOneWidget);
       expect(find.byType(SelectableText), findsOneWidget);
@@ -71,23 +74,38 @@ void main() {
   group('MessageBubble — user messages', () {
     testWidgets('omits the comm tag and the speaker icon', (tester) async {
       await tester.pumpWidget(
-          _wrap(MessageBubble(message: _msg(role: 'user', content: 'hi'))));
+        _wrap(
+          MessageBubble(
+            message: _msg(role: 'user', content: 'hi'),
+          ),
+        ),
+      );
       await tester.pump();
       expect(find.text('KLUKAI // SST-05'), findsNothing);
       expect(find.byIcon(Icons.volume_up_outlined), findsNothing);
     });
 
     testWidgets('read status shows double-tick (done_all)', (tester) async {
-      await tester.pumpWidget(_wrap(
-          MessageBubble(message: _msg(role: 'user', status: 'read'))));
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: _msg(role: 'user', status: 'read'),
+          ),
+        ),
+      );
       await tester.pump();
       expect(find.byIcon(Icons.done_all), findsOneWidget);
       expect(find.byIcon(Icons.done), findsNothing);
     });
 
     testWidgets('non-read status shows single-tick (done)', (tester) async {
-      await tester.pumpWidget(_wrap(
-          MessageBubble(message: _msg(role: 'user', status: 'sent'))));
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: _msg(role: 'user', status: 'sent'),
+          ),
+        ),
+      );
       await tester.pump();
       expect(find.byIcon(Icons.done), findsOneWidget);
       expect(find.byIcon(Icons.done_all), findsNothing);
@@ -95,10 +113,14 @@ void main() {
   });
 
   group('MessageBubble — streaming', () {
-    testWidgets('while streaming, hides timestamp footer (no ticks/speaker)',
-        (tester) async {
-      await tester.pumpWidget(_wrap(MessageBubble(
-          message: _msg(isStreaming: true, content: 'typing...'))));
+    testWidgets('while streaming, hides timestamp footer (no ticks/speaker)', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(message: _msg(isStreaming: true, content: 'typing...')),
+        ),
+      );
       await tester.pump();
       // Footer (with speaker + timestamp) is suppressed during streaming.
       expect(find.byIcon(Icons.volume_up_outlined), findsNothing);
@@ -109,11 +131,16 @@ void main() {
   });
 
   group('MessageBubble — image content', () {
-    testWidgets('shows an image (not selectable text) when imageData present',
-        (tester) async {
-      await tester.pumpWidget(_wrap(MessageBubble(
-        message: _msg(content: 'see attached', imageData: _pngB64),
-      )));
+    testWidgets('shows an image (not selectable text) when imageData present', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: _msg(content: 'see attached', imageData: _pngB64),
+          ),
+        ),
+      );
       await tester.pump();
       expect(find.byType(Image), findsOneWidget);
       // Text body is replaced by the image branch.
@@ -124,16 +151,27 @@ void main() {
   });
 
   group('MessageBubble — alignment', () {
-    testWidgets('user message is right-aligned, companion left-aligned',
-        (tester) async {
+    testWidgets('user message is right-aligned, companion left-aligned', (
+      tester,
+    ) async {
       await tester.pumpWidget(
-          _wrap(MessageBubble(message: _msg(role: 'user', content: 'u'))));
+        _wrap(
+          MessageBubble(
+            message: _msg(role: 'user', content: 'u'),
+          ),
+        ),
+      );
       await tester.pump();
       final userRow = tester.widget<Row>(find.byType(Row).first);
       expect(userRow.mainAxisAlignment, MainAxisAlignment.end);
 
-      await tester.pumpWidget(_wrap(
-          MessageBubble(message: _msg(role: 'assistant', content: 'a'))));
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: _msg(role: 'assistant', content: 'a'),
+          ),
+        ),
+      );
       await tester.pump();
       final botRow = tester.widget<Row>(find.byType(Row).first);
       expect(botRow.mainAxisAlignment, MainAxisAlignment.start);

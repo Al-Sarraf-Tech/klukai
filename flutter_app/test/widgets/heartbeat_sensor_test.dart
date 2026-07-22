@@ -1,4 +1,6 @@
 @TestOn('browser')
+library;
+
 // Widget tests for HeartbeatSensor: BPM readout, color, icon, ECG painter.
 // No main.dart dependency (runs on VM or chrome).
 //
@@ -11,22 +13,28 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:companion_app/widgets/heartbeat_sensor.dart';
 
-Widget _wrap(Widget child) => MaterialApp(home: Scaffold(body: Center(child: child)));
+Widget _wrap(Widget child) => MaterialApp(
+  home: Scaffold(body: Center(child: child)),
+);
 
 void main() {
   group('HeartbeatSensor readout', () {
     testWidgets('renders the BPM number and the BPM label', (tester) async {
       await tester.pumpWidget(
-          _wrap(const HeartbeatSensor(bpm: 72, color: Colors.red)));
+        _wrap(const HeartbeatSensor(bpm: 72, color: Colors.red)),
+      );
       expect(find.text('72'), findsOneWidget);
       expect(find.text('BPM'), findsOneWidget);
       // Tear down the infinite-repeat ticker cleanly.
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
-    testWidgets('renders the heart icon and an ECG CustomPaint', (tester) async {
+    testWidgets('renders the heart icon and an ECG CustomPaint', (
+      tester,
+    ) async {
       await tester.pumpWidget(
-          _wrap(const HeartbeatSensor(bpm: 90, color: Colors.pink)));
+        _wrap(const HeartbeatSensor(bpm: 90, color: Colors.pink)),
+      );
       expect(find.byIcon(Icons.favorite), findsOneWidget);
       expect(find.byType(CustomPaint), findsWidgets);
       await tester.pumpWidget(const SizedBox.shrink());
@@ -44,7 +52,8 @@ void main() {
 
     testWidgets('high BPM (spike) renders cleanly and pulses', (tester) async {
       await tester.pumpWidget(
-          _wrap(const HeartbeatSensor(bpm: 175, color: Colors.red)));
+        _wrap(const HeartbeatSensor(bpm: 175, color: Colors.red)),
+      );
       await tester.pump(const Duration(milliseconds: 120));
       expect(find.text('175'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
@@ -52,21 +61,25 @@ void main() {
 
     testWidgets('low BPM renders cleanly', (tester) async {
       await tester.pumpWidget(
-          _wrap(const HeartbeatSensor(bpm: 48, color: Colors.cyan)));
+        _wrap(const HeartbeatSensor(bpm: 48, color: Colors.cyan)),
+      );
       expect(find.text('48'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
-    testWidgets('updates BPM on rebuild without throwing (ticker reuse)',
-        (tester) async {
+    testWidgets('updates BPM on rebuild without throwing (ticker reuse)', (
+      tester,
+    ) async {
       // Regression: a BPM change must retarget the existing controller, not
       // allocate a second ticker from the SingleTickerProviderStateMixin.
       await tester.pumpWidget(
-          _wrap(const HeartbeatSensor(bpm: 72, color: Colors.red)));
+        _wrap(const HeartbeatSensor(bpm: 72, color: Colors.red)),
+      );
       expect(find.text('72'), findsOneWidget);
       // Rebuild the same widget position with a new BPM → didUpdateWidget.
       await tester.pumpWidget(
-          _wrap(const HeartbeatSensor(bpm: 130, color: Colors.red)));
+        _wrap(const HeartbeatSensor(bpm: 130, color: Colors.red)),
+      );
       await tester.pump(const Duration(milliseconds: 50));
       expect(tester.takeException(), isNull);
       expect(find.text('130'), findsOneWidget);

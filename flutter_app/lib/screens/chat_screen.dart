@@ -84,7 +84,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   int? _heartbeatSpikeOverride; // Temporary BPM override from heartbeat_spike
   Timer? _spikeDecayTimer;
   Timer? _inputLockTimer; // Safety timeout to auto-unlock input
-  Timer? _warmupTimer; // Phased "waking up" status while a cold model loads + warms
+  Timer?
+  _warmupTimer; // Phased "waking up" status while a cold model loads + warms
 
   bool get _isDormMode {
     final hour = DateTime.now().hour;
@@ -201,20 +202,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// inserted in timestamp order, preserving the live conversation flow.
   void _mergeHistory(List<ChatMessage> fetched) {
     bool isLocalEchoOf(ChatMessage m) => _messages.any(
-          (x) =>
-              x.id != m.id &&
-              x.role == m.role &&
-              x.content == m.content &&
-              (x.id.startsWith('user-') ||
-                  x.id.startsWith('streaming-') ||
-                  x.id.startsWith('proactive-') ||
-                  x.id.startsWith('image-')),
-        );
+      (x) =>
+          x.id != m.id &&
+          x.role == m.role &&
+          x.content == m.content &&
+          (x.id.startsWith('user-') ||
+              x.id.startsWith('streaming-') ||
+              x.id.startsWith('proactive-') ||
+              x.id.startsWith('image-')),
+    );
     final known = _messages.map((m) => m.id).toSet();
-    final additions = fetched
-        .where((m) => !known.contains(m.id) && !isLocalEchoOf(m))
-        .toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    final additions =
+        fetched
+            .where((m) => !known.contains(m.id) && !isLocalEchoOf(m))
+            .toList()
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
     if (additions.isEmpty) return;
     setState(() {
       for (final m in additions) {
@@ -234,9 +236,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: const Text("COULDN'T LOAD HISTORY",
-            style: TextStyle(
-                fontFamily: 'monospace', letterSpacing: 1.0, fontSize: 12)),
+        content: const Text(
+          "COULDN'T LOAD HISTORY",
+          style: TextStyle(
+            fontFamily: 'monospace',
+            letterSpacing: 1.0,
+            fontSize: 12,
+          ),
+        ),
         backgroundColor: GFL2Colors.surface,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 6),
@@ -485,8 +492,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         _playNotificationSound();
         // Auto-unlock after brief pause
         Timer(const Duration(milliseconds: 1500), () {
-          if (mounted && _state.inputLockReason == 'INCOMING TRANSMISSION')
+          if (mounted && _state.inputLockReason == 'INCOMING TRANSMISSION') {
             _unlockInput();
+          }
         });
 
       case 'voice_audio':
@@ -536,8 +544,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           _scrollToBottom(retries: 3);
           _playNotificationSound();
           Timer(const Duration(seconds: 2), () {
-            if (mounted && _state.inputLockReason == 'IMAGE INCOMING')
+            if (mounted && _state.inputLockReason == 'IMAGE INCOMING') {
               _unlockInput();
+            }
           });
         }
 
@@ -563,7 +572,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         // in-flight indicators — including the warmup hint — so the UI never
         // sticks on "WAKING UP", and show her message as a normal bubble.
         _clearWarmupHint();
-        final errText = msg['message'] as String? ??
+        final errText =
+            msg['message'] as String? ??
             '...Something glitched on my end, Commander. Try again.';
         setState(() {
           _streamingBuffer = '';
@@ -891,7 +901,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     // Image.network(headers:) is ignored on web, and the same applies to audio
     // src — so fetch the bytes with the bearer token and play them inline.
     try {
-      final uri = Uri.parse('${widget.serverUrl}/api/voice-notes/$voiceId/audio');
+      final uri = Uri.parse(
+        '${widget.serverUrl}/api/voice-notes/$voiceId/audio',
+      );
       final resp = await http
           .get(uri, headers: _authHeaders)
           .timeout(const Duration(seconds: 20));
