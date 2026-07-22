@@ -13,7 +13,7 @@ from .llm_json import call_llm, call_llm_text
 
 logger = logging.getLogger(__name__)
 
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")
 EXTRACTION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
 # ── Valid moods (must match models.py Mood enum) ─────────────────────────

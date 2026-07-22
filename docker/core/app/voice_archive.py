@@ -51,7 +51,7 @@ _MAX_TTS_CHARS = 500
 
 def _voice_url() -> str:
     """Resolve the voice service base URL (same default as the chat WS / TTS paths)."""
-    return os.environ.get("VOICE_URL", "http://companion-voice:8301")
+    return os.environ.get("VOICE_URL", "http://dominus:8301")
 
 
 async def save_voice_note(

@@ -5,7 +5,7 @@ The task brief referenced ``app/voice_client.py``. That module does NOT exist
 in this repo (nor anywhere in git history across all branches); the only entry
 for it is a stale ``omit =`` line in ``.coveragerc``. The actual voice shim —
 STT then TTS round-trip to the dominus voice service at ``$VOICE_URL`` (default
-http://companion-voice:8301) — lives in ``app.chat._handle_voice``. Per the
+http://dominus:8301 over Tailscale) — lives in ``app.chat._handle_voice``. Per the
 task rules I must not create ``app/`` code to invent the module, so this file
 tests the REAL shim that ships.
 

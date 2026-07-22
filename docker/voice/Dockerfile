@@ -46,7 +46,7 @@ ENV HOME=/home/voice
 
 EXPOSE 8301
 
-# Bind host is env-configurable (default 0.0.0.0). Set VOICE_BIND_HOST to a
-# specific interface (e.g. the Tailscale IP) to narrow exposure. Shell form so
-# the env var expands. Also set VOICE_API_TOKEN to require bearer auth.
+# Bind host is env-configurable inside the container (default 0.0.0.0). Host
+# exposure is controlled by the Compose port mapping and host/Tailscale ACLs.
+# Also set VOICE_API_TOKEN to require bearer auth.
 CMD ["sh", "-c", "uvicorn app.main:app --host ${VOICE_BIND_HOST:-0.0.0.0} --port 8301 --log-level info"]

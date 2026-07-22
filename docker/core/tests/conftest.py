@@ -6,10 +6,21 @@ Tests run without any network or infrastructure dependencies.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+# Never let an incompletely mocked unit test fall through to the live GPU
+# services, even if the developer's shell exports production URLs. The live
+# integration target opts in explicitly from Makefile.
+if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
+    os.environ["LM_STUDIO_URL"] = "http://127.0.0.1:1"
+    os.environ["VOICE_URL"] = "http://127.0.0.1:1"
+    os.environ["COMFYUI_URL"] = "http://127.0.0.1:1"
 
 # ── Psycopg shim ─────────────────────────────────────────────────────────────
 # Mock psycopg/psycopg_pool at the module level before any app code imports
@@ -29,8 +40,6 @@ def _inject_psycopg_shim() -> None:
 
 _inject_psycopg_shim()
 
-import pytest
-
 # Ensure the app package is importable from the repo root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -38,14 +47,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # is absent (dev workstations, CI checkouts). app.personality.loader reads the
 # PERSONALITY_PATH default at call time, so setting it here — before any test
 # triggers a load — keeps prompt-assembly tests portable without per-test paths.
-import os as _os
-
-if not _os.environ.get("PERSONALITY_PATH"):
+if not os.environ.get("PERSONALITY_PATH"):
     _repo_personality = (
         Path(__file__).resolve().parent.parent.parent.parent / "config" / "personality.yaml"
     )
     if _repo_personality.exists():
-        _os.environ["PERSONALITY_PATH"] = str(_repo_personality)
+        os.environ["PERSONALITY_PATH"] = str(_repo_personality)
 
 
 # ── LM Studio mock ──────────────────────────────────────────────────────────
@@ -218,7 +225,7 @@ def personality_config_path():
     silently under-measured the mutation kill rate on affection.py). CI/mutmut
     set PERSONALITY_PATH to an absolute path; honour it.
     """
-    env_path = _os.environ.get("PERSONALITY_PATH")
+    env_path = os.environ.get("PERSONALITY_PATH")
     if env_path and Path(env_path).exists():
         return env_path
     container = Path("/config/personality.yaml")

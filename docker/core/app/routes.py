@@ -199,7 +199,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
         # LM Studio
         try:
-            lm_url = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
+            lm_url = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")
             async with _hx.AsyncClient(timeout=5.0) as c:
                 resp = await c.get(f"{lm_url}/v1/models")
                 models = [m["id"] for m in resp.json().get("data", [])]
@@ -209,7 +209,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
         # ComfyUI
         try:
-            comfy_url = os.environ.get("COMFYUI_URL", "http://192.168.50.2:8388")
+            comfy_url = os.environ.get("COMFYUI_URL", "http://dominus:8388")
             async with _hx.AsyncClient(timeout=5.0) as c:
                 resp = await c.get(f"{comfy_url}/system_stats")
                 stats = resp.json()
@@ -230,7 +230,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
         # Voice service
         try:
-            voice_url = os.environ.get("VOICE_URL", "http://192.168.50.2:8301")
+            voice_url = os.environ.get("VOICE_URL", "http://dominus:8301")
             async with _hx.AsyncClient(timeout=5.0) as c:
                 resp = await c.get(f"{voice_url}/health")
                 results["voice"] = {"status": "ok" if resp.status_code == 200 else "degraded"}
@@ -283,7 +283,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
 
-        voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
+        voice_url = os.environ.get("VOICE_URL", "http://dominus:8301")
         tts_text = _strip_actions_for_tts(req.text)
         if not tts_text.strip():
             return JSONResponse({"error": "No speakable text"}, status_code=400)

@@ -313,3 +313,27 @@ class TestComfyUIPort:
         source = Path(__file__).resolve().parent.parent / "seed_memories.py"
         text = source.read_text()
         assert "8388" in text, "seed_memories.py default should be 8388"
+
+    def test_regen_images_default_8388(self):
+        source = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "regen_images.py"
+        if not source.exists():
+            import pytest
+            pytest.skip("scripts/regen_images.py not shipped into runtime image")
+        text = source.read_text()
+        assert "http://dominus:8388" in text
+        assert "dominus:8188" not in text
+
+
+class TestTailscaleBackendConfig:
+    """GPU backend defaults use Tailscale MagicDNS and remain overridable."""
+
+    def test_compose_uses_magicdns_defaults(self):
+        compose = Path(__file__).resolve().parent.parent.parent.parent / "docker-compose.yml"
+        if not compose.exists():
+            import pytest
+            pytest.skip("docker-compose.yml not shipped into runtime image")
+        text = compose.read_text()
+        assert '${LM_STUDIO_URL:-http://dominus:1234}' in text
+        assert '${VOICE_URL:-http://dominus:8301}' in text
+        assert '${COMFYUI_URL:-http://dominus:8388}' in text
+        assert "192.168.50.2" not in text

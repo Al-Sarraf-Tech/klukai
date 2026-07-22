@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# offsite-backup.sh — mirror amarillo's local backups to dominus over LAN.
+# offsite-backup.sh — mirror amarillo's local backups to dominus over Tailscale SSH.
 #
 # Runs ~30 min after nightly backup-companions.sh. Tars
 # /mnt/nvmeINT/backups/ (klukai + kairi DB dumps, images) and pipes

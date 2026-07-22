@@ -18,7 +18,7 @@ from psycopg.rows import dict_row
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("regen")
 
-COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://192.168.50.2:8188")
+COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://dominus:8388")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 IMAGES_DIR = "/images"
 

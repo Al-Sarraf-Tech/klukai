@@ -77,7 +77,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://host.docker.internal:8388")
+COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://dominus:8388")
 
 
 _http: httpx.AsyncClient | None = None

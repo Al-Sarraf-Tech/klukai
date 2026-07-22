@@ -94,7 +94,8 @@ Tier-promotion pipeline:
 
 ### dominus — GPU sidecar (Tailscale)
 
-Reachable on Tailnet only. amarillo connects to dominus over Tailscale + LAN for bulk transfers (`feedback_lan_transfers.md`).
+Reachable on the Tailnet only. amarillo resolves `dominus` through Tailscale
+MagicDNS for GPU APIs and SSH/file transfers; no private-LAN route is required.
 
 - **voice** — TTS service. Container port `8301` periodically loses port binding; remediated by `rm -f && docker compose up` (`feedback_dominus_voice_port.md`).
 - **ComfyUI** — image gen. Container maps `8188→8388` per `feedback_comfyui_port.md`.

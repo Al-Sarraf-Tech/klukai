@@ -184,10 +184,10 @@ Coverage:
 
 ## Deployment
 
-Klukai runs across two hosts on a Tailscale + LAN data plane:
+Klukai runs across two hosts on a Tailscale data plane:
 
 - **amarillo** (core host): companion-core (FastAPI :8300), PostgreSQL, Qdrant, Redis, the nginx gateway, and the observability stack (Alloy/Prometheus/Loki/Tempo/Grafana).
-- **dominus** (GPU sidecar, `192.168.50.2`): LM Studio (RTX 3090 + Arc A380), companion-voice (:8301), ComfyUI (:8388). Reached over Tailscale for API calls and LAN `192.168.50.2` for bulk transfers.
+- **dominus** (GPU sidecar, Tailscale MagicDNS `dominus`): LM Studio (RTX 3090 + Arc A380), companion-voice (:8301), ComfyUI (:8388). All amarillo↔dominus API and SSH/file traffic crosses the Tailnet.
 
 ```bash
 # On amarillo (the core host)

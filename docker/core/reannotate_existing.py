@@ -34,7 +34,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://host.docker.internal:1234")
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")
 LM_TTL_SECONDS = int(os.environ.get("LM_STUDIO_TTL", "600"))
 
 # dolphin-24b for annotation: clean creative text, no chain-of-thought leakage
