@@ -1,6 +1,7 @@
 # ADR-0002: Compute split — amarillo (core/gateway) + dominus (voice/GPU)
 
 - **Date:** 2026-04 (formalized 2026-05-16)
+- **Updated:** 2026-07-22 (inter-host transport moved to Tailscale)
 - **Status:** Accepted
 - **Authors:** jalsarraf
 
@@ -24,8 +25,10 @@ VRAM) + Tailscale.
   ingest path (Cloudflare → public IP → nginx → core).
 - **dominus** runs: `companion-voice` (XTTS v2 CUDA), `comfyui`
   (image gen), LM Studio (gemma-4 + dolphin + gpt-oss).
-- Inter-host traffic uses **LAN** (`192.168.50.2`), NOT Tailscale, for
-  voice + image-gen low-latency paths. Tailscale is for SSH + DNS only.
+- Inter-host traffic uses **Tailscale**. Services are addressed through the
+  `dominus` MagicDNS name so code and operational commands do not depend on a
+  particular `100.x` address. This includes voice, image generation, LLM
+  inference, SSH, backups, and other file transfers.
 
 ## Consequences
 
@@ -53,7 +56,6 @@ VRAM) + Tailscale.
 ## Related
 
 - `docs/runbooks/voice-unreachable.md`
-- `feedback_lan_transfers.md` (global CLAUDE.md)
 - `feedback_dominus_voice_port.md`
 - `feedback_comfyui_port.md`
 - ADR-0007 (voice on dominus rationale)

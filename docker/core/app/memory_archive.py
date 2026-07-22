@@ -15,7 +15,7 @@ from .db import get_conn, get_conn_autocommit
 
 logger = logging.getLogger(__name__)
 
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")
 EXTRACTION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
 # Shared httpx client for LM Studio calls

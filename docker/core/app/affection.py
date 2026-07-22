@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # Affection classification uses gpt-oss-20b — reliable JSON, uncensored.
 # Only used as legacy fallback — primary path is merged extraction via extract_facts().
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")
 CLASSIFICATION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
 DAILY_POINTS_CAP = 8  # fallback only; config affection.scoring.daily_points_cap is authoritative

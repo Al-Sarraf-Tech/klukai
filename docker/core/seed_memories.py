@@ -27,9 +27,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://host.docker.internal:1234")
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")
 LM_TTL_SECONDS = int(os.environ.get("LM_STUDIO_TTL", "600"))
-COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://host.docker.internal:8388")
+COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://dominus:8388")
 
 # gpt-oss-20b for selection: reliable structured JSON at low temperature
 SELECTOR_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"

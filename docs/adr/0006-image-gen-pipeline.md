@@ -21,7 +21,7 @@ ComfyUI on dominus with:
 - **Adapters**: PhotoMaker for reference-image continuity
 - **Workflow**: pre-built in `ComfyUI/user/default/workflows/`
 - **Routing**: companion-core POSTs to ComfyUI at
-  `192.168.50.2:8388` (per `feedback_comfyui_port.md` external:internal
+  `dominus:8388` over Tailscale (per `feedback_comfyui_port.md` external:internal
   mapping = 8388:8188)
 - **Cooldown**: 5s delay after each chat response before image gen
   starts, to avoid VRAM contention with LM Studio

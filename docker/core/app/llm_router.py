@@ -38,7 +38,7 @@ def lm_gate_busy() -> bool:
     """True if an LM Studio request is currently in-flight."""
     return _lm_gate is not None and _lm_gate.locked()
 
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")       # Dominus RTX 3090
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")  # Dominus RTX 3090 via Tailscale
 LM_STUDIO_TOKEN = os.environ.get("LM_STUDIO_TOKEN", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 

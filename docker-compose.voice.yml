@@ -1,6 +1,6 @@
 # companion-voice — runs on DOMINUS (RTX 3090, CUDA required).
 # Deploy:  dominus:~/git/klukai $ docker compose -f docker-compose.voice.yml up -d --build
-# Reachable at 192.168.50.2:8301 (LAN); companion-core reaches it via VOICE_URL.
+# Reachable at dominus:8301 over Tailscale; companion-core uses VOICE_URL.
 #
 # SELF-HEAL — fixes the recurring :8301 port-loss. XTTS's GPU model load at
 # startup can leave the container "up" but not actually serving on 8301. The
@@ -16,7 +16,7 @@ services:
     build: ./docker/voice
     container_name: companion-voice
     ports:
-      - "8301:8301"            # LAN-exposed so amarillo reaches 192.168.50.2:8301
+      - "8301:8301"            # Host-published; restrict ingress to the Tailnet firewall-side
     environment:
       REFERENCE_WAV: "${REFERENCE_WAV:-/app/reference/klukai_reference.wav}"
       WHISPER_MODEL: "${WHISPER_MODEL:-base.en}"

@@ -153,7 +153,7 @@ def register_extras(app: FastAPI) -> None:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
+        voice_url = os.environ.get("VOICE_URL", "http://dominus:8301")
         try:
             from .helpers import voice_auth_headers
             async with httpx.AsyncClient(timeout=30.0) as client:

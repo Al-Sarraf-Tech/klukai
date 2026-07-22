@@ -1,4 +1,4 @@
-# Run on amarillo: bridges aichat internals to Tailscale + reverse proxies web to dominus
+# Run on amarillo: bridges aichat internals to Tailscale/ZeroTier + reverse proxies web to dominus
 services:
   companion-gateway:
     image: nginx:alpine
@@ -6,14 +6,20 @@ services:
     mem_limit: 256m
     ports:
       # companion-core serves 8300 directly now (no longer proxied)
-      # aichat HTTP services on Tailscale only
+      # aichat HTTP services on both overlay networks
       - "100.111.198.19:18096:18096"  # MCP gateway
       - "100.111.198.19:18091:18091"  # Data service
       - "100.111.198.19:18105:18105"  # Inference
-      # aichat TCP services on Tailscale only
+      - "10.206.182.169:18096:18096"  # MCP gateway (ZeroTier)
+      - "10.206.182.169:18091:18091"  # Data service (ZeroTier)
+      - "10.206.182.169:18105:18105"  # Inference (ZeroTier)
+      # aichat TCP services on both overlay networks
       - "100.111.198.19:15432:15432"  # PostgreSQL
       - "100.111.198.19:16379:16379"  # Redis
       - "100.111.198.19:16333:16333"  # Qdrant
+      - "10.206.182.169:15432:15432"  # PostgreSQL (ZeroTier)
+      - "10.206.182.169:16379:16379"  # Redis (ZeroTier)
+      - "10.206.182.169:16333:16333"  # Qdrant (ZeroTier)
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     networks:

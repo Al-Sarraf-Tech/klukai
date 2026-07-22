@@ -53,7 +53,7 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
 
     Failure modes surface a UX signal — the user never gets ghosted.
     """
-    voice_url = os.environ.get("VOICE_URL", "http://companion-voice:8301")
+    voice_url = os.environ.get("VOICE_URL", "http://dominus:8301")
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:

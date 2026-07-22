@@ -8,7 +8,7 @@
 - First chat after a long idle is slow (15-60s to first token)
 - Subsequent chats are normal (sub-second)
 - companion-core logs show LM Studio response time >10s
-- LM Studio dashboard (192.168.50.2:1234) shows model loading
+- LM Studio dashboard (`dominus:1234` over Tailscale) shows model loading
 
 ## Why it happens
 

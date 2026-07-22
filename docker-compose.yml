@@ -19,20 +19,20 @@ services:
       MCP_URL: "http://aichat-mcp:8096"
       DATA_URL: "http://aichat-data:8091"
       INFERENCE_URL: "http://aichat-inference:8105"
-      # Voice on dominus (LAN)
-      VOICE_URL: "http://192.168.50.2:8301"
+      # GPU services on dominus over Tailscale MagicDNS. All three URLs are
+      # overridable for local integration tests or an emergency failover.
+      VOICE_URL: "${VOICE_URL:-http://dominus:8301}"
       # Bearer token for the voice service (app/helpers.py). Empty = auth off
       # (current behavior). Must match VOICE_API_TOKEN in docker-compose.voice.yml.
       VOICE_API_TOKEN: "${VOICE_API_TOKEN:-}"
-      # LM Studio backend. Default: dominus RTX 3090 over LAN (auth required).
+      # LM Studio backend. Default: dominus RTX 3090 over Tailscale (auth required).
       # Override LM_STUDIO_URL in .env to point at the local llama.cpp/LM Studio
       # on amarillo (e.g. http://host.docker.internal:1235) for auth-free local
       # inference during integration testing.
-      LM_STUDIO_URL: "${LM_STUDIO_URL:-http://192.168.50.2:1234}"
+      LM_STUDIO_URL: "${LM_STUDIO_URL:-http://dominus:1234}"
       LM_STUDIO_TOKEN: "${LM_STUDIO_TOKEN:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      # ComfyUI on dominus (LAN)
-      COMFYUI_URL: "http://192.168.50.2:8388"
+      COMFYUI_URL: "${COMFYUI_URL:-http://dominus:8388}"
       PERSONALITY_PATH: "/config/personality.yaml"
       # Commander's location for weather-driven mood (Open-Meteo, keyless).
       # Defaults to Chicago; override in .env. Weather is fail-soft — if unset
@@ -86,7 +86,7 @@ services:
 
   # companion-voice runs on dominus (RTX 3090, CUDA required)
   # Compose: dominus:~/git/klukai/docker-compose.voice.yml
-  # Reachable at 192.168.50.2:8301
+  # Reachable at dominus:8301 over Tailscale
 
 volumes:
   companion-images:

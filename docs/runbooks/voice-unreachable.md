@@ -6,7 +6,7 @@
 ## Symptom
 
 - `/health` shows `voice: "down"` in subsystem detail
-- companion-core logs: `httpx.ConnectError` to `192.168.50.2:8301`
+- companion-core logs: `httpx.ConnectError` to `dominus:8301`
 - Flutter PWA shows "Voice unavailable" indicator
 - TTS requests return 503
 
@@ -14,7 +14,7 @@
 
 1. Verify dominus is reachable from amarillo:
    ```bash
-   ping -c 3 192.168.50.2
+   tailscale ping -c 3 dominus
    ssh dominus 'echo OK'
    ```
 2. Check companion-voice container on dominus:
@@ -36,11 +36,11 @@
 | Container up, port not bound | Known dominus voice port bug | `rm -f` + recreate (see above) |
 | Container exited, CUDA error | XTTS CUDA OOM | Restart; review GPU sharing with ComfyUI |
 | Container OK, slow response | Model loading or busy queue | Wait; or `ssh dominus 'nvidia-smi'` to confirm |
-| Cannot reach 192.168.50.2 | LAN issue, dominus down | Power-cycle dominus if needed |
+| Cannot reach `dominus` | Tailscale route, ACL, DNS, or dominus is down | Check `tailscale status`; power-cycle dominus if needed |
 
 ## Verification after fix
 
-1. `curl -sf http://192.168.50.2:8301/health` returns 200.
+1. `curl -sf http://dominus:8301/health` returns 200.
 2. Send a chat turn; verify audio plays in PWA.
 3. Check companion-core logs for successful TTS handoff.
 
@@ -50,10 +50,11 @@ Until Phase 4 circuit breaker lands, voice down = text-only chat. Users
 see "Voice unavailable" toast but conversation continues. **No chat
 memory or affection state is at risk.**
 
-## Per `feedback_lan_transfers.md`
+## Network path
 
-Always use **LAN** (192.168.50.2) for voice service, not Tailscale.
-Tailscale path is for SSH; LAN path is for low-latency TTS audio.
+Use the Tailscale MagicDNS name `dominus` for the voice service. Do not put a
+raw `100.x` address into application defaults; `VOICE_URL` remains available
+as an explicit override.
 
 ## Post-incident
 
@@ -65,5 +66,4 @@ Tailscale path is for SSH; LAN path is for low-latency TTS audio.
 
 - ADR-0007: Voice on dominus only (RTX 3090 + CUDA)
 - `feedback_dominus_voice_port.md`
-- `feedback_lan_transfers.md`
 - `docker-compose.voice.yml` (on dominus)

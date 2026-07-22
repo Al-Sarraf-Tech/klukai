@@ -50,7 +50,7 @@ amarillo (core host):
 - Redis (session store — TTL 24h, mood state, mission state)
 - Alloy (OTel collector)
 
-dominus (GPU sidecar — Tailscale + LAN):
+dominus (GPU sidecar — Tailscale):
 - LM Studio model server (RTX 3090 + Arc A380)
 - `companion-voice` TTS service (port 8301)
 - ComfyUI image gen (container port 8188 → host port 8388)
@@ -67,7 +67,7 @@ Show data flow arrows with labels:
 - nginx → companion-core: HTTP proxy
 - companion-core → PostgreSQL/Qdrant/Redis: internal Docker network
 - companion-core → Alloy: OTLP gRPC
-- companion-core → dominus: Tailscale (API) / LAN 192.168.50.x (bulk file transfers)
+- companion-core → dominus: Tailscale (LM Studio, voice, ComfyUI, SSH/file transfers)
 - Alloy → Prometheus, Loki, Tempo: scrape/push
 - Grafana → Prometheus/Loki/Tempo: query
 
@@ -482,7 +482,7 @@ Render a quick-reference operations table for the most common operational tasks.
 | Voice service restart | `rm -f <pidfile> && docker compose up -d companion-voice` | Port 8301 binding bug; `rm -f` + fresh up is the fix |
 | ComfyUI access | `http://dominus:8388` | Container maps 8188→8388; port 8188 is wrong |
 | LM Studio | JIT load-on-demand | No keepalive. TTL 600s. Models auto-unload after last request |
-| File transfers | LAN: `192.168.50.2`, port 2222 (WSL2 is decommissioned) | **Always LAN for bulk.** Tailscale for API calls only |
+| File transfers | Tailscale SSH: `dominus` (WSL2 is decommissioned) | Use MagicDNS; do not hard-code a `100.x` address |
 | Nightly backup | Automated: amarillo→dominus SSH tar | Verify with `scripts/restore-from-backup.sh` dry-run quarterly |
 
 ### 10.3 Telegram Bridge
@@ -531,7 +531,7 @@ Render as a clean list with brief rationale for each. These are architectural de
 - Docker Engine + Docker Compose v2
 - Python 3.13 (tooling only; app runs in Docker)
 - `git`, `make`, `curl`, `jq`
-- Tailscale enrolled on amarillo (only required to reach dominus)
+- Tailscale enrolled on amarillo (required for all dominus backend traffic)
 
 ### Steps
 

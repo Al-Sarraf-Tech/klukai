@@ -1,3 +1,9 @@
+DOMINUS_HOST ?= dominus
+LM_STUDIO_URL ?= http://$(DOMINUS_HOST):1234
+VOICE_URL ?= http://$(DOMINUS_HOST):8301
+COMFYUI_URL ?= http://$(DOMINUS_HOST):8388
+CURL_HEALTH = curl -sf --connect-timeout 3 --max-time 10
+
 .PHONY: build build-backend build-pwa run stop logs health gateway gateway-stop deploy perf-baseline test-local lint-local type-check security-scan
 
 # ── Local (amarillo) commands ────────────────────────────────────────────────
@@ -46,7 +52,7 @@ build-pwa:
 # separate harness cleanup; the live read/write smoke covers the new features.
 test-integration:
 	docker cp docker/core/tests companion-core:/app/tests
-	docker exec companion-core sh -c "pip install -q --target=/tmp/pylibs pytest pytest-asyncio && PYTHONPATH=/tmp/pylibs:/app python3 -m pytest /app/tests/integration -m integration -q"
+	docker exec companion-core sh -c "pip install -q --target=/tmp/pylibs pytest pytest-asyncio && KLUKAI_TEST_ALLOW_LIVE_BACKENDS=1 PYTHONPATH=/tmp/pylibs:/app python3 -m pytest /app/tests/integration -m integration -q"
 
 # ── Core stack (amarillo) — runs companion-core + datastores ─────────────────
 
@@ -74,13 +80,16 @@ rebuild: stop build run
 
 health:
 	@echo "=== companion-core (amarillo) ==="
-	@curl -sf http://localhost:8300/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
+	@$(CURL_HEALTH) http://localhost:8300/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
 	@echo ""
-	@echo "=== companion-voice (dominus 192.168.50.2) ==="
-	@curl -sf http://192.168.50.2:8301/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
+	@echo "=== LM Studio ($(LM_STUDIO_URL), Tailscale) ==="
+	@$(CURL_HEALTH) $(LM_STUDIO_URL)/v1/models >/dev/null 2>&1 && echo "ok" || echo "UNREACHABLE"
 	@echo ""
-	@echo "=== ComfyUI (dominus 192.168.50.2) ==="
-	@curl -sf http://192.168.50.2:8388/system_stats 2>/dev/null >/dev/null && echo "ok" || echo "UNREACHABLE"
+	@echo "=== companion-voice ($(VOICE_URL), Tailscale) ==="
+	@$(CURL_HEALTH) $(VOICE_URL)/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
+	@echo ""
+	@echo "=== ComfyUI ($(COMFYUI_URL), Tailscale) ==="
+	@$(CURL_HEALTH) $(COMFYUI_URL)/system_stats >/dev/null 2>&1 && echo "ok" || echo "UNREACHABLE"
 
 # ── Full deploy: core on amarillo, GPU services on dominus ───────────────────
 
@@ -88,7 +97,7 @@ deploy: gateway
 	@echo "Core runs on amarillo (this host). Deploy steps:"
 	@echo "  1. Python change:  docker compose build companion-core && docker compose up -d companion-core"
 	@echo "  2. Web change:     rsync web-build/ into the bind-mount (no rebuild)"
-	@echo "  3. GPU sidecar:    LM Studio / voice / ComfyUI live on dominus (192.168.50.2)"
+	@echo "  3. GPU sidecar:    LM Studio / voice / ComfyUI live on dominus (Tailscale)"
 
 # ── Quality gates (mirror CI) ────────────────────────────────────────────────
 

@@ -22,7 +22,7 @@ slow at JSON; JSON-tuned models are wooden at chat). dominus has
 ## Decision
 
 Route by task type to three models, all served by LM Studio on dominus
-at `192.168.50.2:1234`:
+at `dominus:1234` over Tailscale:
 
 | Model | Role | Why |
 |---|---|---|

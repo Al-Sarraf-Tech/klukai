@@ -6,14 +6,15 @@
 ## Symptom
 
 - Chat responses that should include images return text-only
-- companion-core logs: `httpx.ConnectError` to `192.168.50.2:8388`
-- ComfyUI dashboard at http://192.168.50.2:8388 doesn't load
+- companion-core logs: `httpx.ConnectError` to `dominus:8388`
+- ComfyUI dashboard at http://dominus:8388 doesn't load
 
 ## Immediate action (< 5 min)
 
 1. Verify ComfyUI is reachable:
    ```bash
-   curl -sf http://192.168.50.2:8388/system_stats
+   tailscale ping -c 3 dominus
+   curl -sf http://dominus:8388/system_stats
    ```
 2. Check container on dominus:
    ```bash
@@ -32,13 +33,13 @@
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Container exited, CUDA OOM | LM Studio + image gen contention | Wait for chat to settle; restart |
-| Port mismatch | `feedback_comfyui_port.md` bug | Verify `8188:8388` mapping in compose |
+| Port mismatch | `feedback_comfyui_port.md` bug | Verify `8388:8188` (host:container) mapping in compose |
 | Workflow load error | Missing model in `models/checkpoints/` | Check Illustrious + Klukai LoRA presence |
 | Slow generation | VRAM pressure | Normal under load; throttle |
 
 ## Verification after fix
 
-1. `curl -sf http://192.168.50.2:8388/system_stats` returns model list.
+1. `curl -sf http://dominus:8388/system_stats` returns model list.
 2. Trigger an image gen via chat ("show me Klukai in winter outfit").
 3. Verify image appears within 15s p95 (per SLO).
 
