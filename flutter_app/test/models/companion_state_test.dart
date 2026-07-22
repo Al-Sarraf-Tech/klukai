@@ -1,4 +1,6 @@
 @TestOn('browser')
+library;
+
 // Unit tests for the CompanionState immutable model + copyWith semantics.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:companion_app/models/companion_state.dart';

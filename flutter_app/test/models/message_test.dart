@@ -1,4 +1,6 @@
 @TestOn('browser')
+library;
+
 // Unit tests for ChatMessage model: JSON parsing, defaults, copyWith.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:companion_app/models/message.dart';
@@ -22,8 +24,10 @@ void main() {
       expect(m.mood, 'focused');
       expect(m.model, 'venice');
       expect(m.status, 'sent');
-      expect(m.createdAt.toUtc(),
-          DateTime.parse('2026-05-01T12:30:45.000Z').toUtc());
+      expect(
+        m.createdAt.toUtc(),
+        DateTime.parse('2026-05-01T12:30:45.000Z').toUtc(),
+      );
     });
 
     test('applies defaults for an empty json map', () {
@@ -65,7 +69,11 @@ void main() {
     });
 
     test('preserves a user role distinctly', () {
-      final m = ChatMessage.fromJson({'id': '1', 'role': 'user', 'content': 'yo'});
+      final m = ChatMessage.fromJson({
+        'id': '1',
+        'role': 'user',
+        'content': 'yo',
+      });
       expect(m.role, 'user');
     });
   });
@@ -85,14 +93,24 @@ void main() {
       final before = DateTime.now();
       final m = ChatMessage(id: '1', role: 'user', content: 'hi');
       final after = DateTime.now();
-      expect(m.createdAt.isBefore(after.add(const Duration(seconds: 1))), isTrue);
       expect(
-          m.createdAt.isAfter(before.subtract(const Duration(seconds: 1))), isTrue);
+        m.createdAt.isBefore(after.add(const Duration(seconds: 1))),
+        isTrue,
+      );
+      expect(
+        m.createdAt.isAfter(before.subtract(const Duration(seconds: 1))),
+        isTrue,
+      );
     });
 
     test('explicit createdAt is preserved exactly', () {
       final ts = DateTime.utc(2025, 1, 2, 3, 4, 5);
-      final m = ChatMessage(id: '1', role: 'user', content: 'hi', createdAt: ts);
+      final m = ChatMessage(
+        id: '1',
+        role: 'user',
+        content: 'hi',
+        createdAt: ts,
+      );
       expect(m.createdAt, ts);
     });
   });

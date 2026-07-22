@@ -1,4 +1,6 @@
 @TestOn('browser')
+library;
+
 // Widget tests for DateDivider: relative date labelling.
 //
 // Imports main.dart (GFL2Colors) -> package:web, so run under chrome:
@@ -22,8 +24,9 @@ void main() {
       expect(find.text('Yesterday'), findsOneWidget);
     });
 
-    testWidgets('today is computed by calendar day, not 24h window',
-        (tester) async {
+    testWidgets('today is computed by calendar day, not 24h window', (
+      tester,
+    ) async {
       // 00:05 this morning is still "Today" even though it may be >24h logic.
       final now = DateTime.now();
       final earlyToday = DateTime(now.year, now.month, now.day, 0, 5);
@@ -38,15 +41,17 @@ void main() {
       expect(find.text('Apr 7'), findsOneWidget);
     });
 
-    testWidgets('January maps to "Jan" (month index boundary low)',
-        (tester) async {
+    testWidgets('January maps to "Jan" (month index boundary low)', (
+      tester,
+    ) async {
       final past = DateTime(2025, 1, 15);
       await tester.pumpWidget(_wrap(DateDivider(date: past)));
       expect(find.text('Jan 15'), findsOneWidget);
     });
 
-    testWidgets('December maps to "Dec" (month index boundary high)',
-        (tester) async {
+    testWidgets('December maps to "Dec" (month index boundary high)', (
+      tester,
+    ) async {
       final past = DateTime(2025, 12, 25);
       await tester.pumpWidget(_wrap(DateDivider(date: past)));
       expect(find.text('Dec 25'), findsOneWidget);

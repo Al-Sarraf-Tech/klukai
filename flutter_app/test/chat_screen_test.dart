@@ -1,4 +1,6 @@
 @TestOn('browser')
+library;
+
 // Widget tests for ChatScreen — the chat orchestration layer.
 //
 // ChatScreen.initState() opens a WebSocket and schedules self-reconnecting
@@ -246,35 +248,32 @@ void main() {
     });
 
     testWidgets(
-        'a failed send is NOT echoed as sent — error surfaces, draft kept', (
-      tester,
-    ) async {
-      final fake = await _pumpChat(tester);
-      // The channel dies under us, but the connectionState event hasn't
-      // landed yet (the silent no-op window the old void send() hid).
-      fake.sendShouldSucceed = false;
+      'a failed send is NOT echoed as sent — error surfaces, draft kept',
+      (tester) async {
+        final fake = await _pumpChat(tester);
+        // The channel dies under us, but the connectionState event hasn't
+        // landed yet (the silent no-op window the old void send() hid).
+        fake.sendShouldSucceed = false;
 
-      await tester.enterText(find.byType(TextField), 'status report');
-      await tester.pump();
-      await tester.tap(find.byIcon(Icons.send));
-      await tester.pump();
+        await tester.enterText(find.byType(TextField), 'status report');
+        await tester.pump();
+        await tester.tap(find.byIcon(Icons.send));
+        await tester.pump();
 
-      // No fake echo in the transcript...
-      expect(find.byType(MessageBubble), findsNothing);
-      // ...nothing reached the transport...
-      expect(fake.sent, isEmpty);
-      // ...the failure is surfaced...
-      expect(
-        find.text('TRANSMISSION FAILED // LINK DOWN'),
-        findsOneWidget,
-      );
-      // ...and the draft stays in the composer for retry.
-      expect(
-        tester.widget<TextField>(find.byType(TextField)).controller!.text,
-        'status report',
-      );
-      fake.dispose();
-    });
+        // No fake echo in the transcript...
+        expect(find.byType(MessageBubble), findsNothing);
+        // ...nothing reached the transport...
+        expect(fake.sent, isEmpty);
+        // ...the failure is surfaced...
+        expect(find.text('TRANSMISSION FAILED // LINK DOWN'), findsOneWidget);
+        // ...and the draft stays in the composer for retry.
+        expect(
+          tester.widget<TextField>(find.byType(TextField)).controller!.text,
+          'status report',
+        );
+        fake.dispose();
+      },
+    );
   });
 
   group('ChatScreen — reconnect', () {

@@ -1,4 +1,6 @@
 @TestOn('browser')
+library;
+
 // Widget tests for MoodIndicator: mood -> label + color mapping.
 //
 // Imports main.dart (GFL2Colors) transitively, which pulls package:web, so run
@@ -7,7 +9,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:companion_app/widgets/mood_indicator.dart';
 
-Widget _wrap(Widget child) => MaterialApp(home: Scaffold(body: Center(child: child)));
+Widget _wrap(Widget child) => MaterialApp(
+  home: Scaffold(body: Center(child: child)),
+);
 
 /// Pulls the color off the status-text Text widget (which uses moodColor).
 Color _statusTextColor(WidgetTester tester, String label) {
@@ -44,13 +48,16 @@ void main() {
       });
     });
 
-    testWidgets('unknown mood falls back to uppercased raw value',
-        (tester) async {
+    testWidgets('unknown mood falls back to uppercased raw value', (
+      tester,
+    ) async {
       await tester.pumpWidget(_wrap(const MoodIndicator(mood: 'sleepy')));
       expect(find.text('SLEEPY'), findsOneWidget);
     });
 
-    testWidgets('empty mood renders an empty (uppercased) status', (tester) async {
+    testWidgets('empty mood renders an empty (uppercased) status', (
+      tester,
+    ) async {
       await tester.pumpWidget(_wrap(const MoodIndicator(mood: '')));
       // ''.toUpperCase() == '' -> a Text('') still exists in the tree.
       expect(find.byType(Text), findsOneWidget);
@@ -68,11 +75,11 @@ void main() {
       expect(focused, isNot(equals(hunting)));
     });
 
-    testWidgets('flustered maps to a pink-family color (0xFFF472B6)',
-        (tester) async {
+    testWidgets('flustered maps to a pink-family color (0xFFF472B6)', (
+      tester,
+    ) async {
       await tester.pumpWidget(_wrap(const MoodIndicator(mood: 'flustered')));
-      expect(_statusTextColor(tester, 'FLUSTERED'),
-          const Color(0xFFF472B6));
+      expect(_statusTextColor(tester, 'FLUSTERED'), const Color(0xFFF472B6));
     });
 
     testWidgets('the status dot and text share the mood color', (tester) async {
@@ -82,17 +89,18 @@ void main() {
       final dot = tester
           .widgetList<Container>(find.byType(Container))
           .firstWhere((c) {
-        final d = c.decoration;
-        return d is BoxDecoration && d.shape == BoxShape.circle;
-      });
+            final d = c.decoration;
+            return d is BoxDecoration && d.shape == BoxShape.circle;
+          });
       final dotColor = (dot.decoration as BoxDecoration).color;
       expect(dotColor, textColor);
     });
   });
 
   group('MoodIndicator structure', () {
-    testWidgets('uses AnimatedContainer for the smooth color transition',
-        (tester) async {
+    testWidgets('uses AnimatedContainer for the smooth color transition', (
+      tester,
+    ) async {
       await tester.pumpWidget(_wrap(const MoodIndicator(mood: 'composed')));
       expect(find.byType(AnimatedContainer), findsWidgets);
     });

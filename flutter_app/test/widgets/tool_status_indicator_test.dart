@@ -1,4 +1,6 @@
 @TestOn('browser')
+library;
+
 // Widget tests for ToolStatusIndicator: tool-name framing + in-progress vs
 // done visuals.
 //
@@ -25,7 +27,8 @@ void main() {
     framings.forEach((tool, frame) {
       testWidgets('"$tool" is framed as "$frame"', (tester) async {
         await tester.pumpWidget(
-            _wrap(ToolStatusIndicator(toolName: tool, status: 'running')));
+          _wrap(ToolStatusIndicator(toolName: tool, status: 'running')),
+        );
         expect(find.text('$frame // $tool'), findsOneWidget);
       });
     });
@@ -33,23 +36,33 @@ void main() {
 
   group('ToolStatusIndicator status visuals', () {
     testWidgets('in-progress shows a spinner, not a check', (tester) async {
-      await tester.pumpWidget(_wrap(
-          const ToolStatusIndicator(toolName: 'web_search', status: 'running')));
+      await tester.pumpWidget(
+        _wrap(
+          const ToolStatusIndicator(toolName: 'web_search', status: 'running'),
+        ),
+      );
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
       expect(find.byIcon(Icons.check), findsNothing);
     });
 
     testWidgets('done shows a check, not a spinner', (tester) async {
-      await tester.pumpWidget(_wrap(
-          const ToolStatusIndicator(toolName: 'web_search', status: 'done')));
+      await tester.pumpWidget(
+        _wrap(
+          const ToolStatusIndicator(toolName: 'web_search', status: 'done'),
+        ),
+      );
       expect(find.byIcon(Icons.check), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsNothing);
     });
 
-    testWidgets('any non-"done" status is treated as in-progress',
-        (tester) async {
-      await tester.pumpWidget(_wrap(
-          const ToolStatusIndicator(toolName: 'web_search', status: 'queued')));
+    testWidgets('any non-"done" status is treated as in-progress', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _wrap(
+          const ToolStatusIndicator(toolName: 'web_search', status: 'queued'),
+        ),
+      );
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
     });
   });

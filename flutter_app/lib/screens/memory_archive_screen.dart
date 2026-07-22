@@ -37,7 +37,7 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
   List<MonthGroup> _timeline = [];
   List<Memory> _memories = [];
   String _selectedCategory = 'All';
-  String? _selectedMonth;  // null = all months
+  String? _selectedMonth; // null = all months
   bool _loadingCategories = true;
   bool _loadingMemories = true;
   bool _memoriesError = false;
@@ -274,16 +274,24 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
                 child: SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 1.5, color: GFL2Colors.primary),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: GFL2Colors.primary,
+                  ),
                 ),
               )
             else ...[
-              ..._categories.map((cat) => _buildSidebarItem(cat.name, cat.count)),
+              ..._categories.map(
+                (cat) => _buildSidebarItem(cat.name, cat.count),
+              ),
             ],
             // Divider
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              child: Container(height: 1, color: GFL2Colors.border.withValues(alpha: 0.4)),
+              child: Container(
+                height: 1,
+                color: GFL2Colors.border.withValues(alpha: 0.4),
+              ),
             ),
             _buildSidebarItem('All', _totalKept),
             // Month/year section
@@ -302,7 +310,9 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
                 ),
               ),
               _buildSidebarMonthItem(null, 'All Months', _totalKept),
-              ..._timeline.map((g) => _buildSidebarMonthItem(g.month, g.label, g.count)),
+              ..._timeline.map(
+                (g) => _buildSidebarMonthItem(g.month, g.label, g.count),
+              ),
             ],
             const Spacer(),
             // Archive stats
@@ -311,7 +321,10 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(height: 1, color: GFL2Colors.border.withValues(alpha: 0.4)),
+                  Container(
+                    height: 1,
+                    color: GFL2Colors.border.withValues(alpha: 0.4),
+                  ),
                   const SizedBox(height: 10),
                   Text(
                     'ARCHIVE STATUS',
@@ -388,7 +401,9 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
               child: Text(
                 name,
                 style: TextStyle(
-                  color: isSelected ? GFL2Colors.textPrimary : GFL2Colors.textDim,
+                  color: isSelected
+                      ? GFL2Colors.textPrimary
+                      : GFL2Colors.textDim,
                   fontSize: 11,
                   fontFamily: 'monospace',
                   letterSpacing: 0.6,
@@ -437,7 +452,9 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
               child: Text(
                 label,
                 style: TextStyle(
-                  color: isSelected ? GFL2Colors.textPrimary : GFL2Colors.textDim.withValues(alpha: 0.7),
+                  color: isSelected
+                      ? GFL2Colors.textPrimary
+                      : GFL2Colors.textDim.withValues(alpha: 0.7),
                   fontSize: 10,
                   fontFamily: 'monospace',
                   letterSpacing: 0.4,
@@ -549,11 +566,14 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
           scrollDirection: Axis.horizontal,
           physics: const ClampingScrollPhysics(),
           itemCount: _timeline.length + 1, // +1 for "All" tab
-          separatorBuilder: (_, __) => const SizedBox(width: 5),
+          separatorBuilder: (_, _) => const SizedBox(width: 5),
           itemBuilder: (_, i) {
             if (i == 0) return _buildMonthTab(null, 'ALL');
             final group = _timeline[i - 1];
-            return _buildMonthTab(group.month, '${group.label} (${group.count})');
+            return _buildMonthTab(
+              group.month,
+              '${group.label} (${group.count})',
+            );
           },
         ),
       ),
@@ -580,7 +600,9 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? GFL2Colors.primary : GFL2Colors.textDim.withValues(alpha: 0.6),
+            color: isSelected
+                ? GFL2Colors.primary
+                : GFL2Colors.textDim.withValues(alpha: 0.6),
             fontSize: 9,
             fontFamily: 'monospace',
             letterSpacing: 0.6,
@@ -599,7 +621,10 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            CircularProgressIndicator(strokeWidth: 1.5, color: GFL2Colors.primary),
+            CircularProgressIndicator(
+              strokeWidth: 1.5,
+              color: GFL2Colors.primary,
+            ),
             SizedBox(height: 12),
             Text(
               'RETRIEVING MEMORIES...',
@@ -654,25 +679,25 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
           child: _memoriesError
               ? _buildErrorState()
               : _memories.isEmpty
-                  ? _buildEmptyState()
-                  : ListView.builder(
-                      physics: const ClampingScrollPhysics(
-                        parent: AlwaysScrollableScrollPhysics(),
-                      ),
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                      itemCount: _memories.length,
-                      itemBuilder: (_, i) => MemoryTimelineEntry(
-                        // Keyed by memory id so a filter switch never reuses
-                        // a recycled State (and its stale thumbnail) for a
-                        // different memory.
-                        key: ValueKey(_memories[i].id),
-                        memory: _memories[i],
-                        serverUrl: widget.serverUrl,
-                        authToken: _authToken,
-                        isCompact: isCompact,
-                        onTap: () => _openMemoryDetail(_memories[i]),
-                      ),
-                    ),
+              ? _buildEmptyState()
+              : ListView.builder(
+                  physics: const ClampingScrollPhysics(
+                    parent: AlwaysScrollableScrollPhysics(),
+                  ),
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                  itemCount: _memories.length,
+                  itemBuilder: (_, i) => MemoryTimelineEntry(
+                    // Keyed by memory id so a filter switch never reuses
+                    // a recycled State (and its stale thumbnail) for a
+                    // different memory.
+                    key: ValueKey(_memories[i].id),
+                    memory: _memories[i],
+                    serverUrl: widget.serverUrl,
+                    authToken: _authToken,
+                    isCompact: isCompact,
+                    onTap: () => _openMemoryDetail(_memories[i]),
+                  ),
+                ),
         ),
       ],
     );
@@ -713,8 +738,7 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
             onPressed: _retryLoad,
             style: TextButton.styleFrom(
               backgroundColor: GFL2Colors.background,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(4),
                 side: BorderSide(
@@ -810,10 +834,12 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
 
   Future<void> _loadImage() async {
     try {
-      final response = await http.get(
-        Uri.parse(_imageUrl),
-        headers: {'Authorization': 'Bearer ${widget.authToken}'},
-      ).timeout(const Duration(seconds: 20));
+      final response = await http
+          .get(
+            Uri.parse(_imageUrl),
+            headers: {'Authorization': 'Bearer ${widget.authToken}'},
+          )
+          .timeout(const Duration(seconds: 20));
       if (response.statusCode == 200 && mounted) {
         setState(() => _imageBytes = response.bodyBytes);
       } else if (mounted) {
@@ -852,10 +878,12 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
       // Reuse the already-loaded full image when present; otherwise fetch it.
       Uint8List? bytes = _imageBytes;
       if (bytes == null) {
-        final response = await http.get(
-          Uri.parse(_imageUrl),
-          headers: {'Authorization': 'Bearer ${widget.authToken}'},
-        ).timeout(const Duration(seconds: 30));
+        final response = await http
+            .get(
+              Uri.parse(_imageUrl),
+              headers: {'Authorization': 'Bearer ${widget.authToken}'},
+            )
+            .timeout(const Duration(seconds: 30));
         if (response.statusCode == 200) bytes = response.bodyBytes;
       }
       if (bytes == null) {
@@ -865,13 +893,18 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
       // Real browser download via blob + anchor (same path the chat image
       // bubble uses). The full image is served as WebP; sniff the RIFF magic
       // so the saved file gets the right extension/MIME.
-      final isWebp = bytes.length > 12 &&
-          bytes[0] == 0x52 && bytes[1] == 0x49 &&
-          bytes[2] == 0x46 && bytes[3] == 0x46; // "RIFF"
+      final isWebp =
+          bytes.length > 12 &&
+          bytes[0] == 0x52 &&
+          bytes[1] == 0x49 &&
+          bytes[2] == 0x46 &&
+          bytes[3] == 0x46; // "RIFF"
       final ext = isWebp ? 'webp' : 'png';
       final mime = isWebp ? 'image/webp' : 'image/png';
-      final idShort =
-          widget.memory.id.substring(0, widget.memory.id.length.clamp(0, 8));
+      final idShort = widget.memory.id.substring(
+        0,
+        widget.memory.id.length.clamp(0, 8),
+      );
       final blob = web.Blob([bytes.toJS].toJS, web.BlobPropertyBag(type: mime));
       final url = web.URL.createObjectURL(blob);
       final a = web.document.createElement('a') as web.HTMLAnchorElement
@@ -893,19 +926,32 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: GFL2Colors.surface,
-        title: const Text('Discard memory?',
-            style: TextStyle(
-                color: GFL2Colors.textPrimary, fontSize: 14, fontFamily: 'monospace')),
-        content: const Text('It will be hidden from the album. Nothing is deleted.',
-            style: TextStyle(color: GFL2Colors.textDim, fontSize: 12)),
+        title: const Text(
+          'Discard memory?',
+          style: TextStyle(
+            color: GFL2Colors.textPrimary,
+            fontSize: 14,
+            fontFamily: 'monospace',
+          ),
+        ),
+        content: const Text(
+          'It will be hidden from the album. Nothing is deleted.',
+          style: TextStyle(color: GFL2Colors.textDim, fontSize: 12),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('CANCEL', style: TextStyle(color: GFL2Colors.textDim)),
+            child: const Text(
+              'CANCEL',
+              style: TextStyle(color: GFL2Colors.textDim),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('DISCARD', style: TextStyle(color: GFL2Colors.primary)),
+            child: const Text(
+              'DISCARD',
+              style: TextStyle(color: GFL2Colors.primary),
+            ),
           ),
         ],
       ),
@@ -916,10 +962,14 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
   Future<void> _discard() async {
     setState(() => _discarding = true);
     try {
-      final r = await http.post(
-        Uri.parse('${widget.serverUrl}/api/memories/${widget.memory.id}/discard'),
-        headers: {'Authorization': 'Bearer ${widget.authToken}'},
-      ).timeout(const Duration(seconds: 15));
+      final r = await http
+          .post(
+            Uri.parse(
+              '${widget.serverUrl}/api/memories/${widget.memory.id}/discard',
+            ),
+            headers: {'Authorization': 'Bearer ${widget.authToken}'},
+          )
+          .timeout(const Duration(seconds: 15));
       if (r.statusCode == 200 && mounted) {
         widget.onDiscarded?.call(widget.memory.id);
         Navigator.of(context).pop();
@@ -989,18 +1039,33 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
                                     width: 16,
                                     height: 16,
                                     child: CircularProgressIndicator(
-                                        strokeWidth: 1.5, color: GFL2Colors.textDim),
+                                      strokeWidth: 1.5,
+                                      color: GFL2Colors.textDim,
+                                    ),
                                   )
-                                : const Icon(Icons.delete_outline,
-                                    color: GFL2Colors.textDim, size: 18),
+                                : const Icon(
+                                    Icons.delete_outline,
+                                    color: GFL2Colors.textDim,
+                                    size: 18,
+                                  ),
                             padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                            constraints: const BoxConstraints(
+                              minWidth: 32,
+                              minHeight: 32,
+                            ),
                           ),
                           IconButton(
                             onPressed: () => Navigator.of(context).pop(),
-                            icon: const Icon(Icons.close, color: GFL2Colors.textDim, size: 18),
+                            icon: const Icon(
+                              Icons.close,
+                              color: GFL2Colors.textDim,
+                              size: 18,
+                            ),
                             padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                            constraints: const BoxConstraints(
+                              minWidth: 32,
+                              minHeight: 32,
+                            ),
                           ),
                         ],
                       ),
@@ -1014,27 +1079,31 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
                         child: _imageBytes != null
                             ? Image.memory(_imageBytes!, fit: BoxFit.contain)
                             : _imageFailed
-                                ? Container(
-                                    height: 200,
-                                    color: GFL2Colors.panel,
-                                    child: Center(
-                                      child: Icon(
-                                        Icons.broken_image_outlined,
-                                        color: GFL2Colors.textDim.withValues(alpha: 0.3),
-                                        size: 48,
-                                      ),
+                            ? Container(
+                                height: 200,
+                                color: GFL2Colors.panel,
+                                child: Center(
+                                  child: Icon(
+                                    Icons.broken_image_outlined,
+                                    color: GFL2Colors.textDim.withValues(
+                                      alpha: 0.3,
                                     ),
-                                  )
-                                : Container(
-                                    height: 200,
-                                    color: GFL2Colors.panel,
-                                    child: Center(
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 1.5,
-                                        color: GFL2Colors.primary.withValues(alpha: 0.5),
-                                      ),
+                                    size: 48,
+                                  ),
+                                ),
+                              )
+                            : Container(
+                                height: 200,
+                                color: GFL2Colors.panel,
+                                child: Center(
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1.5,
+                                    color: GFL2Colors.primary.withValues(
+                                      alpha: 0.5,
                                     ),
                                   ),
+                                ),
+                              ),
                       ),
                     ),
                     // Annotation

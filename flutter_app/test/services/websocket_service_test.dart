@@ -1,4 +1,6 @@
 @TestOn('vm')
+library;
+
 // Tests for WebSocketService.
 //
 // websocket_service.dart has NO web-only imports, so these run on the default
@@ -181,8 +183,7 @@ void main() {
       svc.dispose();
     });
 
-    test('confirms connection on first frame and decodes valid JSON',
-        () async {
+    test('confirms connection on first frame and decodes valid JSON', () async {
       final svc = WebSocketService();
       final firstMsg = svc.messages.first;
       final connected = svc.connectionState.firstWhere((c) => c == true);
@@ -200,54 +201,58 @@ void main() {
       svc.dispose();
     });
 
-    test('swallows a malformed (non-JSON) frame without crashing the stream',
-        () async {
-      // The service jsonDecodes every inbound frame inside a try/catch and
-      // drops anything that fails to parse. Push a raw garbage frame straight
-      // from the server, then a valid one, and assert only the valid one
-      // surfaces on `messages` (and the socket stays alive).
-      final svc = WebSocketService();
-      final received = <Map<String, dynamic>>[];
-      final sub = svc.messages.listen(received.add);
-      final connected = svc.connectionState.firstWhere((c) => c == true);
+    test(
+      'swallows a malformed (non-JSON) frame without crashing the stream',
+      () async {
+        // The service jsonDecodes every inbound frame inside a try/catch and
+        // drops anything that fails to parse. Push a raw garbage frame straight
+        // from the server, then a valid one, and assert only the valid one
+        // surfaces on `messages` (and the socket stays alive).
+        final svc = WebSocketService();
+        final received = <Map<String, dynamic>>[];
+        final sub = svc.messages.listen(received.add);
+        final connected = svc.connectionState.firstWhere((c) => c == true);
 
-      svc.connect(server.wsUrl);
-      final socket = await server.firstSocket;
+        svc.connect(server.wsUrl);
+        final socket = await server.firstSocket;
 
-      // 1) malformed frame -> must be swallowed, but still confirms connection
-      socket.add('this is not json {');
-      await connected.timeout(const Duration(seconds: 5));
-      expect(svc.isConnected, isTrue);
+        // 1) malformed frame -> must be swallowed, but still confirms connection
+        socket.add('this is not json {');
+        await connected.timeout(const Duration(seconds: 5));
+        expect(svc.isConnected, isTrue);
 
-      // 2) valid frame -> must be decoded and delivered
-      socket.add('{"type":"ok","v":42}');
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+        // 2) valid frame -> must be decoded and delivered
+        socket.add('{"type":"ok","v":42}');
+        await Future<void>.delayed(const Duration(milliseconds: 200));
 
-      // Exactly one (the valid) message should have come through.
-      expect(received.length, 1);
-      expect(received.single['type'], 'ok');
-      expect(received.single['v'], 42);
+        // Exactly one (the valid) message should have come through.
+        expect(received.length, 1);
+        expect(received.single['type'], 'ok');
+        expect(received.single['v'], 42);
 
-      await sub.cancel();
-      svc.dispose();
-    });
+        await sub.cancel();
+        svc.dispose();
+      },
+    );
 
-    test('disconnect emits connectionState=false and clears isConnected',
-        () async {
-      final svc = WebSocketService();
-      final connected = svc.connectionState.firstWhere((c) => c == true);
-      svc.connect(server.wsUrl);
-      await server.firstSocket;
-      svc.send({'type': 'ping'});
-      await connected.timeout(const Duration(seconds: 5));
+    test(
+      'disconnect emits connectionState=false and clears isConnected',
+      () async {
+        final svc = WebSocketService();
+        final connected = svc.connectionState.firstWhere((c) => c == true);
+        svc.connect(server.wsUrl);
+        await server.firstSocket;
+        svc.send({'type': 'ping'});
+        await connected.timeout(const Duration(seconds: 5));
 
-      final disconnected = svc.connectionState.firstWhere((c) => c == false);
-      svc.disconnect();
-      await disconnected.timeout(const Duration(seconds: 5));
-      expect(svc.isConnected, isFalse);
+        final disconnected = svc.connectionState.firstWhere((c) => c == false);
+        svc.disconnect();
+        await disconnected.timeout(const Duration(seconds: 5));
+        expect(svc.isConnected, isFalse);
 
-      svc.dispose();
-    });
+        svc.dispose();
+      },
+    );
   });
 
   group('WebSocketService.send when not connected', () {

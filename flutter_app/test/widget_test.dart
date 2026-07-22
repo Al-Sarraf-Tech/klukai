@@ -1,4 +1,6 @@
 @TestOn('browser')
+library;
+
 // App-level smoke tests.
 //
 // The previous template test referenced a non-existent `MyApp`/counter and no
@@ -37,8 +39,11 @@ void main() {
         GFL2Colors.textPrimary,
         GFL2Colors.textDim,
       ]) {
-        expect(c.toARGB32() >> 24 & 0xFF, 0xFF,
-            reason: 'palette colors must be opaque');
+        expect(
+          c.toARGB32() >> 24 & 0xFF,
+          0xFF,
+          reason: 'palette colors must be opaque',
+        );
       }
     });
 
