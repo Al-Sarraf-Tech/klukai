@@ -120,13 +120,14 @@ def _reset_module_state():
 
 
 class TestLMHeaders:
-    def test_with_token_returns_bearer(self):
-        with patch.object(lr, "LM_STUDIO_TOKEN", "secret-tok"):
-            assert lr._lm_headers() == {"Authorization": "Bearer secret-tok"}
+    def test_with_token_returns_bearer(self, monkeypatch):
+        monkeypatch.setenv("LM_STUDIO_TOKEN", "secret-tok")
+        assert lr._lm_headers() == {"Authorization": "Bearer secret-tok"}
 
-    def test_without_token_returns_empty(self):
-        with patch.object(lr, "LM_STUDIO_TOKEN", ""):
-            assert lr._lm_headers() == {}
+    def test_without_token_fails_closed(self, monkeypatch):
+        monkeypatch.delenv("LM_STUDIO_TOKEN", raising=False)
+        with pytest.raises(RuntimeError, match="LM_STUDIO_TOKEN is required"):
+            lr._lm_headers()
 
 
 # ── init / close (lines 132-136, 139-140) ───────────────────────────────────
@@ -627,117 +628,21 @@ class TestCompleteLocal:
         assert data["choices"][0]["message"]["content"] == "ok"
 
 
-# ── keepalive (lines 370-423) ───────────────────────────────────────────────
+# ── strict keepalive policy ──────────────────────────────────────────────────
 
 
 class TestKeepalive:
     @pytest.mark.asyncio
-    async def test_skips_when_gate_busy(self):
+    async def test_compatibility_method_never_calls_backend(self):
         r = LLMRouter()
         r._http = AsyncMock()
-        gate = lr.get_lm_gate()
-        async with gate:  # gate locked -> busy
-            await r.keepalive()
-        r._http.post.assert_not_awaited()
+        r._lmstudio_available = True
+        r._ensure_lmstudio_fresh = AsyncMock(return_value=True)
 
-    @pytest.mark.asyncio
-    async def test_skips_when_lmstudio_unavailable(self):
-        r = LLMRouter()
-        r._http = AsyncMock()
-        r._lmstudio_available = False
-        r._ensure_lmstudio_fresh = AsyncMock(return_value=False)
         await r.keepalive()
+
         r._http.post.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_skips_during_seeding(self):
-        r = LLMRouter()
-        r._http = AsyncMock()
-        r._lmstudio_available = True
-        lr.set_seeding_active(True)
-        await r.keepalive()
-        r._http.post.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_idle_unload_skips_ping(self):
-        """No connections, no mission, not early-AM, user idle -> evict (no ping)."""
-        r = LLMRouter()
-        r._http = AsyncMock()
-        r._lmstudio_available = True
-        fake_ctx = MagicMock()
-        fake_ctx.ws._connections = []
-        with patch.dict(
-            sys.modules,
-            {
-                "app.context": fake_ctx,
-                "app.proactive": MagicMock(has_active_mission=lambda: False),
-            },
-        ), patch.object(lr, "_is_early_am_window", return_value=False), patch.object(
-            lr, "_is_user_idle", return_value=True
-        ):
-            await r.keepalive()
-        r._http.post.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_pings_model_when_active_and_stale(self):
-        """Connections present -> keepalive POST fires and marks model used."""
-        r = LLMRouter()
-        r._http = MagicMock()
-        resp = MagicMock()
-        resp.status_code = 200
-        r._http.post = AsyncMock(return_value=resp)
-        r._lmstudio_available = True
-        fake_ctx = MagicMock()
-        fake_ctx.ws._connections = ["someone"]
-        with patch.dict(
-            sys.modules,
-            {
-                "app.context": fake_ctx,
-                "app.proactive": MagicMock(has_active_mission=lambda: True),
-            },
-        ):
-            await r.keepalive()
-        r._http.post.assert_awaited_once()
-        assert LOCAL_CASUAL in lr._model_last_used
-        body = r._http.post.call_args.kwargs["json"]
-        assert body["model"] == LOCAL_CASUAL
-        assert body["max_tokens"] == 1
-
-    @pytest.mark.asyncio
-    async def test_skips_ping_when_model_fresh(self):
-        r = LLMRouter()
-        r._http = AsyncMock()
-        r._lmstudio_available = True
-        lr.mark_model_used(LOCAL_CASUAL)  # fresh -> needs_keepalive False
-        fake_ctx = MagicMock()
-        fake_ctx.ws._connections = ["someone"]
-        with patch.dict(
-            sys.modules,
-            {
-                "app.context": fake_ctx,
-                "app.proactive": MagicMock(has_active_mission=lambda: True),
-            },
-        ):
-            await r.keepalive()
-        r._http.post.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_ping_exception_is_swallowed(self):
-        r = LLMRouter()
-        r._http = MagicMock()
-        r._http.post = AsyncMock(side_effect=RuntimeError("down"))
-        r._lmstudio_available = True
-        fake_ctx = MagicMock()
-        fake_ctx.ws._connections = ["x"]
-        with patch.dict(
-            sys.modules,
-            {
-                "app.context": fake_ctx,
-                "app.proactive": MagicMock(has_active_mission=lambda: True),
-            },
-        ):
-            await r.keepalive()  # must not raise
-        assert LOCAL_CASUAL not in lr._model_last_used
+        r._ensure_lmstudio_fresh.assert_not_awaited()
 
 
 # ── module-level idle/keepalive helpers ─────────────────────────────────────

@@ -1,58 +1,61 @@
-# ADR-0015: wsl2 is NOT a klukai deployment target
+# ADR-0015: Windows and WSL2 are not klukai deployment targets
 
 - **Date:** 2026-04-20 (formalized 2026-05-16)
+- **Updated:** 2026-08-01 (lost Windows host recorded)
 - **Status:** Accepted
 - **Authors:** jalsarraf
 
 ## Context
 
-Early in klukai's history (2026-04 origin period), wsl2 was
-considered as a possible host for parts of the stack — convenient
-for development, Linux toolchain available on Windows. As the project
-matured, dominus (Windows + RTX 3090 + Tailscale) and amarillo
-(Linux server) emerged as the clear deployment targets.
+Early in Klukai's history, WSL2 was considered for server-side components and
+the RTX 3090 services ultimately ran on a Windows machine named `dominus`.
+That Windows installation and its WSL2 environment are now a total loss. They
+cannot provide live configuration, model files, a rollback target, or a
+network endpoint.
 
-wsl2 lingered as a "maybe we'll deploy something here" possibility
-for ~2 months, creating confusion about where services should run
-and leading to drift in compose files.
+The replacement workstation is `dominus-nobara`, running Nobara Linux with
+the RTX 3090 and NVMe RAID 0. The always-on application and data services
+remain on the Linux server `amarillo`.
 
 ## Decision
 
-**wsl2 is NOT a klukai deployment target.** Per commit `8654573
-chore(ops): decommission wsl2 as klukai deployment target`
-(2026-04-20) and the global CLAUDE.md `feedback_wsl2_decommissioned.md`
-memory.
+Klukai's deployment topology has exactly two hosts:
 
-klukai topology is exactly two hosts:
-- **amarillo** (Linux server) — core, gateway, PG, Redis, Qdrant
-- **dominus** (Windows + RTX 3090) — voice, ComfyUI, LM Studio
+- **amarillo** — core, edge gateway, PostgreSQL, Redis, Qdrant, primary backup
+  staging, and non-GPU application services.
+- **dominus-nobara** — the canonical RAID-backed, containerized LLM, voice,
+  speech, image, and transcription sidecar plus the preserved RAID-contained
+  native-vLLM exception.
 
-That's it. Future hosts require a new ADR.
+Windows `dominus` and WSL2 are both retired historical evidence. No script,
+Compose file, DNS entry, copy step, or rollback plan may depend on either.
+Connections between the two live hosts use Tailscale only. A future deployment
+host requires a new ADR.
 
 ## Consequences
 
-- **Simplifies operations**: only two failure domains, two backup
-  destinations, two systemd manifests to maintain.
-- **Compose files** are scoped to either amarillo or dominus —
-  no wsl2 overrides.
-- **CI runner topology** (per global CLAUDE.md) excludes wsl2 from
-  klukai-specific jobs.
-- **Personal Windows machine** can still run klukai dev clients
-  (`make build-pwa` works anywhere with flutter installed) but no
-  klukai server-side services live there.
+- Operations cover two live failure domains and one canonical service owner
+  per workload.
+- `ops/dominus-nobara/compose.yaml`, the associated user units, and the
+  immutable model lock define the GPU-side deployment.
+- All durable GPU-side data lives on `/mnt/nvmer0`; host packages are limited
+  to the storage, Docker/NVIDIA, Tailscale, and service-manager substrate.
+- Recovery copies may be staged on `amarillo`, but the dead Windows/WSL2 host
+  is never queried or used as a source.
+- RAID 0 is not a backup, so unique data requires an independent copy.
 
 ## Alternatives considered
 
-- **Keep wsl2 as a third deployment target**: rejected — added
-  failure domain with no resource benefit (wsl2 has no GPU,
-  no production network exposure).
-- **Migrate dominus services to wsl2**: rejected — would require
-  CUDA-in-wsl2 setup with marginal gains, plus voice/image-gen
-  latency penalty from the WSL kernel hop.
+- **Rebuild the Windows/WSL2 topology:** rejected because both environments
+  are lost and the clean Nobara host provides a simpler container runtime.
+- **Treat WSL2 as a third target:** rejected because it adds an unsupported
+  failure domain without a deployment need.
+- **Run every service on amarillo:** rejected because the supported CUDA GPU
+  and recovered large model fleet are on `dominus-nobara`.
 
 ## Related
 
-- Commit `8654573` (decommission commit)
-- `feedback_wsl2_decommissioned.md` (global CLAUDE.md)
-- ADR-0002 (amarillo/dominus split — the canonical topology)
-- Phase 2 spec §3 Non-Goals (no third host)
+- `ops/dominus-nobara/RUNBOOK.md`
+- `ops/dominus-nobara/models.lock.json`
+- ADR-0002 (canonical two-host split)
+- ADR-0014 (off-host recovery copy)

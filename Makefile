@@ -1,10 +1,15 @@
-DOMINUS_HOST ?= dominus
-LM_STUDIO_URL ?= http://$(DOMINUS_HOST):1234
-VOICE_URL ?= http://$(DOMINUS_HOST):8301
-COMFYUI_URL ?= http://$(DOMINUS_HOST):8388
+DOMINUS_SSH_HOST ?= dominus-nobara
+DOMINUS_TAILSCALE_IPV4 ?= 100.107.121.5
+AMARILLO_TAILSCALE_IPV4 ?= 100.111.198.19
+DOMINUS_RAID_MOUNT ?= /mnt/nvmer0
+DOMINUS_AI_DIR ?= /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara
+DOMINUS_STACK_ENV ?= /mnt/nvmer0/services/ai-stack/config/stack.env
+LM_STUDIO_URL ?= http://$(DOMINUS_TAILSCALE_IPV4):1234
+VOICE_URL ?= http://$(DOMINUS_TAILSCALE_IPV4):8301
 CURL_HEALTH = curl -sf --connect-timeout 3 --max-time 10
+DOMINUS_SSH = ssh -T -o AddressFamily=inet -o BatchMode=yes -o ClearAllForwardings=yes -o ConnectTimeout=10 -o ControlMaster=no -o ControlPath=none -o ForwardAgent=no -o StrictHostKeyChecking=yes
 
-.PHONY: build build-backend build-pwa run stop logs health gateway gateway-stop deploy perf-baseline test-local lint-local type-check security-scan
+.PHONY: build build-backend build-pwa run stop logs logs-core logs-voice restart rebuild health dominus-preflight gateway gateway-stop gateway-logs deploy perf-baseline test-local test-integration lint-local type-check security-scan
 
 # ── Local (amarillo) commands ────────────────────────────────────────────────
 
@@ -68,8 +73,35 @@ logs:
 logs-core:
 	docker compose logs -f companion-core
 
-logs-voice:
-	docker compose logs -f companion-voice
+dominus-preflight:
+	@command -v tailscale >/dev/null
+	@tailscale ip -4 | grep -Fxq '$(AMARILLO_TAILSCALE_IPV4)' || { echo 'ERROR: this is not the expected amarillo Tailnet node ($(AMARILLO_TAILSCALE_IPV4))' >&2; exit 1; }
+	@resolved="$$(ssh -G -o AddressFamily=inet '$(DOMINUS_SSH_HOST)' 2>/dev/null | awk '$$1 == "hostname" {print $$2; exit}')"; \
+		[ "$$resolved" = '$(DOMINUS_TAILSCALE_IPV4)' ] || { echo "ERROR: $(DOMINUS_SSH_HOST) resolves to $${resolved:-nothing}, not $(DOMINUS_TAILSCALE_IPV4)" >&2; exit 1; }
+	@printf '%s\n' \
+		'set -Eeuo pipefail' \
+		'read -r client_ip _ server_ip _ <<<"$${SSH_CONNECTION:-}"' \
+		'[[ "$$client_ip" == "$$1" && "$$server_ip" == "$$2" ]]' \
+		'mountpoint --quiet -- "$$3"' \
+		'[[ "$$(findmnt -n -o TARGET --target "$$3")" == "$$3" ]]' \
+		| $(DOMINUS_SSH) '$(DOMINUS_SSH_HOST)' bash -s -- '$(AMARILLO_TAILSCALE_IPV4)' '$(DOMINUS_TAILSCALE_IPV4)' '$(DOMINUS_RAID_MOUNT)'
+
+logs-voice: dominus-preflight
+	@printf '%s\n' \
+		'set -Eeuo pipefail' \
+		'read -r client_ip _ server_ip _ <<<"$${SSH_CONNECTION:-}"' \
+		'[[ "$$client_ip" == "$$1" && "$$server_ip" == "$$2" ]]' \
+		'mountpoint --quiet -- "$$3"' \
+		'[[ "$$(findmnt -n -o TARGET --target "$$3")" == "$$3" ]]' \
+		'[[ "$$(realpath -m -- "$$4")" == "$$4" ]]' \
+		'[[ "$$(realpath -e -- "$$5")" == "$$5" ]]' \
+		'[[ "$$4" == "$$3/"* && "$$5" == "$$3/"* ]]' \
+		'[[ -r "$$4/compose.yaml" && -r "$$5" ]]' \
+		'cd -- "$$4"' \
+		'exec docker compose --env-file "$$5" --file compose.yaml --profile "*" logs -f companion-voice' \
+		| $(DOMINUS_SSH) '$(DOMINUS_SSH_HOST)' bash -s -- \
+			'$(AMARILLO_TAILSCALE_IPV4)' '$(DOMINUS_TAILSCALE_IPV4)' \
+			'$(DOMINUS_RAID_MOUNT)' '$(DOMINUS_AI_DIR)' '$(DOMINUS_STACK_ENV)'
 
 restart:
 	docker compose restart
@@ -82,22 +114,24 @@ health:
 	@echo "=== companion-core (amarillo) ==="
 	@$(CURL_HEALTH) http://localhost:8300/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
 	@echo ""
-	@echo "=== LM Studio ($(LM_STUDIO_URL), Tailscale) ==="
-	@$(CURL_HEALTH) $(LM_STUDIO_URL)/v1/models >/dev/null 2>&1 && echo "ok" || echo "UNREACHABLE"
+	@echo "=== LLM compatibility gateway ($(LM_STUDIO_URL), Tailscale only) ==="
+	@$(CURL_HEALTH) '$(LM_STUDIO_URL)/health' 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
 	@echo ""
 	@echo "=== companion-voice ($(VOICE_URL), Tailscale) ==="
-	@$(CURL_HEALTH) $(VOICE_URL)/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
+	@$(CURL_HEALTH) '$(VOICE_URL)/health' 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
 	@echo ""
-	@echo "=== ComfyUI ($(COMFYUI_URL), Tailscale) ==="
-	@$(CURL_HEALTH) $(COMFYUI_URL)/system_stats >/dev/null 2>&1 && echo "ok" || echo "UNREACHABLE"
+	@echo "=== ComfyUI (authenticated gateway facade; no raw host port) ==="
+	@$(CURL_HEALTH) '$(LM_STUDIO_URL)/health' 2>/dev/null | jq -e '.comfyui_status == "ok"' >/dev/null && echo "ok" || echo "UNREACHABLE"
 
-# ── Full deploy: core on amarillo, GPU services on dominus ───────────────────
+# ── Full deploy: core on amarillo, GPU services on dominus-nobara ───────────────────
 
 deploy: gateway
 	@echo "Core runs on amarillo (this host). Deploy steps:"
 	@echo "  1. Python change:  docker compose build companion-core && docker compose up -d companion-core"
 	@echo "  2. Web change:     rsync web-build/ into the bind-mount (no rebuild)"
-	@echo "  3. GPU sidecar:    LM Studio / voice / ComfyUI live on dominus (Tailscale)"
+	@echo "  3. GPU sidecar:    follow the guarded runbook; installation does not enable/start units without explicit GPU clearance"
+	@echo "     Canonical file: $(DOMINUS_AI_DIR)/compose.yaml"
+	@echo "     Published APIs: $(DOMINUS_TAILSCALE_IPV4):1234, :8301, :8390 (Tailnet only; ComfyUI uses :1234 facade; transcription disabled)"
 
 # ── Quality gates (mirror CI) ────────────────────────────────────────────────
 

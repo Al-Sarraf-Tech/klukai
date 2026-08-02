@@ -30,12 +30,13 @@ from datetime import datetime, timezone
 import httpx
 import psycopg
 
+from app.lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")
-LM_TTL_SECONDS = int(os.environ.get("LM_STUDIO_TTL", "600"))
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
 
 # dolphin-24b for annotation: clean creative text, no chain-of-thought leakage
 ANNOTATOR_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
@@ -173,6 +174,7 @@ async def _call_annotator(client: httpx.AsyncClient, user_msg: str,
     )
     r = await client.post(
         f"{LM_STUDIO_URL}/v1/chat/completions",
+        headers=lm_studio_auth_headers(),
         json={
             "model": ANNOTATOR_MODEL,
             "messages": [{"role": "user", "content": prompt}],
@@ -321,7 +323,7 @@ async def main():
                         client, exchange["user"], exchange["assistant"], category
                     )
                 except Exception as e:
-                    logger.warning("    -> LLM call failed: %s", e)
+                    logger.warning("    -> LLM call failed (%s)", type(e).__name__)
                     await asyncio.sleep(SLEEP_BETWEEN_CALLS)
                     continue
 

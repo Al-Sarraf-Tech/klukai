@@ -1,67 +1,74 @@
 # Runbook: ComfyUI Image Generation Down
 
-**Severity:** P3 (image gen disabled; chat continues without inline images)
-**SLO breach:** `/api/images/generate` returns 5xx.
+**Severity:** P3 (image generation disabled; chat remains available)
 
-## Symptom
+**SLO breach:** `/api/images/generate` returns 5xx or produces no image.
 
-- Chat responses that should include images return text-only
-- companion-core logs: `httpx.ConnectError` to `dominus:8388`
-- ComfyUI dashboard at http://dominus:8388 doesn't load
+## Symptoms
 
-## Immediate action (< 5 min)
+- Image-producing chat turns return text only.
+- `companion-core` reports the gateway's ComfyUI status as down.
+- Image requests through `100.107.121.5:1234/api/v1/comfy` fail after lease
+  acquisition.
 
-1. Verify ComfyUI is reachable:
-   ```bash
-   tailscale ping -c 3 dominus
-   curl -sf http://dominus:8388/system_stats
-   ```
-2. Check container on dominus:
-   ```bash
-   ssh dominus 'docker ps --filter name=comfyui'
-   ssh dominus 'docker logs --tail=200 comfyui'
-   ```
-3. Per `feedback_comfyui_port.md`: container maps **8188 internal → 8388
-   external**. If port is wrong, fix `docker-compose.yml` and recreate.
-4. If exited: restart:
-   ```bash
-   ssh dominus 'docker restart comfyui'
-   ```
+## Immediate checks
 
-## Root-cause investigation
+From `amarillo`:
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| Container exited, CUDA OOM | LM Studio + image gen contention | Wait for chat to settle; restart |
-| Port mismatch | `feedback_comfyui_port.md` bug | Verify `8388:8188` (host:container) mapping in compose |
-| Workflow load error | Missing model in `models/checkpoints/` | Check Illustrious + Klukai LoRA presence |
-| Slow generation | VRAM pressure | Normal under load; throttle |
+```bash
+tailscale ping -c 3 dominus-nobara
+curl --fail http://100.107.121.5:1234/health | jq '.comfyui_status'
+```
 
-## Verification after fix
+On `dominus-nobara`, inspect the canonical Compose service:
 
-1. `curl -sf http://dominus:8388/system_stats` returns model list.
-2. Trigger an image gen via chat ("show me Klukai in winter outfit").
-3. Verify image appears within 15s p95 (per SLO).
+```bash
+cd /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara
+test ! -e /run/user/1000/dominus-gpu/game-active
+systemctl --user status dominus-ai-stack.service --no-pager
+docker compose \
+  --env-file /mnt/nvmer0/services/ai-stack/config/stack.env \
+  --file compose.yaml ps comfyui
+docker compose \
+  --env-file /mnt/nvmer0/services/ai-stack/config/stack.env \
+  --file compose.yaml logs --tail=200 comfyui
+```
 
-## Per `reference_illustrious.md`
+If the game marker exists, ComfyUI is intentionally stopped. Wait for the
+GameMode end hook. Otherwise, recreate only the canonical service:
 
-Image generation pipeline:
-- NoobAI-XL base + Klukai IL LoRA on X: NVMe RAID
-- 5s VRAM-contention delay built in (avoids LLM clash)
-- Workflows live in `ComfyUI/user/default/workflows/`
+```bash
+docker compose \
+  --env-file /mnt/nvmer0/services/ai-stack/config/stack.env \
+  --file compose.yaml up --detach --no-build --no-deps --force-recreate comfyui
+```
 
-If a model file is missing, restore from dominus model storage —
-re-downloading takes hours.
+## Failure diagnosis
 
-## Out-of-scope
+| Result | Meaning | Action |
+| --- | --- | --- |
+| Game marker exists | GameMode owns the GPU | Wait; do not bypass the guard |
+| CUDA OOM while loading a workflow | Another GPU model is resident | Unload it through its supported API or wait for its job/idle TTL |
+| Gateway reports `comfyui_status` down | Canonical container is stopped or unhealthy | Inspect logs and recreate `comfyui` |
+| Client uses port 8188 or 8388 | It bypasses the lease/authentication boundary | Set Klukai core to `http://100.107.121.5:1234/api/v1/comfy` |
+| Checkpoint or LoRA is absent | Immutable release is incomplete | Verify `models/current` against `models.lock.json` |
+| Output cannot be written | RAID data path ownership or mount failed | Verify `/mnt/nvmer0` and the explicit `/data` bind mounts |
 
-Image gen is **non-critical** to klukai's core function (chat). Down for
-hours = acceptable. Users see "image unavailable" indicator. Until Phase
-4 circuit breaker, image-gen down = a few extra exception logs.
+ComfyUI listens only on the internal Compose network at container port `8188`.
+The gateway facade at `100.107.121.5:1234/api/v1/comfy` requires both the
+rotated bearer credential and a matching bounded GPU lease; direct host access
+is intentionally absent.
 
-## Related
+## Verification
 
-- ADR-0006: Image gen pipeline (Illustrious + Klukai LoRA)
-- `reference_illustrious.md`
-- `feedback_comfyui_port.md`
-- `app/image_gen.py`
+1. Confirm gateway health reports `comfyui_status: ok`; inspect
+   `/system_stats` and `/object_info` only from inside the container network.
+2. Run one NoobAI/Illustrious workflow with
+   `Klukai_GFL2_IL-03.safetensors` and one SDXL Turbo workflow.
+3. Confirm generated files land under
+   `/mnt/nvmer0/services/ai-stack/data/comfyui/output`.
+4. Confirm chat remains usable while image generation is unavailable or busy.
+
+Models are mounted read-only from the verified release. Do not download
+replacement weights inside ComfyUI; restore or restage them through the model
+lock procedure in `ops/dominus-nobara/RUNBOOK.md`.

@@ -1,51 +1,23 @@
-# companion-voice — runs on DOMINUS (RTX 3090, CUDA required).
-# Deploy:  dominus:~/git/klukai $ docker compose -f docker-compose.voice.yml up -d --build
-# Reachable at dominus:8301 over Tailscale; companion-core uses VOICE_URL.
+# RETIRED: the standalone voice deployment was replaced by the canonical
+# dominus-nobara AI stack. This file intentionally defines no services, so an
+# old `docker compose -f docker-compose.voice.yml up` command cannot create a
+# second companion-voice container or compete for Tailscale port 8301.
 #
-# SELF-HEAL — fixes the recurring :8301 port-loss. XTTS's GPU model load at
-# startup can leave the container "up" but not actually serving on 8301. The
-# /health healthcheck flips it to unhealthy and the restart policy + autoheal
-# label recover it automatically, instead of a manual `rm -f && compose up`.
-# (Mirrors the self-heal that companion-core already uses on amarillo.)
-#
-# NOTE: reconcile the GPU stanza + volume paths with the existing dominus setup
-# before deploying — if dominus already uses `runtime: nvidia` or `gpus: all`,
-# keep that; the deploy.devices form below is the Compose-v2 equivalent.
-services:
-  companion-voice:
-    build: ./docker/voice
-    container_name: companion-voice
-    ports:
-      - "8301:8301"            # Host-published; restrict ingress to the Tailnet firewall-side
-    environment:
-      REFERENCE_WAV: "${REFERENCE_WAV:-/app/reference/klukai_reference.wav}"
-      WHISPER_MODEL: "${WHISPER_MODEL:-base.en}"
-      TTS_ENGINE: "${TTS_ENGINE:-xtts}"
-      # Opt-in bearer auth (app/main.py). Empty = auth off (current behavior).
-      # Must match VOICE_API_TOKEN on companion-core (docker-compose.yml).
-      VOICE_API_TOKEN: "${VOICE_API_TOKEN:-}"
-      # Uvicorn bind address (docker/voice/Dockerfile CMD). Default 0.0.0.0.
-      VOICE_BIND_HOST: "${VOICE_BIND_HOST:-0.0.0.0}"
-    volumes:
-      - voice-models:/app/models   # persist XTTS + whisper downloads across restarts
-    # GPU access (RTX 3090). Requires nvidia-container-toolkit on dominus.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
-    healthcheck:
-      # XTTS load is slow — a generous start_period so it isn't killed mid-load.
-      test: ["CMD-SHELL", "curl -sf http://localhost:8301/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 180s
-    labels:
-      autoheal: "true"          # picked up by an autoheal sidecar (as on amarillo)
+# Canonical Compose file:
+#   ops/dominus-nobara/compose.yaml
+# Canonical service:
+#   companion-voice
+# Canonical user unit:
+#   dominus-ai-stack.service
+# Full procedure:
+#   ops/dominus-nobara/RUNBOOK.md
 
-volumes:
-  voice-models:
+name: klukai-voice-retired
+
+x-retired-deployment:
+  host: dominus-nobara
+  compose_file: ops/dominus-nobara/compose.yaml
+  service: companion-voice
+  systemd_user_unit: dominus-ai-stack.service
+
+services: {}

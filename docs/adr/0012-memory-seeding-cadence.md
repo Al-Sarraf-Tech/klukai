@@ -1,73 +1,68 @@
-# ADR-0012: Memory archive seeding cadence — every 2 days, 3-6 AM dominus-local
+# ADR-0012: Memory archive seeding cadence — every other local day, 03:00–06:00
 
 - **Date:** 2026-04 (formalized 2026-05-16)
+- **Updated:** 2026-08-01 (Amarillo timer reconstruction)
 - **Status:** Accepted
 - **Authors:** jalsarraf
 
 ## Context
 
-Klukai's "memory archive" is her curated photo album (per
-`project_memory_archive.md`): images she's chosen to keep, with
-annotations describing the scene + mood. Building this requires:
+Klukai's memory archive is her curated photo album. The seed pipeline selects
+meaningful unprocessed conversations, writes in-character annotations, and
+uses the image pipeline for retained memories. It needs the live
+`companion-core` container and database on Amarillo, while its LLM and ComfyUI
+calls consume the shared RTX 3090 through the authenticated Tailscale gateway
+and bounded GPU lease on `dominus-nobara`.
 
-1. Browsing all generated images (`companion_memories`).
-2. Selecting which to keep (`gpt-oss-20b` decides per
-   `feedback_gptoss_for_memories.md`).
-3. Annotating the kept ones (`dolphin-24b` writes the descriptions).
-
-Steps 2 + 3 are LLM-heavy. Running them during chat hours would
-contend with the conversational chat path on the same dominus GPU.
+The original schedule was associated with the lost `dominus` environment and
+had no surviving unit in this repository. Restoring that dead host as a timer
+owner would make the schedule operationally false.
 
 ## Decision
 
-Memory archive seeding runs on a **systemd timer on dominus** every
-2 days, 3-6 AM (local) when chat traffic is essentially zero.
-The cadence + window is captured in `feedback_memory_seeding_schedule.md`
-with priority ABSOLUTE.
+Amarillo owns `klukai-memory-archive-seed.timer` and its oneshot service. The
+timer evaluates daily at 04:00 America/Chicago. A checked `ExecCondition`
+admits only even Unix-epoch local calendar days, yielding a deterministic
+every-other-day cadence, and rejects any execution outside 03:00–06:00.
 
-Pipeline (two-pass):
-1. `gpt-oss-20b` selects images from the unprocessed pool. Output:
-   list of `memory_id` to keep.
-2. `dolphin-24b` annotates each kept image. Output: annotation +
-   scene tags.
+The timer has `Persistent=false`, so a machine that was down at 04:00 never
+catches up outside the approved window. The service has a 6,900-second timeout
+so a stuck 04:00 run ends before 06:00. It executes exactly:
 
-Reannotation of existing memories runs as a separate path
-(`docker/core/reannotate_existing.py`) — useful when annotation
-quality bar shifts (e.g., new prompt).
+```text
+docker compose exec -T companion-core python3 /app/seed_memories.py
+```
+
+Model aliases remain application policy in `docker/core/seed_memories.py` and
+must resolve through `ops/dominus-nobara/models.lock.json`. The timer neither
+overrides model choice nor bypasses Tailscale, bearer authentication, the game
+guard, or the GPU lease.
 
 ## Consequences
 
-- **No contention with chat**: 3-6 AM is reliably idle for klukai.
-- **2-day cadence** means at most ~48h between new image gen and it
-  appearing in the archive. Acceptable for a curated album, not
-  acceptable for real-time UI.
-- **Backfill via `/api/memories/backfill-annotations`**: operator
-  can trigger reannotation on-demand without waiting for the
-  scheduled run.
-- **dominus must be on** for seeding to run. If dominus is off
-  during the window, the next run picks up everything.
-- **Model selection matters**: per `feedback_dolphin_for_annotations.md`,
-  Dolphin for creative text (the annotation IS creative writing),
-  gpt-oss for JSON (the selection is structured), gemma-4 for quick
-  fixes. NEVER thinking models for creative text.
+- The schedule follows the host that owns `companion-core` and its database.
+- There is no boot-time or daytime catch-up. A missed or failed eligible run is
+  picked up by the pipeline's unprocessed-state logic on a later eligible date.
+- Amarillo and the Dominus Tailnet services must both be healthy for GPU-backed
+  selection/image work; failure does not permit a LAN or dead-host fallback.
+- Operators do not manually start the service outside the approved window.
+- During a GPU embargo, the checked units may be installed and statically
+  verified, but the timer remains disabled and inactive.
 
 ## Alternatives considered
 
-- **Real-time annotation on image gen**: rejected — would block chat
-  while annotation runs. Latency unacceptable.
-- **Daily cadence**: rejected — 24h is too frequent; pipeline takes
-  ~10-30min per run; weekly is too sparse. 2 days is the trade-off.
-- **Manual selection**: rejected — defeats the "Klukai curates"
-  framing of `project_memory_archive.md`.
+- **Timer on dominus-nobara:** rejected because the core container and database
+  live on Amarillo; remote orchestration would add another failure boundary.
+- **Persistent catch-up:** rejected because it can run during chat or gaming
+  hours and violate the absolute time window.
+- **Daily or weekly cadence:** rejected; every other day is the established
+  balance between freshness and GPU contention.
 
 ## Related
 
-- `docker/core/seed_memories.py` (main seeding pipeline)
-- `docker/core/reannotate_existing.py` (on-demand reannotation)
-- `app/memory_archive.py`
-- `feedback_memory_seeding_schedule.md` (global CLAUDE.md, ABSOLUTE)
-- `feedback_gptoss_for_memories.md`
-- `feedback_dolphin_for_annotations.md`
-- `project_memory_archive.md`
-- ADR-0004 (LM Studio routing — same models)
-- ADR-0006 (image gen pipeline — source of memories)
+- `ops/amarillo/README.md`
+- `ops/amarillo/systemd/klukai-memory-archive-seed.service`
+- `ops/amarillo/systemd/klukai-memory-archive-seed.timer`
+- `docker/core/seed_memories.py`
+- ADR-0004 (locked local model routing)
+- ADR-0006 (image generation pipeline)

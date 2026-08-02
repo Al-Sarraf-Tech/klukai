@@ -49,7 +49,7 @@ Initial dashboards (Phase 2 spec §6.5):
 - `overview.json` — TBD: per-endpoint RED panel
 - `chat-path.json` — TBD: LM Studio latency, mood breakdown
 - `memory-pipeline.json` — TBD: Qdrant search latency, recall rate
-- `voice-image-gen.json` — TBD: dominus GPU health
+- `voice-image-gen.json` — TBD: dominus-nobara GPU health
 
 These get authored as klukai's metrics surface stabilizes.
 

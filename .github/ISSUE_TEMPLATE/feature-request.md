@@ -71,4 +71,4 @@ labels: enhancement
 - [ ] Must not modify Commander persona
       (`feedback_commander_human.md`, ADR-0011)
 - [ ] Must not require macOS / darwin (global CLAUDE.md)
-- [ ] Must work on amarillo + dominus topology only (ADR-0002, ADR-0015)
+- [ ] Must work on amarillo + dominus-nobara topology only (ADR-0002, ADR-0015)

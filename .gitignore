@@ -1,4 +1,14 @@
 .env
+/ops/dominus-nobara/config/stack.env
+/ops/dominus-nobara/config/tls/
+/ops/dominus-nobara/recovery-snapshots/
+/ops/dominus-nobara/.recovery-snapshot/
+/ops/dominus-nobara/source-files.nul
+/ops/dominus-nobara/source-files.jsonl
+/ops/dominus-nobara/source-tree.sha256
+/ops/dominus-nobara/base-head.txt
+/ops/dominus-nobara/base-status.txt
+/ops/dominus-nobara/models.lock.sha256
 web-build/*
 !web-build/.gitkeep
 !web-build/index.html

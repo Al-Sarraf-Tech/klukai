@@ -53,10 +53,12 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
 
     Failure modes surface a UX signal — the user never gets ghosted.
     """
-    voice_url = os.environ.get("VOICE_URL", "http://dominus:8301")
+    voice_url = os.environ.get("VOICE_URL", "http://100.107.121.5:8301")
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(
+            timeout=30.0, trust_env=False, follow_redirects=False
+        ) as client:
             await ws.send_thinking(user_id, "Listening...")
             try:
                 from .helpers import voice_auth_headers
@@ -88,11 +90,12 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
                 last_turn = session.turns[-1]
                 if last_turn["role"] == "assistant":
                     try:
-                        from .helpers import voice_auth_headers
-                        r = await client.post(
-                            f"{voice_url}/tts",
-                            json={"text": last_turn["content"]},
-                            headers=voice_auth_headers(),
+                        from .voice_client import post_leased_tts
+
+                        r = await post_leased_tts(
+                            client,
+                            {"text": last_turn["content"]},
+                            timeout=30.0,
                         )
                         if r.status_code == 200:
                             import base64

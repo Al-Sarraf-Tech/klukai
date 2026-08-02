@@ -12,13 +12,14 @@ from pydantic import BaseModel
 
 from .db import get_conn, get_conn_autocommit
 from .events import publish as publish_event
+from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
 from .personality import load_personality
 
 logger = logging.getLogger(__name__)
 
 # Affection classification uses gpt-oss-20b — reliable JSON, uncensored.
 # Only used as legacy fallback — primary path is merged extraction via extract_facts().
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
 CLASSIFICATION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
 DAILY_POINTS_CAP = 8  # fallback only; config affection.scoring.daily_points_cap is authoritative
@@ -340,9 +341,9 @@ class AffectionManager:
 
             gate = get_lm_gate()
             async with gate:  # Waits for main chat to finish streaming
-                from .llm_router import LM_TTL_SECONDS
                 r = await self._http.post(
                     f"{LM_STUDIO_URL}/v1/chat/completions",
+                    headers=lm_studio_auth_headers(),
                     json={
                         "model": CLASSIFICATION_MODEL,
                         "messages": [{"role": "user", "content": prompt}],
@@ -365,7 +366,7 @@ class AffectionManager:
             intensity = max(1, min(10, int(result.get("intensity", 5))))
             return itype, intensity
         except Exception as e:
-            logger.warning("Interaction classification failed: %s", e)
+            logger.warning("Interaction classification failed (%s)", type(e).__name__)
             return "neutral", 5
 
     def _calculate_delta(self, interaction_type: str, intensity: int) -> int:

@@ -44,7 +44,7 @@ instead of a vibe.
 
 | Endpoint | Latency target | Availability | Notes |
 |---|---|---|---|
-| `POST /api/chat/turn` (first token) | p99 ≤ **2s** | 99.9% | Time-to-first-token; LM Studio on dominus dominates |
+| `POST /api/chat/turn` (first token) | p99 ≤ **2s** | 99.9% | Time-to-first-token; a cold llama.cpp load on dominus-nobara dominates |
 | `POST /api/chat/turn` (full response) | p99 ≤ **8s** | 99.9% | Whole completion, varies by `max_tokens` (6144 cap) |
 | `WS /ws` (connection) | p99 ≤ **200ms** | 99.9% | Reconnect-tolerant; brief drops acceptable |
 | `WS /ws` (per-message latency) | p99 ≤ **8s** | 99.9% | Inherits chat-turn target |
@@ -74,12 +74,12 @@ instead of a vibe.
 | `GET /api/audit/verify` | p99 ≤ **500ms** | 99.9% | Walk chain; O(N) over recent window |
 | `POST /api/admin/rate-limit/reset` | p99 ≤ **200ms** | 99.9% | Redis flush by bucket |
 
-### Image gen (offloaded to dominus)
+### Image gen (offloaded to dominus-nobara)
 
 | Endpoint | Latency target | Availability | Notes |
 |---|---|---|---|
 | `POST /api/images/generate` (queue) | p99 ≤ **200ms** | 99.9% | Just enqueues; actual gen happens async |
-| Image gen end-to-end | p95 ≤ **15s** | 99% | ComfyUI on dominus; 5s VRAM-contention delay built in |
+| Image gen end-to-end | p95 ≤ **15s** | 99% | ComfyUI on dominus-nobara; admission waits for the bounded GPU lease and verified LLM quiescence |
 
 ## Composite SLOs
 
@@ -122,8 +122,8 @@ If one of these becomes user-facing, it gets an SLO when that PR lands.
 ## Revisiting
 
 This document is **not a contract** — it's a target. When the architecture
-changes (e.g., voice moves off dominus, LM Studio replaced with a faster
-model, cache TTL tuned), the targets get re-evaluated. Change history
+changes (e.g., voice moves off dominus-nobara, the llama.cpp backend changes,
+or a cache TTL is tuned), the targets get re-evaluated. Change history
 lives in `git log -- docs/slos.md`; rationale for any target change goes
 in an ADR.
 

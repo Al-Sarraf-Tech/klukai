@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,6 +20,7 @@ import pytest
 # integration target opts in explicitly from Makefile.
 if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
     os.environ["LM_STUDIO_URL"] = "http://127.0.0.1:1"
+    os.environ.setdefault("LM_STUDIO_TOKEN", "pytest-local-lm-token")
     os.environ["VOICE_URL"] = "http://127.0.0.1:1"
     os.environ["COMFYUI_URL"] = "http://127.0.0.1:1"
 
@@ -111,6 +113,28 @@ def mock_httpx_post():
     mock_post = AsyncMock(return_value=resp)
     with patch("httpx.AsyncClient.post", mock_post):
         yield mock_post
+
+
+@pytest.fixture
+def mock_voice_gpu_lease(monkeypatch):
+    """Keep legacy voice-call unit tests offline under the new lease boundary."""
+
+    from app import llm_router, voice_client
+    from app.gpu_lease import GPULease
+
+    class Gate:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    @asynccontextmanager
+    async def lease(_workload: str):
+        yield GPULease(ttl_seconds=600, token="pytest-voice-lease")
+
+    monkeypatch.setattr(llm_router, "get_lm_gate", lambda: Gate())
+    monkeypatch.setattr(voice_client, "gpu_lease", lease)
 
 
 # ── Redis mock ───────────────────────────────────────────────────────────────

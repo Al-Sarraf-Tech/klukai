@@ -10,18 +10,18 @@ status, consequences. Format follows [MADR-lite](https://adr.github.io/madr/).
 | [0001](0001-s-tier-uplift.md) | Adopt S+ tier uplift roadmap | Accepted | Spec |
 | [0002](0002-amarillo-dominus-split.md) | Compute split: amarillo (core/gateway) + dominus (voice/GPU) | Accepted | Origin |
 | [0003](0003-three-tier-memory.md) | Three-tier memory: Redis → Qdrant → PostgreSQL | Accepted | Origin |
-| [0004](0004-lm-studio-routing.md) | LM Studio model routing (gemma-4 / dolphin / gpt-oss) | Accepted | 2026-04 |
+| [0004](0004-lm-studio-routing.md) | Local model routing through the compatibility gateway | Accepted | 2026-04 / 2026-08 amendment |
 | [0005](0005-affection-taxonomy.md) | Affection level 0-9 with distinct speech patterns | Accepted | Origin |
 | [0006](0006-image-gen-pipeline.md) | Illustrious + Klukai LoRA on dominus ComfyUI | Accepted | 2026-04 |
-| [0007](0007-voice-on-dominus.md) | XTTS v2 on dominus (RTX 3090 + CUDA) | Accepted | Origin |
+| [0007](0007-voice-on-dominus.md) | XTTS v2 on dominus-nobara with bounded GPU lease | Accepted | Origin / 2026-08 amendment |
 | [0008](0008-audit-chain-hmac.md) | HMAC-chained audit log for tamper detection | Accepted | 2026-04 |
 | [0009](0009-cloudflare-nginx-gateway.md) | Cloudflare → nginx gateway → companion-core | Accepted | Origin |
 | [0010](0010-flutter-pwa-base-href.md) | Flutter PWA at `/app/` base-href (service worker scope) | Accepted | 2026-04 |
 | [0011](0011-character-rules.md) | Klukai is T-Doll; Commander is HUMAN (canonical rules) | Accepted | Origin |
-| [0012](0012-memory-seeding-cadence.md) | Memory archive seeding every 2 days, 3-6 AM | Accepted | 2026-04 |
+| [0012](0012-memory-seeding-cadence.md) | Amarillo memory seeding every other local day, 03:00–06:00 | Accepted | 2026-04 / 2026-08 amendment |
 | [0013](0013-klukai-vs-kairi-separation.md) | klukai and kairi are separate characters, separate data | Accepted | 2026-04 |
-| [0014](0014-offsite-backup.md) | Off-site backup: amarillo → dominus nightly tar | Accepted | 2026-04 |
-| [0015](0015-wsl2-decommissioned.md) | wsl2 is NOT a klukai deployment target | Accepted | 2026-04 |
+| [0014](0014-offsite-backup.md) | Off-host recovery copy: amarillo → dominus-nobara over Tailscale | Accepted | 2026-04 / 2026-08 amendment |
+| [0015](0015-wsl2-decommissioned.md) | Windows and WSL2 are not deployment targets | Accepted | 2026-04 / 2026-08 amendment |
 | [0016](0016-tribute-system.md) | Tribute system — Commander's crown-jewel memories | Accepted | 2026-05 |
 
 ## Conventions

@@ -72,7 +72,8 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     if not content.strip():
         return
 
-    # Track user activity for idle unload + romance window
+    # Preserve relationship activity tracking. This timestamp cannot extend
+    # LLM residency; the compatibility keepalive method is a hard no-op.
     from .llm_router import mark_user_active
     mark_user_active()
     proactive.mark_user_messaged_today()

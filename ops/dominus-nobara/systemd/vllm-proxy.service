@@ -1,0 +1,20 @@
+[Unit]
+Description=Fail-closed lazy proxy for native vLLM (loopback port 8000)
+After=graphical-session.target
+Wants=vllm-idle-watchdog.service
+ConditionPathIsMountPoint=/mnt/nvmer0
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/mountpoint --quiet /mnt/nvmer0
+ExecStartPre=/usr/bin/test -d /mnt/nvmer0/services/ai-stack/state/vllm
+ExecStartPre=/usr/bin/test -d /mnt/nvmer0/services/ai-stack/logs/vllm
+ExecStartPre=/usr/bin/test -r /home/jalsarraf/.local/bin/dominus_gpu_lease.py
+ExecStart=/usr/bin/python3 /home/jalsarraf/.local/bin/dominus-vllm-proxy.py
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

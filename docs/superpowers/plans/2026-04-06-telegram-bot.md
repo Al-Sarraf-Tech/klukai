@@ -68,7 +68,7 @@ Write to `telegram/.gitignore`.
 - [ ] **Step 4: Write .env file**
 
 ```bash
-TELEGRAM_BOT_TOKEN=8631107462:AAH5s5W7kf544FrmBDnrtpoC09Q5MBbiSVo
+TELEGRAM_BOT_TOKEN=<ROTATE_AND_SET_LOCALLY>
 ALLOWED_USER_IDS=
 REDIS_URL=redis://100.111.198.19:16379/1
 COMPANION_CORE_URL=http://localhost:8300

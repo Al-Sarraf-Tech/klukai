@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 import anthropic
 import httpx
 
+from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
 from .models import LLMConfig, SessionState
 
 logger = logging.getLogger(__name__)
@@ -38,21 +39,17 @@ def lm_gate_busy() -> bool:
     """True if an LM Studio request is currently in-flight."""
     return _lm_gate is not None and _lm_gate.locked()
 
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")  # Dominus RTX 3090 via Tailscale
-LM_STUDIO_TOKEN = os.environ.get("LM_STUDIO_TOKEN", "")
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")  # Dominus RTX 3090 via Tailscale
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 
 def _lm_headers() -> dict[str, str]:
-    """Bearer auth header for dominus LM Studio. Empty dict if no token set."""
-    if LM_STUDIO_TOKEN:
-        return {"Authorization": f"Bearer {LM_STUDIO_TOKEN}"}
-    return {}
+    """Required bearer header for the Tailscale-only compatibility gateway."""
+    return lm_studio_auth_headers()
 
-# Per-request TTL (seconds) — LM Studio auto-unloads the model this long
-# after the last request. Applies only to JIT-loaded models; manual loads
-# keep their own lifecycle. Override via env LM_STUDIO_TTL.
-LM_TTL_SECONDS = int(os.environ.get("LM_STUDIO_TTL", "600"))
+# This is a policy ceiling, not a tuning knob. It is intentionally independent
+# of the environment so stale deployment values cannot keep an LLM resident.
+MAX_LLM_IDLE_TTL_SECONDS = LM_TTL_SECONDS
 
 # Model aliases
 LOCAL_CASUAL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"  # Chat: uncensored, clean streaming, no thinking tags
@@ -60,50 +57,43 @@ LOCAL_AGENT = "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2"     # Agent: 
 LOCAL_TOOLS = LOCAL_AGENT                                               # Same as agent
 CLOUD_FALLBACK = "claude-haiku-4-5-20251001"
 
-# ── Model keep-alive ───────────────────────────────────────────────────────
-_KEEPALIVE_INTERVAL = 20 * 60  # Ping every 20 minutes to prevent eviction
+# Legacy activity bookkeeping remains for compatibility with older companion
+# extensions and observability tests. It cannot issue requests: ``keepalive``
+# below is a policy-enforced no-op and no scheduler calls it.
+_KEEPALIVE_INTERVAL = 20 * 60
 _model_last_used: dict[str, float] = {}
-
-# ── Idle auto-unload ──────────────────────────────────────────────────────
-# If no user message for IDLE_TIMEOUT seconds AND no active mission timer,
-# skip keepalive pings and let LM Studio evict models from VRAM.
-IDLE_TIMEOUT = 2 * 3600  # 2 hours
+IDLE_TIMEOUT = 2 * 3600
 _last_user_message: float = 0.0
-_seeding_active: bool = False  # Set by seed_memories.py to suppress keepalive
+_seeding_active: bool = False
 
 
 def set_seeding_active(active: bool) -> None:
-    """Signal that memory seeding is running — suppresses keepalive to avoid VRAM fights."""
     global _seeding_active
     _seeding_active = active
 
 
 def _is_early_am_window() -> bool:
-    """Hours 1-4 local time — proactive engine runs dreams/events, keep LLM warm."""
     from datetime import datetime
+
     return 1 <= datetime.now().hour <= 4
 
 
 def mark_user_active() -> None:
-    """Record that a user message was just received (for idle unload)."""
     global _last_user_message
     _last_user_message = time.monotonic()
 
 
 def _is_user_idle() -> bool:
-    """True if no user message received for IDLE_TIMEOUT seconds."""
     if _last_user_message == 0.0:
-        return False  # Never messaged yet — don't unload on fresh startup
+        return False
     return (time.monotonic() - _last_user_message) > IDLE_TIMEOUT
 
 
 def mark_model_used(model: str) -> None:
-    """Record that a model was just used (for keepalive scheduling)."""
     _model_last_used[model] = time.monotonic()
 
 
 def model_needs_keepalive(model: str) -> bool:
-    """True if the model hasn't been used recently and may be evicted."""
     last = _model_last_used.get(model, 0)
     return last == 0 or (time.monotonic() - last > _KEEPALIVE_INTERVAL)
 
@@ -433,59 +423,8 @@ class LLMRouter:
             )
 
     async def keepalive(self) -> None:
-        """Ping primary chat model to keep it loaded in LM Studio VRAM.
-
-        Skips if a real request is already in-flight (model is warm by definition).
-        Also skips if the user has been idle for IDLE_TIMEOUT and no mission is active,
-        letting LM Studio evict models to free VRAM.
-        """
-        if lm_gate_busy():
-            return  # Real request in progress — model is warm, skip ping
-        if not self._lmstudio_available:
-            await self._ensure_lmstudio_fresh()
-        if not self._lmstudio_available:
-            return
-
-        # Skip keepalive during memory seeding — it fights for VRAM
-        if _seeding_active:
-            logger.debug("Keepalive skipped: memory seeding active")
-            return
-
-        # Auto-unload: skip keepalive when no users connected AND no mission running
-        # Exception: early AM (1-4) — proactive engine needs LLM for dreams/events
-        from .context import ws
-        anyone_connected = bool(ws._connections)
-        from .proactive import has_active_mission
-
-        if not anyone_connected and not has_active_mission() and not _is_early_am_window():
-            if _is_user_idle():
-                logger.info("LLM idle unload: no connections, no mission, letting models evict")
-                return
-
-        gate = get_lm_gate()
-        # Only keepalive dolphin — it handles chat + extraction + classification
-        for model in (LOCAL_CASUAL,):
-            if not model_needs_keepalive(model):
-                continue
-            try:
-                async with gate:
-                    r = await self._http.post(
-                        f"{LM_STUDIO_URL}/v1/chat/completions",
-                        json={
-                            "model": model,
-                            "messages": [{"role": "user", "content": "."}],
-                            "max_tokens": 1,
-                            "temperature": 0,
-                            "stream": False,
-                            "ttl": LM_TTL_SECONDS,
-                        },
-                        timeout=30.0,
-                    )
-                    if r.status_code == 200:
-                        mark_model_used(model)
-                        logger.debug("Keepalive OK: %s", model)
-            except Exception as e:
-                logger.warning("Keepalive failed for %s: %s", model, e)
+        """Compatibility no-op: strict policy forbids extending LLM residency."""
+        logger.warning("LLM keepalive ignored: strict max idle TTL is %ss", LM_TTL_SECONDS)
 
     async def _stream_lmstudio(
         self, system_prompt: str, messages: list[dict], config: LLMConfig

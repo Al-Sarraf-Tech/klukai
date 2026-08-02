@@ -1,0 +1,705 @@
+name: dominus-ai-stack
+
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "25m"
+    max-file: "4"
+
+x-gpu-reservation: &gpu-reservation
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
+
+services:
+  # Compose interpolation rejects empty values; this one-shot also rejects
+  # whitespace-only or weak placeholders before any public service starts.
+  stack-preflight:
+    image: python:3.12.11-slim@sha256:c00fc7b44d844b6da22861ec24af43968a5200eac4ec607b4725d585165d6b49
+    platform: linux/amd64
+    restart: "no"
+    command:
+      - python
+      - -c
+      - |
+        import os
+        import sys
+
+        secret_names = ("LM_STUDIO_TOKEN", "SPEACHES_API_KEY", "VOICE_API_TOKEN")
+        bad_secrets = [
+            name for name in secret_names if len(os.environ.get(name, "").strip()) < 32
+        ]
+        bad_ttls = []
+        ttl_names = (
+            "SPEACHES_STT_MODEL_TTL_SECONDS",
+            "SPEACHES_TTS_MODEL_TTL_SECONDS",
+            "VOICE_MODEL_TTL_SECONDS",
+        )
+        ttl_values = {}
+        for name in ttl_names:
+            try:
+                value = int(os.environ.get(name, ""))
+            except ValueError:
+                bad_ttls.append(name)
+            else:
+                maximum = 895 if name.startswith("SPEACHES_") else 900
+                if not 1 <= value <= maximum:
+                    bad_ttls.append(name)
+                ttl_values[name] = value
+        errors = []
+        if os.path.exists("/run/dominus-gpu/game-active"):
+            errors.append("game marker is active; refusing to start GPU service shells")
+        if bad_secrets:
+            errors.append("missing/short rotated secret(s): " + ",".join(bad_secrets))
+        if bad_ttls:
+            errors.append(
+                "Speaches TTLs must be 1..895 and voice TTL must be 1..900: "
+                + ",".join(bad_ttls)
+            )
+        if (
+            not bad_ttls
+            and ttl_values["SPEACHES_STT_MODEL_TTL_SECONDS"]
+            != ttl_values["SPEACHES_TTS_MODEL_TTL_SECONDS"]
+        ):
+            errors.append("pinned Speaches 0.8.3 requires matching STT/TTS TTLs")
+        sys.exit("; ".join(errors) if errors else 0)
+    environment:
+      LM_STUDIO_TOKEN: "${LM_STUDIO_TOKEN:?LM_STUDIO_TOKEN must be a non-empty rotated secret}"
+      SPEACHES_API_KEY: "${SPEACHES_API_KEY:?SPEACHES_API_KEY must be a non-empty rotated secret}"
+      VOICE_API_TOKEN: "${VOICE_API_TOKEN:?VOICE_API_TOKEN must be a non-empty rotated secret}"
+      SPEACHES_STT_MODEL_TTL_SECONDS: "${SPEACHES_STT_MODEL_TTL_SECONDS:-600}"
+      SPEACHES_TTS_MODEL_TTL_SECONDS: "${SPEACHES_TTS_MODEL_TTL_SECONDS:-600}"
+      VOICE_MODEL_TTL_SECONDS: "${VOICE_MODEL_TTL_SECONDS:-600}"
+    read_only: true
+    volumes:
+      - type: bind
+        source: /run/user/1000/dominus-gpu
+        target: /run/dominus-gpu
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    network_mode: none
+    logging: *default-logging
+
+  # CPU-only compatibility/catalog layer. It is deliberately independent of
+  # llama-router so health and model catalog requests still work while the GPU
+  # router is quiesced for a game.
+  lmstudio-compat:
+    depends_on:
+      stack-preflight:
+        condition: service_completed_successfully
+    build:
+      context: ./lmstudio-compat
+      dockerfile: Dockerfile
+    image: dominus-lmstudio-compat:2026-08-01
+    user: "1000:1001"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    environment:
+      LLAMA_CPP_URL: http://llama-router:8080
+      COMFYUI_URL: http://comfyui:8188
+      COMPANION_VOICE_URL: http://companion-voice:8301
+      COMPANION_VOICE_BEARER_TOKEN: "${VOICE_API_TOKEN:?VOICE_API_TOKEN must be a non-empty rotated secret}"
+      MODEL_LOCK_PATH: /config/models.lock.json
+      GATEWAY_BEARER_TOKEN: "${LM_STUDIO_TOKEN:?LM_STUDIO_TOKEN must be a non-empty rotated secret}"
+      GAME_ACTIVE_MARKER: /run/dominus-gpu/game-active
+      GPU_LEASE_MARKER: /run/dominus-gpu/non-llm-lease.json
+      GPU_LEASE_VLLM_ACK: /run/dominus-gpu/non-llm-lease-vllm-ack.json
+    ports:
+      - "100.107.121.5:1234:1234"
+    volumes:
+      - type: bind
+        source: ./models.lock.json
+        target: /config/models.lock.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/user/1000/dominus-gpu
+        target: /run/dominus-gpu
+        read_only: false
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:1234/health', timeout=3).read()
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
+    stop_grace_period: 15s
+    # ai-internal alone has no bridge gateway, so Docker cannot program the
+    # host->container DNAT for its published port; ai-publish exists only to
+    # carry that inbound path, still pinned to the literal Tailscale address.
+    networks: [ai-internal, ai-publish]
+    logging: *default-logging
+
+  # Router mode starts without a model. A request selects one preset and only
+  # one weight set may be resident. b10200 polls its idle sleeper at up to one
+  # second, so 898 is a fixed safety deadline that guarantees release by the
+  # hard 900-second ceiling. The gateway also strips client-provided TTLs.
+  llama-router:
+    image: ghcr.io/ggml-org/llama.cpp@sha256:657694ff6b0ceba64cbaed4502b2c3e5c52812c9911bc813cd1f65b3499b2e72
+    platform: linux/amd64
+    init: true
+    restart: unless-stopped
+    depends_on:
+      stack-preflight:
+        condition: service_completed_successfully
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --models-preset
+      - /config/llama-models.ini
+      - --models-max
+      - "1"
+      - --sleep-idle-seconds
+      - "898"
+      - --threads-http
+      - "${LLAMA_HTTP_THREADS:-8}"
+      - --metrics
+      - --offline
+      - --no-webui
+    environment:
+      LLAMA_CACHE: /cache
+      CUDA_VISIBLE_DEVICES: "0"
+    expose:
+      - "8080"
+    volumes:
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/models/current
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config/llama-models.ini
+        target: /config/llama-models.ini
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+      - /cache:size=64m,mode=0700
+    shm_size: "2gb"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    deploy: *gpu-reservation
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8080;
+          printf "GET /health HTTP/1.0\r\n\r\n" >&3;
+          head -n 1 <&3 | grep -q " 200 "'
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    stop_grace_period: 30s
+    networks: [ai-internal]
+    logging: *default-logging
+
+  comfyui:
+    profiles: [image]
+    build:
+      context: ./config/comfyui
+      dockerfile: Dockerfile
+    image: dominus-comfyui:0.29.2
+    init: true
+    restart: unless-stopped
+    depends_on:
+      stack-preflight:
+        condition: service_completed_successfully
+    command:
+      - --listen
+      - 0.0.0.0
+      - --port
+      - "8188"
+      - --disable-auto-launch
+      - --extra-model-paths-config
+      - /config/extra_model_paths.yaml
+      - --input-directory
+      - /data/input
+      - --output-directory
+      - /data/output
+      - --user-directory
+      - /data/user
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      HF_HUB_OFFLINE: "1"
+    expose:
+      - "8188"
+    volumes:
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/models/current
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config/comfyui-extra-model-paths.yaml
+        target: /config/extra_model_paths.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/data/comfyui/input
+        target: /data/input
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/data/comfyui/output
+        target: /data/output
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/data/comfyui/user
+        target: /data/user
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/cache/comfyui
+        target: /cache
+        read_only: false
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    shm_size: "2gb"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    deploy: *gpu-reservation
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8188/system_stats', timeout=3).read()
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 45s
+    stop_grace_period: 30s
+    networks: [ai-internal]
+    logging: *default-logging
+
+  # Pinned Speaches 0.8.3 can explicitly offload Whisper but exposes no
+  # equivalent Kokoro cleanup endpoint. Until every speech model has a proven
+  # crash-safe GPU cleaner, this service is deliberately CPU-only and receives
+  # no NVIDIA device. A server-owned 895-second timer cutoff keeps real model
+  # residency under the public 900-second policy even with scheduler jitter.
+  speaches:
+    profiles: [speech]
+    image: ghcr.io/speaches-ai/speaches@sha256:f48b50035b173ec4f78af1371a4f8a3f0e24c3c63aeaba6ef99a55d0eee7c1ff
+    platform: linux/amd64
+    init: true
+    restart: unless-stopped
+    read_only: true
+    depends_on:
+      stack-preflight:
+        condition: service_completed_successfully
+    environment:
+      API_KEY: "${SPEACHES_API_KEY:?SPEACHES_API_KEY must be a non-empty rotated secret}"
+      ENABLE_UI: "false"
+      LOG_LEVEL: info
+      WHISPER__INFERENCE_DEVICE: cpu
+      WHISPER__COMPUTE_TYPE: int8
+      # In exact v0.8.3, this one upstream setting feeds Whisper, Piper, and
+      # Kokoro SelfDisposingModel managers. The wrapper independently requires
+      # the STT and TTS values to match and remain <=895 seconds.
+      WHISPER__TTL: "${SPEACHES_STT_MODEL_TTL_SECONDS:-600}"
+      DOMINUS_SPEACHES_TTS_TTL: "${SPEACHES_TTS_MODEL_TTL_SECONDS:-600}"
+      PYTHONPATH: /opt/dominus
+      PYTHONDONTWRITEBYTECODE: "1"
+      HF_HOME: /home/ubuntu/.cache/huggingface
+      HF_HUB_CACHE: /home/ubuntu/.cache/huggingface/hub
+      HF_HUB_OFFLINE: "1"
+    command: [uvicorn, --factory, dominus_speaches:create_app]
+    ports:
+      - "100.107.121.5:8390:8000"
+    volumes:
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/models/current
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/cache/speech/current/speaches-hf
+        target: /home/ubuntu/.cache/huggingface
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config/speaches/dominus_speaches.py
+        target: /opt/dominus/dominus_speaches.py
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    shm_size: "2gb"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          --header "Authorization: Bearer $${API_KEY}"
+          http://127.0.0.1:8000/health
+      interval: 30s
+      timeout: 10s
+      retries: 4
+      start_period: 20s
+    stop_grace_period: 30s
+    networks: [ai-internal, ai-publish]
+    logging: *default-logging
+
+  transcriptionsuite:
+    profiles: [transcription]
+    image: ghcr.io/homelab-00/transcriptionsuite-server@sha256:9b9587d6db3dbc6e06ab5df3498798a9f194bf853156fc2fe62b1b1771dba1b0
+    platform: linux/amd64
+    init: true
+    restart: "no"
+    depends_on:
+      stack-preflight:
+        condition: service_completed_successfully
+    entrypoint: [/bootstrap/offline-entrypoint.sh]
+    environment:
+      DATA_DIR: /data
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: "9786"
+      LOG_LEVEL: "${TRANSCRIPTION_LOG_LEVEL:-INFO}"
+      HF_TOKEN: "${HUGGINGFACE_TOKEN:-}"
+      HF_HOME: /models
+      HF_HUB_OFFLINE: "1"
+      TORCH_HOME: /runtime/torch-cache
+      BOOTSTRAP_RUNTIME_DIR: /runtime
+      BOOTSTRAP_CACHE_DIR: /runtime/cache
+      BOOTSTRAP_STATUS_FILE: /runtime/bootstrap-status.json
+      BOOTSTRAP_TIMEOUT_SECONDS: "${TRANSCRIPTION_BOOTSTRAP_TIMEOUT_SECONDS:-1800}"
+      BOOTSTRAP_REQUIRE_HF_TOKEN: "false"
+      BOOTSTRAP_LOG_CHANGES: "true"
+      PYTORCH_VARIANT: cu129
+      MAIN_TRANSCRIBER_MODEL: "${MAIN_TRANSCRIBER_MODEL:-nvidia/parakeet-tdt-0.6b-v3}"
+      LIVE_TRANSCRIBER_MODEL: "${LIVE_TRANSCRIBER_MODEL:-Systran/faster-whisper-large-v3}"
+      DIARIZATION_MODEL: "${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}"
+      INSTALL_WHISPER: "${TRANSCRIPTION_INSTALL_WHISPER:-true}"
+      INSTALL_NEMO: "${TRANSCRIPTION_INSTALL_NEMO:-true}"
+      INSTALL_VIBEVOICE_ASR: "false"
+      LM_STUDIO_URL: http://lmstudio-compat:1234
+      LLM_API_KEY: "${LM_STUDIO_TOKEN:?LM_STUDIO_TOKEN must be a non-empty rotated secret}"
+      # Production remains hard-disabled until exact gated bytes, exclusive
+      # GPU admission, and tested inbound authentication are all implemented.
+      DOMINUS_TRANSCRIPTION_PRODUCTION_ENABLED: "false"
+      TLS_ENABLED: "true"
+      TLS_CERT_FILE: /certs/cert.crt
+      TLS_KEY_FILE: /certs/cert.key
+      STARTUP_EVENTS_FILE: /startup-events/startup-events.jsonl
+    expose:
+      - "9786"
+    volumes:
+      # v1.3.7's root entrypoint chowns /models, so it cannot be the immutable
+      # release mount. The maintenance profile seeds this writable HF cache
+      # from /release-models with verified XFS reflinks.
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/models/current
+        target: /release-models
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/cache/speech/current/transcriptionsuite-hf
+        target: /models
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/data/transcriptionsuite
+        target: /data
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/runtime/transcriptionsuite
+        target: /runtime
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/config/transcriptionsuite
+        target: /user-config
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/state/transcriptionsuite
+        target: /startup-events
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/config/tls/dominus-nobara.crt
+        target: /certs/cert.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/config/tls/dominus-nobara.key
+        target: /certs/cert.key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config/transcriptionsuite
+        target: /bootstrap
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:size=4g,mode=1777
+    shm_size: "4gb"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - >-
+          if [ "$${TLS_ENABLED:-false}" = true ]; then
+            curl --fail --insecure https://127.0.0.1:9786/health;
+          else
+            curl --fail http://127.0.0.1:9786/health;
+          fi
+      interval: 30s
+      timeout: 10s
+      retries: 4
+      start_period: 600s
+    stop_grace_period: 130s
+    networks: [ai-internal]
+    logging: *default-logging
+
+  # v1.3.7 always syncs its locked Python runtime at startup. This one-shot is
+  # the only TranscriptionSuite container with egress: it fills the RAID venv
+  # and uv cache, records exact source/package hashes, then exits. Production
+  # verifies that seal and runs on the internal/offline network only.
+  transcriptionsuite-bootstrap:
+    profiles: [transcription-bootstrap]
+    image: ghcr.io/homelab-00/transcriptionsuite-server@sha256:9b9587d6db3dbc6e06ab5df3498798a9f194bf853156fc2fe62b1b1771dba1b0
+    platform: linux/amd64
+    init: true
+    restart: "no"
+    entrypoint: [/bootstrap/bootstrap.sh]
+    environment:
+      DOMINUS_TRANSCRIPTION_BOOTSTRAP_ENABLED: "false"
+      HF_TOKEN: "${HUGGINGFACE_TOKEN:-}"
+      HF_HOME: /models
+      HF_HUB_OFFLINE: "1"
+      TORCH_HOME: /runtime/torch-cache
+      BOOTSTRAP_RUNTIME_DIR: /runtime
+      BOOTSTRAP_CACHE_DIR: /runtime/cache
+      BOOTSTRAP_STATUS_FILE: /runtime/bootstrap-status.json
+      BOOTSTRAP_TIMEOUT_SECONDS: "${TRANSCRIPTION_BOOTSTRAP_TIMEOUT_SECONDS:-1800}"
+      BOOTSTRAP_REQUIRE_HF_TOKEN: "false"
+      BOOTSTRAP_LOG_CHANGES: "true"
+      PYTORCH_VARIANT: cu129
+      MAIN_TRANSCRIBER_MODEL: "${MAIN_TRANSCRIBER_MODEL:-nvidia/parakeet-tdt-0.6b-v3}"
+      LIVE_TRANSCRIBER_MODEL: "${LIVE_TRANSCRIBER_MODEL:-Systran/faster-whisper-large-v3}"
+      DIARIZATION_MODEL: "${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}"
+      INSTALL_WHISPER: "${TRANSCRIPTION_INSTALL_WHISPER:-true}"
+      INSTALL_NEMO: "${TRANSCRIPTION_INSTALL_NEMO:-true}"
+      INSTALL_VIBEVOICE_ASR: "false"
+      STARTUP_EVENTS_FILE: /startup-events/startup-events.jsonl
+    volumes:
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/cache/speech/current/transcriptionsuite-hf
+        target: /models
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/runtime/transcriptionsuite
+        target: /runtime
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/state/transcriptionsuite
+        target: /startup-events
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config/transcriptionsuite
+        target: /bootstrap
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:size=4g,mode=1777
+    shm_size: "4gb"
+    security_opt:
+      - no-new-privileges:true
+    networks: [bootstrap-egress]
+    logging: *default-logging
+
+  companion-voice:
+    profiles: [voice]
+    build:
+      context: ../../docker/voice
+      dockerfile: Dockerfile
+    image: dominus-companion-voice:2026-08-01
+    init: true
+    group_add: ["1001"]
+    restart: unless-stopped
+    depends_on:
+      stack-preflight:
+        condition: service_completed_successfully
+    read_only: true
+    environment:
+      REFERENCE_WAV: /models/voice/reference/klukai_reference.wav
+      WHISPER_MODEL: base.en
+      WHISPER_MODEL_DIR: /models/voice/whisper-base-en
+      XTTS_MODEL_DIR: /models/voice/xtts-v2
+      VOICE_MODEL_TTL: "${VOICE_MODEL_TTL_SECONDS:-600}"
+      TTS_ENGINE: xtts
+      VOICE_API_TOKEN: "${VOICE_API_TOKEN:?VOICE_API_TOKEN must be a non-empty rotated secret}"
+      VOICE_BIND_HOST: 0.0.0.0
+      GPU_LEASE_MARKER: /run/dominus-gpu/non-llm-lease.json
+      HF_HUB_OFFLINE: "1"
+      CUDA_VISIBLE_DEVICES: "0"
+    ports:
+      - "100.107.121.5:8301:8301"
+    volumes:
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/models/current
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/cache/companion-voice
+        target: /app/models
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/user/1000/dominus-gpu
+        target: /run/dominus-gpu
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    shm_size: "2gb"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    deploy: *gpu-reservation
+    healthcheck:
+      test: [CMD, curl, --fail, http://127.0.0.1:8301/health]
+      interval: 30s
+      timeout: 10s
+      retries: 4
+      start_period: 45s
+    stop_grace_period: 30s
+    networks: [ai-internal, ai-publish]
+    logging: *default-logging
+
+  # One-shot, network-isolated cache view builder. It never downloads models:
+  # every source and destination file is SHA-256 verified against the lock.
+  hf-cache-materialize:
+    profiles: [maintenance]
+    build:
+      context: ./config/hf-cache
+      dockerfile: Dockerfile
+    image: dominus-hf-cache-materializer:2026-08-01
+    restart: "no"
+    read_only: true
+    environment:
+      MODEL_LOCK_PATH: /config/models.lock.json
+      MODEL_RELEASE_ROOT: /release
+      SPEACHES_HF_HOME: /caches/speaches
+      TRANSCRIPTION_HF_HOME: /caches/transcription
+      MATERIALIZE_WORKERS: "${HF_CACHE_MATERIALIZE_WORKERS:-8}"
+    volumes:
+      - type: bind
+        source: ./models.lock.json
+        target: /config/models.lock.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/models/current
+        target: /release
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/cache/speech/current/speaches-hf
+        target: /caches/speaches
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/nvmer0/services/ai-stack/cache/speech/current/transcriptionsuite-hf
+        target: /caches/transcription
+        read_only: false
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    network_mode: none
+    logging: *default-logging
+
+networks:
+  ai-internal:
+    name: dominus-ai-internal
+    driver: bridge
+    internal: true
+  # Not internal: Docker only programs a published-port DNAT path for a
+  # bridge network that has a gateway, and internal networks are never given
+  # one. This network exists solely to carry the three Tailscale-bound host
+  # ports; it grants no service anything ai-internal didn't already allow
+  # except that one inbound path.
+  ai-publish:
+    name: dominus-ai-publish
+    driver: bridge
+  bootstrap-egress:
+    name: dominus-transcription-bootstrap-egress
+    driver: bridge

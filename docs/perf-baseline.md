@@ -74,8 +74,8 @@ container. 200 requests per endpoint at concurrency 10. See
 1. Cache subsystem health checks (5s TTL) so `/health` doesn't ping
    backends on every probe.
 2. Add `/api/chat` to the load test with a seed-user bearer token.
-   Establish chat-path baseline (probably dominated by LM Studio
-   latency on dominus, which is fine — measure it, don't fight it).
+   Establish the chat-path baseline (probably dominated by llama.cpp cold-load
+   latency on dominus-nobara, which is fine — measure it, don't fight it).
 3. Wire `make perf-baseline` into CI as a non-gating informational
    step. Compare against `docs/perf-baseline.json` from `main`.
    Print a regression diff but don't fail CI yet.

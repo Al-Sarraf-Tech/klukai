@@ -22,7 +22,7 @@ You are a senior technical documentation designer. Your job is to render a **com
 
 # Klukai
 
-> **Production companion AI.** Deployed at `klukai.appnest.cc`. Two-host architecture (amarillo + dominus). FastAPI + Flutter PWA. Three-tier memory. GPU sidecar for voice and image generation. S+ engineering quality across all 8 audit dimensions as of 2026-05-17.
+> **Production companion AI.** Deployed at `klukai.appnest.cc`. Two-host architecture (amarillo + dominus-nobara). FastAPI + Flutter PWA. Three-tier memory. Containerized GPU sidecar for local LLM, voice, speech, and image generation. S+ engineering quality across all 8 audit dimensions as of 2026-05-17.
 
 ---
 
@@ -34,7 +34,7 @@ Render a tight linked ToC covering every H2 and H3 section below.
 
 ## 1. System Topology
 
-Render a Mermaid `graph TD` diagram showing the full runtime topology. Use clear subgraphs for: **Internet edge**, **amarillo (core host)**, **dominus (GPU sidecar)**, and **Observability stack**. Include every component listed below. After the diagram, write a two-paragraph prose explanation — one paragraph on the request path from browser to LLM, one on the Tailscale data plane between hosts.
+Render a Mermaid `graph TD` diagram showing the full runtime topology. Use clear subgraphs for: **Internet edge**, **amarillo (core host)**, **dominus-nobara (GPU sidecar)**, and **Observability stack**. Include every component listed below. After the diagram, write a two-paragraph prose explanation — one paragraph on the request path from browser to LLM, one on the Tailscale data plane between hosts.
 
 **Components to include in the diagram:**
 
@@ -50,10 +50,15 @@ amarillo (core host):
 - Redis (session store — TTL 24h, mood state, mission state)
 - Alloy (OTel collector)
 
-dominus (GPU sidecar — Tailscale):
-- LM Studio model server (RTX 3090 + Arc A380)
-- `companion-voice` TTS service (port 8301)
-- ComfyUI image gen (container port 8188 → host port 8388)
+dominus-nobara (GPU sidecar — Tailscale):
+- `lmstudio-compat` — CPU-only LM Studio/OpenAI compatibility gateway (Tailscale port 1234, bearer auth)
+- `llama-router` — pinned llama.cpp router (internal port 8080, RTX 3090, one lazy model maximum)
+- `companion-voice` — XTTS/Whisper service (Tailscale port 8301, bearer auth)
+- `comfyui` — image gen (internal port 8188, authenticated leased facade on Tailscale port 1234)
+- `speaches` — CPU-only speech API (Tailscale port 8390, bearer auth; no NVIDIA device until complete cleanup exists)
+- `transcriptionsuite` — on-demand transcription profile (Tailscale HTTPS port 9786)
+- `transcriptionsuite-bootstrap` and `hf-cache-materialize` — one-shot maintenance jobs with no published endpoint; only the bootstrap job has scoped egress
+- NVMe RAID 0 service root at `/mnt/nvmer0/services/ai-stack` (models, caches, state, logs, outputs)
 
 Observability (amarillo, loopback-bound):
 - Prometheus (15d metrics)
@@ -67,7 +72,7 @@ Show data flow arrows with labels:
 - nginx → companion-core: HTTP proxy
 - companion-core → PostgreSQL/Qdrant/Redis: internal Docker network
 - companion-core → Alloy: OTLP gRPC
-- companion-core → dominus: Tailscale (LM Studio, voice, ComfyUI, SSH/file transfers)
+- companion-core → dominus-nobara: Tailscale-only APIs (`lmstudio-compat`, voice, ComfyUI) and SSH/file transfers
 - Alloy → Prometheus, Loki, Tempo: scrape/push
 - Grafana → Prometheus/Loki/Tempo: query
 
@@ -99,7 +104,7 @@ Render a Mermaid `graph LR` showing the FastAPI application's internal module st
 - `agent_loop.py` → optional tool-use agent loop for structured LLM calls
 
 **LLM Routing:**
-- `llm_router.py` → local-first routing with Claude API fallback; single shared `asyncio.Lock` prevents LM Studio queue pile-up; circuit breaker with 15s re-probe
+- `llm_router.py` → local-first routing with Claude API fallback; single shared `asyncio.Lock` prevents local model-swap queue pile-up; circuit breaker with 15s re-probe
 - `llm_json.py` → JSON extraction helpers wrapping LLM calls with schema validation
 - `tool_schemas.py` → OpenAI-format tool schemas for agent-mode calls
 - `mcp_client.py` → MCP protocol client (gemma-4 / local tool server bridge)
@@ -136,7 +141,7 @@ Render a Mermaid `graph LR` showing the FastAPI application's internal module st
 **I/O Services:**
 - `image_gen.py` → ComfyUI + NoobAI-XL (Illustrious) + Klukai LoRA pipeline; async job queue with status polling
 - `image_gen_constants.py` → ComfyUI workflow templates, LoRA weights, sampler configs
-- `voice_client.py` → TTS shim to dominus `companion-voice`; retries on port-binding bug
+- `voice_client.py` → authenticated TTS shim to dominus-nobara `companion-voice`; degrades safely to text-only chat
 - `push.py` → Web Push (VAPID) for PWA notifications; stores sub per-device in PG
 
 **Observability / Infra:**
@@ -266,15 +271,18 @@ Render a table of the eight character behavior modules and the signal each produ
 
 Render a full table of every model in the routing stack:
 
+State that `ops/dominus-nobara/models.lock.json` is the source of truth for
+the complete restored catalog and exact artifact hashes. The rows below are
+application routing roles, not a substitute for that lock.
+
 | Model | Host | Role | Use Cases | Routing Flag |
 |---|---|---|---|---|
-| `cognitivecomputations_dolphin-mistral-24b-venice-edition` (LOCAL_CASUAL) | dominus LM Studio (RTX 3090) | Primary chat | Main conversation turns, narrative responses, creative text, memory annotations | Default for all chat turns |
-| `dolphin-mistral-glm-4.7-flash-24b-venice-edition-thinking-uncensored-i1` (LOCAL_CASUAL_FALLBACK) | dominus LM Studio | Chat fallback | Previous chat model; used if LOCAL_CASUAL unavailable | Circuit breaker failover |
-| `qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2` (LOCAL_AGENT) | dominus LM Studio | Agent / tool-use | Structured tool-call loops, reasoning-heavy decisions | `agent_loop.py` calls |
-| `cognitivecomputations_dolphin-mistral-24b-venice-edition` (dolphin-24b) | dominus LM Studio | Creative annotation | Memory archive annotations, dream generation, reflection writing | `memory_archive.py`, `dreams.py` |
+| `cognitivecomputations_dolphin-mistral-24b-venice-edition` (LOCAL_CASUAL) | dominus-nobara `lmstudio-compat` → `llama-router` (RTX 3090) | Primary chat | Main conversation turns, narrative responses, creative text, memory annotations | Default for all chat turns |
+| `qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2` (LOCAL_AGENT) | dominus-nobara `lmstudio-compat` → `llama-router` | Agent / tool-use | Structured tool-call loops, reasoning-heavy decisions | `agent_loop.py` calls |
+| `cognitivecomputations_dolphin-mistral-24b-venice-edition` (dolphin-24b) | dominus-nobara `lmstudio-compat` → `llama-router` | Creative annotation | Memory archive annotations, dream generation, reflection writing | `memory_archive.py`, `dreams.py` |
 | `gpt-oss-20b` (via Venice endpoint) | Venice API | JSON extraction | Affection classification, fact extraction, structured outputs | `fact_extractor.py`, `affection.py` classification path |
-| `gemma-4` | dominus LM Studio | Quick decisions / annotation | Short classification tasks, MCP session work, quick fixes | `mcp_client.py`, annotation tasks |
-| Claude Sonnet / Opus (via Anthropic API) | Anthropic cloud | Cloud fallback | Activated only when local LM Studio circuit breaker is open; `ANTHROPIC_API_KEY` must be set | `llm_router.py` fallback path |
+| `gemma-4` | dominus-nobara compatibility gateway when its locked alias is selected | Quick decisions / annotation | Short classification tasks, MCP session work, quick fixes | `mcp_client.py`, annotation tasks |
+| Claude Sonnet / Opus (via Anthropic API) | Anthropic cloud | Cloud fallback | Activated only when the local gateway circuit breaker is open; `ANTHROPIC_API_KEY` must be set | `llm_router.py` fallback path |
 
 ### 5.2 Routing Decision Flow
 
@@ -286,13 +294,13 @@ Render a Mermaid `flowchart TD` showing how `llm_router.py` picks a model for a 
 4. Check: is this creative annotation / archive? → YES → dolphin-24b
 5. Check: is this a quick classification? → YES → gemma-4
 6. Default: chat turn → attempt LOCAL_CASUAL
-   - Acquire shared `asyncio.Lock` (prevents LM Studio queue pile-up)
-   - Check LM Studio circuit breaker (15s re-probe interval)
+   - Acquire shared `asyncio.Lock` (prevents local model-swap queue pile-up)
+   - Check the LM Studio-compatible gateway circuit breaker (15s re-probe interval)
    - Circuit closed → stream from LOCAL_CASUAL
-   - Circuit open → try LOCAL_CASUAL_FALLBACK → if also open → Claude API fallback
-7. LM Studio TTL: models auto-unload `LM_STUDIO_TTL` seconds (default 600) after last request (JIT lifecycle, no keepalive)
+   - Circuit open → Claude API fallback when configured; otherwise return a clear unavailable error
+7. LLM lifecycle: models load on demand and unload no later than 900 seconds of inference idle. The llama.cpp deadline may be a few seconds lower as a safety margin; the gateway strips client `ttl` overrides and no keepalive is permitted
 
-> ⚠ **Single global asyncio.Lock.** Only one LM Studio request is in-flight at a time. This prevents the server from queue-thrashing during model swaps. Never bypass this lock in new code paths.
+> ⚠ **Single global asyncio.Lock.** Only one local compatibility-gateway request is in-flight at a time. This prevents the router from queue-thrashing during model swaps. Never bypass this lock in new code paths.
 
 ---
 
@@ -351,7 +359,7 @@ Render the full SLO table with four columns: Endpoint, Latency Target, Availabil
 
 | Endpoint | Latency Target | Availability | Notes |
 |---|---|---|---|
-| `POST /api/chat/turn` (first token) | p99 ≤ 2s | 99.9% | Time-to-first-token; LM Studio on dominus dominates |
+| `POST /api/chat/turn` (first token) | p99 ≤ 2s | 99.9% | Time-to-first-token; llama.cpp cold loads on dominus-nobara dominate |
 | `POST /api/chat/turn` (full response) | p99 ≤ 8s | 99.9% | Full completion; `max_tokens` capped at 6144 |
 | `WS /ws` (connect) | p99 ≤ 200ms | 99.9% | Brief drops tolerated; client auto-reconnects |
 | `WS /ws` (per-message) | p99 ≤ 8s | 99.9% | Inherits chat-turn budget |
@@ -380,12 +388,12 @@ Render the full SLO table with four columns: Endpoint, Latency Target, Availabil
 | `GET /api/audit/verify` | p99 ≤ 500ms | 99.9% | Chain walk, O(N) over recent window |
 | `POST /api/admin/rate-limit/reset` | p99 ≤ 200ms | 99.9% | Redis bucket flush |
 
-**Image generation (async, dominus):**
+**Image generation (async, dominus-nobara):**
 
 | Endpoint | Latency Target | Availability | Notes |
 |---|---|---|---|
 | `POST /api/images/generate` (enqueue) | p99 ≤ 200ms | 99.9% | Enqueue only; gen is async |
-| End-to-end image gen | p95 ≤ 15s | 99% | ComfyUI on dominus RTX 3090; 5s VRAM contention budget built in |
+| End-to-end image gen | p95 ≤ 15s | 99% | ComfyUI on dominus-nobara RTX 3090; admission uses the bounded GPU lease and verified LLM quiescence |
 
 ### 7.2 Composite SLOs
 
@@ -413,7 +421,7 @@ Prometheus alert rules in `docs/alerts/klukai.yaml`. Every alert carries a `runb
 | DB down | `docs/runbooks/db-down.md` |
 | Disk space | `docs/runbooks/disk-space.md` |
 | High latency | `docs/runbooks/high-latency.md` |
-| LM Studio cold | `docs/runbooks/lm-studio-cold.md` |
+| LM Studio-compatible gateway cold | `docs/runbooks/lm-studio-cold.md` |
 | Memory leak | `docs/runbooks/memory-leak.md` |
 | Qdrant down | `docs/runbooks/qdrant-down.md` |
 | Redis down | `docs/runbooks/redis-down.md` |
@@ -475,15 +483,19 @@ Render a quick-reference operations table for the most common operational tasks.
 | Static asset deploy | `rsync` to amarillo bind-mount path | No container rebuild needed; web-build is bind-mounted |
 | Flutter build | `flutter build web --base-href=/app/` | **Absolute: `--base-href=/app/` always.** Without it, the service worker intercepts the login page |
 
-### 10.2 dominus Operations
+### 10.2 dominus-nobara Operations
 
 | Operation | Command / Path | Notes |
 |---|---|---|
-| Voice service restart | `rm -f <pidfile> && docker compose up -d companion-voice` | Port 8301 binding bug; `rm -f` + fresh up is the fix |
-| ComfyUI access | `http://dominus:8388` | Container maps 8188→8388; port 8188 is wrong |
-| LM Studio | JIT load-on-demand | No keepalive. TTL 600s. Models auto-unload after last request |
-| File transfers | Tailscale SSH: `dominus` (WSL2 is decommissioned) | Use MagicDNS; do not hard-code a `100.x` address |
-| Nightly backup | Automated: amarillo→dominus SSH tar | Verify with `scripts/restore-from-backup.sh` dry-run quarterly |
+| Canonical stack status | `systemctl --user status dominus-ai-stack.service` | User unit is the owner; source is `/mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara` |
+| Compose service status | `docker compose --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml ps` | Canonical project is `dominus-ai-stack`; never use the retired top-level voice file |
+| Voice service recovery | `docker compose --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml up -d --no-build --no-deps --force-recreate companion-voice` | Do not use `docker rm`; verify the game marker is absent first |
+| ComfyUI access | `http://100.107.121.5:1234/api/v1/comfy` | Gateway bearer + bounded lease required; no raw 8188/8388 host port |
+| LLM compatibility API | `http://100.107.121.5:1234` | Rotated bearer token required; lazy one-model llama.cpp backend; maximum 900s idle residency |
+| LLM services | `lmstudio-compat`, `llama-router` | Gateway is CPU-only; router is internal and owns model processes |
+| Game interlock | `/run/user/1000/dominus-gpu/game-active` | HTTP 503 for inference/load while active; never bypass it |
+| File transfers | Tailscale SSH: `dominus-nobara` (WSL2 is decommissioned) | Alias must resolve to `100.107.121.5`; private LAN is not a fallback |
+| Model/data root | `/mnt/nvmer0/services/ai-stack` | RAID 0 is not a backup; keep an independent off-host copy |
 
 ### 10.3 Telegram Bridge
 
@@ -497,7 +509,7 @@ Render a quick-reference operations table for the most common operational tasks.
 
 ### 10.4 Memory Seeding Schedule
 
-> 🔒 **ABSOLUTE: Memory seeding runs every 2 days at 03:00–06:00 on dominus.** Managed by a systemd timer. Do not reschedule, disable, or manually trigger outside this window without owner approval.
+> 🔒 **ABSOLUTE: Memory seeding runs every other local calendar day inside 03:00–06:00.** Amarillo owns the checked 04:00 systemd timer because `companion-core` and its database live there; GPU work still uses the authenticated Tailscale gateway and bounded lease on dominus-nobara. Do not reschedule, disable, or manually trigger outside this window without owner approval.
 
 - **Selection model:** gpt-oss-20b (reliable JSON, uncensored)
 - **Annotation model:** dolphin-24b (creative, narrative quality)
@@ -512,11 +524,12 @@ Render as a clean list with brief rationale for each. These are architectural de
 | Non-goal | Why |
 |---|---|
 | Kubernetes | Docker Compose is the right operational complexity for a two-host personal system. K8s would add topology overhead with no scaling benefit |
-| Multi-region | Single failure domain (amarillo + dominus) is deliberate. No multi-user SLA to meet |
+| Multi-region | Single failure domain (amarillo + dominus-nobara) is deliberate. No multi-user SLA to meet |
 | OAuth | Bearer tokens with seed users suffice. OAuth adds attack surface (redirect URIs, PKCE, token rotation) with no benefit on a personal system |
-| Model fine-tuning | Off-the-shelf uncensored models (dolphin, gpt-oss) via LM Studio. Fine-tuning would require training infrastructure and VRAM budget that doesn't exist |
-| WSL2 as deployment target | Decommissioned 2026-04-20. amarillo (bare Linux) + dominus only |
-| Persistent LLM keepalive | JIT load-on-demand with TTL 600s. No keepalive prevents VRAM contention between models |
+| Model fine-tuning | Off-the-shelf uncensored models (dolphin, gpt-oss) through the compatibility gateway. Fine-tuning would require training infrastructure and VRAM budget that doesn't exist |
+| WSL2 as deployment target | Decommissioned 2026-04-20. amarillo (bare Linux) + dominus-nobara only |
+| Host-installed AI application runtimes | llama.cpp, voice, speech, and ComfyUI stay in the canonical Docker Compose stack so Nobara remains clean |
+| Persistent LLM keepalive | JIT load-on-demand with a hard 900-second maximum idle residency. No keepalive prevents RAM/VRAM contention between models |
 | Autonomous password rotation | Owner-initiated only. Automated rotation creates more risk than it mitigates on a personal system |
 
 ---
@@ -531,7 +544,7 @@ Render as a clean list with brief rationale for each. These are architectural de
 - Docker Engine + Docker Compose v2
 - Python 3.13 (tooling only; app runs in Docker)
 - `git`, `make`, `curl`, `jq`
-- Tailscale enrolled on amarillo (required for all dominus backend traffic)
+- Tailscale enrolled on amarillo (required for all dominus-nobara backend traffic)
 
 ### Steps
 
@@ -563,7 +576,7 @@ curl -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -X POST http://localhost:8300/api/chat/turn \
      -d '{"message":"Hello, Klukai."}'
-# Expect: a response from Klukai. If LM Studio (dominus) is unreachable,
+# Expect: a response from Klukai. If the compatibility gateway (dominus-nobara) is unreachable,
 # expect a 503 with a clear error — that's correct behavior for an isolated dev box.
 
 # 6. Run the test suite

@@ -1,6 +1,6 @@
 # Run on amarillo: companion-core (consolidated with aichat infra)
 # Shares Docker networks with infra-postgres, redis, qdrant locally
-# companion-voice remains on dominus (RTX 3090, CUDA required)
+# companion-voice remains on dominus-nobara (RTX 3090, CUDA required)
 # Pin the compose project name so `docker compose` (and every Makefile target)
 # acts on the live stack instead of the directory-default `klukai` project.
 name: companion
@@ -19,20 +19,21 @@ services:
       MCP_URL: "http://aichat-mcp:8096"
       DATA_URL: "http://aichat-data:8091"
       INFERENCE_URL: "http://aichat-inference:8105"
-      # GPU services on dominus over Tailscale MagicDNS. All three URLs are
-      # overridable for local integration tests or an emergency failover.
-      VOICE_URL: "${VOICE_URL:-http://dominus:8301}"
-      # Bearer token for the voice service (app/helpers.py). Empty = auth off
-      # (current behavior). Must match VOICE_API_TOKEN in docker-compose.voice.yml.
-      VOICE_API_TOKEN: "${VOICE_API_TOKEN:-}"
-      # LM Studio backend. Default: dominus RTX 3090 over Tailscale (auth required).
-      # Override LM_STUDIO_URL in .env to point at the local llama.cpp/LM Studio
-      # on amarillo (e.g. http://host.docker.internal:1235) for auth-free local
-      # inference during integration testing.
-      LM_STUDIO_URL: "${LM_STUDIO_URL:-http://dominus:1234}"
-      LM_STUDIO_TOKEN: "${LM_STUDIO_TOKEN:-}"
+      # GPU services on dominus-nobara over its literal Tailscale address.
+      # Overrides are for isolated integration tests only; production must not
+      # use an RFC1918/LAN endpoint.
+      VOICE_URL: "${VOICE_URL:-http://100.107.121.5:8301}"
+      # Must match the canonical target stack's VOICE_API_TOKEN.
+      VOICE_API_TOKEN: "${VOICE_API_TOKEN:?VOICE_API_TOKEN is required}"
+      # LM Studio backend. Default: dominus-nobara RTX 3090 over Tailscale (auth required).
+      # Override LM_STUDIO_URL only for isolated integration testing. The core
+      # always sends the required bearer header; test backends may ignore it.
+      LM_STUDIO_URL: "${LM_STUDIO_URL:-http://100.107.121.5:1234}"
+      LM_STUDIO_TOKEN: "${LM_STUDIO_TOKEN:?LM_STUDIO_TOKEN is required}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      COMFYUI_URL: "${COMFYUI_URL:-http://dominus:8388}"
+      # ComfyUI has no published raw port. Every operation is proxied by the
+      # authenticated gateway and authorized again with the active GPU lease.
+      COMFYUI_URL: "${COMFYUI_URL:-http://100.107.121.5:1234/api/v1/comfy}"
       PERSONALITY_PATH: "/config/personality.yaml"
       # Commander's location for weather-driven mood (Open-Meteo, keyless).
       # Defaults to Chicago; override in .env. Weather is fail-soft — if unset
@@ -84,9 +85,8 @@ services:
     labels:
       autoheal: "true"
 
-  # companion-voice runs on dominus (RTX 3090, CUDA required)
-  # Compose: dominus:~/git/klukai/docker-compose.voice.yml
-  # Reachable at dominus:8301 over Tailscale
+  # companion-voice runs in the canonical ops/dominus-nobara stack on RAID0.
+  # Reachable only at the target Tailscale address on port 8301.
 
 volumes:
   companion-images:

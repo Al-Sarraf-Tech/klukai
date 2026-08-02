@@ -1,0 +1,684 @@
+{
+  "schema_version": 1,
+  "lock_id": "dominus-wsl2-rebuild-2026-08-01-v1",
+  "created_on": "2026-08-01",
+  "purpose": "Immutable, evidence-ranked artifact lock for rebuilding the lost Dominus Windows/WSL2 AI services on dominus-nobara.",
+  "staging": {
+    "suggested_root": "/home/jalsarraf/dominus-model-staging-20260801-v1",
+    "marker": ".dominus-model-staging"
+  },
+  "target": {
+    "ssh_host": "dominus-nobara",
+    "tailscale_ipv4": "100.107.121.5",
+    "raid_mountpoint": "/mnt/nvmer0",
+    "release_root": "/mnt/nvmer0/services/ai-stack/models/releases/dominus-wsl2-rebuild-2026-08-01-v1"
+  },
+  "preserved_target": {
+    "staged_or_transferred": false,
+    "reason": "These assets and the accepted native-vLLM environment already survive on the target RAID and are verified in place.",
+    "inventory_path": "preserved-target-models.lock.json",
+    "inventory_sha256": "d0096d26cfdf78d2d1cb56c0e579fe74b913814a6829a9cbeea73b1566e19d90",
+    "file_ledger_path": "preserved-target-models.sha256",
+    "file_ledger_sha256": "7aa41114cedacf0fecb43250b8295833b00b1f4d7d88c4f9c5c3d7e0ca6ebc8c",
+    "accepted_runtime_path": "config/vllm/requirements.accepted.txt",
+    "accepted_runtime_file_sha256": "e7a3e0614f08ef999e9d6fa0c1fe8a171937b38c20936e44281addb84947eb77"
+  },
+  "llama_router_contract": {
+    "router_id": "For each enabled llm or embedding artifact, use runtime.router_id verbatim; it equals the canonical recovered alias.",
+    "model_path": "Prefix the artifact destination with /models/.",
+    "mmproj_pairing": "For a VLM, pair the enabled llm_mmproj artifact in the same destination directory; no projector means omit the projector option.",
+    "default_context_length": 32768,
+    "context_overrides": {
+      "unsloth/gemma-4-26b-a4b-it": 134144,
+      "text-embedding-nomic-embed-text-v1.5": 2048
+    },
+    "context_note": "134144 is recovered final-fleet evidence. The byte-exact Nomic artifact is conservatively locked to its recorded 2048-token load/max context because there is no evidence that the lost runtime loaded 8192. 32768 is a conservative deployment default where the lost per-model preset was not retained, not a claim about each model's architectural maximum.",
+    "server_owned_args": {
+      "models_max": 1,
+      "sleep_idle_seconds": 898,
+      "maximum_idle_residency_seconds": 900,
+      "jinja": true
+    },
+    "idle_timer_note": "Pinned llama.cpp checks idle state on an approximately one-second loop. The 898-second runtime value is a safety margin that guarantees the user-visible maximum remains no more than 900 seconds.",
+    "jq_rows_command": "jq -r '.artifacts[] | select(.enabled and (.kind == \"llm\" or .kind == \"embedding\")) | [.runtime.router_id, (\"/models/\" + .destination), (.runtime.model_type // .kind), (.runtime.quantization // \"\"), (.runtime.max_context_length | tostring), (.runtime.load_context_length | tostring)] | @tsv' models.lock.json"
+  },
+  "policy": {
+    "default_download_jobs": 4,
+    "maximum_download_jobs": 20,
+    "stage_all_enabled_entries": true,
+    "delete_source_caches": false,
+    "delete_staging_automatically": false,
+    "notes": [
+      "The staging directory is deliberately retained until remote size/hash verification and owner acceptance.",
+      "Hugging Face revisions are immutable commit IDs; x-linked-etag/LFS oid values are recorded as SHA-256.",
+      "Entries marked reconstructed preserve the observed model alias and quantization, but surviving evidence did not prove the lost file's byte identity.",
+      "No FLUX weights are restored: the recovered FLUX files were zero bytes and were intentionally removed before the loss."
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "llm-unsloth-gemma-4-26b-a4b-it-q4km",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "llm",
+      "destination": "llm/unsloth-gemma-4-26b-a4b-it/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+      "size_bytes": 16947539744,
+      "sha256": "34c746b1d50ab813e29cd46c4796e3f43c741901a582f93a67b55b9fc9687b35",
+      "source": {
+        "type": "huggingface_file",
+        "repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
+        "revision": "3bb10d594514ef4edb7f3a65d41a7e4eb8c5767a",
+        "file": "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+      },
+      "runtime": {
+        "aliases": ["unsloth/gemma-4-26b-a4b-it", "gemma-4-26b-a4b-it"],
+        "router_id": "unsloth/gemma-4-26b-a4b-it",
+        "publisher": "unsloth",
+        "architecture": "gemma4",
+        "capabilities": ["tool_use"],
+        "model_type": "vlm",
+        "quantization": "Q4_K_M",
+        "max_context_length": 262144,
+        "load_context_length": 134144,
+        "loaded_context_length": 134144
+      },
+      "evidence": {
+        "confidence": "high",
+        "parity": "byte-exact-upstream-at-pre-loss-revision",
+        "basis": "Recovered final-fleet alias and 134K-context load record; pinned to the 2026-06-09 upstream commit because the current file differs."
+      }
+    },
+    {
+      "id": "llm-unsloth-gemma-4-26b-a4b-it-mmproj-bf16",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "llm_mmproj",
+      "destination": "llm/unsloth-gemma-4-26b-a4b-it/mmproj-BF16.gguf",
+      "size_bytes": 1194828256,
+      "sha256": "41926ed5f1403cf5add23b0684992805ea6f97253096132e769e65646b8cef9d",
+      "source": {
+        "type": "huggingface_file",
+        "repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
+        "revision": "3bb10d594514ef4edb7f3a65d41a7e4eb8c5767a",
+        "file": "mmproj-BF16.gguf"
+      },
+      "evidence": {"confidence": "high", "parity": "byte-exact-upstream-at-pre-loss-revision"}
+    },
+    {
+      "id": "llm-venice-24b-q4-1",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "llm",
+      "destination": "llm/cognitivecomputations-dolphin-mistral-24b-venice-edition/cognitivecomputations_Dolphin-Mistral-24B-Venice-Edition-Q4_1.gguf",
+      "size_bytes": 14873106816,
+      "sha256": "7354b2407beeb3cdc5c7adef238fca823eb8ed90ed939a543da83b889b115368",
+      "source": {"type": "huggingface_file", "repo": "bartowski/cognitivecomputations_Dolphin-Mistral-24B-Venice-Edition-GGUF", "revision": "708d0be4ed30e671c5121304fe840e02a60beaf0", "file": "cognitivecomputations_Dolphin-Mistral-24B-Venice-Edition-Q4_1.gguf"},
+      "runtime": {"aliases": ["cognitivecomputations_dolphin-mistral-24b-venice-edition"], "router_id": "cognitivecomputations_dolphin-mistral-24b-venice-edition", "publisher": "bartowski", "architecture": "llama", "capabilities": [], "model_type": "llm", "quantization": "Q4_1", "max_context_length": 32768, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "alias-and-quantization-exact-current-upstream-bytes", "basis": "Exact alias and Q4_1 were recovered from the 2026-05-19 LM Studio catalog."}
+    },
+    {
+      "id": "llm-qwen35-27b-claude-opus-distill-q4km",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "llm",
+      "destination": "llm/qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2/Qwen3.5-27B.Q4_K_M.gguf",
+      "size_bytes": 16547395008,
+      "sha256": "51ce67b6936e98b60abc4f61af79c3f5edd1610871818a917df55baae06d631b",
+      "source": {"type": "huggingface_file", "repo": "Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF", "revision": "2fc6465288bfa3695eda8fc367e5ccb7e5609f0a", "file": "Qwen3.5-27B.Q4_K_M.gguf"},
+      "runtime": {"aliases": ["qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2"], "router_id": "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2", "publisher": "Jackrong", "architecture": "qwen35", "capabilities": ["tool_use"], "model_type": "vlm", "quantization": "Q4_K_M", "max_context_length": 262144, "load_context_length": 32768},
+      "evidence": {"confidence": "medium", "parity": "alias-and-quantization-exact-current-upstream-bytes", "basis": "The alias/quantization and client routing are exact; the public repository appears to have been recreated after the lost-host catalog snapshot, so byte parity is not provable."}
+    },
+    {
+      "id": "llm-qwen35-27b-claude-opus-distill-mmproj-f32",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "llm_mmproj",
+      "destination": "llm/qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2/mmproj-F32.gguf",
+      "size_bytes": 931145856,
+      "sha256": "191cc67513358de838abaae1e35900f5f47cbeca2efffda0dae6713dbaf72240",
+      "source": {"type": "huggingface_file", "repo": "Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF", "revision": "2fc6465288bfa3695eda8fc367e5ccb7e5609f0a", "file": "mmproj-F32.gguf"},
+      "evidence": {"confidence": "medium", "parity": "current-upstream-reconstruction"}
+    },
+    {
+      "id": "llm-gpt-oss-20b-absolute-heresy-q5ks",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "llm",
+      "destination": "llm/gpt-oss-20b-absolute-heresy-i1/gpt-oss-20b-absolute-heresy.i1-Q5_K_S.gguf",
+      "size_bytes": 15892205856,
+      "sha256": "4e8c417631d372781ebe0fa19e55ca253f767e5981eee90ae26fe75ad132bb51",
+      "source": {"type": "huggingface_file", "repo": "mradermacher/gpt-oss-20b-absolute-heresy-i1-GGUF", "revision": "84bcd07cf7e60ebc17a82200b09e4f47d6a0d53f", "file": "gpt-oss-20b-absolute-heresy.i1-Q5_K_S.gguf"},
+      "runtime": {"aliases": ["gpt-oss-20b-absolute-heresy-i1"], "router_id": "gpt-oss-20b-absolute-heresy-i1", "publisher": "mradermacher", "architecture": "gpt-oss", "capabilities": ["tool_use"], "model_type": "llm", "quantization": "Q5_K_S", "max_context_length": 131072, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "alias-and-quantization-exact-current-upstream-bytes"}
+    },
+    {
+      "id": "llm-qwen35-9b-q4km-local",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "llm",
+      "destination": "llm/qwen3.5-9b/Qwen3.5-9B-Q4_K_M.gguf",
+      "size_bytes": 5627044256,
+      "sha256": "cd76ec205963b3b33350093e6904d9de16c4e666fd104e1f632d25c7f15f2a13",
+      "source": {"type": "local_file", "path": "/home/jalsarraf/.lmstudio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"},
+      "runtime": {"aliases": ["qwen/qwen3.5-9b"], "router_id": "qwen/qwen3.5-9b", "publisher": "qwen", "architecture": "qwen35", "capabilities": ["tool_use"], "model_type": "vlm", "quantization": "Q4_K_M", "max_context_length": 262144, "load_context_length": 32768},
+      "evidence": {"confidence": "highest", "parity": "byte-exact-surviving-local-file"}
+    },
+    {
+      "id": "llm-qwen35-9b-mmproj-local",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "llm_mmproj",
+      "destination": "llm/qwen3.5-9b/mmproj-Qwen3.5-9B-BF16.gguf",
+      "size_bytes": 921704480,
+      "sha256": "330d17547bfdbcd0e7a0cb3f4b06b4ceeac0aaa1e449122d9d66ef957aeb74b3",
+      "source": {"type": "local_file", "path": "/home/jalsarraf/.lmstudio/models/lmstudio-community/Qwen3.5-9B-GGUF/mmproj-Qwen3.5-9B-BF16.gguf"},
+      "evidence": {"confidence": "highest", "parity": "byte-exact-surviving-local-file"}
+    },
+    {
+      "id": "embedding-nomic-v15-q4km-local",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "embedding",
+      "destination": "llm/nomic-embed-text-v1.5/nomic-embed-text-v1.5.Q4_K_M.gguf",
+      "size_bytes": 84106624,
+      "sha256": "d4e388894e09cf3816e8b0896d81d265b55e7a9fff9ab03fe8bf4ef5e11295ac",
+      "source": {"type": "local_file", "path": "/home/jalsarraf/.lmstudio/.internal/bundled-models/nomic-ai/nomic-embed-text-v1.5-GGUF/nomic-embed-text-v1.5.Q4_K_M.gguf"},
+      "runtime": {"aliases": ["text-embedding-nomic-embed-text-v1.5"], "router_id": "text-embedding-nomic-embed-text-v1.5", "publisher": "nomic-ai", "architecture": "nomic-bert", "capabilities": ["embeddings"], "model_type": "embeddings", "quantization": "Q4_K_M", "max_context_length": 2048, "load_context_length": 2048},
+      "evidence": {"confidence": "highest", "parity": "byte-exact-surviving-local-file"}
+    },
+    {
+      "id": "llm-gemma-4-26b-a4b-qat-q4-0",
+      "enabled": true,
+      "tier": "latest-confirmed",
+      "kind": "llm",
+      "destination": "llm/google-gemma-4-26b-a4b-qat/gemma-4-26B-A4B-it-QAT-Q4_0.gguf",
+      "size_bytes": 14439362752,
+      "sha256": "9b96aa267521008235f8792590cb8e2dc47a8a236c6ff1767964cbbe32510873",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF", "revision": "43abd4da26c7b9c1a93c4d96a588c8a5374be8eb", "file": "gemma-4-26B-A4B-it-QAT-Q4_0.gguf"},
+      "runtime": {"aliases": ["google/gemma-4-26b-a4b-qat"], "router_id": "google/gemma-4-26b-a4b-qat", "publisher": "google", "architecture": "gemma4", "capabilities": ["tool_use"], "model_type": "vlm", "quantization": "Q4_0", "max_context_length": 262144, "load_context_length": 32768},
+      "evidence": {"confidence": "medium-high", "parity": "latest-alias-exact-quantization-inferred-at-historical-revision"}
+    },
+    {
+      "id": "llm-gemma-4-26b-a4b-qat-mmproj",
+      "enabled": true,
+      "tier": "latest-confirmed",
+      "kind": "llm_mmproj",
+      "destination": "llm/google-gemma-4-26b-a4b-qat/mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf",
+      "size_bytes": 1194827776,
+      "sha256": "a823a84619622b7b3132ba760e97bcf959fb13d2213cccaef5317df388d35c3c",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF", "revision": "43abd4da26c7b9c1a93c4d96a588c8a5374be8eb", "file": "mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf"},
+      "evidence": {"confidence": "medium-high", "parity": "historical-upstream-reconstruction"}
+    },
+    {
+      "id": "llm-gemma-4-26b-a4b-q4km",
+      "enabled": true,
+      "tier": "latest-confirmed",
+      "kind": "llm",
+      "destination": "llm/google-gemma-4-26b-a4b/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+      "size_bytes": 16796015040,
+      "sha256": "0ab52d910e0f641fa6618a028c8333f107095d450f1b0d5ff6fb515709cba355",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/gemma-4-26B-A4B-it-GGUF", "revision": "f11c185920b2c7b202e07e4a9768bf1bea0111d1", "file": "gemma-4-26B-A4B-it-Q4_K_M.gguf"},
+      "runtime": {"aliases": ["google/gemma-4-26b-a4b"], "router_id": "google/gemma-4-26b-a4b", "publisher": "google", "architecture": "gemma4", "capabilities": ["tool_use"], "model_type": "vlm", "quantization": "Q4_K_M", "max_context_length": 262144, "load_context_length": 32768},
+      "evidence": {"confidence": "medium-high", "parity": "latest-alias-exact-quantization-inferred-at-historical-revision"}
+    },
+    {
+      "id": "llm-gemma-4-26b-a4b-mmproj",
+      "enabled": true,
+      "tier": "latest-confirmed",
+      "kind": "llm_mmproj",
+      "destination": "llm/google-gemma-4-26b-a4b/mmproj-gemma-4-26B-A4B-it-BF16.gguf",
+      "size_bytes": 1194827744,
+      "sha256": "85f81a6a844d2f63c0fa64fa0899758429df791adb3886cdf09974d7429d0a3e",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/gemma-4-26B-A4B-it-GGUF", "revision": "f11c185920b2c7b202e07e4a9768bf1bea0111d1", "file": "mmproj-gemma-4-26B-A4B-it-BF16.gguf"},
+      "evidence": {"confidence": "medium-high", "parity": "historical-upstream-reconstruction"}
+    },
+    {
+      "id": "llm-gemma-4-e4b-q4km",
+      "enabled": true,
+      "tier": "latest-confirmed",
+      "kind": "llm",
+      "destination": "llm/google-gemma-4-e4b/gemma-4-E4B-it-Q4_K_M.gguf",
+      "size_bytes": 5335289664,
+      "sha256": "3f72a20a06f626c78e6c475ae07a64c88b2663149c0f6197b56bf7cf1f37585c",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/gemma-4-E4B-it-GGUF", "revision": "53a691ddc52708042c56f80cdaf47f8a1daf051e", "file": "gemma-4-E4B-it-Q4_K_M.gguf"},
+      "runtime": {"aliases": ["google/gemma-4-e4b"], "router_id": "google/gemma-4-e4b", "publisher": "google", "architecture": "gemma4", "capabilities": ["tool_use"], "model_type": "vlm", "quantization": "Q4_K_M", "max_context_length": 262144, "load_context_length": 32768},
+      "evidence": {"confidence": "medium", "parity": "latest-alias-exact-quantization-inferred-at-historical-revision"}
+    },
+    {
+      "id": "llm-gemma-4-e4b-mmproj",
+      "enabled": true,
+      "tier": "latest-confirmed",
+      "kind": "llm_mmproj",
+      "destination": "llm/google-gemma-4-e4b/mmproj-gemma-4-E4B-it-BF16.gguf",
+      "size_bytes": 991551840,
+      "sha256": "68486d68176b924c5f126b0d25ab93e2b38458b607f46671d41c166f8c77c200",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/gemma-4-E4B-it-GGUF", "revision": "53a691ddc52708042c56f80cdaf47f8a1daf051e", "file": "mmproj-gemma-4-E4B-it-BF16.gguf"},
+      "evidence": {"confidence": "medium", "parity": "historical-upstream-reconstruction"}
+    },
+    {
+      "id": "llm-qwen35-08b-q8",
+      "enabled": true,
+      "tier": "latest-confirmed",
+      "kind": "llm",
+      "destination": "llm/qwen3.5-0.8b/Qwen3.5-0.8B-Q8_0.gguf",
+      "size_bytes": 811843040,
+      "sha256": "091d8deba394f428b67aa42c100ee145fcbecac5a79621935d3655016ca737e5",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/Qwen3.5-0.8B-GGUF", "revision": "26bab2c9369648924251c0ebb3dae012f5147707", "file": "Qwen3.5-0.8B-Q8_0.gguf"},
+      "runtime": {"aliases": ["qwen3.5-0.8b"], "router_id": "qwen3.5-0.8b", "publisher": "qwen", "architecture": "qwen35", "capabilities": ["tool_use"], "model_type": "vlm", "quantization": "Q8_0", "max_context_length": 262144, "load_context_length": 32768},
+      "evidence": {"confidence": "medium-high", "parity": "latest-alias-exact-quantization-readme-confirmed"}
+    },
+    {
+      "id": "llm-qwen35-08b-mmproj",
+      "enabled": true,
+      "tier": "latest-confirmed",
+      "kind": "llm_mmproj",
+      "destination": "llm/qwen3.5-0.8b/mmproj-Qwen3.5-0.8B-BF16.gguf",
+      "size_bytes": 207345952,
+      "sha256": "6fdd1b4bdc3d2ae8bd15d783e23260dd07dcf83f45604a21dabfd6efad8f8bc5",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/Qwen3.5-0.8B-GGUF", "revision": "26bab2c9369648924251c0ebb3dae012f5147707", "file": "mmproj-Qwen3.5-0.8B-BF16.gguf"},
+      "evidence": {"confidence": "medium-high", "parity": "latest-upstream-reconstruction"}
+    },
+    {
+      "id": "llm-qwen25-05b-q8",
+      "enabled": true,
+      "tier": "latest-confirmed",
+      "kind": "llm",
+      "destination": "llm/qwen2.5-0.5b-instruct/qwen2.5-0.5b-instruct-q8_0.gguf",
+      "size_bytes": 675710816,
+      "sha256": "ca59ca7f13d0e15a8cfa77bd17e65d24f6844b554a7b6c12e07a5f89ff76844e",
+      "source": {"type": "huggingface_file", "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF", "revision": "9217f5db79a29953eb74d5343926648285ec7e67", "file": "qwen2.5-0.5b-instruct-q8_0.gguf"},
+      "runtime": {"aliases": ["qwen2.5-0.5b-instruct"], "router_id": "qwen2.5-0.5b-instruct", "model_type": "llm", "quantization": "Q8_0", "max_context_length": 32768, "load_context_length": 32768},
+      "evidence": {"confidence": "medium", "parity": "latest-alias-exact-quantization-inferred"}
+    },
+    {
+      "id": "llm-llama32-1b-instruct-q8",
+      "enabled": true,
+      "tier": "latest-confirmed",
+      "kind": "llm",
+      "destination": "llm/llama-3.2-1b-instruct/llama-3.2-1b-instruct-q8_0.gguf",
+      "size_bytes": 1321079200,
+      "sha256": "ba345c83bf5cc679c653b853c46517eea5a34f03ed2205449db77184d9ae62a9",
+      "source": {"type": "huggingface_file", "repo": "hugging-quants/Llama-3.2-1B-Instruct-Q8_0-GGUF", "revision": "8790ecfe0c6c7a20f2a532acdfc1b5d98e1bfa8b", "file": "llama-3.2-1b-instruct-q8_0.gguf"},
+      "runtime": {"aliases": ["llama-3.2-1b-instruct"], "router_id": "llama-3.2-1b-instruct", "model_type": "llm", "quantization": "Q8_0", "max_context_length": 131072, "load_context_length": 32768},
+      "evidence": {"confidence": "medium", "parity": "latest-alias-exact-quantization-inferred"}
+    },
+    {
+      "id": "llm-qwen36-27b-q4km",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm",
+      "destination": "llm/qwen3.6-27b/Qwen3.6-27B-Q4_K_M.gguf",
+      "size_bytes": 16547398784,
+      "sha256": "33625d8dc3a5dd8d88c324d47db58561b11f7072816287078bfe58b4c55782f9",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/Qwen3.6-27B-GGUF", "revision": "58c6607d9c4cae8b071b3781c73be633fb3dee36", "file": "Qwen3.6-27B-Q4_K_M.gguf"},
+      "runtime": {"aliases": ["qwen/qwen3.6-27b"], "router_id": "qwen/qwen3.6-27b", "publisher": "qwen", "architecture": "qwen35", "capabilities": ["tool_use"], "model_type": "vlm", "quantization": "Q4_K_M", "max_context_length": 262144, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "alias-and-quantization-exact-current-upstream-bytes"}
+    },
+    {
+      "id": "llm-qwen36-27b-mmproj",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm_mmproj",
+      "destination": "llm/qwen3.6-27b/mmproj-Qwen3.6-27B-BF16.gguf",
+      "size_bytes": 931145856,
+      "sha256": "b5d6d9c7063068ce85130bae1d7851eadae1f81f9ecfae82112adffd4b736b45",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/Qwen3.6-27B-GGUF", "revision": "58c6607d9c4cae8b071b3781c73be633fb3dee36", "file": "mmproj-Qwen3.6-27B-BF16.gguf"},
+      "evidence": {"confidence": "high", "parity": "current-upstream-reconstruction"}
+    },
+    {
+      "id": "llm-qwen35-9b-deepseek-v4-flash-bf16",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm",
+      "destination": "llm/qwen3.5-9b-deepseek-v4-flash/Qwen3.5-9B-DeepSeek-V4-Flash-BF16.gguf",
+      "size_bytes": 17920693504,
+      "sha256": "01e584f93a45c0d1e71f10bffb05e196c1c321b28933e59f97ae7c13c7bb0ca3",
+      "source": {"type": "huggingface_file", "repo": "Jackrong/Qwen3.5-9B-DeepSeek-V4-Flash-GGUF", "revision": "bc3598c6e3a13fc32b1ce9e0d91e22ea3a1cde0e", "file": "Qwen3.5-9B-DeepSeek-V4-Flash-BF16.gguf"},
+      "runtime": {"aliases": ["qwen3.5-9b-deepseek-v4-flash"], "router_id": "qwen3.5-9b-deepseek-v4-flash", "publisher": "Jackrong", "architecture": "qwen35", "capabilities": ["tool_use"], "model_type": "llm", "quantization": "BF16", "max_context_length": 262144, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "alias-quantization-and-historical-upstream-revision-exact"}
+    },
+    {
+      "id": "llm-devstral-small-2-q4km",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm",
+      "destination": "llm/devstral-small-2-2512/Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf",
+      "size_bytes": 14334437504,
+      "sha256": "fd9c29aee820b5db745434d43329e8803a72fc27e4261b661df8309c16bcde8c",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/Devstral-Small-2-24B-Instruct-2512-GGUF", "revision": "e471f62bf546b027d9f23f679bcd1a295eabf403", "file": "Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf"},
+      "runtime": {"aliases": ["mistralai/devstral-small-2-2512"], "router_id": "mistralai/devstral-small-2-2512", "publisher": "mistralai", "architecture": "mistral3", "capabilities": ["tool_use"], "model_type": "vlm", "quantization": "Q4_K_M", "max_context_length": 393216, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "alias-and-quantization-exact-current-upstream-bytes"}
+    },
+    {
+      "id": "llm-devstral-small-2-mmproj",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm_mmproj",
+      "destination": "llm/devstral-small-2-2512/mmproj-Devstral-Small-2-24B-Instruct-2512-F16.gguf",
+      "size_bytes": 878053472,
+      "sha256": "9bda8c9a3f90de857eb4a6a1bee03f8c92efbbeb580406ebd433ea068a738886",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/Devstral-Small-2-24B-Instruct-2512-GGUF", "revision": "e471f62bf546b027d9f23f679bcd1a295eabf403", "file": "mmproj-Devstral-Small-2-24B-Instruct-2512-F16.gguf"},
+      "evidence": {"confidence": "high", "parity": "current-upstream-reconstruction"}
+    },
+    {
+      "id": "llm-glm47-flash-q4km",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm",
+      "destination": "llm/glm-4.7-flash/GLM-4.7-Flash-Q4_K_M.gguf",
+      "size_bytes": 18132721120,
+      "sha256": "a53ccc46b2a48e4b29b97f1d5828902a9d8701e74c3f7c2f5331c136b66c728b",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/GLM-4.7-Flash-GGUF", "revision": "b58019be521f54a64160968f3c37a55174b1f186", "file": "GLM-4.7-Flash-Q4_K_M.gguf"},
+      "runtime": {"aliases": ["zai-org/glm-4.7-flash"], "router_id": "zai-org/glm-4.7-flash", "publisher": "zai-org", "architecture": "deepseek2", "capabilities": ["tool_use"], "model_type": "llm", "quantization": "Q4_K_M", "max_context_length": 202752, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "alias-and-quantization-exact-current-upstream-bytes"}
+    },
+    {
+      "id": "llm-granite4-h-tiny-q8",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm",
+      "destination": "llm/granite-4-h-tiny/granite-4.0-h-tiny-Q8_0.gguf",
+      "size_bytes": 7390331328,
+      "sha256": "3528ba7c7ece5cb9ea8b981f57577bae41d280c5753e1de8f3df4b03ac46d5b8",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/granite-4.0-h-tiny-GGUF", "revision": "9d8302a377d06978215e70d4f547dfa539b13bd1", "file": "granite-4.0-h-tiny-Q8_0.gguf"},
+      "runtime": {"aliases": ["ibm/granite-4-h-tiny"], "router_id": "ibm/granite-4-h-tiny", "publisher": "ibm", "architecture": "granitehybrid", "capabilities": ["tool_use"], "model_type": "llm", "quantization": "Q8_0", "max_context_length": 1048576, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "alias-and-quantization-exact-current-upstream-bytes"}
+    },
+    {
+      "id": "llm-phi4-reasoning-plus-q8",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm",
+      "destination": "llm/phi-4-reasoning-plus/Phi-4-reasoning-plus-Q8_0.gguf",
+      "size_bytes": 15580501728,
+      "sha256": "0956c5c89fa3363a8d6163bc06dbf9eee8d29457c07f469bae16b86bb0c768c8",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/Phi-4-reasoning-plus-GGUF", "revision": "32a07ec573ed9a856f7f75c26a558bc8f23cca55", "file": "Phi-4-reasoning-plus-Q8_0.gguf"},
+      "runtime": {"aliases": ["microsoft/phi-4-reasoning-plus"], "router_id": "microsoft/phi-4-reasoning-plus", "publisher": "microsoft", "architecture": "phi3", "capabilities": [], "model_type": "llm", "quantization": "Q8_0", "max_context_length": 32768, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "alias-and-quantization-exact-current-upstream-bytes"}
+    },
+    {
+      "id": "llm-gpt-oss-20b-mxfp4",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm",
+      "destination": "llm/gpt-oss-20b/gpt-oss-20b-MXFP4.gguf",
+      "size_bytes": 12109565632,
+      "sha256": "65d06d31a3977d553cb3af137b5c26b5f1e9297a6aaa29ae7caa98788cde53ab",
+      "source": {"type": "huggingface_file", "repo": "lmstudio-community/gpt-oss-20b-GGUF", "revision": "21f8a86825e36be34d24601e6d5ab45e2d366f4b", "file": "gpt-oss-20b-MXFP4.gguf"},
+      "runtime": {"aliases": ["openai/gpt-oss-20b"], "router_id": "openai/gpt-oss-20b", "publisher": "openai", "architecture": "gpt-oss", "capabilities": ["tool_use"], "model_type": "llm", "quantization": "MXFP4", "max_context_length": 131072, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "alias-and-quantization-exact-current-upstream-bytes"}
+    },
+    {
+      "id": "llm-kimi-vl-a3b-thinking-q8",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm",
+      "destination": "llm/kimi-vl-a3b-thinking-2506/Kimi-VL-A3B-Thinking-2506-Q8_0.gguf",
+      "size_bytes": 16974941088,
+      "sha256": "ffcfd257855ee9f16243d8d16b4d74fcb106d3dc1fd65f466d1c089bf320b377",
+      "source": {"type": "huggingface_file", "repo": "ggml-org/Kimi-VL-A3B-Thinking-2506-GGUF", "revision": "e7dcd093335f922a057772febc7ab27eda985b40", "file": "Kimi-VL-A3B-Thinking-2506-Q8_0.gguf"},
+      "runtime": {"aliases": ["kimi-vl-a3b-thinking-2506"], "router_id": "kimi-vl-a3b-thinking-2506", "publisher": "ggml-org", "architecture": "deepseek2", "capabilities": [], "model_type": "vlm", "quantization": "Q8_0", "max_context_length": 131072, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "alias-and-quantization-exact-current-upstream-bytes"}
+    },
+    {
+      "id": "llm-kimi-vl-a3b-thinking-mmproj-bf16",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm_mmproj",
+      "destination": "llm/kimi-vl-a3b-thinking-2506/mmproj-Kimi-VL-A3B-Thinking-2506-bf16.gguf",
+      "size_bytes": 906726464,
+      "sha256": "fc9b4043c3cd9a4649eec121b688e0e3bf609f6b3f836e45282f8a34f3ffee39",
+      "source": {"type": "huggingface_file", "repo": "ggml-org/Kimi-VL-A3B-Thinking-2506-GGUF", "revision": "e7dcd093335f922a057772febc7ab27eda985b40", "file": "mmproj-Kimi-VL-A3B-Thinking-2506-bf16.gguf"},
+      "evidence": {"confidence": "medium", "parity": "model-exact-mmproj-choice-reconstructed", "basis": "The old VLM alias and Q8 model are exact; the truncated catalog did not retain which of the upstream mmproj variants LM Studio selected."}
+    },
+    {
+      "id": "llm-dolphin3-r1-mistral24b-q5km",
+      "enabled": true,
+      "tier": "catalog-parity",
+      "kind": "llm",
+      "destination": "llm/dolphin3-r1-mistral-24b-abliterated/Dolphin3.0-R1-Mistral-24B-abliterated.Q5_K_M.gguf",
+      "size_bytes": 16763999072,
+      "sha256": "06f01cba594719d4d2000dc33686f0bbb2fa9db832169d821d163a469028d9c5",
+      "source": {"type": "huggingface_file", "repo": "mradermacher/Dolphin3.0-R1-Mistral-24B-abliterated-GGUF", "revision": "27fdbaf87c0e9ba59de94351764d75685097eca6", "file": "Dolphin3.0-R1-Mistral-24B-abliterated.Q5_K_M.gguf"},
+      "runtime": {"aliases": ["dolphin3.0-r1-mistral-24b-abliterated"], "router_id": "dolphin3.0-r1-mistral-24b-abliterated", "publisher": "lactroiii", "architecture": "llama", "capabilities": [], "model_type": "llm", "quantization": "Q5_K_M", "max_context_length": 32768, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "alias-and-quantization-exact-current-upstream-bytes"}
+    },
+    {
+      "id": "image-noobai-xl-vpred-v1",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "comfy_checkpoint",
+      "destination": "comfy/checkpoints/noobai_xl_v1.safetensors",
+      "size_bytes": 7105350110,
+      "sha256": "ea349eeae87ca8d25ba902c93810f7ca83e5c82f920edf12f273af004ae02819",
+      "source": {"type": "huggingface_file", "repo": "Laxhar/noobai-XL-Vpred-1.0", "revision": "66aa55e3469c27c29a89813cd35dd95fb7485fa1", "file": "NoobAI-XL-Vpred-v1.0.safetensors"},
+      "runtime": {"aliases": ["noobai_xl_v1.safetensors"]},
+      "evidence": {"confidence": "high", "parity": "intended-code-exact-upstream-bytes", "basis": "The Klukai workflow hard-codes noobai_xl_v1.safetensors; this exact upstream mirror file and LFS oid were recovered."}
+    },
+    {
+      "id": "image-sdxl-base-1",
+      "enabled": true,
+      "tier": "comfy-parity",
+      "kind": "comfy_checkpoint",
+      "destination": "comfy/checkpoints/sd_xl_base_1.0.safetensors",
+      "size_bytes": 6938078334,
+      "sha256": "31e35c80fc4829d14f90153f4c74cd59c90b779f6afe05a74cd6120b893f7e5b",
+      "source": {"type": "huggingface_file", "repo": "stabilityai/stable-diffusion-xl-base-1.0", "revision": "462165984030d82259a11f4367a4eed129e94a7b", "file": "sd_xl_base_1.0.safetensors"},
+      "evidence": {"confidence": "highest", "parity": "recovered-size-and-upstream-sha-exact"}
+    },
+    {
+      "id": "image-sdxl-turbo-fp32",
+      "enabled": true,
+      "tier": "comfy-parity",
+      "kind": "comfy_checkpoint",
+      "destination": "comfy/checkpoints/sdxl_turbo.safetensors",
+      "size_bytes": 13875761366,
+      "sha256": "2e58e3704b4c0831bf848e0507c9b5ff2cd8d007b8d0719dba3874156f631050",
+      "source": {"type": "huggingface_file", "repo": "stabilityai/sdxl-turbo", "revision": "71153311d3dbb46851df1931d3ca6e939de83304", "file": "sd_xl_turbo_1.0.safetensors"},
+      "evidence": {"confidence": "highest", "parity": "recovered-size-and-upstream-sha-exact", "basis": "The recovered 13,875,761,366-byte file proves this was the FP32 checkpoint, not the smaller fp16 variant."}
+    },
+    {
+      "id": "image-sdxl-lightning-4step-unet",
+      "enabled": true,
+      "tier": "comfy-parity",
+      "kind": "comfy_diffusion_model",
+      "destination": "comfy/diffusion_models/sdxl_lightning_4step.safetensors",
+      "size_bytes": 5135149736,
+      "sha256": "39a90a8a2a25c1372633c1e8eb1a96f85eab937bcb58cfc6ec9baf66242ec23c",
+      "source": {"type": "huggingface_file", "repo": "ByteDance/SDXL-Lightning", "revision": "c9a24f48e1c025556787b0c58dd67a091ece2e44", "file": "sdxl_lightning_4step_unet.safetensors"},
+      "evidence": {"confidence": "highest", "parity": "recovered-size-and-upstream-sha-exact", "basis": "The source UNet is intentionally renamed to the exact recovered ComfyUI destination filename."}
+    },
+    {
+      "id": "image-animagine-xl-31",
+      "enabled": true,
+      "tier": "comfy-parity",
+      "kind": "comfy_checkpoint",
+      "destination": "comfy/checkpoints/animagine_xl_31.safetensors",
+      "size_bytes": 6938325776,
+      "sha256": "e3c47aedb06418c6c331443cd89f2b3b3b34b7ed2102a3d4c4408a8d35aad6b0",
+      "source": {"type": "huggingface_file", "repo": "cagliostrolab/animagine-xl-3.1", "revision": "483f0c322568ed13697ed01dd0be07204746d12b", "file": "animagine-xl-3.1.safetensors"},
+      "evidence": {"confidence": "medium-high", "parity": "recovered-name-current-upstream-reconstruction"}
+    },
+    {
+      "id": "lora-klukai-gfl2-il03",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "comfy_lora",
+      "destination": "comfy/loras/Klukai_GFL2_IL-03.safetensors",
+      "size_bytes": 50975620,
+      "sha256": "65c932a400af429dc264a3fa6838d36515853159a6fd5d58308f204ece278757",
+      "source": {"type": "remote_file", "ssh_host": "dominus-nobara", "path": "/mnt/satar0/shared_linux/Klukai_GFL2_IL-03.safetensors"},
+      "runtime": {"strength": 0.75},
+      "evidence": {"confidence": "highest", "parity": "byte-exact-surviving-target-file", "basis": "Current Klukai code hard-codes this exact filename and strength."}
+    },
+    {
+      "id": "lora-gfl2-klukai-illustrious-default",
+      "enabled": true,
+      "tier": "preserved-assets",
+      "kind": "comfy_lora",
+      "destination": "comfy/loras/gfl2_klukai_illustriousXL-DEFAULT.safetensors",
+      "size_bytes": 57482284,
+      "sha256": "22a5330cbb569d3a82d011e1862c8e50f050f4b51dead265eaeec76337ab2fa1",
+      "source": {"type": "remote_file", "ssh_host": "dominus-nobara", "path": "/mnt/satar0/shared_linux/gfl2_klukai_illustriousXL-DEFAULT.safetensors"},
+      "evidence": {"confidence": "highest", "parity": "byte-exact-surviving-target-file"}
+    },
+    {
+      "id": "lora-klukai-il",
+      "enabled": true,
+      "tier": "preserved-assets",
+      "kind": "comfy_lora",
+      "destination": "comfy/loras/Klukai_il.safetensors",
+      "size_bytes": 170544508,
+      "sha256": "d0224832c6b79f1e111cc641da8573e25b7dc90cddb49e4d67bdc8f308ff79b7",
+      "source": {"type": "remote_file", "ssh_host": "dominus-nobara", "path": "/mnt/satar0/shared_linux/Klukai_il.safetensors"},
+      "evidence": {"confidence": "highest", "parity": "byte-exact-surviving-target-file"}
+    },
+    {
+      "id": "voice-klukai-reference-wav",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "voice_reference",
+      "destination": "voice/reference/klukai_reference.wav",
+      "size_bytes": 617478,
+      "sha256": "276e9bb51b901fb941077130ed24c42e7af3e91c0255119b58eca7a602bc5a00",
+      "source": {"type": "local_file", "path": "/home/jalsarraf/git/klukai/docker/voice/reference/klukai_reference.wav"},
+      "evidence": {"confidence": "highest", "parity": "byte-exact-repository-asset"}
+    }
+  ],
+  "snapshots": [
+    {
+      "id": "voice-xtts-v2",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "speech_snapshot",
+      "destination": "voice/xtts-v2",
+      "source": {"type": "huggingface_snapshot", "repo": "coqui/XTTS-v2", "revision": "6c2b0d75eae4b7047358e3b6bd9325f857d43f77"},
+      "files": [
+        {"path": "config.json", "size_bytes": 4368, "sha256": "ef262b1454dd2a77e1461b0b2cd53e19b8a7624cc131b837d36df67356bc75e8"},
+        {"path": "dvae.pth", "size_bytes": 210514388, "sha256": "b29bc227d410d4991e0a8c09b858f77415013eeb9fba9650258e96095557d97a"},
+        {"path": "hash.md5", "size_bytes": 32, "sha256": "ef2e25fc4639bb81c6c5048740c1ee8268606a160548abaa2e2fe03b12278c54"},
+        {"path": "mel_stats.pth", "size_bytes": 1067, "sha256": "1f69422a8a8f344c4fca2f0c6b8d41d2151d6615b7321e48e6bb15ae949b119c"},
+        {"path": "model.pth", "size_bytes": 1867929118, "sha256": "c7ea20001c6a0a841c77e252d8409f6a74fb423e79b3206a0771ba5989776187"},
+        {"path": "speakers_xtts.pth", "size_bytes": 7754818, "sha256": "f0f6137c19a4eab0cbbe4c99b5babacf68b1746e50da90807708c10e645b943b"},
+        {"path": "vocab.json", "size_bytes": 361219, "sha256": "928260878a59da8a72a2a5b7687fea29d5106137669d90945430fe17e415304a"}
+      ],
+      "runtime": {"host_env": "XTTS_MODEL_DIR", "container_path": "/app/models/xtts-v2"},
+      "evidence": {"confidence": "medium-high", "parity": "model-family-exact-current-official-snapshot", "basis": "The old service and code prove XTTS v2, but did not retain its exact downloaded repository commit."}
+    },
+    {
+      "id": "voice-faster-whisper-base-en",
+      "enabled": true,
+      "tier": "cutover-critical",
+      "kind": "speech_snapshot",
+      "destination": "voice/whisper-base-en",
+      "source": {"type": "huggingface_snapshot", "repo": "Systran/faster-whisper-base.en", "revision": "3d3d5dee26484f91867d81cb899cfcf72b96be6c"},
+      "files": [
+        {"path": "config.json", "size_bytes": 2227, "sha256": "f3bc3821e9fc76a27bae538e11ae5b677dcdd352b4600429ce7951d398569aeb"},
+        {"path": "model.bin", "size_bytes": 145216508, "sha256": "2a166925539a16005f14ff328359f9b9adb9dc4fb631bb3b227526862e93e2ef"},
+        {"path": "tokenizer.json", "size_bytes": 2128466, "sha256": "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df"},
+        {"path": "vocabulary.txt", "size_bytes": 422309, "sha256": "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf"}
+      ],
+      "runtime": {"host_env": "WHISPER_MODEL_DIR", "container_path": "/app/models/whisper-base-en"},
+      "evidence": {"confidence": "high", "parity": "model-alias-exact-current-official-snapshot", "basis": "Klukai compose and voice source both specify base.en."}
+    },
+    {
+      "id": "shared-faster-whisper-large-v3",
+      "enabled": true,
+      "tier": "speech-parity",
+      "kind": "speech_snapshot",
+      "destination": "speech/shared/huggingface/Systran/faster-whisper-large-v3",
+      "consumer_destinations": [
+        "speaches/huggingface/Systran/faster-whisper-large-v3",
+        "transcription/huggingface/Systran/faster-whisper-large-v3"
+      ],
+      "deduplication": "One physical copy; bind-mount this canonical directory into both containers.",
+      "source": {"type": "huggingface_snapshot", "repo": "Systran/faster-whisper-large-v3", "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478"},
+      "files": [
+        {"path": "README.md", "size_bytes": 2052, "sha256": "39e96252229f5a3d0141dc81afb65a36fd205461ac21e5b70f2cd1248ef0082c"},
+        {"path": "config.json", "size_bytes": 2394, "sha256": "a9306624f5ec14270a014b647e5c316b6e03a662c369758d1b90697a7b0655b9"},
+        {"path": "model.bin", "size_bytes": 3087284237, "sha256": "69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1"},
+        {"path": "preprocessor_config.json", "size_bytes": 340, "sha256": "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711"},
+        {"path": "tokenizer.json", "size_bytes": 2480617, "sha256": "6d8cbd7cd0d8d5815e478dac67b85a26bbe77c1f5e0c6d76d1ce2abc0e5f21ca"},
+        {"path": "vocabulary.json", "size_bytes": 1068114, "sha256": "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1"}
+      ],
+      "runtime": {"materialization": "The Compose cache materializer fans this flat immutable snapshot into both service HF cache trees with XFS reflinks and a refs/main pointer."},
+      "evidence": {"confidence": "medium", "parity": "service-model-reconstructed-current-official-snapshot", "basis": "The recovered Docker volume size and pinned service defaults identify large-v3; the lost cache did not preserve its commit."}
+    },
+    {
+      "id": "speaches-kokoro-82m-v10-onnx",
+      "enabled": true,
+      "tier": "speech-parity",
+      "kind": "speech_snapshot",
+      "destination": "speaches/huggingface/speaches-ai/Kokoro-82M-v1.0-ONNX",
+      "source": {"type": "huggingface_snapshot", "repo": "speaches-ai/Kokoro-82M-v1.0-ONNX", "revision": "dc196c76d64fed9203906231372bcb98135815df"},
+      "files": [
+        {"path": "README.md", "size_bytes": 280, "sha256": "6d8def2b0d1b2beb96c907f33f58c6a8c10371d5c7527252b36c255f564c1ab5"},
+        {"path": "model.onnx", "size_bytes": 325532387, "sha256": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5"},
+        {"path": "voices.bin", "size_bytes": 28214398, "sha256": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"}
+      ],
+      "runtime": {"materialization": "Speaches 0.8.3 requires the model card plus model.onnx and voices.bin in a standard HF snapshot cache tree."},
+      "evidence": {"confidence": "high", "parity": "service-version-compatible-immutable-snapshot", "basis": "Speaches 0.8.3 registry uses speaches-ai/Kokoro-82M-v1.0-ONNX; the hexgrad PyTorch checkpoint is intentionally excluded as incompatible."}
+    },
+    {
+      "id": "transcription-parakeet-tdt-06b-v3",
+      "enabled": true,
+      "tier": "speech-parity",
+      "kind": "speech_snapshot",
+      "destination": "transcription/huggingface/nvidia/parakeet-tdt-0.6b-v3",
+      "source": {"type": "huggingface_snapshot", "repo": "nvidia/parakeet-tdt-0.6b-v3", "revision": "7c35754d166cca382ad1e53e68b01e7c575f3a1d"},
+      "files": [
+        {"path": "README.md", "size_bytes": 42280, "sha256": "10171089d00553522fe3f51d5a7fa600cbdc7005a98d12b6eaabc056b05d1b8d"},
+        {"path": "config.json", "size_bytes": 1153, "sha256": "e747b85e1bdfd300c8b8ac63bac8dd5221f8fe9bc275b48d06c735fcd6971b6e"},
+        {"path": "generation_config.json", "size_bytes": 289, "sha256": "b141de6ec6d7f982ece13f98f604e3fe1807ea9c0e839185d0ab7064604209d0"},
+        {"path": "model.safetensors", "size_bytes": 2508311120, "sha256": "3a2026366188c8c68598edbbff92f8d11590a08e0ae2e6775544e7b07d6a5e11"},
+        {"path": "parakeet-tdt-0.6b-v3.nemo", "size_bytes": 2509332480, "sha256": "3cbdc85877e668ca7b82d0d56770eb1fac76691f55d6b97545e8d61ca588d10d"},
+        {"path": "processor_config.json", "size_bytes": 392, "sha256": "8346a93a3b987fa1dec57a78f045cd0817d21786589a5a096b41a57a446fd1d7"},
+        {"path": "tokenizer.json", "size_bytes": 1159960, "sha256": "bd321b096832a3f270bd3b2a88823957920f1a5c5ada71114a26ea729d0cbe91"},
+        {"path": "tokenizer_config.json", "size_bytes": 290, "sha256": "0b2fe0037599ee335f0b972fa682bf0ece74e4ccfec755cb7daa3405d3d3e874"}
+      ],
+      "runtime": {"materialization": "TranscriptionSuite cache materializer builds the standard HF cache tree from this complete runtime snapshot."},
+      "evidence": {"confidence": "high", "parity": "pinned-service-default-immutable-snapshot", "basis": "TranscriptionSuite v1.3.7 commit f1760a17 configures nvidia/parakeet-tdt-0.6b-v3 as the default. V2 was a modernizing guess and is deliberately not restored."}
+    },
+    {
+      "id": "transcription-pyannote-speaker-diarization-community-1",
+      "enabled": false,
+      "tier": "speech-blocked",
+      "kind": "speech_snapshot",
+      "destination": "transcription/huggingface/pyannote/speaker-diarization-community-1",
+      "source": {"type": "huggingface_snapshot", "repo": "pyannote/speaker-diarization-community-1", "revision": "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee", "requires_auth": true},
+      "files": [
+        {"path": "README.md", "size_bytes": 9978, "sha256": null},
+        {"path": "config.yaml", "size_bytes": 444, "sha256": null},
+        {"path": "embedding/README.md", "size_bytes": 938, "sha256": null},
+        {"path": "embedding/pytorch_model.bin", "size_bytes": 26646242, "sha256": null},
+        {"path": "plda/README.md", "size_bytes": 220, "sha256": null},
+        {"path": "plda/plda.npz", "size_bytes": 133852, "sha256": null},
+        {"path": "plda/xvec_transform.npz", "size_bytes": 134376, "sha256": null},
+        {"path": "segmentation/pytorch_model.bin", "size_bytes": 5906507, "sha256": null}
+      ],
+      "blocked_reason": "Gated repository terms have not been accepted for the Amarillo Hugging Face identity, so content SHA-256 cannot be truthfully locked yet.",
+      "runtime": {"materialization": "Enable only after all gated files have exact SHA-256 values; materialize as one self-contained community-1 HF snapshot."},
+      "evidence": {"confidence": "high-for-identity-low-for-content", "parity": "pinned-service-default-revision-content-blocked", "basis": "TranscriptionSuite v1.3.7 commit f1760a17 bootstraps pyannote/speaker-diarization-community-1. The gate prevents content hashing without accepted terms."}
+    }
+  ],
+  "retired": [
+    {
+      "id": "legacy-gemma-4-e2b-it-q4km",
+      "reason": "Explicitly recorded as no longer downloaded before the loss; preserve as an Amarillo archive, do not deploy.",
+      "surviving_path": "/home/jalsarraf/.lmstudio/models.quarantine/gemma-4-e2b-it.20260515/gemma-4-E2B-it-Q4_K_M.gguf",
+      "size_bytes": 3106731392,
+      "sha256": "a67d147c4b461fd5ad394acffa954ecc8686970671d2de8562d6db8888181011"
+    },
+    {"id": "legacy-lfm2", "reason": "Explicitly recorded as no longer downloaded; no byte-exact artifact survived."},
+    {"id": "legacy-qwen25-3b", "reason": "Explicitly recorded as no longer downloaded; no byte-exact artifact survived."},
+    {"id": "comfy-flux", "reason": "Recovered FLUX files were zero bytes and were intentionally removed; restoring FLUX would not be parity."},
+    {"id": "wsl-vision-router-triton-compreface", "reason": "The unversioned source was unavailable and the stack had crash-looped for roughly four months; excluded from cutover-critical recovery pending a separate redesign."}
+  ],
+  "uncertainties": [
+    "The 2026-07-21 LM Studio output was truncated after eight rows, so the final complete catalog count cannot be proven; May catalog-parity entries are retained rather than falsely declared absent.",
+    "The Qwen3.5-27B Claude/Opus distillation public repository appears newer than the recovered May record; alias and quantization are exact, bytes are a pinned reconstruction.",
+    "Kimi's Q8 model is exact to the catalog; the BF16 mmproj variant is the best-supported current reconstruction but the old selected projector was not recorded.",
+    "XTTS, large-v3, Kokoro, Parakeet, and PyAnnote model families are known, but their lost cache commits were not preserved; current immutable snapshots are locked.",
+    "PyAnnote speaker-diarization and segmentation remain disabled until gated terms are accepted and their content SHA-256 values can be added without guessing."
+  ]
+}

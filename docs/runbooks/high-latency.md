@@ -20,12 +20,12 @@
    - Database panel: pool saturation? Slow queries?
    - Redis panel: command latency?
    - Qdrant panel: search latency?
-   - LM Studio: response time?
+   - Compatibility gateway and llama.cpp router: response time and cold-load state?
 3. Triage by endpoint:
 
 | Endpoint slow | Likely culprit | Next runbook |
 |---|---|---|
-| `/api/chat/*` | LM Studio cold-start or VRAM | [lm-studio-cold.md](lm-studio-cold.md) |
+| `/api/chat/*` | llama.cpp cold start, lease wait, or VRAM pressure | [lm-studio-cold.md](lm-studio-cold.md) |
 | `/api/memories/search` | Qdrant degraded | [qdrant-down.md](qdrant-down.md) |
 | `/api/user/stats` | PG slow | [db-down.md](db-down.md) |
 | `/health` | Cache miss path | Check `health_cache.py` TTL config |
@@ -54,7 +54,7 @@ curl -s http://localhost:9090/api/v1/query \
 |---|---|
 | Latency rises gradually over hours | Memory leak or DB bloat |
 | Latency spikes during peak hours | Load > capacity; scale or queue |
-| Latency spike correlated with image gen | VRAM contention with LM Studio |
+| Latency spike correlated with image gen | Expected bounded lease wait or a failed GPU cleanup |
 | One endpoint slow, others fine | Endpoint-specific code regression |
 | All endpoints slow | companion-core itself (GC, leak, lock contention) |
 

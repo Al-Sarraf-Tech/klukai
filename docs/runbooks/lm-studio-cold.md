@@ -1,69 +1,92 @@
-# Runbook: LM Studio Cold Start
+# Runbook: LM Studio-Compatible Gateway Cold Start
 
-**Severity:** P3 (slow first chat after idle; subsequent chats normal)
-**SLO breach:** `/api/chat/turn` first-token p99 may breach 2s target temporarily.
+**Severity:** P3 (slow first chat after idle; later requests are normal)
 
-## Symptom
+**SLO breach:** `/api/chat/turn` first-token latency may temporarily exceed its target.
 
-- First chat after a long idle is slow (15-60s to first token)
-- Subsequent chats are normal (sub-second)
-- companion-core logs show LM Studio response time >10s
-- LM Studio dashboard (`dominus:1234` over Tailscale) shows model loading
+## Expected behavior
 
-## Why it happens
+`dominus-nobara` no longer runs the LM Studio application. The CPU-only
+`lmstudio-compat` service preserves its authenticated API on Tailscale port
+`1234`, while the internal `llama-router` service runs the pinned llama.cpp
+backend and loads one locked preset at a time.
 
-Per the 2026-04-20 commit `551906e perf(llm): load-on-demand with 600s TTL`:
+An idle model is unloaded no later than 900 seconds after its last inference.
+The current llama.cpp deadline is slightly lower than 900 seconds to allow for
+the runtime's polling interval. The gateway strips client-supplied `ttl`
+values, so a caller cannot extend residency. A cold request after that unload
+can take tens of seconds while weights return to RAM and VRAM; this is
+intentional.
 
-- LM Studio JIT-unloads models after 600s of idle.
-- First request after unload triggers model load (~10-60s depending on
-  size: gemma-4 < dolphin-24b < gpt-oss-20b).
-- This is **intentional behavior** — VRAM contention with image gen
-  required load-on-demand. See `feedback_llm_load_on_demand.md`.
+## Symptoms
 
-## Immediate action (none for end-user-visible cold start)
+- The first chat after at least 15 minutes of inactivity is slow.
+- Later requests to the same model are fast.
+- `GET /health` reports the gateway and router state, but does not load a model.
+- An authenticated catalog request reports the selected model as loading or
+  not loaded.
 
-This is expected when the system has been idle. The first request "pays
-the cold-start tax." No action needed.
+## Immediate checks
 
-However, if cold-start is happening *during active hours* (not after long
-idle), investigate:
+Run API checks from an enrolled Tailnet host. Keep the rotated token out of
+shell history and logs.
 
-1. Check LM Studio dashboard for model loaded state:
-   ```bash
-   ssh dominus 'curl -sf http://localhost:1234/v1/models | jq'
-   ```
-2. Check VRAM pressure:
-   ```bash
-   ssh dominus 'nvidia-smi --query-gpu=memory.used,memory.total --format=csv'
-   ```
-3. If VRAM full from image gen, model was evicted. Wait for image gen to
-   complete or pre-warm:
-   ```bash
-   ssh dominus 'curl -X POST http://localhost:1234/v1/models/dolphin-2.9.4-llama3.1-8b/load'
-   ```
+```bash
+read -r -s -p 'LM gateway token: ' LM_STUDIO_TOKEN; printf '\n'
+export LM_STUDIO_TOKEN
+curl --fail http://100.107.121.5:1234/health | jq .
+curl --fail \
+  -H "Authorization: Bearer ${LM_STUDIO_TOKEN:?token is not set}" \
+  http://100.107.121.5:1234/api/v0/models | jq .
+```
 
-## Root-cause investigation
+On `dominus-nobara`, inspect the canonical user unit and Compose services:
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| Cold start mid-session | VRAM evicted by image gen | Pre-warm before image gen; throttle image gen |
-| Cold start every request | TTL set too low | Verify `LM_STUDIO_TTL_SECONDS=600` env |
-| Cold start across all models | LM Studio service restart | `ssh dominus systemctl status lm-studio.service` |
+```bash
+cd /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara
+systemctl --user status dominus-ai-stack.service --no-pager
+docker compose \
+  --env-file /mnt/nvmer0/services/ai-stack/config/stack.env \
+  --file compose.yaml ps lmstudio-compat llama-router
+docker compose \
+  --env-file /mnt/nvmer0/services/ai-stack/config/stack.env \
+  --file compose.yaml logs --tail=200 lmstudio-compat llama-router
+nvidia-smi
+```
 
-## Verification after fix
+If both services are healthy and the delay followed a true idle period, take
+no action. Do not add a keepalive or increase the TTL.
 
-1. Send 3 chat turns; verify first <8s p99, subsequent <1s.
-2. Confirm LM Studio dashboard shows model loaded.
+## Failure diagnosis
 
-## Out-of-scope
+| Result | Meaning | Action |
+| --- | --- | --- |
+| First request alone is slow | Normal lazy model load | Wait for that request to finish |
+| HTTP 401 | Missing or stale bearer token | Re-read the rotated `LM_STUDIO_TOKEN`; do not disable auth |
+| HTTP 503 with `game_active` | GameMode owns the GPU | Wait for the game to exit; do not bypass the guard |
+| `/health` is degraded | `llama-router` is unavailable or starting | Inspect the two service logs and the model release mount |
+| Every request reloads | Router restart, load failure, or model swap | Check container restart counts, logs, and `nvidia-smi` |
+| Model remains resident after 900 seconds idle | TTL safety contract failed | Stop inference and escalate; verify the fixed llama.cpp command and gateway image |
 
-Cold starts during true idle (e.g., morning after no overnight activity)
-are **expected and acceptable**. Do not optimize away — VRAM is finite,
-and image gen + chat must coexist on the same GPU.
+To deliberately pre-load a locked alias for a scheduled job, use the
+compatibility API. Pre-loading still obeys the hard idle ceiling:
 
-## Related
+```bash
+curl --fail \
+  -H "Authorization: Bearer ${LM_STUDIO_TOKEN:?token is not set}" \
+  -H 'Content-Type: application/json' \
+  --data '{"model":"cognitivecomputations_dolphin-mistral-24b-venice-edition"}' \
+  http://100.107.121.5:1234/api/v0/models/load | jq .
+```
 
-- ADR-0004: LM Studio routing
-- `feedback_llm_load_on_demand.md`
-- `feedback_model_routing.md`
-- Commit `551906e` — load-on-demand TTL
+## Verification
+
+1. Send one request and confirm it completes with the requested model ID.
+2. Confirm at most one LLM preset is resident.
+3. Make no inference requests for 900 seconds; health and catalog checks do
+   not reset the inference idle timer.
+4. Confirm the model has unloaded and GPU memory has returned. An unload a few
+   seconds early is expected; an unload later than 900 seconds is a failure.
+
+The complete rebuild and acceptance procedure is in
+`ops/dominus-nobara/RUNBOOK.md`.

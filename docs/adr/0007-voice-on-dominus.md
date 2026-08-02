@@ -1,63 +1,71 @@
-# ADR-0007: Voice synthesis on dominus only (RTX 3090 + CUDA)
+# ADR-0007: Voice synthesis on dominus-nobara (RTX 3090 + CUDA)
 
 - **Date:** Origin (formalized 2026-05-16)
-- **Updated:** 2026-07-22 (voice transport moved to Tailscale)
+- **Updated:** 2026-08-01 (Nobara rebuild and GPU lease)
 - **Status:** Accepted
 - **Authors:** jalsarraf
 
 ## Context
 
-Klukai's voice is XTTS v2 (Coqui) trained on her Japanese VA's
-reference audio. Per `feedback_local_llm.md`: JP voice ONLY (English
-voice scrapped — sounded wrong). XTTS v2 generation is GPU-heavy:
-~3s of audio takes ~1-2s on RTX 3090 with CUDA. CPU-only inference
-is 10-20x slower, breaking the conversational flow.
+Klukai's voice uses the preserved XTTS v2 model and Japanese reference audio.
+CUDA inference on the RTX 3090 provides the conversational latency the
+companion needs. `amarillo` has an Intel Arc A380 and is not the supported
+XTTS execution target.
 
-amarillo has Intel Arc A380 (no CUDA). dominus has RTX 3090.
+The former Windows/WSL2 `dominus` deployment is gone. Voice must be restored
+without reintroducing a manual container, a LAN dependency, an unbounded model
+load, or a root-disk data path.
 
 ## Decision
 
-`companion-voice` (XTTS v2 + Piper fallback) runs **only on dominus**
-at `dominus:8301`. `companion-core` on amarillo proxies TTS requests
-over Tailscale. Per `feedback_dominus_voice_port.md`: the voice
-container periodically loses the `:8301` binding (cause unknown,
-recurring); fix is `docker rm -f companion-voice && docker compose
--f docker-compose.voice.yml up -d` — see `docs/runbooks/voice-unreachable.md`.
+The canonical `companion-voice` service runs in
+`ops/dominus-nobara/compose.yaml` and is owned by
+`dominus-ai-stack.service`. Its model and mutable cache binds live on
+`/mnt/nvmer0`; no retired top-level Compose file owns the service.
+
+`companion-core` reaches the bearer-authenticated endpoint only through
+Tailscale at `100.107.121.5:8301` (or the locked MagicDNS name). The published
+socket binds only to the Tailnet address.
+
+XTTS loads lazily after acquiring the same restart-safe GPU lease used by
+ComfyUI. Acquisition blocks new LLM work, drains/unloads llama.cpp, stops
+native vLLM, and verifies quiescence. Release, expiry, or explicit unload
+cleans both leased workload classes before removing the marker. Dirty,
+expired, or `cleanup_failed` state remains fail-closed until cleanup is
+positively verified.
+
+Voice uses a fixed 600-second idle TTL, bounded by the system-wide maximum of
+900 seconds. Health checks remain model-free. The game guard stops the voice
+container and verifies canonical GPU processes before a game; game end
+restores only the empty lazy shell.
 
 ## Consequences
 
-- **Single failure domain for voice**: dominus down = no voice.
-  Klukai chat continues text-only (`feedback_dolphin_for_annotations.md`
-  notes voice is not blocking the conversation path).
-- **No iPhone/local TTS**: rejected — Klukai's voice must be consistent
-  across all clients.
-- **Tailnet-only path**: Tailscale MagicDNS avoids a hard-coded address, and
-  direct peer connectivity keeps voice latency low. `tailscale ping dominus`
-  is the canonical transport check.
-- **VRAM shares with image gen + LM Studio** on dominus's 24GB RTX 3090.
-  Voice gen pre-loads XTTS (~3GB resident); image gen evicts other
-  models when running; LLM uses JIT TTL (ADR-0004).
-- **Phase 4 circuit breaker** (per `docs/superpowers/specs/2026-05-16-s-plus-uplift.md`
-  §5.4) will make voice failure non-blocking: chat returns text-only with
-  a "voice unavailable" indicator instead of 5xx.
+- `dominus-nobara` is a single failure domain for voice; chat degrades to text
+  when it is unavailable.
+- Voice, image generation, local LLMs, and games safely share one GPU through
+  explicit arbitration rather than timing delays.
+- The first TTS request after idle may pay the XTTS cold-load cost.
+- Operators recover the canonical Compose service through the runbook. They
+  do not use `docker rm`, publish a second port, or bypass the lease/game guard.
+- Voice model bytes and the reference WAV are immutable release artifacts;
+  the running container does not download substitutes.
 
 ## Alternatives considered
 
-- **CPU-only XTTS on amarillo**: rejected — 10-20x slowdown breaks
+- **CPU-only XTTS on amarillo:** rejected because latency breaks the intended
   conversational pacing.
-- **Cloud TTS (ElevenLabs)**: rejected — privacy (all dialog is
-  Commander-private), cost, vendor lock-in.
-- **Voice via amarillo Arc A380**: rejected — XTTS doesn't have
-  reliable oneAPI/IPEX bindings. CUDA path is mature.
-- **Move voice to amarillo with smaller GPU added**: out of scope;
-  dominus already has the right hardware.
+- **Cloud TTS:** rejected for privacy, cost, and vendor dependency.
+- **Arc A380 XTTS:** rejected because the recovered implementation and model
+  are validated for the CUDA path.
+- **Manual standalone voice container:** rejected because it can bypass the
+  RAID, authentication, lease, port, and game invariants.
 
 ## Related
 
-- `docker-compose.voice.yml` (on dominus, not amarillo)
-- `app/routes.py:/api/tts`
-- `feedback_local_llm.md` (global CLAUDE.md)
-- `feedback_dominus_voice_port.md`
+- `ops/dominus-nobara/compose.yaml`
+- `ops/dominus-nobara/RUNBOOK.md`
+- `docker/core/app/voice_client.py`
 - `docs/runbooks/voice-unreachable.md`
-- ADR-0002 (amarillo/dominus split)
-- ADR-0006 (image gen also on dominus, same GPU)
+- ADR-0002 (amarillo/dominus-nobara split)
+- ADR-0006 (image generation on the same GPU)

@@ -12,10 +12,11 @@ import httpx
 from PIL import Image
 
 from .db import get_conn, get_conn_autocommit
+from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
 
 logger = logging.getLogger(__name__)
 
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
 EXTRACTION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
 # Shared httpx client for LM Studio calls
@@ -327,9 +328,9 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict:
         try:
             async with gate:
                 client = _get_http()
-                from .llm_router import LM_TTL_SECONDS
                 r = await client.post(
                     f"{LM_STUDIO_URL}/v1/chat/completions",
+                    headers=lm_studio_auth_headers(),
                     json={
                         "model": EXTRACTION_MODEL,
                         "messages": [{"role": "user", "content": llm_prompt}],
@@ -368,7 +369,7 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict:
             )
 
         except Exception as e:
-            logger.error("Backfill failed for %s: %s", mem_id, e)
+            logger.error("Backfill failed for %s (%s)", mem_id, type(e).__name__)
 
     logger.info("Backfill complete: %d/%d updated.", updated, total)
     return {"total": total, "updated": updated}

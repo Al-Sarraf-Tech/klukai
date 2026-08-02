@@ -1,73 +1,82 @@
-# ADR-0004: LM Studio model routing (gemma-4 / dolphin / gpt-oss)
+# ADR-0004: Local model routing through the compatibility gateway
 
 - **Date:** 2026-04 (formalized 2026-05-16)
+- **Updated:** 2026-08-01 (Nobara rebuild)
 - **Status:** Accepted
 - **Authors:** jalsarraf
 
 ## Context
 
-klukai needs LLM inference for three distinct task types:
+Klukai needs private local inference for conversational character work,
+structured extraction, agent/tool use, embeddings, and operator-selected
+specialized jobs. The RTX 3090 on `dominus-nobara` is also shared by voice and
+ComfyUI, so an always-resident model would interfere with those workloads and
+with games.
 
-1. **Conversational chat** with Klukai's personality (creative,
-   character-driven, sometimes intimate).
-2. **JSON extraction** (facts from messages, mood classification,
-   gift parsing) — needs strict structured output.
-3. **Quick utility** (one-off short responses, classification tags,
-   sanity checks) — speed matters more than depth.
-
-Running everything on one model wastes VRAM (chat-tuned models are
-slow at JSON; JSON-tuned models are wooden at chat). dominus has
-24GB VRAM (RTX 3090) shared with ComfyUI image gen.
+The original implementation used LM Studio and a smaller three-model policy.
+That Windows/WSL2 installation is gone. The recovered fleet is larger, and its
+exact bytes, aliases, quantizations, paths, and enabled state are now recorded
+in `ops/dominus-nobara/models.lock.json`.
 
 ## Decision
 
-Route by task type to three models, all served by LM Studio on dominus
-at `dominus:1234` over Tailscale:
+`companion-core` keeps the existing OpenAI/LM-Studio-compatible client
+contract, but sends it over Tailscale to the authenticated, CPU-only
+`lmstudio-compat` gateway on `100.107.121.5:1234`. The gateway admits only
+aliases in the immutable model lock and forwards inference to the internal
+pinned llama.cpp router. The router can hold at most one preset.
 
-| Model | Role | Why |
-|---|---|---|
-| `gemma-4-e2b-it` (Q4_K_M, 2.9GB) | Quick utility + ambient | Always loaded, fast, small VRAM footprint |
-| `dolphin-2.9.4-llama3.1-8b` | Conversational chat + memory annotation | Creative, character-stable, good at long-form |
-| `gpt-oss-20b` | JSON extraction + memory selection | Disciplined, follows schemas, strict output |
+The application has two primary routing aliases:
 
-Routing logic lives in `app/llm_router.py`. Per
-`feedback_dolphin_for_annotations.md`: Dolphin for creative text,
-gpt-oss for JSON only, gemma-4 for quick fixes.
+| Alias | Role |
+| --- | --- |
+| `cognitivecomputations_dolphin-mistral-24b-venice-edition` | Default conversation, creative text, and current extraction/annotation paths |
+| `qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2` | Agent and tool-use paths |
 
-Per `feedback_llm_load_on_demand.md`: LM Studio JIT TTL (600s)
-handles model lifecycle. Models load on demand, unload after idle.
-First request after long idle pays the cold-start tax — this is
-intentional (see `docs/runbooks/lm-studio-cold.md`).
+The lock also preserves the recovered optional chat, VLM, reasoning,
+embedding, and utility catalog. Those entries are selectable only by their
+locked aliases; their presence does not make them resident. This ADR does not
+replace or abbreviate that catalog: the lock is the source of truth.
+
+LLM residency has a hard 15-minute ceiling. llama.cpp uses a fixed
+`--sleep-idle-seconds 898`, allowing for its approximately one-second polling
+interval, and the gateway strips client-provided TTL values. Native vLLM uses
+a separate fixed 895-second process-stop watchdog. Health, catalog, and idle
+keepalive traffic may not extend either deadline.
+
+ComfyUI and companion voice acquire the bounded GPU lease before loading
+weights. Lease acquisition blocks new LLM work, drains and unloads llama.cpp,
+stops native vLLM, and verifies quiescence. An expired or failed-cleanup lease
+remains fail-closed until positive cleanup removes all leased workload residue.
 
 ## Consequences
 
-- **VRAM contention**: chat + image gen on the same GPU. Image gen
-  evicts the chat model. Mitigation: 5s VRAM-contention delay built
-  into image gen (commit `c8ad96f` April 2026).
-- **No Anthropic fallback by default** — `ANTHROPIC_API_KEY` is
-  optional. When present, used as last-resort fallback if LM Studio
-  is unreachable.
-- **First-message-after-idle is slow** (15-60s depending on model).
-  This is documented behavior, not a bug.
-- **No model fine-tuning** — using off-the-shelf models per
-  `feedback_local_llm.md`. The character is in the personality YAML
-  + system prompt, not the model weights.
+- First use after idle pays a cold-load cost; this is expected behavior.
+- At most one locked llama.cpp preset is resident, and it unloads by the
+  900-second ceiling.
+- The public compatibility API and legacy `LM_STUDIO_*` configuration names
+  remain stable even though LM Studio itself is not deployed.
+- Local inference remains private and offline. An explicitly configured cloud
+  fallback remains optional rather than a residency mechanism.
+- The character remains defined by Klukai's personality and memory system,
+  not by fine-tuning or an always-loaded model.
 
 ## Alternatives considered
 
-- **One big model** (Dolphin for everything): rejected — JSON
-  extraction is unreliable, structured output frequently malformed.
-- **OpenAI / Anthropic only**: rejected — privacy (all chat content
-  is private to the Commander) + cost + offline capability.
-- **Always-resident models**: rejected — eats VRAM that image gen
-  needs. JIT TTL is the right trade-off.
+- **Restore LM Studio on another desktop host:** rejected because the lost
+  Windows/WSL2 host is not a deployment or rollback target.
+- **One model for every task:** rejected because conversational and agentic
+  requirements differ, while the recovered locked fleet already preserves
+  specialized choices.
+- **Always-resident models or keepalives:** rejected because they violate the
+  shared-GPU and 15-minute residency requirements.
+- **Cloud-only inference:** rejected for privacy, cost, and offline operation.
 
 ## Related
 
-- `app/llm_router.py`
-- `feedback_dolphin_for_annotations.md`
-- `feedback_model_routing.md`
-- `feedback_llm_load_on_demand.md`
-- `feedback_local_llm.md`
+- `ops/dominus-nobara/models.lock.json`
+- `ops/dominus-nobara/RUNBOOK.md`
+- `docker/core/app/llm_router.py`
 - `docs/runbooks/lm-studio-cold.md`
-- ADR-0007 (voice on dominus — same GPU)
+- ADR-0006 (image generation on the shared GPU)
+- ADR-0007 (voice on the shared GPU)

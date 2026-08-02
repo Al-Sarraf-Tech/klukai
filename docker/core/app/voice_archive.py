@@ -6,8 +6,9 @@ module owns the synthesis + persistence (``save_voice_note``) and the playback
 helpers (``get_voice_note``, ``latest_voice_note``, ``mark_played``).
 
 Design:
-- Audio bytes are produced by POSTing to the companion-voice service ``/tts``,
-  exactly as the chat WS path and ``/api/tts`` do (VOICE_URL + voice_auth_headers).
+- Audio bytes are produced through ``post_leased_tts``, exactly as the chat WS
+  path and ``/api/tts`` do. It holds the shared LM gate plus a remote
+  ``companion-voice`` GPU lease and sends both voice auth and lease capability.
   The request shape mirrors ``/api/tts``: ``{"text": ..., "language": ...}``.
   Klukai speaks Japanese (the project default), so ``language`` defaults to
   ``"ja"`` here — the server-configured JP voice the WS path relies on.
@@ -49,11 +50,6 @@ DEFAULT_VOICE_LANGUAGE = os.environ.get("VOICE_LANGUAGE", "ja")
 _MAX_TTS_CHARS = 500
 
 
-def _voice_url() -> str:
-    """Resolve the voice service base URL (same default as the chat WS / TTS paths)."""
-    return os.environ.get("VOICE_URL", "http://dominus:8301")
-
-
 async def save_voice_note(
     text: str,
     user_id: str = "jalsarraf",
@@ -66,8 +62,8 @@ async def save_voice_note(
     """Synthesize ``text`` to a JP voice letter, store it, and return its id.
 
     Steps (all fail-soft → return ``None`` on any error, leaving no row):
-      1. POST ``{VOICE_URL}/tts`` with ``{"text", "language"}`` + voice auth
-         headers (same as ``/api/tts``). Non-200 → ``None``.
+      1. Acquire the GPU lease and POST ``/tts`` with ``{"text", "language"}``.
+         Non-200 or lease failure → ``None``.
       2. Write the returned WAV bytes to ``AUDIO_DIR/{uuid}.wav``.
       3. INSERT a ``companion_voice_notes`` row scoped to ``user_id``.
 
@@ -82,12 +78,15 @@ async def save_voice_note(
 
     # 1. Synthesize via the voice service (mirror /api/tts request shape).
     try:
-        from .helpers import voice_auth_headers
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(
-                f"{_voice_url()}/tts",
-                json={"text": text.strip()[:_MAX_TTS_CHARS], "language": language},
-                headers=voice_auth_headers(),
+        from .voice_client import post_leased_tts
+
+        async with httpx.AsyncClient(
+            timeout=60.0, trust_env=False, follow_redirects=False
+        ) as client:
+            r = await post_leased_tts(
+                client,
+                {"text": text.strip()[:_MAX_TTS_CHARS], "language": language},
+                timeout=60.0,
             )
         if r.status_code != 200:
             logger.warning(

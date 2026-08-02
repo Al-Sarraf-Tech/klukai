@@ -8,7 +8,7 @@
 - Docker Engine + Docker Compose v2.
 - Python 3.13 (only required for tooling outside the container — the app itself runs inside Docker).
 - `git`, `make`, `curl`, `jq`.
-- Tailscale account + amarillo node enrolled (only if you want to reach dominus).
+- Tailscale account + amarillo node enrolled (only if you want to reach dominus-nobara).
 
 ## 1. Clone the repo
 
@@ -85,7 +85,11 @@ curl -H "Authorization: Bearer $TOKEN" \
      -d '{"message":"Hello, Klukai."}'
 ```
 
-If LM Studio (on dominus) isn't reachable, you'll get a 503 with a clear error and the circuit breaker for `lm_studio` will be open. That's expected for an isolated dev box.
+If the authenticated compatibility gateway or its llama.cpp backend on
+`dominus-nobara` is not reachable, you will get a clear 503 and the legacy
+`lm_studio` circuit-breaker label will be open. That label is retained for API
+compatibility; LM Studio itself is no longer deployed. This is expected on an
+isolated development box.
 
 ## 6. Run the tests
 
@@ -114,7 +118,7 @@ A green run is the definition of S+ tier. Anything red is the floor.
 | Symptom | Fix |
 |---|---|
 | `companion-core` immediately exits | Check `docker compose logs core` — usually a missing env var |
-| `voice` service has no port 8301 | dominus port-binding bug; `docker rm -f klukai-voice && docker compose up -d voice` (ref `feedback_dominus_voice_port.md`) |
+| `voice` service is unavailable | Follow `docs/runbooks/voice-unreachable.md`; recover only the canonical `ops/dominus-nobara` Compose service after checking the game guard and GPU lease |
 | Flutter app login page is blank | SW intercepted; rebuild with `--base-href=/app/` (ref `feedback_flutter_base_href.md`) |
 | Image upload returns 401 on web | `Image.network(headers:)` ignored on web — use `http.get` + `Image.memory` (ref `feedback_flutter_web_image_auth.md`) |
 | Tests can't import `psycopg` | dev shim in `conftest.py` mocks it — make sure `tests/__init__.py` is loaded |

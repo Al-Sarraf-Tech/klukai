@@ -13,6 +13,8 @@ import re
 
 import httpx
 
+from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
+
 logger = logging.getLogger(__name__)
 
 # Precompiled patterns — no per-call overhead
@@ -127,9 +129,9 @@ async def call_llm(  # pragma: no cover - integration (LM Studio HTTP)
     close_after = client is None
 
     try:
-        from .llm_router import LM_TTL_SECONDS
         r = await http.post(
             f"{url}/v1/chat/completions",
+            headers=lm_studio_auth_headers(),
             json={
                 "model": model,
                 "messages": messages,
@@ -157,7 +159,7 @@ async def call_llm(  # pragma: no cover - integration (LM Studio HTTP)
         logger.warning("LLM HTTP error (model=%s): %s", model, e.response.status_code)
         return {}
     except Exception as e:
-        logger.warning("LLM call failed (model=%s, %s): %s", model, type(e).__name__, e)
+        logger.warning("LLM call failed (model=%s, %s)", model, type(e).__name__)
         return {}
     finally:
         if close_after:
@@ -187,9 +189,9 @@ async def call_llm_text(  # pragma: no cover - integration (LM Studio HTTP)
     close_after = client is None
 
     try:
-        from .llm_router import LM_TTL_SECONDS
         r = await http.post(
             f"{url}/v1/chat/completions",
+            headers=lm_studio_auth_headers(),
             json={
                 "model": model,
                 "messages": messages,
@@ -205,7 +207,7 @@ async def call_llm_text(  # pragma: no cover - integration (LM Studio HTTP)
         return text or ""
 
     except Exception as e:
-        logger.warning("LLM text call failed (model=%s, %s): %s", model, type(e).__name__, e)
+        logger.warning("LLM text call failed (model=%s, %s)", model, type(e).__name__)
         return ""
     finally:
         if close_after:

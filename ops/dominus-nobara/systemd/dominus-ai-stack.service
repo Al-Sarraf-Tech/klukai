@@ -1,0 +1,49 @@
+[Unit]
+Description=Dominus containerized AI routing plane (models load on demand)
+Documentation=file:///mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+ConditionPathExists=!/run/user/1000/dominus-gpu/game-active
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=DOMINUS_AI_ROOT=/mnt/nvmer0/services/ai-stack
+Environment=SOURCE_DIR=/mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara
+Environment=STACK_ENV=/mnt/nvmer0/services/ai-stack/config/stack.env
+WorkingDirectory=/mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara
+
+# A failed mount check is intentional: Restart=on-failure retries without ever
+# allowing Docker to create empty bind-mount directories on the root disk.
+ExecStartPre=/usr/bin/mountpoint --quiet /mnt/nvmer0
+ExecStartPre=/usr/bin/test ! -e /run/user/1000/dominus-gpu/game-active
+ExecStartPre=/usr/bin/test -d /mnt/nvmer0/services/ai-stack/models/current
+ExecStartPre=/usr/bin/test -r /mnt/nvmer0/services/ai-stack/config/stack.env
+ExecStartPre=/usr/bin/test -r /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/models.lock.json
+ExecStartPre=/usr/bin/test -r /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/config/llama-models.ini
+ExecStartPre=/usr/bin/test -d /mnt/nvmer0/services/ai-stack/cache/comfyui
+ExecStartPre=/usr/bin/test -d /mnt/nvmer0/services/ai-stack/cache/companion-voice
+ExecStartPre=/usr/bin/test -d /mnt/nvmer0/services/ai-stack/cache/speech/current/speaches-hf
+ExecStartPre=/usr/bin/test -d /mnt/nvmer0/services/ai-stack/data/comfyui/input
+ExecStartPre=/usr/bin/test -d /mnt/nvmer0/services/ai-stack/data/comfyui/output
+ExecStartPre=/usr/bin/test -d /mnt/nvmer0/services/ai-stack/data/comfyui/user
+ExecStartPre=/usr/bin/install -d -m 0755 /run/user/1000/dominus-gpu
+ExecStartPre=/usr/bin/bash -ec 'probe=$(/usr/bin/mktemp /run/user/1000/dominus-gpu/.gateway-write-probe.XXXXXX); /usr/bin/rm -f -- "$probe"'
+ExecStartPre=/usr/bin/docker info
+ExecStartPre=/usr/bin/bash -ec '/usr/bin/tailscale ip -4 | /usr/bin/grep -Fxq 100.107.121.5'
+ExecStartPre=/usr/bin/python3 /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/scripts/verify-compose-contract.py --compose-file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --source-root /mnt/nvmer0/services/ai-stack/source/klukai --raid-root /mnt/nvmer0 --expected-env-uid 1000
+ExecStartPre=/usr/bin/docker compose --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml run --rm --no-deps --pull never stack-preflight
+ExecStart=/usr/bin/docker compose --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml up --detach --no-build --wait --wait-timeout 180 llama-router lmstudio-compat companion-voice comfyui speaches
+ExecReload=/usr/bin/test ! -e /run/user/1000/dominus-gpu/game-active
+ExecReload=/usr/bin/python3 /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/scripts/verify-compose-contract.py --compose-file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --source-root /mnt/nvmer0/services/ai-stack/source/klukai --raid-root /mnt/nvmer0 --expected-env-uid 1000
+ExecReload=/usr/bin/docker compose --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml run --rm --no-deps --pull never stack-preflight
+ExecReload=/usr/bin/docker compose --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml up --detach --no-build --wait --wait-timeout 180 llama-router lmstudio-compat companion-voice comfyui speaches
+ExecStop=/usr/bin/docker compose --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml stop --timeout 30 lmstudio-compat llama-router companion-voice comfyui speaches
+TimeoutStartSec=240
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

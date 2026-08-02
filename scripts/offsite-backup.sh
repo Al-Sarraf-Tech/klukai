@@ -1,87 +1,305 @@
 #!/usr/bin/env bash
-# offsite-backup.sh — mirror amarillo's local backups to dominus over Tailscale SSH.
+# Copy Amarillo's verified local backup set to dominus-nobara over Tailscale.
 #
-# Runs ~30 min after nightly backup-companions.sh. Tars
-# /mnt/nvmeINT/backups/ (klukai + kairi DB dumps, images) and pipes
-# over ssh to dominus:~/klukai-backups/ as dated snapshot tars so
-# amarillo hardware/drive death doesn't take the backups with it.
+# The destination is off-host for Amarillo, but it is on dominus-nobara's
+# RAID 0 and is not an independent backup of any data originating there.
+# This script never prunes or overwrites completed archives.
 #
-# Uses tar-over-ssh (not rsync) because dominus runs Windows Git Bash
-# with no rsync in PATH. Backups are small (few MB) so a full transfer
-# each night is fine.
-#
-# Retention: keep last 30 tars on dominus. Old ones pruned by filename date.
-#
-# Exits 0 on success, 2 on warning (no fresh dump found), 1 on fatal.
+# Exit codes: 0 success, 2 no sufficiently recent DB dump, 1 fatal.
 
-set -euo pipefail
+set -Eeuo pipefail
 
-SRC="${SRC:-/mnt/nvmeINT/backups/}"
-DEST_HOST="${DEST_HOST:-dominus}"
-DEST_PATH="${DEST_PATH:-/c/Users/jalsarraf/klukai-backups/}"
+SOURCE_MOUNT="${SOURCE_MOUNT:-/mnt/nvmeINT}"
+SRC="${SRC:-/mnt/nvmeINT/backups}"
 LOG="${LOG:-/mnt/nvmeINT/logs/offsite-backup.log}"
+DEST_HOST="${DEST_HOST:-dominus-nobara}"
+DEST_TAILSCALE_IPV4="${DEST_TAILSCALE_IPV4:-100.107.121.5}"
+SOURCE_TAILSCALE_IPV4="${SOURCE_TAILSCALE_IPV4:-100.111.198.19}"
+DEST_RAID_MOUNT="${DEST_RAID_MOUNT:-/mnt/nvmer0}"
+DEST_PATH="${DEST_PATH:-/mnt/nvmer0/services/ai-stack/backups/amarillo/klukai}"
 RETENTION_DAYS="${RETENTION_DAYS:-30}"
-STAMP="$(date +%Y%m%d-%H%M)"
-TAR_NAME="backups-${STAMP}.tar.gz"
+MAX_SOURCE_AGE_HOURS="${MAX_SOURCE_AGE_HOURS:-30}"
+SSH_CONNECT_TIMEOUT_SECONDS="${SSH_CONNECT_TIMEOUT_SECONDS:-15}"
+DEST_MARKER=".klukai-offsite-backups-v1"
+ARCHIVE_ROOTS=(./klukai ./qdrant ./kairi)
 
-mkdir -p "$(dirname "$LOG")"
+die() {
+  echo "offsite-backup: ERROR: $*" >&2
+  exit 1
+}
+
+for command_name in awk chmod date dirname find findmnt grep gzip install mkdir mountpoint mv realpath sha256sum ssh stat tailscale tar tee wc; do
+  command -v "${command_name}" >/dev/null || die "missing required command: ${command_name}"
+done
+
+for integer_name in RETENTION_DAYS MAX_SOURCE_AGE_HOURS SSH_CONNECT_TIMEOUT_SECONDS; do
+  integer_value=${!integer_name}
+  [[ "${integer_value}" =~ ^[0-9]+$ ]] || die "${integer_name} must be a non-negative integer"
+done
+(( RETENTION_DAYS >= 1 )) || die "RETENTION_DAYS must be at least 1"
+(( MAX_SOURCE_AGE_HOURS >= 1 && MAX_SOURCE_AGE_HOURS <= 168 )) || \
+  die "MAX_SOURCE_AGE_HOURS must be between 1 and 168"
+(( SSH_CONNECT_TIMEOUT_SECONDS >= 5 && SSH_CONNECT_TIMEOUT_SECONDS <= 120 )) || \
+  die "SSH_CONNECT_TIMEOUT_SECONDS must be between 5 and 120"
+
+SOURCE_MOUNT=$(realpath -m -- "${SOURCE_MOUNT}")
+SRC=$(realpath -m -- "${SRC}")
+LOG=$(realpath -m -- "${LOG}")
+
+for path_value in "${SOURCE_MOUNT}" "${SRC}" "${LOG}" "${DEST_RAID_MOUNT}" "${DEST_PATH}"; do
+  [[ "${path_value}" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "unsafe path: ${path_value}"
+done
+for remote_path in "${DEST_RAID_MOUNT}" "${DEST_PATH}"; do
+  case "${remote_path}" in
+    /|*/|*//*|*/./*|*/.|*/../*|*/..) die "remote path is not canonical: ${remote_path}" ;;
+  esac
+done
+[[ "${SRC}" == "${SOURCE_MOUNT}/"* && "${SRC}" != "${SOURCE_MOUNT}" ]] || \
+  die "SRC must be a child of SOURCE_MOUNT"
+[[ "${LOG}" == "${SOURCE_MOUNT}/"* ]] || die "LOG must stay below SOURCE_MOUNT"
+[[ "${DEST_PATH}" == "${DEST_RAID_MOUNT}/"* && "${DEST_PATH}" != "${DEST_RAID_MOUNT}" ]] || \
+  die "DEST_PATH must be a child of DEST_RAID_MOUNT"
+[[ "${DEST_HOST}" =~ ^[A-Za-z0-9._-]+$ ]] || die "unsafe DEST_HOST"
+[[ "${SOURCE_TAILSCALE_IPV4}" =~ ^100\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid source Tailscale IPv4"
+[[ "${DEST_TAILSCALE_IPV4}" =~ ^100\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid destination Tailscale IPv4"
+
+mountpoint --quiet -- "${SOURCE_MOUNT}" || die "source mount is absent: ${SOURCE_MOUNT}"
+[[ "$(findmnt -n -o TARGET --target "${SOURCE_MOUNT}")" == "${SOURCE_MOUNT}" ]] || \
+  die "SOURCE_MOUNT is not the live mountpoint: ${SOURCE_MOUNT}"
+[[ -d "${SRC}" ]] || die "backup source directory is absent: ${SRC}"
+for archive_root in "${ARCHIVE_ROOTS[@]}"; do
+  [[ -d "${SRC}/${archive_root#./}" && ! -L "${SRC}/${archive_root#./}" ]] || \
+    die "required backup root is absent: ${SRC}/${archive_root#./}"
+done
+mkdir -p -- "$(dirname -- "${LOG}")"
 
 log() {
-  echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOG"
+  printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "${LOG}"
 }
 
-log "=== offsite backup start: $SRC -> $DEST_HOST:$DEST_PATH ==="
-
-# Ensure destination exists on dominus
-ssh -o LogLevel=ERROR -o ConnectTimeout=10 "$DEST_HOST" \
-  "bash -l -c 'mkdir -p \"$DEST_PATH\"'" >> "$LOG" 2>&1 || {
-    log "ERROR: could not create destination on $DEST_HOST"
-    exit 1
+ssh_transport() {
+  command ssh -T \
+    -o AddressFamily=inet \
+    -o BatchMode=yes \
+    -o ClearAllForwardings=yes \
+    -o Compression=no \
+    -o ConnectTimeout="${SSH_CONNECT_TIMEOUT_SECONDS}" \
+    -o ControlMaster=no \
+    -o ControlPath=none \
+    -o ForwardAgent=no \
+    -o StrictHostKeyChecking=yes \
+    "$@"
 }
 
-# Verify source has content
-if ! find "$SRC" -type f -name "*.sql.gz" -print -quit | grep -q .; then
-  log "WARN: source has no DB dumps — upstream backup may have failed"
-fi
-
-# Tar + stream over SSH — create a compressed snapshot on dominus
-tar -C "$SRC" -czf - . 2>> "$LOG" \
-  | ssh -o LogLevel=ERROR -o ConnectTimeout=30 "$DEST_HOST" \
-      "bash -l -c 'cat > \"${DEST_PATH}${TAR_NAME}\"'" || {
-    log "ERROR: tar+ssh pipe failed"
-    exit 1
+# OpenSSH joins command arguments into a remote shell command. Quote every
+# argument explicitly so the remote Bash program and its parameters retain
+# their boundaries.
+ssh_remote_command() {
+  local remote_host=$1
+  shift
+  local remote_command
+  printf -v remote_command '%q ' "$@"
+  ssh_transport "${remote_host}" "${remote_command% }"
 }
 
-# Verify the remote tar is non-empty and readable
-REMOTE_SIZE=$(ssh -o LogLevel=ERROR "$DEST_HOST" \
-  "bash -l -c 'stat -c%s \"${DEST_PATH}${TAR_NAME}\" 2>/dev/null'" || echo 0)
+resolved_ssh_host=$(ssh -G -o AddressFamily=inet "${DEST_HOST}" 2>/dev/null \
+  | awk '$1 == "hostname" {print $2; exit}')
+[[ "${resolved_ssh_host}" == "${DEST_TAILSCALE_IPV4}" ]] || \
+  die "${DEST_HOST} resolves to ${resolved_ssh_host:-nothing}, not ${DEST_TAILSCALE_IPV4}"
+tailscale ip -4 | grep -Fxq -- "${SOURCE_TAILSCALE_IPV4}" || \
+  die "this host is not the expected Amarillo Tailnet node (${SOURCE_TAILSCALE_IPV4})"
 
-if [ "${REMOTE_SIZE:-0}" -lt 100 ]; then
-  log "ERROR: remote tar too small ($REMOTE_SIZE bytes) — treating as failure"
+remote_preflight() {
+  ssh_transport "${DEST_HOST}" bash -s -- \
+    "${SOURCE_TAILSCALE_IPV4}" "${DEST_TAILSCALE_IPV4}" \
+    "${DEST_RAID_MOUNT}" "${DEST_PATH}" "${DEST_MARKER}" <<'REMOTE'
+set -Eeuo pipefail
+expected_client_ip=$1
+expected_server_ip=$2
+raid_mount=$3
+dest_path=$4
+marker_name=$5
+
+read -r client_ip _ server_ip _ <<<"${SSH_CONNECTION:-}"
+[[ "${client_ip}" == "${expected_client_ip}" && "${server_ip}" == "${expected_server_ip}" ]] || {
+  echo "refusing non-Tailscale SSH path: ${client_ip:-unknown} -> ${server_ip:-unknown}" >&2
+  exit 1
+}
+mountpoint --quiet -- "${raid_mount}" || {
+  echo "destination RAID is not mounted: ${raid_mount}" >&2
+  exit 1
+}
+[[ "$(findmnt -n -o TARGET --target "${raid_mount}")" == "${raid_mount}" ]] || {
+  echo "destination is not the expected mountpoint: ${raid_mount}" >&2
+  exit 1
+}
+[[ "$(realpath -m -- "${raid_mount}")" == "${raid_mount}" ]] || {
+  echo "destination RAID path is not canonical: ${raid_mount}" >&2
+  exit 1
+}
+canonical_dest=$(realpath -m -- "${dest_path}")
+[[ "${canonical_dest}" == "${dest_path}" ]] || {
+  echo "destination path is not canonical: ${dest_path}" >&2
+  exit 1
+}
+[[ "${dest_path}" == "${raid_mount}/"* && "${dest_path}" != "${raid_mount}" ]] || {
+  echo "unsafe destination below RAID: ${dest_path}" >&2
+  exit 1
+}
+
+if [[ -d "${dest_path}" && ! -f "${dest_path}/${marker_name}" ]] && \
+   [[ -n "$(find "${dest_path}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+  echo "refusing unmarked non-empty backup destination: ${dest_path}" >&2
   exit 1
 fi
-
-log "tar shipped — remote size: ${REMOTE_SIZE} bytes (${TAR_NAME})"
-
-# Retention: prune tars older than RETENTION_DAYS
-ssh -o LogLevel=ERROR "$DEST_HOST" "bash -l -c '
-  find \"$DEST_PATH\" -name \"backups-*.tar.gz\" -mtime +$RETENTION_DAYS -delete 2>/dev/null || true
-  ls \"$DEST_PATH\" 2>/dev/null | wc -l
-'" 2>> "$LOG" | tail -1 | {
-  read -r COUNT
-  log "retention applied — ${COUNT:-?} snapshots remain on $DEST_HOST"
+install -d -m 0700 -- "${dest_path}"
+if [[ -f "${dest_path}/${marker_name}" && ! -L "${dest_path}/${marker_name}" ]]; then
+  [[ "$(<"${dest_path}/${marker_name}")" == "klukai-offsite-backups-v1" ]] || {
+    echo "backup destination marker has unexpected content" >&2
+    exit 1
+  }
+else
+  [[ ! -e "${dest_path}/${marker_name}" && ! -L "${dest_path}/${marker_name}" ]] || {
+    echo "refusing unexpected backup destination marker type" >&2
+    exit 1
+  }
+  printf '%s\n' 'klukai-offsite-backups-v1' >"${dest_path}/${marker_name}"
+  chmod 0600 "${dest_path}/${marker_name}"
+fi
+REMOTE
 }
 
-# Sanity: verify today's dump made it into the tar (quick peek)
-TODAY=$(date +%Y%m%d)
-HAS_TODAY=$(ssh -o LogLevel=ERROR "$DEST_HOST" "bash -l -c '
-  tar -tzf \"${DEST_PATH}${TAR_NAME}\" 2>/dev/null | grep -c \"${TODAY}\" || echo 0
-'" 2>> "$LOG" | tail -1 || echo 0)
+recent_minutes=$((MAX_SOURCE_AGE_HOURS * 60))
+recent_dumps=()
+for database_name in klukai kairi; do
+  mapfile -d '' database_dumps < <(
+    find "${SRC}/${database_name}" -type f -name "${database_name}-db-*.sql.gz" \
+      -mmin "-${recent_minutes}" -print0
+  )
+  if (( ${#database_dumps[@]} == 0 )); then
+    log "WARN: no recent ${database_name} DB dump; refusing to ship an incomplete snapshot"
+    exit 2
+  fi
+  recent_dumps+=("${database_dumps[@]}")
+done
+for dump_path in "${recent_dumps[@]}"; do
+  gzip -t -- "${dump_path}" || die "DB dump failed gzip validation: ${dump_path}"
+done
+for collection_name in companion_episodes companion_exchanges; do
+  snapshot_path="${SRC}/qdrant/${collection_name}.snapshot"
+  [[ -f "${snapshot_path}" && ! -L "${snapshot_path}" && -s "${snapshot_path}" ]] || \
+    die "required Qdrant snapshot is absent, linked, or empty: ${snapshot_path}"
+  [[ -n "$(find "${snapshot_path}" -mmin "-${recent_minutes}" -print -quit)" ]] || {
+    log "WARN: Qdrant snapshot is older than ${MAX_SOURCE_AGE_HOURS}h: ${snapshot_path}"
+    exit 2
+  }
+done
 
-if [ "${HAS_TODAY:-0}" -lt 1 ]; then
-  log "WARN: tar contains no files matching today ($TODAY) — upstream backup may have failed"
-  exit 2
+remote_preflight || die "Tailscale or destination RAID preflight failed"
+
+stamp=$(date -u +%Y%m%d-%H%M%S)
+tar_name="backups-${stamp}.tar.gz"
+remote_final="${DEST_PATH}/${tar_name}"
+remote_checksum="${remote_final}.sha256"
+remote_partial="${DEST_PATH}/.${tar_name}.partial.$$"
+
+log "backup start: ${SRC} -> ${DEST_HOST}:${remote_final}"
+
+# The single-quoted program is evaluated by remote Bash, not locally.
+# shellcheck disable=SC2016
+tar --one-file-system -C "${SRC}" -czf - -- "${ARCHIVE_ROOTS[@]}" 2>>"${LOG}" \
+  | ssh_remote_command "${DEST_HOST}" bash -c '
+      set -Eeuo pipefail
+      expected_client_ip=$1
+      expected_server_ip=$2
+      raid_mount=$3
+      dest_path=$4
+      partial_path=$5
+      marker_name=$6
+      read -r client_ip _ server_ip _ <<<"${SSH_CONNECTION:-}"
+      [[ "${client_ip}" == "${expected_client_ip}" && "${server_ip}" == "${expected_server_ip}" ]]
+      mountpoint --quiet -- "${raid_mount}"
+      [[ "$(findmnt -n -o TARGET --target "${raid_mount}")" == "${raid_mount}" ]]
+      [[ "$(realpath -m -- "${dest_path}")" == "${dest_path}" ]]
+      [[ "$(realpath -m -- "${partial_path}")" == "${partial_path}" ]]
+      [[ -f "${dest_path}/${marker_name}" && ! -L "${dest_path}/${marker_name}" ]]
+      [[ "$(<"${dest_path}/${marker_name}")" == "klukai-offsite-backups-v1" ]]
+      [[ "${partial_path}" == "${dest_path}/."* ]]
+      [[ ! -e "${partial_path}" ]]
+      umask 077
+      set -o noclobber
+      cat >"${partial_path}"
+    ' bash "${SOURCE_TAILSCALE_IPV4}" "${DEST_TAILSCALE_IPV4}" \
+      "${DEST_RAID_MOUNT}" "${DEST_PATH}" "${remote_partial}" "${DEST_MARKER}" \
+  || die "tar stream failed; any partial file was preserved for inspection"
+
+remote_size=$(ssh_transport "${DEST_HOST}" bash -s -- \
+  "${SOURCE_TAILSCALE_IPV4}" "${DEST_TAILSCALE_IPV4}" \
+  "${DEST_RAID_MOUNT}" "${DEST_PATH}" "${remote_partial}" \
+  "${remote_final}" "${remote_checksum}" "${tar_name}" "${DEST_MARKER}" <<'REMOTE'
+set -Eeuo pipefail
+expected_client_ip=$1
+expected_server_ip=$2
+raid_mount=$3
+dest_path=$4
+partial_path=$5
+final_path=$6
+checksum_path=$7
+tar_name=$8
+marker_name=$9
+read -r client_ip _ server_ip _ <<<"${SSH_CONNECTION:-}"
+[[ "${client_ip}" == "${expected_client_ip}" && "${server_ip}" == "${expected_server_ip}" ]]
+mountpoint --quiet -- "${raid_mount}"
+[[ "$(findmnt -n -o TARGET --target "${raid_mount}")" == "${raid_mount}" ]]
+[[ "$(realpath -m -- "${dest_path}")" == "${dest_path}" ]]
+[[ "$(realpath -m -- "${partial_path}")" == "${partial_path}" ]]
+[[ "$(realpath -m -- "${final_path}")" == "${final_path}" ]]
+[[ "$(realpath -m -- "${checksum_path}")" == "${checksum_path}" ]]
+[[ -f "${dest_path}/${marker_name}" && ! -L "${dest_path}/${marker_name}" ]]
+[[ "$(<"${dest_path}/${marker_name}")" == 'klukai-offsite-backups-v1' ]]
+[[ "${partial_path}" == "${dest_path}/."* ]]
+[[ "${final_path}" == "${dest_path}/backups-"*.tar.gz ]]
+[[ "${checksum_path}" == "${final_path}.sha256" ]]
+[[ -f "${partial_path}" && ! -e "${final_path}" && ! -e "${checksum_path}" ]]
+tar -tzf "${partial_path}" >/dev/null
+size=$(stat -c '%s' -- "${partial_path}")
+(( size >= 100 ))
+hash=$(sha256sum -- "${partial_path}" | awk '{print $1}')
+checksum_partial="${checksum_path}.partial.$$"
+umask 077
+printf '%s  %s\n' "${hash}" "${tar_name}" >"${checksum_partial}"
+mv -- "${checksum_partial}" "${checksum_path}"
+mv -- "${partial_path}" "${final_path}"
+printf '%s\n' "${size}"
+REMOTE
+) || die "remote archive validation/finalization failed; completed backups were not touched"
+
+read -r snapshot_count old_count < <(
+  ssh_transport "${DEST_HOST}" bash -s -- \
+    "${SOURCE_TAILSCALE_IPV4}" "${DEST_TAILSCALE_IPV4}" \
+    "${DEST_RAID_MOUNT}" "${DEST_PATH}" "${RETENTION_DAYS}" "${DEST_MARKER}" <<'REMOTE'
+set -Eeuo pipefail
+expected_client_ip=$1
+expected_server_ip=$2
+raid_mount=$3
+dest_path=$4
+retention_days=$5
+marker_name=$6
+read -r client_ip _ server_ip _ <<<"${SSH_CONNECTION:-}"
+[[ "${client_ip}" == "${expected_client_ip}" && "${server_ip}" == "${expected_server_ip}" ]]
+mountpoint --quiet -- "${raid_mount}"
+[[ "$(findmnt -n -o TARGET --target "${raid_mount}")" == "${raid_mount}" ]]
+[[ "$(realpath -m -- "${dest_path}")" == "${dest_path}" ]]
+[[ -f "${dest_path}/${marker_name}" && ! -L "${dest_path}/${marker_name}" ]]
+[[ "$(<"${dest_path}/${marker_name}")" == 'klukai-offsite-backups-v1' ]]
+snapshot_count=$(find "${dest_path}" -maxdepth 1 -type f -name 'backups-*.tar.gz' | wc -l)
+old_count=$(find "${dest_path}" -maxdepth 1 -type f -name 'backups-*.tar.gz' -mtime "+${retention_days}" | wc -l)
+printf '%s %s\n' "${snapshot_count}" "${old_count}"
+REMOTE
+)
+
+log "backup complete: ${tar_name}, ${remote_size} bytes, ${#recent_dumps[@]} recent validated DB dump(s)"
+log "destination now has ${snapshot_count} snapshot(s); ${old_count} exceed ${RETENTION_DAYS}d"
+if (( old_count > 0 )); then
+  log "NOTICE: old snapshots were preserved; prune only after an independent non-RAID copy is verified"
 fi
-
-log "=== offsite backup ok — ${HAS_TODAY} fresh files in ${TAR_NAME} ==="
-exit 0

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Reject a vLLM cold start before its long initialization when the RTX 3090
+# does not have the empirically validated free-VRAM floor. This is deliberately
+# not configurable: lowering it recreated the observed 300-second failure path.
+set -euo pipefail
+
+raid_mount=/mnt/nvmer0
+required_free_mib=22650
+game_marker=/run/user/1000/dominus-gpu/game-active
+gpu_lease_marker=/run/user/1000/dominus-gpu/non-llm-lease.json
+
+mountpoint --quiet "$raid_mount" || {
+  echo "vLLM unavailable: $raid_mount is not mounted" >&2
+  exit 75
+}
+
+if test -e "$game_marker"; then
+  echo "vLLM unavailable: GameMode owns the GPU" >&2
+  exit 75
+fi
+
+# The persistent gateway and watchdog remove a valid marker at its bounded
+# expiry. Existence (including malformed state) is deliberately fail-closed in
+# this independent systemd preflight.
+if test -e "$gpu_lease_marker"; then
+  echo "vLLM unavailable: a non-LLM workload owns the GPU" >&2
+  exit 75
+fi
+
+read -r total_mib free_mib < <(
+  nvidia-smi \
+    --query-gpu=memory.total,memory.free \
+    --format=csv,noheader,nounits \
+    | head -n 1 \
+    | tr -d ',' \
+    | awk '{print $1, $2}'
+)
+
+[[ "$total_mib" =~ ^[0-9]+$ && "$free_mib" =~ ^[0-9]+$ ]] || {
+  echo "vLLM unavailable: could not read NVIDIA VRAM counters" >&2
+  exit 75
+}
+
+if (( free_mib < required_free_mib )); then
+  echo "vLLM unavailable: ${free_mib} MiB free; ${required_free_mib} MiB required" >&2
+  exit 75
+fi
+
+exit 0

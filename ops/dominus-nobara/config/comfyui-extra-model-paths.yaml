@@ -1,0 +1,9 @@
+dominus_release:
+  base_path: /models/comfy
+  checkpoints: checkpoints
+  diffusion_models: diffusion_models
+  loras: loras
+  vae: vae
+  clip: clip
+  upscale_models: upscale_models
+

@@ -138,23 +138,9 @@ async def proactive_callback(message: str) -> None:
         await send_push(title="Klukai", body=message)
 
 
-async def _keepalive_loop() -> None:
-    """Periodically ping LM Studio models to keep them loaded in VRAM."""
-    from .llm_router import _KEEPALIVE_INTERVAL
-    while True:
-        await asyncio.sleep(_KEEPALIVE_INTERVAL)
-        try:
-            await router.keepalive()
-        except Exception as e:
-            logger.warning("Keepalive loop error: %s", e)
-
-_keepalive_task: asyncio.Task | None = None
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup/shutdown."""
-    global _keepalive_task
     await init_pool(min_size=2, max_size=10)
     await run_migration()
     from .auth import init_users
@@ -184,19 +170,10 @@ async def lifespan(app: FastAPI):
     await events_init()
     load_personality()
 
-    # Load-on-demand: no startup warmup, no periodic keepalive.
-    # LM Studio's JIT TTL evicts dolphin after idle; first message
-    # reloads it (~3-5s cold-start). Set KLUKAI_LLM_KEEPALIVE=1 to
-    # re-enable the keepalive loop.
-    if os.environ.get("KLUKAI_LLM_KEEPALIVE") == "1":
-        try:
-            await router.keepalive()
-        except Exception as e:
-            logger.warning("LLM warmup failed: %s", e)
-        _keepalive_task = asyncio.create_task(_keepalive_loop())
-        logger.info("LLM keepalive enabled (KLUKAI_LLM_KEEPALIVE=1)")
-    else:
-        logger.info("LLM load-on-demand mode (no keepalive, JIT TTL handles unload)")
+    # Strict residency policy: LLMs are load-on-demand and no application
+    # setting can warm or periodically ping them. The compatibility gateway
+    # and runtimes enforce a maximum 900-second idle residency.
+    logger.info("LLM load-on-demand mode (keepalive disabled, max idle TTL 900s)")
 
     # Session token cleanup — runs every 6 hours
     async def _session_cleanup_loop():
@@ -213,8 +190,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    if _keepalive_task:
-        _keepalive_task.cancel()
     proactive.stop()
     await events_close()
     await memory.close()

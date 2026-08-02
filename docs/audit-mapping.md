@@ -19,7 +19,7 @@
 | **CC6.1** Logical access | yes | Bearer tokens + per-user rate limit + admin role; loopback bind | Quarterly token rotation runbook (Phase 5 calendar gate) |
 | **CC6.2** New user provisioning | yes | Seed users hardcoded; documented in `.env.example` | No self-service onboarding (intentional non-goal) |
 | **CC6.3** User access changes | partial | Manual via `app/auth.py`; admin endpoints audited | No formal change ticket trail |
-| **CC6.6** External access | yes | Cloudflare TLS in front; nginx loopback bind; Tailscale to dominus | n/a |
+| **CC6.6** External access | yes | Cloudflare TLS in front; nginx loopback bind; Tailscale to dominus-nobara | n/a |
 | **CC6.7** Access removal | partial | `revoke_token` endpoint exists; no auto-expiry yet | TTL on bearer tokens |
 | **CC6.8** Malicious software prevention | yes | trivy + grype + bandit + safety + gitleaks in CI | n/a |
 | **CC7.1** Vulnerability mgmt | yes | Renovate weekly; safety in CI; trivy HIGH/CRITICAL fail | n/a |

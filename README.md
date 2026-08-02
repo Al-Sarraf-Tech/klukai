@@ -31,8 +31,8 @@ A production-grade AI companion built on [Girls' Frontline 2: Exilium](https://g
          ┌─────────┬───────┴───────┬──────────┐
          │         │               │          │
     ┌────┴───┐ ┌───┴────┐  ┌──────┴────┐ ┌───┴──────┐
-    │ LM     │ │ Qdrant │  │PostgreSQL │ │  Redis   │
-    │ Studio │ │(vector)│  │ (factual) │ │(session) │
+    │ LLM API│ │ Qdrant │  │PostgreSQL │ │  Redis   │
+    │llama.cpp││(vector)│  │ (factual) │ │(session) │
     └────────┘ └────────┘  └───────────┘ └──────────┘
     dolphin-24b  episodic     messages     session
     gpt-oss-20b  memories     affection    mood
@@ -120,15 +120,15 @@ ComfyUI with NoobAI-XL (Illustrious) and a custom Klukai LoRA:
 |-----------|-----------|
 | Backend | Python 3.14, FastAPI, uvicorn |
 | Frontend | Flutter Web (PWA), Dart |
-| Chat LLM | dolphin-mistral-24b-venice-edition (local, LM Studio) |
+| Chat LLM | dolphin-mistral-24b-venice-edition (local, llama.cpp behind an LM Studio-compatible API) |
 | Agent LLM | qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2 (local) |
 | Image Gen | ComfyUI, NoobAI-XL, Klukai LoRA |
 | Voice | XTTS v2 (TTS), Whisper (STT) |
 | Database | PostgreSQL (aichat shared) |
 | Vector DB | Qdrant (nomic-embed-text-v1.5) |
 | Session | Redis |
-| Gateway | nginx (Tailscale proxy) |
-| Container | Docker Compose (rootless Podman) |
+| Gateway | nginx on amarillo; authenticated LM Studio compatibility gateway on dominus-nobara |
+| Container | Docker Engine + Docker Compose v2 |
 
 ## Project Structure
 
@@ -159,8 +159,10 @@ companion/
 │   └── voice/                    # XTTS + Whisper container
 ├── flutter_app/                  # Flutter PWA source
 ├── gateway/                      # nginx reverse proxy
+├── ops/dominus-nobara/          # canonical GPU Compose stack, model lock, systemd unit, cutover runbook
 ├── web-build/                    # Compiled Flutter output
-└── docker-compose.yml            # companion-core + companion-voice
+├── docker-compose.yml            # amarillo companion-core stack
+└── docker-compose.voice.yml      # retired, deliberately non-deployable pointer
 ```
 
 ## Test Suite
@@ -187,7 +189,24 @@ Coverage:
 Klukai runs across two hosts on a Tailscale data plane:
 
 - **amarillo** (core host): companion-core (FastAPI :8300), PostgreSQL, Qdrant, Redis, the nginx gateway, and the observability stack (Alloy/Prometheus/Loki/Tempo/Grafana).
-- **dominus** (GPU sidecar, Tailscale MagicDNS `dominus`): LM Studio (RTX 3090 + Arc A380), companion-voice (:8301), ComfyUI (:8388). All amarillo↔dominus API and SSH/file traffic crosses the Tailnet.
+- **dominus-nobara** (containerized GPU sidecar, Tailscale
+  `100.107.121.5` / `dominus-nobara.tail9bdca.ts.net`): the
+  `lmstudio-compat` gateway (:1234) fronts the internal `llama-router`, with
+  `companion-voice` (:8301) and CPU-isolated `speaches` (:8390).
+  TranscriptionSuite reserves internal `:9786` in its recovery definition but
+  is hard-disabled, unpublished, and has no GPU until its model, interlock, and
+  inbound-auth gates are complete. ComfyUI has no raw host port: Klukai reaches
+  its internal `:8188` socket only through the authenticated, leased gateway
+  facade on `:1234`. Every published port is bound only to the Tailscale
+  address.
+
+The LLM API requires the rotated `LM_STUDIO_TOKEN` bearer token and loads at
+most one locked model preset. Every LLM unloads by 900 seconds of inference
+idle; llama.cpp may unload a few seconds earlier as a safety margin. Client
+`ttl` fields cannot extend that limit. Canonical container releases and mutable
+container data live under `/mnt/nvmer0/services/ai-stack`; the preserved
+native-vLLM exception uses `/mnt/nvmer0/models` and `/mnt/nvmer0/ai/vllm`.
+Everything remains on the NVMe RAID, not the Nobara root filesystem.
 
 ```bash
 # On amarillo (the core host)
@@ -198,7 +217,17 @@ docker compose build companion-core && docker compose up -d companion-core   # P
 
 # Health check
 curl -sf http://localhost:8300/health
+
+# On dominus-nobara (canonical GPU stack; starts empty/lazy model shells)
+cd /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara
+systemctl --user status dominus-ai-stack.service --no-pager
+docker compose \
+  --env-file /mnt/nvmer0/services/ai-stack/config/stack.env \
+  --file compose.yaml ps
 ```
+
+See `ops/dominus-nobara/RUNBOOK.md` for the rebuild, model verification,
+GameMode interlock, acceptance, rollback, and Amarillo staging cleanup gates.
 
 ## Who Is Klukai?
 

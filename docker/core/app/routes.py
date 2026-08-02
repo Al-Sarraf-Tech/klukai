@@ -25,6 +25,7 @@ from .helpers import (
     strip_actions_for_tts as _strip_actions_for_tts,
 )
 from .image_gen import generate_image
+from .lm_gateway import lm_studio_auth_headers
 from .models import SessionState
 from .personality import load_personality
 from .push import add_subscription, get_vapid_public_key
@@ -32,36 +33,46 @@ from .push import add_subscription, get_vapid_public_key
 
 # ── Request models ────────────────────────────────────────────────────────
 
+
 class LoginRequest(BaseModel):
     username: str
     password: str
+
 
 class TTSRequest(BaseModel):
     text: str = Field(min_length=1)
     language: str = "en"
 
+
 class STTRequest(BaseModel):
     audio: str = Field(min_length=1)
+
 
 class ImageGenRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=2000)
 
+
 class GiftRequest(BaseModel):
     gift: str = Field(min_length=1)
 
+
 class CostumeRequest(BaseModel):
     costume: str
+
 
 class PushSubscription(BaseModel):
     endpoint: str
     keys: dict
 
+
 class ChangePasswordRequest(BaseModel):
     old_password: str = Field(min_length=1)
     new_password: str = Field(min_length=8, max_length=128)
 
+
 class TributeRequest(BaseModel):
     """Body for POST /api/tribute — Commander's heartfelt message to Klukai."""
+
     text: str = Field(min_length=20, max_length=1000)
     make_crown_jewel: bool = True
 
@@ -69,7 +80,9 @@ class TributeRequest(BaseModel):
 class AccountDeactivateRequest(BaseModel):
     """Body for POST /api/account/deactivate — soft delete. SACRED chat
     data is preserved per CLAUDE.md absolute rule."""
+
     confirm: str = Field(pattern=r"^DEACTIVATE$")
+
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +94,7 @@ _current_costume = "blazing_star"
 async def _get_user_id(request: Request) -> str | None:
     """Extract user_id from Authorization header. Returns None if invalid."""
     from .auth import get_user_from_token
+
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         token = auth[7:]
@@ -96,6 +110,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     @app.post("/api/auth/login")
     async def login(req: LoginRequest, request: Request):
         from .auth import authenticate, check_ip_banned
+
         ip = client_ip(request)
         if await check_ip_banned(ip):
             return JSONResponse({"error": "IP banned"}, status_code=403)
@@ -121,6 +136,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         SLO: p99 ≤ 30ms (per docs/slos.md).
         """
         from .observability.health_cache import get_cached_health
+
         return await get_cached_health()
 
     @app.get("/api/health/live")
@@ -132,6 +148,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         intentionally don't fail on a backend outage here.
         """
         from .observability.health_cache import get_live_health
+
         return get_live_health()
 
     @app.get("/api/health/ready")
@@ -143,14 +160,15 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         remove the pod from service rotation without restarting it.
         """
         from .observability.health_cache import get_fresh_health
+
         result = await get_fresh_health()
         # 503 if backends are down so load balancers / Cloudflare can
         # short-circuit traffic instead of forwarding to a broken core.
         if result.get("status") == "unhealthy":
             from fastapi.responses import JSONResponse
+
             return JSONResponse(content=result, status_code=503)
         return result
-
 
     # ── Subsystem health (S+ feature: loud failure detection) ───────────
 
@@ -172,8 +190,12 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         # Database
         try:
             from .db import check_health as db_health
+
             db = await db_health()
-            results["database"] = {"status": "ok" if db.get("status") == "ok" else "down", **db}
+            results["database"] = {
+                "status": "ok" if db.get("status") == "ok" else "down",
+                **db,
+            }
         except Exception:
             results["database"] = {"status": "down"}
 
@@ -181,6 +203,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         try:
             from .memory import REDIS_URL
             import redis.asyncio as aioredis
+
             r = aioredis.from_url(REDIS_URL, decode_responses=True)
             await r.ping()
             await r.aclose()
@@ -191,49 +214,74 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         # Qdrant
         try:
             from .memory import QDRANT_URL
+
             async with _hx.AsyncClient(timeout=3.0) as c:
                 resp = await c.get(f"{QDRANT_URL}/healthz")
-                results["qdrant"] = {"status": "ok" if resp.status_code == 200 else "degraded"}
+                results["qdrant"] = {
+                    "status": "ok" if resp.status_code == 200 else "degraded"
+                }
         except Exception:
             results["qdrant"] = {"status": "down"}
 
         # LM Studio
         try:
-            lm_url = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")
+            lm_url = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
             async with _hx.AsyncClient(timeout=5.0) as c:
-                resp = await c.get(f"{lm_url}/v1/models")
+                resp = await c.get(
+                    f"{lm_url}/v1/models",
+                    headers=lm_studio_auth_headers(),
+                )
                 models = [m["id"] for m in resp.json().get("data", [])]
-                results["lm_studio"] = {"status": "ok", "models_loaded": len(models), "models": models}
+                results["lm_studio"] = {
+                    "status": "ok",
+                    "models_loaded": len(models),
+                    "models": models,
+                }
         except Exception:
             results["lm_studio"] = {"status": "down"}
 
-        # ComfyUI
+        # ComfyUI is deliberately not queried through its protected facade:
+        # every facade request needs an active lease and health checks must not
+        # acquire, refresh, or extend GPU ownership.  The gateway performs a
+        # safe internal reachability probe in its public health document.
         try:
-            comfy_url = os.environ.get("COMFYUI_URL", "http://dominus:8388")
-            async with _hx.AsyncClient(timeout=5.0) as c:
-                resp = await c.get(f"{comfy_url}/system_stats")
-                stats = resp.json()
-                gpu = stats.get("devices", [{}])[0]
-                vram_free_gb = round(gpu.get("vram_free", 0) / 1e9, 1)
-                results["comfyui"] = {"status": "ok", "gpu": gpu.get("name", "?"), "vram_free_gb": vram_free_gb}
+            lm_url = os.environ.get(
+                "LM_STUDIO_URL", "http://100.107.121.5:1234"
+            ).rstrip("/")
+            async with _hx.AsyncClient(
+                timeout=5.0, trust_env=False, follow_redirects=False
+            ) as c:
+                resp = await c.get(f"{lm_url}/health")
+                resp.raise_for_status()
+                gateway_health = resp.json()
+                comfy_status = gateway_health.get("comfyui_status", "unavailable")
+                results["comfyui"] = {
+                    "status": "ok" if comfy_status == "ok" else "down",
+                    "source": "gpu_gateway",
+                }
         except Exception:
             results["comfyui"] = {"status": "down"}
 
         # Embedding service
         try:
             from .memory import INFERENCE_URL
+
             async with _hx.AsyncClient(timeout=5.0) as c:
                 resp = await c.get(f"{INFERENCE_URL}/health")
-                results["embeddings"] = {"status": "ok" if resp.status_code == 200 else "degraded"}
+                results["embeddings"] = {
+                    "status": "ok" if resp.status_code == 200 else "degraded"
+                }
         except Exception:
             results["embeddings"] = {"status": "down"}
 
         # Voice service
         try:
-            voice_url = os.environ.get("VOICE_URL", "http://dominus:8301")
+            voice_url = os.environ.get("VOICE_URL", "http://100.107.121.5:8301")
             async with _hx.AsyncClient(timeout=5.0) as c:
                 resp = await c.get(f"{voice_url}/health")
-                results["voice"] = {"status": "ok" if resp.status_code == 200 else "degraded"}
+                results["voice"] = {
+                    "status": "ok" if resp.status_code == 200 else "degraded"
+                }
         except Exception:
             results["voice"] = {"status": "down"}
 
@@ -283,20 +331,23 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
 
-        voice_url = os.environ.get("VOICE_URL", "http://dominus:8301")
         tts_text = _strip_actions_for_tts(req.text)
         if not tts_text.strip():
             return JSONResponse({"error": "No speakable text"}, status_code=400)
         try:
-            from .helpers import voice_auth_headers
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                r = await client.post(
-                    f"{voice_url}/tts",
-                    json={"text": tts_text[:500], "language": req.language},
-                    headers=voice_auth_headers(),
+            from .voice_client import post_leased_tts
+
+            async with httpx.AsyncClient(
+                timeout=60.0, trust_env=False, follow_redirects=False
+            ) as client:
+                r = await post_leased_tts(
+                    client,
+                    {"text": tts_text[:500], "language": req.language},
+                    timeout=60.0,
                 )
                 if r.status_code == 200:
                     import base64
+
                     return {"audio": base64.b64encode(r.content).decode()}
                 return JSONResponse({"error": "TTS failed"}, status_code=r.status_code)
         except Exception:
@@ -313,10 +364,14 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         img_bytes = await generate_image(req.prompt)
         if img_bytes:
             import base64
+
             aff_state = await affection.get_state(user_id)
             mem_id = await memory_archive.save_image(
-                img_bytes, req.prompt, "api",
-                mood="composed", affection_level=aff_state.level,
+                img_bytes,
+                req.prompt,
+                "api",
+                mood="composed",
+                affection_level=aff_state.level,
                 user_id=user_id,
             )
             return {
@@ -359,6 +414,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         if tier != "disliked":
             try:
                 from .context import proactive
+
                 await proactive.store_gift(user_id, gift_name, sentiment=tier)
                 await proactive.record_first(user_id, "first_gift")
             except Exception:
@@ -367,24 +423,36 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         reaction = reactions.get(tier, "...Noted.")
         if ws.is_connected(user_id):
             await ws.send_proactive(user_id, reaction)
-            await ws.send_affection(user_id, aff_state.score, aff_state.level, aff_state.level_name, bonus)
+            await ws.send_affection(
+                user_id, aff_state.score, aff_state.level, aff_state.level_name, bonus
+            )
 
         try:
             from . import audit
+
             ip = request.client.host if request.client else None
             await audit.log(
-                audit.EVENT_GIFT_GIVEN, user_id=user_id, ip_address=ip,
+                audit.EVENT_GIFT_GIVEN,
+                user_id=user_id,
+                ip_address=ip,
                 request_id=getattr(request.state, "request_id", None),
                 metadata={"gift": gift_name, "tier": tier, "bonus": bonus},
             )
         except Exception:
             pass
 
-        return {"tier": tier, "bonus": bonus, "reaction": reaction, "new_score": aff_state.score}
+        return {
+            "tier": tier,
+            "bonus": bonus,
+            "reaction": reaction,
+            "new_score": aff_state.score,
+        }
+
     # Remaining endpoints split for file-size hygiene (S+ Phase 2 §6.1).
     from .routes_extras import register_extras
     from .routes_extras2 import register_extras2
     from .routes_extras3 import register_extras3
+
     register_extras(app)
     register_extras2(app)
     register_extras3(app)
@@ -396,9 +464,16 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 async def _run_mission(user_id: str, affection_level: int) -> None:
     """Background: generate and deliver a mission narrative."""
     import random
+
     await asyncio.sleep(15)  # Simulate mission duration
 
-    gifts = ["a signal relay component", "a field ration set", "a data chip", "a comm device", "a tactical flashlight"]
+    gifts = [
+        "a signal relay component",
+        "a field ration set",
+        "a data chip",
+        "a comm device",
+        "a tactical flashlight",
+    ]
     gift = random.choice(gifts)
 
     if affection_level >= 3:
@@ -417,9 +492,15 @@ async def _run_mission(user_id: str, affection_level: int) -> None:
     try:
         config = await router.route("mission", SessionState(conversation_id="mission"))
         full = []
-        async for token in router.stream(prompt, [{"role": "user", "content": prompt}], config):
+        async for token in router.stream(
+            prompt, [{"role": "user", "content": prompt}], config
+        ):
             full.append(token)
-        report = _fix_narration("".join(full)) if full else f"Sortie complete. I found {gift}. Take it."
+        report = (
+            _fix_narration("".join(full))
+            if full
+            else f"Sortie complete. I found {gift}. Take it."
+        )
 
         if ws.is_connected(user_id):
             await ws.send_proactive(user_id, report)
@@ -430,4 +511,6 @@ async def _run_mission(user_id: str, affection_level: int) -> None:
     except Exception as e:
         logger.warning("Mission narrative failed: %s", e)
         if ws.is_connected(user_id):
-            await ws.send_proactive(user_id, f"Sortie complete. Found {gift}. Take it, Commander.")
+            await ws.send_proactive(
+                user_id, f"Sortie complete. Found {gift}. Take it, Commander."
+            )

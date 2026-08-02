@@ -66,7 +66,7 @@
 
 - [ ] No restart required (PR is config-only / docs-only)
 - [ ] `companion-core` restart needed → `docker compose restart companion-core`
-- [ ] `companion-voice` restart needed → on dominus
+- [ ] `companion-voice` restart needed → on dominus-nobara
 - [ ] Migration needed → `docker compose run companion-core alembic upgrade head`
 - [ ] DB schema change → backup taken before merge
 

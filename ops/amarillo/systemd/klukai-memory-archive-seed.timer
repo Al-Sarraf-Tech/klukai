@@ -1,0 +1,13 @@
+[Unit]
+Description=Run Klukai memory seeding at 04:00 on alternating local dates
+Documentation=file:///home/jalsarraf/git/klukai/ops/amarillo/README.md
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 America/Chicago
+AccuracySec=1min
+RandomizedDelaySec=0
+Persistent=false
+Unit=klukai-memory-archive-seed.service
+
+[Install]
+WantedBy=timers.target

@@ -21,8 +21,8 @@ labels: bug
 ## Affects
 
 - [ ] Chat (companion-core)
-- [ ] Voice (companion-voice on dominus)
-- [ ] Image gen (ComfyUI on dominus)
+- [ ] Voice (companion-voice on dominus-nobara)
+- [ ] Image gen (ComfyUI on dominus-nobara)
 - [ ] Memory archive
 - [ ] Affection state
 - [ ] Auth / login
@@ -70,7 +70,7 @@ labels: bug
 
 ## Environment
 
-- Host: <!-- amarillo / dominus / both -->
+- Host: <!-- amarillo / dominus-nobara / both -->
 - Branch / commit:
 - Date observed:
 

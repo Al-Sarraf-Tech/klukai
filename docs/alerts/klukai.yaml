@@ -65,8 +65,8 @@ groups:
           severity: ticket
           tier: P2
         annotations:
-          summary: "Voice service (dominus) unreachable"
-          description: "TTS endpoint at dominus:8301 over Tailscale has been down 5m. Chat is text-only."
+          summary: "Voice service (dominus-nobara) unreachable"
+          description: "TTS endpoint at dominus-nobara:8301 over Tailscale has been down 5m. Chat is text-only."
           runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/voice-unreachable.md"
 
       - alert: KlukaiComfyUIDown
@@ -77,7 +77,7 @@ groups:
           tier: P3
         annotations:
           summary: "ComfyUI down — image gen disabled"
-          description: "ComfyUI at dominus:8388 over Tailscale has been down 10m. Chat continues without inline images."
+          description: "The authenticated ComfyUI facade on dominus-nobara:1234 has reported its internal backend down for 10m. Chat continues without inline images."
           runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/comfyui-down.md"
 
   - name: klukai_slo_burn
@@ -111,7 +111,7 @@ groups:
           tier: P2
         annotations:
           summary: "Chat p99 latency SLO breach"
-          description: "/api/chat/turn p99 > 8s for 10m. Likely LM Studio degraded (see lm-studio-cold runbook)."
+          description: "/api/chat/turn p99 > 8s for 10m. Check the compatibility gateway, llama.cpp cold-load state, and GPU lease (see lm-studio-cold runbook)."
           runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/lm-studio-cold.md"
 
       - alert: KlukaiAvailabilitySLOFastBurn
@@ -187,7 +187,7 @@ groups:
     interval: 5m
     rules:
       - alert: KlukaiBackupStale
-        # No fresh tar on dominus in 36h
+        # No fresh tar on dominus-nobara in 36h
         expr: time() - klukai_backup_last_success_unix > 129600
         for: 1h
         labels:
@@ -195,7 +195,7 @@ groups:
           tier: P2
         annotations:
           summary: "Offsite backup hasn't run in >36h"
-          description: "Per scripts/verify-backups.sh + offsite-backup.sh. Check dominus reachability."
+          description: "Per scripts/verify-backups.sh + offsite-backup.sh. Check dominus-nobara reachability."
           runbook_url: "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/disk-space.md"
 
       - alert: KlukaiMemoryIntegrityDrop

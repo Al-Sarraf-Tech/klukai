@@ -26,6 +26,8 @@ from fastapi import FastAPI
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+pytestmark = pytest.mark.usefixtures("mock_voice_gpu_lease")
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -71,6 +73,10 @@ class _Resp:
 
     def json(self):
         return self._json
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
 
 
 def _fake_async_client(get_resp=None, post_resp=None, get_exc=None, post_exc=None):
@@ -196,7 +202,7 @@ class TestSubsystemHealth:
         # httpx client returns 200 + healthy JSON for every probe.
         good = _Resp(200, {
             "data": [{"id": "model-a"}],
-            "devices": [{"name": "RTX 3090", "vram_free": 24_000_000_000}],
+            "comfyui_status": "ok",
         })
         redis_mock = MagicMock()
         redis_mock.ping = AsyncMock()
@@ -217,8 +223,7 @@ class TestSubsystemHealth:
         assert subs["lm_studio"]["models_loaded"] == 1
         assert subs["lm_studio"]["models"] == ["model-a"]
         assert subs["comfyui"]["status"] == "ok"
-        assert subs["comfyui"]["gpu"] == "RTX 3090"
-        assert subs["comfyui"]["vram_free_gb"] == 24.0
+        assert subs["comfyui"]["source"] == "gpu_gateway"
         assert subs["embeddings"]["status"] == "ok"
         assert subs["voice"]["status"] == "ok"
 
@@ -286,9 +291,10 @@ class TestSubsystemHealth:
         assert result["subsystems"]["qdrant"]["status"] == "degraded"
         assert result["subsystems"]["embeddings"]["status"] == "degraded"
         assert result["subsystems"]["voice"]["status"] == "degraded"
-        # No "down" present (lm_studio/comfyui returned 200-shaped JSON) but a
-        # "degraded" exists -> overall "ok" only if no down; here none down.
-        assert result["status"] == "ok"
+        # Gateway health itself returned 500, so the protected Comfy facade is
+        # correctly down and the aggregate degrades.
+        assert result["subsystems"]["comfyui"]["status"] == "down"
+        assert result["status"] == "degraded"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

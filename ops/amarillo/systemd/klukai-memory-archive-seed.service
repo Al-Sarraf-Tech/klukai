@@ -1,0 +1,21 @@
+[Unit]
+Description=Klukai memory archive seed pass (bounded local window)
+Documentation=file:///home/jalsarraf/git/klukai/ops/amarillo/README.md
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=/home/jalsarraf/git/klukai
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/jalsarraf/git/klukai
+Environment=TZ=America/Chicago
+UMask=0077
+ExecCondition=/home/jalsarraf/.local/bin/klukai-memory-seed-day-condition
+ExecStartPre=/usr/bin/test -r /home/jalsarraf/git/klukai/docker-compose.yml
+ExecStartPre=/usr/bin/docker compose config --quiet
+ExecStart=/usr/bin/docker compose exec -T companion-core python3 /app/seed_memories.py
+TimeoutStartSec=6900
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal

@@ -3,7 +3,7 @@
 These exercise the real functions/middleware with mocked I/O and assert
 concrete behavior:
   * lifespan OPENS the pool on entry and CLOSES it on exit, starts + stops the
-    proactive engine, and cancels the keepalive task when one was started;
+    proactive engine, and never schedules an LLM keepalive;
   * each middleware dispatch sets the headers / status it promises;
   * the rate-limit middleware skips unprotected paths, consumes a token on
     protected ones, and returns 429 on overflow;
@@ -445,53 +445,6 @@ class TestProactiveCallback:
         assert push.await_args.kwargs["body"] == "Ping."
 
 
-# ── _keepalive_loop ──────────────────────────────────────────────────────────
-
-
-class TestKeepaliveLoop:
-    async def test_one_iteration_pings_router_then_stops(self):
-        """Drive the infinite loop exactly once.
-
-        The loop sleeps FIRST, then pings. So the 1st sleep must return, the
-        ping fires, then the 2nd sleep raises CancelledError to break out —
-        proving exactly one keepalive happened per cycle.
-        """
-        calls = {"n": 0}
-
-        async def sleep_then_cancel(_secs):
-            calls["n"] += 1
-            if calls["n"] >= 2:
-                raise asyncio.CancelledError
-
-        router = MagicMock()
-        router.keepalive = AsyncMock()
-        with patch("app.main.asyncio.sleep", new=sleep_then_cancel), \
-             patch("app.llm_router._KEEPALIVE_INTERVAL", 1), \
-             patch.object(main, "router", router):
-            with pytest.raises(asyncio.CancelledError):
-                await main._keepalive_loop()
-        router.keepalive.assert_awaited_once()
-
-    async def test_keepalive_error_is_logged_not_raised(self):
-        """A keepalive failure is swallowed; loop continues to next sleep."""
-        seq = {"n": 0}
-
-        async def sleep_twice(_secs):
-            seq["n"] += 1
-            if seq["n"] >= 2:
-                raise asyncio.CancelledError
-
-        router = MagicMock()
-        router.keepalive = AsyncMock(side_effect=RuntimeError("LM down"))
-        with patch("app.main.asyncio.sleep", new=sleep_twice), \
-             patch("app.llm_router._KEEPALIVE_INTERVAL", 1), \
-             patch.object(main, "router", router):
-            with pytest.raises(asyncio.CancelledError):
-                await main._keepalive_loop()
-        # Tried at least once and did not propagate the RuntimeError.
-        assert router.keepalive.await_count >= 1
-
-
 # ── lifespan ─────────────────────────────────────────────────────────────────
 
 
@@ -604,32 +557,19 @@ class TestLifespan:
         # At least the session-cleanup loop coroutine was handed to create_task.
         assert len(lifespan_mocks.created) >= 1
 
-    async def test_keepalive_enabled_when_env_set(self, lifespan_mocks, monkeypatch):
+    async def test_keepalive_env_is_ignored(self, lifespan_mocks, monkeypatch):
         monkeypatch.setenv("KLUKAI_LLM_KEEPALIVE", "1")
         async with main.lifespan(main.app):
             pass
-        # Warmup ping fired and the keepalive task was created (2 create_task:
-        # keepalive loop + session cleanup).
-        lifespan_mocks.router.keepalive.assert_awaited()
-        assert len(lifespan_mocks.created) >= 2
+        lifespan_mocks.router.keepalive.assert_not_awaited()
+        assert len(lifespan_mocks.created) == 1
 
-    async def test_keepalive_task_cancelled_on_shutdown(self, lifespan_mocks, monkeypatch):
+    async def test_keepalive_task_is_never_created(self, lifespan_mocks, monkeypatch):
         monkeypatch.setenv("KLUKAI_LLM_KEEPALIVE", "1")
-        # Use a real cancellable task object so .cancel() is observable.
-        cancel_flag = {"cancelled": False}
-
-        class _FakeTask:
-            def cancel(self):
-                cancel_flag["cancelled"] = True
-
-        def fake_create_task(coro):
-            coro.close()
-            return _FakeTask()
-
-        monkeypatch.setattr(main.asyncio, "create_task", fake_create_task)
         async with main.lifespan(main.app):
             pass
-        assert cancel_flag["cancelled"] is True
+        lifespan_mocks.router.keepalive.assert_not_awaited()
+        assert len(lifespan_mocks.created) == 1
 
     async def test_session_getter_falls_back_to_primary_user(self, lifespan_mocks, monkeypatch):
         """The lifespan-local session getter tries connected users, then primary."""
@@ -687,15 +627,13 @@ class TestLifespan:
         assert result is carol_session
         assert lifespan_mocks.memory.get_session.await_args.args[0] == "session:carol"
 
-    async def test_keepalive_warmup_failure_is_swallowed(self, lifespan_mocks, monkeypatch):
-        """A warmup-ping failure during startup must not crash the lifespan."""
+    async def test_keepalive_override_cannot_trigger_warmup(self, lifespan_mocks, monkeypatch):
         monkeypatch.setenv("KLUKAI_LLM_KEEPALIVE", "1")
         lifespan_mocks.router.keepalive = AsyncMock(side_effect=RuntimeError("warmup boom"))
-        # Startup completes despite the warmup error.
         async with main.lifespan(main.app):
             pass
-        lifespan_mocks.router.keepalive.assert_awaited()
-        lifespan_mocks.close_pool.assert_awaited_once()  # still shut down cleanly
+        lifespan_mocks.router.keepalive.assert_not_awaited()
+        lifespan_mocks.close_pool.assert_awaited_once()
 
     async def test_session_cleanup_loop_calls_cleanup(self, monkeypatch):
         """Drive the inner _session_cleanup_loop one iteration via patched sleep.

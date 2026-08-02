@@ -25,6 +25,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.models import SessionState  # noqa: E402
 
 
+pytestmark = pytest.mark.usefixtures("mock_voice_gpu_lease")
+
+
 # ── Fakes ─────────────────────────────────────────────────────────────────────
 
 

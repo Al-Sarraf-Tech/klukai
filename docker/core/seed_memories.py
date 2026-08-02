@@ -18,18 +18,19 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 
 import httpx
 import psycopg
+
+from app.image_gen import build_prompt, free_comfyui_vram, generate_image
+from app.lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://dominus:1234")
-LM_TTL_SECONDS = int(os.environ.get("LM_STUDIO_TTL", "600"))
-COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://dominus:8388")
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
 
 # gpt-oss-20b for selection: reliable structured JSON at low temperature
 SELECTOR_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
@@ -87,14 +88,17 @@ Write ONLY the caption. Nothing else. No quotes around it."""
 
 # ── LLM Response Parsing ─────────────────────────────────────────────────────
 
+
 def _clean_llm_response(msg: dict) -> str:
     """Extract usable text from an LLM response, handling thinking models."""
     content = (msg.get("content") or "").strip()
     if not content:
         content = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
     # Strip thinking tags
-    content = re.sub(r'<\|?think\|?>.*?<\|?/think\|?>', '', content, flags=re.DOTALL).strip()
-    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+    content = re.sub(
+        r"<\|?think\|?>.*?<\|?/think\|?>", "", content, flags=re.DOTALL
+    ).strip()
+    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
     return content
 
 
@@ -107,21 +111,27 @@ def _extract_json(text: str) -> dict:
             text = parts[1].lstrip("json").strip()
     # Find JSON object in mixed text
     if text and not text.startswith("{"):
-        m = re.search(r'\{.*\}', text, flags=re.DOTALL)
+        m = re.search(r"\{.*\}", text, flags=re.DOTALL)
         if m:
             text = m.group(0)
     # Fix trailing commas
-    text = re.sub(r',\s*([}\]])', r'\1', text)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
     return json.loads(text)
 
 
 def _clean_annotation(text: str) -> str | None:
     """Clean an annotation, rejecting leaked chain-of-thought."""
-    text = text.strip('"').strip("'").strip('`')
-    text = re.sub(r'^(?:Caption|Annotation|Memory|Entry|Journal|Note)\s*:\s*',
-                  '', text, flags=re.IGNORECASE).strip()
+    text = text.strip('"').strip("'").strip("`")
+    text = re.sub(
+        r"^(?:Caption|Annotation|Memory|Entry|Journal|Note)\s*:\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
     # Reject leaked reasoning
-    if text.lower().startswith(("we need", "the user", "let me", "i need to", "so the", "here is")):
+    if text.lower().startswith(
+        ("we need", "the user", "let me", "i need to", "so the", "here is")
+    ):
         return None
     if len(text) < 15:
         return None
@@ -130,18 +140,23 @@ def _clean_annotation(text: str) -> str | None:
 
 # ── Seeding State ────────────────────────────────────────────────────────────
 
+
 async def _get_last_seeded_at(conn, user_id: str = "jalsarraf") -> datetime | None:
     """Get the timestamp of the last seeded exchange for a user."""
     key = f"last_seeded_at:{user_id}"
     # Try user-scoped key first, fall back to legacy key
-    row = await (await conn.execute(
-        "SELECT value FROM companion_relationship WHERE key = %s", (key,)
-    )).fetchone()
+    row = await (
+        await conn.execute(
+            "SELECT value FROM companion_relationship WHERE key = %s", (key,)
+        )
+    ).fetchone()
     if not row:
         # Legacy fallback for jalsarraf
-        row = await (await conn.execute(
-            "SELECT value FROM companion_relationship WHERE key = 'last_seeded_at'"
-        )).fetchone()
+        row = await (
+            await conn.execute(
+                "SELECT value FROM companion_relationship WHERE key = 'last_seeded_at'"
+            )
+        ).fetchone()
     if row and row[0]:
         try:
             val = json.loads(row[0]) if isinstance(row[0], str) else row[0]
@@ -165,29 +180,37 @@ async def _set_last_seeded_at(conn, ts: datetime, user_id: str = "jalsarraf") ->
 
 # ── Deduplication ────────────────────────────────────────────────────────────
 
+
 async def _is_duplicate(conn, user_msg: str, assistant_msg: str) -> bool:
     """Check if a substantially similar memory already exists.
 
     Compares against the original exchange text stored in the prompt field
     and recent annotations to avoid near-identical entries.
     """
-    # Check by content fingerprint — first 100 chars of user+assistant
-    fingerprint = f"{user_msg[:100]}|{assistant_msg[:100]}"
-    row = await (await conn.execute(
-        "SELECT COUNT(*) FROM companion_memories "
-        "WHERE conversation_id = 'seed' AND prompt LIKE %s",
-        (f"%{user_msg[:60].replace('%', '')}%",),
-    )).fetchone()
+    row = await (
+        await conn.execute(
+            "SELECT COUNT(*) FROM companion_memories "
+            "WHERE conversation_id = 'seed' AND prompt LIKE %s",
+            (f"%{user_msg[:60].replace('%', '')}%",),
+        )
+    ).fetchone()
     return row and row[0] > 0
 
 
 # ── LLM Calls ───────────────────────────────────────────────────────────────
 
-async def _call_llm(client: httpx.AsyncClient, model: str, prompt: str,
-                     max_tokens: int = 2048, temperature: float = 0.1) -> str:
+
+async def _call_llm(
+    client: httpx.AsyncClient,
+    model: str,
+    prompt: str,
+    max_tokens: int = 2048,
+    temperature: float = 0.1,
+) -> str:
     """Make a single LLM call and return cleaned text."""
     r = await client.post(
         f"{LM_STUDIO_URL}/v1/chat/completions",
+        headers=lm_studio_auth_headers(),
         json={
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
@@ -201,8 +224,9 @@ async def _call_llm(client: httpx.AsyncClient, model: str, prompt: str,
     return _clean_llm_response(r.json()["choices"][0]["message"])
 
 
-async def _select_batch(client: httpx.AsyncClient, batch: list[dict],
-                         batch_start: int) -> list[dict]:
+async def _select_batch(
+    client: httpx.AsyncClient, batch: list[dict], batch_start: int
+) -> list[dict]:
     """Pass 1: Select memorable exchanges from a batch using gpt-oss-20b."""
     exchange_text = ""
     for j, ex in enumerate(batch):
@@ -211,8 +235,9 @@ async def _select_batch(client: httpx.AsyncClient, batch: list[dict],
         exchange_text += f"  Klukai: {ex['assistant'][:200]}\n"
 
     prompt = SELECTION_PROMPT.format(count=len(batch), exchanges=exchange_text)
-    content = await _call_llm(client, SELECTOR_MODEL, prompt,
-                               max_tokens=2048, temperature=0.1)
+    content = await _call_llm(
+        client, SELECTOR_MODEL, prompt, max_tokens=2048, temperature=0.1
+    )
     result = _extract_json(content)
     selected = []
     for mem in result.get("memories", []):
@@ -224,22 +249,25 @@ async def _select_batch(client: httpx.AsyncClient, batch: list[dict],
     return selected
 
 
-async def _annotate(client: httpx.AsyncClient, exchange: dict,
-                     category: str) -> str | None:
+async def _annotate(
+    client: httpx.AsyncClient, exchange: dict, category: str
+) -> str | None:
     """Pass 2: Write annotation using dolphin-24b with actual conversation text."""
     prompt = ANNOTATION_PROMPT.format(
         user_msg=exchange["user"][:400],
         assistant_msg=exchange["assistant"][:400],
         category=category,
     )
-    content = await _call_llm(client, ANNOTATOR_MODEL, prompt,
-                               max_tokens=300, temperature=0.85)
+    content = await _call_llm(
+        client, ANNOTATOR_MODEL, prompt, max_tokens=300, temperature=0.85
+    )
     return _clean_annotation(content)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-async def main():
+
+async def main() -> int:
     # Parse --user argument (default: jalsarraf)
     target_user = "jalsarraf"
     for i, arg in enumerate(sys.argv[1:], 1):
@@ -247,13 +275,6 @@ async def main():
             target_user = sys.argv[i + 1] if (i + 1) < len(sys.argv) else "jalsarraf"
         elif arg.startswith("--user="):
             target_user = arg.split("=", 1)[1]
-
-    # Signal keepalive to back off during seeding (avoids VRAM fights)
-    try:
-        from app.llm_router import set_seeding_active
-        set_seeding_active(True)
-    except ImportError:
-        pass  # Running standalone outside container
 
     logger.info("=== Memory Seeder Starting (user: %s) ===", target_user)
     logger.info("Selector: %s | Annotator: %s", SELECTOR_MODEL, ANNOTATOR_MODEL)
@@ -286,11 +307,13 @@ async def main():
     while i < len(rows) - 1:
         if rows[i][0] == "user" and rows[i + 1][0] == "assistant":
             ts = rows[i][2]
-            exchanges.append({
-                "user": rows[i][1][:500],
-                "assistant": rows[i + 1][1][:500],
-                "created_at": ts.isoformat() if ts else "",
-            })
+            exchanges.append(
+                {
+                    "user": rows[i][1][:500],
+                    "assistant": rows[i + 1][1][:500],
+                    "created_at": ts.isoformat() if ts else "",
+                }
+            )
             if ts and (newest_ts is None or ts > newest_ts):
                 newest_ts = ts
             i += 2
@@ -301,59 +324,50 @@ async def main():
     if not exchanges:
         logger.info("No new exchanges to process")
         await conn.close()
-        return
+        return 0
 
-    # ── VRAM management: free ComfyUI before LLM-heavy passes ─────────
-    async def _free_comfyui_vram():
-        """Ask ComfyUI to unload models and release VRAM for LLM work."""
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as c:
-                await c.post(f"{COMFYUI_URL}/free",
-                             json={"unload_models": True, "free_memory": True})
-                logger.info("ComfyUI VRAM freed for LLM passes")
-        except Exception:
-            logger.debug("ComfyUI not reachable (may not be running)")
-
-    async def _warm_model(model: str):
-        """Send a minimal request to ensure model is loaded before heavy use."""
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as c:
-                r = await c.post(f"{LM_STUDIO_URL}/v1/chat/completions", json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": "."}],
-                    "max_tokens": 1, "temperature": 0, "stream": False,
-                    "ttl": LM_TTL_SECONDS,
-                })
-                if r.status_code == 200:
-                    logger.info("Model %s warmed up", model.split("/")[-1][:30])
-                else:
-                    logger.warning("Model warmup returned %d: %s", r.status_code, r.text[:100])
-        except Exception as e:
-            logger.warning("Model warmup failed: %s", e)
-
-    # Free ComfyUI VRAM and warm the selector model before Pass 1
-    await _free_comfyui_vram()
-    await asyncio.sleep(3)
-    await _warm_model(SELECTOR_MODEL)
+    # Free stale ComfyUI allocations before the first real selection batch.
+    # Even cleanup goes through the authenticated gateway facade while holding
+    # the matching GPU lease; there is no raw ComfyUI network path.
+    # The first batch itself performs the lazy model load; synthetic warm-up or
+    # keepalive prompts are forbidden because they create false activity and
+    # extend model residency.
+    try:
+        cleanup_ready = await free_comfyui_vram()
+    except Exception as error:
+        logger.error("Initial GPU cleanup failed (%s)", type(error).__name__)
+        cleanup_ready = False
+    if not cleanup_ready:
+        logger.error("Seeding incomplete; last_seeded_at remains unchanged")
+        await conn.close()
+        return 1
 
     # ── PASS 1: Selection ────────────────────────────────────────────────
     logger.info("=== PASS 1: Selection (%s) ===", SELECTOR_MODEL)
     selected = []
     failed_batches = []
+    unresolved_selector_batches: list[int] = []
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         for batch_start in range(0, len(exchanges), BATCH_SIZE):
-            batch = exchanges[batch_start:batch_start + BATCH_SIZE]
-            logger.info("Selecting batch %d-%d of %d...",
-                        batch_start, batch_start + len(batch), len(exchanges))
+            batch = exchanges[batch_start : batch_start + BATCH_SIZE]
+            logger.info(
+                "Selecting batch %d-%d of %d...",
+                batch_start,
+                batch_start + len(batch),
+                len(exchanges),
+            )
             try:
                 batch_selected = await _select_batch(client, batch, batch_start)
                 selected.extend(batch_selected)
                 for s in batch_selected:
-                    logger.info("  Selected exchange %d (%s)",
-                                s["global_index"], s.get("category", "?"))
+                    logger.info(
+                        "  Selected exchange %d (%s)",
+                        s["global_index"],
+                        s.get("category", "?"),
+                    )
             except Exception as e:
-                logger.warning("  Batch %d failed: %s", batch_start, e)
+                logger.warning("  Batch %d failed (%s)", batch_start, type(e).__name__)
                 failed_batches.append((batch_start, batch))
             await asyncio.sleep(2)
 
@@ -366,20 +380,42 @@ async def main():
                     batch_selected = await _select_batch(client, batch, batch_start)
                     selected.extend(batch_selected)
                     for s in batch_selected:
-                        logger.info("  RETRY: Selected exchange %d (%s)",
-                                    s["global_index"], s.get("category", "?"))
+                        logger.info(
+                            "  RETRY: Selected exchange %d (%s)",
+                            s["global_index"],
+                            s.get("category", "?"),
+                        )
                 except Exception as e:
-                    logger.warning("  RETRY batch %d failed again: %s", batch_start, e)
+                    logger.warning(
+                        "  RETRY batch %d failed again (%s)",
+                        batch_start,
+                        type(e).__name__,
+                    )
+                    unresolved_selector_batches.append(batch_start)
                 await asyncio.sleep(3)
 
-    logger.info("Pass 1 complete: %d exchanges selected from %d", len(selected), len(exchanges))
+    pipeline_failures = [
+        f"selector batch {batch_start}"
+        for batch_start in unresolved_selector_batches
+    ]
+
+    logger.info(
+        "Pass 1 complete: %d exchanges selected from %d", len(selected), len(exchanges)
+    )
 
     if not selected:
-        logger.info("No memories selected — updating last_seeded_at anyway")
+        if pipeline_failures:
+            logger.error(
+                "Seeding incomplete (%s); last_seeded_at remains unchanged",
+                ", ".join(pipeline_failures),
+            )
+            await conn.close()
+            return 1
+        logger.info("No memories selected; selection completed successfully")
         if newest_ts:
             await _set_last_seeded_at(conn, newest_ts, target_user)
         await conn.close()
-        return
+        return 0
 
     # ── PASS 2: Annotation ───────────────────────────────────────────────
     logger.info("=== PASS 2: Annotation (%s) ===", ANNOTATOR_MODEL)
@@ -397,7 +433,19 @@ async def main():
             except Exception:
                 pass  # If dedup check fails, proceed anyway
 
-            annotation = await _annotate(client, ex, category)
+            try:
+                annotation = await _annotate(client, ex, category)
+            except Exception as error:
+                logger.error(
+                    "  Annotation failed for exchange %s (%s)",
+                    mem.get("global_index", "?"),
+                    type(error).__name__,
+                )
+                mem["pipeline_failed"] = True
+                pipeline_failures.append(
+                    f"annotation exchange {mem.get('global_index', '?')}"
+                )
+                continue
             if annotation:
                 mem["annotation"] = annotation
                 logger.info("  Annotated: %s", annotation[:70])
@@ -409,135 +457,200 @@ async def main():
             await asyncio.sleep(3)
 
     # Filter out skipped (duplicates)
-    selected = [m for m in selected if not m.get("skip")]
+    selected = [
+        m
+        for m in selected
+        if not m.get("skip") and not m.get("pipeline_failed")
+    ]
     logger.info("Pass 2 complete: %d annotations written (after dedup)", len(selected))
 
     if not selected:
-        if newest_ts:
+        if pipeline_failures:
+            logger.error(
+                "Seeding incomplete (%s); last_seeded_at remains unchanged",
+                ", ".join(pipeline_failures),
+            )
+        elif newest_ts:
             await _set_last_seeded_at(conn, newest_ts, target_user)
         await conn.close()
-        return
+        return 1 if pipeline_failures else 0
 
     # ── PASS 3: Image Generation ─────────────────────────────────────────
-    # Free LLM VRAM before image gen — send a dummy request to let LM Studio
-    # know we're done with the model, then give ComfyUI room
-    logger.info("Freeing LLM VRAM for image generation...")
-    await _free_comfyui_vram()  # Also free ComfyUI's stale allocations
-    await asyncio.sleep(5)  # Let VRAM settle
+    # generate_image acquires the authenticated exclusive GPU lease, drains
+    # active inference, and unloads llama.cpp before ComfyUI can allocate.
+    logger.info("Preparing exclusive GPU handoff for image generation...")
 
     logger.info("=== PASS 3: Image Generation ===")
-    sys.path.insert(0, "/app")
-    from app.image_gen import build_prompt, generate_image
     from app.memory_archive import save_image
     from app.db import init_pool, close_pool
 
     await init_pool(min_size=1, max_size=3)
     saved_count = 0
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        for i, mem in enumerate(selected):
-            ex = mem["exchange"]
-            logger.info("Generating %d/%d: %s",
-                        i + 1, len(selected), mem.get("annotation", "")[:50])
+    for i, mem in enumerate(selected):
+        ex = mem["exchange"]
+        logger.info(
+            "Generating %d/%d: %s",
+            i + 1,
+            len(selected),
+            mem.get("annotation", "")[:50],
+        )
 
-            try:
-                tags = mem.get("image_tags", [])
-                exchange_text = f"{ex['user']} {ex['assistant']}"
+        try:
+            tags = mem.get("image_tags", [])
+            exchange_text = f"{ex['user']} {ex['assistant']}"
 
-                # Infer tags from conversation if selector didn't provide them
-                if not tags:
-                    tags = _infer_scene_tags(exchange_text, mem.get("category", ""))
-                    logger.info("  Inferred tags: %s", tags)
+            # Infer tags from conversation if selector didn't provide them
+            if not tags:
+                tags = _infer_scene_tags(exchange_text, mem.get("category", ""))
+                logger.info("  Inferred tags: %s", tags)
 
-                scene_tags = ", ".join(tags)
-                couple = any(kw in exchange_text.lower()
-                             for kw in ["us", "together", "we", "our", "holding",
-                                        "hug", "kiss", "beside", "couple", "1boy"])
+            scene_tags = ", ".join(tags)
+            couple = any(
+                kw in exchange_text.lower()
+                for kw in [
+                    "us",
+                    "together",
+                    "we",
+                    "our",
+                    "holding",
+                    "hug",
+                    "kiss",
+                    "beside",
+                    "couple",
+                    "1boy",
+                ]
+            )
 
-                full_prompt = build_prompt(
-                    scene_tags, couple=couple, affection_level=8,
-                    context=exchange_text,
+            full_prompt = build_prompt(
+                scene_tags,
+                couple=couple,
+                affection_level=8,
+                context=exchange_text,
+            )
+
+            img_bytes = await generate_image(full_prompt)
+            if img_bytes:
+                curation = {
+                    "keep": True,
+                    "annotation": mem.get("annotation", ""),
+                    "category": mem.get("category", "Precious Memories"),
+                    "image_tags": tags,
+                }
+                memory_id = await save_image(
+                    img_bytes,
+                    full_prompt,
+                    "seed",
+                    mood="tender",
+                    affection_level=8,
+                    curation=curation,
+                    user_id=target_user,
+                )
+                if memory_id:
+                    saved_count += 1
+                    logger.info("  Saved: %s (%s)", memory_id[:12], mem.get("category"))
+
+                    # Copy to shared_linux if accessible
+                    _copy_to_shared(memory_id, mem.get("annotation", ""))
+                else:
+                    logger.warning("  Save failed")
+                    pipeline_failures.append(
+                        f"save exchange {mem.get('global_index', '?')}"
+                    )
+            else:
+                logger.warning("  Image gen failed")
+                pipeline_failures.append(
+                    f"image exchange {mem.get('global_index', '?')}"
                 )
 
-                img_bytes = await generate_image(full_prompt)
-                if img_bytes:
-                    curation = {
-                        "keep": True,
-                        "annotation": mem.get("annotation", ""),
-                        "category": mem.get("category", "Precious Memories"),
-                        "image_tags": tags,
-                    }
-                    memory_id = await save_image(
-                        img_bytes, full_prompt, "seed",
-                        mood="tender", affection_level=8, curation=curation,
-                        user_id=target_user,
-                    )
-                    if memory_id:
-                        saved_count += 1
-                        logger.info("  Saved: %s (%s)", memory_id[:12], mem.get("category"))
+            # generate_image frees Comfy weights before releasing its lease.
+            if i < len(selected) - 1:
+                logger.info("  Waiting 30s...")
+                await asyncio.sleep(30)
 
-                        # Copy to shared_linux if accessible
-                        _copy_to_shared(memory_id, mem.get("annotation", ""))
-                    else:
-                        logger.warning("  Save failed")
-                else:
-                    logger.warning("  Image gen failed")
+        except Exception as e:
+            logger.error(
+                "  Pipeline failed for exchange %s (%s)",
+                mem.get("global_index", "?"),
+                type(e).__name__,
+            )
+            pipeline_failures.append(
+                f"image/save exchange {mem.get('global_index', '?')}"
+            )
 
-                # Free VRAM between generations
-                try:
-                    await client.post(f"{COMFYUI_URL}/free",
-                                      json={"unload_models": True, "free_memory": True},
-                                      timeout=5.0)
-                except Exception:
-                    pass
-
-                if i < len(selected) - 1:
-                    logger.info("  Waiting 30s...")
-                    await asyncio.sleep(30)
-
-            except Exception as e:
-                logger.error("  Error: %s", e)
-
-    # Update last_seeded_at so next run only processes new messages
-    if newest_ts:
+    # Advance only after every selector batch and every selected memory reached
+    # a durable save (or was confirmed as an existing duplicate). A partial
+    # outage must leave the range eligible for a later retry.
+    if not pipeline_failures and newest_ts:
         await _set_last_seeded_at(conn, newest_ts, target_user)
         logger.info("Updated last_seeded_at to %s", newest_ts)
+    elif pipeline_failures:
+        logger.error(
+            "Seeding incomplete (%s); last_seeded_at remains unchanged",
+            ", ".join(pipeline_failures),
+        )
 
     await close_pool()
     await conn.close()
 
-    # Release seeding lock so keepalive resumes
-    try:
-        from app.llm_router import set_seeding_active
-        set_seeding_active(False)
-    except ImportError:
-        pass
-
-    logger.info("=== SEEDING COMPLETE: %d/%d memories saved ===", saved_count, len(selected))
+    logger.info(
+        "=== SEEDING COMPLETE: %d/%d memories saved ===", saved_count, len(selected)
+    )
+    return 1 if pipeline_failures else 0
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 SCENE_KEYWORDS = {
-    "bed": "bed", "sleep": "sleep", "morning": "morning",
-    "lingerie": "lingerie", "intimate": "intimate",
-    "hold me": "hold", "close to me": "close", "cuddle": "cuddle",
-    "kiss": "kiss", "love": "love", "tender": "tender",
-    "cook": "cooking", "motorcycle": "motorcycle", "ride": "motorcycle",
-    "beach": "beach", "rain": "rain", "night": "night",
-    "rooftop": "rooftop", "cafe": "cafe", "coffee": "cafe",
-    "bath": "bath", "garden": "garden", "train": "training",
-    "workout": "training", "gym": "training", "date": "date",
-    "dinner": "date", "restaurant": "date", "battle": "battle",
-    "fight": "fight", "mission": "patrol", "home": "home",
-    "couch": "home", "relax": "home", "snow": "snow",
-    "forest": "forest", "city": "city",
+    "bed": "bed",
+    "sleep": "sleep",
+    "morning": "morning",
+    "lingerie": "lingerie",
+    "intimate": "intimate",
+    "hold me": "hold",
+    "close to me": "close",
+    "cuddle": "cuddle",
+    "kiss": "kiss",
+    "love": "love",
+    "tender": "tender",
+    "cook": "cooking",
+    "motorcycle": "motorcycle",
+    "ride": "motorcycle",
+    "beach": "beach",
+    "rain": "rain",
+    "night": "night",
+    "rooftop": "rooftop",
+    "cafe": "cafe",
+    "coffee": "cafe",
+    "bath": "bath",
+    "garden": "garden",
+    "train": "training",
+    "workout": "training",
+    "gym": "training",
+    "date": "date",
+    "dinner": "date",
+    "restaurant": "date",
+    "battle": "battle",
+    "fight": "fight",
+    "mission": "patrol",
+    "home": "home",
+    "couch": "home",
+    "relax": "home",
+    "snow": "snow",
+    "forest": "forest",
+    "city": "city",
 }
 
 MOOD_KEYWORDS = {
-    "hug": "hug", "hold": "holding hands", "kiss": "kiss",
-    "cuddle": "cuddling", "cry": "tears", "smile": "smile",
-    "blush": "blush", "tender": "tender", "gentle": "gentle",
+    "hug": "hug",
+    "hold": "holding hands",
+    "kiss": "kiss",
+    "cuddle": "cuddling",
+    "cry": "tears",
+    "smile": "smile",
+    "blush": "blush",
+    "tender": "tender",
+    "gentle": "gentle",
 }
 
 CATEGORY_DEFAULTS = {
@@ -568,15 +681,16 @@ def _copy_to_shared(memory_id: str, annotation: str) -> None:
     try:
         import shutil
         from pathlib import Path
+
         src = Path(f"/images/{memory_id}.png")
         if src.exists():
             dst = Path("/mnt/c/shared_linux/klukai_memories")
             dst.mkdir(parents=True, exist_ok=True)
-            safe_ann = re.sub(r'[^\w\s-]', '', annotation[:40]).strip()
+            safe_ann = re.sub(r"[^\w\s-]", "", annotation[:40]).strip()
             shutil.copy2(src, dst / f"{safe_ann}_{memory_id[:8]}.png")
     except Exception:
         pass
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

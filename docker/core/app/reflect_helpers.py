@@ -144,7 +144,7 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
         config = LLMConfig(
             provider="lmstudio",
             model="cognitivecomputations_dolphin-mistral-24b-venice-edition",
-            base_url=os.environ.get("LM_STUDIO_URL", "http://dominus:1234"),
+            base_url=os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234"),
             temperature=0.9,
             max_tokens=180,
         )

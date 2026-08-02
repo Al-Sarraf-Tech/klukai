@@ -16,6 +16,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+pytestmark = pytest.mark.usefixtures("mock_voice_gpu_lease")
+
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
 
@@ -138,7 +140,10 @@ class TestSaveVoiceNoteHappy:
         assert call.args[0].endswith("/tts")
         assert call.kwargs["json"]["language"] == "ja"
         assert call.kwargs["json"]["text"] == "こんにちは指揮官"
-        assert call.kwargs["headers"] == {"Authorization": "Bearer vtok"}
+        assert call.kwargs["headers"] == {
+            "Authorization": "Bearer vtok",
+            "X-GPU-Lease-Token": "pytest-voice-lease",
+        }
 
     @pytest.mark.asyncio
     async def test_truncates_long_text_for_synth_but_stores_full(self, tmp_path, monkeypatch):

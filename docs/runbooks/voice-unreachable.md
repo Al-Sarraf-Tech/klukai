@@ -1,69 +1,79 @@
-# Runbook: Voice Service Unreachable (dominus)
+# Runbook: Voice Service Unreachable (`dominus-nobara`)
 
 **Severity:** P2 (TTS disabled; chat continues text-only)
-**SLO breach:** `/api/voice/*` returns 5xx; chat responses lose audio.
 
-## Symptom
+**SLO breach:** `/api/voice/*` returns 5xx or chat responses lose audio.
 
-- `/health` shows `voice: "down"` in subsystem detail
-- companion-core logs: `httpx.ConnectError` to `dominus:8301`
-- Flutter PWA shows "Voice unavailable" indicator
-- TTS requests return 503
+## Symptoms
 
-## Immediate action (< 5 min)
+- Companion health reports the voice subsystem as down.
+- `companion-core` cannot connect to `100.107.121.5:8301`.
+- The PWA shows its voice-unavailable state.
+- TTS requests return 503 while text chat continues.
 
-1. Verify dominus is reachable from amarillo:
-   ```bash
-   tailscale ping -c 3 dominus
-   ssh dominus 'echo OK'
-   ```
-2. Check companion-voice container on dominus:
-   ```bash
-   ssh dominus 'docker ps --filter name=companion-voice'
-   ssh dominus 'docker logs --tail=200 companion-voice'
-   ```
-3. If exited: `ssh dominus 'docker restart companion-voice'`.
-4. Per `feedback_dominus_voice_port.md`, voice periodically loses the
-   `:8301` binding. Fix:
-   ```bash
-   ssh dominus 'docker rm -f companion-voice && cd ~/git/klukai && docker compose -f docker-compose.voice.yml up -d'
-   ```
+## Immediate checks
 
-## Root-cause investigation
+From `amarillo`, prove the Tailnet path and check the public, model-free health
+endpoint:
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| Container up, port not bound | Known dominus voice port bug | `rm -f` + recreate (see above) |
-| Container exited, CUDA error | XTTS CUDA OOM | Restart; review GPU sharing with ComfyUI |
-| Container OK, slow response | Model loading or busy queue | Wait; or `ssh dominus 'nvidia-smi'` to confirm |
-| Cannot reach `dominus` | Tailscale route, ACL, DNS, or dominus is down | Check `tailscale status`; power-cycle dominus if needed |
+```bash
+tailscale ping -c 3 dominus-nobara
+curl --fail http://100.107.121.5:8301/health | jq .
+```
 
-## Verification after fix
+On `dominus-nobara`, use the canonical stack rather than the retired
+top-level `docker-compose.voice.yml`:
 
-1. `curl -sf http://dominus:8301/health` returns 200.
-2. Send a chat turn; verify audio plays in PWA.
-3. Check companion-core logs for successful TTS handoff.
+```bash
+cd /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara
+test ! -e /run/user/1000/dominus-gpu/game-active
+systemctl --user status dominus-ai-stack.service --no-pager
+docker compose \
+  --env-file /mnt/nvmer0/services/ai-stack/config/stack.env \
+  --file compose.yaml ps companion-voice
+docker compose \
+  --env-file /mnt/nvmer0/services/ai-stack/config/stack.env \
+  --file compose.yaml logs --tail=200 companion-voice
+```
 
-## Graceful degradation
+If the game marker exists, the stopped voice container is intentional. Wait
+for GameMode's end hook; never start a GPU service around the guard.
 
-Until Phase 4 circuit breaker lands, voice down = text-only chat. Users
-see "Voice unavailable" toast but conversation continues. **No chat
-memory or affection state is at risk.**
+If there is no active game and only voice needs recovery, recreate the
+canonical service without building or touching other projects:
 
-## Network path
+```bash
+docker compose \
+  --env-file /mnt/nvmer0/services/ai-stack/config/stack.env \
+  --file compose.yaml up --detach --no-build --no-deps --force-recreate \
+  companion-voice
+```
 
-Use the Tailscale MagicDNS name `dominus` for the voice service. Do not put a
-raw `100.x` address into application defaults; `VOICE_URL` remains available
-as an explicit override.
+Do not use `docker rm`, the retired Compose file, `down -v`, or a manually
+published port. The canonical service alone owns `100.107.121.5:8301`.
 
-## Post-incident
+## Failure diagnosis
 
-- If port-binding bug recurred, file ticket to investigate dominus Docker
-  networking (root cause unknown — known recurring issue).
-- Run `make health` to confirm full stack.
+| Result | Meaning | Action |
+| --- | --- | --- |
+| Game marker exists | GPU services were quiesced for a game | Wait for the game to exit |
+| Container is absent or exited | Canonical service failed to start | Inspect Compose logs, then recreate as above |
+| CUDA OOM on first TTS request | Another GPU workload is resident | Let it finish or unload it through its supported API |
+| Health works; TTS returns 401 | Missing or stale `VOICE_API_TOKEN` | Restore the rotated matching token on client and server |
+| Port 8301 is already in use | A legacy/manual voice container is competing | Identify it with `ss -lntp`; do not delete until ownership is confirmed |
+| Model or reference WAV is missing | Immutable release is incomplete | Re-run model-release verification; do not download in the container |
 
-## Related
+## Verification
 
-- ADR-0007: Voice on dominus only (RTX 3090 + CUDA)
-- `feedback_dominus_voice_port.md`
-- `docker-compose.voice.yml` (on dominus)
+1. Confirm `GET http://100.107.121.5:8301/health` returns `status: ok` and
+   `lazy_loading: true` without loading XTTS.
+2. Send one authenticated `/tts` request and verify audio playback.
+3. Call authenticated `POST /unload` and confirm XTTS GPU memory is released.
+4. Send a Klukai chat turn and verify the core-to-voice handoff succeeds.
+
+All access is through Tailscale (`100.107.121.5` or
+`dominus-nobara.tail9bdca.ts.net`). The host port is bound only to the
+Tailscale address. TTS, STT, and unload endpoints require the rotated bearer
+token; `/health` is intentionally model-free.
+
+The complete stack procedure is in `ops/dominus-nobara/RUNBOOK.md`.

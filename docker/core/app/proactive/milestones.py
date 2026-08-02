@@ -345,7 +345,7 @@ class MilestonesMixin(_EngineBase):
                     config = LLMConfig(
                         provider="lmstudio",
                         model="cognitivecomputations_dolphin-mistral-24b-venice-edition",
-                        base_url=os.environ.get("LM_STUDIO_URL", "http://dominus:1234"),
+                        base_url=os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234"),
                         temperature=0.85,
                         max_tokens=400,
                     )

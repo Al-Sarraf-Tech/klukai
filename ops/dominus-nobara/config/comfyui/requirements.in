@@ -1,0 +1,38 @@
+# Direct dependencies for ComfyUI v0.29.2 (commit
+# 322122449c9d2ba8b8df1bb517364527dd0615f1).  This mirrors that release's
+# requirements.txt while pinning the CUDA-capable PyTorch family explicitly.
+comfyui-frontend-package==1.47.11
+comfyui-workflow-templates==0.11.20
+comfyui-embedded-docs==0.5.9
+torch==2.7.1
+torchvision==0.22.1
+torchaudio==2.7.1
+torchsde
+numpy>=1.25.0
+einops
+transformers>=4.50.3
+tokenizers>=0.13.3
+sentencepiece
+safetensors>=0.4.2
+aiohttp>=3.11.8
+yarl>=1.18.0
+pyyaml
+Pillow
+scipy
+tqdm
+psutil
+alembic
+SQLAlchemy>=2.0.0
+filelock
+av>=16.0.0
+comfy-kitchen==0.2.22
+comfy-aimdo==0.4.10
+requests
+simpleeval>=1.0.0
+blake3
+kornia>=0.7.1
+spandrel
+pydantic~=2.0
+pydantic-settings~=2.0
+PyOpenGL>=3.1.8
+comfy-angle

@@ -10,6 +10,13 @@ import uuid
 
 import httpx
 
+from app.gpu_lease import (
+    GPULease,
+    GPULeaseError,
+    gpu_lease,
+    gpu_lease_auth_headers,
+)
+
 # Constants extracted to image_gen_constants.py (S+ Phase 2 file-size hygiene).
 # Imported here and re-exported for backward compat with callers that still
 # `from app.image_gen import <CONSTANT>` (helpers.py, tests, etc.).
@@ -68,6 +75,7 @@ __all__ = [
     "build_prompt",
     "check_comfyui_ready",
     "detect_squad_members",
+    "free_comfyui_vram",
     "generate_image",
     "is_couple_scene",
     "is_landscape",
@@ -77,17 +85,34 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://dominus:8388")
+COMFYUI_URL = os.environ.get(
+    "COMFYUI_URL", "http://100.107.121.5:1234/api/v1/comfy"
+).rstrip("/")
 
 
 _http: httpx.AsyncClient | None = None
-_image_gen_lock = asyncio.Semaphore(1)  # Only one image gen at a time — prevents GPU overload
+_image_gen_lock = asyncio.Semaphore(
+    1
+)  # Only one image gen at a time — prevents GPU overload
+
+# The gateway lease is fixed at 600 seconds and its clock starts while the
+# gateway is still quiescing llama.cpp/native vLLM.  Cap Comfy work at eight
+# minutes, leaving two minutes for acquisition drain time, interrupt/model
+# cleanup, authenticated release, and scheduler jitter.
+_IMAGE_LEASE_WORK_SECONDS = 8 * 60
 
 
 def _get_http() -> httpx.AsyncClient:
     global _http
     if _http is None or _http.is_closed:
-        _http = httpx.AsyncClient(timeout=180.0)
+        # Both bearer auth and the lease capability are sent per request.
+        # Never let ambient proxies or redirects move them off the literal
+        # Tailscale gateway route.
+        _http = httpx.AsyncClient(
+            timeout=180.0,
+            trust_env=False,
+            follow_redirects=False,
+        )
     return _http
 
 
@@ -97,16 +122,12 @@ def _get_http() -> httpx.AsyncClient:
 # Scene-appropriate outfits — matched by keyword in conversation context
 
 
-
-
-
 # Squad member detection for multi-character scenes
 # Rich visual profiles — weapon designation IS the character identity
 # Lore-accurate squad visual profiles — sourced from Danbooru tags, IOP Wiki, official art
 # Each T-Doll's weapon designation IS their identity
 
 # ── Mission-aware image generation ────────────────────────────────────────
-
 
 
 def detect_squad_members(text: str) -> list[str]:
@@ -141,7 +162,9 @@ def build_mission_prompt(
 
     # Add injury tags to Klukai if she's hurt
     if injuries and "klukai_injured" in injuries:
-        parts.append("bandaged arm, torn sleeve, blood stains, determined expression, still commanding")
+        parts.append(
+            "bandaged arm, torn sleeve, blood stains, determined expression, still commanding"
+        )
 
     # Add squad members
     if squad_members:
@@ -165,8 +188,8 @@ def build_mission_prompt(
 
     return ", ".join(parts)
 
-# Situational context tags — detect what's happening in the conversation
 
+# Situational context tags — detect what's happening in the conversation
 
 
 # NoobAI-XL (Illustrious) + Klukai IL LoRA workflow
@@ -187,8 +210,11 @@ def needs_image(message: str) -> bool:
 def is_couple_scene(text: str) -> bool:
     """Detect if the request is for a scene with both Klukai and the Commander."""
     import re
+
     lower = text.lower()
-    return any(re.search(r'\b' + re.escape(kw) + r'\b', lower) for kw in COUPLE_KEYWORDS)
+    return any(
+        re.search(r"\b" + re.escape(kw) + r"\b", lower) for kw in COUPLE_KEYWORDS
+    )
 
 
 def is_landscape(text: str) -> bool:
@@ -271,10 +297,14 @@ def build_prompt(
     if costume and costume in OUTFIT_COSTUME_TAGS:
         klukai_outfit = OUTFIT_COSTUME_TAGS[costume]
     else:
-        klukai_outfit = _select_outfit(outfit_context, OUTFIT_MAP, KLUKAI_DEFAULT_OUTFIT)
+        klukai_outfit = _select_outfit(
+            outfit_context, OUTFIT_MAP, KLUKAI_DEFAULT_OUTFIT
+        )
 
     if couple:
-        commander_outfit = _select_outfit(outfit_context, COMMANDER_OUTFIT_MAP, COMMANDER_DEFAULT_OUTFIT)
+        commander_outfit = _select_outfit(
+            outfit_context, COMMANDER_OUTFIT_MAP, COMMANDER_DEFAULT_OUTFIT
+        )
         parts.append(COUPLE_TAGS)
         parts.append(f"{COMMANDER_IDENTITY}, {commander_outfit}")
         parts.append(KLUKAI_IDENTITY)
@@ -296,47 +326,103 @@ def build_prompt(
 
 
 async def check_comfyui_ready() -> bool:
-    """Check if ComfyUI is reachable and has the queue clear."""
-    try:
-        client = _get_http()
-        r = await client.get(f"{COMFYUI_URL}/queue", timeout=5.0)
-        if r.status_code != 200:
-            return False
-        data = r.json()
-        running = len(data.get("queue_running", []))
-        pending = len(data.get("queue_pending", []))
-        if running > 0 or pending > 0:
-            logger.info("ComfyUI busy: %d running, %d pending", running, pending)
-            return False
-        return True
-    except Exception:
-        return False
+    """Check ComfyUI's queue only while holding its exclusive GPU lease.
+
+    This remains as a compatibility helper for callers that explicitly need a
+    queue probe.  Normal image generation performs its own work under one
+    continuous lease and does not use a separate preflight lease.
+    """
+    from .llm_router import get_lm_gate
+
+    async with _image_gen_lock:
+        async with get_lm_gate():
+            try:
+                async with gpu_lease("comfyui") as lease:
+                    client = _get_http()
+                    response = await client.get(
+                        f"{COMFYUI_URL}/queue",
+                        headers=gpu_lease_auth_headers(lease),
+                        timeout=5.0,
+                    )
+                    if response.status_code != 200:
+                        return False
+                    data = response.json()
+                    running = len(data.get("queue_running", []))
+                    pending = len(data.get("queue_pending", []))
+                    if running > 0 or pending > 0:
+                        logger.info(
+                            "ComfyUI busy: %d running, %d pending", running, pending
+                        )
+                        return False
+                    return True
+            except (GPULeaseError, httpx.HTTPError, TypeError, ValueError):
+                return False
 
 
-async def _interrupt_comfyui() -> None:
+async def _interrupt_comfyui(lease: GPULease) -> bool:
     """Interrupt the current ComfyUI generation."""
     try:
         client = _get_http()
-        await client.post(f"{COMFYUI_URL}/interrupt", timeout=5.0)
-        logger.info("ComfyUI generation interrupted")
-        await asyncio.sleep(1)  # Let it settle
-    except Exception as e:
-        logger.warning("ComfyUI interrupt failed: %s", e)
-
-
-async def _free_comfyui_vram() -> None:
-    """Unload ComfyUI models from VRAM after generation to free space for LM Studio."""
-    try:
-        await asyncio.sleep(2)  # Let ComfyUI finish post-processing before unloading
-        client = _get_http()
-        await client.post(
-            f"{COMFYUI_URL}/free",
-            json={"unload_models": True, "free_memory": True},
+        response = await client.post(
+            f"{COMFYUI_URL}/interrupt",
+            headers=gpu_lease_auth_headers(lease),
             timeout=5.0,
         )
-        logger.info("ComfyUI VRAM freed after image generation")
+        if response.status_code != 200:
+            logger.warning("ComfyUI interrupt returned HTTP %s", response.status_code)
+            return False
+        logger.info("ComfyUI generation interrupted")
+        await asyncio.sleep(1)  # Let it settle
+        return True
     except Exception as e:
-        logger.warning("ComfyUI VRAM free failed: %s", e)
+        logger.warning("ComfyUI interrupt failed: %s", e)
+        return False
+
+
+async def _free_comfyui_vram(lease: GPULease) -> bool:
+    """Unload ComfyUI weights, retrying before the gateway lease is released."""
+    await asyncio.sleep(2)  # Let ComfyUI finish post-processing before unloading
+    client = _get_http()
+    for attempt in range(1, 4):
+        try:
+            response = await client.post(
+                f"{COMFYUI_URL}/free",
+                headers=gpu_lease_auth_headers(lease),
+                json={"unload_models": True, "free_memory": True},
+                timeout=5.0,
+            )
+            if response.status_code == 200:
+                logger.info("ComfyUI VRAM freed after image generation")
+                return True
+            logger.warning(
+                "ComfyUI VRAM free returned HTTP %s (attempt %d/3)",
+                response.status_code,
+                attempt,
+            )
+        except Exception as exc:
+            logger.warning(
+                "ComfyUI VRAM free failed (%s, attempt %d/3)",
+                type(exc).__name__,
+                attempt,
+            )
+        if attempt < 3:
+            await asyncio.sleep(1)
+    logger.error("ComfyUI VRAM could not be confirmed free after three attempts")
+    return False
+
+
+async def free_comfyui_vram() -> bool:
+    """Safely release stale Comfy weights under an authenticated GPU lease."""
+    from .llm_router import get_lm_gate
+
+    async with _image_gen_lock:
+        async with get_lm_gate():
+            try:
+                async with gpu_lease("comfyui") as lease:
+                    return await _free_comfyui_vram(lease)
+            except GPULeaseError as exc:
+                logger.warning("ComfyUI cleanup GPU handoff refused: %s", exc)
+                return False
 
 
 async def generate_image(
@@ -345,27 +431,76 @@ async def generate_image(
     height: int = 1216,
     retry: bool = True,
 ) -> bytes | None:
-    """Generate an image via ComfyUI. Semaphore ensures one at a time."""
+    """Generate under an exclusive gateway lease, one image at a time.
+
+    The shared LM gate drains Klukai's own local-LLM calls.  The authenticated
+    gateway lease then drains external inference, unloads llama.cpp, and keeps
+    all model loads blocked for the complete ComfyUI operation.
+    """
     async with _image_gen_lock:
-        return await _generate_image_inner(prompt, width, height, retry)
+        # Lazy import avoids coupling image prompt helpers to the LLM router at
+        # module import time.
+        from .llm_router import get_lm_gate
+
+        async with get_lm_gate():
+            try:
+                async with gpu_lease("comfyui") as lease:
+                    try:
+                        async with asyncio.timeout(_IMAGE_LEASE_WORK_SECONDS):
+                            return await _generate_image_inner(
+                                prompt, width, height, retry, lease
+                            )
+                    except TimeoutError:
+                        logger.error(
+                            "Image generation exceeded the bounded GPU lease window"
+                        )
+                        # A timed-out Comfy job may still be executing.  Stop it
+                        # and release its weights before the lease can be returned.
+                        interrupted = await _interrupt_comfyui(lease)
+                        cleaned = await _free_comfyui_vram(lease)
+                        if not interrupted or not cleaned:
+                            # The gateway release endpoint is the final cleanup
+                            # authority and must retain a fail-closed marker if
+                            # it cannot prove quiescence.  Still reject the job
+                            # locally rather than treating failed cleanup as
+                            # success.
+                            raise GPULeaseError(
+                                "ComfyUI timeout cleanup could not be confirmed"
+                            ) from None
+                        return None
+            except GPULeaseError as exc:
+                # The exception is intentionally credential-free.
+                logger.warning("Image GPU handoff refused: %s", exc)
+                return None
 
 
 async def _generate_image_inner(
-    prompt: str, width: int, height: int, retry: bool,
+    prompt: str,
+    width: int,
+    height: int,
+    retry: bool,
+    lease: GPULease,
 ) -> bytes | None:
     try:
-        result = await _try_generate(prompt, width, height)
+        result = await _try_generate(prompt, width, height, lease)
         if result is None and retry:
             logger.info("Image generation retry — interrupting stale job and retrying")
-            await _interrupt_comfyui()
-            result = await _try_generate(prompt, width, height)
+            if not await _interrupt_comfyui(lease):
+                raise GPULeaseError("ComfyUI retry interrupt could not be confirmed")
+            result = await _try_generate(prompt, width, height, lease)
         return result
     finally:
         # Always free VRAM after gen so LM Studio can reclaim it
-        await _free_comfyui_vram()
+        if not await _free_comfyui_vram(lease):
+            raise GPULeaseError("ComfyUI VRAM cleanup could not be confirmed")
 
 
-async def _try_generate(prompt: str, width: int, height: int) -> bytes | None:
+async def _try_generate(
+    prompt: str,
+    width: int,
+    height: int,
+    lease: GPULease,
+) -> bytes | None:
     """Single attempt at image generation."""
     workflow = json.loads(json.dumps(WORKFLOW_TEMPLATE))
 
@@ -378,6 +513,7 @@ async def _try_generate(prompt: str, width: int, height: int) -> bytes | None:
         client = _get_http()
         r = await client.post(
             f"{COMFYUI_URL}/prompt",
+            headers=gpu_lease_auth_headers(lease),
             json={"prompt": workflow},
         )
         if r.status_code != 200:
@@ -391,7 +527,10 @@ async def _try_generate(prompt: str, width: int, height: int) -> bytes | None:
         # Poll for completion (up to 300s — first gen after model load can be slow)
         for _ in range(300):
             await asyncio.sleep(1)
-            r = await client.get(f"{COMFYUI_URL}/history/{prompt_id}")
+            r = await client.get(
+                f"{COMFYUI_URL}/history/{prompt_id}",
+                headers=gpu_lease_auth_headers(lease),
+            )
             if r.status_code == 200:
                 history = r.json()
                 if prompt_id in history:
@@ -402,6 +541,7 @@ async def _try_generate(prompt: str, width: int, height: int) -> bytes | None:
                             img = images[0]
                             r2 = await client.get(
                                 f"{COMFYUI_URL}/view",
+                                headers=gpu_lease_auth_headers(lease),
                                 params={
                                     "filename": img["filename"],
                                     "subfolder": img.get("subfolder", ""),
@@ -409,7 +549,11 @@ async def _try_generate(prompt: str, width: int, height: int) -> bytes | None:
                                 },
                             )
                             if r2.status_code == 200:
-                                logger.info("Image generated: %s (%d bytes)", img["filename"], len(r2.content))
+                                logger.info(
+                                    "Image generated: %s (%d bytes)",
+                                    img["filename"],
+                                    len(r2.content),
+                                )
                                 return r2.content
                     return None
 

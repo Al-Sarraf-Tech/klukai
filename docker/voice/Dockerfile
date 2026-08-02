@@ -1,33 +1,25 @@
-FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
+FROM python:3.11.13-slim-bookworm@sha256:cec9aa7aa96eea4fa036e9b82be1e6b325f2e3707f462d885868df51ec0a4b47
 
 WORKDIR /app
 
-# Install Python 3.11 (Coqui TTS requires <3.12)
+# Runtime libraries used by Coqui, faster-whisper, and the healthcheck.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common curl ffmpeg libsndfile1 \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3.11-dev \
+    curl ffmpeg libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create venv with Python 3.11
-RUN python3.11 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Install PyTorch with CUDA
-RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu126
-
-# Install Coqui TTS (includes XTTS v2)
-# Pin transformers<4.46 to avoid BeamSearchScorer removal
-RUN pip install --no-cache-dir "transformers<4.46" "torchaudio<2.6" soundfile && pip install --no-cache-dir TTS
+# The old image resolved these dynamically. Pin the known-compatible CUDA
+# wheel pair and XTTS dependency set so rebuilding does not silently change
+# the voice. CUDA wheels carry their userspace libraries; the Nobara host only
+# needs the NVIDIA driver + container toolkit.
+RUN python -m pip install --no-cache-dir \
+      torch==2.5.1+cu124 torchaudio==2.5.1+cu124 \
+      --index-url https://download.pytorch.org/whl/cu124 \
+    && python -m pip install --no-cache-dir \
+      TTS==0.22.0 transformers==4.45.2 soundfile==0.12.1
 
 # Install remaining deps
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Keep Piper as fallback
-RUN pip install --no-cache-dir piper-tts || true
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
 # Auto-accept Coqui TTS license + allow unsafe model loading (needed for XTTS checkpoints)
 ENV COQUI_TOS_AGREED=1
@@ -38,11 +30,17 @@ COPY reference/ ./reference/
 
 # Run as a non-root user. Pre-create the dirs it writes to: /app/models
 # (whisper download target) and the HOME caches XTTS/HF/torch use.
-RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin voice \
-    && mkdir -p /app/models /home/voice/.cache /home/voice/.local/share/tts \
-    && chown -R voice:voice /app /home/voice
-USER voice
-ENV HOME=/home/voice
+RUN groupadd --gid 10001 voiceapp \
+    && useradd --create-home --uid 10001 --gid voiceapp \
+       --shell /usr/sbin/nologin voiceapp \
+    && mkdir -p /app/models/tts /app/models/cache /app/models/huggingface \
+       /home/voiceapp/.cache /home/voiceapp/.local/share/tts \
+    && chown -R voiceapp:voiceapp /app /home/voiceapp
+USER voiceapp
+ENV HOME=/home/voiceapp
+ENV TTS_HOME=/app/models/tts
+ENV HF_HOME=/app/models/huggingface
+ENV XDG_CACHE_HOME=/app/models/cache
 
 EXPOSE 8301
 

@@ -5,7 +5,7 @@ The task brief referenced ``app/voice_client.py``. That module does NOT exist
 in this repo (nor anywhere in git history across all branches); the only entry
 for it is a stale ``omit =`` line in ``.coveragerc``. The actual voice shim —
 STT then TTS round-trip to the dominus voice service at ``$VOICE_URL`` (default
-http://dominus:8301 over Tailscale) — lives in ``app.chat._handle_voice``. Per the
+http://100.107.121.5:8301 over Tailscale) — lives in ``app.chat._handle_voice``. Per the
 task rules I must not create ``app/`` code to invent the module, so this file
 tests the REAL shim that ships.
 
@@ -31,6 +31,9 @@ import pytest
 
 from app.chat import _handle_voice
 from app.models import SessionState
+
+
+pytestmark = pytest.mark.usefixtures("mock_voice_gpu_lease")
 
 
 def _routing_client(stt_text: str, tts_status: int = 200, tts_bytes: bytes = b"audio"):
