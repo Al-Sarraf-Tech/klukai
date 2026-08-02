@@ -216,6 +216,120 @@ class EnsureBackendStartedTests(unittest.IsolatedAsyncioTestCase):
             await proxy.ensure_backend_started()
         record_activity.assert_called_once()
 
+    async def test_lease_block_skips_hard_stop_when_backend_already_inactive(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            proxy,
+            "gpu_lease_block",
+            return_value=proxy.ServiceUnavailable("gpu_leased", "leased to comfyui"),
+        ), mock.patch.object(
+            proxy, "_backend_active", return_value=False
+        ), mock.patch.object(proxy, "_hard_stop_backend") as hard_stop:
+            with self.assertRaises(proxy.ServiceUnavailable) as caught:
+                await proxy.ensure_backend_started()
+            self.assertEqual(caught.exception.code, "gpu_leased")
+            hard_stop.assert_not_called()
+
+    async def test_backend_exiting_during_cold_start_is_reported(self) -> None:
+        with mock.patch.object(
+            proxy, "gpu_lease_block", return_value=None
+        ), mock.patch.object(
+            proxy, "_backend_reachable", return_value=False
+        ), mock.patch.object(
+            proxy, "_run_vram_preflight", return_value=True
+        ), mock.patch.object(
+            proxy, "_run_systemctl", return_value=0
+        ), mock.patch.object(proxy, "_backend_active", return_value=False):
+            with self.assertRaises(proxy.ServiceUnavailable) as caught:
+                await proxy.ensure_backend_started()
+            self.assertEqual(caught.exception.code, "start_failed")
+            self.assertIn("exited during cold start", str(caught.exception))
+
+    async def test_game_marker_appearing_mid_cold_start_hard_stops_and_blocks(
+        self,
+    ) -> None:
+        def reachable() -> bool:
+            # Simulate the marker appearing between polling iterations.
+            proxy.GAME_MARKER.touch()
+            return False
+
+        with mock.patch.object(
+            proxy, "gpu_lease_block", return_value=None
+        ), mock.patch.object(
+            proxy, "_backend_reachable", side_effect=reachable
+        ), mock.patch.object(
+            proxy, "_run_vram_preflight", return_value=True
+        ), mock.patch.object(
+            proxy, "_run_systemctl", return_value=0
+        ), mock.patch.object(
+            proxy, "_backend_active", return_value=True
+        ), mock.patch.object(
+            proxy, "_hard_stop_backend", return_value=None
+        ) as hard_stop, mock.patch.object(proxy.asyncio, "sleep", return_value=None):
+            with self.assertRaises(proxy.ServiceUnavailable) as caught:
+                await proxy.ensure_backend_started()
+            self.assertEqual(caught.exception.code, "game_active")
+            hard_stop.assert_called_once()
+
+    async def test_gpu_lease_appearing_mid_cold_start_hard_stops_and_blocks(
+        self,
+    ) -> None:
+        calls = {"n": 0}
+
+        def lease_block() -> object | None:
+            calls["n"] += 1
+            # Calls 1-2 are the pre-loop check and the first iteration's
+            # check; the lease appears only starting from the third call.
+            if calls["n"] <= 2:
+                return None
+            return proxy.ServiceUnavailable("gpu_leased", "leased to comfyui")
+
+        with mock.patch.object(
+            proxy, "gpu_lease_block", side_effect=lease_block
+        ), mock.patch.object(
+            proxy, "_backend_reachable", return_value=False
+        ), mock.patch.object(
+            proxy, "_run_vram_preflight", return_value=True
+        ), mock.patch.object(
+            proxy, "_run_systemctl", return_value=0
+        ), mock.patch.object(
+            proxy, "_backend_active", return_value=True
+        ), mock.patch.object(
+            proxy, "_hard_stop_backend", return_value=None
+        ) as hard_stop, mock.patch.object(proxy.asyncio, "sleep", return_value=None):
+            with self.assertRaises(proxy.ServiceUnavailable) as caught:
+                await proxy.ensure_backend_started()
+            self.assertEqual(caught.exception.code, "gpu_leased")
+            hard_stop.assert_called_once()
+
+    async def test_cold_start_timeout_hard_stops_and_reports_start_timeout(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            proxy, "gpu_lease_block", return_value=None
+        ), mock.patch.object(
+            proxy, "_backend_reachable", return_value=False
+        ), mock.patch.object(
+            proxy, "_run_vram_preflight", return_value=True
+        ), mock.patch.object(
+            proxy, "_run_systemctl", return_value=0
+        ), mock.patch.object(
+            proxy, "_backend_active", return_value=True
+        ), mock.patch.object(
+            proxy, "_hard_stop_backend", return_value=None
+        ) as hard_stop, mock.patch.object(
+            proxy.asyncio, "sleep", return_value=None
+        ), mock.patch.object(
+            proxy.time, "monotonic", side_effect=[0.0, 1.0, 100.0]
+        ):
+            with self.assertRaises(proxy.ServiceUnavailable) as caught:
+                await proxy.ensure_backend_started()
+            self.assertEqual(caught.exception.code, "start_timeout")
+            hard_stop.assert_called_once_with(
+                "75-second cold-start deadline exceeded"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
