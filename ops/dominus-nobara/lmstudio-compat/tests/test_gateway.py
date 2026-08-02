@@ -13,6 +13,7 @@ import httpx
 from fastapi.testclient import TestClient
 import pytest
 
+from gateway import main as gateway_main
 from gateway.main import create_app
 from gateway.settings import Settings
 
@@ -602,6 +603,85 @@ def test_gpu_lease_quiesces_router_blocks_load_and_releases_without_token_leak(
     assert idempotent_release.json() == {"status": "released", "was_active": False}
     assert not lease_marker.exists()
     assert inference_after.status_code == 200
+
+
+class SlowUnloadRouter:
+    """llama.cpp frees VRAM after /models/unload returns, not within the same
+    call — the next few residency polls can still report the outgoing model
+    before it actually clears."""
+
+    def __init__(self, *, clears_after_polls: int) -> None:
+        self.calls: list[str] = []
+        self._loaded = True
+        self._unload_requested = False
+        self._polls_since_unload = 0
+        self._clears_after_polls = clears_after_polls
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.calls.append(request.url.path)
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/models/unload":
+            self._unload_requested = True
+            return httpx.Response(200, json={"success": True})
+        if request.url.path == "/models":
+            if self._unload_requested:
+                self._polls_since_unload += 1
+                if self._polls_since_unload > self._clears_after_polls:
+                    self._loaded = False
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "chat-router-preset",
+                            "status": {
+                                "value": "loaded" if self._loaded else "unloaded"
+                            },
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(200, json={"ok": True})
+
+
+def test_gpu_lease_acquire_polls_router_quiescence_before_failing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gateway_main, "ROUTER_UNLOAD_POLL_SECONDS", 0.01)
+    router = SlowUnloadRouter(clears_after_polls=2)
+    app, _ = make_app(tmp_path, router, gateway_token="client-secret")
+    auth = {"Authorization": "Bearer client-secret"}
+
+    with TestClient(app) as client:
+        acquired = client.post(
+            "/api/v1/gpu/lease/acquire",
+            headers=auth,
+            json={"owner": "klukai-core", "workload": "comfyui", "ttl_seconds": 600},
+        )
+
+    assert acquired.status_code == 201
+    assert acquired.json()["status"] == "acquired"
+
+
+def test_gpu_lease_acquire_fails_if_router_never_quiesces_within_the_drain_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gateway_main, "ROUTER_UNLOAD_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(gateway_main, "ROUTER_UNLOAD_DRAIN_SECONDS", 0.05)
+    router = SlowUnloadRouter(clears_after_polls=10_000)
+    app, _ = make_app(tmp_path, router, gateway_token="client-secret")
+    auth = {"Authorization": "Bearer client-secret"}
+
+    with TestClient(app) as client:
+        acquired = client.post(
+            "/api/v1/gpu/lease/acquire",
+            headers=auth,
+            json={"owner": "klukai-core", "workload": "comfyui", "ttl_seconds": 600},
+        )
+
+    assert acquired.status_code == 503
+    assert acquired.json()["error"]["code"] == "router_not_quiesced"
 
 
 def test_gpu_lease_survives_restart_and_expiry_cleans_before_marker_removal(

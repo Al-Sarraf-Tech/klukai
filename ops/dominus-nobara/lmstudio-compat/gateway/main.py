@@ -39,6 +39,11 @@ LEASE_ACQUIRE_COORDINATION_WAIT_SECONDS = 30.0
 LEASE_RELEASE_COORDINATION_WAIT_SECONDS = 10.0
 LEASE_ROUTER_REQUEST_SECONDS = 5.0
 LEASE_ROUTER_QUIESCE_SECONDS = 20.0
+# llama.cpp's /models/unload frees VRAM after the call returns, not within it;
+# an immediate re-check can still observe the outgoing model. Poll instead of
+# failing on the first sample, the same way the Comfy queue drain does below.
+ROUTER_UNLOAD_DRAIN_SECONDS = 8.0
+ROUTER_UNLOAD_POLL_SECONDS = 0.2
 LEASE_EXPIRY_POLL_SECONDS = 0.5
 LEASE_CLEANUP_RETRY_SECONDS = 5.0
 COMFY_QUEUE_DRAIN_SECONDS = 10.0
@@ -399,17 +404,21 @@ async def _quiesce_router_within_deadline(
             return response
         if response.is_error:
             return _upstream_failure(response)
-    remaining = await _resident_router_models(client, catalog, timeout_seconds)
-    if isinstance(remaining, Response):
-        return remaining
-    if remaining:
-        return _error(
-            503,
-            "llama.cpp still has a resident model after unload",
-            "unavailable_error",
-            "router_not_quiesced",
-        )
-    return None
+    deadline = time.monotonic() + ROUTER_UNLOAD_DRAIN_SECONDS
+    while True:
+        remaining = await _resident_router_models(client, catalog, timeout_seconds)
+        if isinstance(remaining, Response):
+            return remaining
+        if not remaining:
+            return None
+        if time.monotonic() >= deadline:
+            return _error(
+                503,
+                "llama.cpp still has a resident model after unload",
+                "unavailable_error",
+                "router_not_quiesced",
+            )
+        await asyncio.sleep(ROUTER_UNLOAD_POLL_SECONDS)
 
 
 async def _quiesce_router(
