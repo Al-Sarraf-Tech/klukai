@@ -213,6 +213,54 @@ def test_health_is_public_but_catalog_requires_configured_token(tmp_path: Path) 
     assert authorized.status_code == 200
 
 
+def test_tailnet_source_ip_bypasses_bearer_token(tmp_path: Path) -> None:
+    app, _ = make_app(tmp_path, default_handler, gateway_token="correct-token")
+    with TestClient(app, client=("100.111.198.19", 51820)) as client:
+        no_token = client.get("/api/v0/models")
+
+    assert no_token.status_code == 200
+
+
+def test_docker_proxy_loopback_source_bypasses_bearer_token(tmp_path: Path) -> None:
+    # docker-proxy relays the Tailscale-bound published port through
+    # loopback, so 127.0.0.1 is what a real tailnet peer's request looks
+    # like in practice — see the comment on _from_tailnet in gateway/main.py.
+    app, _ = make_app(tmp_path, default_handler, gateway_token="correct-token")
+    with TestClient(app, client=("127.0.0.1", 51820)) as client:
+        no_token = client.get("/api/v0/models")
+
+    assert no_token.status_code == 200
+
+
+def test_docker_proxy_gateway_source_bypasses_bearer_token(tmp_path: Path) -> None:
+    # The actual behavior observed in production: docker-proxy relays the
+    # published port from the dominus-ai-publish network's gateway address,
+    # not loopback. See the comment on _from_tailnet in gateway/main.py.
+    app, _ = make_app(tmp_path, default_handler, gateway_token="correct-token")
+    with TestClient(app, client=("172.19.0.1", 51820)) as client:
+        no_token = client.get("/api/v0/models")
+
+    assert no_token.status_code == 200
+
+
+def test_sibling_container_source_ip_still_requires_bearer_token(
+    tmp_path: Path,
+) -> None:
+    app, _ = make_app(tmp_path, default_handler, gateway_token="correct-token")
+    with TestClient(app, client=("172.19.0.4", 51820)) as client:
+        no_token = client.get("/api/v0/models")
+
+    assert no_token.status_code == 401
+
+
+def test_non_tailnet_source_ip_still_requires_bearer_token(tmp_path: Path) -> None:
+    app, _ = make_app(tmp_path, default_handler, gateway_token="correct-token")
+    with TestClient(app, client=("203.0.113.5", 51820)) as client:
+        no_token = client.get("/api/v0/models")
+
+    assert no_token.status_code == 401
+
+
 def test_catalog_shapes_merge_router_state_and_metadata(tmp_path: Path) -> None:
     app, _ = make_app(tmp_path, default_handler)
     with TestClient(app) as client:

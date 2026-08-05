@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
+import ipaddress
 import json
 import logging
 import secrets
@@ -86,6 +87,42 @@ def _error(status: int, message: str, error_type: str, code: str | int) -> JSONR
                 "type": error_type,
             }
         },
+    )
+
+
+# This container's published port is bound only to the host's Tailscale
+# address (`docker-proxy -host-ip 100.107.121.5 -host-port 1234 ...`).
+# Docker's userland-proxy relays that connection into the container by
+# opening its own connection from the host, sourced from the
+# `dominus-ai-publish` network's gateway (172.19.0.1 — confirmed via
+# tcpdump inside the container's netns, `docker network inspect
+# dominus-ai-publish` for the IPAM gateway). A request from that specific
+# address can only be docker-proxy relaying something that arrived on the
+# Tailscale-bound port (itself gated by Tailscale's own device auth to
+# join the tailnet) — sibling containers on this network reach each other
+# with their own container IPs (172.19.0.3+), never the gateway address,
+# so they're unaffected and still need the real token. If
+# `dominus-ai-publish` is ever recreated with a different subnet, this
+# constant needs updating to match. Also accept 127.0.0.1 and the tailnet
+# CGNAT range directly, in case userland-proxy is disabled or the deploy
+# topology changes so the real source IP (or loopback) is seen instead.
+_TAILNET_RANGE = ipaddress.ip_network("100.64.0.0/10")
+_DOCKER_PROXY_LOOPBACK = ipaddress.ip_address("127.0.0.1")
+_DOCKER_PROXY_GATEWAY = ipaddress.ip_address("172.19.0.1")
+
+
+def _from_tailnet(request: Request) -> bool:
+    client = request.client
+    if client is None:
+        return False
+    try:
+        host = ipaddress.ip_address(client.host)
+    except ValueError:
+        return False
+    return (
+        host == _DOCKER_PROXY_LOOPBACK
+        or host == _DOCKER_PROXY_GATEWAY
+        or host in _TAILNET_RANGE
     )
 
 
@@ -688,7 +725,11 @@ def create_app(
 
     @application.middleware("http")
     async def bearer_authentication(request: Request, call_next: Any) -> Response:
-        if request.url.path == "/health" or _authorized(request, config.gateway_token):
+        if (
+            request.url.path == "/health"
+            or _from_tailnet(request)
+            or _authorized(request, config.gateway_token)
+        ):
             return await call_next(request)
         response = _error(
             401,
