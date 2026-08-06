@@ -57,23 +57,26 @@ def get_affection_level_config(p: dict, level: int) -> dict:
 def get_speech_patterns(p: dict, level: int) -> dict:
     """Get speech pattern config for the given affection level.
 
-    Levels 0-4 have distinct speech patterns. Levels 5-9 use "bonded"
-    since the speech differences at high affection are modulated by
-    the affection prompt_modifier, not by separate speech configs.
+    Aligns speech keys with the emotional progression of affection.levels:
+      0        → cold          (Cold Assessment)
+      1–2      → professional  (Acknowledged / Professional Respect)
+      3–4      → trusted       (Guarded Interest / Trusted Ally)
+      5–6      → devoted       (Unguarded / Deep Devotion)
+      7–9      → bonded        (Vulnerable / Bonded / Oath Fulfilled)
 
-    NOTE: see `feedback_speech_routing_bug.md` — historical bug where
-    levels 5-9 silently defaulted to "cold" because the if-ladder
-    didn't handle the high-level case. Any future routing changes
-    here MUST preserve the "all levels >=4 use bonded" rule.
+    Constraint from `feedback_speech_routing_bug.md`: levels 5–9 MUST never
+    fall back to cold. This ladder preserves that (devoted/bonded only).
+    Graphic intimacy lives in the bonded tone and is gated further in
+    `build_speech_guidelines` to affection_level >= 8.
     """
     if level <= 0:
         key = "level_0_cold"
-    elif level == 1:
+    elif level <= 2:
         key = "level_1_professional"
-    elif level == 2:
+    elif level <= 4:
         key = "level_2_trusted"
-    elif level == 3:
+    elif level <= 6:
         key = "level_3_devoted"
     else:
-        key = "level_4_bonded"  # Levels 4-9 all use bonded speech
+        key = "level_4_bonded"
     return p.get("speech_patterns", {}).get(key, {})

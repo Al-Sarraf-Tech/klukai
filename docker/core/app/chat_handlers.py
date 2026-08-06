@@ -231,6 +231,35 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         crown_jewel=crown_jewel,
     )
 
+    # Presence / absence coloring (return gap + streak) — fail-soft.
+    try:
+        from datetime import date as _date, datetime as _dt
+
+        from .personality import build_presence_block
+        from .proactive.state import now_local
+
+        hours_away = None
+        lid = getattr(aff_state, "last_interaction_date", None)
+        if lid is not None:
+            now = now_local()
+            if isinstance(lid, _date) and not isinstance(lid, _dt):
+                # Date-only: approximate gap in hours from calendar day delta.
+                hours_away = float((now.date() - lid).days * 24)
+            else:
+                lid_naive = lid.replace(tzinfo=None) if getattr(lid, "tzinfo", None) else lid
+                now_naive = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
+                hours_away = max(0.0, (now_naive - lid_naive).total_seconds() / 3600.0)
+        presence = build_presence_block(
+            hours_away=hours_away,
+            affection_level=aff_state.level,
+            consecutive_days=getattr(aff_state, "consecutive_days", 0) or 0,
+        )
+        if presence:
+            system_prompt = system_prompt + "\n\n" + presence
+    except Exception as e:
+        logger.debug("Presence block skipped: %s", e)
+
+
     # Memory nudge — proactive past reference based on affection level
     nudge = await memory.get_memory_nudge(session.turn_count, aff_state.level, user_id=user_id)
     if nudge:

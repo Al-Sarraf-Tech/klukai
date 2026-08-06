@@ -81,24 +81,55 @@ class TestLoader:
         result = loader.get_speech_patterns(p, 0)
         assert result["name"] == "Cold"
 
-    def test_get_speech_patterns_levels_5_through_9_use_bonded(self):
-        # Per feedback_speech_routing_bug.md: levels 5-9 MUST use bonded
-        p = {"speech_patterns": {"level_4_bonded": {"name": "Bonded"}}}
-        for level in range(4, 10):
+    def test_get_speech_patterns_levels_7_through_9_use_bonded(self):
+        p = {"speech_patterns": {
+            "level_3_devoted": {"name": "Devoted"},
+            "level_4_bonded": {"name": "Bonded"},
+        }}
+        for level in range(7, 10):
             result = loader.get_speech_patterns(p, level)
             assert result["name"] == "Bonded", f"level {level} should use bonded"
 
+    def test_get_speech_patterns_levels_5_6_use_devoted_not_cold(self):
+        # feedback_speech_routing_bug.md: levels 5-9 MUST NEVER default to cold.
+        p = {"speech_patterns": {
+            "level_0_cold": {"name": "Cold"},
+            "level_3_devoted": {"name": "Devoted"},
+            "level_4_bonded": {"name": "Bonded"},
+        }}
+        for level in (5, 6):
+            result = loader.get_speech_patterns(p, level)
+            assert result["name"] == "Devoted"
+            assert result["name"] != "Cold"
+
+    def test_get_speech_patterns_aligned_bands(self):
+        p = {"speech_patterns": {
+            "level_0_cold": {"name": "cold"},
+            "level_1_professional": {"name": "pro"},
+            "level_2_trusted": {"name": "trusted"},
+            "level_3_devoted": {"name": "devoted"},
+            "level_4_bonded": {"name": "bonded"},
+        }}
+        expected = {
+            0: "cold", 1: "pro", 2: "pro",
+            3: "trusted", 4: "trusted",
+            5: "devoted", 6: "devoted",
+            7: "bonded", 8: "bonded", 9: "bonded",
+        }
+        for lvl, name in expected.items():
+            assert loader.get_speech_patterns(p, lvl)["name"] == name
+
     def test_get_speech_patterns_each_low_level_distinct(self):
-        # Levels 0-3 have distinct keys
         p = {"speech_patterns": {
             "level_0_cold": {"name": "lvl_0"},
             "level_1_professional": {"name": "lvl_1"},
             "level_2_trusted": {"name": "lvl_2"},
             "level_3_devoted": {"name": "lvl_3"},
         }}
-        for i in range(4):
-            result = loader.get_speech_patterns(p, i)
-            assert result["name"] == f"lvl_{i}"
+        assert loader.get_speech_patterns(p, 0)["name"] == "lvl_0"
+        assert loader.get_speech_patterns(p, 1)["name"] == "lvl_1"
+        assert loader.get_speech_patterns(p, 3)["name"] == "lvl_2"
+        assert loader.get_speech_patterns(p, 5)["name"] == "lvl_3"
 
     def test_get_speech_patterns_missing_returns_empty(self):
         result = loader.get_speech_patterns({}, 0)

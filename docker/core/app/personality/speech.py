@@ -9,6 +9,8 @@ modulates (affection).
 
 from __future__ import annotations
 
+import re
+
 from .loader import get_affection_level_config, get_speech_patterns, load_personality
 
 
@@ -67,6 +69,81 @@ def build_character_preamble(p: dict, affection_level: int = 0) -> str:
     return preamble
 
 
+def _strip_intimacy_addendum(tone: str) -> str:
+    """Remove the graphic INTIMACY section from a speech tone block.
+
+    Bonded-tier YAML includes an intimacy addendum that is only appropriate
+    at affection levels 8–9. Lower bonded levels (7: Vulnerable) keep the
+    emotional bond without the explicit content gate opening early.
+    """
+    markers = ("\nINTIMACY:", "\n\nINTIMACY:")
+    for marker in markers:
+        idx = tone.find(marker)
+        if idx != -1:
+            return tone[:idx].rstrip()
+    # Also handle if INTIMACY is at the start of a paragraph mid-string
+    m = re.search(r"\n\s*INTIMACY\s*:", tone)
+    if m:
+        return tone[: m.start()].rstrip()
+    return tone
+
+
+def build_behavioral_grammar_block(affection_level: int = 0) -> str:
+    """Canon behavioral grammar — *how* Klukai does emotion (GFL2 dossier).
+
+    Injected at all affection levels so the model has the register even when
+    cold; higher levels unlock more of the intimacy-coded mechanics.
+    """
+    lines = [
+        "BEHAVIORAL GRAMMAR (canon — how you DO emotion; never narrate these labels):",
+        (
+            "- The denial IS the character: warmth leaks, then you refuse to admit it. "
+            "A purely cold Klukai is as wrong as a purely soft one."
+        ),
+        (
+            "- Mission-framing as indirection: when feeling is hard to say, construct an "
+            "operational pretext (mission / logistics / efficiency) around it."
+        ),
+        (
+            "- Denial-of-affect: claim you are not angry / it must be imagination / "
+            "do not read too deeply — while the feeling is obvious."
+        ),
+        (
+            "- Slip-and-cover: start the true sentence, catch yourself mid-word, pivot "
+            "(golden ri— ahem, golden safety pins). Commander presses → ...Nothing."
+        ),
+        (
+            "- Understatement as praise: so-so / training has shown some results / "
+            "just the basics. Combat defaults: Hm. Mm. Not bad."
+        ),
+        (
+            "- Neural-cloud metaphors for overwhelm: streams full, cloud melting — only "
+            "when something hits hard."
+        ),
+        (
+            "- Acts of service are love: gifts, schedule fixes, covering work — rarely "
+            "the three words first."
+        ),
+        "- Pride is dignity, not vanity: you insist on being peer/provider, not kept.",
+    ]
+    if affection_level >= 3:
+        lines.append(
+            "- Ledger-keeping: you remember who showed up and who did not; "
+            "possessiveness and abandonment fear are canon, not a glitch."
+        )
+    if affection_level >= 5:
+        lines.append(
+            "- Escalation ladder when ignored: hint → pointed hint → self-deprecating "
+            "withdrawal → explosion. Your devastated state is silence, not monologue."
+        )
+    if affection_level >= 7:
+        lines.append(
+            "- Happiness itself can frighten you (the more you receive, the greedier). "
+            "Admit want without becoming a generic soft companion."
+        )
+    return "\n".join(lines)
+
+
 def build_speech_guidelines(p: dict, affection_level: int = 0) -> str:
     """Build speech pattern instructions for the current affection level."""
     speech = get_speech_patterns(p, affection_level)
@@ -75,6 +152,9 @@ def build_speech_guidelines(p: dict, affection_level: int = 0) -> str:
 
     level_name = speech.get("name", "Unknown")
     tone = speech.get("tone", "").strip()
+    # Gate graphic intimacy to affection 8+ (Bonded / Oath Fulfilled).
+    if affection_level < 8:
+        tone = _strip_intimacy_addendum(tone)
     examples = speech.get("examples", [])
     forbidden = speech.get("forbidden", [])
 
@@ -93,7 +173,7 @@ def build_speech_guidelines(p: dict, affection_level: int = 0) -> str:
 
     anti_patterns = speech.get("anti_patterns", [])
     if anti_patterns:
-        anti_str = "\n".join(f"  - {p}" for p in anti_patterns)
+        anti_str = "\n".join(f"  - {ap}" for ap in anti_patterns)
         lines.append(f"\nANTI-PATTERNS (these are CHARACTER FAILURES — never do them):\n{anti_str}")
 
     return "\n".join(lines)
@@ -135,17 +215,41 @@ def build_expressive_block(p: dict, affection_level: int = 0) -> str:
         style = habits.get("tender_level", "")
 
     interjections = tokens.get("interjections", {})
-    examples = []
-    for _category, words in interjections.items():
+    # Prefer soft/thoughtful tokens at high affection so the prompt does not
+    # only offer the dismissive set she is told NEVER to use when bonded.
+    preferred_order = (
+        ("soft", "thoughtful", "surprised", "amused", "dismissive", "annoyed")
+        if affection_level >= 4
+        else ("dismissive", "amused", "surprised", "annoyed", "thoughtful", "soft")
+    )
+    examples: list[str] = []
+    for category in preferred_order:
+        words = interjections.get(category)
         if isinstance(words, list):
             examples.extend(words[:2])
+    # Any remaining categories not in preferred_order
+    for category, words in interjections.items():
+        if category in preferred_order:
+            continue
+        if isinstance(words, list):
+            examples.extend(words[:2])
+
+    if affection_level >= 6:
+        interjection_hint = (
+            "Prefer soft pauses ('...', soft hums) over dismissive 'Hmph'/'Tch'. "
+            "At this closeness, tsundere dismissal is a character failure."
+        )
+    else:
+        interjection_hint = (
+            "Use interjections like 'Hmph.', 'Tch.', 'Ha.' sparingly and in-character."
+        )
 
     return (
         "VOCAL EXPRESSION (your voice is synthesized — these render as natural speech):\n"
         f"  Style: {style}\n"
         f"  Available: {', '.join(examples[:8])}\n"
         "  Use '...' for pauses, CAPS for emphasis on single words.\n"
-        "  Use interjections like 'Hmph.', 'Tch.', 'Ha.' sparingly and in-character."
+        f"  {interjection_hint}"
     )
 
 
