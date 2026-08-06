@@ -9,6 +9,7 @@ persisted as a kept Precious Memory tagged ``her_pov``.
 from __future__ import annotations
 
 import asyncio
+import os
 import base64
 import logging
 import random
@@ -43,11 +44,68 @@ def _now_iso() -> str:
 
 
 async def get_job(job_id: str) -> dict[str, Any] | None:
+    """Return a public job view. Memory first, then Postgres.
+
+    Postgres is the durable source of truth after a worker restart; the
+    in-process board is a hot cache for the running pipeline and unit tests.
+    """
     async with _JOBS_LOCK:
         job = _JOBS.get(job_id)
-        if not job:
+        if job:
+            return {k: v for k, v in job.items() if not k.startswith("_")}
+    return await _load_job_from_db(job_id)
+
+
+async def _load_job_from_db(job_id: str) -> dict[str, Any] | None:
+    try:
+        uuid.UUID(str(job_id))
+    except (ValueError, AttributeError, TypeError):
+        return None
+    try:
+        from .db import get_pool
+        get_pool()  # raises if not initialized
+    except Exception:
+        return None
+    try:
+        from .db import get_conn
+        async with get_conn() as conn:
+            row = await (await conn.execute(
+                "SELECT id, user_id, status, phase, message, error, title, "
+                "annotation, mood, memory_id, has_image, exchange_preview, "
+                "created_at, updated_at "
+                "FROM companion_her_pov_jobs WHERE id = %s",
+                (job_id,),
+            )).fetchone()
+        if not row:
             return None
-        return {k: v for k, v in job.items() if not k.startswith("_")}
+        preview = row[11]
+        if isinstance(preview, str):
+            import json as _json
+            try:
+                preview = _json.loads(preview)
+            except Exception:
+                pass
+        def _iso(v):
+            return v.isoformat() if v is not None and hasattr(v, "isoformat") else v
+        return {
+            "id": str(row[0]),
+            "user_id": row[1],
+            "status": row[2],
+            "phase": row[3],
+            "message": row[4],
+            "error": row[5],
+            "title": row[6],
+            "annotation": row[7],
+            "mood": row[8],
+            "memory_id": row[9],
+            "has_image": bool(row[10]),
+            "exchange_preview": preview,
+            "created_at": _iso(row[12]),
+            "updated_at": _iso(row[13]),
+        }
+    except Exception as e:
+        logger.debug("her_pov load from db failed: %s", e)
+        return None
 
 
 def _prune_jobs_locked(now: float | None = None) -> None:
@@ -77,6 +135,70 @@ async def _set_job(job_id: str, **fields: Any) -> None:
         job["updated_at"] = _now_iso()
         job["_touched"] = time.monotonic()
         _prune_jobs_locked()
+        snapshot = {k: v for k, v in job.items() if not k.startswith("_")}
+    await _persist_job(job_id, snapshot)
+
+
+async def _persist_job(job_id: str, snapshot: dict[str, Any]) -> None:
+    """Best-effort write-through to Postgres. Never fails the pipeline."""
+    try:
+        from .db import get_pool
+        get_pool()
+    except Exception:
+        return
+    try:
+        import json as _json
+        from .db import get_conn_autocommit
+
+        status = snapshot.get("status") or "queued"
+        phase = snapshot.get("phase") or status
+        terminal = status in ("done", "failed")
+        preview = snapshot.get("exchange_preview")
+        preview_json = _json.dumps(preview) if preview is not None else None
+        async with get_conn_autocommit() as conn:
+            await conn.execute(
+                "INSERT INTO companion_her_pov_jobs "
+                "(id, user_id, status, phase, message, error, title, annotation, "
+                " mood, memory_id, has_image, exchange_preview, created_at, updated_at, "
+                " finished_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, "
+                "        COALESCE(%s::timestamptz, NOW()), NOW(), "
+                "        CASE WHEN %s THEN NOW() ELSE NULL END) "
+                "ON CONFLICT (id) DO UPDATE SET "
+                " status = EXCLUDED.status, "
+                " phase = EXCLUDED.phase, "
+                " message = EXCLUDED.message, "
+                " error = EXCLUDED.error, "
+                " title = COALESCE(EXCLUDED.title, companion_her_pov_jobs.title), "
+                " annotation = COALESCE(EXCLUDED.annotation, companion_her_pov_jobs.annotation), "
+                " mood = COALESCE(EXCLUDED.mood, companion_her_pov_jobs.mood), "
+                " memory_id = COALESCE(EXCLUDED.memory_id, companion_her_pov_jobs.memory_id), "
+                " has_image = EXCLUDED.has_image OR companion_her_pov_jobs.has_image, "
+                " exchange_preview = COALESCE(EXCLUDED.exchange_preview, "
+                "                             companion_her_pov_jobs.exchange_preview), "
+                " updated_at = NOW(), "
+                " finished_at = CASE WHEN %s THEN COALESCE(companion_her_pov_jobs.finished_at, NOW()) "
+                "                    ELSE companion_her_pov_jobs.finished_at END",
+                (
+                    job_id,
+                    snapshot.get("user_id") or "",
+                    status,
+                    phase,
+                    snapshot.get("message"),
+                    snapshot.get("error"),
+                    snapshot.get("title"),
+                    snapshot.get("annotation"),
+                    snapshot.get("mood"),
+                    snapshot.get("memory_id"),
+                    bool(snapshot.get("has_image")),
+                    preview_json,
+                    snapshot.get("created_at"),
+                    terminal,
+                    terminal,
+                ),
+            )
+    except Exception as e:
+        logger.debug("her_pov persist failed: %s", e)
 
 
 def _is_trivial(text: str) -> bool:
@@ -454,13 +576,67 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
                 _ACTIVE_JOB_BY_USER.pop(user_id, None)
 
 
+def _execution_mode() -> str:
+    """inline (default, unit tests) or queue (production durable rail)."""
+    return (os.environ.get("HER_POV_EXECUTION") or "inline").strip().lower()
+
+
+async def _enqueue_job(job_id: str) -> bool:
+    """Ask the events-bridge to park this job on the durable work queue."""
+    try:
+        from . import events
+        await events.publish(
+            "job.enqueue",
+            data=job_id,
+            domain="job",
+            kind="her_pov",
+            job_id=job_id,
+        )
+        return True
+    except Exception as e:
+        logger.warning("her_pov enqueue failed for %s: %s", job_id, e)
+        return False
+
+
+async def _claim_active_from_db(user_id: str) -> dict[str, Any] | None:
+    """Return an existing non-terminal DB job for this user, if any."""
+    try:
+        from .db import get_pool
+        get_pool()
+    except Exception:
+        return None
+    try:
+        from .db import get_conn
+        async with get_conn() as conn:
+            row = await (await conn.execute(
+                "SELECT id, status FROM companion_her_pov_jobs "
+                "WHERE user_id = %s AND status NOT IN ('done', 'failed') "
+                "ORDER BY created_at DESC LIMIT 1",
+                (user_id,),
+            )).fetchone()
+        if not row:
+            return None
+        return {"job_id": str(row[0]), "status": row[1], "reused": True}
+    except Exception as e:
+        logger.debug("her_pov db claim lookup failed: %s", e)
+        return None
+
+
 async def start_her_pov(user_id: str) -> dict[str, Any]:
     """Start a her-POV job if the user isn't already running one.
 
-    One in-flight job per user. The claim is the dict entry itself, taken under
-    the lock before the task is spawned, so a double-tapped CTA can never buy a
-    second LLM call and a second GPU render.
+    One in-flight job per user. The claim is taken under the lock (and under a
+    partial unique index in Postgres) before any work is scheduled, so a
+    double-tapped CTA can never buy a second LLM call and a second GPU render.
+
+    Production (`HER_POV_EXECUTION=queue`) only enqueues the job id onto the
+    durable `klukai.jobs.her_pov` rail — the events-bridge consumer (prefetch=1)
+    is the GPU lease. Unit tests and local dev keep the inline asyncio path.
     """
+    existing = await _claim_active_from_db(user_id)
+    if existing:
+        return existing
+
     job_id = str(uuid.uuid4())
     async with _JOBS_LOCK:
         running = _ACTIVE_JOB_BY_USER.get(user_id)
@@ -473,20 +649,41 @@ async def start_her_pov(user_id: str) -> dict[str, Any]:
             }
         _ACTIVE_JOB_BY_USER[user_id] = job_id
 
-    await _set_job(
-        job_id,
-        user_id=user_id,
-        status="queued",
-        phase="queued",
-        message="Standing by…",
-        created_at=_now_iso(),
-    )
-    # fire-and-forget
+    try:
+        await _set_job(
+            job_id,
+            user_id=user_id,
+            status="queued",
+            phase="queued",
+            message="Standing by…",
+            created_at=_now_iso(),
+        )
+    except Exception:
+        async with _JOBS_LOCK:
+            if _ACTIVE_JOB_BY_USER.get(user_id) == job_id:
+                _ACTIVE_JOB_BY_USER.pop(user_id, None)
+        raise
+
+    mode = _execution_mode()
+    if mode == "queue":
+        armed = await _enqueue_job(job_id)
+        if not armed:
+            # Fail-soft: run inline so a bridge outage never strands the CTA.
+            logger.warning(
+                "her_pov queue arm failed; falling back to inline for %s", job_id
+            )
+            return await _start_inline(user_id, job_id)
+        return {"job_id": job_id, "status": "queued", "reused": False}
+
+    return await _start_inline(user_id, job_id)
+
+
+async def _start_inline(user_id: str, job_id: str) -> dict[str, Any]:
+    """Legacy path: spawn the pipeline as an in-process asyncio task."""
     from .context import ws as _ws
     try:
         task = asyncio.create_task(run_her_pov(user_id, job_id))
     except Exception:
-        # Never strand the claim if the task could not be scheduled.
         async with _JOBS_LOCK:
             if _ACTIVE_JOB_BY_USER.get(user_id) == job_id:
                 _ACTIVE_JOB_BY_USER.pop(user_id, None)
@@ -496,3 +693,61 @@ async def start_her_pov(user_id: str) -> dict[str, Any]:
     except Exception:
         pass
     return {"job_id": job_id, "status": "queued", "reused": False}
+
+
+async def run_job_from_queue(job_id: str) -> bool:
+    """Worker entry: claim a queued job and run the pipeline.
+
+    Called by the internal HTTP hook the events-bridge hits. Returns True when
+    the job is finished or gone (bridge should ack), False only when the bridge
+    should requeue (claim failed transiently).
+    """
+    try:
+        uuid.UUID(str(job_id))
+    except (ValueError, AttributeError, TypeError):
+        logger.warning("her_pov worker ignoring malformed id %r", job_id)
+        return True  # poison: do not redeliver forever
+
+    user_id: str | None = None
+    try:
+        from .db import get_conn_autocommit
+        async with get_conn_autocommit() as conn:
+            row = await (await conn.execute(
+                "UPDATE companion_her_pov_jobs "
+                "SET status = 'searching', phase = 'searching', "
+                "    claimed_at = NOW(), attempts = attempts + 1, "
+                "    updated_at = NOW() "
+                "WHERE id = %s AND status IN "
+                "  ('queued', 'searching', 'thinking', 'drawing') "
+                "RETURNING user_id",
+                (job_id,),
+            )).fetchone()
+        if not row:
+            # Already terminal or unknown — bridge should ack.
+            return True
+        user_id = row[0]
+    except Exception as e:
+        logger.warning("her_pov claim via db failed (%s); trying memory", e)
+        async with _JOBS_LOCK:
+            job = _JOBS.get(job_id)
+            if not job:
+                return True
+            user_id = job.get("user_id")
+            if job.get("status") in ("done", "failed"):
+                return True
+
+    if not user_id:
+        return True
+
+    async with _JOBS_LOCK:
+        _ACTIVE_JOB_BY_USER[user_id] = job_id
+        job = _JOBS.setdefault(job_id, {"id": job_id, "user_id": user_id})
+        job.setdefault("user_id", user_id)
+        job["status"] = "searching"
+        job["phase"] = "searching"
+        job["_touched"] = time.monotonic()
+
+    # Do NOT track on the WS manager: a disconnect must not cancel a durable
+    # GPU render that the Commander already paid for with the CTA.
+    await run_her_pov(user_id, job_id)
+    return True

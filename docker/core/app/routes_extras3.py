@@ -474,3 +474,31 @@ def register_extras3(app: FastAPI) -> None:
         # 200 either way: "already delivered" is a success from the bridge's
         # point of view, and must not make it redeliver forever.
         return {"task_id": task_id, "fired": fired}
+
+    @app.post("/internal/jobs/her-pov/run")
+    async def api_her_pov_run(request: Request):
+        """Run a durable Her POV job to completion.
+
+        Called by the events-bridge while it holds the unacked queue message
+        (prefetch=1 = GPU lease). Same shared-secret gate as deferred/fire.
+        Blocks until the pipeline is terminal so the bridge can ack safely.
+        """
+        import os
+
+        expected = os.environ.get("CORE_INTERNAL_TOKEN", "")
+        presented = request.headers.get("X-Internal-Token", "")
+        if not expected or not secrets.compare_digest(presented, expected):
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+        job_id = str((body or {}).get("job_id") or "")
+        if not job_id:
+            return JSONResponse({"error": "job_id required"}, status_code=400)
+
+        from . import memory_her_pov
+        ok = await memory_her_pov.run_job_from_queue(job_id)
+        return {"job_id": job_id, "ok": ok}

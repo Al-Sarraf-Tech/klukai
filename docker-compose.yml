@@ -18,6 +18,9 @@ services:
       # Shared secret for /internal/deferred/fire (events-bridge -> core).
       # Fails closed: unset means the endpoint rejects everyone.
       CORE_INTERNAL_TOKEN: "${CORE_INTERNAL_TOKEN:-}"
+      # queue = durable RabbitMQ work rail (prefetch=1 GPU lease via bridge).
+      # inline = in-process asyncio task (unit tests / bridge outage fallback).
+      HER_POV_EXECUTION: "${HER_POV_EXECUTION:-queue}"
       QDRANT_URL: "http://aichat-vector:6333"
       MCP_URL: "http://aichat-mcp:8096"
       DATA_URL: "http://aichat-data:8091"
