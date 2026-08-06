@@ -65,6 +65,46 @@ from app.reflect_helpers import (  # noqa: F401,E402
 REFLECTION_MIN_HOURS_AWAY = 8
 REFLECTION_MAX_HOURS_AWAY = 72
 
+# The Commander's message for this turn is already persisted by the time the
+# system prompt is built, so ignore the last minute when measuring the gap.
+_PRESENCE_IGNORE_SECONDS = 60
+
+
+async def _hours_since_last_exchange(user_id: str) -> float | None:
+    """Hours since the Commander and Klukai last actually talked.
+
+    Reads real message timestamps — the same source the return-greeting uses —
+    so the system prompt and the greeting can't disagree about how long he was
+    gone. Her own proactive check-ins are excluded: they would otherwise make
+    the gap look shorter than it was. Returns None if the gap can't be
+    determined, so the caller can fall back.
+    """
+    try:
+        from datetime import datetime, timezone
+
+        from .db import get_conn
+
+        async with get_conn() as conn:
+            row = await (await conn.execute(
+                # make_interval, not a quoted interval literal: psycopg3 does
+                # not bind placeholders inside string literals, and that form
+                # has silently broken queries here before (see
+                # tests/test_sql_bind_guard.py).
+                "SELECT MAX(created_at) FROM companion_messages "
+                "WHERE user_id = %s AND COALESCE(model, '') <> 'proactive' "
+                "AND created_at < NOW() - make_interval(secs => %s)",
+                (user_id, _PRESENCE_IGNORE_SECONDS),
+            )).fetchone()
+        if not row or not row[0]:
+            return None
+        last = row[0]
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        gap = (datetime.now(timezone.utc) - last).total_seconds() / 3600.0
+        return max(0.0, gap)
+    except Exception as e:
+        logger.debug("Presence gap lookup failed: %s", e)
+        return None
 
 
 async def _handle_message(content: str, session: SessionState, user_id: str = "default") -> None:
@@ -238,12 +278,16 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         from .personality import build_presence_block
         from .proactive.state import now_local
 
-        hours_away = None
+        # Prefer real message timestamps. `last_interaction_date` is a DATE
+        # column, so deriving the gap from it always lands on a multiple of 24 —
+        # an overnight 10h absence read as a full day, and disagreed with the
+        # return-greeting, which measures the same gap from actual timestamps.
+        hours_away = await _hours_since_last_exchange(user_id)
         lid = getattr(aff_state, "last_interaction_date", None)
-        if lid is not None:
+        if hours_away is None and lid is not None:
             now = now_local()
             if isinstance(lid, _date) and not isinstance(lid, _dt):
-                # Date-only: approximate gap in hours from calendar day delta.
+                # Date-only fallback: approximate from the calendar day delta.
                 hours_away = float((now.date() - lid).days * 24)
             else:
                 lid_naive = lid.replace(tzinfo=None) if getattr(lid, "tzinfo", None) else lid
