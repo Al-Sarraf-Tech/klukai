@@ -43,7 +43,7 @@ async def _handle_tap_interact(user_id: str) -> None:
         await proactive.trigger_tap()
     else:
         # Fallback: send a simple acknowledgment if proactive can't send
-        await ws.send_proactive(user_id, "Hm? Right here, Commander.")
+        await ws.send_proactive(user_id, "Hm? Right here, Commander.", persist=False)
 
 
 
@@ -71,6 +71,7 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
                     user_id,
                     "...Voice link garbled, Commander — I couldn't make out the transmission. "
                     "Try again or switch to text.",
+                    persist=False,
                 )
                 return
 
@@ -78,6 +79,7 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
                 await ws.send_proactive(
                     user_id,
                     "...I heard nothing on the channel, Commander. Try again, closer to the mic.",
+                    persist=False,
                 )
                 return
 
@@ -107,12 +109,14 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
                                 user_id,
                                 "...The voice synth is offline, Commander — "
                                 "I'm reading you in text instead.",
+                                persist=False,
                             )
                     except Exception as tts_err:
                         logger.error("TTS failed: %s", tts_err)
                         await ws.send_proactive(
                             user_id,
                             "...Voice synth dropped, Commander — text reply only.",
+                            persist=False,
                         )
     except Exception as e:
         logger.error("Voice processing failed: %s", e, exc_info=True)
@@ -120,6 +124,7 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
             await ws.send_proactive(
                 user_id,
                 "...Voice channel broke entirely, Commander. Switching to text.",
+                persist=False,
             )
         except Exception:
             pass

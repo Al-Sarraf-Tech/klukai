@@ -115,14 +115,23 @@ class WSManager:
     async def send_mood(self, user_id: str, mood: str) -> None:
         await self.send(user_id, {"type": "mood", "mood": mood})
 
-    async def send_proactive(self, user_id: str, message: str) -> None:
-        """Deliver a proactive line over WS and persist it to chat history.
+    async def send_proactive(
+        self, user_id: str, message: str, *, persist: bool = True
+    ) -> None:
+        """Deliver a proactive line over WS, optionally persisting it to history.
 
         Persistence is best-effort and fail-soft: a DB blip must never prevent
-        the live push. Stored as role=assistant / model=proactive so offline
-        Commanders still see check-ins, dreams, and level-up lines in history.
+        the live push. Stored as role=assistant / model=proactive so Commanders
+        still see check-ins, dreams, and level-up lines in history.
+
+        Pass ``persist=False`` for transient UX toasts — "voice link garbled",
+        "rendering pipeline broke", and friends. Chat history is SACRED and
+        append-only, so an infrastructure hiccup written into it is permanent
+        and would also be replayed back to the model as context.
         """
         await self.send(user_id, {"type": "proactive", "message": message})
+        if not persist:
+            return
         try:
             await self._persist_proactive(user_id, message)
         except Exception as e:
@@ -153,6 +162,13 @@ class WSManager:
                 "(conversation_id, role, content, model, user_id, content_type) "
                 "VALUES (%s, 'assistant', %s, 'proactive', %s, 'proactive')",
                 (conv_id, message, user_id),
+            )
+            # Mirror helpers.store_message so turn_count keeps matching the
+            # actual row count — anything reading it would otherwise drift.
+            await conn.execute(
+                "UPDATE companion_conversations "
+                "SET turn_count = turn_count + 1 WHERE id = %s",
+                (conv_id,),
             )
             await conn.commit()
 

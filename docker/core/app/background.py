@@ -455,7 +455,7 @@ async def background_image_gen(
             await proactive.record_first(user_id, "first_image")
             await memory.record_milestone("first_image", user_id=user_id)
         else:
-            await ws.send_proactive(user_id, "...Visualization failed. Interference in the rendering pipeline. I'll try again later.")
+            await ws.send_proactive(user_id, "...Visualization failed. Interference in the rendering pipeline. I'll try again later.", persist=False)
             await ws.send(user_id, {"type": "thinking", "content": ""})  # clear thinking bubble
     except Exception as e:
         logger.error("Background image gen failed: %s", e, exc_info=True)
@@ -466,6 +466,7 @@ async def background_image_gen(
                 user_id,
                 "...The rendering pipeline broke mid-frame, Commander. "
                 "I'll attempt the visual again later.",
+                persist=False,
             )
             await ws.send(user_id, {"type": "thinking", "content": ""})
         except Exception:
@@ -478,7 +479,7 @@ async def background_recall(content: str, session: SessionState, user_id: str) -
         aff_state = await affection.get_state(user_id)
         mem = await memory_archive.recall_memory(content, session.mood, aff_state.level, user_id=user_id)
         if not mem:
-            await ws.send_proactive(user_id, "...I searched through our records, but nothing matched. Perhaps we haven't made that memory yet, Commander.")
+            await ws.send_proactive(user_id, "...I searched through our records, but nothing matched. Perhaps we haven't made that memory yet, Commander.", persist=False)
             return
 
         # Format the memory card

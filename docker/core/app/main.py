@@ -89,8 +89,11 @@ async def generate_daily_recap(affection_level: int, user_id: str = "jalsarraf")
         async with pool.connection() as conn:
             rows = await (
                 await conn.execute(
+                    # Skip her own check-ins — recapping them back at her turns
+                    # the daily recap into an echo chamber.
                     "SELECT role, content FROM companion_messages "
                     "WHERE user_id = %s AND created_at::date = %s::date "
+                    "AND COALESCE(model, '') <> 'proactive' "
                     "ORDER BY created_at ASC LIMIT 40",
                     (user_id, today,),
                 )
