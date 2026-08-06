@@ -38,6 +38,8 @@ RABBIT_USER = os.environ.get("RABBIT_USER", "homelab")
 RABBIT_PASS = os.environ["RABBIT_PASS"]
 EXCHANGE = os.environ.get("RABBIT_EXCHANGE", "homelab.events")
 LOCAL_HOSTNAME = os.environ.get("LOCAL_HOSTNAME", socket.gethostname().split(".")[0])
+# Heartbeat is 30s; poll well inside that so idle ticks keep the AMQP socket fed.
+POLL_TIMEOUT = float(os.environ.get("BRIDGE_POLL_TIMEOUT", "5.0"))
 
 
 def rabbit_connect():
@@ -93,6 +95,17 @@ def routing_and_body(payload: dict) -> tuple[str, dict]:
     return rk, body
 
 
+def parse_payload(raw) -> dict:
+    """Normalize a raw Redis pub/sub payload into an event dict."""
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else {}
+        if not isinstance(payload, dict):
+            payload = {"type": "unknown", "data": raw}
+    except json.JSONDecodeError:
+        payload = {"type": "raw", "data": raw}
+    return payload
+
+
 def run():
     r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
     pubsub = r.pubsub(ignore_subscribe_messages=True)
@@ -104,38 +117,61 @@ def run():
         f"amqp://{RABBIT_HOST}:{RABBIT_PORT}/{EXCHANGE} as host.{LOCAL_HOSTNAME}.*",
         flush=True,
     )
-    for message in pubsub.listen():
+    # Poll rather than block in pubsub.listen(): companion events are sparse
+    # (check-ins, GPU lease pairs), so a blocking read would starve the AMQP
+    # connection of heartbeats and the broker would drop us between events.
+    while True:
+        message = pubsub.get_message(timeout=POLL_TIMEOUT)
+        if message is None:
+            # Idle tick — service the AMQP socket so the connection stays alive.
+            try:
+                conn.process_data_events(0)
+            except Exception as exc:
+                print(f"bridge: idle heartbeat failed ({exc}), reconnecting...",
+                      flush=True)
+                conn, ch = _reconnect(conn)
+            continue
         if message.get("type") != "message":
             continue
-        raw = message.get("data") or ""
-        try:
-            payload = json.loads(raw) if isinstance(raw, str) else {}
-            if not isinstance(payload, dict):
-                payload = {"type": "unknown", "data": raw}
-        except json.JSONDecodeError:
-            payload = {"type": "raw", "data": raw}
 
+        payload = parse_payload(message.get("data") or "")
         rk, body = routing_and_body(payload)
-        try:
-            ch.basic_publish(
-                exchange=EXCHANGE,
-                routing_key=rk,
-                body=json.dumps(body, default=str),
-                properties=pika.BasicProperties(
-                    delivery_mode=2,
-                    content_type="application/json",
-                ),
-            )
-            published += 1
-            if published % 20 == 0:
-                print(f"bridge: published {published} events (last rk={rk})", flush=True)
-        except Exception as exc:
-            print(f"bridge: publish error ({exc}), reconnecting rabbit...", flush=True)
+        encoded = json.dumps(body, default=str)
+
+        # One retry across a reconnect: the publish that discovers a dead
+        # connection must not be the event we throw away.
+        for attempt in (1, 2):
             try:
-                conn.close()
-            except Exception:
-                pass
-            conn, ch = rabbit_connect()
+                ch.basic_publish(
+                    exchange=EXCHANGE,
+                    routing_key=rk,
+                    body=encoded,
+                    properties=pika.BasicProperties(
+                        delivery_mode=2,
+                        content_type="application/json",
+                    ),
+                )
+                published += 1
+                if published % 20 == 0:
+                    print(f"bridge: published {published} events (last rk={rk})",
+                          flush=True)
+                break
+            except Exception as exc:
+                if attempt == 2:
+                    print(f"bridge: dropping event after retry ({exc}) rk={rk}",
+                          flush=True)
+                    break
+                print(f"bridge: publish error ({exc}), reconnecting rabbit...",
+                      flush=True)
+                conn, ch = _reconnect(conn)
+
+
+def _reconnect(conn):
+    try:
+        conn.close()
+    except Exception:
+        pass
+    return rabbit_connect()
 
 
 if __name__ == "__main__":
