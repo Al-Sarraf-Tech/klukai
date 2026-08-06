@@ -416,8 +416,12 @@ class TestSchedulerErrorListener:
         real_add_listener = e._scheduler.add_listener
 
         def spy_add_listener(cb, mask):
-            captured["cb"] = cb
-            captured["mask"] = mask
+            # start() registers more than one listener (job-error and
+            # job-executed), so select by mask rather than taking the last.
+            from apscheduler.events import EVENT_JOB_ERROR
+            if mask & EVENT_JOB_ERROR:
+                captured["cb"] = cb
+                captured["mask"] = mask
             return real_add_listener(cb, mask)
 
         with patch.object(e._scheduler, "add_listener", side_effect=spy_add_listener):
@@ -464,7 +468,9 @@ class TestSchedulerErrorListener:
         real_add = e._scheduler.add_listener
 
         def spy(cb, mask):
-            captured["cb"] = cb
+            from apscheduler.events import EVENT_JOB_ERROR
+            if mask & EVENT_JOB_ERROR:
+                captured["cb"] = cb
             return real_add(cb, mask)
 
         with patch.object(e._scheduler, "add_listener", side_effect=spy):
@@ -497,8 +503,8 @@ class TestSchedulerErrorListener:
              patch("app.proactive.engine.logger") as log:
             e.start()
         assert log.warning.called
-        warn_msg = log.warning.call_args.args[0]
-        assert "scheduler error listener" in warn_msg
+        warnings = [c.args[0] for c in log.warning.call_args_list]
+        assert any("scheduler error listener" in w for w in warnings)
 
     def test_stop_shuts_down_scheduler_and_active_mission(self):
         e = ProactiveEngine()
