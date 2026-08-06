@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -438,3 +439,38 @@ def register_extras3(app: FastAPI) -> None:
         }
         return safe
 
+
+
+    # ── Deferred tasks: internal delivery hook ─────────────────────────────
+
+    @app.post("/internal/deferred/fire")
+    async def api_deferred_fire(request: Request):
+        """Deliver a deferred task whose timer expired.
+
+        Called by the events bridge, which owns the AMQP side of the delay rail.
+        Guarded by a shared secret rather than a user session: there is no user
+        on this path, and the endpoint can start work, so it must never be
+        reachable from the public surface. Fails closed — an unset token means
+        nobody can call it, rather than everybody.
+        """
+        import os
+
+        expected = os.environ.get("CORE_INTERNAL_TOKEN", "")
+        presented = request.headers.get("X-Internal-Token", "")
+        if not expected or not secrets.compare_digest(presented, expected):
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+        task_id = str((body or {}).get("task_id") or "")
+        if not task_id:
+            return JSONResponse({"error": "task_id required"}, status_code=400)
+
+        from . import deferred
+        fired = await deferred.fire(task_id)
+        # 200 either way: "already delivered" is a success from the bridge's
+        # point of view, and must not make it redeliver forever.
+        return {"task_id": task_id, "fired": fired}

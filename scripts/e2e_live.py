@@ -156,7 +156,6 @@ async def check_authed_read(ctx: dict[str, Any]) -> str:
         ) as r:
             if r.status != 200:
                 raise CheckFailed(f"/api/user/stats returned {r.status}")
-            stats = await r.json()
         async with s.get(
             f"{BASE_URL}/api/memories", timeout=aiohttp.ClientTimeout(total=30)
         ) as r:
@@ -399,12 +398,93 @@ async def check_anniversary_sweep(ctx: dict[str, Any]) -> str:
     return out.stdout.strip().splitlines()[-1]
 
 
+async def check_deferred_rail(ctx: dict[str, Any]) -> str:
+    """A deferred task fires through the RabbitMQ delay rail, on time.
+
+    Proves the whole loop: core persists to Postgres -> publishes `defer.arm`
+    to Redis -> the bridge parks it in a fixed-TTL bucket queue -> the TTL
+    expires and dead-letters onto the due queue -> the bridge calls core back
+    -> core claims the row and dispatches it.
+
+    Asserts the *timer* did the work, not the once-a-minute sweeper: a task
+    delivered within the bucket's own delay could not have come from a sweep.
+    """
+    delay = 10
+    code = (
+        "import asyncio, sys; sys.path.insert(0,'/app')\n"
+        "async def main():\n"
+        "    from app.db import init_pool\n"
+        "    from app import events, deferred\n"
+        "    await init_pool(min_size=1, max_size=2)\n"
+        "    await events.init()\n"
+        "    tid = await deferred.schedule(\n"
+        "        {'kind': 'message', 'text': 'e2e deferred rail probe'},\n"
+        f"        user_id='{ctx['username']}', delay_seconds={delay})\n"
+        "    print('TASK', tid)\n"
+        "    await asyncio.sleep(1)\n"
+        "asyncio.run(main())\n"
+    )
+    out = subprocess.run(
+        ["docker", "exec", "companion-core", "python3", "-c", code],
+        capture_output=True, text=True, timeout=90,
+    )
+    task_id = ""
+    for line in out.stdout.splitlines():
+        if line.startswith("TASK "):
+            task_id = line.split(None, 1)[1].strip()
+    if not task_id or task_id == "None":
+        raise CheckFailed(f"could not schedule: {(out.stderr or out.stdout)[-200:]}")
+
+    deadline = time.monotonic() + delay + 25
+    status = "pending"
+    while time.monotonic() < deadline:
+        await asyncio.sleep(2)
+        status = _psql(
+            f"SELECT status FROM companion_scheduled WHERE id = '{task_id}'"
+        )
+        if status and status != "pending":
+            break
+
+    if status != "delivered":
+        raise CheckFailed(f"task ended status={status!r} (expected delivered)")
+
+    late = _psql(
+        "SELECT EXTRACT(EPOCH FROM (delivered_at - due_at))::numeric(8,2) "
+        f"FROM companion_scheduled WHERE id = '{task_id}'"
+    )
+    lateness = float(late or 999)
+    # The sweeper runs on a 60s interval, so anything this prompt came from the
+    # rail. A generous ceiling still excludes a sweep.
+    if lateness > 30:
+        raise CheckFailed(
+            f"delivered {lateness}s late — the sweeper caught it, not the timer"
+        )
+    _psql(f"DELETE FROM companion_scheduled WHERE id = '{task_id}'")
+    return f"fired {lateness}s after due via the {delay}s bucket"
+
+
+async def check_cron_bookkeeping(ctx: dict[str, Any]) -> str:
+    """Recurring jobs record when they ran, so a restart can replay misses."""
+    rows = _psql(
+        "SELECT COUNT(*), COUNT(*) FILTER (WHERE last_fired > NOW() - INTERVAL '2 days') "
+        "FROM companion_job_runs"
+    )
+    if not rows:
+        raise CheckFailed("companion_job_runs is empty — nothing is recording runs")
+    total, recent = (rows.split("|") + ["0"])[:2]
+    if int(total or 0) == 0:
+        raise CheckFailed("no job runs recorded")
+    return f"{total} job(s) tracked, {recent} fired in the last 2 days"
+
+
 CHECKS: dict[str, Callable[[dict[str, Any]], Awaitable[str]]] = {
     "health": check_health,
     "auth-required": check_auth_required,
     "bad-token": check_bad_token_rejected,
     "authed-read": check_authed_read,
     "anniversary": check_anniversary_sweep,
+    "cron-bookkeeping": check_cron_bookkeeping,
+    "deferred": check_deferred_rail,
     "chat": check_chat_roundtrip,
     "her-pov": check_her_pov,
     "her-pov-idor": check_her_pov_idor,

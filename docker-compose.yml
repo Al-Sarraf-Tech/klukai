@@ -15,6 +15,9 @@ services:
       # aichat services on amarillo (LAN via Docker network)
       DATABASE_URL: "postgresql://aichat:${POSTGRES_PASSWORD:?}@infra-postgres:5432/aichat"
       REDIS_URL: "redis://aichat-redis:6379/1"
+      # Shared secret for /internal/deferred/fire (events-bridge -> core).
+      # Fails closed: unset means the endpoint rejects everyone.
+      CORE_INTERNAL_TOKEN: "${CORE_INTERNAL_TOKEN:-}"
       QDRANT_URL: "http://aichat-vector:6333"
       MCP_URL: "http://aichat-mcp:8096"
       DATA_URL: "http://aichat-data:8091"
@@ -101,6 +104,11 @@ services:
       RABBIT_USER: "${RABBIT_USER:-homelab}"
       RABBIT_PASS: "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required for events-bridge}"
       LOCAL_HOSTNAME: "${LOCAL_HOSTNAME:-amarillo}"
+      # Deferred-task rail: the bridge runs the timer and calls core back when
+      # a task comes due. Unset token => core rejects the callback (fail closed)
+      # and the core-side sweeper delivers instead, just less punctually.
+      CORE_URL: "${CORE_URL:-http://companion-core:8300}"
+      CORE_INTERNAL_TOKEN: "${CORE_INTERNAL_TOKEN:-}"
     deploy:
       resources:
         limits:
