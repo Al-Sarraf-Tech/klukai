@@ -255,14 +255,20 @@ def interaction_to_sentiment(interaction: dict | None) -> str | None:
         "compliment", "genuine_interest", "personal_sharing", "greeting",
         "remembering",
     }:
-        # High-intensity compliments / personal sharing pull flirty at close range
-        if t in {"compliment", "personal_sharing"} and intensity >= 8:
+        # High-intensity compliments pull flirty at close range. `personal_sharing`
+        # is deliberately excluded: its intensity measures how *heavy* the
+        # disclosure is, not how warm it is, so promoting it made her turn
+        # flustered when the Commander shared something painful.
+        if t == "compliment" and intensity >= 8:
             return "flirty"
         return "positive"
     if t in {"combative", "hostile", "angry", "rude", "negative"}:
         return "negative_heavy" if intensity >= 7 else "negative_light"
+    # Distress is NOT hostility. The Commander hurting must pull her toward
+    # protectiveness, never toward irritation — routing both down the same
+    # 'negative_heavy' path made her snap at him when he opened up.
     if t in {"sad", "hurt", "distressed", "vulnerable"}:
-        return "negative_heavy"
+        return "distress"
     # mission_discussion / neutral → no contagion
     return None
 
@@ -281,6 +287,24 @@ _MOOD_NUDGES: dict[str, dict[str, str]] = {
         "composed":  "composed",
         "playful":   "composed",
         "content":   "composed",
+    },
+    # The Commander is hurting. She drops whatever register she was in and
+    # turns toward him — protective when she was neutral, softer when she
+    # was light, worried instead of annoyed if she was already prickly.
+    "distress": {
+        "composed":  "protective",
+        "focused":   "protective",
+        "defiant":   "protective",
+        "battle_ready": "protective",
+        "playful":   "tender",
+        "amused":    "tender",
+        "flustered": "tender",
+        "content":   "tender",
+        "quietly_pleased": "tender",
+        "affectionate": "tender",
+        "irritated": "worried",
+        "exasperated": "worried",
+        "bored":     "worried",
     },
     "positive":    {
         "cold":      "composed",  # legacy / invalid cold label warms toward composed

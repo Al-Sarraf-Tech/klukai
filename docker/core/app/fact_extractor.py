@@ -66,6 +66,12 @@ mission_discussion, remembering, neutral, flirty, playful, tender, warm, affecti
 combative, hostile, angry, rude, sad, hurt, distressed, vulnerable
 IMPORTANT: Short/casual messages are NEVER "rude". Only explicit hostility is "rude".
 "I love you" is a compliment (intensity 8-10) OR tender/warm (intensity 8-10), NOT neutral.
+IMPORTANT: If the Commander says he is struggling, in pain, grieving, exhausted, \
+lonely, scared, or "not okay" — even briefly, flatly, or while insisting he does not \
+want to talk about it — classify it as "sad", "hurt", "distressed" or "vulnerable". \
+Never "neutral", and never "genuine_interest". Understatement is how he reports pain; \
+read the content, not the tone. Bereavement, illness, and "I can't sleep / I feel \
+alone / I don't know what to do" are distress. Intensity 7-10 for loss or despair.
 
 facts: Relationship facts worth long-term storage as {{"key","value"}} string pairs. \
 Examples: {{"key":"favorite_drink","value":"black coffee"}}, {{"key":"callsign","value":"Wolf"}}. \
