@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="720" viewBox="0 0 1100 720">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e3a5f"/>
+      <stop offset="100%" stop-color="#0f2744"/>
+    </linearGradient>
+    <linearGradient id="gpu" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b1d4a"/>
+      <stop offset="100%" stop-color="#1f0f2e"/>
+    </linearGradient>
+    <linearGradient id="mesh" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#94a3b8"/>
+    </marker>
+    <marker id="arrowC" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#22d3ee"/>
+    </marker>
+  </defs>
+  <rect width="1100" height="720" fill="url(#bg)"/>
+  <text x="550" y="42" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="22" font-weight="700">Klukai — Two-Host Topology</text>
+  <text x="550" y="68" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">Public edge · app core · private mesh · GPU sidecar  ·  IPs redacted</text>
+
+  <!-- Public edge -->
+  <rect x="390" y="95" width="320" height="70" rx="12" fill="#0f172a" stroke="#334155" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="550" y="125" text-anchor="middle" fill="#38bdf8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600">Public edge</text>
+  <text x="550" y="148" text-anchor="middle" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Cloudflare TLS  →  nginx gateway  →  /app PWA</text>
+
+  <line x1="550" y1="165" x2="550" y2="200" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Core host -->
+  <rect x="40" y="200" width="520" height="460" rx="16" fill="url(#core)" stroke="#38bdf8" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="300" y="230" text-anchor="middle" fill="#7dd3fc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="700">CORE HOST</text>
+  <text x="300" y="250" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">CPU · RAM · state · ingress</text>
+
+  <rect x="60" y="270" width="480" height="70" rx="10" fill="#0c1a2e" stroke="#475569"/>
+  <text x="300" y="298" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600">companion-core</text>
+  <text x="300" y="320" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">FastAPI · WebSocket chat · Her POV · proactive · local-only LLM router</text>
+
+  <rect x="60" y="360" width="148" height="58" rx="8" fill="#0c1a2e" stroke="#475569"/>
+  <text x="134" y="385" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">PostgreSQL</text>
+  <text x="134" y="403" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">messages · jobs</text>
+
+  <rect x="226" y="360" width="148" height="58" rx="8" fill="#0c1a2e" stroke="#475569"/>
+  <text x="300" y="385" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">Redis</text>
+  <text x="300" y="403" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">session · events</text>
+
+  <rect x="392" y="360" width="148" height="58" rx="8" fill="#0c1a2e" stroke="#475569"/>
+  <text x="466" y="385" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">Qdrant</text>
+  <text x="466" y="403" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">episodic recall</text>
+
+  <rect x="60" y="440" width="230" height="70" rx="10" fill="#0c1a2e" stroke="#a78bfa"/>
+  <text x="175" y="468" text-anchor="middle" fill="#e9d5ff" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">events-bridge</text>
+  <text x="175" y="488" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">Redis → AMQP · job queue · delay rail</text>
+
+  <rect x="310" y="440" width="230" height="70" rx="10" fill="#0c1a2e" stroke="#34d399"/>
+  <text x="425" y="468" text-anchor="middle" fill="#a7f3d0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">RabbitMQ bus</text>
+  <text x="425" y="488" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">homelab.events · klukai.jobs · defer</text>
+
+  <rect x="60" y="535" width="480" height="50" rx="10" fill="#0c1a2e" stroke="#475569"/>
+  <text x="300" y="565" text-anchor="middle" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Observability: Prometheus · Grafana · Loki · Tempo · Alloy</text>
+
+  <text x="300" y="635" text-anchor="middle" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Policy: all chat inference is local-only — no cloud LLM fallback</text>
+
+  <!-- Mesh -->
+  <line x1="560" y1="305" x2="640" y2="305" stroke="url(#mesh)" stroke-width="3" marker-end="url(#arrowC)"/>
+  <text x="600" y="292" text-anchor="middle" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="600">private mesh</text>
+  <text x="600" y="325" text-anchor="middle" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">(encrypted, no public IPs)</text>
+
+  <!-- GPU host -->
+  <rect x="640" y="200" width="420" height="320" rx="16" fill="url(#gpu)" stroke="#c084fc" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="850" y="230" text-anchor="middle" fill="#e9d5ff" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="700">GPU HOST</text>
+  <text x="850" y="250" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">RTX-class CUDA · internal AI stack</text>
+
+  <rect x="665" y="275" width="370" height="55" rx="8" fill="#1a0f24" stroke="#7c3aed"/>
+  <text x="850" y="298" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="600">lmstudio-compat gateway</text>
+  <text x="850" y="316" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">OpenAI-compatible · auth · GPU lease facade</text>
+
+  <rect x="665" y="350" width="175" height="50" rx="8" fill="#1a0f24" stroke="#475569"/>
+  <text x="752" y="372" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">llama-router</text>
+  <text x="752" y="388" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">internal only</text>
+
+  <rect x="860" y="350" width="175" height="50" rx="8" fill="#1a0f24" stroke="#475569"/>
+  <text x="947" y="372" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">ComfyUI</text>
+  <text x="947" y="388" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">leased via gateway</text>
+
+  <rect x="665" y="420" width="175" height="50" rx="8" fill="#1a0f24" stroke="#475569"/>
+  <text x="752" y="442" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">companion-voice</text>
+  <text x="752" y="458" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">TTS (auth)</text>
+
+  <rect x="860" y="420" width="175" height="50" rx="8" fill="#1a0f24" stroke="#475569"/>
+  <text x="947" y="442" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">speaches</text>
+  <text x="947" y="458" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">STT</text>
+
+  <text x="850" y="500" text-anchor="middle" fill="#a78bfa" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Published ports: private mesh only · never 0.0.0.0</text>
+
+  <!-- legend -->
+  <rect x="640" y="545" width="420" height="115" rx="12" fill="#0f172a" stroke="#334155"/>
+  <text x="660" y="575" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="600">Data classes</text>
+  <text x="660" y="600" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">• Chat / memory / affection — SACRED (additive only)</text>
+  <text x="660" y="622" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">• GPU work — leased, single-flight, TTL-bounded</text>
+  <text x="660" y="644" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">• Secrets — env files, never committed</text>
+</svg>

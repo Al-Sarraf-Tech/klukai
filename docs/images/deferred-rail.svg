@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="380" viewBox="0 0 1100 380">
+  <defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <marker id="a3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#34d399"/>
+    </marker>
+  </defs>
+  <rect width="1100" height="380" fill="url(#bg3)"/>
+  <text x="550" y="40" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="700">Proactive Systems — Cron + Deferred Rail</text>
+  <text x="550" y="64" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Recurring clocks stay in-process · one-shot future work rides RabbitMQ delay buckets</text>
+
+  <rect x="40" y="100" width="480" height="220" rx="14" fill="#0f2744" stroke="#38bdf8"/>
+  <text x="280" y="135" text-anchor="middle" fill="#7dd3fc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" font-weight="700">Recurring (APScheduler)</text>
+  <text x="70" y="170" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">• Morning / evening check-ins, anniversary, seasonal</text>
+  <text x="70" y="198" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">• companion_job_runs bookkeeping — catch up on restart</text>
+  <text x="70" y="226" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">• Curated allowlist for catch-up (no replaying idle noise)</text>
+  <text x="70" y="254" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">• Warm-on-connect: model load starts when he opens the app</text>
+  <text x="70" y="290" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Not keepalive — same idle TTL, just earlier load</text>
+
+  <rect x="560" y="100" width="500" height="220" rx="14" fill="#052e1a" stroke="#34d399"/>
+  <text x="810" y="135" text-anchor="middle" fill="#a7f3d0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" font-weight="700">One-shot deferred (RabbitMQ)</text>
+  <text x="590" y="170" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">• “Remind him in three hours” style work</text>
+  <text x="590" y="198" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">• Fixed TTL buckets (no head-of-line blocking)</text>
+  <text x="590" y="226" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">• Postgres row first — broker outage delays, never loses</text>
+  <text x="590" y="254" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">• Sweeper is the fail-soft backstop</text>
+  <text x="590" y="290" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Core speaks no AMQP — bridge owns the timer</text>
+</svg>

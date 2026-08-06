@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="420" viewBox="0 0 1100 420">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <marker id="a2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#38bdf8"/>
+    </marker>
+  </defs>
+  <rect width="1100" height="420" fill="url(#bg2)"/>
+  <text x="550" y="40" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="700">Her POV — Durable Job Path</text>
+  <text x="550" y="64" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Postgres is truth · queue carries only the id · hold-until-done is the GPU lease</text>
+
+  <!-- steps -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif">
+    <rect x="30" y="110" width="150" height="100" rx="12" fill="#0f2744" stroke="#38bdf8"/>
+    <text x="105" y="150" text-anchor="middle" fill="#7dd3fc" font-size="13" font-weight="700">1. CTA</text>
+    <text x="105" y="175" text-anchor="middle" fill="#cbd5e1" font-size="11">Commander opens</text>
+    <text x="105" y="192" text-anchor="middle" fill="#cbd5e1" font-size="11">Her POV menu</text>
+
+    <line x1="180" y1="160" x2="210" y2="160" stroke="#38bdf8" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="210" y="110" width="150" height="100" rx="12" fill="#0f2744" stroke="#38bdf8"/>
+    <text x="285" y="150" text-anchor="middle" fill="#7dd3fc" font-size="13" font-weight="700">2. Persist</text>
+    <text x="285" y="175" text-anchor="middle" fill="#cbd5e1" font-size="11">INSERT job row</text>
+    <text x="285" y="192" text-anchor="middle" fill="#cbd5e1" font-size="11">status=queued</text>
+
+    <line x1="360" y1="160" x2="390" y2="160" stroke="#38bdf8" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="390" y="110" width="150" height="100" rx="12" fill="#1f0f2e" stroke="#c084fc"/>
+    <text x="465" y="150" text-anchor="middle" fill="#e9d5ff" font-size="13" font-weight="700">3. Enqueue</text>
+    <text x="465" y="175" text-anchor="middle" fill="#cbd5e1" font-size="11">Redis job.enqueue</text>
+    <text x="465" y="192" text-anchor="middle" fill="#cbd5e1" font-size="11">→ quorum queue</text>
+
+    <line x1="540" y1="160" x2="570" y2="160" stroke="#38bdf8" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="570" y="110" width="150" height="100" rx="12" fill="#1f0f2e" stroke="#c084fc"/>
+    <text x="645" y="150" text-anchor="middle" fill="#e9d5ff" font-size="13" font-weight="700">4. Bridge</text>
+    <text x="645" y="175" text-anchor="middle" fill="#cbd5e1" font-size="11">hold message</text>
+    <text x="645" y="192" text-anchor="middle" fill="#cbd5e1" font-size="11">until complete</text>
+
+    <line x1="720" y1="160" x2="750" y2="160" stroke="#38bdf8" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="750" y="110" width="150" height="100" rx="12" fill="#0f2744" stroke="#34d399"/>
+    <text x="825" y="150" text-anchor="middle" fill="#a7f3d0" font-size="13" font-weight="700">5. Pipeline</text>
+    <text x="825" y="175" text-anchor="middle" fill="#cbd5e1" font-size="11">search · think</text>
+    <text x="825" y="192" text-anchor="middle" fill="#cbd5e1" font-size="11">draw · keep</text>
+
+    <line x1="900" y1="160" x2="930" y2="160" stroke="#38bdf8" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="930" y="110" width="140" height="100" rx="12" fill="#0f2744" stroke="#fbbf24"/>
+    <text x="1000" y="150" text-anchor="middle" fill="#fde68a" font-size="13" font-weight="700">6. Archive</text>
+    <text x="1000" y="175" text-anchor="middle" fill="#cbd5e1" font-size="11">memory + tags</text>
+    <text x="1000" y="192" text-anchor="middle" fill="#cbd5e1" font-size="11">her_pov</text>
+  </g>
+
+  <rect x="30" y="250" width="1040" height="130" rx="14" fill="#0f172a" stroke="#334155"/>
+  <text x="55" y="285" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600">Why this shape</text>
+  <text x="55" y="315" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">• One active job per user (DB unique index) — double-tap cannot buy two GPU renders</text>
+  <text x="55" y="340" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">• Disconnect does not cancel a durable render — progress survives in Postgres</text>
+  <text x="55" y="365" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">• Bridge hold-until-done = structural single-flight lease across the fleet</text>
+</svg>

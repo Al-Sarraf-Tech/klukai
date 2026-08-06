@@ -1,3 +1,5 @@
+> **Current architecture (with diagrams):** see [architecture.md](architecture.md) and the root [README](../README.md).
+
 # Onboarding — running klukai from a fresh machine
 
 > Goal: a fresh laptop with git + Docker installed can reach a running `klukai` stack and send a chat message in under 30 minutes. This doc is **tested quarterly**; the most recent test result lives in `docs/onboarding-test-result.json`. Any drift is a bug — open an issue with the `runbook-incident` template.
