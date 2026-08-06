@@ -88,6 +88,30 @@ services:
   # companion-voice runs in the canonical ops/dominus-nobara stack on RAID0.
   # Reachable only at the target Tailscale address on port 8301.
 
+  # Fan companion Redis events onto the shared homelab RabbitMQ bus
+  # (see ~/git/rabbitmq-ops). Reachable over Tailscale AMQP only.
+  events-bridge:
+    build: ./docker/events-bridge
+    container_name: companion-events-bridge
+    environment:
+      REDIS_URL: "redis://aichat-redis:6379/1"
+      REDIS_CHANNEL: "companion:events"
+      RABBIT_HOST: "${RABBIT_HOST:-100.111.198.19}"
+      RABBIT_PORT: "${RABBIT_PORT:-5672}"
+      RABBIT_USER: "${RABBIT_USER:-homelab}"
+      RABBIT_PASS: "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required for events-bridge}"
+      LOCAL_HOSTNAME: "${LOCAL_HOSTNAME:-amarillo}"
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+    networks:
+      - aichat
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
+
+
 volumes:
   companion-images:
   companion-audio:
