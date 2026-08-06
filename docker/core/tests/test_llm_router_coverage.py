@@ -26,7 +26,6 @@ from app.llm_router import (
     LM_STUDIO_URL,
     LOCAL_CASUAL,
     LOCAL_TOOLS,
-    CLOUD_FALLBACK,
     _HEALTH_RECHECK_INTERVAL,
 )
 from app.models import LLMConfig, SessionState
@@ -135,27 +134,24 @@ class TestLMHeaders:
 
 class TestInitClose:
     @pytest.mark.asyncio
-    async def test_init_builds_client_and_probes(self):
+    async def test_init_builds_http_client_and_probes(self):
         r = LLMRouter()
-        with patch.object(lr, "ANTHROPIC_API_KEY", "ak"), patch.object(
-            lr.anthropic, "AsyncAnthropic"
-        ) as anth, patch.object(
+        with patch.object(
             LLMRouter, "_check_lmstudio", AsyncMock(return_value=True)
         ) as chk:
             await r.init()
         assert r._http is not None
-        anth.assert_called_once_with(api_key="ak")
+        assert not hasattr(r, "_anthropic") or r.__dict__.get("_anthropic") is None
         chk.assert_awaited_once()
         await r.close()
 
     @pytest.mark.asyncio
-    async def test_init_no_anthropic_key_leaves_client_none(self):
+    async def test_init_ignores_anthropic_api_key_if_present(self):
+        """Even with ANTHROPIC_API_KEY in the environment, no cloud client."""
         r = LLMRouter()
-        with patch.object(lr, "ANTHROPIC_API_KEY", ""), patch.object(
-            LLMRouter, "_check_lmstudio", AsyncMock(return_value=False)
-        ):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "ak-should-be-ignored"}),              patch.object(LLMRouter, "_check_lmstudio", AsyncMock(return_value=False)):
             await r.init()
-        assert r._anthropic is None
+        assert getattr(r, "_anthropic", None) is None
 
     @pytest.mark.asyncio
     async def test_close_calls_aclose(self):
@@ -264,21 +260,18 @@ class TestRoute:
         r = LLMRouter()
         r._lmstudio_available = False
         r._ensure_lmstudio_fresh = AsyncMock(return_value=False)
-        r._anthropic = object()
-        cfg = await r.route("hi", _session())
+        with pytest.raises(RuntimeError, match="No local LLM backend"):
+            await r.route("hi", _session())
         r._ensure_lmstudio_fresh.assert_awaited_once()
-        # still down -> cloud fallback
-        assert cfg.provider == "anthropic"
-        assert cfg.model == CLOUD_FALLBACK
 
     @pytest.mark.asyncio
-    async def test_user_override_claude_routes_anthropic(self):
+    async def test_user_override_claude_is_ignored_uses_local(self):
         r = LLMRouter()
         r._lmstudio_available = True
         cfg = await r.route("x", _session(), user_override="claude-sonnet-4-20250514")
-        assert cfg.provider == "anthropic"
-        assert cfg.model == "claude-sonnet-4-20250514"
-        assert cfg.temperature == 0.7
+        # Cloud overrides are rejected; falls through to default local casual.
+        assert cfg.provider == "lmstudio"
+        assert cfg.model == LOCAL_CASUAL
 
     @pytest.mark.asyncio
     async def test_user_override_local_routes_lmstudio(self):
@@ -306,24 +299,21 @@ class TestRoute:
         assert cfg.model == LOCAL_CASUAL
 
     @pytest.mark.asyncio
-    async def test_no_local_no_anthropic_raises(self):
+    async def test_no_local_raises(self):
         r = LLMRouter()
         r._lmstudio_available = False
         r._ensure_lmstudio_fresh = AsyncMock(return_value=False)
-        r._anthropic = None
-        with pytest.raises(RuntimeError, match="No LLM backend"):
+        with pytest.raises(RuntimeError, match="No local LLM backend"):
             await r.route("x", _session())
 
     @pytest.mark.asyncio
-    async def test_needs_tools_but_local_down_falls_to_cloud(self):
-        """needs_tools requires local; when down, falls through to Claude."""
+    async def test_needs_tools_but_local_down_raises(self):
+        """needs_tools requires local; when down, fail closed — no cloud."""
         r = LLMRouter()
         r._lmstudio_available = False
         r._ensure_lmstudio_fresh = AsyncMock(return_value=False)
-        r._anthropic = object()
-        cfg = await r.route("search now", _session(), needs_tools=True)
-        assert cfg.provider == "anthropic"
-        assert cfg.model == CLOUD_FALLBACK
+        with pytest.raises(RuntimeError, match="No local LLM backend"):
+            await r.route("search now", _session(), needs_tools=True)
 
 
 # ── needs_agent reprobe branch (line 214-217) ───────────────────────────────
@@ -374,22 +364,18 @@ class TestNeedsAgentReprobe:
         assert await r.needs_agent("The supply crates arrived.") is False
 
 
-# ── stream(): anthropic provider path (lines 259-265) ───────────────────────
+# ── stream(): non-local provider refused ─────────────────────────────────────
 
 
-class TestStreamAnthropic:
+class TestStreamLocalOnly:
     @pytest.mark.asyncio
-    async def test_anthropic_path_yields_and_marks_used(self):
+    async def test_non_local_provider_yields_sentinel(self):
+        from app.llm_router import FAILURE_SENTINEL
+
         r = LLMRouter()
-        r._anthropic = MagicMock()
-        r._anthropic.messages.stream = MagicMock(
-            return_value=_FakeAnthropicStreamCtx(["Hel", "lo"])
-        )
         cfg = LLMConfig(provider="anthropic", model="claude-x")
         out = [t async for t in r.stream("sys", [{"role": "user", "content": "hi"}], cfg)]
-        assert "".join(out) == "Hello"
-        # marked used
-        assert "claude-x" in lr._model_last_used
+        assert out == [FAILURE_SENTINEL]
 
 
 # ── stream(): LM Studio success + gate (lines 267-276) ──────────────────────
@@ -397,9 +383,8 @@ class TestStreamAnthropic:
 
 class TestStreamLMStudioSuccess:
     @pytest.mark.asyncio
-    async def test_local_success_marks_used_no_fallback(self):
+    async def test_local_success_marks_used(self):
         r = LLMRouter()
-        r._anthropic = MagicMock()  # would be used on fallback — must NOT be
         cfg = LLMConfig(provider="lmstudio", model=LOCAL_CASUAL, base_url=LM_STUDIO_URL)
 
         async def _fake_local(sp, msgs, c):
@@ -410,21 +395,18 @@ class TestStreamLMStudioSuccess:
         out = [t async for t in r.stream("sys", [], cfg)]
         assert "".join(out) == "token"
         assert LOCAL_CASUAL in lr._model_last_used
-        r._anthropic.messages.stream.assert_not_called()
 
 
 # ── stream(): failure -> circuit opens -> Claude fallback (277-301) ─────────
 
 
-class TestStreamFailureFallback:
+class TestStreamFailureLocalOnly:
     @pytest.mark.asyncio
-    async def test_readtimeout_opens_breaker_and_falls_back(self):
+    async def test_readtimeout_opens_breaker_and_yields_sentinel(self):
+        from app.llm_router import FAILURE_SENTINEL
+
         r = LLMRouter()
         r._lmstudio_available = True
-        r._anthropic = MagicMock()
-        r._anthropic.messages.stream = MagicMock(
-            return_value=_FakeAnthropicStreamCtx(["fall", "back"])
-        )
         cfg = LLMConfig(provider="lmstudio", model=LOCAL_CASUAL, base_url=LM_STUDIO_URL)
 
         async def _boom(sp, msgs, c):
@@ -434,19 +416,17 @@ class TestStreamFailureFallback:
         r._stream_lmstudio = _boom
         with patch.object(lr.time, "monotonic", return_value=500.0):
             out = [t async for t in r.stream("sys", [], cfg)]
-        assert "".join(out) == "fallback"
+        assert out == [FAILURE_SENTINEL]
         # breaker opened
         assert r._lmstudio_available is False
         assert r._lmstudio_last_check == 500.0
 
     @pytest.mark.asyncio
-    async def test_generic_exception_opens_breaker_and_falls_back(self):
+    async def test_generic_exception_opens_breaker_and_yields_sentinel(self):
+        from app.llm_router import FAILURE_SENTINEL
+
         r = LLMRouter()
         r._lmstudio_available = True
-        r._anthropic = MagicMock()
-        r._anthropic.messages.stream = MagicMock(
-            return_value=_FakeAnthropicStreamCtx(["X"])
-        )
         cfg = LLMConfig(provider="lmstudio", model=LOCAL_CASUAL, base_url=LM_STUDIO_URL)
 
         async def _boom(sp, msgs, c):
@@ -455,14 +435,13 @@ class TestStreamFailureFallback:
 
         r._stream_lmstudio = _boom
         out = [t async for t in r.stream("sys", [], cfg)]
-        assert "".join(out) == "X"
+        assert out == [FAILURE_SENTINEL]
         assert r._lmstudio_available is False
 
     @pytest.mark.asyncio
-    async def test_local_fails_no_anthropic_yields_disrupted_message(self):
+    async def test_local_fails_yields_disrupted_message(self):
         r = LLMRouter()
         r._lmstudio_available = True
-        r._anthropic = None
         cfg = LLMConfig(provider="lmstudio", model=LOCAL_CASUAL, base_url=LM_STUDIO_URL)
 
         async def _boom(sp, msgs, c):
@@ -714,8 +693,8 @@ class TestIdleAndKeepaliveHelpers:
 
 # ── stream(): mid-stream failure semantics (data-loss fixes 2026-06-11) ─────
 #
-# Contract: a failure BEFORE any token degrades to the failure sentinel (or
-# the cloud fallback); a failure AFTER tokens were yielded raises
+# Contract: a failure BEFORE any token degrades to the failure sentinel
+# (never a cloud model); a failure AFTER tokens were yielded raises
 # LLMStreamFailed so callers never see a partial answer silently glued to a
 # second full response.
 
@@ -744,14 +723,12 @@ class _FailingAnthropicStreamCtx:
 
 class TestStreamMidStreamFailure:
     @pytest.mark.asyncio
-    async def test_local_midstream_failure_raises_no_cloud_concat(self):
-        """Partial local tokens followed by a crash must NOT be glued to a
-        second full cloud answer — the failure surfaces as LLMStreamFailed."""
+    async def test_local_midstream_failure_raises(self):
+        """Partial local tokens followed by a crash surface as LLMStreamFailed."""
         from app.llm_router import LLMStreamFailed
 
         r = LLMRouter()
         r._lmstudio_available = True
-        r._anthropic = MagicMock()  # must NOT be consulted
         cfg = LLMConfig(provider="lmstudio", model=LOCAL_CASUAL, base_url=LM_STUDIO_URL)
 
         async def _partial(sp, msgs, c):
@@ -763,72 +740,25 @@ class TestStreamMidStreamFailure:
         with pytest.raises(LLMStreamFailed):
             async for tok in r.stream("sys", [], cfg):
                 out.append(tok)
-        # Partial tokens were delivered before the failure, nothing appended.
         assert out == ["partial "]
-        r._anthropic.messages.stream.assert_not_called()
-        # Breaker still opens so the next request reroutes.
         assert r._lmstudio_available is False
 
     @pytest.mark.asyncio
-    async def test_anthropic_direct_failure_before_tokens_yields_sentinel(self):
-        """Direct-anthropic failure before any token must NOT propagate (it
-        used to kill the WebSocket) — it degrades to the failure sentinel."""
+    async def test_anthropic_config_refused_with_sentinel(self):
+        """Hand-built anthropic config cannot leave the box."""
         from app.llm_router import FAILURE_SENTINEL
 
         r = LLMRouter()
-        r._anthropic = MagicMock()
-        r._anthropic.messages.stream = MagicMock(side_effect=RuntimeError("api down"))
         cfg = LLMConfig(provider="anthropic", model="claude-x")
         out = [t async for t in r.stream("sys", [], cfg)]
         assert out == [FAILURE_SENTINEL]
 
     @pytest.mark.asyncio
-    async def test_anthropic_direct_midstream_failure_raises(self):
-        from app.llm_router import LLMStreamFailed
-
-        r = LLMRouter()
-        r._anthropic = MagicMock()
-        r._anthropic.messages.stream = MagicMock(
-            return_value=_FailingAnthropicStreamCtx(["tok"], RuntimeError("mid"))
-        )
-        cfg = LLMConfig(provider="anthropic", model="claude-x")
-        out = []
-        with pytest.raises(LLMStreamFailed):
-            async for t in r.stream("sys", [], cfg):
-                out.append(t)
-        assert out == ["tok"]
-
-    @pytest.mark.asyncio
-    async def test_cloud_fallback_midstream_failure_raises(self):
-        from app.llm_router import LLMStreamFailed
-
-        r = LLMRouter()
-        r._lmstudio_available = True
-        r._anthropic = MagicMock()
-        r._anthropic.messages.stream = MagicMock(
-            return_value=_FailingAnthropicStreamCtx(["cloud"], RuntimeError("mid"))
-        )
-        cfg = LLMConfig(provider="lmstudio", model=LOCAL_CASUAL, base_url=LM_STUDIO_URL)
-
-        async def _boom(sp, msgs, c):
-            raise RuntimeError("dead")
-            yield  # pragma: no cover
-
-        r._stream_lmstudio = _boom
-        out = []
-        with pytest.raises(LLMStreamFailed):
-            async for t in r.stream("sys", [], cfg):
-                out.append(t)
-        assert out == ["cloud"]
-
-    @pytest.mark.asyncio
-    async def test_cloud_fallback_failure_before_tokens_yields_sentinel(self):
+    async def test_local_failure_before_tokens_never_clouds(self):
         from app.llm_router import FAILURE_SENTINEL
 
         r = LLMRouter()
         r._lmstudio_available = True
-        r._anthropic = MagicMock()
-        r._anthropic.messages.stream = MagicMock(side_effect=RuntimeError("api down"))
         cfg = LLMConfig(provider="lmstudio", model=LOCAL_CASUAL, base_url=LM_STUDIO_URL)
 
         async def _boom(sp, msgs, c):

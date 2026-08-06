@@ -36,7 +36,8 @@ services:
       # always sends the required bearer header; test backends may ignore it.
       LM_STUDIO_URL: "${LM_STUDIO_URL:-http://100.107.121.5:1234}"
       LM_STUDIO_TOKEN: "${LM_STUDIO_TOKEN:?LM_STUDIO_TOKEN is required}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # Cloud fallback is forbidden. Key is deliberately not wired.
+      # ANTHROPIC_API_KEY: deliberately omitted — local RTX 3090 only.
       # ComfyUI has no published raw port. Every operation is proxied by the
       # authenticated gateway and authorized again with the active GPU lease.
       COMFYUI_URL: "${COMFYUI_URL:-http://100.107.121.5:1234/api/v1/comfy}"

@@ -1,4 +1,4 @@
-"""LLM routing: local-first with Claude API fallback."""
+"""LLM routing: local RTX 3090 only. No cloud fallback — ever."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import os
 import time
 from collections.abc import AsyncIterator
 
-import anthropic
 import httpx
 
 from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
@@ -40,8 +39,6 @@ def lm_gate_busy() -> bool:
     return _lm_gate is not None and _lm_gate.locked()
 
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")  # Dominus RTX 3090 via Tailscale
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-
 
 def _lm_headers() -> dict[str, str]:
     """Required bearer header for the Tailscale-only compatibility gateway."""
@@ -55,7 +52,8 @@ MAX_LLM_IDLE_TTL_SECONDS = LM_TTL_SECONDS
 LOCAL_CASUAL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"  # Chat: uncensored, clean streaming, no thinking tags
 LOCAL_AGENT = "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2"     # Agent: Opus-level tool-use + reasoning
 LOCAL_TOOLS = LOCAL_AGENT                                               # Same as agent
-CLOUD_FALLBACK = "claude-haiku-4-5-20251001"
+# Cloud fallback is intentionally absent. Owner policy: all inference stays
+# on the local RTX 3090. ANTHROPIC_API_KEY is ignored if present.
 
 # Legacy activity bookkeeping remains for compatibility with older companion
 # extensions and observability tests. It cannot issue requests: ``keepalive``
@@ -105,11 +103,11 @@ FAILURE_SENTINEL = "Communications disrupted, Commander. Standby for reconnectio
 class LLMStreamFailed(Exception):
     """The LLM stream died AFTER tokens were already yielded.
 
-    Raised instead of yielding a sentinel or a cloud fallback so callers never
-    see a partial answer silently concatenated with a second full response —
-    and so the sentinel prefix check can't be defeated by leading partial
-    tokens. Failures before the first token still degrade in-band (fallback
-    or FAILURE_SENTINEL) and never raise.
+    Raised instead of yielding a sentinel so callers never see a partial
+    answer silently concatenated with a second full response — and so the
+    sentinel prefix check can't be defeated by leading partial tokens.
+    Failures before the first token degrade in-band to FAILURE_SENTINEL only
+    (never a cloud model).
     """
 
 
@@ -123,19 +121,18 @@ AGENT_SIGNALS = [
 
 
 class LLMRouter:
-    """Routes requests to local LM Studio or Anthropic based on complexity."""
+    """Routes requests to local LM Studio only. Cloud is not an option."""
 
     def __init__(self) -> None:
         self._http: httpx.AsyncClient | None = None
-        self._anthropic: anthropic.AsyncAnthropic | None = None
         self._lmstudio_available: bool | None = None
         self._lmstudio_last_check: float = 0.0
 
     async def init(self) -> None:
         headers = _lm_headers()
         self._http = httpx.AsyncClient(timeout=60.0, headers=headers if headers else None)
-        if ANTHROPIC_API_KEY:
-            self._anthropic = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        # Deliberately never constructs an Anthropic client, even if
+        # ANTHROPIC_API_KEY is set in the environment.
         await self._check_lmstudio()
 
     async def close(self) -> None:
@@ -176,17 +173,20 @@ class LLMRouter:
         if not self._lmstudio_available:
             await self._ensure_lmstudio_fresh()
 
-        # User explicit override
+        # User explicit override — local models only. Cloud model names are
+        # rejected so a stale client/UI preference can never leave the box.
         if user_override:
-            if user_override.startswith("claude"):
-                return LLMConfig(
-                    provider="anthropic", model=user_override, temperature=0.7
+            if user_override.startswith("claude") or user_override.startswith("anthropic"):
+                logger.warning(
+                    "Ignoring cloud model override %r — local-only policy",
+                    user_override,
                 )
-            return LLMConfig(
-                provider="lmstudio",
-                model=user_override,
-                base_url=LM_STUDIO_URL,
-            )
+            else:
+                return LLMConfig(
+                    provider="lmstudio",
+                    model=user_override,
+                    base_url=LM_STUDIO_URL,
+                )
 
         # Tool use -> local large model
         if needs_tools and self._lmstudio_available:
@@ -204,13 +204,8 @@ class LLMRouter:
                 base_url=LM_STUDIO_URL,
             )
 
-        # Fallback: Claude if no local
-        if self._anthropic:
-            return LLMConfig(
-                provider="anthropic", model=CLOUD_FALLBACK, temperature=0.7
-            )
-
-        raise RuntimeError("No LLM backend available")
+        # No cloud fallback. Ever. If the local GPU path is down, fail closed.
+        raise RuntimeError("No local LLM backend available")
 
     async def needs_agent(self, message: str) -> bool:
         """Determine if a message needs the agentic tool-use loop."""
@@ -252,36 +247,26 @@ class LLMRouter:
     async def stream(
         self, system_prompt: str, messages: list[dict], config: LLMConfig
     ) -> AsyncIterator[str]:
-        """Stream tokens from the selected LLM.
+        """Stream tokens from the local LLM only.
 
         LM Studio calls go through a global gate (1-at-a-time) to prevent
         queue pile-up when the server is slow or swapping models.
-        On local failure, falls back directly to Claude — no cascading
-        local retries that would just pile more requests onto a stuck server.
+        On local failure there is no cloud path — only FAILURE_SENTINEL.
 
-        Failure semantics: a failure BEFORE any token degrades in-band (cloud
-        fallback, or FAILURE_SENTINEL as the whole response). A failure AFTER
-        tokens were yielded raises LLMStreamFailed so a partial answer is
-        never silently concatenated with a second full response.
+        Failure semantics: a failure BEFORE any token yields FAILURE_SENTINEL
+        as the whole response. A failure AFTER tokens were yielded raises
+        LLMStreamFailed so a partial answer is never silently concatenated
+        with a second full response.
         """
         yielded = False
 
-        if config.provider == "anthropic":
-            try:
-                async for token in self._stream_anthropic(
-                    system_prompt, messages, config
-                ):
-                    yielded = True
-                    yield token
-            except Exception as e:
-                if yielded:
-                    raise LLMStreamFailed(
-                        f"anthropic stream died mid-response: {e}"
-                    ) from e
-                logger.error("Anthropic stream failed before any token: %s", e)
-                yield FAILURE_SENTINEL
-                return
-            mark_model_used(config.model)
+        if config.provider != "lmstudio":
+            # Defense in depth: even a hand-built LLMConfig cannot leave the box.
+            logger.error(
+                "Refusing non-local LLM provider %r (local-only policy)",
+                config.provider,
+            )
+            yield FAILURE_SENTINEL
             return
 
         # ── LM Studio path: acquire gate so only 1 request is in-flight ──
@@ -315,29 +300,14 @@ class LLMRouter:
         # ── Gate released ──
 
         if yielded:
-            # Mid-stream death after partial local tokens: never glue a second
-            # full cloud answer onto a partial one — surface the failure.
+            # Mid-stream death after partial local tokens: surface the failure
+            # rather than inventing a second answer.
             raise LLMStreamFailed(
                 "local stream died mid-response"
             ) from local_error
 
-        # Cloud fallback (outside gate — Anthropic is a different server)
-        if self._anthropic:
-            logger.info("Fast-fallback to Claude after local failure")
-            cloud = LLMConfig(provider="anthropic", model=CLOUD_FALLBACK, temperature=0.7)
-            try:
-                async for token in self._stream_anthropic(system_prompt, messages, cloud):
-                    yielded = True
-                    yield token
-            except Exception as e:
-                if yielded:
-                    raise LLMStreamFailed(
-                        f"cloud fallback stream died mid-response: {e}"
-                    ) from e
-                logger.error("Cloud fallback failed before any token: %s", e)
-                yield FAILURE_SENTINEL
-        else:
-            yield FAILURE_SENTINEL
+        # Local path is the only path. No Anthropic, no second model, no off-box.
+        yield FAILURE_SENTINEL
 
     async def complete_local(
         self,
@@ -393,34 +363,6 @@ class LLMRouter:
                 pass
             return data
 
-    async def _stream_anthropic(
-        self, system_prompt: str, messages: list[dict], config: LLMConfig
-    ) -> AsyncIterator[str]:
-        import time as _time
-
-        from .observability import record_llm_usage
-
-        _start = _time.monotonic()
-        _in = (len(system_prompt) + sum(len(str(m.get("content", ""))) for m in messages)) // 4
-        _out_chars = 0
-        try:
-            async with self._anthropic.messages.stream(
-                model=config.model,
-                max_tokens=config.max_tokens,
-                temperature=config.temperature,
-                system=system_prompt,
-                messages=messages,
-            ) as stream:
-                async for text in stream.text_stream:
-                    _out_chars += len(text)
-                    yield text
-        finally:
-            # Stream paths previously recorded no metrics — /api/metrics was
-            # blind to interactive chat. Tokens are estimated (~4 chars/token).
-            record_llm_usage(
-                model=config.model, tokens_in=_in, tokens_out=_out_chars // 4,
-                latency_ms=(_time.monotonic() - _start) * 1000, route="chat",
-            )
 
     async def keepalive(self) -> None:
         """Compatibility no-op: strict policy forbids extending LLM residency."""

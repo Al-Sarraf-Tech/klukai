@@ -129,5 +129,5 @@ class TestModelAliases:
         assert llm_router.LOCAL_CASUAL
         assert isinstance(llm_router.LOCAL_CASUAL, str)
 
-    def test_cloud_fallback_is_haiku(self):
-        assert "haiku" in llm_router.CLOUD_FALLBACK.lower()
+    def test_no_cloud_fallback_constant(self):
+        assert not hasattr(llm_router, "CLOUD_FALLBACK")
