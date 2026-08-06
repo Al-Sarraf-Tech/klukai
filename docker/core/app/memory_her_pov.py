@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
 import random
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -23,7 +23,14 @@ logger = logging.getLogger(__name__)
 # In-process job board (single-process uvicorn). Fail-soft if worker restarts.
 _JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = asyncio.Lock()
-_ACTIVE_USERS: set[str] = set()
+# user_id -> job_id of the run currently in flight. Authoritative for dedupe:
+# scanning _JOBS for a non-terminal job raced with the WS delivery tail and let
+# a double-tap start a second LLM call + GPU render.
+_ACTIVE_JOB_BY_USER: dict[str, str] = {}
+
+# The board is in-process and never persisted, so it must not grow forever.
+_JOB_TTL_SECONDS = 3600.0
+_JOB_MAX = 200
 
 _TRIVIAL = {
     "ok", "okay", "yes", "no", "yeah", "yep", "nope", "sure", "thanks",
@@ -38,7 +45,29 @@ def _now_iso() -> str:
 async def get_job(job_id: str) -> dict[str, Any] | None:
     async with _JOBS_LOCK:
         job = _JOBS.get(job_id)
-        return dict(job) if job else None
+        if not job:
+            return None
+        return {k: v for k, v in job.items() if not k.startswith("_")}
+
+
+def _prune_jobs_locked(now: float | None = None) -> None:
+    """Drop stale jobs. Caller must hold _JOBS_LOCK.
+
+    Entries carry titles, annotations and exchange previews, so an unbounded
+    board is a slow leak for the lifetime of the worker.
+    """
+    now = time.monotonic() if now is None else now
+    stale = [
+        jid for jid, job in _JOBS.items()
+        if now - float(job.get("_touched", now)) > _JOB_TTL_SECONDS
+    ]
+    for jid in stale:
+        _JOBS.pop(jid, None)
+    # Hard ceiling as a backstop for a burst inside one TTL window.
+    if len(_JOBS) > _JOB_MAX:
+        oldest = sorted(_JOBS.items(), key=lambda kv: kv[1].get("_touched", 0.0))
+        for jid, _ in oldest[: len(_JOBS) - _JOB_MAX]:
+            _JOBS.pop(jid, None)
 
 
 async def _set_job(job_id: str, **fields: Any) -> None:
@@ -46,6 +75,8 @@ async def _set_job(job_id: str, **fields: Any) -> None:
         job = _JOBS.setdefault(job_id, {"id": job_id})
         job.update(fields)
         job["updated_at"] = _now_iso()
+        job["_touched"] = time.monotonic()
+        _prune_jobs_locked()
 
 
 def _is_trivial(text: str) -> bool:
@@ -229,6 +260,7 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
                 await ws.send_proactive(
                     user_id,
                     "…Our records are still thin. Talk to me more first, Commander.",
+                    persist=False,
                 )
                 await ws.send(user_id, {
                     "type": "her_pov", "job_id": job_id, "status": "failed",
@@ -274,7 +306,10 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
         if not (costume and is_outfit_unlocked(costume, level)):
             costume = None
 
-        hour = datetime.now().hour
+        # The Commander's wall clock, not the container's UTC — otherwise an
+        # evening portrait gets rendered with 1am lighting.
+        from .proactive.state import now_local
+        hour = now_local().hour
         if 5 <= hour < 12:
             tod = "morning"
         elif 12 <= hour < 17:
@@ -307,6 +342,7 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
                     user_id,
                     "…Visualization failed. Interference in the rendering pipeline. "
                     "I'll try again later.",
+                    persist=False,
                 )
                 await ws.send(user_id, {
                     "type": "her_pov", "job_id": job_id, "status": "failed",
@@ -330,6 +366,25 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
             },
             user_id=user_id,
         )
+        if not memory_id:
+            # save_image returns None when the archive rejects the row (e.g. the
+            # annotation deduped against an earlier one) and deletes the files.
+            # Reporting "done" here left the client showing "Kept." over an
+            # empty stage with nothing in the archive.
+            await _set_job(
+                job_id, status="failed", phase="failed",
+                error="not_saved",
+                message="…I drew it, but it wouldn't keep. Ask me again.",
+                annotation=pov["annotation"], title=pov["title"],
+            )
+            try:
+                await ws.send(user_id, {
+                    "type": "her_pov", "job_id": job_id, "status": "failed",
+                    "phase": "failed", "error": "not_saved",
+                })
+            except Exception:
+                pass
+            return
 
         img_b64 = base64.b64encode(img).decode()
         await _set_job(
@@ -369,6 +424,17 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
 
         logger.info("her_pov done user=%s job=%s mem=%s", user_id, job_id, memory_id)
 
+    except asyncio.CancelledError:
+        # WSManager.disconnect cancels tracked tasks when the last device drops,
+        # and this pipeline runs for minutes. CancelledError is not an Exception
+        # subclass, so without this the job would sit at "drawing" forever and
+        # the client would poll it for the life of the process.
+        logger.info("her_pov cancelled user=%s job=%s", user_id, job_id)
+        await _set_job(
+            job_id, status="failed", phase="failed",
+            error="cancelled", message="…Interrupted. Ask me again when you're back.",
+        )
+        raise
     except Exception as e:
         logger.exception("her_pov failed: %s", e)
         await _set_job(
@@ -384,22 +450,29 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
             pass
     finally:
         async with _JOBS_LOCK:
-            _ACTIVE_USERS.discard(user_id)
+            if _ACTIVE_JOB_BY_USER.get(user_id) == job_id:
+                _ACTIVE_JOB_BY_USER.pop(user_id, None)
 
 
 async def start_her_pov(user_id: str) -> dict[str, Any]:
-    """Start a her-POV job if the user isn't already running one."""
-    async with _JOBS_LOCK:
-        if user_id in _ACTIVE_USERS:
-            # return latest active job if any
-            for jid, job in reversed(list(_JOBS.items())):
-                if job.get("user_id") == user_id and job.get("status") not in (
-                    "done", "failed",
-                ):
-                    return {"job_id": jid, "status": job.get("status"), "reused": True}
-        _ACTIVE_USERS.add(user_id)
+    """Start a her-POV job if the user isn't already running one.
 
+    One in-flight job per user. The claim is the dict entry itself, taken under
+    the lock before the task is spawned, so a double-tapped CTA can never buy a
+    second LLM call and a second GPU render.
+    """
     job_id = str(uuid.uuid4())
+    async with _JOBS_LOCK:
+        running = _ACTIVE_JOB_BY_USER.get(user_id)
+        if running:
+            job = _JOBS.get(running) or {}
+            return {
+                "job_id": running,
+                "status": job.get("status", "queued"),
+                "reused": True,
+            }
+        _ACTIVE_JOB_BY_USER[user_id] = job_id
+
     await _set_job(
         job_id,
         user_id=user_id,
@@ -410,7 +483,14 @@ async def start_her_pov(user_id: str) -> dict[str, Any]:
     )
     # fire-and-forget
     from .context import ws as _ws
-    task = asyncio.create_task(run_her_pov(user_id, job_id))
+    try:
+        task = asyncio.create_task(run_her_pov(user_id, job_id))
+    except Exception:
+        # Never strand the claim if the task could not be scheduled.
+        async with _JOBS_LOCK:
+            if _ACTIVE_JOB_BY_USER.get(user_id) == job_id:
+                _ACTIVE_JOB_BY_USER.pop(user_id, None)
+        raise
     try:
         _ws.track_task(user_id, task)
     except Exception:

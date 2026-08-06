@@ -47,6 +47,8 @@ class _HerPovScreenState extends State<HerPovScreen>
   List<Memory> _gallery = [];
   bool _galleryLoading = true;
   Timer? _poll;
+  int _pollFailures = 0;
+  static const int _maxPollFailures = 5;
 
   @override
   void initState() {
@@ -96,10 +98,12 @@ class _HerPovScreenState extends State<HerPovScreen>
         _galleryLoading = false;
       });
     } catch (_) {
-      if (mounted) setState(() {
-        _gallery = [];
-        _galleryLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _gallery = [];
+          _galleryLoading = false;
+        });
+      }
     }
   }
 
@@ -128,6 +132,7 @@ class _HerPovScreenState extends State<HerPovScreen>
       }
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
       _jobId = data['job_id'] as String?;
+      _pollFailures = 0;
       _poll?.cancel();
       _poll = Timer.periodic(const Duration(seconds: 2), (_) => _tick());
       await _tick();
@@ -148,7 +153,21 @@ class _HerPovScreenState extends State<HerPovScreen>
         Uri.parse('${widget.serverUrl}/api/memories/her-pov/$id'),
         headers: _headers,
       );
-      if (resp.statusCode != 200) return;
+      if (resp.statusCode != 200) {
+        // The job board is in-process, so a core restart makes a live job
+        // 404 forever. Give up instead of polling for the life of the tab
+        // with the button stuck disabled.
+        if (++_pollFailures >= _maxPollFailures) {
+          _poll?.cancel();
+          if (!mounted) return;
+          setState(() {
+            _phase = _Phase.failed;
+            _status = 'Lost track of that one. Ask me again.';
+          });
+        }
+        return;
+      }
+      _pollFailures = 0;
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
       final phase = (data['phase'] as String?) ?? 'searching';
       final mapped = switch (phase) {
@@ -188,7 +207,7 @@ class _HerPovScreenState extends State<HerPovScreen>
         children: [
           AnimatedBuilder(
             animation: _pulse,
-            builder: (_, __) => DecoratedBox(
+            builder: (context, child) => DecoratedBox(
               decoration: BoxDecoration(
                 gradient: RadialGradient(
                   center: const Alignment(0, -0.55),
@@ -450,7 +469,7 @@ class _HerPovScreenState extends State<HerPovScreen>
                 fit: BoxFit.cover,
                 width: double.infinity,
                 headers: _headers,
-                errorBuilder: (_, __, ___) => const Icon(
+                errorBuilder: (context, error, stack) => const Icon(
                     Icons.image_outlined,
                     color: GFL2Colors.textDim,
                     size: 48),
@@ -503,7 +522,7 @@ class _HerPovScreenState extends State<HerPovScreen>
       children: [
         AnimatedBuilder(
           animation: _spin,
-          builder: (_, __) => CustomPaint(
+          builder: (context, child) => CustomPaint(
             size: const Size(118, 118),
             painter: _RingPainter(
               progress: _spin.value,
@@ -531,7 +550,7 @@ class _HerPovScreenState extends State<HerPovScreen>
         : (_phase == _Phase.done ? 'Another moment' : 'Find a moment');
     return AnimatedBuilder(
       animation: _pulse,
-      builder: (_, __) {
+      builder: (context, child) {
         final glow = _busy ? 0.08 : 0.22 + 0.14 * _pulse.value;
         return Material(
           color: Colors.transparent,
@@ -654,7 +673,7 @@ class _HerPovScreenState extends State<HerPovScreen>
                                     _memories.thumbnailUrl(m.id),
                                     fit: BoxFit.cover,
                                     headers: _headers,
-                                    errorBuilder: (_, __, ___) => Container(
+                                    errorBuilder: (context, error, stack) => Container(
                                       color: GFL2Colors.panel,
                                       child: const Icon(
                                           Icons.image_not_supported_outlined,
