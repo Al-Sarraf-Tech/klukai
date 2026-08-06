@@ -38,9 +38,34 @@ class TestInteractionToSentiment:
         from app.character_behaviors import interaction_to_sentiment
         assert interaction_to_sentiment({"type": "combative", "intensity": 9}) == "negative_heavy"
 
-    def test_sad_heavy_regardless_of_intensity(self):
+    def test_distress_is_not_hostility(self):
+        """Sadness and hostility are different signals and must not share a path.
+
+        Routing them both to `negative_heavy` made a Commander who said he was
+        struggling get an *irritated* Klukai back.
+        """
         from app.character_behaviors import interaction_to_sentiment
-        assert interaction_to_sentiment({"type": "sad", "intensity": 3}) == "negative_heavy"
+        for t in ("sad", "hurt", "distressed", "vulnerable"):
+            for intensity in (3, 8):
+                assert interaction_to_sentiment(
+                    {"type": t, "intensity": intensity}
+                ) == "distress"
+
+    def test_hostility_still_reads_as_negative(self):
+        from app.character_behaviors import interaction_to_sentiment
+        assert interaction_to_sentiment(
+            {"type": "hostile", "intensity": 8}) == "negative_heavy"
+        assert interaction_to_sentiment(
+            {"type": "hostile", "intensity": 3}) == "negative_light"
+
+    def test_heavy_personal_sharing_does_not_read_as_flirty(self):
+        """Intensity on `personal_sharing` measures weight, not warmth —
+        promoting it turned a painful disclosure into flustered flirting."""
+        from app.character_behaviors import interaction_to_sentiment
+        assert interaction_to_sentiment(
+            {"type": "personal_sharing", "intensity": 9}) == "positive"
+        assert interaction_to_sentiment(
+            {"type": "compliment", "intensity": 9}) == "flirty"
 
     def test_unknown_type_returns_none(self):
         from app.character_behaviors import interaction_to_sentiment
@@ -62,17 +87,33 @@ class TestInteractionToSentiment:
 class TestMoodContagionChain:
     """Integration check: interaction_to_sentiment feeds nudge_mood correctly."""
 
-    def test_flirty_pulls_composed_to_flirty(self):
+    def test_flirty_pulls_composed_to_flustered(self):
         from app.character_behaviors import interaction_to_sentiment, nudge_mood
         sentiment = interaction_to_sentiment({"type": "flirty", "intensity": 6})
         mood = nudge_mood("composed", sentiment)
-        assert mood == "flirty"
+        # flustered is a VALID mood; bare "flirty" is not
+        assert mood == "flustered"
 
-    def test_heavy_negative_pulls_playful_to_tender(self):
+    def test_heavy_hostility_pulls_playful_to_composed(self):
         from app.character_behaviors import interaction_to_sentiment, nudge_mood
-        sentiment = interaction_to_sentiment({"type": "sad", "intensity": 8})
+        sentiment = interaction_to_sentiment({"type": "hostile", "intensity": 8})
         mood = nudge_mood("playful", sentiment)
-        assert mood == "tender"
+        # Hostility must not make her softer — she cools instead.
+        assert mood == "composed"
+
+    def test_distress_turns_her_toward_him(self):
+        """When the Commander is hurting she gets protective, never irritated."""
+        from app.character_behaviors import interaction_to_sentiment, nudge_mood
+        sentiment = interaction_to_sentiment({"type": "hurt", "intensity": 8})
+        assert nudge_mood("composed", sentiment) == "protective"
+        assert nudge_mood("playful", sentiment) == "tender"
+        # even mid-sulk, she softens to worry rather than staying annoyed
+        assert nudge_mood("irritated", sentiment) == "worried"
+
+    def test_distress_targets_are_real_moods(self):
+        from app.character_behaviors import _MOOD_NUDGES
+        from app.fact_extractor import VALID_MOODS
+        assert set(_MOOD_NUDGES["distress"].values()) <= VALID_MOODS
 
     def test_positive_warms_cold_to_composed(self):
         from app.character_behaviors import interaction_to_sentiment, nudge_mood

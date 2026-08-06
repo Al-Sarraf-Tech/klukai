@@ -137,3 +137,17 @@ class TestMissionContextBlock:
         assert "Sortie to Zone 6" in out
         assert "radio transmissions" in out
         assert "Elmo" in out
+
+
+class TestAnniversaryBlockPrincessUpgrade:
+    def test_upcoming_anniversary_uses_future_tense(self):
+        from app.personality.state_blocks import build_anniversary_block
+        out = build_anniversary_block([{"days_ago": -2, "event_type": "first_mission", "years_ago": 1}])
+        assert "In 2 days" in out
+        assert "first mission" in out
+        assert "ago" not in out.split("first mission")[0][-40:]  # not past tense for this line
+
+    def test_past_near_anniversary_uses_ago(self):
+        from app.personality.state_blocks import build_anniversary_block
+        out = build_anniversary_block([{"days_ago": 2, "event_type": "first_gift"}])
+        assert "2 days ago" in out

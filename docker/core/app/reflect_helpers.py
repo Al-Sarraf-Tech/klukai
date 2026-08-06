@@ -47,9 +47,13 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
         recent_excerpts: list[tuple[str, str]] = []
         prior_mood: str | None = None
         async with pool.connection() as conn:
-            # Last message time
+            # Last message time. Exclude her own proactive check-ins: they are
+            # persisted to history too, and counting them would measure the gap
+            # since *she* last spoke rather than since the Commander did —
+            # shrinking hours_away and suppressing the return greeting entirely.
             row = await (await conn.execute(
-                "SELECT MAX(created_at) FROM companion_messages WHERE user_id = %s",
+                "SELECT MAX(created_at) FROM companion_messages "
+                "WHERE user_id = %s AND COALESCE(model, '') <> 'proactive'",
                 (user_id,),
             )).fetchone()
             if not row or not row[0]:

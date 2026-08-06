@@ -329,6 +329,10 @@ class TestDirectStreamingPath:
             await _drain_tasks()
 
         ns.memory.recall_for_prompt.assert_awaited_once()
+        # affection_level must be threaded so importance re-ranking is not stuck at 0
+        kwargs = ns.memory.recall_for_prompt.await_args.kwargs
+        assert "affection_level" in kwargs
+        assert kwargs["affection_level"] == ns.affection.get_state.return_value.level
 
     @pytest.mark.asyncio
     async def test_warmup_timer_scheduled_for_lmstudio(self):
@@ -862,3 +866,121 @@ class TestStreamFailureHandling:
 
         types = [c.args[1].get("type") for c in ns.ws.send.call_args_list]
         assert "warning" in types
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# _hours_since_last_exchange — presence gap
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestHoursSinceLastExchange:
+    """The presence block used to derive the gap from `last_interaction_date`,
+    a DATE column, so every absence rounded to a multiple of 24 hours and
+    disagreed with the return-greeting (which reads real timestamps)."""
+
+    @staticmethod
+    def _conn_returning(row):
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        result = MagicMock()
+        result.fetchone = AsyncMock(return_value=row)
+        conn = MagicMock()
+        conn.execute = AsyncMock(return_value=result)
+
+        @asynccontextmanager
+        async def _cm():
+            yield conn
+
+        return _cm, conn
+
+    @pytest.mark.asyncio
+    async def test_reports_a_real_sub_day_gap(self):
+        from datetime import datetime, timedelta, timezone
+
+        from app.chat_handlers import _hours_since_last_exchange
+
+        last = datetime.now(timezone.utc) - timedelta(hours=10)
+        cm, _ = self._conn_returning((last,))
+        with patch("app.db.get_conn", cm):
+            gap = await _hours_since_last_exchange("claude")
+
+        assert gap is not None
+        assert 9.9 < gap < 10.1  # not snapped to 24
+
+    @pytest.mark.asyncio
+    async def test_naive_timestamp_is_treated_as_utc(self):
+        from datetime import datetime, timedelta, timezone
+
+        from app.chat_handlers import _hours_since_last_exchange
+
+        last = (datetime.now(timezone.utc) - timedelta(hours=3)).replace(tzinfo=None)
+        cm, _ = self._conn_returning((last,))
+        with patch("app.db.get_conn", cm):
+            gap = await _hours_since_last_exchange("claude")
+
+        assert 2.9 < gap < 3.1
+
+    @pytest.mark.asyncio
+    async def test_excludes_her_own_check_ins(self):
+        from datetime import datetime, timezone
+
+        from app.chat_handlers import _hours_since_last_exchange
+
+        cm, conn = self._conn_returning((datetime.now(timezone.utc),))
+        with patch("app.db.get_conn", cm):
+            await _hours_since_last_exchange("claude")
+
+        sql = conn.execute.await_args.args[0]
+        assert "proactive" in sql
+
+    @pytest.mark.asyncio
+    async def test_binds_the_grace_window_as_a_parameter(self):
+        """A placeholder inside a quoted interval literal does not bind under
+        psycopg3 — see tests/test_sql_bind_guard.py."""
+        from datetime import datetime, timezone
+
+        from app.chat_handlers import _PRESENCE_IGNORE_SECONDS, _hours_since_last_exchange
+
+        cm, conn = self._conn_returning((datetime.now(timezone.utc),))
+        with patch("app.db.get_conn", cm):
+            await _hours_since_last_exchange("claude")
+
+        sql, params = conn.execute.await_args.args[0], conn.execute.await_args.args[1]
+        assert "make_interval" in sql
+        assert _PRESENCE_IGNORE_SECONDS in params
+
+    @pytest.mark.asyncio
+    async def test_no_history_returns_none_so_caller_can_fall_back(self):
+        from app.chat_handlers import _hours_since_last_exchange
+
+        cm, _ = self._conn_returning((None,))
+        with patch("app.db.get_conn", cm):
+            assert await _hours_since_last_exchange("claude") is None
+
+    @pytest.mark.asyncio
+    async def test_empty_row_returns_none(self):
+        from app.chat_handlers import _hours_since_last_exchange
+
+        cm, _ = self._conn_returning(None)
+        with patch("app.db.get_conn", cm):
+            assert await _hours_since_last_exchange("claude") is None
+
+    @pytest.mark.asyncio
+    async def test_db_failure_is_fail_soft(self):
+        from app.chat_handlers import _hours_since_last_exchange
+
+        with patch("app.db.get_conn", side_effect=RuntimeError("pool down")):
+            assert await _hours_since_last_exchange("claude") is None
+
+    @pytest.mark.asyncio
+    async def test_future_timestamp_clamps_to_zero(self):
+        from datetime import datetime, timedelta, timezone
+
+        from app.chat_handlers import _hours_since_last_exchange
+
+        cm, _ = self._conn_returning(
+            (datetime.now(timezone.utc) + timedelta(hours=2),)
+        )
+        with patch("app.db.get_conn", cm):
+            assert await _hours_since_last_exchange("claude") == 0.0

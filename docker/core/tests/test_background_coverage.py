@@ -784,3 +784,58 @@ class TestMemoryKeep:
         bg_mocks.memory_archive.update_kept.assert_awaited_once_with(
             "mem-7", kept=True, kept_by="commander"
         )
+
+
+
+# ── background_extraction: malformed LLM fact payloads ───────────────────────
+
+
+class TestBackgroundExtractionMalformedFacts:
+    """A bad facts list must not abort mood/affection/exchange persistence.
+
+    Pre-fix, `fact["key"]` on a string raised TypeError which the outer
+    except swallowed — silently dropping store_exchange for that turn.
+    """
+
+    @pytest.mark.asyncio
+    async def test_string_facts_skipped_and_exchange_still_stored(self, bg_mocks):
+        bg_mocks.extract_facts.return_value = _base_extract_result(
+            facts=["he likes coffee", "also motorcycles"],
+            should_remember=True,
+            mood="composed",
+        )
+        await bg.background_extraction("m", "r", _session(1), user_id="u1")
+        bg_mocks.memory.set_relationship_fact.assert_not_awaited()
+        bg_mocks.memory.store_exchange.assert_awaited_once()
+        # importance should still reflect should_remember
+        kwargs = bg_mocks.memory.store_exchange.call_args.kwargs
+        assert kwargs["importance"] == 0.7
+
+    @pytest.mark.asyncio
+    async def test_mixed_facts_stores_only_valid_dicts(self, bg_mocks):
+        bg_mocks.extract_facts.return_value = _base_extract_result(
+            facts=[
+                "bare string",
+                {"key": "favorite_drink", "value": "black coffee"},
+                {"key": 123, "value": "bad key type"},
+                {"key": "ok", "value": None},
+                {"key": "squad", "value": "404"},
+            ],
+        )
+        await bg.background_extraction("m", "r", _session(1), user_id="u1")
+        # Only the two well-formed string key/value pairs
+        calls = bg_mocks.memory.set_relationship_fact.await_args_list
+        stored = {(c.args[0], c.args[1]) for c in calls}
+        assert stored == {("favorite_drink", "black coffee"), ("squad", "404")}
+        bg_mocks.memory.store_exchange.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_non_list_topics_still_stores_exchange(self, bg_mocks):
+        bg_mocks.extract_facts.return_value = _base_extract_result(
+            topics="single-topic-string",
+            should_remember=False,
+        )
+        await bg.background_extraction("m", "r", _session(1), user_id="u1")
+        kwargs = bg_mocks.memory.store_exchange.call_args.kwargs
+        assert kwargs["topics"] == ["single-topic-string"]
+        assert kwargs["importance"] == 0.4

@@ -17,6 +17,7 @@ from .memory_blocks import (
 from .moods import build_context_block, build_mood_bleed_block
 from .rules import build_character_rules, build_pace_block, build_tool_block
 from .speech import (
+    build_behavioral_grammar_block,
     build_affection_block,
     build_character_preamble,
     build_expressive_block,
@@ -82,6 +83,7 @@ def assemble_system_prompt(
         build_expressive_block(p, affection_level),
         build_japanese_block(p, affection_level),
         build_speech_guidelines(p, affection_level),
+        build_behavioral_grammar_block(affection_level),
         build_affection_block(affection_score, affection_level, level_name, p),
         build_context_block(mood, affection_level, days_together),
         build_mood_bleed_block(mood),

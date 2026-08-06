@@ -20,7 +20,7 @@ Per-dep configuration matches §5.4 of the spec:
 | postgres   | 5 errs / 10s  | 1 query / 30s  | Serve cached state from Redis |
 | redis      | 5 errs / 10s  | 1 PING / 15s   | Disable session caching; PG passthrough |
 | qdrant     | 3 errs / 30s  | 1 search / 60s | Empty episodic memory; PG fallback |
-| lm_studio  | 3 errs / 60s  | 1 health / 120s | Anthropic fallback or 503 |
+| lm_studio  | 3 errs / 60s  | 1 health / 120s | FAILURE_SENTINEL (local-only, no cloud) |
 | voice      | 5 errs / 60s  | 1 health / 120s | Skip TTS; text-only |
 | comfyui    | 3 errs / 60s  | 1 health / 300s | Skip image gen; "image unavailable" |
 

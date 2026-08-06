@@ -15,6 +15,12 @@ services:
       # aichat services on amarillo (LAN via Docker network)
       DATABASE_URL: "postgresql://aichat:${POSTGRES_PASSWORD:?}@infra-postgres:5432/aichat"
       REDIS_URL: "redis://aichat-redis:6379/1"
+      # Shared secret for /internal/deferred/fire (events-bridge -> core).
+      # Fails closed: unset means the endpoint rejects everyone.
+      CORE_INTERNAL_TOKEN: "${CORE_INTERNAL_TOKEN:-}"
+      # queue = durable RabbitMQ work rail (prefetch=1 GPU lease via bridge).
+      # inline = in-process asyncio task (unit tests / bridge outage fallback).
+      HER_POV_EXECUTION: "${HER_POV_EXECUTION:-queue}"
       QDRANT_URL: "http://aichat-vector:6333"
       MCP_URL: "http://aichat-mcp:8096"
       DATA_URL: "http://aichat-data:8091"
@@ -30,7 +36,8 @@ services:
       # always sends the required bearer header; test backends may ignore it.
       LM_STUDIO_URL: "${LM_STUDIO_URL:-http://100.107.121.5:1234}"
       LM_STUDIO_TOKEN: "${LM_STUDIO_TOKEN:?LM_STUDIO_TOKEN is required}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # Cloud fallback is forbidden. Key is deliberately not wired.
+      # ANTHROPIC_API_KEY: deliberately omitted — local RTX 3090 only.
       # ComfyUI has no published raw port. Every operation is proxied by the
       # authenticated gateway and authorized again with the active GPU lease.
       COMFYUI_URL: "${COMFYUI_URL:-http://100.107.121.5:1234/api/v1/comfy}"
@@ -87,6 +94,35 @@ services:
 
   # companion-voice runs in the canonical ops/dominus-nobara stack on RAID0.
   # Reachable only at the target Tailscale address on port 8301.
+
+  # Fan companion Redis events onto the shared homelab RabbitMQ bus
+  # (see ~/git/rabbitmq-ops). Reachable over Tailscale AMQP only.
+  events-bridge:
+    build: ./docker/events-bridge
+    container_name: companion-events-bridge
+    environment:
+      REDIS_URL: "redis://aichat-redis:6379/1"
+      REDIS_CHANNEL: "companion:events"
+      RABBIT_HOST: "${RABBIT_HOST:-100.111.198.19}"
+      RABBIT_PORT: "${RABBIT_PORT:-5672}"
+      RABBIT_USER: "${RABBIT_USER:-homelab}"
+      RABBIT_PASS: "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required for events-bridge}"
+      LOCAL_HOSTNAME: "${LOCAL_HOSTNAME:-amarillo}"
+      # Deferred-task rail: the bridge runs the timer and calls core back when
+      # a task comes due. Unset token => core rejects the callback (fail closed)
+      # and the core-side sweeper delivers instead, just less punctually.
+      CORE_URL: "${CORE_URL:-http://companion-core:8300}"
+      CORE_INTERNAL_TOKEN: "${CORE_INTERNAL_TOKEN:-}"
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+    networks:
+      - aichat
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
+
 
 volumes:
   companion-images:

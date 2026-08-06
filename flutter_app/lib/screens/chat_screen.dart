@@ -22,6 +22,7 @@ import '../widgets/heartbeat_sensor.dart';
 import '../widgets/exit_icon.dart';
 import 'profile_screen.dart';
 import 'memory_archive_screen.dart';
+import 'her_pov_screen.dart';
 import 'subscription_screen.dart';
 
 @JS('audioRecorder.start')
@@ -860,6 +861,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     web.window.location.href = '/';
   }
 
+  void _openHerPov() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => HerPovScreen(
+          serverUrl: widget.serverUrl,
+          affectionLevel: _state.affectionLevel,
+          affectionLevelName: _state.affectionLevelName,
+        ),
+      ),
+    );
+  }
+
   void _openArchive() {
     Navigator.push(
       context,
@@ -1161,6 +1175,20 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           tooltip: _ambientMuted
                               ? 'Enable ambient audio'
                               : 'Mute ambient audio',
+                        ),
+                        IconButton(
+                          onPressed: _openHerPov,
+                          icon: Icon(
+                            Icons.auto_awesome,
+                            color: GFL2Colors.affinity.withValues(alpha: 0.75),
+                            size: 16,
+                          ),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 28,
+                            minHeight: 28,
+                          ),
+                          tooltip: 'Her POV',
                         ),
                         IconButton(
                           onPressed: _openArchive,

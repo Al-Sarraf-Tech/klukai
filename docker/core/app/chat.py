@@ -43,7 +43,7 @@ async def _handle_tap_interact(user_id: str) -> None:
         await proactive.trigger_tap()
     else:
         # Fallback: send a simple acknowledgment if proactive can't send
-        await ws.send_proactive(user_id, "Hm? Right here, Commander.")
+        await ws.send_proactive(user_id, "Hm? Right here, Commander.", persist=False)
 
 
 
@@ -71,6 +71,7 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
                     user_id,
                     "...Voice link garbled, Commander — I couldn't make out the transmission. "
                     "Try again or switch to text.",
+                    persist=False,
                 )
                 return
 
@@ -78,6 +79,7 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
                 await ws.send_proactive(
                     user_id,
                     "...I heard nothing on the channel, Commander. Try again, closer to the mic.",
+                    persist=False,
                 )
                 return
 
@@ -107,12 +109,14 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
                                 user_id,
                                 "...The voice synth is offline, Commander — "
                                 "I'm reading you in text instead.",
+                                persist=False,
                             )
                     except Exception as tts_err:
                         logger.error("TTS failed: %s", tts_err)
                         await ws.send_proactive(
                             user_id,
                             "...Voice synth dropped, Commander — text reply only.",
+                            persist=False,
                         )
     except Exception as e:
         logger.error("Voice processing failed: %s", e, exc_info=True)
@@ -120,6 +124,7 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
             await ws.send_proactive(
                 user_id,
                 "...Voice channel broke entirely, Commander. Switching to text.",
+                persist=False,
             )
         except Exception:
             pass
@@ -144,6 +149,19 @@ def register_websocket(app: FastAPI) -> None:
             return
 
         await ws.connect(websocket, user_id)
+
+        # He just opened the app. Start loading the model now so it is resident
+        # by the time he has finished typing, instead of making him watch a
+        # loading bar after he hits send. Fire-and-forget: this must never delay
+        # the connect, and a failure only costs the slow first reply he would
+        # have had anyway.
+        try:
+            from .warmup import warm_in_background
+            warm_task = warm_in_background()
+            if warm_task is not None:
+                ws.track_task(user_id, warm_task)
+        except Exception as e:
+            logger.debug("Warm-up on connect skipped: %s", e)
 
         # Ensure session exists — always restore mood from PostgreSQL (source of truth)
         session_key = session_id(user_id)

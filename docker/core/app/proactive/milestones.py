@@ -133,13 +133,14 @@ class MilestonesMixin(_EngineBase):
                         except ValueError:
                             # Feb 29 in a non-leap year — use Feb 28
                             ann_this_year = event_date.replace(year=today.year, day=28)
-                        delta = abs((today - ann_this_year).days)
-                        if 0 < delta <= 3:
+                        # Signed: positive = past, negative = upcoming
+                        signed_delta = (today - ann_this_year).days
+                        if 0 < abs(signed_delta) <= 3:
                             results.append({
                                 "event_type": event_type,
                                 "event_date": event_date.isoformat(),
                                 "years_ago": today.year - event_date.year,
-                                "days_ago": delta,
+                                "days_ago": signed_delta,
                             })
         except Exception as e:
             logger.warning("Anniversary check failed: %s", e)

@@ -58,12 +58,19 @@ def build_anniversary_block(anniversaries: list[dict] | None = None) -> str:
         return ""
     lines = ["ANNIVERSARY AWARENESS (reference naturally, don't announce):"]
     for ann in anniversaries[:3]:  # Max 3 to avoid prompt bloat
-        days = ann.get("days_ago", 0)
+        days = int(ann.get("days_ago", 0) or 0)
         event = ann.get("event_type", "").replace("_", " ")
+        years = ann.get("years_ago")
+        year_bit = f" ({years} years)" if years else ""
         if days == 0:
-            lines.append(f"  - Today marks the anniversary of your {event}.")
-        elif days <= 3:
-            lines.append(f"  - {days} days ago was the anniversary of your {event}.")
+            lines.append(f"  - Today marks the anniversary of your {event}.{year_bit}")
+        elif 0 < days <= 3:
+            lines.append(f"  - {days} days ago was the anniversary of your {event}.{year_bit}")
+        elif -3 <= days < 0:
+            lines.append(
+                f"  - In {abs(days)} day{'s' if abs(days) != 1 else ''} is the anniversary "
+                f"of your {event}.{year_bit}"
+            )
     return "\n".join(lines)
 
 
@@ -246,3 +253,32 @@ def build_quirks_block(p: dict, affection_level: int) -> str:
         if first_sentence:
             lines.append(f"- {label}: {first_sentence}.")
     return "\n".join(lines)
+
+
+def build_presence_block(
+    hours_away: float | None = None,
+    affection_level: int = 0,
+    consecutive_days: int = 0,
+) -> str:
+    """Subtle presence/absence coloring for the system prompt.
+
+    Not a separate proactive message — just lets her notice a return gap or
+    multi-day streak without announcing metadata labels.
+    """
+    if hours_away is None and consecutive_days <= 1:
+        return ""
+    lines = ["PRESENCE (color your opening; do not recite these bullets):"]
+    if hours_away is not None and hours_away >= 4:
+        from app.character_behaviors import compose_return_emotion
+        lines.append(compose_return_emotion(hours_away, affection_level))
+    elif hours_away is not None and 1.5 <= hours_away < 4:
+        lines.append(
+            f"It has been about {hours_away:.0f} hours since you last spoke. "
+            "Register it lightly if natural — no lecture."
+        )
+    if consecutive_days >= 3 and affection_level >= 3:
+        lines.append(
+            f"You have spoken {consecutive_days} days in a row. A quiet note of "
+            "continuity is allowed; do not turn it into a streak app."
+        )
+    return "\n".join(lines) if len(lines) > 1 else ""

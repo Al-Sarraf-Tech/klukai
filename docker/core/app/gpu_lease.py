@@ -90,6 +90,28 @@ def _request_timeout(read_seconds: float) -> httpx.Timeout:
     )
 
 
+
+async def _publish_lease_event(action: str, workload: str, **extra) -> None:
+    """Best-effort fan-out of GPU lease transitions onto companion Redis events.
+
+    companion-events-bridge republishes them onto homelab.events as
+    host.<host>.gpu_lease.<workload>.<action> for rabbitmq-metrics.
+    Never raises.
+    """
+    try:
+        from . import events
+        await events.publish(
+            f"gpu_lease.{action}",
+            data=workload,
+            workload=workload,
+            domain="gpu_lease",
+            action=action,
+            **extra,
+        )
+    except Exception:
+        pass
+
+
 async def acquire_gpu_lease(
     client: httpx.AsyncClient,
     *,
@@ -133,12 +155,15 @@ async def acquire_gpu_lease(
         or ttl != GPU_LEASE_TTL_SECONDS
     ):
         raise GPULeaseError("GPU lease TTL did not match the fixed safety contract")
+    await _publish_lease_event("acquired", workload)
     return GPULease(token=token, ttl_seconds=ttl)
 
 
 async def release_gpu_lease(
     client: httpx.AsyncClient,
     lease: GPULease,
+    *,
+    workload: str = "unknown",
 ) -> None:
     """Release an acquired lease without ever placing its token in a URL."""
     last_error: GPULeaseError | None = None
@@ -156,6 +181,7 @@ async def release_gpu_lease(
             last_error.__cause__ = exc
         else:
             if response.status_code in {200, 204}:
+                await _publish_lease_event("released", workload)
                 return
             last_error = _status_error("release", response)
             if response.status_code < 500:
@@ -189,7 +215,7 @@ async def gpu_lease(
     finally:
         try:
             if lease is not None:
-                release_task = asyncio.create_task(release_gpu_lease(http, lease))
+                release_task = asyncio.create_task(release_gpu_lease(http, lease, workload=workload))
                 try:
                     await asyncio.shield(release_task)
                 except asyncio.CancelledError:

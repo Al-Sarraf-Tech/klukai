@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -398,3 +399,106 @@ def register_extras3(app: FastAPI) -> None:
         if login_path.exists():
             return FileResponse(login_path, media_type="text/html")
         return {"status": "companion-core running", "auth": "login page not deployed"}
+
+
+    # ── Her POV: she picks a moment and draws it ────────────────────────────
+
+    @app.post("/api/memories/her-pov")
+    async def api_her_pov_start(request: Request):
+        """Start a Her POV memory job: she picks any real exchange and draws it.
+
+        Returns 202 with job_id. Progress streams over WS (type=her_pov) and
+        can be polled via GET /api/memories/her-pov/{job_id}.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from . import memory_her_pov
+        result = await memory_her_pov.start_her_pov(user_id)
+        return JSONResponse(result, status_code=202)
+
+    @app.get("/api/memories/her-pov/{job_id}")
+    async def api_her_pov_status(job_id: str, request: Request):
+        """Poll status of a Her POV job (no image payload)."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from . import memory_her_pov
+        job = await memory_her_pov.get_job(job_id)
+        if not job or job.get("user_id") != user_id:
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        # Strip any accidental bulky fields
+        safe = {
+            k: job[k]
+            for k in (
+                "id", "status", "phase", "message", "error", "memory_id",
+                "title", "annotation", "mood", "exchange_preview",
+                "created_at", "updated_at", "has_image",
+            )
+            if k in job
+        }
+        return safe
+
+
+
+    # ── Deferred tasks: internal delivery hook ─────────────────────────────
+
+    @app.post("/internal/deferred/fire")
+    async def api_deferred_fire(request: Request):
+        """Deliver a deferred task whose timer expired.
+
+        Called by the events bridge, which owns the AMQP side of the delay rail.
+        Guarded by a shared secret rather than a user session: there is no user
+        on this path, and the endpoint can start work, so it must never be
+        reachable from the public surface. Fails closed — an unset token means
+        nobody can call it, rather than everybody.
+        """
+        import os
+
+        expected = os.environ.get("CORE_INTERNAL_TOKEN", "")
+        presented = request.headers.get("X-Internal-Token", "")
+        if not expected or not secrets.compare_digest(presented, expected):
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+        task_id = str((body or {}).get("task_id") or "")
+        if not task_id:
+            return JSONResponse({"error": "task_id required"}, status_code=400)
+
+        from . import deferred
+        fired = await deferred.fire(task_id)
+        # 200 either way: "already delivered" is a success from the bridge's
+        # point of view, and must not make it redeliver forever.
+        return {"task_id": task_id, "fired": fired}
+
+    @app.post("/internal/jobs/her-pov/run")
+    async def api_her_pov_run(request: Request):
+        """Run a durable Her POV job to completion.
+
+        Called by the events-bridge while it holds the unacked queue message
+        (prefetch=1 = GPU lease). Same shared-secret gate as deferred/fire.
+        Blocks until the pipeline is terminal so the bridge can ack safely.
+        """
+        import os
+
+        expected = os.environ.get("CORE_INTERNAL_TOKEN", "")
+        presented = request.headers.get("X-Internal-Token", "")
+        if not expected or not secrets.compare_digest(presented, expected):
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+        job_id = str((body or {}).get("job_id") or "")
+        if not job_id:
+            return JSONResponse({"error": "job_id required"}, status_code=400)
+
+        from . import memory_her_pov
+        ok = await memory_her_pov.run_job_from_queue(job_id)
+        return {"job_id": job_id, "ok": ok}

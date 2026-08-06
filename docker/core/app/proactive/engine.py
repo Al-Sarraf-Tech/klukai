@@ -90,7 +90,18 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
     def __init__(self) -> None:
         # All scheduling happens on the Commander's wall clock — the container
         # runs UTC, so the zone is set explicitly (DST handled by zoneinfo).
-        self._scheduler = AsyncIOScheduler(timezone=LOCAL_TZ)
+        # misfire_grace_time defaults to ONE SECOND, which silently discards a
+        # job whenever the event loop is busy at its fire time (a cold model
+        # load or an image render is easily longer than that).
+        from .durability import MISFIRE_GRACE_SECONDS
+        self._scheduler = AsyncIOScheduler(
+            timezone=LOCAL_TZ,
+            job_defaults={
+                "misfire_grace_time": MISFIRE_GRACE_SECONDS,
+                "coalesce": True,
+                "max_instances": 1,
+            },
+        )
         self._muted_until: datetime | None = None
         self._on_message_callback = None
         self._on_recap_callback = None
@@ -324,6 +335,17 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             replace_existing=True,
         )
 
+        # Deferred-task safety net: fire anything already due that the RabbitMQ
+        # delay rail did not deliver. This is what turns a broker outage into
+        # late delivery instead of lost work, so it must stay unconditional.
+        self._scheduler.add_job(
+            self._deferred_sweep,
+            "interval",
+            minutes=1,
+            id="deferred_sweep",
+            replace_existing=True,
+        )
+
         # Surface scheduled-job failures via audit log + structured logger.
         # Without this, an anniversary check (or any other scheduled job) that
         # raises gets swallowed by APScheduler's default handler — the user
@@ -355,8 +377,51 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         except Exception as e:
             logger.warning("Could not wire scheduler error listener: %s", e)
 
+        # Record every successful run so a restart can tell what it missed.
+        try:
+            from apscheduler.events import EVENT_JOB_EXECUTED
+
+            from .durability import record_fire
+
+            def _on_job_executed(event):
+                try:
+                    import asyncio as _asyncio
+                    _asyncio.create_task(record_fire(event.job_id))
+                except Exception:
+                    pass
+
+            self._scheduler.add_listener(_on_job_executed, EVENT_JOB_EXECUTED)
+        except Exception as e:
+            logger.warning("Could not wire scheduler run recorder: %s", e)
+
         self._scheduler.start()
+
+        # Replay anything whose fire time passed while the process was down.
+        # Backgrounded so a slow catch-up never delays startup.
+        try:
+            import asyncio as _asyncio
+            _asyncio.create_task(self._catch_up_missed())
+        except Exception as e:
+            logger.warning("Could not schedule catch-up pass: %s", e)
+
         logger.info("Klukai proactive engine started")
+
+    async def _deferred_sweep(self) -> None:
+        """Backstop for the RabbitMQ delay rail."""
+        from ..deferred import sweep
+        await sweep()
+
+    async def _catch_up_missed(self) -> None:
+        """Run allowlisted jobs whose fire time passed while she was down."""
+        from .durability import run_catch_up
+
+        jobs = [
+            (job.id, job.trigger, job.func)
+            for job in self._scheduler.get_jobs()
+        ]
+        ran = await run_catch_up(jobs)
+        if ran:
+            logger.info("Scheduler catch-up replayed: %s", ", ".join(ran))
 
     def stop(self) -> None:
         if self._mission_timer and self._mission_timer.active:

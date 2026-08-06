@@ -189,3 +189,23 @@ class TestStripActionsForTts:
         from app.helpers import strip_actions_for_tts
         result = strip_actions_for_tts("Just a plain sentence.")
         assert "Just a plain sentence." in result
+
+
+class TestSquadAddressNoFalsePositives:
+    def test_relevant_does_not_match_leva(self):
+        from app.helpers import detect_squad_address
+        assert detect_squad_address("is that relevant to the mission?") is None
+
+    def test_elevator_does_not_match_leva(self):
+        from app.helpers import detect_squad_address
+        assert detect_squad_address("I took the elevator") is None
+
+    def test_vector_math_does_not_match_vector_alone_when_embedded(self):
+        from app.helpers import detect_squad_address
+        # "vector" as whole word still matches Vector member — that's intentional.
+        # Ensure substring-in-word is fixed for leva only primarily.
+        assert detect_squad_address("the elevators are down") is None
+
+    def test_real_leva_still_matches(self):
+        from app.helpers import detect_squad_address
+        assert detect_squad_address("Talk to Leva about intel") == "Leva"

@@ -25,8 +25,7 @@ cp .env.example .env
 #   POSTGRES_PASSWORD=<dev password>
 #   SEED_PASSWORD_JALSARRAF=<dev password>
 #   ADMIN_TOKEN=<short random string>
-# Optional (for cloud fallback / image gen):
-#   ANTHROPIC_API_KEY=...
+# Cloud fallback is forbidden (local RTX 3090 only).
 #   VAPID_PUBLIC_KEY=...
 #   VAPID_PRIVATE_KEY=...
 chmod 600 .env

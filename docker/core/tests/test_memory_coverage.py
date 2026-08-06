@@ -625,6 +625,22 @@ class TestRecallForPrompt:
         assert m.recall_episodes.call_args[1]["user_id"] == "carol"
         assert m.get_relationship_facts.call_args[1]["user_id"] == "carol"
         assert m.recall_exchanges_with_recency.call_args[1]["user_id"] == "carol"
+        # Default affection_level=0 is threaded so ranking is deterministic.
+        assert m.recall_exchanges_with_recency.call_args[1]["affection_level"] == 0
+
+    @pytest.mark.asyncio
+    async def test_threads_affection_level_into_exchange_rerank(self):
+        """Live chat at high affection must NOT fall into the low-affection
+        importance-penalty branch — affection_level has to reach the re-ranker."""
+        m = _mk_manager()
+        m.recall_episodes = AsyncMock(return_value=[])
+        m.get_relationship_facts = AsyncMock(return_value={})
+        m.recall_exchanges_with_recency = AsyncMock(return_value=[])
+
+        await m.recall_for_prompt("remember when", user_id="carol", affection_level=9)
+
+        assert m.recall_exchanges_with_recency.call_args[1]["affection_level"] == 9
+        assert m.recall_exchanges_with_recency.call_args[1]["user_id"] == "carol"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
