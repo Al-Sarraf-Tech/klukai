@@ -150,6 +150,19 @@ def register_websocket(app: FastAPI) -> None:
 
         await ws.connect(websocket, user_id)
 
+        # He just opened the app. Start loading the model now so it is resident
+        # by the time he has finished typing, instead of making him watch a
+        # loading bar after he hits send. Fire-and-forget: this must never delay
+        # the connect, and a failure only costs the slow first reply he would
+        # have had anyway.
+        try:
+            from .warmup import warm_in_background
+            warm_task = warm_in_background()
+            if warm_task is not None:
+                ws.track_task(user_id, warm_task)
+        except Exception as e:
+            logger.debug("Warm-up on connect skipped: %s", e)
+
         # Ensure session exists — always restore mood from PostgreSQL (source of truth)
         session_key = session_id(user_id)
         session = await memory.get_session(session_key)
