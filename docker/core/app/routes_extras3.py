@@ -398,3 +398,43 @@ def register_extras3(app: FastAPI) -> None:
         if login_path.exists():
             return FileResponse(login_path, media_type="text/html")
         return {"status": "companion-core running", "auth": "login page not deployed"}
+
+
+    # ── Her POV: she picks a moment and draws it ────────────────────────────
+
+    @app.post("/api/memories/her-pov")
+    async def api_her_pov_start(request: Request):
+        """Start a Her POV memory job: she picks any real exchange and draws it.
+
+        Returns 202 with job_id. Progress streams over WS (type=her_pov) and
+        can be polled via GET /api/memories/her-pov/{job_id}.
+        """
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from . import memory_her_pov
+        result = await memory_her_pov.start_her_pov(user_id)
+        return JSONResponse(result, status_code=202)
+
+    @app.get("/api/memories/her-pov/{job_id}")
+    async def api_her_pov_status(job_id: str, request: Request):
+        """Poll status of a Her POV job (no image payload)."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from . import memory_her_pov
+        job = await memory_her_pov.get_job(job_id)
+        if not job or job.get("user_id") != user_id:
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        # Strip any accidental bulky fields
+        safe = {
+            k: job[k]
+            for k in (
+                "id", "status", "phase", "message", "error", "memory_id",
+                "title", "annotation", "mood", "exchange_preview",
+                "created_at", "updated_at", "has_image",
+            )
+            if k in job
+        }
+        return safe
+
