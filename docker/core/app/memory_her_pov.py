@@ -198,7 +198,7 @@ async def compose_pov(
 
 async def run_her_pov(user_id: str, job_id: str) -> None:
     """Full pipeline with WS status updates. Never raises out of task."""
-    from . import affection as affection_mod
+    from .context import affection
     from . import memory_archive
     from .context import memory, ws
     from .image_gen import build_prompt, generate_image, is_outfit_unlocked
@@ -238,7 +238,7 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
                 pass
             return
 
-        aff = await affection_mod.get_state(user_id)
+        aff = await affection.get_state(user_id)
         level = aff.level
 
         await _set_job(job_id, status="thinking", phase="thinking",
