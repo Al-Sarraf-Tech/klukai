@@ -329,6 +329,10 @@ class TestDirectStreamingPath:
             await _drain_tasks()
 
         ns.memory.recall_for_prompt.assert_awaited_once()
+        # affection_level must be threaded so importance re-ranking is not stuck at 0
+        kwargs = ns.memory.recall_for_prompt.await_args.kwargs
+        assert "affection_level" in kwargs
+        assert kwargs["affection_level"] == ns.affection.get_state.return_value.level
 
     @pytest.mark.asyncio
     async def test_warmup_timer_scheduled_for_lmstudio(self):

@@ -445,13 +445,19 @@ class MemoryManager:
 
     async def recall_for_prompt(
         self, query: str, user_id: str = "jalsarraf",
+        affection_level: int = 0,
     ) -> tuple[list[str], dict, list[dict]]:
-        """Return (episodic_memories, relationship_facts, recalled_exchanges) — parallel fetch, scoped to user."""
+        """Return (episodic_memories, relationship_facts, recalled_exchanges) — parallel fetch, scoped to user.
+
+        affection_level is threaded into exchange re-ranking so high-affection
+        chat prefers should_remember exchanges (and low-affection de-emphasizes
+        them). Callers that omit it keep the historical default of 0.
+        """
         import asyncio
         episodes_task = self.recall_episodes(query, limit=5, user_id=user_id)
         facts_task = self.get_relationship_facts(user_id=user_id)
         exchanges_task = self.recall_exchanges_with_recency(
-            query, limit=MSG_RECALL_LIMIT, user_id=user_id
+            query, limit=MSG_RECALL_LIMIT, affection_level=affection_level, user_id=user_id
         )
 
         episodes, facts, exchanges = await asyncio.gather(

@@ -80,9 +80,23 @@ async def background_extraction(
             except Exception as e:
                 logger.warning("Memory curation update failed for %s: %s", curation_target, e)
 
-        # Store new facts (scoped to user)
-        for fact in result.get("facts", []):
-            await memory.set_relationship_fact(fact["key"], fact["value"], user_id=user_id)
+        # Store new facts (scoped to user). LLM output is untrusted — skip any
+        # non-dict / non-string entries instead of TypeError-ing the whole
+        # extraction (which would also skip mood, affection, and exchange store).
+        try:
+            for fact in result.get("facts", []) or []:
+                if not isinstance(fact, dict):
+                    logger.warning("Skipping non-dict fact from extractor: %r", fact)
+                    continue
+                key, value = fact.get("key"), fact.get("value")
+                if not isinstance(key, str) or not isinstance(value, str):
+                    logger.warning("Skipping malformed fact (key/value types): %r", fact)
+                    continue
+                if not key or not value:
+                    continue
+                await memory.set_relationship_fact(key, value, user_id=user_id)
+        except Exception as e:
+            logger.warning("Fact storage failed (continuing extraction): %s", e)
 
         # Store commander details as relationship facts (feature: she remembers)
         commander_details = result.get("commander_details", {})
@@ -276,15 +290,26 @@ async def background_extraction(
         except Exception as e:
             logger.warning("Affection adjustment failed: %s", e)
 
-        # Store exchange in conversation memory for rich recall (scoped to user)
+        # Normalize topics once — extractor sometimes returns a bare string or null.
+        raw_topics = result.get("topics", [])
+        if isinstance(raw_topics, str):
+            topics = [raw_topics] if raw_topics else []
+        elif isinstance(raw_topics, list):
+            topics = [t for t in raw_topics if isinstance(t, str)]
+        else:
+            topics = []
+
+        # Store exchange in conversation memory for rich recall (scoped to user).
+        # Isolated from fact-parsing so a malformed extractor payload never
+        # silently drops the conversation from long-term memory.
         try:
             exchange_id = str(uuid.uuid4())
             await memory.store_exchange(
                 exchange_id=exchange_id,
                 user_content=user_msg,
                 assistant_content=assistant_msg,
-                topics=result.get("topics", []),
-                mood=result.get("mood", "composed"),
+                topics=topics,
+                mood=mood if isinstance(mood, str) else "composed",
                 importance=0.7 if result.get("should_remember") else 0.4,
                 conversation_id=session.conversation_id,
                 user_id=user_id,
@@ -294,19 +319,22 @@ async def background_extraction(
 
         # Create episode every 10 turns (scoped to user)
         if session.turn_count > 0 and session.turn_count % 10 == 0:
-            summary = await create_episode_summary(session.turns)
-            if summary:
-                episode_id = str(uuid.uuid4())
-                await memory.store_episode(
-                    episode_id=episode_id,
-                    summary=summary,
-                    keywords=result.get("topics", []),
-                    emotion_tags=[mood],
-                    importance=0.5,
-                    conversation_id=session.conversation_id,
-                    user_id=user_id,
-                )
-                logger.info("Episode stored: %s", summary[:80])
+            try:
+                summary = await create_episode_summary(session.turns)
+                if summary:
+                    episode_id = str(uuid.uuid4())
+                    await memory.store_episode(
+                        episode_id=episode_id,
+                        summary=summary,
+                        keywords=topics,
+                        emotion_tags=[mood] if isinstance(mood, str) else [],
+                        importance=0.5,
+                        conversation_id=session.conversation_id,
+                        user_id=user_id,
+                    )
+                    logger.info("Episode stored: %s", summary[:80])
+            except Exception as e:
+                logger.warning("Episode creation failed: %s", e)
     except Exception as e:
         import traceback
         logger.error("Background extraction failed: %s\n%s", e, traceback.format_exc())

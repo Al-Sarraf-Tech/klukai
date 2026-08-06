@@ -133,6 +133,10 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         except Exception as e:
             logger.warning("Could not deliver store-failure warning: %s", e)
 
+    # Affection is needed both for prompt modulation and for memory re-ranking
+    # (importance bias only fires when affection_level is passed through).
+    aff_state = await affection.get_state(user_id)
+
     # Skip expensive memory recall for very short messages (hi, ok, yes, etc)
     is_short = len(content.strip()) <= 20
     if is_short:
@@ -142,7 +146,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     else:
         try:
             episode_memories, rel_facts, recalled_exchanges = await memory.recall_for_prompt(
-                content, user_id=user_id
+                content, user_id=user_id, affection_level=aff_state.level,
             )
         except Exception as e:
             # Defense in depth: recall_for_prompt already fails open, but never let
@@ -150,9 +154,6 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             # context and keep replying.
             logger.warning("recall_for_prompt failed, continuing with empty context: %s", e)
             episode_memories, rel_facts, recalled_exchanges = [], {}, []
-
-    # Get affection state for prompt modulation
-    aff_state = await affection.get_state(user_id)
 
     # Assemble system prompt
     # Calculate days together
