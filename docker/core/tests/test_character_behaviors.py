@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
@@ -83,6 +83,39 @@ class TestIsAnniversary:
         from app.character_behaviors import is_anniversary
         assert is_anniversary(None) is None
 
+    def test_accepts_plain_date(self):
+        """companion_firsts.event_date is a SQL DATE -> psycopg returns date.
+
+        Regression: `date` has no `.tzinfo`, which used to raise AttributeError
+        and take down the whole daily anniversary sweep.
+        """
+        from app.character_behaviors import is_anniversary
+        now = datetime(2026, 4, 20, tzinfo=timezone.utc)
+        result = is_anniversary(date(2025, 4, 20), today=now)
+        assert result is not None
+        assert result["years"] == 1
+
+    def test_accepts_plain_date_for_today(self):
+        from app.character_behaviors import is_anniversary
+        result = is_anniversary(date(2025, 4, 20), today=date(2026, 4, 20))
+        assert result is not None
+        assert result["years"] == 1
+
+    def test_plain_date_non_match_returns_none(self):
+        from app.character_behaviors import is_anniversary
+        now = datetime(2026, 4, 20, tzinfo=timezone.utc)
+        assert is_anniversary(date(2025, 4, 19), today=now) is None
+
+    def test_accepts_iso_date_string(self):
+        from app.character_behaviors import is_anniversary
+        now = datetime(2026, 4, 20, tzinfo=timezone.utc)
+        assert is_anniversary("2025-04-20", today=now)["years"] == 1
+
+    def test_malformed_string_returns_none(self):
+        from app.character_behaviors import is_anniversary
+        now = datetime(2026, 4, 20, tzinfo=timezone.utc)
+        assert is_anniversary("not-a-date", today=now) is None
+
 
 class TestSelectAnniversaryFromFirsts:
     def test_picks_anniversary_match(self):
@@ -137,6 +170,32 @@ class TestSelectAnniversaryFromFirsts:
              "event_date": datetime(2025, 6, 11, tzinfo=timezone.utc)},
         ]
         assert select_anniversary_from_firsts(firsts, today=today) is None
+
+    def test_accepts_plain_date_rows(self):
+        """Rows straight out of psycopg carry `date`, not `datetime`.
+
+        Regression for the crash that killed the daily anniversary sweep.
+        """
+        from app.character_behaviors import select_anniversary_from_firsts
+        today = datetime(2026, 4, 20, tzinfo=timezone.utc)
+        firsts = [
+            {"event_type": "first_message", "event_date": date(2025, 4, 20)},
+            {"event_type": "first_laugh", "event_date": date(2025, 7, 3)},
+        ]
+        pick = select_anniversary_from_firsts(firsts, today=today)
+        assert pick is not None
+        assert pick["event_type"] == "first_message"
+        assert pick["years"] == 1
+
+    def test_mixed_date_and_datetime_rows(self):
+        from app.character_behaviors import select_anniversary_from_firsts
+        today = datetime(2026, 4, 20, tzinfo=timezone.utc)
+        firsts = [
+            {"event_type": "first_message", "event_date": date(2025, 4, 20)},
+            {"event_type": "first_kiss",
+             "event_date": datetime(2023, 4, 20, tzinfo=timezone.utc)},
+        ]
+        assert select_anniversary_from_firsts(firsts, today=today)["years"] == 3
 
 
 # ─────────────────────────────────────────────────────────────────────────

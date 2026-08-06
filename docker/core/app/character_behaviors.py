@@ -9,7 +9,7 @@ with a dream?", "is today an anniversary?" — that the higher-level flows
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Literal
 
 logger = logging.getLogger(__name__)
@@ -140,7 +140,33 @@ def compose_return_emotion(hours_away: float, affection_level: int,
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def is_anniversary(event_date: datetime, today: datetime | None = None) -> dict | None:
+def _as_aware_datetime(value: datetime | date | str | None) -> datetime | None:
+    """Coerce a date-ish value into a timezone-aware UTC datetime.
+
+    `companion_firsts.event_date` is a SQL DATE, so psycopg hands back a plain
+    `datetime.date` — which has no `.tzinfo`. Accept dates, datetimes and ISO
+    strings alike so callers never have to care which one the DB returned.
+    """
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    # datetime is a subclass of date — check it first.
+    if not isinstance(value, datetime):
+        if not isinstance(value, date):
+            return None
+        value = datetime(value.year, value.month, value.day)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def is_anniversary(
+    event_date: datetime | date | str | None, today: datetime | date | str | None = None
+) -> dict | None:
     """Return anniversary metadata if today matches event_date's month/day.
 
     For a date that occurred N years ago, returns {"years": N, "original": ISO}.
@@ -148,15 +174,10 @@ def is_anniversary(event_date: datetime, today: datetime | None = None) -> dict 
 
     Returns None if no special-date match.
     """
+    event_date = _as_aware_datetime(event_date)
     if not event_date:
         return None
-    now = today or datetime.now(timezone.utc)
-
-    # Align timezone for comparison
-    if event_date.tzinfo is None:
-        event_date = event_date.replace(tzinfo=timezone.utc)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+    now = _as_aware_datetime(today) or datetime.now(timezone.utc)
 
     # Same year, same day = original date (not really an anniversary)
     if event_date.year == now.year:
@@ -179,23 +200,18 @@ def is_anniversary(event_date: datetime, today: datetime | None = None) -> dict 
 
 
 def select_anniversary_from_firsts(firsts: list[dict],
-                                    today: datetime | None = None) -> dict | None:
+                                    today: datetime | date | str | None = None) -> dict | None:
     """Scan a list of 'firsts' (companion_firsts rows) for anniversary matches.
 
     Returns the first match (or the most significant by years) or None.
     Each firsts dict should contain at least 'event_type' and 'event_date'.
     """
-    now = today or datetime.now(timezone.utc)
+    now = _as_aware_datetime(today) or datetime.now(timezone.utc)
     best: dict | None = None
     for f in firsts:
-        ed = f.get("event_date")
+        ed = _as_aware_datetime(f.get("event_date"))
         if not ed:
             continue
-        if isinstance(ed, str):
-            try:
-                ed = datetime.fromisoformat(ed.replace("Z", "+00:00"))
-            except Exception:
-                continue
         anniversary = is_anniversary(ed, today=now)
         if anniversary:
             entry = {
