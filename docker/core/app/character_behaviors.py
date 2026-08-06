@@ -233,36 +233,50 @@ def interaction_to_sentiment(interaction: dict | None) -> str | None:
 
     if t == "flirty":
         return "flirty"
-    if t in {"playful", "warm", "affectionate", "tender", "positive"}:
+    # Extractor-native positives (plus legacy labels)
+    if t in {
+        "playful", "warm", "affectionate", "tender", "positive",
+        "compliment", "genuine_interest", "personal_sharing", "greeting",
+        "remembering",
+    }:
+        # High-intensity compliments / personal sharing pull flirty at close range
+        if t in {"compliment", "personal_sharing"} and intensity >= 8:
+            return "flirty"
         return "positive"
     if t in {"combative", "hostile", "angry", "rude", "negative"}:
         return "negative_heavy" if intensity >= 7 else "negative_light"
     if t in {"sad", "hurt", "distressed", "vulnerable"}:
         return "negative_heavy"
+    # mission_discussion / neutral → no contagion
     return None
 
 
 _MOOD_NUDGES: dict[str, dict[str, str]] = {
+    # Targets must be valid moods the rest of the stack accepts.
     "negative_heavy": {
-        "composed":  "tender",
-        "playful":   "tender",
-        "flirty":    "tender",
+        "composed":  "irritated",
+        "playful":   "composed",
+        "flirty":    "composed",
+        "affectionate": "composed",
         "defiant":   "composed",
-        "cold":      "composed",
+        "content":   "composed",
     },
     "negative_light": {
         "composed":  "composed",
         "playful":   "composed",
-        "cold":      "composed",
+        "content":   "composed",
     },
     "positive":    {
-        "cold":      "composed",
-        "composed":  "playful",
-        "tender":    "playful",
+        "cold":      "composed",  # legacy / invalid cold label warms toward composed
+        "composed":  "quietly_pleased",
+        "irritated": "composed",
+        "tender":    "affectionate",
+        "focused":   "composed",
     },
     "flirty":      {
-        "composed":  "flirty",
-        "playful":   "flirty",
+        "composed":  "flustered",
+        "playful":   "affectionate",
+        "quietly_pleased": "flustered",
     },
 }
 

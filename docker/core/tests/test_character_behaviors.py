@@ -145,21 +145,27 @@ class TestSelectAnniversaryFromFirsts:
 
 
 class TestNudgeMood:
-    def test_heavy_negative_pulls_playful_to_tender(self):
+    def test_heavy_negative_pulls_playful_to_composed(self):
         from app.character_behaviors import nudge_mood
-        assert nudge_mood("playful", "negative_heavy") == "tender"
+        # Hostility must not make her softer (old tender mapping was wrong).
+        assert nudge_mood("playful", "negative_heavy") == "composed"
+
+    def test_heavy_negative_composed_goes_irritated(self):
+        from app.character_behaviors import nudge_mood
+        assert nudge_mood("composed", "negative_heavy") == "irritated"
 
     def test_light_negative_pulls_playful_to_composed(self):
         from app.character_behaviors import nudge_mood
         assert nudge_mood("playful", "negative_light") == "composed"
 
-    def test_positive_sentiment_warms_cold_mood(self):
+    def test_positive_sentiment_warms_composed_mood(self):
         from app.character_behaviors import nudge_mood
-        assert nudge_mood("cold", "positive") == "composed"
+        assert nudge_mood("composed", "positive") == "quietly_pleased"
 
-    def test_flirty_sentiment_pulls_composed(self):
+    def test_flirty_sentiment_pulls_composed_to_flustered(self):
         from app.character_behaviors import nudge_mood
-        assert nudge_mood("composed", "flirty") == "flirty"
+        # flirty is not a VALID mood name; flustered is.
+        assert nudge_mood("composed", "flirty") == "flustered"
 
     def test_unknown_sentiment_keeps_mood(self):
         from app.character_behaviors import nudge_mood

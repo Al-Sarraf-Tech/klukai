@@ -62,17 +62,19 @@ class TestInteractionToSentiment:
 class TestMoodContagionChain:
     """Integration check: interaction_to_sentiment feeds nudge_mood correctly."""
 
-    def test_flirty_pulls_composed_to_flirty(self):
+    def test_flirty_pulls_composed_to_flustered(self):
         from app.character_behaviors import interaction_to_sentiment, nudge_mood
         sentiment = interaction_to_sentiment({"type": "flirty", "intensity": 6})
         mood = nudge_mood("composed", sentiment)
-        assert mood == "flirty"
+        # flustered is a VALID mood; bare "flirty" is not
+        assert mood == "flustered"
 
-    def test_heavy_negative_pulls_playful_to_tender(self):
+    def test_heavy_negative_pulls_playful_to_composed(self):
         from app.character_behaviors import interaction_to_sentiment, nudge_mood
         sentiment = interaction_to_sentiment({"type": "sad", "intensity": 8})
         mood = nudge_mood("playful", sentiment)
-        assert mood == "tender"
+        # Hostility/distress must not make her softer (old tender mapping)
+        assert mood == "composed"
 
     def test_positive_warms_cold_to_composed(self):
         from app.character_behaviors import interaction_to_sentiment, nudge_mood

@@ -188,12 +188,15 @@ def detect_squad_address(message: str) -> str | None:
     """Detect if the Commander is addressing a specific squad member.
 
     Returns the canonical squad member name (e.g., 'Mechty') or None.
+    Uses word-boundary matching so English words like "relevant" / "elevator"
+    do not false-positive on the alias "leva".
     """
+    import re as _re
     lower = message.lower()
 
-    # Check if any squad member name appears in the message
-    for alias, canonical in SQUAD_MEMBERS.items():
-        if alias in lower:
+    # Prefer longer aliases first (e.g. "ump45" before bare digits if any)
+    for alias, canonical in sorted(SQUAD_MEMBERS.items(), key=lambda kv: -len(kv[0])):
+        if _re.search(rf"\b{_re.escape(alias)}\b", lower):
             return canonical
 
     return None

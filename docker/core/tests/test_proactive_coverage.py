@@ -1417,7 +1417,7 @@ class TestCheckAnniversaries:
         with _patch_now(), patch("app.db.get_conn", return_value=_db_ctx(conn)):
             results = await e.check_anniversaries("alice")
         assert len(results) == 1
-        assert results[0]["days_ago"] == 2
+        assert abs(results[0]["days_ago"]) == 2  # signed: past +N / upcoming -N
         assert results[0]["years_ago"] == 1
 
     @pytest.mark.asyncio

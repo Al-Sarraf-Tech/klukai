@@ -62,9 +62,20 @@ drowsy, amused, bored, excited, melancholic, haunted, conflicted, guilty, determ
 grieving, furious, nostalgic, curious, irritated, defiant, vulnerable, grateful, worried, embarrassed
 
 Interaction types: greeting, genuine_interest, personal_sharing, compliment, \
-mission_discussion, remembering, neutral
+mission_discussion, remembering, neutral, flirty, playful, tender, warm, affectionate, \
+combative, hostile, angry, rude, sad, hurt, distressed, vulnerable
 IMPORTANT: Short/casual messages are NEVER "rude". Only explicit hostility is "rude".
-"I love you" is a compliment (intensity 8-10), NOT neutral.
+"I love you" is a compliment (intensity 8-10) OR tender/warm (intensity 8-10), NOT neutral.
+
+facts: Relationship facts worth long-term storage as {{"key","value"}} string pairs. \
+Examples: {{"key":"favorite_drink","value":"black coffee"}}, {{"key":"callsign","value":"Wolf"}}. \
+Only durable personal/relationship facts — not mood, not one-off logistics. Empty list if none.
+
+topics: 1-5 short topic tags for this exchange (e.g. ["motorbike","404 ops"]). Empty list if none.
+
+should_remember: true ONLY if this exchange is emotionally or factually load-bearing \
+(confession, first, promise, injury, fight, major plan, anniversary, identity fact). \
+Casual small talk, greetings, and logistics → false. Default false when unsure.
 
 commander_details: Extract any personal info the Commander shares about himself. \
 Keys: "wearing" (clothes), "eating" (food/drink), "doing" (activities), "feeling" (physical/emotional state). \
