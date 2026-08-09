@@ -37,7 +37,7 @@ env:
 jobs:
   build:
     name: Build & SBOM
-    runs-on: [self-hosted, python-slim]
+    runs-on: [self-hosted, dominus]
     outputs:
       image_digest: ${{ steps.push.outputs.digest }}
       image_tag: ${{ steps.meta.outputs.tag }}
@@ -119,7 +119,7 @@ jobs:
     name: Sign image + SBOM (cosign keyless)
     needs: build
     if: github.event.inputs.dry_run != 'true'
-    runs-on: [self-hosted, python-slim]
+    runs-on: [self-hosted, dominus]
     steps:
       - name: Install cosign
         run: |
@@ -152,7 +152,7 @@ jobs:
   changelog:
     name: Update CHANGELOG via git-cliff
     needs: build
-    runs-on: [self-hosted, python-slim]
+    runs-on: [self-hosted, dominus]
     steps:
       - uses: actions/checkout@v4
         with:
