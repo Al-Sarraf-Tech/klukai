@@ -112,6 +112,9 @@ services:
       MODEL_LOCK_PATH: /config/models.lock.json
       GATEWAY_BEARER_TOKEN: "${LM_STUDIO_TOKEN:?LM_STUDIO_TOKEN must be a non-empty rotated secret}"
       GAME_ACTIVE_MARKER: /run/dominus-gpu/game-active
+      # Kept serving (small/CPU-offloaded) during the game-active graceful
+      # degrade instead of the blanket 503 every other model still gets.
+      GAMING_SAFE_MODEL_IDS: huihui-gemma-4-26b-a4b-abliterated
       GPU_LEASE_MARKER: /run/dominus-gpu/non-llm-lease.json
       GPU_LEASE_VLLM_ACK: /run/dominus-gpu/non-llm-lease-vllm-ack.json
     ports:

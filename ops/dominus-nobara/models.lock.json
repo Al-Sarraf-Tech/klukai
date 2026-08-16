@@ -543,6 +543,29 @@
       "sha256": "276e9bb51b901fb941077130ed24c42e7af3e91c0255119b58eca7a602bc5a00",
       "source": {"type": "local_file", "path": "/home/jalsarraf/git/klukai/docker/voice/reference/klukai_reference.wav"},
       "evidence": {"confidence": "highest", "parity": "byte-exact-repository-asset"}
+    },
+    {
+      "id": "llm-huihui-gemma-4-26b-a4b-abliterated-q4km",
+      "enabled": true,
+      "tier": "gaming-optional",
+      "kind": "llm",
+      "destination": "llm/huihui-gemma-4-26b-a4b-abliterated/Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated.Q4_K_M.gguf",
+      "size_bytes": 16796016704,
+      "sha256": "d1f68ed340eb402263a79f5b7c0131fe9ced3f3bf63ecd848e3dc8319d07a479",
+      "source": {"type": "huggingface_file", "repo": "mradermacher/Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated-GGUF", "revision": "e7d47f0be1dc3510a655873df1f7fa7b4a591c9f", "file": "Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated.Q4_K_M.gguf"},
+      "runtime": {"aliases": ["huihui-gemma-4-26b-a4b-abliterated"], "router_id": "huihui-gemma-4-26b-a4b-abliterated", "publisher": "mradermacher", "architecture": "gemma4", "capabilities": ["tool_use"], "model_type": "vlm", "quantization": "Q4_K_M", "max_context_length": 262144, "load_context_length": 32768},
+      "evidence": {"confidence": "high", "parity": "measured-locally-2026-08-16-cpu-moe-bench-and-character-battery"}
+    },
+    {
+      "id": "llm-huihui-gemma-4-26b-a4b-abliterated-mmproj-f16",
+      "enabled": true,
+      "tier": "gaming-optional",
+      "kind": "llm_mmproj",
+      "destination": "llm/huihui-gemma-4-26b-a4b-abliterated/Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated.mmproj-f16.gguf",
+      "size_bytes": 1193058912,
+      "sha256": "38be46d4079b069777bfc08dbc6b5ec78f3b13efeb7688663e7a8e00d57c8b18",
+      "source": {"type": "huggingface_file", "repo": "mradermacher/Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated-GGUF", "revision": "e7d47f0be1dc3510a655873df1f7fa7b4a591c9f", "file": "Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated.mmproj-f16.gguf"},
+      "evidence": {"confidence": "high", "parity": "byte-exact-upstream"}
     }
   ],
   "snapshots": [

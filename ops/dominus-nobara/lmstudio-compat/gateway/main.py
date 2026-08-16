@@ -740,8 +740,17 @@ def create_app(
         response.headers["WWW-Authenticate"] = "Bearer"
         return response
 
-    def game_active() -> bool:
-        return config.game_marker_path.exists()
+    def game_active(model: Model | None = None) -> bool:
+        # A designated gaming-safe model (small/CPU-offloaded) is allowed to
+        # keep serving during the graceful degrade instead of the blanket
+        # block -- everything else (other LLMs, ComfyUI, voice/GPU leases)
+        # stays hard-blocked. No model given (non-LLM call sites) blocks
+        # unconditionally, same as before this patch.
+        if not config.game_marker_path.exists():
+            return False
+        if model is not None and model.router_id in config.gaming_safe_model_ids:
+            return False
+        return True
 
     def game_block() -> JSONResponse:
         return _error(
@@ -910,7 +919,7 @@ def create_app(
             return resolved
         model, requested_id = resolved
         async with application.state.coordination_lock:
-            if operation == "load" and game_active():
+            if operation == "load" and game_active(model):
                 return game_block()
             if operation == "load" and (blocked := lease_block()) is not None:
                 return blocked
@@ -952,7 +961,7 @@ def create_app(
         model, requested_id = resolved
         started = time.monotonic()
         async with application.state.coordination_lock:
-            if game_active():
+            if game_active(model):
                 return game_block()
             if (blocked := lease_block()) is not None:
                 return blocked
@@ -1296,6 +1305,7 @@ def create_app(
     async def proxy_openai(endpoint: str, request: Request) -> Response:
         body = await request.body()
         payload: dict[str, Any] | None = None
+        model: Model | None = None
         content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
         if body and content_type == "application/json":
             try:
@@ -1338,7 +1348,7 @@ def create_app(
         wants_stream = payload is not None and payload.get("stream") is True
         coordination_lock: asyncio.Lock = application.state.coordination_lock
         await coordination_lock.acquire()
-        if game_active():
+        if game_active(model):
             coordination_lock.release()
             return game_block()
         if (blocked := lease_block()) is not None:

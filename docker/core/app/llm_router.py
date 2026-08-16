@@ -52,8 +52,23 @@ MAX_LLM_IDLE_TTL_SECONDS = LM_TTL_SECONDS
 LOCAL_CASUAL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"  # Chat: uncensored, clean streaming, no thinking tags
 LOCAL_AGENT = "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2"     # Agent: Opus-level tool-use + reasoning
 LOCAL_TOOLS = LOCAL_AGENT                                               # Same as agent
+# Gaming-mode chat persona: an abliterated Gemma-4-26B-A4B MoE model running
+# --cpu-moe on the gateway side (~4-5GB VRAM vs Venice's dense ~14-18GB).
+# The gateway (lmstudio-compat) is the sole source of truth for whether a
+# game is active on dominus-nobara -- it reads a local marker file amarillo
+# cannot see directly, so the client asks via /health instead of guessing.
+# Chosen specifically as an abliterated model (not stock Gemma/Granite) so
+# gaming mode doesn't reintroduce corporate-safety refusals mid-game -- the
+# whole reason Venice was chosen in the first place. See
+# ~/.claude/plans/klukai-handoff-node.md for the full research trail.
+LOCAL_CASUAL_GAMING = "huihui-gemma-4-26b-a4b-abliterated"
 # Cloud fallback is intentionally absent. Owner policy: all inference stays
 # on the local RTX 3090. ANTHROPIC_API_KEY is ignored if present.
+
+# How long a cached game-active read is trusted before re-checking /health.
+# Short enough that switching in/out of gaming mode is noticed within a
+# couple of chat turns; long enough not to hammer the gateway every message.
+_GAME_ACTIVE_RECHECK_INTERVAL = 5.0
 
 # Legacy activity bookkeeping remains for compatibility with older companion
 # extensions and observability tests. It cannot issue requests: ``keepalive``
@@ -127,6 +142,8 @@ class LLMRouter:
         self._http: httpx.AsyncClient | None = None
         self._lmstudio_available: bool | None = None
         self._lmstudio_last_check: float = 0.0
+        self._game_active: bool = False
+        self._game_active_last_check: float = 0.0
 
     async def init(self) -> None:
         headers = _lm_headers()
@@ -148,6 +165,28 @@ class LLMRouter:
         self._lmstudio_last_check = time.monotonic()
         logger.info("LM Studio available: %s", self._lmstudio_available)
         return self._lmstudio_available
+
+    async def _is_game_active(self) -> bool:
+        """Ask the gateway (the source of truth) whether a game currently
+        owns dominus-nobara's GPU. Cached briefly -- amarillo cannot read
+        dominus's local marker file directly, so this is a network check,
+        not a filesystem one. Fails closed (assumes NOT gaming, i.e. keeps
+        Venice) on a network error, matching this router's existing
+        fail-open-to-local-only-then-fail-closed-on-total-loss posture --
+        the gateway itself is the actual enforcement point and will still
+        503 a blocked model regardless of what this cache believes.
+        """
+        elapsed = time.monotonic() - self._game_active_last_check
+        if elapsed < _GAME_ACTIVE_RECHECK_INTERVAL:
+            return self._game_active
+        try:
+            r = await self._http.get(f"{LM_STUDIO_URL}/health", timeout=5.0)
+            if r.status_code == 200:
+                self._game_active = bool(r.json().get("game_active", False))
+        except (httpx.HTTPError, ValueError):
+            pass  # keep last-known value; gateway still enforces regardless
+        self._game_active_last_check = time.monotonic()
+        return self._game_active
 
     async def _ensure_lmstudio_fresh(self) -> bool:
         """Re-check LM Studio if it was down and enough time has passed."""
@@ -196,11 +235,16 @@ class LLMRouter:
                 base_url=LM_STUDIO_URL,
             )
 
-        # Default: gpt-oss-20b for all chat (casual + complex)
+        # Default: Venice for casual chat, unless dominus-nobara is mid-game --
+        # then the graceful-degrade persona (LOCAL_CASUAL_GAMING) so chat
+        # stays available instead of hard-failing on the gateway's 503.
         if self._lmstudio_available:
+            casual_model = (
+                LOCAL_CASUAL_GAMING if await self._is_game_active() else LOCAL_CASUAL
+            )
             return LLMConfig(
                 provider="lmstudio",
-                model=LOCAL_CASUAL,
+                model=casual_model,
                 base_url=LM_STUDIO_URL,
             )
 

@@ -41,6 +41,10 @@ class Settings:
     connect_timeout_seconds: float = 10.0
     read_timeout_seconds: float = 1800.0
     health_timeout_seconds: float = 2.0
+    # Model router_ids allowed to keep serving while a game is active --
+    # a graceful degrade (small/CPU-offloaded model) instead of the
+    # blanket 503 game_block() every other model/workload still gets.
+    gaming_safe_model_ids: frozenset[str] = field(default_factory=frozenset)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -107,4 +111,9 @@ class Settings:
             connect_timeout_seconds=_float_env("UPSTREAM_CONNECT_TIMEOUT", 10.0),
             read_timeout_seconds=_float_env("UPSTREAM_READ_TIMEOUT", 1800.0),
             health_timeout_seconds=_float_env("UPSTREAM_HEALTH_TIMEOUT", 2.0),
+            gaming_safe_model_ids=frozenset(
+                m.strip()
+                for m in os.getenv("GAMING_SAFE_MODEL_IDS", "").split(",")
+                if m.strip()
+            ),
         )
