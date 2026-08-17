@@ -2,10 +2,15 @@
 # Reject a vLLM cold start before its long initialization when the RTX 3090
 # does not have the empirically validated free-VRAM floor. This is deliberately
 # not configurable: lowering it recreated the observed 300-second failure path.
+#
+# 2026-08-16: vllm-serve.sh now passes --cpu-offload-gb 1, streaming 1 GiB of
+# weights from system RAM via UVA instead of holding them resident in VRAM.
+# The floor is lowered by exactly that 1024 MiB -- keep this number in lockstep
+# with VLLM_CPU_OFFLOAD_GB in vllm-serve.sh, do not drift them independently.
 set -euo pipefail
 
 raid_mount=/mnt/nvmer0
-required_free_mib=22650
+required_free_mib=21626
 game_marker=/run/user/1000/dominus-gpu/game-active
 gpu_lease_marker=/run/user/1000/dominus-gpu/non-llm-lease.json
 

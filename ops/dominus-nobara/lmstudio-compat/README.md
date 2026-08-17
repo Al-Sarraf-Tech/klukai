@@ -13,7 +13,7 @@ Supported surfaces:
   `/api/v1`;
 - OpenAI-compatible `/v1/*` forwarding, including unbuffered SSE streaming;
 - removal of the LM Studio-only top-level `ttl` request field;
-- a non-overridable 900-second model idle/sleep policy;
+- a non-overridable 300-second model idle/sleep policy;
 - alias-to-llama-router preset translation from `models.lock.json`.
 
 The gateway reads `/config/models.lock.json` by default. The preferred schema
@@ -52,17 +52,19 @@ While the marker exists, `/v1/*` inference and both load endpoints return 503.
 Catalogs and health remain available, and unload remains enabled so the guard
 can always free GPU memory.
 
-Every v0/v1 load request has its `ttl` replaced with `900`, including requests
+Every v0/v1 load request has its `ttl` replaced with `300`, including requests
 that omit it or try to use `0`, a shorter duration, or a longer duration. The
 effective value is returned as `ttl` in the load response. OpenAI inference
 requests have their LM Studio-only `ttl` removed, so a client cannot change the
 router policy through inference either.
 
-The pinned llama.cpp router is launched with `--sleep-idle-seconds 898`, and its
+The pinned llama.cpp router is launched with `--sleep-idle-seconds 298`, and its
 management port must remain internal to the Compose network. The gateway and
 that router setting are the two halves of the guarantee: the gateway prevents
 client overrides, while llama.cpp owns the actual inactivity clock and releases
-model memory before the hard 900-second ceiling, including its scheduler margin.
+model memory before the hard 300-second ceiling, including its scheduler margin.
+(Lowered 2026-08-17 from the original 900s/898s to release large presets like
+Dolphin-Mistral-24B faster; see `~/git/vram-guard/NOTES.md`.)
 
 ## Verification
 

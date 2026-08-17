@@ -31,10 +31,11 @@ from .settings import Settings
 ClientFactory = Callable[[Settings], httpx.AsyncClient]
 logger = logging.getLogger(__name__)
 
-# The client-visible ceiling is 900 seconds. The pinned router is launched at
-# 898 seconds because its roughly one-second scheduler needs a safety margin
-# to guarantee actual model residency never exceeds this policy ceiling.
-MODEL_IDLE_TTL_SECONDS = 900
+# The client-visible ceiling is 300 seconds (5 min; lowered 2026-08-17 from
+# 900s to unload big presets faster). The pinned router is launched at 298
+# seconds because its roughly one-second scheduler needs a safety margin to
+# guarantee actual model residency never exceeds this policy ceiling.
+MODEL_IDLE_TTL_SECONDS = 300
 NATIVE_VLLM_ACK_TIMEOUT_SECONDS = 15.0
 LEASE_ACQUIRE_COORDINATION_WAIT_SECONDS = 30.0
 LEASE_RELEASE_COORDINATION_WAIT_SECONDS = 10.0

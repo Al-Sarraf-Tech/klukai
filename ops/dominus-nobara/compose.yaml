@@ -158,8 +158,10 @@ services:
 
   # Router mode starts without a model. A request selects one preset and only
   # one weight set may be resident. b10200 polls its idle sleeper at up to one
-  # second, so 898 is a fixed safety deadline that guarantees release by the
-  # hard 900-second ceiling. The gateway also strips client-provided TTLs.
+  # second, so 298 is a fixed safety deadline that guarantees release by the
+  # 2026-08-17 300-second ceiling (lowered from 900s -- see
+  # lmstudio-compat/gateway/main.py MODEL_IDLE_TTL_SECONDS, keep both in
+  # lockstep). The gateway also strips client-provided TTLs.
   llama-router:
     image: ghcr.io/ggml-org/llama.cpp@sha256:657694ff6b0ceba64cbaed4502b2c3e5c52812c9911bc813cd1f65b3499b2e72
     platform: linux/amd64
@@ -178,7 +180,7 @@ services:
       - --models-max
       - "1"
       - --sleep-idle-seconds
-      - "898"
+      - "298"
       - --threads-http
       - "${LLAMA_HTTP_THREADS:-8}"
       - --metrics

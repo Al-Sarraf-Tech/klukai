@@ -22,10 +22,11 @@ cache during this procedure.
   (`100.107.121.5` or its MagicDNS name). LAN addresses are never a fallback.
 - The llama.cpp router admits at most one locked preset. b10200 checks its
   sleeper on an interval of up to one second, so the runtime uses a fixed
-  `--sleep-idle-seconds 898` safety deadline. There is no environment override,
+  `--sleep-idle-seconds 298` safety deadline (lowered 2026-08-17 from 898;
+  see `~/git/vram-guard/NOTES.md`). There is no environment override,
   its cache is an empty tmpfs, and `--offline` plus no additive model directory
   prevents discovery outside the lock. The gateway strips every client `ttl`.
-  Effective idle residency therefore cannot exceed 900 seconds.
+  Effective idle residency therefore cannot exceed 300 seconds.
 - Native vLLM is fully stopped, not put to sleep, at a fixed 895-second
   deadline. The proxy records monotonic state on the RAID only when bytes move
   or a connection opens/closes; an idle keep-alive cannot pin the model. A
@@ -83,7 +84,7 @@ cache during this procedure.
 | Service | Host endpoint | Startup policy | Model behavior |
 | --- | --- | --- | --- |
 | LM Studio compatibility gateway | `100.107.121.5:1234` | base user unit | CPU only; stopped with the canonical unit during games |
-| llama.cpp b10200 router | internal `:8080` | base user unit | lazy, one model, hard 900-second idle unload |
+| llama.cpp b10200 router | internal `:8080` | base user unit | lazy, one model, hard 300-second idle unload |
 | Preserved native vLLM | loopback `127.0.0.1:8000` | lazy proxy + watchdog | locked AWQ coder; hard process stop by 900 seconds |
 | Companion voice | `100.107.121.5:8301` | base lazy shell (`voice`) | lazy XTTS; explicit unload and 600-second TTS TTL |
 | ComfyUI 0.29.2 | internal `:8188` through `:1234/api/v1/comfy` | base empty shell (`image`) | authenticated bounded lease; loads checkpoints only for jobs |
@@ -715,8 +716,9 @@ that can turn them into `0.0.0.0`. TranscriptionSuite has only a reserved
 internal `expose` and is hard-disabled. Never redirect a fully interpolated
 render to disk: it contains every service secret. Persist only a mode-`0600`
 `--no-interpolate` contract. The Python validator performs its real render in
-memory and emits status only. The b10200 deadline is 898 seconds because its
-one-second polling interval must still fit under the 900-second maximum:
+memory and emits status only. The b10200 deadline is 298 seconds because its
+one-second polling interval must still fit under the 300-second maximum
+(lowered 2026-08-17 from 898/900; see `~/git/vram-guard/NOTES.md`):
 
 ```bash
 cd /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara
@@ -746,7 +748,7 @@ jq -e '
   (.services["llama-router"].command | index("--offline") != null) and
   (.services["llama-router"].command | index("--models-dir") == null) and
   (.services["llama-router"].command as $c |
-    $c[($c | index("--sleep-idle-seconds")) + 1] == "898" and
+    $c[($c | index("--sleep-idle-seconds")) + 1] == "298" and
     $c[($c | index("--models-max")) + 1] == "1")
 ' "$compose_contract"
 mv -T -- "$compose_contract" "$snapshot_dir/compose.no-interpolate.json"
@@ -1062,11 +1064,11 @@ Hard TTL acceptance is mandatory:
 2. Verify the upstream request logged by the gateway does not contain `ttl`.
 3. Record a monotonic timestamp at response completion, then make no inference
    requests. Health, props, metrics, and catalog checks do not renew the timer.
-4. Poll unloaded state from 898 seconds onward and prove that model VRAM is gone
-   no later than 900 seconds after response completion.
-5. Inspect the running command and verify `--sleep-idle-seconds 898`,
+4. Poll unloaded state from 298 seconds onward and prove that model VRAM is gone
+   no later than 300 seconds after response completion.
+5. Inspect the running command and verify `--sleep-idle-seconds 298`,
    `--models-max 1`, and `--offline` are literal and `--models-dir` is absent.
-   Any residency after 900 seconds is a failed cutover gate.
+   Any residency after 300 seconds is a failed cutover gate.
 
 Test native vLLM separately through its preserved loopback proxy on port 8000:
 
@@ -1084,9 +1086,11 @@ Test native vLLM separately through its preserved loopback proxy on port 8000:
    activate the backend through a fresh request and remove its state file; the
    watchdog must stop it within its next 250 ms pass. Restore only through a
    fresh proxy request, never by copying stale activity.
-6. When free VRAM is below the fixed 22650 MiB preflight floor, the proxy must
-   return JSON HTTP 503 immediately and must not wait for the old 300-second
-   cold-start timeout. A healthy cold start has its own 75-second maximum.
+6. When free VRAM is below the fixed 21626 MiB preflight floor (lowered
+   2026-08-17 from 22650 to account for `--cpu-offload-gb 1`; see
+   `~/git/vram-guard/NOTES.md`), the proxy must return JSON HTTP 503
+   immediately and must not wait for the old 300-second cold-start timeout.
+   A healthy cold start has its own 75-second maximum.
 
 Ports remain loopback `127.0.0.1:8000`/`:8001`; do not expose native vLLM on a
 LAN address or bypass its proxy.
@@ -1385,7 +1389,7 @@ Acceptance requires all of the following:
 - the native vLLM 195-line accepted package fingerprint matches exactly;
 - all 21 catalog entries map to the exact llama preset and no fake artifacts;
 - every LLM/VLM/embedding smoke test passes sequentially;
-- one-model limit and the hard 900-second maximum idle TTL pass;
+- one-model limit and the hard 300-second maximum idle TTL pass;
 - native vLLM hard-stops by 900 seconds and rejects games/low-VRAM starts with
   prompt 503 responses;
 - leased ComfyUI, leased voice, and CPU-only Speaches pass; both

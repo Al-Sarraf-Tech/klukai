@@ -253,7 +253,7 @@ async def ensure_backend_started() -> None:
         if not await _run_vram_preflight():
             raise ServiceUnavailable(
                 "insufficient_vram",
-                "vLLM requires at least 22650 MiB free VRAM for this locked profile",
+                "vLLM requires at least 21626 MiB free VRAM for this locked profile",
             )
 
         log.info("starting %s after successful VRAM preflight", BACKEND_UNIT)

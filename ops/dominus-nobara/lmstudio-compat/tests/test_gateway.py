@@ -448,11 +448,11 @@ def test_v0_and_v1_management_mapping(tmp_path: Path) -> None:
         "success": True,
         "model": "chat-model",
         "state": "loaded",
-        "ttl": 900,
+        "ttl": 300,
     }
     assert v0_unload.json()["state"] == "not-loaded"
     assert v1_load.json()["model_instance_id"] == "legacy-chat"
-    assert v1_load.json()["ttl"] == 900
+    assert v1_load.json()["ttl"] == 300
     assert v1_load.json()["load_config"] == {"context_length": 65536}
     assert v1_unload.json() == {"instance_id": "legacy-chat"}
     assert calls == [
@@ -463,8 +463,8 @@ def test_v0_and_v1_management_mapping(tmp_path: Path) -> None:
     ]
 
 
-@pytest.mark.parametrize("requested_ttl", [None, 0, 30, 900, 901, 86_400])
-def test_load_ttl_is_always_overridden_to_900(
+@pytest.mark.parametrize("requested_ttl", [None, 0, 30, 300, 301, 86_400])
+def test_load_ttl_is_always_overridden_to_300(
     tmp_path: Path, requested_ttl: int | None
 ) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
@@ -483,10 +483,10 @@ def test_load_ttl_is_always_overridden_to_900(
         v1 = client.post("/api/v1/models/load", json=body)
 
     assert v0.status_code == 200
-    assert v0.json()["ttl"] == 900
+    assert v0.json()["ttl"] == 300
     assert v1.status_code == 200
-    assert v1.json()["ttl"] == 900
-    # llama.cpp's management API only accepts `model`; the fixed 900-second
+    assert v1.json()["ttl"] == 300
+    # llama.cpp's management API only accepts `model`; the fixed 300-second
     # clock is configured on llama-server itself, never supplied by a client.
     assert calls == [
         ("/models/load", {"model": "chat-router-preset"}),
