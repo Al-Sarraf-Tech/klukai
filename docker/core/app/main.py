@@ -169,6 +169,7 @@ async def lifespan(app: FastAPI):
         # Fallback to primary user
         return await memory.get_session(session_id("jalsarraf"))
     proactive.set_session_getter(_get_any_session)
+    proactive.set_game_active_probe(router.is_game_active)
     proactive.start()
     await events_init()
     load_personality()

@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any
 
 
-from . import context
+from . import context, rituals
 from .agent_loop import AgentLoop
 from .background import (
     background_compaction,
@@ -43,6 +43,7 @@ from .helpers import (
     wants_recall as _wants_recall,
     wants_mission_start as _wants_mission_start,
     wants_mission_cancel as _wants_mission_cancel,
+    wants_thread_inquiry as _wants_thread_inquiry,
     parse_interval_minutes as _parse_interval_minutes,
     store_message as _store_message,
 )
@@ -51,7 +52,9 @@ from .models import SessionState, new_id
 from .personality import (
     assemble_system_prompt,
     build_growth_arc_block,
+    build_gaming_block,
     build_inside_jokes_block,
+    build_thread_block,
     load_personality,
 )
 
@@ -325,6 +328,21 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     growth_block = build_growth_arc_block(_p, aff_state.level, session.turn_count)
     if growth_block:
         system_prompt += f"\n\n{growth_block}"
+
+    if _wants_thread_inquiry(content):
+        thread_block = build_thread_block(_p, aff_state.level, session.turn_count)
+        if thread_block:
+            system_prompt += f"\n\n{thread_block}"
+
+    gaming_block = build_gaming_block(_p, aff_state.level, await router.is_game_active())
+    if gaming_block:
+        system_prompt += f"\n\n{gaming_block}"
+
+    birthday_block = await rituals.birthday_prompt_block(
+        user_id, _p, aff_state.first_interaction, content,
+    )
+    if birthday_block:
+        system_prompt += f"\n\n{birthday_block}"
 
     # Dream inquiry hint
     if dream_hint:

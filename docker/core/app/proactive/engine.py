@@ -106,6 +106,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         self._on_message_callback = None
         self._on_recap_callback = None
         self._session_getter = None  # callback to get current session state
+        self._game_active_probe = None  # async () -> bool: Commander mid-game?
         # Per-user counters (shared counters caused cross-user blocking)
         self._proactive_counts: dict[str, int] = {}
         self._last_answered: dict[str, bool] = {}
@@ -168,6 +169,11 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
     def set_session_getter(self, getter) -> None:
         """Set a callback to retrieve current session state (for romance context)."""
         self._session_getter = getter
+
+    def set_game_active_probe(self, probe) -> None:
+        """Set an async callable reporting whether the Commander is mid-game;
+        random events hold off while it returns True."""
+        self._game_active_probe = probe
 
     def mark_user_messaged_today(self, user_id: str = "jalsarraf") -> None:
         """Record that the user sent at least one message today."""

@@ -11,6 +11,7 @@ from app.personality.state_blocks import (
     build_jealousy_block,
     build_mission_context_block,
     build_physical_state_block,
+    build_presence_block,
 )
 
 
@@ -151,3 +152,22 @@ class TestAnniversaryBlockPrincessUpgrade:
         from app.personality.state_blocks import build_anniversary_block
         out = build_anniversary_block([{"days_ago": 2, "event_type": "first_gift"}])
         assert "2 days ago" in out
+
+
+class TestPresenceBlock:
+    def test_no_gap_and_no_streak_is_silent(self):
+        assert build_presence_block() == ""
+        assert build_presence_block(hours_away=1.0, consecutive_days=1) == ""
+
+    def test_long_absence_uses_return_emotion(self):
+        block = build_presence_block(hours_away=30, affection_level=0)
+        assert block.startswith("PRESENCE")
+        assert "professional distance" in block
+
+    def test_short_gap_registered_lightly(self):
+        block = build_presence_block(hours_away=2.4)
+        assert "about 2 hours since you last spoke" in block
+
+    def test_streak_noted_only_once_warm(self):
+        assert "3 days in a row" in build_presence_block(consecutive_days=3, affection_level=3)
+        assert build_presence_block(consecutive_days=3, affection_level=2) == ""

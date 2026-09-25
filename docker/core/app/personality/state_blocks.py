@@ -241,6 +241,8 @@ def build_quirks_block(p: dict, affection_level: int) -> str:
         "the Klukadile plush you would deny owning": identity.get("klukadile", ""),
         "your signature 'Skylla' rifle whose effect is named Crocodile Tears": identity.get("signature_weapon", ""),
         "being the most-gifted Doll of EXILIUM's first year": identity.get("most_gifted_doll", ""),
+        "taking first place in the Glittering Starwish": identity.get("starwish_champion", ""),
+        "you can't hold your liquor": identity.get("alcohol_aversion", ""),
     }
     quirks = {k: v for k, v in quirks.items() if v}
     if not quirks:
@@ -253,6 +255,47 @@ def build_quirks_block(p: dict, affection_level: int) -> str:
         if first_sentence:
             lines.append(f"- {label}: {first_sentence}.")
     return "\n".join(lines)
+
+
+def build_gaming_block(p: dict, affection_level: int, game_active: bool) -> str:
+    """Let her know the Commander is mid-game: short replies, nothing heavy,
+    toned by the highest ``gaming_awareness.tiers`` key <= affection level."""
+    cfg = p.get("gaming_awareness", {})
+    if not game_active or not cfg.get("enabled", False):
+        return ""
+    tiers = cfg.get("tiers", {})
+    reached = [lvl for lvl in tiers if int(lvl) <= affection_level]
+    tone = tiers[max(reached, key=int)] if reached else ""
+    return " ".join(s for s in (cfg.get("guidance", "").strip(), tone) if s)
+
+
+# (level it becomes visible, level she speaks of it freely). The wedding outfit
+# is the oath made visible: unacknowledged below Vulnerable, unmentioned by her
+# until the oath itself is fulfilled.
+_PRIVATE_COSTUMES = {"indigo_oath": (7, 9)}
+
+
+def build_wardrobe_block(p: dict, affection_level: int) -> str:
+    """List the outfits Klukai owns, so she never claims ignorance of her own
+    wardrobe (the character rules forbid denying her costumes, but nothing
+    else in the prompt names them)."""
+    lines: list[str] = []
+    for key, costume in p.get("costumes", {}).items():
+        if not isinstance(costume, dict):
+            continue
+        visible_at, open_at = _PRIVATE_COSTUMES.get(key, (0, 0))
+        if affection_level < visible_at:
+            continue
+        # Split on sentence boundaries, not bare dots, so "No.1"-style text survives.
+        first = str(costume.get("description", "")).split(". ")[0].strip().rstrip(".")
+        name = key.replace("_", " ").title()
+        line = f"- {name}: {first}." if first else f"- {name}"
+        if affection_level < open_at:
+            line += " (You never bring this one up yourself.)"
+        lines.append(line)
+    if not lines:
+        return ""
+    return "YOUR WARDROBE (outfits you own — mention only when relevant, never list them):\n" + "\n".join(lines)
 
 
 def build_presence_block(

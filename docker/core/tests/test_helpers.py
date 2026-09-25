@@ -311,3 +311,38 @@ class TestStoreMessage:
         with patch("app.db.get_conn", side_effect=broken):
             ok = await store_message("conv-1", "user", "hello")
         assert ok is False
+
+
+class TestCreateConversation:
+    @staticmethod
+    def _conn(execute):
+        from unittest.mock import AsyncMock, MagicMock
+
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.execute = execute
+        return MagicMock(return_value=conn)
+
+    @pytest.mark.asyncio
+    async def test_inserts_idempotently_for_user(self):
+        from unittest.mock import AsyncMock, patch
+
+        from app.helpers import create_conversation
+
+        execute = AsyncMock()
+        with patch("app.db.get_conn_autocommit", self._conn(execute)):
+            await create_conversation("conv-1", user_id="claude")
+        sql, params = execute.await_args.args
+        assert "ON CONFLICT DO NOTHING" in sql
+        assert params == ("conv-1", "claude")
+
+    @pytest.mark.asyncio
+    async def test_db_failure_is_logged_not_raised(self, caplog):
+        from unittest.mock import AsyncMock, patch
+
+        from app.helpers import create_conversation
+
+        with patch("app.db.get_conn_autocommit", self._conn(AsyncMock(side_effect=RuntimeError("db down")))):
+            await create_conversation("conv-2")
+        assert "Failed to create conversation" in caplog.text

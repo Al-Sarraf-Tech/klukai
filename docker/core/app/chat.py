@@ -213,6 +213,10 @@ def register_websocket(app: FastAPI) -> None:
         # Level-9 Oath capstone for an already-maxed Commander who reached lv9
         # before this feature existed — fires once ever, self-guarded.
         ws.track_task(user_id, _asyncio.create_task(_maybe_oath_on_connect(user_id)))
+        # Recurring rituals: his birthday greeting (once a year) or her monthly
+        # fee settlement (once a month) — self-guarded per period.
+        from . import rituals
+        ws.track_task(user_id, _asyncio.create_task(rituals.on_connect(user_id)))
 
         try:
             while True:

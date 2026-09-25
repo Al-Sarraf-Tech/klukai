@@ -34,6 +34,7 @@ from .state_blocks import (
     build_mission_context_block,
     build_physical_state_block,
     build_quirks_block,
+    build_wardrobe_block,
 )
 
 
@@ -92,6 +93,7 @@ def assemble_system_prompt(
         build_crown_jewel_block(crown_jewel, affection_level),
         build_canon_arcs_block(p, affection_level),
         build_quirks_block(p, affection_level),
+        build_wardrobe_block(p, affection_level),
         build_mission_context_block(mission_description),
         build_memory_block(memories or []),
         build_conversation_recall_block(recalled_exchanges or []),

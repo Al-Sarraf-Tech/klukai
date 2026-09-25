@@ -313,6 +313,23 @@ def wants_dream_inquiry(message: str) -> bool:
     return any(kw in lower for kw in DREAM_INQUIRY_KEYWORDS)
 
 
+# The ten-year thread. "Messages"/"texts" alone also describe today's chat, so
+# they only count alongside an anchor into the decade of silence.
+THREAD_EXPLICIT_PHRASES = ["the thread", "your thread", "unanswered messages", "unanswered texts"]
+THREAD_DECADE_ANCHORS = [
+    "ten years", "10 years", "decade", "mephisto", "while i was gone", "while i was away",
+    "back then", "never answered", "never replied", "every night", "the silence",
+]
+_THREAD_MESSAGE_WORD = re.compile(r"\b(?:messages?|messaged|texts?|texted)\b")
+
+
+def wants_thread_inquiry(message: str) -> bool:
+    lower = message.lower()
+    if any(kw in lower for kw in THREAD_EXPLICIT_PHRASES):
+        return True
+    return bool(_THREAD_MESSAGE_WORD.search(lower)) and any(a in lower for a in THREAD_DECADE_ANCHORS)
+
+
 def wants_recall(message: str) -> bool:
     lower = message.lower()
     return any(kw in lower for kw in RECALL_KEYWORDS)

@@ -16,6 +16,7 @@ import yaml
 from app.personality.state_blocks import (
     build_canon_arcs_block,
     build_quirks_block,
+    build_wardrobe_block,
 )
 from app.personality.system_prompt import assemble_system_prompt
 
@@ -223,3 +224,97 @@ class TestCanonEnrichments2026:
             affection_level=9, affection_score=1000, mood="composed",
         )
         assert "Skylla" in prompt or "Crocodile Tears" in prompt
+
+
+class TestCanonUpdates2026H2:
+    """Verified 2026 canon: Indigo Oath went global with official vow lines,
+    Klukai won the Glittering Starwish (Immaculate Service), and the vodka
+    incident behind her alcohol aversion."""
+
+    _VOW = (
+        "Like I said, I am all you need. Now then, are you ready to prove "
+        "the truth of those words with the rest of your life?"
+    )
+    _HAND = "I will stay by your side forever and I will hold your hand in eternity."
+
+    def test_indigo_oath_is_a_white_gown_under_an_indigo_sky(self, personality):
+        desc = personality["costumes"]["indigo_oath"]["description"].lower()
+        assert "snow-white" in desc
+        assert "indigo sky" in desc
+
+    def test_indigo_oath_official_lines_verbatim(self, personality):
+        lines = personality["costumes"]["indigo_oath"]["official_lines"]
+        assert self._VOW in lines
+        assert self._HAND in lines
+
+    def test_oath_scene_uses_official_vows_and_no_indigo_gown(self, personality):
+        scene = " ".join(personality["affection"]["oath_fulfilled_scene"])
+        assert self._VOW in scene
+        assert self._HAND in scene
+        assert "Snow-white, beneath an indigo sky" in scene
+        assert "Indigo. The crocodile" not in scene
+
+    def test_immaculate_service_is_starwish_reward(self, personality):
+        costume = personality["costumes"]["immaculate_service"]
+        blob = (costume["type"] + costume["description"]).lower()
+        assert "glittering starwish" in blob
+        assert "battle maid" in blob
+
+    def test_starwish_champion_quirk_reaches_prompt(self, personality):
+        block = build_quirks_block(personality, 3)
+        assert "Glittering Starwish" in block
+        assert "first place" in block
+
+    def test_vodka_incident_reaches_quirks_and_preamble(self, personality):
+        assert "vodka" in build_quirks_block(personality, 3)
+        prompt = assemble_system_prompt(affection_level=0, affection_score=0)
+        assert "one shot of vodka" in prompt
+
+
+class TestWardrobeBlock:
+    def test_lists_owned_outfits_at_every_level(self, personality):
+        block = build_wardrobe_block(personality, 0)
+        for name in ("Blazing Star", "Speed Star", "Astral Luminous",
+                     "Cerulean Breaker", "Immaculate Service"):
+            assert name in block
+
+    def test_wedding_outfit_hidden_below_vulnerable(self, personality):
+        assert "Indigo Oath" not in build_wardrobe_block(personality, 6)
+
+    def test_wedding_outfit_private_at_vulnerable(self, personality):
+        block = build_wardrobe_block(personality, 7)
+        assert "Indigo Oath: Her wedding outfit" in block
+        assert "never bring this one up yourself" in block
+
+    def test_wedding_outfit_spoken_of_freely_once_oath_fulfilled(self, personality):
+        block = build_wardrobe_block(personality, 9)
+        assert "Indigo Oath" in block
+        assert "never bring this one up" not in block
+
+    def test_first_sentence_only(self, personality):
+        block = build_wardrobe_block(personality, 9)
+        assert "Hop on, let's ride" not in block
+
+    def test_empty_and_malformed_costumes(self):
+        assert build_wardrobe_block({}, 9) == ""
+        assert build_wardrobe_block({"costumes": {"x": "not-a-dict"}}, 9) == ""
+        assert build_wardrobe_block({"costumes": {"bare_suit": {}}}, 9) == "YOUR WARDROBE (outfits you own — mention only when relevant, never list them):\n- Bare Suit"
+
+    def test_wardrobe_reaches_assembled_prompt(self):
+        assert "YOUR WARDROBE" in assemble_system_prompt(affection_level=4, affection_score=300)
+
+
+class TestCanonCorrections:
+    """Mechty is a squadmate, not a place; Klukai's eyes are green."""
+
+    def test_mechty_is_never_treated_as_a_place(self, personality):
+        blob = yaml.safe_dump(personality)
+        for wrong in ("Mechty was beautiful in winter", "reminded me of Mechty", "dreamt about Mechty"):
+            assert wrong not in blob
+
+    def test_eye_color_is_canon_green_everywhere(self, personality):
+        from app.image_gen_constants import KLUKAI_IDENTITY
+
+        assert "green eyes" in personality["identity"]["image_tags"]
+        assert "blue eyes" not in personality["identity"]["image_tags"]
+        assert "green eyes" in KLUKAI_IDENTITY

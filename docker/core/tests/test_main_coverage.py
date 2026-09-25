@@ -549,6 +549,9 @@ class TestLifespan:
             main.generate_daily_recap
         )
         lifespan_mocks.proactive.set_session_getter.assert_called_once()
+        lifespan_mocks.proactive.set_game_active_probe.assert_called_once_with(
+            lifespan_mocks.router.is_game_active
+        )
 
     async def test_session_cleanup_task_scheduled(self, lifespan_mocks, monkeypatch):
         monkeypatch.delenv("KLUKAI_LLM_KEEPALIVE", raising=False)

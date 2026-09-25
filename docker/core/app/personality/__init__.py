@@ -12,6 +12,7 @@ Internal layout:
 - :mod:`.memory_blocks`  — memory / relationship / recall blocks
 - :mod:`.squad`          — supporting-cast voice profiles + squad interaction hints
 - :mod:`.state_blocks`   — physical / jealousy / anniversary / comfort / mission blocks
+- :mod:`.thread`         — the ten years of unanswered messages (chat block + proactive lines)
 - :mod:`.rules`          — absolute character rules + pace + tool blocks
 - :mod:`.system_prompt`  — assemble_system_prompt() entry point
 """
@@ -70,12 +71,16 @@ from .state_blocks import (
     build_anniversary_block,
     build_comfort_objects_block,
     build_crown_jewel_block,
+    build_gaming_block,
     build_growth_arc_block,
     build_jealousy_block,
     build_mission_context_block,
     build_presence_block,
     build_physical_state_block,
 )
+
+# The ten-year thread
+from .thread import build_thread_block, thread_share_lines
 
 # Main entry point
 from .system_prompt import assemble_system_prompt
@@ -121,9 +126,13 @@ __all__ = [
     "build_anniversary_block",
     "build_comfort_objects_block",
     "build_crown_jewel_block",
+    "build_gaming_block",
     "build_growth_arc_block",
     "build_mission_context_block",
     "build_presence_block",
+    # The ten-year thread
+    "build_thread_block",
+    "thread_share_lines",
     # Rules + pace + tool
     "build_character_rules",
     "build_pace_block",

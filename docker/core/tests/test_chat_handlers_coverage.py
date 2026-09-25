@@ -52,6 +52,8 @@ def _patched_pipeline(
     *,
     stream_tokens=("Hello", ", Commander."),
     needs_agent=False,
+    game_active=False,
+    birthday_block="",
     provider="lmstudio",
     aff_level=5,
     nudge=None,
@@ -67,6 +69,7 @@ def _patched_pipeline(
     # ── router ──
     router = MagicMock()
     router.needs_agent = AsyncMock(return_value=needs_agent)
+    router.is_game_active = AsyncMock(return_value=game_active)
     router.route = AsyncMock(
         return_value=LLMConfig(provider=provider, model="dolphin-24b")
     )
@@ -206,6 +209,7 @@ def _patched_pipeline(
         patch("app.helpers.detect_squad_address", return_value=None),
         patch("app.helpers.detect_jealousy_trigger", return_value=None),
         patch("app.helpers.wants_dream_inquiry", return_value=False),
+        patch("app.rituals.birthday_prompt_block", AsyncMock(return_value=birthday_block)),
         patch("app.image_gen.needs_image", needs_image_fn),
         patch("app.image_gen.detect_squad_members", return_value=[]),
         patch("asyncio.sleep", new=AsyncMock(return_value=None)),
@@ -566,6 +570,43 @@ class TestPromptAssembly:
                 await _drain_tasks()
 
         assert "[Memory: recall this]" in captured["sys"]
+
+    async def _captured_prompt(self, content, **pipeline_kw):
+        from app.chat_handlers import _handle_message
+
+        captured = {}
+
+        async def _stream(system_prompt, messages, config):
+            captured["sys"] = system_prompt
+            yield "Ok."
+
+        with _patched_pipeline(**pipeline_kw) as ns:
+            ns.router.stream = _stream
+            with patch("app.chat_handlers.router", ns.router):
+                await _handle_message(content, _fresh_session())
+                await _drain_tasks()
+        return captured["sys"]
+
+    @pytest.mark.asyncio
+    async def test_thread_block_only_when_commander_asks_about_it(self):
+        asked = await self._captured_prompt("Can I read the thread? All of it?", aff_level=6)
+        assert "THE THREAD" in asked
+        assert "[0200 hours" in asked
+        unrelated = await self._captured_prompt("How was patrol this afternoon?", aff_level=6)
+        assert "THE THREAD" not in unrelated
+
+    @pytest.mark.asyncio
+    async def test_gaming_block_only_while_game_active(self):
+        gaming = await self._captured_prompt("gg, one more round", aff_level=3, game_active=True)
+        assert "GAME IN PROGRESS" in gaming
+        assert "Ask if he's winning" in gaming
+        idle = await self._captured_prompt("gg, one more round", aff_level=3)
+        assert "GAME IN PROGRESS" not in idle
+
+    @pytest.mark.asyncio
+    async def test_birthday_block_appended(self):
+        prompt = await self._captured_prompt("morning", birthday_block="COMMANDER'S BIRTHDAY: today")
+        assert prompt.endswith("COMMANDER'S BIRTHDAY: today")
 
     @pytest.mark.asyncio
     async def test_context_summary_prepended_as_system_message(self):

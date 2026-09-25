@@ -166,7 +166,7 @@ class LLMRouter:
         logger.info("LM Studio available: %s", self._lmstudio_available)
         return self._lmstudio_available
 
-    async def _is_game_active(self) -> bool:
+    async def is_game_active(self) -> bool:
         """Ask the gateway (the source of truth) whether a game currently
         owns dominus-nobara's GPU. Cached briefly -- amarillo cannot read
         dominus's local marker file directly, so this is a network check,
@@ -176,6 +176,10 @@ class LLMRouter:
         the gateway itself is the actual enforcement point and will still
         503 a blocked model regardless of what this cache believes.
         """
+        if self._http is None or not self._lmstudio_available:
+            # No client yet, or the gateway is already known-down: don't stall
+            # the caller on a doomed /health probe -- keep last-known.
+            return self._game_active
         elapsed = time.monotonic() - self._game_active_last_check
         if elapsed < _GAME_ACTIVE_RECHECK_INTERVAL:
             return self._game_active
@@ -240,7 +244,7 @@ class LLMRouter:
         # stays available instead of hard-failing on the gateway's 503.
         if self._lmstudio_available:
             casual_model = (
-                LOCAL_CASUAL_GAMING if await self._is_game_active() else LOCAL_CASUAL
+                LOCAL_CASUAL_GAMING if await self.is_game_active() else LOCAL_CASUAL
             )
             return LLMConfig(
                 provider="lmstudio",

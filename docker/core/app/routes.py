@@ -452,10 +452,12 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     from .routes_extras import register_extras
     from .routes_extras2 import register_extras2
     from .routes_extras3 import register_extras3
+    from .routes_thread import register_thread_routes
 
     register_extras(app)
     register_extras2(app)
     register_extras3(app)
+    register_thread_routes(app)
 
 
 # ── Private helpers (used by routes above) ─────────────────────────────────

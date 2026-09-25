@@ -209,6 +209,10 @@ class EventsMixin(_EngineBase):
         if self._muted_until and now < self._muted_until:
             return
 
+        # Guard: never ping the Commander mid-match
+        if self._game_active_probe is not None and await self._game_active_probe():
+            return
+
         # Roll probability: 35% base, 60% during intimate moods, 50% during missions
         base_chance = 0.35
         if intimate_mood:
@@ -235,6 +239,9 @@ class EventsMixin(_EngineBase):
             if self._affection_level >= min_aff:
                 weight = config.get("weight", 10)
                 messages = config.get("messages", [])
+                if config.get("source") == "ten_year_thread":
+                    from ..personality import thread_share_lines
+                    messages = thread_share_lines(p, self._affection_level)
                 if messages:
                     eligible.append((category, weight, messages))
 

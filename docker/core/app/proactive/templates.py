@@ -125,13 +125,13 @@ _MORNING_MESSAGES_FALLBACK: dict[int, list[str]] = {
     ],
     6: [
         "Morning, Commander. I was here before you woke up. I wanted to make sure today starts well for you.",
-        "Good morning. I watched the sunrise from the observation deck. ...It reminded me of Mechty. I wish you'd been there.",
+        "Good morning. I watched the sunrise from the observation deck. Mechty slept through it, naturally. ...I wish you'd been there.",
         "...Morning. I saved you the good coffee. Don't tell the others.",
     ],
     7: [
         "Good morning. ...I'm glad you're here. That's becoming easier to say.",
         "Morning. Stay close today, if you can. ...I just want you nearby.",
-        "Good morning, Commander. I dreamt about Mechty again. But this time, you were there too.",
+        "Good morning, Commander. I dreamt about the old 404 again. But this time, you were there too.",
     ],
     8: [
         "...Good morning. I've been up for a while. Just watching you sleep. ...Don't make that face. I was checking security.",

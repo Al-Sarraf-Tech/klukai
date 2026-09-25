@@ -32,6 +32,7 @@ class _EngineBase:
     _on_message_callback: Any
     _on_recap_callback: Any
     _session_getter: Any
+    _game_active_probe: Any
 
     # ── Per-user state maps ────────────────────────────────────────────────
     _affection_levels: dict[str, int]
