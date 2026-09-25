@@ -1,0 +1,12 @@
+[Unit]
+Description=Watch Dominus Tailscale publishes after power-on and Docker restarts
+Documentation=file:///mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/RUNBOOK.md
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

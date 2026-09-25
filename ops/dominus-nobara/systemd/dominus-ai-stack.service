@@ -35,6 +35,9 @@ ExecStartPre=/usr/bin/bash -ec '/usr/bin/tailscale ip -4 | /usr/bin/grep -Fxq 10
 ExecStartPre=/usr/bin/python3 /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/scripts/verify-compose-contract.py --compose-file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --source-root /mnt/nvmer0/services/ai-stack/source/klukai --raid-root /mnt/nvmer0 --expected-env-uid 1000
 ExecStartPre=/usr/bin/docker compose --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml run --rm --no-deps --pull never stack-preflight
 ExecStart=/usr/bin/docker compose --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml up --detach --no-build --wait --wait-timeout 180 llama-router lmstudio-compat companion-voice comfyui speaches
+# `up` leaves an already-running container with a missed Tailscale bind
+# untouched. Recreate only the publishes that are actually closed.
+ExecStart=/home/jalsarraf/.local/bin/dominus-repair-tailscale-publish --from-unit
 ExecReload=/usr/bin/test ! -e /run/user/1000/dominus-gpu/game-active
 ExecReload=/usr/bin/python3 /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/scripts/verify-compose-contract.py --compose-file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --source-root /mnt/nvmer0/services/ai-stack/source/klukai --raid-root /mnt/nvmer0 --expected-env-uid 1000
 ExecReload=/usr/bin/docker compose --env-file /mnt/nvmer0/services/ai-stack/config/stack.env --file /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara/compose.yaml run --rm --no-deps --pull never stack-preflight

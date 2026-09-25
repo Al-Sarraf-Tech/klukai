@@ -91,6 +91,19 @@ cache during this procedure.
 | Speaches 0.8.3 CPU | `100.107.121.5:8390` | base lazy shell (`speech`) | no NVIDIA device; lazy models at 600 seconds, hard runtime cutoff 895 seconds |
 | TranscriptionSuite 1.3.7 | reserved internal `:9786`; no host endpoint | production-disabled | recovery definition only; bootstrap/API entrypoints reject starts and receive no GPU |
 
+Powering off this computer is normal. On the next boot, Docker restores
+`restart: unless-stopped` containers before `tailscale0` has
+`100.107.121.5`. The publish then fails with `cannot assign requested
+address`, the container stays up and internally healthy, and `docker restart`
+does not bind the port later. Only a recreate after the address exists does.
+`scripts/repair-tailscale-publish.sh` does that recreate for `1234`, `8301`,
+and `8390`, and it does nothing while `/run/user/1000/dominus-gpu/game-active`
+exists. `dominus-publish-repair.timer` runs it, and the stack unit runs it
+after `compose up`. `systemd/docker.service.d/20-tailscale-address.conf` makes
+dockerd wait up to 60 seconds for the address first, then starts anyway so a
+Tailscale outage cannot wedge the rest of Docker. Do not "fix" a closed
+`1234` with `docker restart`.
+
 The pinned external linux/amd64 manifests are:
 
 - llama.cpp: `sha256:657694ff6b0ceba64cbaed4502b2c3e5c52812c9911bc813cd1f65b3499b2e72`
@@ -495,6 +508,10 @@ sudo install -d /etc/systemd/system/docker.service.d \
   /etc/systemd/system/containerd.service.d
 sudo install -m 0644 systemd/docker.service.d/10-dominus-nvme-mount.conf \
   /etc/systemd/system/docker.service.d/10-dominus-nvme-mount.conf
+sudo install -m 0755 scripts/repair-tailscale-publish.sh \
+  /usr/local/sbin/dominus-repair-tailscale-publish
+sudo install -m 0644 systemd/docker.service.d/20-tailscale-address.conf \
+  /etc/systemd/system/docker.service.d/20-tailscale-address.conf
 sudo install -m 0644 systemd/containerd.service.d/10-dominus-nvme-mount.conf \
   /etc/systemd/system/containerd.service.d/10-dominus-nvme-mount.conf
 ```
@@ -929,8 +946,14 @@ install -m 0755 config/gpu-guard/game-end.sh \
   /home/jalsarraf/.local/bin/dominus-gpu-game-end
 install -m 0644 systemd/vllm-server.service.d/10-dominus-game-guard.conf \
   /home/jalsarraf/.config/systemd/user/vllm-server.service.d/10-dominus-game-guard.conf
+install -m 0755 scripts/repair-tailscale-publish.sh \
+  /home/jalsarraf/.local/bin/dominus-repair-tailscale-publish
 install -m 0644 systemd/dominus-ai-stack.service \
   /home/jalsarraf/.config/systemd/user/dominus-ai-stack.service
+install -m 0644 systemd/dominus-publish-repair.service \
+  /home/jalsarraf/.config/systemd/user/dominus-publish-repair.service
+install -m 0644 systemd/dominus-publish-repair.timer \
+  /home/jalsarraf/.config/systemd/user/dominus-publish-repair.timer
 install -m 0644 systemd/vllm-proxy.service \
   /home/jalsarraf/.config/systemd/user/vllm-proxy.service
 install -m 0644 systemd/vllm-idle-watchdog.service \
@@ -950,6 +973,8 @@ weights. The native proxy/watchdog remain independently guarded.
 systemctl --user daemon-reload
 systemd-analyze --user verify \
   /home/jalsarraf/.config/systemd/user/dominus-ai-stack.service \
+  /home/jalsarraf/.config/systemd/user/dominus-publish-repair.service \
+  /home/jalsarraf/.config/systemd/user/dominus-publish-repair.timer \
   /home/jalsarraf/.config/systemd/user/vllm-proxy.service \
   /home/jalsarraf/.config/systemd/user/vllm-idle-watchdog.service \
   vllm-server.service
@@ -995,17 +1020,24 @@ Do not bypass either disabled TranscriptionSuite entrypoint for a write probe.
 Its host directories remain unused recovery state until all enablement gates
 exist.
 
-After the probes pass, enable the guarded units. The base start restores five
-lightweight/lazy containers plus the native vLLM proxy/watchdog. Speaches is
-CPU-only; the other service shells must not load weights during health probes.
-Record a VRAM baseline immediately before and after:
+After the probes pass, enable the guarded units, including
+`dominus-publish-repair.timer`. Docker's restart policy can restore the pinned
+containers without starting `dominus-ai-stack.service`, and that is the path
+that leaves `1234`, `8301`, and `8390` closed. Start the timer after the stack
+unit so the first recreate still goes through the unit preflights. The base
+start restores five lightweight/lazy containers plus the native vLLM
+proxy/watchdog. Speaches is CPU-only; the other service shells must not load
+weights during health probes. Record a VRAM baseline immediately before and
+after:
 
 ```bash
 test ! -e /run/user/1000/dominus-gpu/game-active
 systemctl --user enable dominus-ai-stack.service \
-  vllm-proxy.service vllm-idle-watchdog.service
+  vllm-proxy.service vllm-idle-watchdog.service \
+  dominus-publish-repair.timer
 systemctl --user start vllm-idle-watchdog.service vllm-proxy.service
 systemctl --user start dominus-ai-stack.service
+systemctl --user start dominus-publish-repair.timer
 systemctl --user status dominus-ai-stack.service --no-pager
 docker compose --env-file /mnt/nvmer0/services/ai-stack/config/stack.env ps
 curl --fail http://100.107.121.5:1234/health
@@ -1229,7 +1261,10 @@ NVIDIA's compute inventory. The old minute timer must remain disabled and the
 In a separate maintenance-window repetition, restart Docker while the marker
 exists. Because the hook manually stopped every GPU container and their
 policies are `unless-stopped` (TranscriptionSuite is `no`), Docker recovery
-must not resurrect them. The canonical unit remains stopped and port 1234 must
+must not resurrect them. The publish-repair timer must stay quiet for the
+same reason: it refuses to recreate anything while the marker exists.
+`docker restart` of an already-running gateway does not repair a missed
+Tailscale bind. The canonical unit remains stopped and port 1234 must
 remain closed:
 
 ```bash

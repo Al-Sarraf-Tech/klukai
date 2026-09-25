@@ -65,6 +65,9 @@ class ComposeContractTests(unittest.TestCase):
             unit.index(f"ExecReload={guard}"),
             unit.index("ExecReload=/usr/bin/docker compose"),
         )
+        repair = "/home/jalsarraf/.local/bin/dominus-repair-tailscale-publish"
+        self.assertLess(unit.index("up --detach --no-build --wait"), unit.index(repair))
+        self.assertIn(f"ExecStart={repair} --from-unit", unit)
         preflight = self.document["services"]["stack-preflight"]
         runtime = next(
             volume

@@ -117,6 +117,9 @@ services:
       GAMING_SAFE_MODEL_IDS: huihui-gemma-4-26b-a4b-abliterated
       GPU_LEASE_MARKER: /run/dominus-gpu/non-llm-lease.json
       GPU_LEASE_VLLM_ACK: /run/dominus-gpu/non-llm-lease-vllm-ack.json
+    # Pinned to the Tailscale address. If dockerd restores this container
+    # before that address exists, the bind fails once and `docker restart`
+    # will not retry it. scripts/repair-tailscale-publish.sh recreates it.
     ports:
       - "100.107.121.5:1234:1234"
     volumes:
