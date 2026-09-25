@@ -66,6 +66,11 @@ Future<_FakeMemoryService> _pumpArchive(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('the archive header opens The Thread', (tester) async {
+    await _pumpArchive(tester);
+    expect(find.byTooltip('The Thread'), findsOneWidget);
+  });
+
   group('MemoryArchiveScreen — error is NOT a fake-empty archive', () {
     testWidgets(
       'server error shows SIGNAL LOST + RETRY, never the empty state',

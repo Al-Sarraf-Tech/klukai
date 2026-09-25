@@ -7,6 +7,7 @@ import '../main.dart';
 import '../models/memory.dart';
 import '../services/memory_service.dart';
 import '../widgets/memory_timeline_entry.dart';
+import 'thread_screen.dart';
 
 class MemoryArchiveScreen extends StatefulWidget {
   final String serverUrl;
@@ -223,6 +224,18 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
           fontFamily: 'monospace',
         ),
       ),
+      actions: [
+        IconButton(
+          tooltip: 'The Thread',
+          icon: Icon(Icons.forum_outlined,
+              color: GFL2Colors.affinity.withValues(alpha: 0.8), size: 20),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ThreadScreen(serverUrl: widget.serverUrl),
+            ),
+          ),
+        ),
+      ],
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(1),
         child: Container(
