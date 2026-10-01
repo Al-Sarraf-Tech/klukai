@@ -30,6 +30,27 @@ scrape_configs:
         labels:
           service: prometheus
 
+  - job_name: loki
+    static_configs:
+      - targets:
+          - klukai-loki:3100
+        labels:
+          service: loki
+
+  - job_name: tempo
+    static_configs:
+      - targets:
+          - klukai-tempo:3200
+        labels:
+          service: tempo
+
+  - job_name: grafana
+    static_configs:
+      - targets:
+          - klukai-grafana:3000
+        labels:
+          service: grafana
+
   # companion-core /api/metrics scrape — admin-token gated.
   # Token lives in the alloy config block (env-substituted at runtime
   # by Alloy's secret integration). For now scrape is disabled until
