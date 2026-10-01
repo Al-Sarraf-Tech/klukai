@@ -68,15 +68,24 @@ otelcol.processor.transform "redact" {
   log_statements {
     context = "log"
     statements = [
-      `replace_all_patterns(body, "value", "AKIA[0-9A-Z]{16}", "<redacted:aws-access-key>")`,
-      `replace_all_patterns(body, "value", "ASIA[0-9A-Z]{16}", "<redacted:aws-session-key>")`,
-      `replace_all_patterns(body, "value", "ghp_[A-Za-z0-9]{36}", "<redacted:github-pat>")`,
-      `replace_all_patterns(body, "value", "gho_[A-Za-z0-9]{36}", "<redacted:github-oauth>")`,
-      `replace_all_patterns(body, "value", "ghs_[A-Za-z0-9]{36}", "<redacted:github-server>")`,
-      `replace_all_patterns(body, "value", "ghu_[A-Za-z0-9]{36}", "<redacted:github-user>")`,
-      `replace_all_patterns(body, "value", "mk_[a-z0-9]+_[A-Za-z0-9_-]{16,}", "<redacted:mcp-bearer>")`,
-      `replace_all_patterns(body, "value", "ey[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}", "<redacted:jwt>")`,
-      `replace_all_patterns(body, "value", "-----BEGIN [A-Z ]+PRIVATE KEY-----[\\s\\S]+?-----END [A-Z ]+PRIVATE KEY-----", "<redacted:pem-private-key>")`,
+      `replace_all_patterns(body, "value", "AKIA[0-9A-Z]{16}", "<redacted:aws-access-key>") where IsMap(body)`,
+      `replace_pattern(body, "AKIA[0-9A-Z]{16}", "<redacted:aws-access-key>") where IsString(body)`,
+      `replace_all_patterns(body, "value", "ASIA[0-9A-Z]{16}", "<redacted:aws-session-key>") where IsMap(body)`,
+      `replace_pattern(body, "ASIA[0-9A-Z]{16}", "<redacted:aws-session-key>") where IsString(body)`,
+      `replace_all_patterns(body, "value", "ghp_[A-Za-z0-9]{36}", "<redacted:github-pat>") where IsMap(body)`,
+      `replace_pattern(body, "ghp_[A-Za-z0-9]{36}", "<redacted:github-pat>") where IsString(body)`,
+      `replace_all_patterns(body, "value", "gho_[A-Za-z0-9]{36}", "<redacted:github-oauth>") where IsMap(body)`,
+      `replace_pattern(body, "gho_[A-Za-z0-9]{36}", "<redacted:github-oauth>") where IsString(body)`,
+      `replace_all_patterns(body, "value", "ghs_[A-Za-z0-9]{36}", "<redacted:github-server>") where IsMap(body)`,
+      `replace_pattern(body, "ghs_[A-Za-z0-9]{36}", "<redacted:github-server>") where IsString(body)`,
+      `replace_all_patterns(body, "value", "ghu_[A-Za-z0-9]{36}", "<redacted:github-user>") where IsMap(body)`,
+      `replace_pattern(body, "ghu_[A-Za-z0-9]{36}", "<redacted:github-user>") where IsString(body)`,
+      `replace_all_patterns(body, "value", "mk_[a-z0-9]+_[A-Za-z0-9_-]{16,}", "<redacted:mcp-bearer>") where IsMap(body)`,
+      `replace_pattern(body, "mk_[a-z0-9]+_[A-Za-z0-9_-]{16,}", "<redacted:mcp-bearer>") where IsString(body)`,
+      `replace_all_patterns(body, "value", "ey[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}", "<redacted:jwt>") where IsMap(body)`,
+      `replace_pattern(body, "ey[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}", "<redacted:jwt>") where IsString(body)`,
+      `replace_all_patterns(body, "value", "-----BEGIN [A-Z ]+PRIVATE KEY-----[\\s\\S]+?-----END [A-Z ]+PRIVATE KEY-----", "<redacted:pem-private-key>") where IsMap(body)`,
+      `replace_pattern(body, "-----BEGIN [A-Z ]+PRIVATE KEY-----[\\s\\S]+?-----END [A-Z ]+PRIVATE KEY-----", "<redacted:pem-private-key>") where IsString(body)`,
     ]
   }
 
