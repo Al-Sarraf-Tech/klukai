@@ -224,3 +224,62 @@ class TestCheckHealth:
             assert result["status"] == "error"
         finally:
             db._pool = orig
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# get_conn returns connections to the pool in a clean (IDLE) state
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestGetConnReturnsIdle:
+    """A read-only caller leaves the manual-commit connection INTRANS.
+
+    The pool would roll it back itself and log a WARNING per use; get_conn
+    must roll back before putconn so the pool never sees a dirty connection.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rolls_back_open_transaction_before_putconn(self):
+        from psycopg.pq import TransactionStatus
+
+        from app import db
+
+        conn = MagicMock()
+        conn.closed = False
+        conn.info.transaction_status = TransactionStatus.INTRANS
+        conn.rollback = AsyncMock()
+        pool = MagicMock()
+        pool.getconn = AsyncMock(return_value=conn)
+        pool.putconn = AsyncMock()
+        orig = db._pool
+        db._pool = pool
+        try:
+            async with db.get_conn():
+                pass
+        finally:
+            db._pool = orig
+        conn.rollback.assert_awaited_once()
+        pool.putconn.assert_awaited_once_with(conn)
+
+    @pytest.mark.asyncio
+    async def test_no_rollback_when_idle(self):
+        from psycopg.pq import TransactionStatus
+
+        from app import db
+
+        conn = MagicMock()
+        conn.closed = False
+        conn.info.transaction_status = TransactionStatus.IDLE
+        conn.rollback = AsyncMock()
+        pool = MagicMock()
+        pool.getconn = AsyncMock(return_value=conn)
+        pool.putconn = AsyncMock()
+        orig = db._pool
+        db._pool = pool
+        try:
+            async with db.get_conn():
+                pass
+        finally:
+            db._pool = orig
+        conn.rollback.assert_not_awaited()
+        pool.putconn.assert_awaited_once_with(conn)

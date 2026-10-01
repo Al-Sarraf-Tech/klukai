@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
 import psycopg
+from psycopg.pq import TransactionStatus
 from psycopg_pool import AsyncConnectionPool
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,14 @@ async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
     try:
         yield conn
     finally:
+        # Connections are manual-commit: a read-only caller leaves the
+        # session INTRANS. Roll back here so the pool never sees a dirty
+        # connection (it would roll back itself and log a WARNING per use).
+        try:
+            if not conn.closed and conn.info.transaction_status != TransactionStatus.IDLE:
+                await conn.rollback()
+        except Exception:  # pragma: no cover - pool discards broken conns
+            logger.debug("rollback before putconn failed", exc_info=True)
         await pool.putconn(conn)
 
 
