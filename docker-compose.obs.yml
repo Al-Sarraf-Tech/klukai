@@ -125,7 +125,7 @@ services:
       GF_SERVER_ROOT_URL: "http://localhost:3000/"
       GF_INSTALL_PLUGINS: ""
     ports:
-      - "127.0.0.1:13000:3000"   # Grafana UI — +10000 to avoid host conflicts
+      - "127.0.0.1:13001:3000"   # Grafana UI — 13000 is taken by mcpservers-obs-grafana
     volumes:
       - ./obs/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./docs/dashboards:/var/lib/grafana/dashboards:ro
