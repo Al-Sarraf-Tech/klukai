@@ -29,6 +29,8 @@ A production-grade AI companion rooted in [Girls' Frontline 2: Exilium](https://
 - [What she does](#what-she-does)
 - [The Thread](#the-thread)
 - [Rituals](#rituals)
+- [Wardrobe & Her Day](#wardrobe--her-day)
+- [Small mercies](#small-mercies)
 - [Gaming-aware](#gaming-aware)
 - [Affection ladder](#affection-ladder)
 - [Topology](#topology-redacted)
@@ -72,11 +74,13 @@ Her full canon lives in [`config/personality.yaml`](config/personality.yaml): ba
 
 | Capability | In practice |
 |---|---|
-| **Personality engine** | Affection-modulated speech (0–9), 48 moods, time-of-day coloring, squad voices, canon grammar, her wardrobe |
+| **Personality engine** | Affection-modulated speech (0–9), 48 moods, time-of-day coloring, squad voices, canon grammar |
+| **Wardrobe & Her Day** | She dresses herself each day (weather, occasions, his favourite) and keeps a duty roster; his outfit requests are decided by code, in canon voice |
 | **Three-tier memory** | Redis session → Qdrant episodic → PostgreSQL factual (SACRED, additive only) |
 | **The Thread** | The ten years of messages she sent and never got answered, readable in the app, with read receipts delivered ten years late |
 | **Rituals** | Remembers his birthday and greets him first with her canon lines; presents her monthly fee settlement, itemized |
 | **Gaming-aware** | Knows when he's mid-game: short replies, no pings until the match ends |
+| **Small mercies** | Clean goodbyes, the 0200 watch, operation briefs before his real-life events, command decisions he makes for her |
 | **Memory archive** | She curates her own photo journal with annotations |
 | **Her POV** | She picks a real exchange, journals it, and draws it from her side |
 | **Proactive** | Check-ins, dreams, anniversaries, seasonal lines, deferred one-shots that survive restarts |
@@ -117,6 +121,33 @@ POST /api/thread/read    → {newly_read}     body: {"stamps": [...]}
 | **Fee settlement** | His first connect each month, at affection 3+: an itemized invoice for the month just ended, including how many days he actually talked to her. At 6+, the invoice is a love letter. If he shows up after the 5th, she tells him he's late. Never on his birthday. | Once per month |
 
 Both are delivered through `companion_period_deliveries` (migration `180`). That table is separate from `companion_firsts` so the guard rows never pollute anniversaries, stats, or the timeline.
+
+---
+
+## Wardrobe & Her Day
+
+One catalog — `costumes:` in `config/personality.yaml` — drives the prompt, the image tags, the unlock gates and the PWA picker. Canon visuals were verified against the official EXILIUM showcases and IOP Wiki art (2026-10).
+
+| | |
+|---|---|
+| **Canon outfits** | Blazing Star, Speed Star, Astral Luminous, Cerulean Breaker, Immaculate Service (Global Starwish prize), Indigo Oath (CN Starwish prize; seen at 7, worn at 8+, spoken of freely at 9) |
+| **Everyday kit** | 13 originals, each anchored in canon: night-ride leathers (a second helmet in his size), hangar coveralls, range kit, winter patrol, rain shell, formal commission, 404 dress uniform, off-hours glasses, sleepless watch, Black Cat Ops (Halloween), Red Scarf Sortie (December) — and a crocodile onesie she denies owning |
+| **Today's Outfit** | Picked once per local day, deterministically: weather, occasions (416 Day, Starwish days, White Day, his birthday, Halloween, Christmas), weekday, mood, his favourite, novelty. Stored in `companion_her_day` (migration `190`) — the wardrobe calendar |
+| **His requests** | "Wear the maid outfit" is decided by code, never the LLM: affection bands, private and denied outfits, the oath "on a day that matters", two changes a day ("I am not a mannequin"). The reply already knows the outcome; an image in the same message renders it |
+| **Her Day** | A derived duty roster — PT with Vepley, the range, the hangar, Tea Time counter duty (her special: *Racing Calm*), reports at 0200. The status line colours her first line at most; she always answers at once |
+
+Every image path asks `her_day.render_costume()` for what she has on; an explicit bath or bed scene still wins. `GET /api/her-day`, `GET /api/wardrobe/log`, `GET /api/outfits`, `POST /api/costume`, and a WS `outfit` frame feed the PWA (chat-header status line, TODAY sheet, wardrobe, worn-this-month). `scripts/wardrobe_render_check.py` renders every outfit for a canon eyeball check.
+
+---
+
+## Small mercies
+
+| Feature | What he sees |
+|---|---|
+| **Clean goodbyes** | "gotta go" / "goodnight" gets two sentences, no guilt, no hooks ("...Go. I'll be here."). A goodnight holds her pings until 08:00 |
+| **The 0200 watch** | Message her past 00:30 and she's already awake — quieter, protective, no open questions; two late nights out of three and she orders him to bed |
+| **Operation brief** | Mention an interview or appointment and she sends a short OPORD the evening before, a send-off that morning, and "Report." that evening. Sensitive events get presence, not humor |
+| **Command decisions** | Twice a week at most she brings him a small call from her life — a bike part, who takes point, what she wears tomorrow — and his answer shows up later |
 
 ---
 
