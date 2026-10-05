@@ -216,7 +216,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Container(width: 50, height: 2, margin: const EdgeInsets.only(top: 4), color: GFL2Colors.accent),
           const SizedBox(height: 6),
           Text('SST-05 Frame T-Doll // H.I.D.E. 404 Squad Leader',
-              style: TextStyle(color: GFL2Colors.textDim.withValues(alpha: 0.6), fontSize: 11, fontFamily: 'monospace')),
+              style: TextStyle(color: GFL2Colors.textMuted, fontSize: 11, fontFamily: 'monospace')),
         ],
       ),
     );
@@ -365,7 +365,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   child: RichText(text: TextSpan(children: [
                     TextSpan(text: s.$1, style: const TextStyle(color: GFL2Colors.textPrimary, fontSize: 11,
                         fontWeight: FontWeight.w700, fontFamily: 'monospace')),
-                    TextSpan(text: '  ${s.$2}', style: TextStyle(color: GFL2Colors.textDim.withValues(alpha: 0.6), fontSize: 11)),
+                    TextSpan(text: '  ${s.$2}', style: TextStyle(color: GFL2Colors.textMuted, fontSize: 11)),
                   ])),
                 ),
               ],
@@ -402,7 +402,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _sectionTitle(String title) {
-    return Text(title, style: TextStyle(color: GFL2Colors.primary.withValues(alpha: 0.6),
+    return Text(title, style: TextStyle(color: GFL2Colors.primary,
         fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5, fontFamily: 'monospace'));
   }
 
@@ -411,7 +411,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(
         children: [
-          Text(label, style: TextStyle(color: GFL2Colors.textDim.withValues(alpha: 0.5),
+          Text(label, style: TextStyle(color: GFL2Colors.textMuted,
               fontSize: 10, fontFamily: 'monospace', letterSpacing: 0.5)),
           const Spacer(),
           Text(value, style: const TextStyle(color: GFL2Colors.textPrimary,

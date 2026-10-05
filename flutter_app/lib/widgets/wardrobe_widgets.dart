@@ -93,7 +93,7 @@ class WardrobeGrid extends StatelessWidget {
           child: Text(title,
               key: Key('wardrobe-group-$title'),
               style: TextStyle(
-                  color: GFL2Colors.textDim.withValues(alpha: 0.7),
+                  color: GFL2Colors.textMuted,
                   fontSize: 9,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 1.4,
@@ -139,7 +139,7 @@ class WardrobeGrid extends StatelessWidget {
                       child: Icon(Icons.lock_outline,
                           key: Key('wardrobe-lock-${item.id}'),
                           size: 10,
-                          color: GFL2Colors.textDim.withValues(alpha: 0.8)),
+                          color: GFL2Colors.textMuted),
                     ),
                   Flexible(
                     child: Text(item.name,
@@ -167,7 +167,7 @@ class WardrobeGrid extends StatelessWidget {
                 Text(item.blurb,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: GFL2Colors.textDim.withValues(alpha: 0.6), fontSize: 9)),
+                    style: TextStyle(color: GFL2Colors.textMuted, fontSize: 9)),
             ],
           ),
         ),
@@ -187,7 +187,7 @@ class WornLogList extends StatelessWidget {
     if (entries.isEmpty) {
       return Text('No record yet.',
           style: TextStyle(
-              color: GFL2Colors.textDim.withValues(alpha: 0.6), fontSize: 11, fontFamily: _mono));
+              color: GFL2Colors.textMuted, fontSize: 11, fontFamily: _mono));
     }
     return Column(
       key: const Key('worn-log'),
@@ -203,7 +203,7 @@ class WornLogList extends StatelessWidget {
                   width: 52,
                   child: Text(e.shortDay,
                       style: TextStyle(
-                          color: GFL2Colors.textDim.withValues(alpha: 0.7),
+                          color: GFL2Colors.textMuted,
                           fontSize: 10,
                           fontFamily: _mono)),
                 ),
@@ -229,7 +229,7 @@ class WornLogList extends StatelessWidget {
                         TextSpan(
                             text: '  ${e.reason}',
                             style: TextStyle(
-                                color: GFL2Colors.textDim.withValues(alpha: 0.7), fontSize: 10)),
+                                color: GFL2Colors.textMuted, fontSize: 10)),
                     ]),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
