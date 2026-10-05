@@ -1,8 +1,14 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:web/web.dart' as web;
-import '../main.dart';
+
+import '../models/her_day.dart';
+import '../services/session_auth.dart';
+import '../services/wardrobe_service.dart';
+import '../theme/gfl2_colors.dart';
+import '../widgets/her_day_widgets.dart';
+import '../widgets/wardrobe_widgets.dart';
 import 'timeline_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -11,12 +17,20 @@ class ProfileScreen extends StatefulWidget {
   final int affectionLevel;
   final String affectionLevelName;
 
+  /// Injectable for tests; defaults to a real [WardrobeService].
+  final WardrobeService? wardrobeService;
+
+  /// Client for the milestones / stats fetches. Injectable for tests.
+  final http.Client? client;
+
   const ProfileScreen({
     super.key,
     required this.serverUrl,
     required this.affectionScore,
     required this.affectionLevel,
     required this.affectionLevelName,
+    this.wardrobeService,
+    this.client,
   });
 
   @override
@@ -24,49 +38,37 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  String _costume = 'blazing_star';
+  late final WardrobeService _wardrobeService;
+  late final http.Client _client;
   Map<String, String> _milestones = {};
   int _interactions = 0;
-  // outfit id -> {unlock_level:int, unlocked:bool} from GET /api/outfits.
-  Map<String, Map<String, dynamic>> _outfits = {};
 
-  Map<String, String> get _authHeaders {
-    String token = '';
-    try {
-      token = web.window.localStorage.getItem('klukai_token') ?? '';
-    } catch (_) {}
-    return {
-      'Authorization': 'Bearer $token',
-      'Content-Type': 'application/json',
-    };
-  }
+  // Today's Outfit / Her Day. Each loads independently and fails soft: a
+  // section whose fetch failed simply doesn't render.
+  Wardrobe? _wardrobe;
+  HerDay? _herDay;
+  List<WardrobeLogEntry> _log = const [];
+  bool _settingCostume = false;
+
+  Map<String, String> get _authHeaders => {
+        'Authorization': 'Bearer ${readAuthToken()}',
+        'Content-Type': 'application/json',
+      };
 
   @override
   void initState() {
     super.initState();
+    _client = widget.client ?? http.Client();
+    _wardrobeService = widget.wardrobeService ?? WardrobeService(serverUrl: widget.serverUrl);
     _loadData();
+    _loadWardrobe();
   }
 
   Future<void> _loadData() async {
     try {
-      final costumeR = await http.get(Uri.parse('${widget.serverUrl}/api/costume'), headers: _authHeaders);
-      final milestonesR = await http.get(Uri.parse('${widget.serverUrl}/api/milestones'), headers: _authHeaders);
-      final statsR = await http.get(Uri.parse('${widget.serverUrl}/api/user/stats'), headers: _authHeaders);
+      final milestonesR = await _client.get(Uri.parse('${widget.serverUrl}/api/milestones'), headers: _authHeaders);
+      final statsR = await _client.get(Uri.parse('${widget.serverUrl}/api/user/stats'), headers: _authHeaders);
       if (!mounted) return;
-      if (costumeR.statusCode == 200) {
-        setState(() => _costume = jsonDecode(costumeR.body)['costume'] ?? 'blazing_star');
-      }
-      final outfitsR = await http.get(Uri.parse('${widget.serverUrl}/api/outfits'), headers: _authHeaders);
-      if (outfitsR.statusCode == 200 && mounted) {
-        final list = jsonDecode(outfitsR.body)['outfits'] as List<dynamic>? ?? [];
-        setState(() => _outfits = {
-              for (final o in list)
-                (o as Map<String, dynamic>)['id'] as String: {
-                  'unlock_level': o['unlock_level'] ?? 0,
-                  'unlocked': o['unlocked'] ?? false,
-                },
-            });
-      }
       if (milestonesR.statusCode == 200) {
         final data = jsonDecode(milestonesR.body)['milestones'] as Map<String, dynamic>? ?? {};
         setState(() => _milestones = data.map((k, v) => MapEntry(k, v.toString())));
@@ -79,20 +81,66 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (_) {}
   }
 
-  Future<void> _setCostume(String costume) async {
+  Future<void> _loadWardrobe() async {
+    await Future.wait([
+      _guard(() async {
+        final w = await _wardrobeService.fetchOutfits();
+        if (mounted) setState(() => _wardrobe = w);
+      }),
+      _guard(() async {
+        final d = await _wardrobeService.fetchHerDay();
+        if (mounted) setState(() => _herDay = d);
+      }),
+      _guard(() async {
+        final log = await _wardrobeService.fetchLog(days: 30);
+        if (mounted) setState(() => _log = log);
+      }),
+    ]);
+  }
+
+  Future<void> _guard(Future<void> Function() load) async {
     try {
-      final resp = await http.post(
-        Uri.parse('${widget.serverUrl}/api/costume'),
-        headers: _authHeaders,
-        body: jsonEncode({'costume': costume}),
-      );
-      if (!mounted) return;
-      // Only adopt the costume if the server accepted it; a locked outfit
-      // returns 403 and must not change the displayed selection.
-      if (resp.statusCode == 200) {
-        setState(() => _costume = costume);
-      }
+      await load();
     } catch (_) {}
+  }
+
+  Future<void> _setCostume(WardrobeItem item) async {
+    if (_settingCostume) return;
+    _settingCostume = true;
+    try {
+      await _wardrobeService.setCostume(item.id);
+      if (!mounted) return;
+      await _loadWardrobe();
+    } on WardrobeServiceException catch (e) {
+      _say(e.isLocked
+          ? 'Not yet.'
+          : e.isUnknown
+              ? "That isn't in my wardrobe, Commander."
+              : 'Comms disrupted. Try again.');
+    } catch (_) {
+      _say('Comms disrupted. Try again.');
+    } finally {
+      _settingCostume = false;
+    }
+  }
+
+  void _say(String line) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        key: const Key('wardrobe-snackbar'),
+        duration: const Duration(seconds: 2),
+        backgroundColor: GFL2Colors.panel,
+        content: Text(line,
+            style: const TextStyle(
+                color: GFL2Colors.textPrimary, fontSize: 12, fontFamily: 'monospace')),
+      ));
+  }
+
+  String get _todayName {
+    final name = _wardrobe?.today?.name ?? _herDay?.outfit?.name;
+    return name == null || name.isEmpty ? '—' : name.toUpperCase();
   }
 
   @override
@@ -120,9 +168,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 20),
             _buildStats(),
             const SizedBox(height: 20),
+            if (_herDay != null && _herDay!.schedule.isNotEmpty) ...[
+              _buildTodaySchedule(),
+              const SizedBox(height: 20),
+            ],
+            if (_wardrobe != null) ...[
+              _buildCostumeSelector(),
+              const SizedBox(height: 20),
+            ],
+            if (_log.isNotEmpty) ...[
+              _buildWornLog(),
+              const SizedBox(height: 20),
+            ],
             _buildBackstory(),
-            const SizedBox(height: 20),
-            _buildCostumeSelector(),
             const SizedBox(height: 20),
             _buildSquadRoster(),
             const SizedBox(height: 20),
@@ -181,7 +239,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _statRow('AFFECTION', '${widget.affectionScore}/1000'),
           _statRow('INTERACTIONS', '$_interactions'),
           _statRow('MILESTONES', '${_milestones.length}'),
-          _statRow('CURRENT OUTFIT', _costumeLabel(_costume)),
+          _statRow('CURRENT OUTFIT', _todayName),
         ],
       ),
     );
@@ -215,17 +273,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildCostumeSelector() {
-    const costumes = [
-      ('blazing_star', 'Blazing Star', 'Default tactical gear'),
-      ('speed_star', 'Speed Star', 'Silver-white rider suit'),
-      ('cerulean_breaker', 'Cerulean Breaker', 'Beach / surfing outfit'),
-      ('astral_luminous', 'Astral Luminous', 'Blue lightning tactical rider'),
-      ('midnight_sovereign', 'Midnight Sovereign', 'Formal midnight gown'),
-      ('starlit_vow', 'Starlit Vow', 'Bridal — only at the deepest bond'),
-    ];
-
+  Widget _panel({required Key key, required String title, required List<Widget> children}) {
     return Container(
+      key: key,
+      width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: GFL2Colors.surface, borderRadius: BorderRadius.circular(4),
@@ -233,65 +284,51 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _sectionTitle('WARDROBE'),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8, runSpacing: 8,
-            children: costumes.map((c) {
-              final info = _outfits[c.$1];
-              // Default to unlocked if /api/outfits hasn't loaded, so the base
-              // outfits stay usable; locked state only hides what the server says.
-              final unlocked = info == null ? true : (info['unlocked'] == true);
-              final unlockLevel = info == null ? 0 : (info['unlock_level'] as int? ?? 0);
-              final selected = _costume == c.$1;
-              return GestureDetector(
-                onTap: unlocked ? () => _setCostume(c.$1) : null,
-                child: Opacity(
-                  opacity: unlocked ? 1.0 : 0.4,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: selected ? GFL2Colors.primary.withValues(alpha: 0.15) : GFL2Colors.background,
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(
-                        color: selected ? GFL2Colors.primary : GFL2Colors.border.withValues(alpha: 0.3),
-                        width: selected ? 1.5 : 1,
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (!unlocked)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: Icon(Icons.lock_outline,
-                                    size: 10, color: GFL2Colors.textDim.withValues(alpha: 0.7)),
-                              ),
-                            Text(c.$2, style: TextStyle(
-                              color: selected ? GFL2Colors.primary : GFL2Colors.textPrimary,
-                              fontSize: 11, fontWeight: FontWeight.w700, fontFamily: 'monospace',
-                            )),
-                          ],
-                        ),
-                        Text(
-                          unlocked ? c.$3 : 'Unlocks at affection Lv $unlockLevel',
-                          style: TextStyle(
-                            color: GFL2Colors.textDim.withValues(alpha: 0.5), fontSize: 9,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-        ],
+        children: [_sectionTitle(title), const SizedBox(height: 8), ...children],
       ),
+    );
+  }
+
+  Widget _buildTodaySchedule() {
+    final day = _herDay!;
+    return _panel(
+      key: const Key('profile-today'),
+      title: 'TODAY',
+      children: [
+        if ((day.status?.label ?? '').isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(day.status!.label,
+                style: const TextStyle(color: GFL2Colors.textPrimary, fontSize: 12,
+                    fontWeight: FontWeight.w600)),
+          ),
+        ScheduleStrip(blocks: day.schedule),
+      ],
+    );
+  }
+
+  Widget _buildCostumeSelector() {
+    final wardrobe = _wardrobe!;
+    final today = wardrobe.today ?? _herDay?.outfit;
+    return _panel(
+      key: const Key('profile-wardrobe'),
+      title: 'WARDROBE',
+      children: [
+        if (today != null) TodayOutfitCard(outfit: today),
+        WardrobeGrid(
+          wardrobe: wardrobe,
+          onSelect: _setCostume,
+          onLockedTap: (_) => _say('Not yet.'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWornLog() {
+    return _panel(
+      key: const Key('profile-worn'),
+      title: 'WORN THIS MONTH',
+      children: [WornLogList(entries: _log)],
     );
   }
 
@@ -382,17 +419,5 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
     );
-  }
-
-  String _costumeLabel(String id) {
-    return switch (id) {
-      'blazing_star' => 'BLAZING STAR',
-      'speed_star' => 'SPEED STAR',
-      'astral_luminous' => 'ASTRAL LUMINOUS',
-      'cerulean_breaker' => 'CERULEAN BREAKER',
-      'midnight_sovereign' => 'MIDNIGHT SOVEREIGN',
-      'starlit_vow' => 'STARLIT VOW',
-      _ => id.toUpperCase().replaceAll('_', ' '),
-    };
   }
 }

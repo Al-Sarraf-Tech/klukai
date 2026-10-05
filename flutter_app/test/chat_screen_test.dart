@@ -25,10 +25,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:web/web.dart' as web;
 
+import 'package:companion_app/models/her_day.dart';
 import 'package:companion_app/screens/chat_screen.dart';
+import 'package:companion_app/services/wardrobe_service.dart';
 import 'package:companion_app/services/websocket_service.dart';
 import 'package:companion_app/widgets/message_bubble.dart';
 import 'package:companion_app/widgets/heartbeat_sensor.dart';
+
+import 'support/her_day_fixtures.dart';
 
 /// In-memory stand-in for [WebSocketService]. Overrides every transport method
 /// to a no-op and routes inbound frames through `emit()`. The connection state
@@ -376,6 +380,68 @@ void main() {
       expect(focusWidget.onKeyEvent!(node, keyA), KeyEventResult.ignored);
 
       await tester.pump(const Duration(milliseconds: 500));
+      expect(tester.takeException(), isNull);
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — Her Day status line', () {
+    Future<(FakeWebSocketService, FakeWardrobeService)> pumpWithDay(
+      WidgetTester tester,
+      FakeWardrobeService wardrobe,
+    ) async {
+      web.window.localStorage.setItem('klukai_token', 'test-token');
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final fake = FakeWebSocketService();
+      await tester.pumpWidget(MaterialApp(
+        home: ChatScreen(
+          serverUrl: 'http://localhost:0',
+          webSocketService: fake,
+          wardrobeService: wardrobe,
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+      return (fake, wardrobe);
+    }
+
+    testWidgets('shows where she is and what she is wearing, at 390px', (tester) async {
+      final (fake, wardrobe) = await pumpWithDay(tester, FakeWardrobeService());
+      expect(find.text('Hangar \u00B7 tuning the suspension'), findsOneWidget);
+      expect(find.byKey(const Key('her-day-outfit-chip')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      expect(wardrobe.herDayCalls, greaterThanOrEqualTo(1));
+      fake.dispose();
+    });
+
+    testWidgets('an outfit frame swaps the chip and refetches', (tester) async {
+      final wardrobe = FakeWardrobeService(herDays: [
+        HerDay.fromJson(herDayJson()),
+        HerDay.fromJson(herDayJson()),
+        HerDay.fromJson(herDayJson(
+            outfit: outfitJson(
+                id: 'immaculate_service', name: 'Immaculate Service', source: 'commander'))),
+      ]);
+      final (fake, _) = await pumpWithDay(tester, wardrobe);
+      final before = wardrobe.herDayCalls;
+      fake.emit({
+        'type': 'outfit',
+        'outfit': outfitJson(
+            id: 'immaculate_service', name: 'Immaculate Service', source: 'commander'),
+      });
+      await tester.pump();
+      expect(find.text('Immaculate Service'), findsOneWidget);
+      expect(wardrobe.herDayCalls, before + 1);
+      fake.dispose();
+    });
+
+    testWidgets('her-day failing hides the line and chat carries on', (tester) async {
+      final (fake, _) = await pumpWithDay(
+          tester, FakeWardrobeService(herDays: [WardrobeServiceException(503)]));
+      expect(find.byKey(const Key('her-day-status')), findsNothing);
+      expect(find.text('KLUKAI'), findsOneWidget);
       expect(tester.takeException(), isNull);
       fake.dispose();
     });

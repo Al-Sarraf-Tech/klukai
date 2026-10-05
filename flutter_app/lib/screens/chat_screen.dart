@@ -9,6 +9,8 @@ import '../main.dart';
 import '../theme/mood_visuals.dart';
 import '../models/message.dart';
 import '../models/companion_state.dart';
+import '../models/her_day.dart';
+import '../services/wardrobe_service.dart';
 import '../services/websocket_service.dart';
 import '../services/pretext_interop.dart';
 import '../widgets/message_bubble.dart';
@@ -20,6 +22,7 @@ import '../widgets/canvas_message_bubble.dart';
 import '../widgets/date_divider.dart';
 import '../widgets/heartbeat_sensor.dart';
 import '../widgets/exit_icon.dart';
+import '../widgets/her_day_widgets.dart';
 import 'profile_screen.dart';
 import 'memory_archive_screen.dart';
 import 'her_pov_screen.dart';
@@ -57,7 +60,20 @@ class ChatScreen extends StatefulWidget {
   /// tests may inject a fake so the screen can be pumped without a live backend.
   final WebSocketService? webSocketService;
 
-  const ChatScreen({super.key, required this.serverUrl, this.webSocketService});
+  /// Today's Outfit / Her Day. Defaults to a real [WardrobeService]; tests
+  /// inject a fake.
+  final WardrobeService? wardrobeService;
+
+  /// How often the header status line refreshes while the chat is visible.
+  final Duration herDayRefresh;
+
+  const ChatScreen({
+    super.key,
+    required this.serverUrl,
+    this.webSocketService,
+    this.wardrobeService,
+    this.herDayRefresh = const Duration(minutes: 10),
+  });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -66,6 +82,13 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   late final WebSocketService _ws =
       widget.webSocketService ?? WebSocketService();
+  late final WardrobeService _wardrobe =
+      widget.wardrobeService ?? WardrobeService(serverUrl: widget.serverUrl);
+
+  /// Where she is and what she's wearing. Null hides the header line; a
+  /// failed fetch must never get in the way of chat.
+  HerDay? _herDay;
+  Timer? _herDayTimer;
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
@@ -148,6 +171,46 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _loadHistory();
     _loadAffection();
     _connectWS();
+    _loadHerDay();
+    _herDayTimer = Timer.periodic(widget.herDayRefresh, (_) => _refreshHerDayIfVisible());
+  }
+
+  Future<void> _loadHerDay() async {
+    try {
+      final day = await _wardrobe.fetchHerDay();
+      if (!mounted) return;
+      setState(() => _herDay = day.hasStatusLine ? day : null);
+    } catch (_) {
+      if (mounted) setState(() => _herDay = null);
+    }
+  }
+
+  /// Periodic refresh, skipped while she's off screen (backgrounded tab, or
+  /// another screen pushed on top). Reconnect and returning from the dossier
+  /// reload it anyway.
+  void _refreshHerDayIfVisible() {
+    if (!mounted) return;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) return;
+    _loadHerDay();
+  }
+
+  void _openHerDaySheet() {
+    final day = _herDay;
+    if (day == null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: GFL2Colors.surface,
+      isScrollControlled: true,
+      builder: (sheetContext) => HerDaySheet(
+        day: day,
+        onOpenDossier: () {
+          Navigator.pop(sheetContext);
+          _openProfile();
+        },
+      ),
+    );
   }
 
   @override
@@ -304,6 +367,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         // (Re)connected — refetch recent history and merge by id so anything
         // missed while the link was down appears, without duplicates.
         _loadHistory();
+        _loadHerDay();
       }
     });
     _ws.messages.listen(_handleWSMessage);
@@ -550,6 +614,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             }
           });
         }
+
+      case 'outfit':
+        // She changed because he asked in chat. Show it now, then refetch so
+        // the status line and schedule agree with the server.
+        final raw = msg['outfit'];
+        if (raw is Map<String, dynamic> && _herDay != null) {
+          setState(() => _herDay = _herDay!.withOutfit(OutfitInfo.fromJson(raw)));
+        }
+        _loadHerDay();
 
       case 'heartbeat_spike':
         final spikeBpm = msg['bpm'] as int? ?? 160;
@@ -845,9 +918,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           affectionScore: _state.affectionScore,
           affectionLevel: _state.affectionLevel,
           affectionLevelName: _state.affectionLevelName,
+          wardrobeService: _wardrobe,
         ),
       ),
-    );
+    ).then((_) => _loadHerDay()); // a wardrobe change in the dossier shows here
   }
 
   Future<void> _logout() async {
@@ -975,6 +1049,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _spikeDecayTimer?.cancel();
     _inputLockTimer?.cancel();
     _warmupTimer?.cancel();
+    _herDayTimer?.cancel();
     _ws.dispose();
     _textController.dispose();
     _scrollController.dispose();
@@ -1110,6 +1185,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                         fontFamily: 'monospace',
                       ),
                     ),
+                    if (_herDay != null) ...[
+                      const SizedBox(height: 3),
+                      HerDayStatusLine(day: _herDay!, onTap: _openHerDaySheet),
+                    ],
                     const SizedBox(height: 6),
                     // Link status + mood
                     Row(
