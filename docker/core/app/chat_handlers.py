@@ -338,6 +338,19 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     if gaming_block:
         system_prompt += f"\n\n{gaming_block}"
 
+    # Clean goodbyes: he is signing off, so she lets him go (one-shot block),
+    # and proactive pings hold until morning ("night") or for 90 min ("leave").
+    # mark_responded() above already lifted any earlier hold.
+    from .goodbyes import build_departure_block
+    from .helpers import detect_goodbye
+    goodbye = detect_goodbye(content)
+    if goodbye:
+        if goodbye == "night":
+            proactive.mark_goodnight()
+        else:
+            proactive.mark_leaving()
+        system_prompt += f"\n\n{build_departure_block(_p, goodbye, aff_state.level)}"
+
     birthday_block = await rituals.birthday_prompt_block(
         user_id, _p, aff_state.first_interaction, content,
     )

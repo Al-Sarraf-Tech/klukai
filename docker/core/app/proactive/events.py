@@ -209,6 +209,10 @@ class EventsMixin(_EngineBase):
         if self._muted_until and now < self._muted_until:
             return
 
+        # Guard: he signed off — let him go
+        if self._goodbye_hold_active(now):
+            return
+
         # Guard: never ping the Commander mid-match
         if self._game_active_probe is not None and await self._game_active_probe():
             return
@@ -300,6 +304,8 @@ class EventsMixin(_EngineBase):
             return
         if self._muted_until and now_local() < self._muted_until:
             return
+        if self._goodbye_hold_active(now_local()):
+            return  # he signed off during the delay (or before it)
 
         self._romance_delivered_today = True
 
@@ -473,6 +479,8 @@ class EventsMixin(_EngineBase):
             return  # a vulnerable gesture — only once genuinely bonded
         if self._muted_until and now < self._muted_until:
             return
+        if self._goodbye_hold_active(now):
+            return
 
         piece = random.choice(_spontaneous_art_pieces())
         try:
@@ -549,6 +557,8 @@ class EventsMixin(_EngineBase):
         if self._affection_level < 4:
             return
         if self._muted_until and now_local() < self._muted_until:
+            return
+        if self._goodbye_hold_active(now_local()):
             return
 
         # Pull a real memory from the archive. Prefer a mood-relevant recall

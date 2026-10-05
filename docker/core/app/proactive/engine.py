@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -33,6 +33,9 @@ from .templates import (
 )
 
 logger = logging.getLogger(__name__)
+
+# After "gotta go" she stays quiet this long; after "goodnight", until morning.
+LEAVE_HOLD = timedelta(minutes=90)
 
 # Tap-interaction lines for the 3D avatar. Sourced from
 # ``proactive_content.tap_lines`` in personality.yaml so they can be tuned
@@ -147,6 +150,10 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         self._quiet_day_delivered_today: bool = False
         # Seasonal greetings fire once per occurrence; keyed by event:YYYY-MM-DD.
         self._seasonal_delivered: dict[str, bool] = {}
+        # Clean goodbyes: no pings until this local time after he signs off.
+        # Cleared by his next message (mark_responded); deliberately NOT by the
+        # midnight reset, so a 2200 goodnight still holds until 0800.
+        self._goodbye_hold_until: datetime | None = None
 
     def set_callback(self, callback) -> None:
         """Set callback for delivering proactive messages."""
@@ -447,15 +454,49 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         self._muted_until = None
 
     def mark_responded(self) -> None:
-        """Mark that the Commander responded to the last proactive message."""
+        """Mark that the Commander responded to the last proactive message.
+
+        Any message from him also lifts a goodbye hold: he is back.
+        """
         self._last_proactive_answered = True
         self._last_message_time = now_local()
+        self._goodbye_hold_until = None
+
+    def mark_goodnight(self) -> None:
+        """He said goodnight: no pings until 0800 local (QUIET_HOUR_END).
+
+        The next 0800, or this morning's if he says it after midnight.
+        """
+        now = now_local()
+        until = now.replace(hour=QUIET_HOUR_END, minute=0, second=0, microsecond=0)
+        if now >= until:
+            until += timedelta(days=1)
+        self._goodbye_hold_until = until
+        logger.info("Goodnight: proactive pings held until %s", until)
+
+    def mark_leaving(self) -> None:
+        """He signed off ("gotta go"): no pings for LEAVE_HOLD."""
+        self._goodbye_hold_until = now_local() + LEAVE_HOLD
+        logger.info("Goodbye: proactive pings held until %s", self._goodbye_hold_until)
+
+    def _goodbye_hold_active(self, now: datetime | None = None) -> bool:
+        """True while a goodbye hold is running; clears it once it lapses."""
+        if self._goodbye_hold_until is None:
+            return False
+        if (now or now_local()) >= self._goodbye_hold_until:
+            self._goodbye_hold_until = None
+            return False
+        return True
 
     def _can_send(self, *, ignore_unanswered: bool = False) -> bool:
         now = now_local()
 
         # Check mute
         if self._muted_until and now < self._muted_until:
+            return False
+
+        # He signed off: let him go (clean goodbyes)
+        if self._goodbye_hold_active(now):
             return False
 
         # Quiet hours (local wall clock)
