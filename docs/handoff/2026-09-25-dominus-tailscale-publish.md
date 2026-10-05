@@ -2,6 +2,35 @@
 
 Date: 2026-09-25. For Claude and Codex. Keep reviewing this. Do not treat a green container healthcheck as proof that Amarillo can reach her.
 
+## Continue here — reboot proof passed 2026-09-25 11:15 CDT
+
+The owner asked for the proof reboot. The note was written first. Then
+`dominus-nobara` only was rebooted. Amarillo stayed up. The machine dropped
+SSH at 11:13 CDT and answered again at 11:15 CDT.
+
+On that boot, with no hand recreate and no `docker restart`:
+
+- `100.107.121.5:1234`, `:8301`, and `:8390` were listening.
+- Gateway health returned `status: ok` and `upstream: ok`. The game marker was absent.
+- The first repair dry-run, while `dominus-ai-stack.service` was still `activating`, returned `noop-activating`. The next one returned `noop-healthy`.
+- Do not reboot her again to re-prove this. Do not move CI onto GitHub-hosted runners.
+
+The Dominus CI runner dropped during the reboot. Leave the workflows on the self-hosted `dominus` runner.
+
+Pre-reboot, checked from Amarillo over SSH:
+
+- Hostname `dominus-nobara`. Game marker absent. GPU 0% and about 2151 MiB, chat model unloaded.
+- `dominus-ai-stack.service` active. `dominus-publish-repair.timer` enabled.
+- Listeners `100.107.121.5:1234`, `:8301`, and `:8390` were open.
+- Live repair script, both unit files, the stack unit, and the Docker drop-in matched commit `d055fbb` on `origin/main`.
+- `web-build/index.html` is still a local Flutter bootstrap-hash change. Leave it out of this work.
+
+After the machine answers SSH, give the boot path time to finish on its own: up to 60 seconds for dockerd to wait on the Tailscale address, the timer's 45 second first pass, and one 30 second repeat. Success is all three listeners open, gateway health `status: ok` and `upstream: ok`, game marker absent, and a repair dry-run of `noop-healthy`, with nobody running `docker restart` or a hand recreate.
+
+If the three ports are still closed after that window, read `journalctl --user -u dominus-publish-repair.service` and the dockerd bind errors. The installed repair may be run once. Do not "fix" a closed `1234` with `docker restart`. Do not recreate `llama-router` or `comfyui`. Do not add a cloud LLM fallback. Leave the five-minute residency ceiling as it is.
+
+The Dominus CI runner will drop during this reboot. Let that queued run fail or resume on the same self-hosted runner. Do not retarget the workflows.
+
 ## Current handoff state
 
 At the end of the 2026-09-25 review, Dominus was reachable from Amarillo on
