@@ -392,3 +392,74 @@ class TestOpenPromises:
         with patch("app.promises.get_conn", side_effect=_boom):
             out = await promises.open_promises("alice")
         assert out == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Operation Brief events share this table — they are NOT his promises
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestEventRowsAreNeverPromises:
+    """op_brief stores his upcoming events here as commitment.kind = "event".
+    The promise follow-up path must never nag him about his own interview as
+    if it were something he promised to do."""
+
+    _EVENT = {"kind": "event", "what": "job interview", "event_date": "2026-06-02"}
+
+    @pytest.mark.asyncio
+    async def test_due_promises_excludes_events_in_sql(self):
+        from app import promises
+
+        conn = _FakeConn(fetchall=[])
+        with _patch_get_conn(conn):
+            await promises.due_promises("jalsarraf", datetime(2026, 6, 1, tzinfo=timezone.utc))
+        sql, _ = conn.executed[0]
+        assert "COALESCE(commitment->>'kind', '') <> 'event'" in sql
+        # The exclusion must sit inside WHERE, before ORDER BY.
+        assert sql.index("<> 'event'") < sql.index("ORDER BY")
+
+    @pytest.mark.asyncio
+    async def test_due_promises_drops_an_event_row_even_if_sql_returns_it(self):
+        from app import promises
+
+        made = datetime(2026, 5, 31, 12, 0, tzinfo=timezone.utc)
+        rows = [
+            ("ev-1", "job interview", self._EVENT, made, made),
+            ("ev-2", "exam", '{"kind": "event", "what": "exam"}', made, made),
+            ("p-1", "fix the door", {"action": "fix the door"}, made, made),
+        ]
+        with _patch_get_conn(_FakeConn(fetchall=rows)):
+            out = await promises.due_promises("jalsarraf", datetime(2026, 6, 1, tzinfo=timezone.utc))
+        assert [p["id"] for p in out] == ["p-1"]
+
+    @pytest.mark.asyncio
+    async def test_followup_check_never_delivers_an_event(self):
+        """End to end through the engine's follow-up job: only an event is
+        'due', so nothing is delivered and nothing is stamped."""
+        from app.proactive.engine import ProactiveEngine
+
+        made = datetime(2026, 5, 31, 12, 0, tzinfo=timezone.utc)
+        rows = [("ev-1", "job interview", self._EVENT, made, made)]
+        engine = ProactiveEngine()
+        engine._deliver = AsyncMock(return_value=True)
+        with _patch_get_conn(_FakeConn(fetchall=rows)), \
+             patch.object(engine, "_can_send", return_value=True), \
+             patch("app.promises.mark_followup_sent", new=AsyncMock()) as stamped:
+            await engine._promise_followup_check()
+        engine._deliver.assert_not_awaited()
+        stamped.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_open_promises_excludes_events(self):
+        from app import promises
+
+        made = datetime(2026, 5, 17, 9, 0, tzinfo=timezone.utc)
+        rows = [
+            ("ev-1", "job interview", self._EVENT, made, None, None),
+            ("p-1", "I'll rest", {"action": "rest"}, made, made, None),
+        ]
+        conn = _FakeConn(fetchall=rows)
+        with _patch_get_conn(conn):
+            out = await promises.open_promises("alice")
+        assert [p["id"] for p in out] == ["p-1"]
+        assert "<> 'event'" in conn.executed[0][0]

@@ -27,6 +27,16 @@ logger = logging.getLogger(__name__)
 # nagging within the same evening.
 DEFAULT_FOLLOWUP_HOURS = 20
 
+# The Operation Brief (app/op_brief.py) stores his upcoming *events* in this
+# table too, as commitment.kind = "event" with scheduled_followup NULL. They are
+# not his promises: the follow-up and listing paths exclude them in SQL, and
+# again in Python so a mis-tagged row can never be nagged about.
+_NOT_EVENT_SQL = "AND COALESCE(commitment->>'kind', '') <> 'event' "
+
+
+def _is_event(commitment: object) -> bool:
+    return isinstance(commitment, dict) and commitment.get("kind") == "event"
+
 
 async def store_promise(
     commitment: dict,
@@ -84,6 +94,7 @@ async def due_promises(user_id: str, now: datetime) -> list[dict]:
                 "FROM companion_promises "
                 "WHERE user_id = %s AND scheduled_followup <= %s "
                 "AND resolved_at IS NULL AND followup_sent_at IS NULL "
+                f"{_NOT_EVENT_SQL}"
                 "ORDER BY scheduled_followup ASC",
                 (user_id, now),
             )).fetchall()
@@ -96,6 +107,8 @@ async def due_promises(user_id: str, now: datetime) -> list[dict]:
                     commitment = json.loads(commitment)
                 except Exception:
                     commitment = {}
+            if _is_event(commitment):
+                continue  # his interview is not his promise — op_brief owns it
             out.append({
                 "id": str(r[0]),
                 "promise_text": r[1],
@@ -121,6 +134,7 @@ async def open_promises(user_id: str, limit: int = 50) -> list[dict]:
                 "SELECT id, promise_text, commitment, made_at, scheduled_followup, "
                 "followup_sent_at FROM companion_promises "
                 "WHERE user_id = %s AND resolved_at IS NULL "
+                f"{_NOT_EVENT_SQL}"
                 "ORDER BY made_at DESC LIMIT %s",
                 (user_id, limit),
             )).fetchall()
@@ -132,6 +146,8 @@ async def open_promises(user_id: str, limit: int = 50) -> list[dict]:
                     commitment = json.loads(commitment)
                 except Exception:
                     commitment = {}
+            if _is_event(commitment):
+                continue
             out.append({
                 "id": str(r[0]),
                 "promise_text": r[1],

@@ -169,7 +169,7 @@ class TestExtractPromises:
         with patch("app.llm_router.get_lm_gate", return_value=_FakeGate(), create=True), \
              patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=None)):
             out = await extract_promises("I'll fix it tomorrow", affection_level=5)
-        assert out == {"promises": []}
+        assert out == {"promises": [], "events": []}
 
     @pytest.mark.asyncio
     async def test_keeps_high_confidence_promises(self):
@@ -232,7 +232,7 @@ class TestExtractPromises:
              patch("app.fact_extractor.call_llm",
                    new=AsyncMock(return_value={"promises": "nope"})):
             out = await extract_promises("...", affection_level=5)
-        assert out == {"promises": []}
+        assert out == {"promises": [], "events": []}
 
     @pytest.mark.asyncio
     async def test_non_dict_result_returns_empty(self):
@@ -242,7 +242,85 @@ class TestExtractPromises:
              patch("app.fact_extractor.call_llm",
                    new=AsyncMock(return_value=["unexpected"])):
             out = await extract_promises("...", affection_level=5)
-        assert out == {"promises": []}
+        assert out == {"promises": [], "events": []}
+
+
+class TestExtractEvents:
+    """The same promise call also returns his upcoming events (Operation Brief)."""
+
+    @pytest.mark.asyncio
+    async def test_prompt_asks_for_events_in_the_same_call(self):
+        from app.fact_extractor import extract_promises
+
+        llm = AsyncMock(return_value={"promises": [], "events": []})
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
+             patch("app.fact_extractor.call_llm", new=llm):
+            await extract_promises("interview thursday", affection_level=3)
+        assert llm.await_count == 1
+        prompt = llm.await_args.args[2]
+        assert '"events"' in prompt and "when_hint" in prompt and "sensitivity" in prompt
+
+    @pytest.mark.asyncio
+    async def test_keeps_valid_events_and_normalizes_sensitivity(self):
+        from app.fact_extractor import extract_promises
+
+        result = {"promises": [], "events": [
+            {"what": " job interview ", "when_hint": " thursday at 9am ",
+             "sensitivity": "normal", "confidence": 0.9},
+            {"what": "funeral", "when_hint": "saturday", "sensitivity": "sensitive",
+             "confidence": 0.75},                                   # boundary kept
+            {"what": "exam", "when_hint": "friday", "sensitivity": "whatever",
+             "confidence": 0.8},
+        ]}
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
+             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+            out = await extract_promises("...", affection_level=5)
+        assert out["events"] == [
+            {"what": "job interview", "when_hint": "thursday at 9am",
+             "sensitivity": "normal", "confidence": 0.9},
+            {"what": "funeral", "when_hint": "saturday",
+             "sensitivity": "sensitive", "confidence": 0.75},
+            {"what": "exam", "when_hint": "friday",
+             "sensitivity": "normal", "confidence": 0.8},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_drops_malformed_and_low_confidence_events(self):
+        from app.fact_extractor import extract_promises
+
+        result = {"promises": [], "events": [
+            "not a dict",
+            {"what": "  ", "when_hint": "tomorrow", "confidence": 0.9},
+            {"what": "exam", "when_hint": None, "confidence": 0.9},
+            {"what": "exam", "when_hint": "  ", "confidence": 0.9},
+            {"what": "exam", "when_hint": "tomorrow", "confidence": "sure"},
+            {"what": "exam", "when_hint": "tomorrow", "confidence": 0.74},
+        ]}
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
+             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+            out = await extract_promises("...", affection_level=5)
+        assert out["events"] == []
+
+    @pytest.mark.asyncio
+    async def test_events_survive_malformed_promises(self):
+        from app.fact_extractor import extract_promises
+
+        result = {"promises": "nope", "events": [
+            {"what": "flight", "when_hint": "tomorrow", "confidence": 0.9}]}
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
+             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+            out = await extract_promises("...", affection_level=5)
+        assert out["promises"] == [] and len(out["events"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_events_not_a_list(self):
+        from app.fact_extractor import extract_promises
+
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
+             patch("app.fact_extractor.call_llm",
+                   new=AsyncMock(return_value={"promises": [], "events": {"what": "x"}})):
+            out = await extract_promises("...", affection_level=5)
+        assert out["events"] == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════
