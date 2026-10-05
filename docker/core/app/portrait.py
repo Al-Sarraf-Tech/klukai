@@ -45,9 +45,26 @@ FRAME_NAMES = ("base", "blink", "talk", "smile", "blush", "annoyed")
 SOURCE_NAME = "base.png"
 WIDTH, HEIGHT = 832, 1216
 
+# Canon palette anchors. Left alone, the LoRA plus outfit accents render her
+# hair saturated cyan/royal blue and some outfits cast the skin pink/magenta;
+# canon is pale silver, near-white with a cool tint, and natural pale skin.
+# Tuned on live renders of speed_star, night_ride and blazing_star: these
+# weights land silver with a cool tint (stronger "muted colors"/"grey hair"
+# washed night_ride out to line art and turned speed_star dull grey).
+PALETTE_ANCHORS = (
+    "(silver hair:1.4), (white hair:1.1), (pale blue-tinted white hair:1.1), "
+    "soft colors, fair skin, natural skin tone"
+)
+PALETTE_NEGATIVE = (
+    "(blue hair:1.2), (cyan hair:1.3), aqua hair, oversaturated, "
+    "(blue skin:1.2), (pink skin:1.1)"
+)
+# Shared quality tags that push saturation; dropped for portraits only.
+_PORTRAIT_DROPPED_TAGS = ("vivid colors, ",)
+
 COMPOSITION = (
     "solo, portrait, upper body, facing viewer, centered, straight-on, "
-    "simple background, light grey background, soft even lighting"
+    "simple background, light grey background, soft even lighting, " + PALETTE_ANCHORS
 )
 BASE_EXPRESSION = "looking at viewer, neutral expression, closed mouth"
 
@@ -137,11 +154,14 @@ def portrait_seed(user_id: str, outfit_id: str) -> int:
 def portrait_prompt(outfit_id: str, level: int, frame: str) -> str:
     """The base or expression-frame prompt; only the expression tags differ."""
     expression = BASE_EXPRESSION if frame == "base" else EXPRESSIONS[frame][0]
-    return build_prompt(
+    prompt = build_prompt(
         f"{expression}, {COMPOSITION}",
         affection_level=level, costume=outfit_id, mood="", request="",
         affection_tags=False,
     )
+    for tag in _PORTRAIT_DROPPED_TAGS:
+        prompt = prompt.replace(tag, "")
+    return prompt
 
 
 async def current_outfit(user_id: str, level: int) -> str:
@@ -346,6 +366,7 @@ async def _chain(user_id: str, outfit_id: str, level: int) -> bool:
             rendered = await image_gen.generate_image(
                 portrait_prompt(outfit_id, level, "base"),
                 width=WIDTH, height=HEIGHT, sfw=sfw, seed=seed,
+                negative_extra=PALETTE_NEGATIVE,
             )
             if not rendered:
                 return _fail(key)
@@ -368,6 +389,7 @@ async def _chain(user_id: str, outfit_id: str, level: int) -> bool:
                 base, portrait_prompt(outfit_id, level, frame),
                 denoise=denoise, seed=seed, sfw=sfw,
                 mask_png=await asyncio.to_thread(frame_mask, size, face, frame),
+                negative_extra=PALETTE_NEGATIVE,
             )
             if not img:
                 return _fail(key)

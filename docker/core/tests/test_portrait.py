@@ -108,6 +108,19 @@ class TestPrompts:
             pt.portrait_prompt("speed_star", 4, frame)
         assert bp.call_args.args[0] == f"{pt.EXPRESSIONS[frame][0]}, {pt.COMPOSITION}"
 
+    def test_canon_palette_is_anchored_and_vivid_colors_dropped(self):
+        prompt = pt.portrait_prompt("speed_star", 4, "base")
+        assert "(silver hair:1.4)" in prompt and "fair skin" in prompt
+        assert "vivid colors" not in prompt
+        assert "masterpiece" in prompt  # the rest of the quality block stays
+        for frame in pt.EXPRESSIONS:
+            assert pt.PALETTE_ANCHORS in pt.portrait_prompt("speed_star", 4, frame)
+        assert "cyan hair" in pt.PALETTE_NEGATIVE and "pink skin" in pt.PALETTE_NEGATIVE
+
+    def test_other_renders_keep_vivid_colors(self):
+        from app.image_gen import build_prompt
+        assert "vivid colors" in build_prompt("upper body", affection_level=4)
+
     def test_expression_table(self):
         assert set(pt.EXPRESSIONS) == set(pt.FRAME_NAMES) - {"base"}
         assert "closed eyes" in pt.EXPRESSIONS["blink"][0]
@@ -189,7 +202,9 @@ class TestChain:
         assert pt.existing_frames("claude", "speed_star") == set(pt.FRAME_NAMES)
         seed = pt.portrait_seed("claude", "speed_star")
         assert gen.await_args.kwargs == {"width": pt.WIDTH, "height": pt.HEIGHT,
-                                        "sfw": True, "seed": seed}
+                                        "sfw": True, "seed": seed,
+                                        "negative_extra": pt.PALETTE_NEGATIVE}
+        assert all(c.kwargs["negative_extra"] == pt.PALETTE_NEGATIVE for c in i2i.await_args_list)
         assert [c.kwargs["denoise"] for c in i2i.await_args_list] == [
             pt.EXPRESSIONS[f][1] for f in pt.EXPRESSIONS]
         assert all(c.args[0] == base and c.kwargs["seed"] == seed and c.kwargs["sfw"] is True

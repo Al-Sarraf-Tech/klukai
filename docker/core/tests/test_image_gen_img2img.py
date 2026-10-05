@@ -190,3 +190,33 @@ def test_build_prompt_can_drop_the_affection_tags():
     assert AFFECTION_MOOD_TAGS[4] in with_tags
     assert AFFECTION_MOOD_TAGS[4] not in without
     assert without.endswith("upper body")
+
+
+class TestNegativeExtra:
+    def test_appended_after_the_sfw_backstop(self):
+        assert ig.negative_prompt(True, "cyan hair").endswith(f"{ig.SFW_NEGATIVE_TAGS}, cyan hair")
+        assert ig.negative_prompt(False, None) == ig.NEGATIVE_TAGS
+        assert ig.negative_prompt(False, "") == ig.NEGATIVE_TAGS
+
+    @pytest.mark.asyncio
+    async def test_reaches_txt2img_and_img2img(self):
+        post = AsyncMock(return_value=_Resp(200, {"prompt_id": "pid"}))
+        get = AsyncMock(side_effect=[_HIST, _Resp(200, content=b"PNG")])
+        with patch.object(ig, "_http", _fake_client(get=get, post=post)), \
+             patch("app.image_gen.asyncio.sleep", new=AsyncMock()):
+            await ig._try_generate("p", 832, 1216, _TEST_LEASE, negative_extra="cyan hair")
+        assert post.call_args.kwargs["json"]["prompt"]["7"]["inputs"]["text"].endswith("cyan hair")
+        with patch("app.image_gen._upload_image", new=AsyncMock(return_value="s.png")), \
+             patch("app.image_gen._run_workflow", new=AsyncMock(return_value=b"F")) as run, \
+             patch("app.image_gen._free_comfyui_vram", new=AsyncMock(return_value=True)):
+            await ig._img2img_inner(b"S", "p", 0.7, 1, False, _TEST_LEASE, negative_extra="pink skin")
+        assert run.await_args.args[0]["7"]["inputs"]["text"].endswith("pink skin")
+
+    @pytest.mark.asyncio
+    async def test_public_calls_forward_it(self):
+        with patch("app.image_gen._generate_image_inner", new=AsyncMock(return_value=b"X")) as inner:
+            await ig.generate_image("p", negative_extra="n1")
+        assert inner.await_args.kwargs["negative_extra"] == "n1"
+        with patch("app.image_gen._img2img_inner", new=AsyncMock(return_value=b"F")) as inner2:
+            await ig.generate_img2img(b"S", "p", denoise=0.7, seed=1, negative_extra="n2")
+        assert inner2.await_args.kwargs["negative_extra"] == "n2"

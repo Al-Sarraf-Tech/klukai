@@ -460,9 +460,11 @@ async def free_comfyui_vram() -> bool:
                 return False
 
 
-def negative_prompt(sfw: bool = False) -> str:
-    """The negative prompt; ``sfw`` adds the below-intimacy-gate backstop."""
-    return f"{NEGATIVE_TAGS}, {SFW_NEGATIVE_TAGS}" if sfw else NEGATIVE_TAGS
+def negative_prompt(sfw: bool = False, extra: str | None = None) -> str:
+    """The negative prompt; ``sfw`` adds the below-intimacy-gate backstop and
+    ``extra`` a caller's own negatives."""
+    base = f"{NEGATIVE_TAGS}, {SFW_NEGATIVE_TAGS}" if sfw else NEGATIVE_TAGS
+    return f"{base}, {extra}" if extra else base
 
 
 async def generate_image(
@@ -473,12 +475,14 @@ async def generate_image(
     *,
     sfw: bool = False,
     seed: int | None = None,
+    negative_extra: str | None = None,
 ) -> bytes | None:
     """Generate under an exclusive gateway lease, one image at a time.
 
     ``sfw=True`` (wardrobe-driven renders below the intimacy gate) adds
-    SFW_NEGATIVE_TAGS to the negative prompt. ``seed`` pins the sampler seed
-    (Live Portrait bases); by default every render gets a fresh one.
+    SFW_NEGATIVE_TAGS to the negative prompt; ``negative_extra`` appends a
+    caller's own negatives (Live Portrait's palette guard). ``seed`` pins the
+    sampler seed (Live Portrait bases); by default every render gets a fresh one.
 
     The shared LM gate drains Klukai's own local-LLM calls.  The authenticated
     gateway lease then drains external inference, unloads llama.cpp, and keeps
@@ -486,7 +490,8 @@ async def generate_image(
     """
     return await _leased(
         lambda lease: _generate_image_inner(
-            prompt, width, height, retry, lease, sfw=sfw, seed=seed
+            prompt, width, height, retry, lease, sfw=sfw, seed=seed,
+            negative_extra=negative_extra,
         )
     )
 
@@ -499,6 +504,7 @@ async def generate_img2img(
     seed: int,
     sfw: bool = False,
     mask_png: bytes | None = None,
+    negative_extra: str | None = None,
 ) -> bytes | None:
     """img2img from ``source_png`` under the same lease path as generate_image.
 
@@ -510,7 +516,8 @@ async def generate_img2img(
     """
     return await _leased(
         lambda lease: _img2img_inner(
-            source_png, prompt, denoise, seed, sfw, lease, mask_png=mask_png
+            source_png, prompt, denoise, seed, sfw, lease, mask_png=mask_png,
+            negative_extra=negative_extra,
         )
     )
 
@@ -560,14 +567,19 @@ async def _generate_image_inner(
     lease: GPULease,
     sfw: bool = False,
     seed: int | None = None,
+    negative_extra: str | None = None,
 ) -> bytes | None:
     try:
-        result = await _try_generate(prompt, width, height, lease, sfw=sfw, seed=seed)
+        result = await _try_generate(
+            prompt, width, height, lease, sfw=sfw, seed=seed, negative_extra=negative_extra
+        )
         if result is None and retry:
             logger.info("Image generation retry — interrupting stale job and retrying")
             if not await _interrupt_comfyui(lease):
                 raise GPULeaseError("ComfyUI retry interrupt could not be confirmed")
-            result = await _try_generate(prompt, width, height, lease, sfw=sfw, seed=seed)
+            result = await _try_generate(
+                prompt, width, height, lease, sfw=sfw, seed=seed, negative_extra=negative_extra
+            )
         return result
     finally:
         # Always free VRAM after gen so LM Studio can reclaim it
@@ -583,6 +595,7 @@ async def _img2img_inner(
     sfw: bool,
     lease: GPULease,
     mask_png: bytes | None = None,
+    negative_extra: str | None = None,
 ) -> bytes | None:
     """Upload the source (and mask), then one img2img attempt; VRAM is always freed."""
     try:
@@ -600,7 +613,7 @@ async def _img2img_inner(
             workflow["3"]["inputs"]["model"] = ["16", 0]
             workflow["9"]["inputs"]["images"] = ["15", 0]
         workflow["6"]["inputs"]["text"] = prompt
-        workflow["7"]["inputs"]["text"] = negative_prompt(sfw)
+        workflow["7"]["inputs"]["text"] = negative_prompt(sfw, negative_extra)
         workflow["11"]["inputs"]["image"] = name
         workflow["3"]["inputs"]["seed"] = int(seed) % (2**32)
         workflow["3"]["inputs"]["denoise"] = max(0.0, min(1.0, float(denoise)))
@@ -641,12 +654,13 @@ async def _try_generate(
     lease: GPULease,
     sfw: bool = False,
     seed: int | None = None,
+    negative_extra: str | None = None,
 ) -> bytes | None:
     """Single attempt at image generation."""
     workflow = json.loads(json.dumps(WORKFLOW_TEMPLATE))
 
     workflow["6"]["inputs"]["text"] = prompt
-    workflow["7"]["inputs"]["text"] = negative_prompt(sfw)
+    workflow["7"]["inputs"]["text"] = negative_prompt(sfw, negative_extra)
     workflow["5"]["inputs"]["width"] = width
     workflow["5"]["inputs"]["height"] = height
     workflow["3"]["inputs"]["seed"] = (
