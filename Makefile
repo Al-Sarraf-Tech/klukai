@@ -9,7 +9,7 @@ VOICE_URL ?= http://$(DOMINUS_TAILSCALE_IPV4):8301
 CURL_HEALTH = curl -sf --connect-timeout 3 --max-time 10
 DOMINUS_SSH = ssh -T -o AddressFamily=inet -o BatchMode=yes -o ClearAllForwardings=yes -o ConnectTimeout=10 -o ControlMaster=no -o ControlPath=none -o ForwardAgent=no -o StrictHostKeyChecking=yes
 
-.PHONY: build build-backend build-pwa run stop logs logs-core logs-voice restart rebuild health dominus-preflight gateway gateway-stop gateway-logs deploy perf-baseline test-local test-integration lint-local type-check security-scan
+.PHONY: build build-backend build-pwa run stop logs logs-core logs-voice restart rebuild health dominus-preflight gateway gateway-stop gateway-logs deploy perf-baseline test-local test-integration test-js lint-local type-check security-scan
 
 # ── Local (amarillo) commands ────────────────────────────────────────────────
 
@@ -140,6 +140,11 @@ deploy: gateway
 	@echo "     Published APIs: $(DOMINUS_TAILSCALE_IPV4):1234, :8301, :8390 (Tailnet only; ComfyUI uses :1234 facade; transcription disabled)"
 
 # ── Quality gates (mirror CI) ────────────────────────────────────────────────
+
+# Companion stage (vanilla JS) + 3D avatar build: node --test, no browser.
+test-js:
+	node --test --test-timeout=20000 tools/companion/test/*.test.mjs
+	@if [ -d tools/avatar/test ]; then cd tools/avatar && node --test --test-timeout=60000 test/*.test.mjs; fi
 
 test-local:
 	cd docker/core && python3 -m pytest tests/ -q --tb=short --cov=app --cov-report=term-missing --cov-fail-under=95

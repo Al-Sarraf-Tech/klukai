@@ -1,0 +1,160 @@
+/* Companion stage — GFL2 palette (lib/theme/gfl2_colors.dart), system fonts
+   only (no third-party requests: Brave/privacy), iOS safe areas. */
+:root {
+  --bg: #12151e; --surface: #1a1f2e; --panel: #252b3b; --border: #3a4256;
+  --primary: #4fc3f7; --accent: #e8923e; --affinity: #e88ca5;
+  --text: #d4dde6; --dim: #6b7d8d;
+  --tint: rgba(79, 195, 247, 0.10);           /* mood tint, set by app.js */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  overscroll-behavior: none; -webkit-text-size-adjust: 100%;
+}
+
+.stage {
+  position: fixed; inset: 0; height: 100vh; height: 100dvh; overflow: hidden;
+  background:
+    radial-gradient(120% 70% at 50% 35%, var(--tint), transparent 70%),
+    linear-gradient(180deg, #0e1220 0%, var(--bg) 55%, #0b0d14 100%);
+  transition: background 1.2s ease;
+  touch-action: manipulation; user-select: none; -webkit-user-select: none;
+}
+
+.ambience { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+/* ── Live portrait ─────────────────────────────────────────────────────── */
+.portrait {
+  position: absolute; left: 0; right: 0; top: calc(var(--safe-top) + 44px);
+  bottom: calc(var(--safe-bottom) + 118px);
+  display: flex; justify-content: center; align-items: flex-end; perspective: 900px;
+}
+.portrait-motion {
+  position: relative; height: 100%; aspect-ratio: 832 / 1216; max-width: 100%;
+  transform-origin: 50% 100%;
+  animation: breathe 4.2s ease-in-out infinite, sway 11s ease-in-out infinite;
+  will-change: transform;
+}
+.portrait-motion.parallax { transition: translate 0.25s ease-out; }
+.frame {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+  object-position: 50% 100%; opacity: 0; transition: opacity 0.6s ease;
+  -webkit-user-drag: none; pointer-events: none;
+  /* soft feather into the backdrop instead of a hard card edge: sides fade
+     radially, the bottom fades into the dock (both masks intersect) */
+  -webkit-mask-image: radial-gradient(85% 75% at 50% 45%, #000 60%, transparent 100%),
+                      linear-gradient(180deg, #000 72%, transparent 97%);
+  -webkit-mask-composite: source-in;
+          mask-image: radial-gradient(85% 75% at 50% 45%, #000 60%, transparent 100%),
+                      linear-gradient(180deg, #000 72%, transparent 97%);
+          mask-composite: intersect;
+}
+.frame.on { opacity: 1; }
+.frame-blink, .frame-talk { transition: opacity 0.05s linear; }
+.portrait.pending .frame-base { filter: saturate(0.75) brightness(0.85); }
+.portrait-glow {
+  position: absolute; left: 15%; right: 15%; bottom: 0; height: 18%;
+  background: radial-gradient(50% 50% at 50% 100%, var(--tint), transparent 70%);
+  filter: blur(18px); opacity: 0.9; pointer-events: none;
+}
+.stage.speaking .portrait-glow { animation: pulse 0.9s ease-in-out infinite; }
+
+@keyframes breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-0.45%) scale(1.004); }
+}
+@keyframes sway {
+  0%, 100% { rotate: 0deg; } 30% { rotate: 0.35deg; } 70% { rotate: -0.3deg; }
+}
+@keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+
+/* ── 3D model window ───────────────────────────────────────────────────── */
+.model { position: absolute; inset: 0; top: calc(var(--safe-top) + 44px); bottom: calc(var(--safe-bottom) + 118px); }
+.model canvas { display: block; width: 100% !important; height: 100% !important; }
+.stage[data-mode="model"] .portrait { visibility: hidden; }
+
+/* ── Top bar ───────────────────────────────────────────────────────────── */
+.topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 3;
+  padding: calc(var(--safe-top) + 6px) calc(var(--safe-right) + 10px) 6px calc(var(--safe-left) + 10px);
+  display: flex; align-items: center; gap: 8px;
+  background: linear-gradient(180deg, rgba(10, 12, 18, 0.85), transparent);
+}
+.status { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.status-line {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px; letter-spacing: 0.02em; color: var(--text); opacity: 0.85;
+}
+.outfit-chip {
+  flex: none; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; font-weight: 600; color: var(--primary);
+  border: 1px solid rgba(79, 195, 247, 0.45); border-radius: 4px; padding: 2px 6px;
+}
+.controls { display: flex; gap: 6px; flex: none; }
+.btn {
+  appearance: none; border: 1px solid var(--border); background: rgba(26, 31, 46, 0.8);
+  color: var(--text); border-radius: 8px; cursor: pointer; font: inherit;
+}
+.btn.icon {
+  min-width: 36px; height: 36px; padding: 0 8px; display: inline-grid; place-items: center;
+  text-decoration: none; font-size: 15px; font-weight: 600;
+}
+.btn[aria-pressed="true"] { border-color: var(--primary); color: var(--primary); }
+.btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+.notice {
+  position: absolute; z-index: 3; left: 50%; top: calc(var(--safe-top) + 54px); translate: -50% 0;
+  max-width: min(90%, 420px); padding: 6px 12px; border-radius: 8px; font-size: 12.5px;
+  background: rgba(37, 43, 59, 0.92); border: 1px solid var(--border); color: var(--dim);
+  text-align: center;
+}
+
+/* ── Dock: her line + composer ─────────────────────────────────────────── */
+.dock {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
+  padding: 10px calc(var(--safe-right) + 12px) calc(var(--safe-bottom) + 10px) calc(var(--safe-left) + 12px);
+  background: linear-gradient(0deg, rgba(10, 12, 18, 0.95) 55%, transparent);
+}
+.subtitle {
+  margin: 0 auto 8px; max-width: 640px; min-height: 2.8em; max-height: 6.2em; overflow-y: auto;
+  font-size: 15px; line-height: 1.4; text-shadow: 0 1px 6px #000; color: var(--text);
+  -webkit-user-select: text; user-select: text;
+}
+.subtitle.thinking::after { content: " …"; color: var(--dim); animation: pulse 1.2s infinite; }
+.composer { display: flex; gap: 8px; max-width: 640px; margin: 0 auto; }
+.composer input {
+  flex: 1; min-width: 0; height: 42px; padding: 0 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: rgba(18, 21, 30, 0.9); color: var(--text);
+  font-size: 16px; /* ≥16px stops iOS Safari zooming on focus */
+  -webkit-user-select: text; user-select: text;
+}
+.composer input:focus { outline: none; border-color: var(--primary); }
+.btn.send { width: 46px; height: 42px; color: var(--primary); font-size: 17px; }
+
+/* ── Wake overlay: the user gesture iOS needs for audio ────────────────── */
+.wake {
+  position: absolute; inset: 0; z-index: 5; display: grid; place-content: center; gap: 6px;
+  border: 0; cursor: pointer; color: var(--text); font: inherit;
+  background: radial-gradient(60% 40% at 50% 45%, rgba(79, 195, 247, 0.12), rgba(10, 12, 18, 0.88));
+}
+.wake[hidden] { display: none; }
+.wake-title { font-size: 26px; font-weight: 700; letter-spacing: 0.3em; color: var(--primary); }
+.wake-sub { font-size: 13px; color: var(--dim); letter-spacing: 0.08em; }
+
+/* ── Desktop: a framed window, not a stretched phone ───────────────────── */
+@media (min-width: 900px) {
+  .portrait, .model { left: 50%; right: auto; width: min(70vh, 640px); translate: -50% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .portrait-motion { animation: none; }
+  .stage.speaking .portrait-glow { animation: none; }
+}

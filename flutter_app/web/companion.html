@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- viewport-fit=cover + env(safe-area-inset-*) keeps the stage clear of the
+       notch and home indicator on iPhone; no zoom so double-taps don't jump. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#12151E">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Klukai">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <title>Klukai — Companion</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="stylesheet" href="companion/companion.css">
+</head>
+<body>
+  <main id="stage" class="stage" data-mode="portrait">
+    <canvas id="ambience" class="ambience" aria-hidden="true"></canvas>
+
+    <section id="portrait" class="portrait" aria-label="Klukai">
+      <div class="portrait-motion">
+        <img class="frame frame-base" alt="Klukai" draggable="false">
+        <img class="frame frame-expr" alt="" aria-hidden="true" draggable="false">
+        <img class="frame frame-blink" alt="" aria-hidden="true" draggable="false">
+        <img class="frame frame-talk" alt="" aria-hidden="true" draggable="false">
+      </div>
+      <div class="portrait-glow" aria-hidden="true"></div>
+    </section>
+
+    <section id="model" class="model" aria-label="Klukai 3D" hidden></section>
+
+    <header class="topbar">
+      <a class="btn icon" href="./" aria-label="Back to chat">‹</a>
+      <div class="status" id="status" aria-live="polite">
+        <span class="status-line" id="status-line">The Elmo</span>
+        <span class="outfit-chip" id="outfit-chip" hidden></span>
+      </div>
+      <div class="controls">
+        <button class="btn icon" id="btn-mode" aria-label="Switch to 3D" title="Portrait / 3D">3D</button>
+        <button class="btn icon" id="btn-music" aria-label="Music" aria-pressed="false" title="Music">♪</button>
+        <button class="btn icon" id="btn-voice" aria-label="Voice" aria-pressed="false" title="Her voice">🔈</button>
+      </div>
+    </header>
+
+    <div class="notice" id="notice" hidden></div>
+
+    <footer class="dock">
+      <p class="subtitle" id="subtitle" aria-live="polite"></p>
+      <form class="composer" id="composer" autocomplete="off">
+        <input id="input" type="text" enterkeyhint="send" maxlength="4000"
+               placeholder="Talk to her…" aria-label="Message Klukai">
+        <button class="btn send" type="submit" aria-label="Send">➤</button>
+      </form>
+    </footer>
+
+    <button class="wake" id="wake" type="button">
+      <span class="wake-title">KLUKAI</span>
+      <span class="wake-sub">Tap to open the channel</span>
+    </button>
+  </main>
+
+  <noscript>The companion view needs JavaScript.</noscript>
+  <script type="module" src="companion/app.js"></script>
+</body>
+</html>
