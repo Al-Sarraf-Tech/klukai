@@ -36,6 +36,8 @@ htmlcov/
 companion-*.png
 assets/source-models/
 assets/textures/
+# Built 3D avatar (game-derived; personal use, served only via authenticated API)
+assets/build/
 
 # mutation-testing artifacts (nightly mutmut job)
 docker/core/mutants/
