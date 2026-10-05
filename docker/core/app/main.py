@@ -13,7 +13,6 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
 
@@ -409,7 +408,9 @@ except Exception as _otel_err:
 # Serve Flutter PWA static files (mounted last so API routes take priority)
 static_dir = Path("/app/static")
 if static_dir.exists():
-    app.mount("/app", StaticFiles(directory=str(static_dir), html=True), name="pwa")
+    from .static_cache import CachedStaticFiles
+
+    app.mount("/app", CachedStaticFiles(directory=str(static_dir), html=True), name="pwa")
 
 
 # ── Re-exports for backward compatibility ────────────────────────────────────
