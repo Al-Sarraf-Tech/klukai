@@ -1,7 +1,7 @@
 """Live Portrait: Klukai's face, in whatever she is wearing today.
 
 Per (user, outfit) the app keeps six frames under
-``/images/portraits/{user_id}/{outfit_id}/``:
+``/images/portraits/{STYLE_VERSION}/{user_id}/{outfit_id}/``:
 
 - ``base.webp``: a txt2img portrait (fixed composition: upper body, facing
   the viewer, centred, plain soft background) with a deterministic seed per
@@ -62,10 +62,17 @@ PALETTE_NEGATIVE = (
 # Shared quality tags that push saturation; dropped for portraits only.
 _PORTRAIT_DROPPED_TAGS = ("vivid colors, ",)
 
+# A dark navy backdrop matching the companion stage (#12151e), so the frame's
+# edges vanish into the page instead of showing a light-grey card; a soft rim
+# light keeps her silhouette off the dark.
 COMPOSITION = (
     "solo, portrait, upper body, facing viewer, centered, straight-on, "
-    "simple background, light grey background, soft even lighting, " + PALETTE_ANCHORS
+    "simple background, dark background, dark navy background, soft rim lighting, "
+    + PALETTE_ANCHORS
 )
+# Bump when COMPOSITION/style changes: frames live under a versioned root, so
+# a new style is drawn fresh instead of serving stale cached frames.
+STYLE_VERSION = "v2"
 BASE_EXPRESSION = "looking at viewer, neutral expression, closed mouth"
 
 # frame -> (expression tags, inpaint denoise). Tuned on live renders as the
@@ -120,7 +127,7 @@ _failed_at: dict[str, float] = {}
 
 
 def portraits_root() -> Path:
-    return Path(os.environ.get("IMAGES_DIR", "/images")) / "portraits"
+    return Path(os.environ.get("IMAGES_DIR", "/images")) / "portraits" / STYLE_VERSION
 
 
 def _key(user_id: str, outfit_id: str) -> str:

@@ -63,7 +63,7 @@ def _write_all(user="claude", outfit="speed_star", frames=pt.FRAME_NAMES):
 class TestLayout:
     def test_frames_live_under_images_portraits(self, tmp_path):
         assert pt.frame_file("claude", "speed_star", "blink") == (
-            tmp_path / "portraits" / "claude" / "speed_star" / "blink.webp"
+            tmp_path / "portraits" / pt.STYLE_VERSION / "claude" / "speed_star" / "blink.webp"
         )
 
     @pytest.mark.parametrize("user, outfit", [
@@ -415,7 +415,7 @@ def test_webp_conversion_and_atomic_write(tmp_path):
 
 def test_portraits_root_defaults_to_images(monkeypatch):
     monkeypatch.delenv("IMAGES_DIR")
-    assert pt.portraits_root() == Path("/images/portraits")
+    assert pt.portraits_root() == Path("/images/portraits") / pt.STYLE_VERSION
 
 
 def test_seconds_since_user_message(monkeypatch):

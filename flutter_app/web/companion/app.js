@@ -89,11 +89,13 @@ function boot() {
     clearTimeout(portraitTimer);
     try {
       const p = await api.portrait();
-      portrait.setFrames(p.frames || {}, { pending: p.status !== "ready" });
+      portrait.setFrames(p.frames || {}, { pending: !p.frames?.base });
       applyMood();
       if (p.status === "pending" || p.status === "partial") {
         portraitTimer = setTimeout(refreshPortrait, PORTRAIT_POLL_MS);
-        if (!p.frames?.base) notice("She's getting ready — her portrait is being drawn.", 0);
+        // Only while she has no portrait at all; once the base exists the
+        // remaining expression frames fill in silently.
+        notice(p.frames?.base ? "" : "She's getting ready — her portrait is being drawn.", 0);
       } else if (p.status === "unavailable") {
         notice("She's off-camera for now — the GPU is busy.", 6000);
       } else {
