@@ -355,7 +355,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     try {
       final uri = Uri.parse('${widget.serverUrl}/api/affection');
       final response = await http.get(uri, headers: _authHeaders);
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 && mounted) {
         final data = jsonDecode(response.body);
         setState(() {
           _state = _state.copyWith(
