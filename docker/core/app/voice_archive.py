@@ -10,8 +10,11 @@ Design:
   path and ``/api/tts`` do. It holds the shared LM gate plus a remote
   ``companion-voice`` GPU lease and sends both voice auth and lease capability.
   The request shape mirrors ``/api/tts``: ``{"text": ..., "language": ...}``.
-  Klukai speaks Japanese (the project default), so ``language`` defaults to
-  ``"ja"`` here — the server-configured JP voice the WS path relies on.
+  Her VOICE is Japanese (the Ai Nonaka reference clip); her TEXT is English.
+  ``language`` is the language of the text being read, so it defaults to
+  ``"en"`` — the same thing the PWA sends. ``"ja"`` asked XTTS to parse
+  English as Japanese and needs ``cutlet`` the voice image doesn't ship, so
+  every letter 500'd (zero ever saved).
 - The WAV is written under ``AUDIO_DIR`` (``/audio`` volume), named ``{uuid}.wav``,
   mirroring how memory_archive writes image files under ``IMAGES_DIR``.
 - A row lands in ``companion_voice_notes`` (migration 151), scoped per user.
@@ -40,10 +43,10 @@ logger = logging.getLogger(__name__)
 # memory_archive.py — a single env-overridable Path resolved at import time.
 AUDIO_DIR = Path(os.environ.get("AUDIO_DIR", "/audio"))
 
-# Klukai's voice is Japanese (project default — JP voice ONLY). The chat WS path
-# omits `language` and relies on the voice service's configured default; here we
-# pass it explicitly so a server-initiated letter is unambiguously her JP voice.
-DEFAULT_VOICE_LANGUAGE = os.environ.get("VOICE_LANGUAGE", "ja")
+# The language of the TEXT, not of her voice: the Japanese voice comes from the
+# reference clip whatever the text language. Her letters are written in English,
+# like everything she says, so they are read as "en" (what the PWA sends too).
+DEFAULT_VOICE_LANGUAGE = os.environ.get("VOICE_LANGUAGE", "en")
 
 # XTTS rejects very long inputs; /api/tts caps at 500 chars. Match that so a long
 # reflective greeting never fails synthesis (the text greeting still carries full).

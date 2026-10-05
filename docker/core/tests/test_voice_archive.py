@@ -133,13 +133,14 @@ class TestSaveVoiceNoteHappy:
         with patch("httpx.AsyncClient.post", post), \
              patch("app.voice_archive.get_pool", return_value=_Pool(conn)), \
              patch("app.helpers.voice_auth_headers", return_value={"Authorization": "Bearer vtok"}):
-            await voice_archive.save_voice_note("こんにちは指揮官", user_id="alice")
+            await voice_archive.save_voice_note("Commander. You came back.", user_id="alice")
 
-        # URL ends with /tts; body carries the JP language and the auth header.
+        # URL ends with /tts; the text is English (her JP voice comes from the
+        # reference clip), so the language is "en" — "ja" 500s without cutlet.
         call = post.await_args
         assert call.args[0].endswith("/tts")
-        assert call.kwargs["json"]["language"] == "ja"
-        assert call.kwargs["json"]["text"] == "こんにちは指揮官"
+        assert call.kwargs["json"]["language"] == "en"
+        assert call.kwargs["json"]["text"] == "Commander. You came back."
         assert call.kwargs["headers"] == {
             "Authorization": "Bearer vtok",
             "X-GPU-Lease-Token": "pytest-voice-lease",
