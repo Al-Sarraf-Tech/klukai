@@ -1,0 +1,56 @@
+<!doctype html><meta charset="utf-8"><title>avatar inspect</title>
+<style>html,body{margin:0;height:100%;background:#7a8590}canvas{display:block}</style>
+<script type="module">
+import * as THREE from '/flutter_app/web/companion/vendor/three.module.min.js';
+import { GLTFLoader } from '/flutter_app/web/companion/vendor/GLTFLoader.js';
+import { MeshoptDecoder } from '/flutter_app/web/companion/vendor/meshopt_decoder.module.js';
+const q = new URLSearchParams(location.search);
+const W = innerWidth, H = innerHeight;
+const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+r.setSize(W, H); r.outputColorSpace = THREE.SRGBColorSpace; document.body.appendChild(r.domElement);
+const scene = new THREE.Scene();
+scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 2.2));
+const dl = new THREE.DirectionalLight(0xffffff, 1.2); dl.position.set(0.5, 2, 2); scene.add(dl);
+const cam = new THREE.PerspectiveCamera(+(q.get('fov') || 30), W / H, 0.01, 50);
+const gl = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(q.get('glb') || '/assets/build/klukai.debug.glb');
+const root = gl.scene; scene.add(root);
+const only = q.get('only')?.split(','), hide = q.get('hide')?.split(',') || [];
+const flat = q.has('flat');
+const texOv = Object.fromEntries((q.get('tex') || '').split(',').filter(Boolean).map(x => x.split(':')));
+const tl = new THREE.TextureLoader();
+const texCache = {};
+async function loadTex(file) { if (!texCache[file]) { const t = await tl.loadAsync('/assets/textures/' + file); t.flipY = false; t.colorSpace = THREE.SRGBColorSpace; texCache[file] = t; } return texCache[file]; }
+const pending = [];
+root.traverse(o => {
+  if (!o.isMesh) return;
+  o.frustumCulled = false;
+  const mats = Array.isArray(o.material) ? o.material : [o.material];
+  mats.forEach(m => {
+    const name = m.name;
+    const show = (only ? only.includes(name) : true) && !(q.has('kept') && m.userData.dropped) && !hide.some(x => x && name.includes(x));
+    m.visible = show;
+    if (texOv[name]) pending.push(loadTex(texOv[name]).then(t => { m.map = t; m.color.set(0xffffff); m.needsUpdate = true; }));
+    if (flat && m.map) { m.color.set(0xffffff); }
+  });
+});
+await Promise.all(pending);
+const mixer = new THREE.AnimationMixer(root);
+const clip = gl.animations.find(a => a.name === (q.get('clip') || 'idle'));
+if (clip && !q.has('bind')) { const a = mixer.clipAction(clip); a.play(); mixer.setTime(+(q.get('t') || 0)); }
+root.traverse(o => { if (o.morphTargetInfluences && q.has('blink')) o.morphTargetInfluences[0] = +q.get('blink'); if (o.isMesh) (Array.isArray(o.material)?o.material:[o.material]).forEach(m => { if (m.userData.role==='cloth' && q.has('poff')) { m.polygonOffset=true; m.polygonOffsetFactor=-1; m.polygonOffsetUnits=-2; }
+ if (m.userData.role==='overlay') { m.transparent=true; m.blending=THREE.AdditiveBlending; m.depthWrite=false; } }); });
+root.updateMatrixWorld(true);
+const head = root.getObjectByName('mixamorigHead');
+const hp = new THREE.Vector3(); head.getWorldPosition(hp);
+const view = q.get('cam') || 'full', yaw = (+(q.get('yaw') || 0)) * Math.PI / 180, pitch = (+(q.get('pitch') || 0)) * Math.PI / 180;
+let target, dist;
+if (view === 'face') { target = hp.clone().add(new THREE.Vector3(0, 0.07, 0)); dist = +(q.get('dist') || 0.45); }
+else if (view === 'upper') { target = hp.clone().add(new THREE.Vector3(0, -0.15, 0)); dist = 1.3; }
+else if (view === 'legs') { target = new THREE.Vector3(0, 0.62, 0); dist = 1.6; }
+else { target = new THREE.Vector3(0, 0.8, 0); dist = 3.6; }
+cam.position.set(target.x + Math.sin(yaw) * Math.cos(pitch) * dist, target.y + Math.sin(pitch) * dist, target.z + Math.cos(yaw) * Math.cos(pitch) * dist);
+cam.lookAt(target);
+r.render(scene, cam);
+window.__info = { hips: root.getObjectByName('mixamorigHips').getWorldPosition(new THREE.Vector3()).toArray().map(v=>+v.toFixed(3)), clips: gl.animations.map(a => a.name), mats: [...new Set((() => { const n = []; root.traverse(o => { if (o.isMesh) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => n.push(m.name)); }); return n; })())], head: hp.toArray() };
+window.__done = true;
+</script>

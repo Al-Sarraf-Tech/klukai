@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Klukai avatar test</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  /* Backdrop proves the canvas is transparent. */
+  body { background: linear-gradient(160deg, #1d2240 0%, #3a2c5c 55%, #7a4f6d 100%); font: 12px system-ui, sans-serif; color: #fff; }
+  #stage { position: fixed; inset: 0; }
+  #hud { position: fixed; left: 8px; bottom: 8px; opacity: .75; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="hud"></div>
+<script type="module">
+  import { createAvatar3D } from '/flutter_app/web/companion/avatar3d.js';
+  const q = new URLSearchParams(location.search);
+  const hud = document.getElementById('hud');
+  window.__events = [];
+  // Stand-in for the app's authenticated fetch: resolves to an ArrayBuffer.
+  const loadModel = async () => {
+    const r = await fetch(q.get('glb') || '/assets/build/klukai.glb', { cache: 'no-store' });
+    if (!r.ok) throw new Error(`model HTTP ${r.status}`);
+    return r.arrayBuffer();
+  };
+  const av = await createAvatar3D(document.getElementById('stage'), {
+    loadModel,
+    framing: q.get('framing') || 'upper',
+    onReady: () => { window.__events.push('ready'); },
+    onError: (e) => { window.__events.push('error:' + e.message); hud.textContent = 'error: ' + e.message; },
+  });
+  window.av = av;
+  if (q.get('state')) av.setState(q.get('state'));
+  if (q.get('mood')) av.setMood(q.get('mood'));
+  if (q.get('speaking')) av.setSpeaking(+q.get('speaking'));
+  hud.textContent = `state=${av.state}`;
+  window.__ready = av.ready;
+</script>
+</body>
+</html>
