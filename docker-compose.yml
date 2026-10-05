@@ -73,6 +73,9 @@ services:
       - ./web-build:/app/static:ro
       - companion-images:/images
       - companion-audio:/audio
+      # Her 3D avatar (tools/avatar build output; game-derived, gitignored).
+      # Served only by the authenticated GET /api/avatar/model — never as /app static.
+      - ./assets/build:/avatar:ro
     deploy:
       resources:
         limits:
