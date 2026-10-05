@@ -595,7 +595,7 @@ class TestGenerateImagePublic:
             )
         assert result == b"WRAPPED"
         # Args forwarded verbatim to the inner implementation.
-        inner.assert_awaited_once_with("a prompt", 512, 768, False, _TEST_LEASE, sfw=False)
+        inner.assert_awaited_once_with("a prompt", 512, 768, False, _TEST_LEASE, sfw=False, seed=None, negative_extra=None)
 
     @pytest.mark.asyncio
     async def test_default_dimensions_are_portrait(self):
@@ -604,7 +604,7 @@ class TestGenerateImagePublic:
         ) as inner:
             await ig.generate_image("p")
         # Defaults: 832x1216 portrait, retry=True.
-        inner.assert_awaited_once_with("p", 832, 1216, True, _TEST_LEASE, sfw=False)
+        inner.assert_awaited_once_with("p", 832, 1216, True, _TEST_LEASE, sfw=False, seed=None, negative_extra=None)
 
     @pytest.mark.asyncio
     async def test_holds_lm_gate_and_gateway_lease_for_entire_render(self):

@@ -38,7 +38,7 @@ def test_offline_loaders_reuse_the_protected_production_path() -> None:
 def test_only_protected_module_contains_comfy_job_endpoints() -> None:
     """A new core loader must not silently grow outside the leased module."""
     allowed = CORE / "app" / "image_gen.py"
-    endpoints = ("/prompt", "/history", "/view", "/free", "/interrupt")
+    endpoints = ("/prompt", "/history", "/view", "/free", "/interrupt", "/upload/image")
 
     offenders: list[str] = []
     for source_path in sorted((CORE / "app").rglob("*.py")):
@@ -54,6 +54,7 @@ def test_only_protected_module_contains_comfy_job_endpoints() -> None:
 def test_every_protected_comfy_call_uses_lease_header_helper() -> None:
     source = (CORE / "app" / "image_gen.py").read_text()
 
-    # queue, interrupt, free, prompt, history, and view each attach both the
-    # gateway bearer credential and the active lease token through one helper.
-    assert source.count("headers=gpu_lease_auth_headers(lease)") == 6
+    # queue, interrupt, free, prompt, history, view, and the img2img source
+    # upload each attach both the gateway bearer credential and the active
+    # lease token through one helper.
+    assert source.count("headers=gpu_lease_auth_headers(lease)") == 7

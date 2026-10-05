@@ -273,7 +273,7 @@ SFW_NEGATIVE_TAGS = (
 KLUKAI_LORA = "Klukai_GFL2_IL-03.safetensors"
 KLUKAI_LORA_TRIGGER = "Klukai"
 
-WORKFLOW_TEMPLATE = {
+WORKFLOW_TEMPLATE: dict = {
     "4": {
         "class_type": "CheckpointLoaderSimple",
         "inputs": {"ckpt_name": "noobai_xl_v1.safetensors"},
@@ -322,6 +322,39 @@ WORKFLOW_TEMPLATE = {
     "9": {
         "class_type": "SaveImage",
         "inputs": {"filename_prefix": "klukai_gen", "images": ["8", 0]},
+    },
+}
+
+# img2img on the same model/LoRA chain: LoadImage -> VAEEncode replaces the
+# empty latent, and KSampler.denoise (set per call) controls how far the result
+# may drift from the source. Used for Live Portrait expression frames.
+IMG2IMG_TEMPLATE: dict = {
+    **{k: v for k, v in WORKFLOW_TEMPLATE.items() if k != "5"},
+    "11": {"class_type": "LoadImage", "inputs": {"image": ""}},
+    "12": {"class_type": "VAEEncode", "inputs": {"pixels": ["11", 0], "vae": ["4", 2]}},
+    "3": {
+        "class_type": "KSampler",
+        "inputs": {
+            **WORKFLOW_TEMPLATE["3"]["inputs"],
+            "latent_image": ["12", 0],
+        },
+    },
+}
+
+# Masked img2img (inpaint) add-ons: only the white of the uploaded mask is
+# re-sampled (DifferentialDiffusion honours its soft edge), and the decoded
+# result is composited back onto the untouched source through the same mask,
+# so every pixel outside it stays exactly the source. "{mask}" is filled in.
+INPAINT_NODES: dict = {
+    "13": {"class_type": "LoadImageMask", "inputs": {"image": "{mask}", "channel": "red"}},
+    "14": {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["12", 0], "mask": ["13", 0]}},
+    "16": {"class_type": "DifferentialDiffusion", "inputs": {"model": ["10", 0]}},
+    "15": {
+        "class_type": "ImageCompositeMasked",
+        "inputs": {
+            "destination": ["11", 0], "source": ["8", 0], "x": 0, "y": 0,
+            "resize_source": False, "mask": ["13", 0],
+        },
     },
 }
 

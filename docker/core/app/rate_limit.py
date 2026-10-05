@@ -64,6 +64,7 @@ LIMITS: dict[str, Limit] = {
     "mission":    Limit(requests=15,  window_seconds=3600),
     "search":     Limit(requests=60,  window_seconds=60),
     "stats":      Limit(requests=30,  window_seconds=60),
+    "portrait_refresh": Limit(requests=1, window_seconds=600),  # re-renders 6 GPU images
 }
 
 
