@@ -102,6 +102,15 @@ class FakeWebSocketService implements WebSocketService {
   @override
   void disconnect() => setConnected(false);
 
+  /// Counts redials requested by the screen (page resume).
+  int reconnectNowCalls = 0;
+
+  @override
+  void reconnectNow() => reconnectNowCalls++;
+
+  @override
+  List<Duration> get reconnectDelays => const [];
+
   @override
   void dispose() {
     _messageController.close();
