@@ -128,14 +128,25 @@ async def background_extraction(
         # makes ("I'll…", "tomorrow I'll…") and schedule a caring follow-up.
         # A separate LLM call (the merged extraction prompt is already large),
         # fully fail-soft so it can never break the rest of extraction.
+        upcoming_events: list = []
         try:
             from .fact_extractor import extract_promises
             from . import promises as promises_store
             promise_result = await extract_promises(user_msg, aff_state_bg.level)
             for commitment in promise_result.get("promises", []):
                 await promises_store.store_promise(commitment, user_id=user_id)
+            upcoming_events = promise_result.get("events") or []
         except Exception as e:
             logger.warning("Promise extraction failed: %s", e)
+
+        # Operation Brief: the same call also returned his upcoming real-life
+        # events. op_brief retires anything he says was cancelled, then plans a
+        # brief / send-off / debrief chain on the deferred rail. Never raises.
+        from . import op_brief
+        await op_brief.on_turn(
+            user_msg, upcoming_events, user_id=user_id,
+            affection_level=aff_state_bg.level,
+        )
 
         # Update mood in session + persist to PostgreSQL
         mood = result.get("mood", "composed")

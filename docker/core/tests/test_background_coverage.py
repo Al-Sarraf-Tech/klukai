@@ -839,3 +839,46 @@ class TestBackgroundExtractionMalformedFacts:
         kwargs = bg_mocks.memory.store_exchange.call_args.kwargs
         assert kwargs["topics"] == ["single-topic-string"]
         assert kwargs["importance"] == 0.4
+
+
+# ── background_extraction: Operation Brief wiring ─────────────────────────────
+
+
+class TestOperationBriefWiring:
+    """The promise call's events go to op_brief.on_turn — no extra LLM call."""
+
+    @pytest.mark.asyncio
+    async def test_events_from_the_promise_call_are_planned(self, bg_mocks):
+        events = [{"what": "job interview", "when_hint": "thursday at 9am",
+                   "sensitivity": "normal", "confidence": 0.9}]
+        promise = {"action": "prep the slides", "confidence": 0.9}
+        extract = AsyncMock(return_value={"promises": [promise], "events": events})
+        with patch("app.fact_extractor.extract_promises", extract), \
+             patch("app.promises.store_promise", AsyncMock()) as store_promise, \
+             patch("app.op_brief.on_turn", AsyncMock(return_value=1)) as on_turn:
+            await bg.background_extraction("interview thursday at 9", "r",
+                                           _session(1), user_id="u1")
+        extract.assert_awaited_once()
+        store_promise.assert_awaited_once_with(promise, user_id="u1")  # promises unchanged
+        on_turn.assert_awaited_once_with("interview thursday at 9", events,
+                                         user_id="u1", affection_level=5)
+
+    @pytest.mark.asyncio
+    async def test_extractor_failure_still_runs_cancellation(self, bg_mocks):
+        """LLM down: no events, but "my interview got cancelled" must still be heard."""
+        with patch("app.fact_extractor.extract_promises",
+                   AsyncMock(side_effect=RuntimeError("LLM down"))), \
+             patch("app.op_brief.on_turn", AsyncMock(return_value=0)) as on_turn:
+            await bg.background_extraction("my interview got cancelled", "r",
+                                           _session(1), user_id="u1")
+        on_turn.assert_awaited_once_with("my interview got cancelled", [],
+                                         user_id="u1", affection_level=5)
+        bg_mocks.memory.store_exchange.assert_awaited_once()  # rest of extraction intact
+
+    @pytest.mark.asyncio
+    async def test_missing_events_key_is_an_empty_list(self, bg_mocks):
+        with patch("app.fact_extractor.extract_promises",
+                   AsyncMock(return_value={"promises": []})), \
+             patch("app.op_brief.on_turn", AsyncMock(return_value=0)) as on_turn:
+            await bg.background_extraction("m", "r", _session(1), user_id="u1")
+        assert on_turn.await_args.args[1] == []
