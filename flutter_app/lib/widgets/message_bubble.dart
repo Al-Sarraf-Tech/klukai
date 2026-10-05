@@ -7,6 +7,7 @@ import '../models/message.dart';
 import '../platform/browser.dart';
 import '../services/session_auth.dart';
 import '../theme/gfl2_colors.dart';
+import '../services/tts_request.dart';
 
 class MessageBubble extends StatefulWidget {
   final ChatMessage message;
@@ -42,14 +43,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ${readAuthToken()}',
         },
-        body: jsonEncode({
-          'text': widget.message.content.length > 500
-              ? widget.message.content.substring(0, 500)
-              : widget.message.content,
-          // Her voice is Japanese only (Ai Nonaka). 'en' asked the voice
-          // service for an English read of her line.
-          'language': 'ja',
-        }),
+        body: jsonEncode(ttsRequestBody(widget.message.content)),
       );
 
       if (response.statusCode == 200) {
