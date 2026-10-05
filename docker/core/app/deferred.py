@@ -263,6 +263,10 @@ async def dispatch(user_id: str, action: dict[str, Any]) -> None:
         from . import memory_her_pov
         await memory_her_pov.start_her_pov(user_id)
         return
+    if kind == "op_brief":
+        from . import op_brief
+        await op_brief.deliver(user_id, action)
+        return
     logger.warning("Unknown deferred action kind %r for user %s", kind, user_id)
 
 

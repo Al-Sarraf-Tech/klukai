@@ -298,6 +298,14 @@ class TestDispatch:
         start.assert_awaited_once_with("claude")
 
     @pytest.mark.asyncio
+    async def test_op_brief_action_delivers_the_slot(self):
+        action = {"kind": "op_brief", "event_id": "e", "slot": "brief",
+                  "due": "2026-10-07T20:30:00"}
+        with patch("app.op_brief.deliver", AsyncMock()) as deliver:
+            await deferred.dispatch("claude", action)
+        deliver.assert_awaited_once_with("claude", action)
+
+    @pytest.mark.asyncio
     async def test_unknown_kind_is_ignored_not_executed(self):
         """A deferred task carries data, never code."""
         await deferred.dispatch("claude", {"kind": "rm -rf /"})  # must not raise

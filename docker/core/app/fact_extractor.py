@@ -135,21 +135,30 @@ state, promises/decisions, current scene. Third person past tense. Be concise.
 {conversation}"""
 
 PROMISE_PROMPT = """\
-Read this message from the Commander (HUMAN male) to Klukai. Detect any concrete \
-COMMITMENT he makes about something HE will do — phrasings like "I'll…", "I'm going \
-to…", "tomorrow I'll…", "I promise to…", "I need to…", "later I'll…".
+Read this message from the Commander (HUMAN male) to Klukai. Detect two things.
+
+1. PROMISES: any concrete COMMITMENT he makes about something HE will do — phrasings \
+like "I'll…", "I'm going to…", "tomorrow I'll…", "I promise to…", "I need to…", \
+"later I'll…".
+2. EVENTS: an upcoming real-life event HE will attend or face — a job interview, exam, \
+appointment, flight, presentation, surgery, court date, funeral, and the like.
 
 Return ONLY valid JSON:
-{{"promises":[{{"action":"<what he will do, short imperative phrase>","target":"<who/what it's for, or null>","deadline_hint":"<when, e.g. tomorrow / tonight / next week, or null>","confidence":<0.0-1.0>}}]}}
+{{"promises":[{{"action":"<what he will do, short imperative phrase>","target":"<who/what it's for, or null>","deadline_hint":"<when, e.g. tomorrow / tonight / next week, or null>","confidence":<0.0-1.0>}}],\
+"events":[{{"what":"<short noun phrase, e.g. job interview at the bank>","when_hint":"<his words for when, e.g. tomorrow at 9am / Thursday / Oct 12, or null>","sensitivity":"<normal|sensitive>","confidence":<0.0-1.0>}}]}}
 
 Rules:
-- Only genuine future commitments BY the Commander. NOT questions, NOT things \
+- Promises: only genuine future commitments BY the Commander. NOT questions, NOT things \
 Klukai will do, NOT vague musings ("maybe someday"), NOT past events.
 - "action" is a brief phrase that completes "you said you'd ___" (e.g. "fix the \
 door", "call your mother", "finish the report").
-- confidence reflects how clearly it's a real commitment (1.0 = explicit promise, \
-0.5 = soft/ambiguous).
-- Empty list if there are no commitments.
+- Events: only FUTURE events he himself attends or faces, with a day he stated or \
+clearly implied. NOT past events, NOT hypotheticals, NOT other people's plans. An \
+event is not also a promise.
+- "sensitivity" is "sensitive" for grief, illness, hospital, surgery, legal trouble, \
+breakups, or anything painful; otherwise "normal".
+- confidence reflects how clearly it's real (1.0 = explicit, 0.5 = soft/ambiguous).
+- Empty lists when there is nothing.
 
 Commander: {user_message}"""
 
@@ -230,13 +239,46 @@ async def extract_facts(
     return out
 
 
-async def extract_promises(user_message: str, affection_level: int) -> dict:
-    """Detect commitments the Commander makes ("I'll…", "tomorrow I'll…").
+def _parse_events(raw: object) -> list[dict]:
+    """Keep well-formed, high-confidence (>= 0.75) events from the extractor.
 
-    Returns ``{"promises": [{action, target, deadline_hint, confidence}, ...]}``
-    keeping only high-confidence detections (confidence >= 0.7). Never raises —
-    returns ``{"promises": []}`` on any failure or malformed output, so the
-    background extraction path stays fail-soft.
+    Only the shape is checked here; whether ``when_hint`` resolves to a real
+    day inside the planning window is op_brief's call, at planning time.
+    """
+    if not isinstance(raw, list):
+        return []
+    kept: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        what, when_hint = item.get("what"), item.get("when_hint")
+        if not isinstance(what, str) or not what.strip():
+            continue
+        if not isinstance(when_hint, str) or not when_hint.strip():
+            continue
+        try:
+            confidence = float(item.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if confidence < 0.75:
+            continue
+        kept.append({
+            "what": what.strip(),
+            "when_hint": when_hint.strip(),
+            "sensitivity": "sensitive" if item.get("sensitivity") == "sensitive" else "normal",
+            "confidence": confidence,
+        })
+    return kept
+
+
+async def extract_promises(user_message: str, affection_level: int) -> dict:
+    """Detect his commitments ("I'll…") and his upcoming events, in ONE call.
+
+    Returns ``{"promises": [{action, target, deadline_hint, confidence}, ...],
+    "events": [{what, when_hint, sensitivity, confidence}, ...]}``. Promises
+    need confidence >= 0.7, events >= 0.75. Never raises — returns empty lists
+    on any failure or malformed output, so background extraction stays
+    fail-soft. Events feed the Operation Brief (app/op_brief.py).
     """
     from .llm_router import get_lm_gate
 
@@ -246,15 +288,16 @@ async def extract_promises(user_message: str, affection_level: int) -> dict:
     async with gate:
         result = await call_llm(
             LM_STUDIO_URL, EXTRACTION_MODEL, prompt,
-            max_tokens=512, temperature=0.1,
+            max_tokens=640, temperature=0.1,
         )
 
     if not result or not isinstance(result, dict):
-        return {"promises": []}
+        return {"promises": [], "events": []}
 
+    events = _parse_events(result.get("events"))
     raw = result.get("promises")
     if not isinstance(raw, list):
-        return {"promises": []}
+        return {"promises": [], "events": events}
 
     kept: list[dict] = []
     for item in raw:
@@ -276,7 +319,7 @@ async def extract_promises(user_message: str, affection_level: int) -> dict:
             "confidence": confidence,
         })
 
-    return {"promises": kept}
+    return {"promises": kept, "events": events}
 
 
 async def create_episode_summary(turns: list[dict], max_turns: int = 10) -> str | None:
