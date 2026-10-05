@@ -21,14 +21,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="description" content="H.I.D.E. 404 Neural Link — Commander Interface">
 
-  <!-- iOS meta tags & icons -->
+  <meta name="theme-color" content="#12151E">
+  <meta name="color-scheme" content="dark">
+
+  <!-- iOS: home-screen app, full-bleed under the status bar (the app pads
+       itself with env(safe-area-inset-*)), proper name and icon. -->
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="companion_app">
-  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Klukai">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <style>
+    /* Matches the app background so overscroll, the notch area and the
+       moment before Flutter paints never flash white. */
+    html, body { background: #12151E; margin: 0; overscroll-behavior: none; }
+  </style>
 
   <title>Klukai</title>
   <link rel="manifest" href="manifest.json">
@@ -43,6 +56,7 @@
   </script>
   <script src="js/pretext_bridge.js"></script>
   <script src="js/audio_recorder.js"></script>
+  <script src="js/voice.js"></script>
 
   <script src="flutter_bootstrap.js" async></script>
 </body>

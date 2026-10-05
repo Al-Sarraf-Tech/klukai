@@ -10,18 +10,17 @@ import '../theme/mood_visuals.dart';
 import '../models/message.dart';
 import '../models/companion_state.dart';
 import '../models/her_day.dart';
+import '../platform/browser.dart';
+import '../services/resume_policy.dart';
 import '../services/wardrobe_service.dart';
 import '../services/websocket_service.dart';
 import '../services/pretext_interop.dart';
 import '../widgets/message_bubble.dart';
-import '../widgets/mood_indicator.dart';
 import '../widgets/voice_button.dart';
-import '../widgets/affection_gauge.dart';
 import '../widgets/tool_status_indicator.dart';
 import '../widgets/canvas_message_bubble.dart';
 import '../widgets/date_divider.dart';
-import '../widgets/heartbeat_sensor.dart';
-import '../widgets/exit_icon.dart';
+import '../widgets/chat_header.dart';
 import '../widgets/her_day_widgets.dart';
 import 'profile_screen.dart';
 import 'memory_archive_screen.dart';
@@ -67,12 +66,21 @@ class ChatScreen extends StatefulWidget {
   /// How often the header status line refreshes while the chat is visible.
   final Duration herDayRefresh;
 
+  /// Browser seam (resume events, Companion window, voice). Defaults to the
+  /// real browser; tests inject a fake.
+  final BrowserPlatform? browser;
+
+  /// When a resume should redial the socket.
+  final ResumePolicy resumePolicy;
+
   const ChatScreen({
     super.key,
     required this.serverUrl,
     this.webSocketService,
     this.wardrobeService,
     this.herDayRefresh = const Duration(minutes: 10),
+    this.browser,
+    this.resumePolicy = const ResumePolicy(),
   });
 
   @override
@@ -89,6 +97,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// failed fetch must never get in the way of chat.
   HerDay? _herDay;
   Timer? _herDayTimer;
+
+  late final BrowserPlatform _browser = widget.browser ?? defaultBrowserPlatform();
+  StreamSubscription<void>? _resumeSub;
+  DateTime _lastFrameAt = DateTime.now();
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
@@ -173,6 +185,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _connectWS();
     _loadHerDay();
     _herDayTimer = Timer.periodic(widget.herDayRefresh, (_) => _refreshHerDayIfVisible());
+    _resumeSub = _browser.onResume.listen((_) => _onPageResume());
+  }
+
+  /// Back from the background (iOS app switch, tab return, bfcache restore,
+  /// network back). Redial a dead or silent socket at once instead of waiting
+  /// for the backoff, and refresh where she is.
+  void _onPageResume() {
+    if (!mounted) return;
+    final silentFor = DateTime.now().difference(_lastFrameAt);
+    if (widget.resumePolicy.shouldReconnect(connected: _ws.isConnected, sinceLastFrame: silentFor)) {
+      _ws.reconnectNow(); // the connection listener reloads history on success
+    }
+    _loadHerDay();
+  }
+
+  /// Opens the Companion page: a new window on desktop, the same window in an
+  /// iOS home-screen app (companion.html links back). Relative to the base href.
+  void _openCompanion() {
+    _browser.openUrl('companion.html', newWindow: companionOpensInNewWindow(_browser));
   }
 
   Future<void> _loadHerDay() async {
@@ -384,6 +415,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _handleWSMessage(Map<String, dynamic> msg) {
+    _lastFrameAt = DateTime.now();
     final type = msg['type'] as String?;
 
     switch (type) {
@@ -905,7 +937,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       final audio = web.HTMLAudioElement()
         ..src = 'audio/comm_beep.wav'
         ..volume = 0.3;
-      audio.play();
+      // play() rejects without a prior gesture (iOS, Safari autoplay rules);
+      // a missed beep is fine, an unhandled rejection is console noise.
+      audio.play().toDart.catchError((Object _) => null);
     } catch (_) {}
   }
 
@@ -975,14 +1009,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// Her voice goes through the shared, gesture-unlocked channel (web/js/
+  /// voice.js): a fresh Audio element per WebSocket frame is refused on iOS,
+  /// and two frames close together would otherwise talk over each other.
   void _playAudio(String base64Audio) {
-    try {
-      final dataUrl = 'data:audio/wav;base64,$base64Audio';
-      final audio = web.HTMLAudioElement()..src = dataUrl;
-      audio.play();
-    } catch (e) {
-      debugPrint('Audio playback failed: $e');
-    }
+    _browser.playVoice('data:audio/wav;base64,$base64Audio').then((ok) {
+      if (!ok) debugPrint('Voice playback refused (no gesture yet?)');
+    });
   }
 
   Future<void> _fetchAndPlayVoiceNote(String voiceId) async {
@@ -1050,6 +1083,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _inputLockTimer?.cancel();
     _warmupTimer?.cancel();
     _herDayTimer?.cancel();
+    _resumeSub?.cancel();
     _ws.dispose();
     _textController.dispose();
     _scrollController.dispose();
@@ -1096,251 +1130,35 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildHeader() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-      decoration: BoxDecoration(
-        color: GFL2Colors.surface,
-        border: Border(
-          bottom: BorderSide(color: GFL2Colors.border.withValues(alpha: 0.4)),
-        ),
-      ),
-      child: Column(
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Portrait — tap to open profile
-              GestureDetector(
-                onTap: _openProfile,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 600),
-                  curve: Curves.easeInOut,
-                  width: 52,
-                  height: 52,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(
-                      color: _moodGlowColor.withValues(alpha: 0.6),
-                      width: 1.5,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _moodGlowColor.withValues(alpha: 0.2),
-                        blurRadius: 12,
-                        spreadRadius: 2,
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
-                    child: Image.asset(
-                      'assets/klukai_portrait.png',
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, e, s) => Container(
-                        color: GFL2Colors.panel,
-                        child: const Center(
-                          child: Text(
-                            'K',
-                            style: TextStyle(
-                              color: GFL2Colors.primary,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              // Name + designation + status
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Name with orange underline accent
-                    const Text(
-                      'KLUKAI',
-                      style: TextStyle(
-                        color: GFL2Colors.textPrimary,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 2.0,
-                      ),
-                    ),
-                    Container(
-                      width: 40,
-                      height: 2,
-                      margin: const EdgeInsets.only(top: 2),
-                      color: GFL2Colors.accent,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'SST-05  //  H.I.D.E. 404',
-                      style: TextStyle(
-                        color: GFL2Colors.textDim.withValues(alpha: 0.6),
-                        fontSize: 10,
-                        letterSpacing: 0.8,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                    if (_herDay != null) ...[
-                      const SizedBox(height: 3),
-                      HerDayStatusLine(day: _herDay!, onTap: _openHerDaySheet),
-                    ],
-                    const SizedBox(height: 6),
-                    // Link status + mood
-                    Row(
-                      children: [
-                        // Connection dot — green/red with glow
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: _state.isConnected
-                                ? GFL2Colors.success
-                                : GFL2Colors.danger,
-                            boxShadow: [
-                              BoxShadow(
-                                color:
-                                    (_state.isConnected
-                                            ? GFL2Colors.success
-                                            : GFL2Colors.danger)
-                                        .withValues(alpha: 0.6),
-                                blurRadius: 6,
-                                spreadRadius: 1,
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          _state.isConnected ? 'LINK ACTIVE' : 'LINK DOWN',
-                          style: TextStyle(
-                            color: _state.isConnected
-                                ? GFL2Colors.success.withValues(alpha: 0.8)
-                                : GFL2Colors.danger.withValues(alpha: 0.8),
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 1.0,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                        const Spacer(),
-                        // Icon cluster: mute | archive | exit | mood
-                        IconButton(
-                          onPressed: () {
-                            try {
-                              final isOn = _jsToggleAmbientMute().toDart;
-                              setState(() => _ambientMuted = !isOn);
-                            } catch (_) {
-                              setState(() => _ambientMuted = !_ambientMuted);
-                            }
-                          },
-                          icon: Icon(
-                            _ambientMuted ? Icons.music_off : Icons.music_note,
-                            color: _ambientMuted
-                                ? GFL2Colors.primary.withValues(alpha: 0.3)
-                                : _moodGlowColor.withValues(alpha: 0.8),
-                            size: 16,
-                          ),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: 28,
-                            minHeight: 28,
-                          ),
-                          tooltip: _ambientMuted
-                              ? 'Enable ambient audio'
-                              : 'Mute ambient audio',
-                        ),
-                        IconButton(
-                          onPressed: _openHerPov,
-                          icon: Icon(
-                            Icons.auto_awesome,
-                            color: GFL2Colors.affinity.withValues(alpha: 0.75),
-                            size: 16,
-                          ),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: 28,
-                            minHeight: 28,
-                          ),
-                          tooltip: 'Her POV',
-                        ),
-                        IconButton(
-                          onPressed: _openArchive,
-                          icon: Icon(
-                            Icons.photo_library_outlined,
-                            color: GFL2Colors.primary.withValues(alpha: 0.5),
-                            size: 16,
-                          ),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: 28,
-                            minHeight: 28,
-                          ),
-                          tooltip: 'Memory Archive',
-                        ),
-                        IconButton(
-                          onPressed: _openSubscription,
-                          icon: Icon(
-                            Icons.workspace_premium_outlined,
-                            color: GFL2Colors.primary.withValues(alpha: 0.5),
-                            size: 16,
-                          ),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: 28,
-                            minHeight: 28,
-                          ),
-                          tooltip: 'Subscription',
-                        ),
-                        GestureDetector(
-                          onTap: _logout,
-                          child: Tooltip(
-                            message: 'Disconnect',
-                            child: ExitIcon(
-                              size: 18,
-                              color: GFL2Colors.danger.withValues(alpha: 0.8),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        MoodIndicator(mood: _state.mood),
-                      ],
-                    ),
-                    // Heartbeat sensor below status line
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        const Spacer(),
-                        HeartbeatSensor(
-                          bpm: _moodBPM,
-                          color: _heartbeatSpikeOverride != null
-                              ? const Color(
-                                  0xFFFF1744,
-                                ) // Red flash during spike
-                              : _moodGlowColor,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          // Full-width affection gauge
-          AffectionGauge(
-            score: _state.affectionScore,
-            level: _state.affectionLevel,
-            levelName: _state.affectionLevelName,
-            lastDelta: _lastAffectionDelta,
-          ),
-        ],
-      ),
+    return ChatHeader(
+      connected: _state.isConnected,
+      mood: _state.mood,
+      glow: _moodGlowColor,
+      bpm: _moodBPM,
+      heartbeatColor: _heartbeatSpikeOverride != null
+          ? const Color(0xFFFF1744) // red flash during a spike
+          : _moodGlowColor,
+      ambientMuted: _ambientMuted,
+      affectionScore: _state.affectionScore,
+      affectionLevel: _state.affectionLevel,
+      affectionLevelName: _state.affectionLevelName,
+      lastAffectionDelta: _lastAffectionDelta,
+      herDay: _herDay,
+      onOpenProfile: _openProfile,
+      onHerDayTap: _openHerDaySheet,
+      onToggleAmbient: () {
+        try {
+          final isOn = _jsToggleAmbientMute().toDart;
+          setState(() => _ambientMuted = !isOn);
+        } catch (_) {
+          setState(() => _ambientMuted = !_ambientMuted);
+        }
+      },
+      onCompanion: _openCompanion,
+      onHerPov: _openHerPov,
+      onArchive: _openArchive,
+      onSubscription: _openSubscription,
+      onLogout: _logout,
     );
   }
 

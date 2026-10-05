@@ -4,12 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:web/web.dart' as web;
 import '../models/message.dart';
-import '../main.dart';
+import '../platform/browser.dart';
+import '../services/session_auth.dart';
+import '../theme/gfl2_colors.dart';
 
 class MessageBubble extends StatefulWidget {
   final ChatMessage message;
 
-  const MessageBubble({super.key, required this.message});
+  /// Voice playback seam; defaults to the real browser.
+  final BrowserPlatform? browser;
+
+  const MessageBubble({super.key, required this.message, this.browser});
 
   @override
   State<MessageBubble> createState() => _MessageBubbleState();
@@ -31,22 +36,19 @@ class _MessageBubbleState extends State<MessageBubble> {
           ? 'http://localhost:8300'
           : Uri.base.origin;
 
-      String authToken = '';
-      try {
-        authToken = web.window.localStorage.getItem('klukai_token') ?? '';
-      } catch (_) {}
-
       final response = await http.post(
         Uri.parse('$serverUrl/api/tts'),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer $authToken',
+          'Authorization': 'Bearer ${readAuthToken()}',
         },
         body: jsonEncode({
           'text': widget.message.content.length > 500
               ? widget.message.content.substring(0, 500)
               : widget.message.content,
-          'language': 'en',
+          // Her voice is Japanese only (Ai Nonaka). 'en' asked the voice
+          // service for an English read of her line.
+          'language': 'ja',
         }),
       );
 
@@ -54,17 +56,18 @@ class _MessageBubbleState extends State<MessageBubble> {
         final data = jsonDecode(response.body);
         final audioB64 = data['audio'] as String?;
         if (audioB64 != null) {
-          setState(() {
-            _isLoading = false;
-            _isPlaying = true;
-          });
-          final audio = web.HTMLAudioElement()
-            ..src = 'data:audio/wav;base64,$audioB64';
-          audio.onEnded.listen((_) {
-            if (mounted) setState(() => _isPlaying = false);
-          });
-          audio.play();
-          return;
+          if (mounted) {
+            setState(() {
+              _isLoading = false;
+              _isPlaying = true;
+            });
+          }
+          // The shared, gesture-unlocked channel: the tap that started this
+          // was spent on the TTS request, so a fresh Audio element would be
+          // refused on iOS. Resolves when she finishes (or if refused), so the
+          // button can never stick on "playing".
+          await (widget.browser ?? defaultBrowserPlatform())
+              .playVoice('data:audio/wav;base64,$audioB64');
         }
       }
     } catch (e) {

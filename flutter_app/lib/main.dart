@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'screens/chat_screen.dart';
 import 'theme/gfl2_colors.dart';
+import 'widgets/safe_area_shim.dart';
 
 // Re-exported so existing `import '../main.dart' show GFL2Colors;` keeps working.
 export 'theme/gfl2_colors.dart';
@@ -32,6 +33,7 @@ class KlukaiApp extends StatelessWidget {
         ),
         fontFamily: 'Inter',
       ),
+      builder: (context, child) => SafeAreaShim(child: child ?? const SizedBox.shrink()),
       home: ChatScreen(serverUrl: serverUrl),
     );
   }
