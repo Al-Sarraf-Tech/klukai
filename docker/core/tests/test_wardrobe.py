@@ -385,7 +385,7 @@ class TestRequestBlock:
         assert "NOT changing" in block
 
     def test_denied_does_not_name_it(self, cat):
-        block = w.request_block(w.RequestOutcome("klukadile_pajamas", "deny", "Deny."), cat)
+        block = w.request_block(w.RequestOutcome("klukadile_pajamas", "deny", "Deny.", discreet=True), cat)
         assert "Klukadile" not in block
         assert "How you see it" not in block
 
@@ -698,3 +698,25 @@ class TestReviewFixes:
         aff.get_state = AsyncMock(side_effect=RuntimeError("x"))
         with patch("app.context.affection", aff):
             await w.warm_today("claude")  # never raises
+
+
+class TestDiscreetRefusals:
+    def test_low_bond_refusal_never_names_the_outfit(self, cat):
+        out = w.decide_request(cat["immaculate_service"], 0, current_id="blazing_star",
+                               request_changes=0, occasions_today=frozenset(), hour=12)
+        assert out.decision == "locked" and out.discreet
+        block = w.request_block(out, cat)
+        assert "Immaculate Service" not in block and "maid" not in block.lower()
+        assert "Do not name or describe any outfit" in block
+
+    def test_reticence_and_denial_are_discreet(self, cat):
+        kw = dict(current_id="blazing_star", request_changes=0, occasions_today=frozenset(), hour=12)
+        assert w.decide_request(cat["speed_star"], 2, **kw).discreet
+        assert w.decide_request(cat["klukadile_pajamas"], 9, hour=2, **{k: v for k, v in kw.items() if k != "hour"}).discreet
+        assert w.decide_request(cat["indigo_oath"], 6, **kw).discreet
+
+    def test_open_bond_refusal_names_it(self, cat):
+        out = w.decide_request(cat["immaculate_service"], 4, current_id="blazing_star",
+                               request_changes=0, occasions_today=frozenset(), hour=12)
+        assert out.decision == "locked" and not out.discreet
+        assert "Immaculate Service" in w.request_block(out, cat)

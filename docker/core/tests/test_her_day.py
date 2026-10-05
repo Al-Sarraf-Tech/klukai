@@ -252,3 +252,13 @@ class TestTeaTime:
     def test_defaults_without_config(self):
         block = hd.tea_time_block(self._now(), "tea", 3, p={})
         assert "Your special: Racing Calm" in block
+
+
+class TestMalformedRoster:
+    def test_bad_slots_and_activities_are_skipped(self):
+        cfg = {
+            "slots": {"good": [5, 12], "bad": "nope", "short": [3], "junk": [None, 4]},
+            "activities": [{"slots": ["good"]}, {"id": "x", "slots": ["good"]}],
+        }
+        blocks = hd.build_day(cfg, SUNDAY, 0)
+        assert [(b.slot, b.id) for b in blocks] == [("good", "x")]

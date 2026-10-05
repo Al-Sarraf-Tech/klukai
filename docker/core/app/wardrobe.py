@@ -551,6 +551,8 @@ class RequestOutcome:
     outfit_id: str
     decision: str  # comply | already | locked | refuse | unacknowledged | deny | not_today | not_now | occasion_only | limit
     note: str
+    # She won't discuss her wardrobe at all: the prompt must not even name it.
+    discreet: bool = False
 
 
 def _band_note(level: int) -> str:
@@ -588,9 +590,9 @@ def decide_request(
     if deployed:
         return RequestOutcome(o.id, "not_now", "You're deployed. Not now — the mission kit stays on.")
     if o.deny:
-        return RequestOutcome(o.id, "deny", "Deny the thing exists. Flatly. Change the subject.")
+        return RequestOutcome(o.id, "deny", "Deny the thing exists. Flatly. Change the subject.", discreet=True)
     if level < o.visible_at:
-        return RequestOutcome(o.id, "unacknowledged", "Do not acknowledge owning any such outfit.")
+        return RequestOutcome(o.id, "unacknowledged", "Do not acknowledge owning any such outfit.", discreet=True)
     if o.id == current_id:
         return RequestOutcome(o.id, "already", "You are already wearing it. Note that he didn't notice.")
     if level < o.unlock_level:
@@ -599,9 +601,11 @@ def decide_request(
             else "Refuse: 'Not yet.' Nothing more." if level < 5
             else "Refuse, but hint — in your voice — that it's a matter of trust, not time."
         )
-        return RequestOutcome(o.id, "locked", hint)
+        return RequestOutcome(o.id, "locked", hint, discreet=level < 3)
     if not ui and level < 3 and o.category not in ("duty", "weather", "training"):
-        return RequestOutcome(o.id, "refuse", "'My attire is not a topic for discussion, Commander.'")
+        return RequestOutcome(
+            o.id, "refuse", "'My attire is not a topic for discussion, Commander.'", discreet=True,
+        )
     if o.category == "oath" and level < 9 and not occasions_today & (_OATH_DAYS | set(o.occasions)):
         return RequestOutcome(o.id, "not_today", "'...Not today. Ask me on a day that matters.'")
     if o.category == "seasonal" and not (occasions_today & set(o.occasions)):
@@ -691,9 +695,18 @@ def request_block(outcome: RequestOutcome, cat: dict[str, Outfit] | None = None)
         if granted
         else "You are NOT changing. Do not describe changing, and do not promise to later."
     )
-    stance = f"\nHow you see it: {o.stance}" if o.stance and outcome.decision not in ("deny", "unacknowledged") else ""
+    if outcome.discreet:
+        # Below the bond where she discusses her wardrobe: no name, no stance —
+        # nothing for the reply to echo back.
+        return (
+            "WARDROBE REQUEST: The Commander asked you to change clothes.\n"
+            f"OUTCOME (already decided — do not change it): {state}\n"
+            f"Play it: {outcome.note} Do not name or describe any outfit.\n"
+            "Keep it to a sentence, then carry on with the conversation."
+        )
+    stance = f"\nHow you see it: {o.stance}" if o.stance else ""
     return (
-        f"WARDROBE REQUEST: The Commander asked you to wear {o.name if outcome.decision not in ('deny', 'unacknowledged') else 'something'}.\n"
+        f"WARDROBE REQUEST: The Commander asked you to wear {o.name}.\n"
         f"OUTCOME (already decided — do not change it): {state}\n"
         f"Play it: {outcome.note}{stance}\n"
         "Keep it to a sentence or two, then carry on with the conversation."

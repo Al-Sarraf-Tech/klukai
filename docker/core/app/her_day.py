@@ -59,14 +59,21 @@ def build_day(cfg: dict, day: date, level: int, *, weather: dict | None = None, 
     """The day's roster, one block per slot, in her day's order (0500 → 0500)."""
     rng = _rng(seed, day)
     condition = (weather or {}).get("condition")
-    activities = [a for a in cfg.get("activities") or () if isinstance(a, dict)]
+    activities = [a for a in cfg.get("activities") or () if isinstance(a, dict) and a.get("id")]
     blocks: list[Block] = []
     # Ordered from her day's start (0500): the insomnia hours close the day.
-    slots = sorted(
-        (cfg.get("slots") or {}).items(),
-        key=lambda kv: (int(kv[1][0]) - wardrobe.DAY_START_HOUR) % 24,
-    )
-    for slot, (start, end) in slots:
+    def _order(kv: tuple) -> int:
+        try:
+            return (int(kv[1][0]) - wardrobe.DAY_START_HOUR) % 24
+        except (TypeError, ValueError, IndexError):
+            return 99
+
+    slots = sorted((cfg.get("slots") or {}).items(), key=_order)
+    for slot, span in slots:
+        try:
+            start, end = int(span[0]), int(span[1])
+        except (TypeError, ValueError, IndexError):
+            continue  # a malformed slot never takes the roster (or a route) down
         candidates = [
             a for a in activities
             if slot in (a.get("slots") or ())
@@ -78,7 +85,7 @@ def build_day(cfg: dict, day: date, level: int, *, weather: dict | None = None, 
             continue
         a = rng.choices(candidates, weights=[float(c.get("weight", 1.0)) for c in candidates])[0]
         blocks.append(Block(
-            slot=slot, start=int(start), end=int(end), id=str(a["id"]),
+            slot=slot, start=start, end=end, id=str(a["id"]),
             location=str(a.get("location", "The Elmo")), activity=str(a.get("activity", "")),
             duty=bool(a.get("duty", False)), private=bool(a.get("private", False)),
             outfit=a.get("outfit"),
