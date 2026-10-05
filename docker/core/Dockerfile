@@ -70,7 +70,7 @@ COPY --from=builder /opt/venv /opt/venv
 
 # Non-root runtime user
 RUN useradd --create-home --shell /bin/bash --uid 1000 appuser && \
-    mkdir -p /images && chown appuser:appuser /images
+    mkdir -p /images /audio && chown appuser:appuser /images /audio
 
 # App source LAST so code changes only invalidate the small final layer
 COPY --chown=appuser:appuser app/ ./app/
