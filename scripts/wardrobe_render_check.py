@@ -29,7 +29,9 @@ for candidate in (CORE_DIR, Path("/app")):
         break
 
 from app import wardrobe  # noqa: E402
-from app.image_gen import build_prompt, generate_image  # noqa: E402
+from app.image_gen import INTIMATE_MIN_LEVEL, build_prompt, generate_image  # noqa: E402
+
+LEVEL = 5  # a mid-bond render: below the intimacy gate, like most of her days
 
 OUT = Path("/tmp/wardrobe-check")
 
@@ -45,9 +47,9 @@ async def main(ids: list[str]) -> int:
                 print(f"skip {oid}: not in catalog")
                 continue
             prompt = build_prompt("solo, standing, full body, looking at viewer, simple background",
-                                  affection_level=5, costume=oid)
+                                  affection_level=LEVEL, costume=oid)
             log.write(f"{oid}\n{prompt}\n\n")
-            img = await generate_image(prompt)
+            img = await generate_image(prompt, sfw=LEVEL < INTIMATE_MIN_LEVEL)
             if not img:
                 print(f"FAIL {oid}: no image (GPU host down or busy?)")
                 failures += 1
