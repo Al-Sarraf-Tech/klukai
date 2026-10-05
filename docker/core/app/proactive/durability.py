@@ -65,10 +65,11 @@ CATCH_UP_WINDOWS: dict[str, timedelta] = {
 #   mission_report       superseded by the next day's report.
 #   deferred_sweep       runs every minute anyway; replaying it is pointless.
 #   command_decision     a rolled, unpredictable ask; it rolls again tomorrow.
+#   portrait_backfill    idle-only by design; the next quiet slot picks it up.
 NEVER_CATCH_UP = frozenset({
     "daily_reset", "random_event", "mission_random_event", "idle_check",
     "dream_event", "memory_recall", "spontaneous_art", "romance_window",
-    "mission_report", "deferred_sweep", "command_decision",
+    "mission_report", "deferred_sweep", "command_decision", "portrait_backfill",
 })
 
 # Guard against a pathological trigger walking forever.

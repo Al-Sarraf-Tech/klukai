@@ -357,6 +357,15 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             replace_existing=True,
         )
 
+        # Live Portrait idle backfill (opt-in, PORTRAIT_BACKFILL=1): draw the
+        # other unlocked outfits one set at a time in the small hours.
+        self._scheduler.add_job(
+            self._portrait_backfill,
+            _cron(hour="2-6", minute="*/15"),
+            id="portrait_backfill",
+            replace_existing=True,
+        )
+
         # Deferred-task safety net: fire anything already due that the RabbitMQ
         # delay rail did not deliver. This is what turns a broker outage into
         # late delivery instead of lost work, so it must stay unconditional.
@@ -432,6 +441,12 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         """Maybe ask the Commander to make a call (see app/decisions.py)."""
         from ..decisions import PRIMARY_USER, maybe_ask
         await maybe_ask(self, PRIMARY_USER)
+
+    async def _portrait_backfill(self) -> None:
+        """Opt-in idle backfill of portrait sets (see app/portrait.py)."""
+        from ..decisions import PRIMARY_USER
+        from ..portrait import backfill_tick
+        await backfill_tick(PRIMARY_USER)
 
     async def _deferred_sweep(self) -> None:
         """Backstop for the RabbitMQ delay rail."""

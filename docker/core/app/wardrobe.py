@@ -489,9 +489,18 @@ async def warm_today(user_id: str) -> None:
     from .context import affection
 
     try:
-        await ensure_today(user_id, (await affection.get_state(user_id)).level)
+        level = (await affection.get_state(user_id)).level
+        await ensure_today(user_id, level)
+        _prewarm_portrait(user_id, level)
     except Exception as e:
         logger.debug("Her Day warm-up skipped: %s", e)
+
+
+def _prewarm_portrait(user_id: str, level: int) -> None:
+    """Today's outfit was picked or changed: start drawing her portrait in it."""
+    from . import portrait
+
+    portrait.prewarm_soon(user_id, level)
 
 
 # ── His requests ───────────────────────────────────────────────────────────
@@ -645,6 +654,7 @@ async def set_requested(user_id: str, oid: str, level: int) -> None:
         if not row.persisted or not await _record_request(user_id, row.day, oid, count=False):
             raise RuntimeError("her day not persisted; outfit not changed")
         _today_cache[user_id] = (time.monotonic(), replace(row, requested_outfit_id=oid))
+    _prewarm_portrait(user_id, level)
 
 
 async def occasions_for(user_id: str, day: date) -> frozenset[str]:
@@ -682,6 +692,7 @@ async def handle_request(
             time.monotonic(),
             replace(row, requested_outfit_id=oid, request_changes=row.request_changes + 1),
         )
+    _prewarm_portrait(user_id, level)
     return outcome
 
 
