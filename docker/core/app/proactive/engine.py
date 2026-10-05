@@ -348,6 +348,15 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             replace_existing=True,
         )
 
+        # Command decisions: she may bring him a small call from her life
+        # (app/decisions.py). Rolled per slot; capped at 2 per rolling week.
+        self._scheduler.add_job(
+            self._command_decision_check,
+            _cron(hour=14, minute=40),
+            id="command_decision",
+            replace_existing=True,
+        )
+
         # Deferred-task safety net: fire anything already due that the RabbitMQ
         # delay rail did not deliver. This is what turns a broker outage into
         # late delivery instead of lost work, so it must stay unconditional.
@@ -418,6 +427,11 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             logger.warning("Could not schedule catch-up pass: %s", e)
 
         logger.info("Klukai proactive engine started")
+
+    async def _command_decision_check(self) -> None:
+        """Maybe ask the Commander to make a call (see app/decisions.py)."""
+        from ..decisions import PRIMARY_USER, maybe_ask
+        await maybe_ask(self, PRIMARY_USER)
 
     async def _deferred_sweep(self) -> None:
         """Backstop for the RabbitMQ delay rail."""
