@@ -343,7 +343,7 @@ async def _insert_row(user_id: str, row: HerDayRow) -> None:
     async with get_conn_autocommit() as conn:
         await conn.execute(
             "INSERT INTO companion_her_day (user_id, day, base_outfit_id, base_reason, weather) "
-            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (user_id, day) DO NOTHING",
+            "VALUES (%s, %s, %s, %s, %s::jsonb) ON CONFLICT (user_id, day) DO NOTHING",
             (user_id, row.day, row.base_outfit_id, row.base_reason,
              json.dumps(row.weather) if row.weather is not None else None),
         )
@@ -480,18 +480,21 @@ def detect_outfit_request(message: str, cat: dict[str, Outfit] | None = None) ->
     """
     cat = catalog() if cat is None else cat
     lower = " ".join(message.lower().split())
-    aliases = sorted(
-        ((alias, o.id) for o in cat.values() for alias in (*o.aliases, o.name.lower())),
-        key=lambda a: -len(a[0]),
-    )
+    aliases = [(alias, o.id) for o in cat.values() for alias in (*o.aliases, o.name.lower())]
     for verb in re.finditer(rf"\b(?:{_VERBS})\b", lower):
         before = lower[: verb.start()]
         if _NEGATION.search(before) or _QUESTION_ABOUT.search(before):
             continue
         tail = lower[verb.end(): verb.end() + 48]
-        for alias, oid in aliases:
-            if re.search(rf"\b{re.escape(alias)}\b", tail):
-                return oid
+        # The outfit named FIRST after the verb wins ("wear the coat over the
+        # maid uniform" is the coat); at the same spot, the longest alias.
+        hits = [
+            (m.start(), -len(alias), oid)
+            for alias, oid in aliases
+            if (m := re.search(rf"\b{re.escape(alias)}\b", tail))
+        ]
+        if hits:
+            return min(hits)[2]
     return None
 
 

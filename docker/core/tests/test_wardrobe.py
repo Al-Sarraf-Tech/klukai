@@ -292,6 +292,8 @@ class TestDetectOutfitRequest:
         ("wear the Indigo Oath", "indigo_oath"),
         ("wear your coat, it's cold", "winter_patrol"),
         ("try on the crocodile onesie", "klukadile_pajamas"),
+        ("wear the coat over the maid uniform", "winter_patrol"),
+        ("wear the maid dress", "immaculate_service"),
     ])
     def test_detects(self, msg, expected):
         assert w.detect_outfit_request(msg) == expected
