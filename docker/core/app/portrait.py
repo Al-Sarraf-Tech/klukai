@@ -112,7 +112,7 @@ BASE_EXPRESSION = "looking at viewer, neutral expression, closed mouth"
 # The mask regions (FRAME_REGIONS) matter as much as denoise: the nose is in
 # no mask, and blink's per-eye ellipses stop above the tear mark.
 EXPRESSIONS: dict[str, tuple[str, float]] = {
-    "blink": ("(closed eyes:1.4), neutral expression, closed mouth", 0.85),
+    "blink": ("(closed eyes:1.6), (eyelashes:1.1), neutral expression, closed mouth", 0.85),
     "talk": ("looking at viewer, (open mouth:1.3), talking", 0.70),
     "smile": ("looking at viewer, (smile:1.3), happy", 0.75),
     "blush": ("(blush:1.3), embarrassed, looking away, wavy mouth", 0.75),
@@ -166,6 +166,9 @@ BLINK_OPEN_RATIO = 0.25  # a blink keeping >25% of the base's iris pixels didn't
 # eyes), keep the most-closed attempt if it hides at least half the iris — a
 # blink is on screen for ~110 ms and passes through half-closed anyway.
 BLINK_FALLBACK_RATIO = 0.5
+# Only a rejected branch is re-run, and only blink can be rejected, so extra
+# re-rolls cost ~2 s each on a 576 px crop: 0.85 → 0.91 → 0.97 → 1.0 …
+BLINK_RETRIES = 5
 BLINK_MIN_IRIS = 40      # fewer iris pixels than this in the base: can't judge, accept
 
 # Idle backfill of the other unlocked outfits (opt-in: PORTRAIT_BACKFILL=1).
@@ -542,7 +545,7 @@ async def _chain(user_id: str, outfit_id: str, level: int, delay_s: float = 0) -
             base_sampling=image_gen.Sampling(steps=BASE_STEPS),
             inpaint_sampling=image_gen.Sampling(steps=INPAINT_STEPS),
             on_image=on_image, accept=plan.accept, retry_denoise_step=BLINK_RETRY_DENOISE,
-            fallback=plan.fallback,
+            retries=BLINK_RETRIES, fallback=plan.fallback,
         )
         await asyncio.gather(*writes)
         if existing_frames(user_id, outfit_id) != set(FRAME_NAMES):
