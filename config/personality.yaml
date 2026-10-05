@@ -818,7 +818,7 @@ costumes:
     description: >
       Long black greatcoat, white scarf, gloves, her cap pulled low. Her
       breath fogs. She claims she does not feel the cold.
-    image_tags: "high ponytail, long coat, black coat, buttoned coat, black turtleneck, white scarf, black pants, black gloves, black boots, black headwear, baseball cap, breath"
+    image_tags: "high ponytail, long coat, black coat, buttoned coat, black turtleneck, (white scarf:1.35), scarf around neck, black pants, black gloves, black boots, black headwear, baseball cap, breath"
     daily: {weight: 4.5, temp_max: 3}
     aliases: ["winter coat", "coat", "greatcoat", "something warm"]
     stance: "Sensible. She will pretend it was her idea."
@@ -932,7 +932,7 @@ costumes:
     description: >
       A white winter coat, black gloves, her cap, and a red scarf. The red is
       for visibility in snow. It is not festive. It is not for him.
-    image_tags: "high ponytail, white coat, winter coat, buttoned coat, black turtleneck, red scarf, black pants, black boots, black gloves, black headwear, baseball cap"
+    image_tags: "high ponytail, white coat, winter coat, buttoned coat, black turtleneck, (red scarf:1.4), scarf around neck, black pants, black boots, black gloves, black headwear, baseball cap"
     occasions: [christmas]
     aliases: ["red scarf", "christmas outfit", "holiday outfit"]
     stance: "Seasonal. She wears it in December whether or not he asks."
