@@ -55,12 +55,14 @@ class _EngineBase:
     _user_messaged_today: bool
     _quiet_day_delivered_today: bool
     _seasonal_delivered: dict[str, bool]
+    _goodbye_hold_until: datetime | None
 
     # ── Cross-mixin methods / properties (concrete impls live on
     #    ProactiveEngine / MissionMixin and are resolved via the MRO) ────────
     _pick_message: Callable[[dict[int, list[str]]], str]
     _deliver: Callable[[str], Any]
     _can_send: Callable[..., bool]
+    _goodbye_hold_active: Callable[..., bool]
     # Activity profiling (concrete impl on PatternsMixin).
     detect_activity_patterns: Callable[..., Any]
 
