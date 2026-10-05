@@ -55,9 +55,15 @@ build-pwa:
 # NOTE: a subset currently errors on a pytest-asyncio strict-mode
 # async-fixture incompatibility in the older integration tests — tracked as a
 # separate harness cleanup; the live read/write smoke covers the new features.
+# Copies the suite's CONTENTS (`tests/.` — copying the dir onto an existing
+# /app/tests nests it and silently runs stale files) plus pytest.ini (asyncio
+# auto mode). One session-wide event loop: the app's DB pool and Redis client
+# are module globals, and a per-test loop leaves them bound to a dead loop.
 test-integration:
-	docker cp docker/core/tests companion-core:/app/tests
-	docker exec companion-core sh -c "pip install -q --target=/tmp/pylibs pytest pytest-asyncio && KLUKAI_TEST_ALLOW_LIVE_BACKENDS=1 PYTHONPATH=/tmp/pylibs:/app python3 -m pytest /app/tests/integration -m integration -q"
+	docker exec -u 0 companion-core rm -rf /app/tests /app/pytest.ini
+	docker cp docker/core/tests/. companion-core:/app/tests/
+	docker cp docker/core/pytest.ini companion-core:/app/pytest.ini
+	docker exec companion-core sh -c "pip install -q --target=/tmp/pylibs pytest==9.0.2 pytest-asyncio==1.3.0 pytest-timeout==2.4.0 && cd /app && KLUKAI_TEST_ALLOW_LIVE_BACKENDS=1 PYTHONPATH=/tmp/pylibs:/app python3 -m pytest tests/integration -m integration -q --timeout=60 -o asyncio_default_fixture_loop_scope=session -o asyncio_default_test_loop_scope=session"
 
 # ── Core stack (amarillo) — runs companion-core + datastores ─────────────────
 

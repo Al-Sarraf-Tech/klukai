@@ -75,6 +75,35 @@ class TestMiddleware:
         ))
 
 
+def _purge_testclient_attempts() -> None:
+    """Starlette's TestClient logs in from the literal IP "testclient" — never a
+    real client. Its failed attempts and rate-limit counters outlive the run:
+    three failures inside the ban window ban every later run's good login (403),
+    and back-to-back runs hit the login rate limit (429). Clear only that
+    synthetic identity, like test_ip_ban_real clears its TEST-NET IPs. Plain
+    sync clients, so the app's global async pool stays on the session loop."""
+    import os
+
+    import psycopg
+
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
+        conn.execute("DELETE FROM companion_login_attempts WHERE ip_address = %s", ("testclient",))
+    # And its login rate-limit window (Redis), which back-to-back runs exhaust.
+    import redis
+
+    r = redis.Redis.from_url(os.environ["REDIS_URL"])
+    for key in r.scan_iter("ratelimit:*:testclient:*"):
+        r.delete(key)
+
+
+@pytest.fixture
+def _clean_testclient_attempts():
+    _purge_testclient_attempts()
+    yield
+    _purge_testclient_attempts()
+
+
+@pytest.mark.usefixtures("_clean_testclient_attempts")
 class TestAuthRoutes:
     def test_login_endpoint_rejects_bad_creds(self, client):
         r = client.post(
