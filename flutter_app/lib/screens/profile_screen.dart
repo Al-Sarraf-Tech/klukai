@@ -113,7 +113,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       await _loadWardrobe();
     } on WardrobeServiceException catch (e) {
       _say(e.isLocked
-          ? 'Not yet.'
+          ? e.refusalLine
           : e.isUnknown
               ? "That isn't in my wardrobe, Commander."
               : 'Comms disrupted. Try again.');

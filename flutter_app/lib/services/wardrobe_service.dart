@@ -8,7 +8,19 @@ import 'session_auth.dart';
 /// Non-200 from a wardrobe / her-day endpoint.
 class WardrobeServiceException implements Exception {
   final int statusCode;
-  WardrobeServiceException(this.statusCode);
+
+  /// The server's decision on a refused outfit (403 body), e.g. `not_today`.
+  final String? decision;
+  WardrobeServiceException(this.statusCode, {this.decision});
+
+  /// What she says when she won't wear it — in her voice, per decision.
+  String get refusalLine => switch (decision) {
+        'not_today' => '...Not today. Ask me on a day that matters.',
+        'deny' => 'What onesie.',
+        'occasion_only' => 'Wrong season for that, Commander.',
+        'not_now' => 'Not now.',
+        _ => 'Not yet.',
+      };
 
   bool get isAuthExpired => statusCode == 401;
 
@@ -75,7 +87,13 @@ class WardrobeService {
       body: jsonEncode({'costume': id}),
     );
     if (response.statusCode != 200) {
-      throw WardrobeServiceException(response.statusCode);
+      String? decision;
+      try {
+        final body = _decode(response);
+        final d = body is Map<String, dynamic> ? body['decision'] : null;
+        decision = d is String ? d : null;
+      } catch (_) {}
+      throw WardrobeServiceException(response.statusCode, decision: decision);
     }
     final decoded = _decode(response);
     final costume = decoded is Map<String, dynamic> ? decoded['costume'] : null;

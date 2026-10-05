@@ -107,6 +107,29 @@ void main() {
       expect(expired.toString(), 'WardrobeServiceException: HTTP 401');
     });
 
+    test('a 403 carries her decision and the line she says', () async {
+      Future<WardrobeServiceException> refusal(String body) async {
+        final svc = _svc((_) async => http.Response(body, 403));
+        try {
+          await svc.setCostume('indigo_oath');
+        } on WardrobeServiceException catch (e) {
+          return e;
+        }
+        fail('expected a refusal');
+      }
+
+      final notToday = await refusal('{"error":"x","decision":"not_today"}');
+      expect(notToday.decision, 'not_today');
+      expect(notToday.refusalLine, contains('a day that matters'));
+      expect((await refusal('{"decision":"deny"}')).refusalLine, 'What onesie.');
+      expect((await refusal('{"decision":"occasion_only"}')).refusalLine, contains('season'));
+      expect((await refusal('{"decision":"not_now"}')).refusalLine, 'Not now.');
+      final plain = await refusal('{"error":"locked"}');
+      expect(plain.decision, isNull);
+      expect(plain.refusalLine, 'Not yet.');
+      expect((await refusal('not json')).decision, isNull);
+    });
+
     test('GET errors throw with the status code', () async {
       final svc = _svc((_) async => http.Response('nope', 503));
       await expectLater(
