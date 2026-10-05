@@ -638,9 +638,10 @@ class TestImageGen:
 
     async def test_unlocked_costume_threaded_into_prompt(self, bg_mocks):
         bg_mocks.affection.get_state.return_value = _aff_state(8)
-        bg_mocks.memory.recall_fact = AsyncMock(return_value="astral_luminous")  # unlock 4
+        render = AsyncMock(return_value="astral_luminous")
         build = MagicMock(return_value="prompt")
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
+        with patch("app.her_day.render_costume", new=render), \
+             patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
              patch.object(bg, "is_couple_scene", return_value=False), \
              patch.object(bg, "is_landscape", return_value=False), \
              patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
@@ -648,12 +649,14 @@ class TestImageGen:
              patch.object(bg, "generate_image", new=AsyncMock(return_value=None)):
             await bg.background_image_gen("draw yourself", user_id="u1")
         assert build.call_args.kwargs["costume"] == "astral_luminous"
+        render.assert_awaited_once_with("u1", 8)
 
-    async def test_locked_costume_not_threaded(self, bg_mocks):
-        bg_mocks.affection.get_state.return_value = _aff_state(2)  # below astral_luminous (4)
-        bg_mocks.memory.recall_fact = AsyncMock(return_value="astral_luminous")
+    async def test_no_wearable_costume_not_threaded(self, bg_mocks):
+        # Gating lives in her_day.render_costume; None means keyword fallback.
+        bg_mocks.affection.get_state.return_value = _aff_state(2)
         build = MagicMock(return_value="prompt")
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
+        with patch("app.her_day.render_costume", new=AsyncMock(return_value=None)), \
+             patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
              patch.object(bg, "is_couple_scene", return_value=False), \
              patch.object(bg, "is_landscape", return_value=False), \
              patch.object(bg, "_enhance_image_prompt", return_value="tags"), \

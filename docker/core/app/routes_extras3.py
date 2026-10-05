@@ -161,6 +161,17 @@ def register_extras3(app: FastAPI) -> None:
                     for r in await rows.fetchall()
                 ]
 
+                rows = await conn.execute(
+                    "SELECT day, base_outfit_id, base_reason, requested_outfit_id "
+                    "FROM companion_her_day WHERE user_id = %s ORDER BY day ASC",
+                    (user_id,),
+                )
+                export["wardrobe_history"] = [
+                    {"day": r[0].isoformat() if r[0] else None, "outfit": r[3] or r[1],
+                     "reason": r[2], "requested": r[3] is not None}
+                    for r in await rows.fetchall()
+                ]
+
                 if include_memories:
                     rows = await conn.execute(
                         "SELECT annotation, category, scene_tags, prompt, created_at "

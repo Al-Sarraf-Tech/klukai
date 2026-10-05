@@ -393,7 +393,7 @@ class TestOutfitsList:
 
     @pytest.mark.asyncio
     async def test_returns_shape_and_derived_unlock(self):
-        from app.image_gen_constants import OUTFIT_UNLOCK_LEVELS
+        from app import wardrobe
         app = _app_with_routes()
         handler = _find_route(app, "/api/outfits", "GET")
         # At level 3: anything with unlock_level <= 3 is unlocked, else locked.
@@ -403,16 +403,34 @@ class TestOutfitsList:
             result = await handler(_mk_request())
 
         outfits = result["outfits"]
-        # One entry per known costume, each with the required keys.
-        assert len(outfits) == len(OUTFIT_UNLOCK_LEVELS)
+        visible = [o for o in wardrobe.catalog().values() if wardrobe.is_visible(o, 3)]
+        assert len(outfits) == len(visible)
         for o in outfits:
-            assert set(o.keys()) == {"id", "unlock_level", "unlocked"}
+            assert set(o.keys()) == {
+                "id", "name", "blurb", "category", "source", "unlock_level", "unlocked", "current",
+            }
             assert o["unlocked"] == (3 >= o["unlock_level"])
         by_id = {o["id"]: o for o in outfits}
-        # blazing_star (0) unlocked; starlit_vow (8) locked at level 3.
         assert by_id["blazing_star"]["unlocked"] is True
-        assert by_id["starlit_vow"]["unlocked"] is False
-        assert by_id["starlit_vow"]["unlock_level"] == 8
+        assert by_id["immaculate_service"]["unlocked"] is False
+        # She does not acknowledge the wedding gown (or the onesie) yet.
+        assert "indigo_oath" not in by_id
+        assert "klukadile_pajamas" not in by_id
+        # Exactly one outfit is the one she has on; "today" describes it.
+        assert sum(o["current"] for o in outfits) == 1
+        assert result["today"]["id"] == next(o["id"] for o in outfits if o["current"])
+
+    @pytest.mark.asyncio
+    async def test_wedding_gown_listed_locked_once_acknowledged(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/outfits", "GET")
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=_mk_aff_state(level=7))):
+            result = await handler(_mk_request())
+        by_id = {o["id"]: o for o in result["outfits"]}
+        assert by_id["indigo_oath"]["unlocked"] is False
+        assert by_id["indigo_oath"]["unlock_level"] == 8
 
 
 class TestCostumeUnlockGate:
@@ -426,10 +444,10 @@ class TestCostumeUnlockGate:
         store_fact = AsyncMock()
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state(level=1))), \
+                   new=AsyncMock(return_value=_mk_aff_state(level=7))), \
              patch("app.routes_extras.memory.store_fact", store_fact):
-            # starlit_vow needs level 8; user is at 1 -> locked.
-            resp = await handler(CostumeRequest(costume="starlit_vow"), _mk_request())
+            # indigo_oath needs level 8; at 7 she acknowledges it but it's locked.
+            resp = await handler(CostumeRequest(costume="indigo_oath"), _mk_request())
 
         assert resp.status_code == 403
         # Rejected costume must not be persisted.
@@ -449,13 +467,43 @@ class TestCostumeUnlockGate:
                    new=AsyncMock(return_value=_mk_aff_state(level=6))), \
              patch("app.routes_extras.memory.store_fact", store_fact), \
              patch("app.audit.log", audit_log):
-            # midnight_sovereign needs level 6; user is exactly at 6 -> unlocked.
+            # Legacy id midnight_sovereign maps to formal_commission (unlock 6).
             result = await handler(CostumeRequest(costume="midnight_sovereign"), _mk_request())
 
-        assert result == {"costume": "midnight_sovereign"}
+        assert result == {"costume": "formal_commission"}
         store_fact.assert_awaited_once()
-        assert store_fact.await_args.args[1] == "midnight_sovereign"
+        assert store_fact.await_args.args[1] == "formal_commission"
         audit_log.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unacknowledged_outfit_is_400_not_403(self):
+        """Below level 7 the wedding gown doesn't exist as far as she'll admit."""
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/costume", "POST")
+        from app.routes import CostumeRequest
+
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=_mk_aff_state(level=1))):
+            resp = await handler(CostumeRequest(costume="starlit_vow"), _mk_request())
+        assert resp.status_code == 400
+        assert b"indigo_oath" not in resp.body
+
+    @pytest.mark.asyncio
+    async def test_selection_sets_todays_outfit(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/costume", "POST")
+        from app.routes import CostumeRequest
+
+        set_requested = AsyncMock()
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.affection.get_state",
+                   new=AsyncMock(return_value=_mk_aff_state(level=5))), \
+             patch("app.routes_extras.memory.store_fact", new=AsyncMock()), \
+             patch("app.wardrobe.set_requested", set_requested), \
+             patch("app.audit.log", new=AsyncMock()):
+            await handler(CostumeRequest(costume="immaculate_service"), _mk_request())
+        set_requested.assert_awaited_once_with("alice", "immaculate_service", 5)
 
     @pytest.mark.asyncio
     async def test_invalid_costume_still_400_before_gate(self):

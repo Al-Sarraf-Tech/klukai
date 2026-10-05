@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any
 
 
-from . import context, rituals
+from . import context, her_day, rituals, wardrobe
 from .agent_loop import AgentLoop
 from .background import (
     background_compaction,
@@ -254,6 +254,40 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             "The truth is you DID dream about him. You just won't admit it."
         )
 
+    # Her Day — what she has on and where she is right now. His outfit
+    # request, if any, is decided deterministically HERE, before the prompt:
+    # this reply already knows the outcome, and an image requested in the same
+    # message renders the change. Fail-soft: the hour-based defaults stand.
+    outfit_line: str | None = None
+    location_line: str | None = None
+    outfit_request_block = ""
+    try:
+        game_active = await router.is_game_active()
+        her_now = await her_day.her_now(
+            user_id, aff_state.level, mood=session.mood,
+            game_active=game_active, mission=mission_desc,
+        )
+        requested = wardrobe.detect_outfit_request(content)
+        if requested:
+            outcome = await wardrobe.handle_request(
+                user_id, requested, aff_state.level,
+                current_id=her_now.outfit.id, mood=session.mood,
+            )
+            outfit_request_block = wardrobe.request_block(outcome)
+            if outcome.decision == "comply":
+                her_now = await her_day.her_now(
+                    user_id, aff_state.level, mood=session.mood,
+                    game_active=game_active, mission=mission_desc,
+                )
+                await ws.send_outfit(user_id, wardrobe.outfit_payload(
+                    her_now.outfit, reason=her_now.outfit_reason,
+                    source=her_now.outfit_source, level=aff_state.level,
+                ))
+        outfit_line = her_now.outfit_line(aff_state.level)
+        location_line = her_now.location_line()
+    except Exception as e:
+        logger.warning("Her Day unavailable this turn: %s", e)
+
     system_prompt = assemble_system_prompt(
         mood=session.mood,
         memories=episode_memories,
@@ -272,6 +306,8 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         anniversaries=anniversaries,
         comfort_objects=comfort_objects,
         crown_jewel=crown_jewel,
+        current_outfit=outfit_line,
+        current_location=location_line,
     )
 
     # Presence / absence coloring (return gap + streak) — fail-soft.
@@ -343,6 +379,9 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     )
     if birthday_block:
         system_prompt += f"\n\n{birthday_block}"
+
+    if outfit_request_block:
+        system_prompt += f"\n\n{outfit_request_block}"
 
     # Dream inquiry hint
     if dream_hint:

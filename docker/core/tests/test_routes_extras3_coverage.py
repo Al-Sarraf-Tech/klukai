@@ -166,11 +166,13 @@ class TestUserExport:
         handler = _find_route(app, "/api/user/export", "GET")
 
         ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        # Order: messages, firsts, gifts, memories
+        # Order: messages, firsts, gifts, wardrobe history, memories
         batches = [
             [("user", "hi", "text", "warm", None, ts)],
             [("first_message", ts, {"x": 1})],
             [("flower", "pretty", "delighted", ts)],
+            [(ts.date(), "winter_patrol", "It's 2°C.", None),
+             (ts.date(), "blazing_star", "A duty day.", "immaculate_service")],
             [("annot", "slice_of_life", ["t"], "prompt", ts)],
         ]
 
@@ -207,6 +209,11 @@ class TestUserExport:
         assert len(data["messages"]) == 1
         assert len(data["milestones"]) == 1
         assert len(data["gifts"]) == 1
+        assert data["wardrobe_history"][0] == {
+            "day": "2026-01-01", "outfit": "winter_patrol", "reason": "It's 2°C.", "requested": False,
+        }
+        assert data["wardrobe_history"][1]["outfit"] == "immaculate_service"
+        assert data["wardrobe_history"][1]["requested"] is True
         # include_memories=True → memories_kept branch (163-179) executed.
         assert len(data["memories_kept"]) == 1
         assert data["memories_kept"][0]["annotation"] == "annot"

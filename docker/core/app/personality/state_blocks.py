@@ -269,30 +269,37 @@ def build_gaming_block(p: dict, affection_level: int, game_active: bool) -> str:
     return " ".join(s for s in (cfg.get("guidance", "").strip(), tone) if s)
 
 
-# (level it becomes visible, level she speaks of it freely). The wedding outfit
-# is the oath made visible: unacknowledged below Vulnerable, unmentioned by her
-# until the oath itself is fulfilled.
-_PRIVATE_COSTUMES = {"indigo_oath": (7, 9)}
-
-
 def build_wardrobe_block(p: dict, affection_level: int) -> str:
     """List the outfits Klukai owns, so she never claims ignorance of her own
     wardrobe (the character rules forbid denying her costumes, but nothing
-    else in the prompt names them)."""
+    else in the prompt names them).
+
+    Canon outfits get a line each; her original everyday kit is one compact
+    line. ``private: [visible_at, open_at]`` hides an outfit below visible_at
+    and keeps her from raising it below open_at (the wedding gown is the oath
+    made visible). ``deny: true`` outfits are never listed — she denies them.
+    """
     lines: list[str] = []
+    originals: list[str] = []
     for key, costume in p.get("costumes", {}).items():
-        if not isinstance(costume, dict):
+        if not isinstance(costume, dict) or costume.get("deny"):
             continue
-        visible_at, open_at = _PRIVATE_COSTUMES.get(key, (0, 0))
-        if affection_level < visible_at:
+        visible_at, open_at = (costume.get("private") or [0, 0])[:2]
+        if affection_level < int(visible_at):
+            continue
+        name = str(costume.get("name") or key.replace("_", " ").title())
+        if costume.get("source") == "original":
+            originals.append(name)
             continue
         # Split on sentence boundaries, not bare dots, so "No.1"-style text survives.
-        first = str(costume.get("description", "")).split(". ")[0].strip().rstrip(".")
-        name = key.replace("_", " ").title()
+        desc = " ".join(str(costume.get("description", "")).split())
+        first = desc.split(". ")[0].strip().rstrip(".")
         line = f"- {name}: {first}." if first else f"- {name}"
-        if affection_level < open_at:
+        if affection_level < int(open_at):
             line += " (You never bring this one up yourself.)"
         lines.append(line)
+    if originals:
+        lines.append(f"- Everyday kit: {', '.join(originals)}.")
     if not lines:
         return ""
     return "YOUR WARDROBE (outfits you own — mention only when relevant, never list them):\n" + "\n".join(lines)

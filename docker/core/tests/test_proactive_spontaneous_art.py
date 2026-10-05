@@ -151,22 +151,24 @@ class TestSpontaneousArt:
 
 
 class TestSpontaneousArtWardrobe:
-    @pytest.mark.asyncio
-    async def test_unlocked_costume_flows_into_prompt(self):
-        import app.context as _ctx
-        e = _engine(aff=9)
-        _ctx.memory.recall_fact = AsyncMock(return_value="starlit_vow")  # unlocks at 8
-        gen, bp, save, slp = _gen_patches()
-        with gen, bp as build, save, slp, patch("app.context.ws", _ws()):
-            await e._spontaneous_art_event()
-        assert build.call_args.kwargs.get("costume") == "starlit_vow"
+    """She draws herself in what she has on today (gating lives in her_day)."""
 
     @pytest.mark.asyncio
-    async def test_locked_costume_is_not_applied(self):
-        import app.context as _ctx
-        e = _engine(aff=6)  # passes the >=6 art gate, but below starlit_vow's level 8
-        _ctx.memory.recall_fact = AsyncMock(return_value="starlit_vow")
+    async def test_todays_outfit_flows_into_prompt(self):
+        e = _engine(aff=9)
+        render = AsyncMock(return_value="indigo_oath")
         gen, bp, save, slp = _gen_patches()
-        with gen, bp as build, save, slp, patch("app.context.ws", _ws()):
+        with gen, bp as build, save, slp, patch("app.context.ws", _ws()), \
+                patch("app.her_day.render_costume", new=render):
+            await e._spontaneous_art_event()
+        assert build.call_args.kwargs.get("costume") == "indigo_oath"
+        render.assert_awaited_once_with("jalsarraf", 9)
+
+    @pytest.mark.asyncio
+    async def test_no_wearable_outfit_is_not_applied(self):
+        e = _engine(aff=6)
+        gen, bp, save, slp = _gen_patches()
+        with gen, bp as build, save, slp, patch("app.context.ws", _ws()), \
+                patch("app.her_day.render_costume", new=AsyncMock(return_value=None)):
             await e._spontaneous_art_event()
         assert build.call_args.kwargs.get("costume") is None

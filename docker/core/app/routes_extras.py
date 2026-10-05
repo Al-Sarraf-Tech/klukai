@@ -89,61 +89,79 @@ def register_extras(app: FastAPI) -> None:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        # Persisted per-user in the fact store so the choice survives restarts
-        # (was a single in-process global that reset on every redeploy).
-        costume = await memory.recall_fact("costume", user_id=user_id)
-        return {"costume": costume or "blazing_star"}
+        # What she is wearing right now (Her Day: her pick, his granted
+        # request, or block kit) — not merely his last selection.
+        from . import her_day
+        level = (await affection.get_state(user_id)).level
+        now = await her_day.her_now(user_id, level)
+        return {"costume": now.outfit.id}
 
     @app.get("/api/outfits")
     async def api_get_outfits(request: Request):
-        """List the unlockable wardrobe with derived unlock state.
+        """The wardrobe catalog with derived unlock state and today's outfit.
 
-        "Unlocked" is computed on read from the user's current affection level
-        (no wardrobe table): unlocked == affection_level >= unlock_level.
+        Unlock is computed on read (affection_level >= unlock_level). Outfits
+        she does not yet acknowledge owning (the wedding gown below level 7)
+        are omitted entirely.
         """
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        from .image_gen_constants import OUTFIT_UNLOCK_LEVELS
-        aff = await affection.get_state(user_id)
-        level = aff.level
+        from . import her_day, wardrobe
+        level = (await affection.get_state(user_id)).level
+        now = await her_day.her_now(user_id, level)
         outfits = [
-            {"id": oid, "unlock_level": unlock, "unlocked": level >= unlock}
-            for oid, unlock in OUTFIT_UNLOCK_LEVELS.items()
+            {
+                "id": o.id, "name": o.name, "blurb": o.blurb, "category": o.category,
+                "source": o.source, "unlock_level": o.unlock_level,
+                "unlocked": level >= o.unlock_level, "current": o.id == now.outfit.id,
+            }
+            for o in wardrobe.catalog().values()
+            if wardrobe.is_visible(o, level)
         ]
-        return {"outfits": outfits}
+        today = wardrobe.outfit_payload(
+            now.outfit, reason=now.outfit_reason, source=now.outfit_source, level=level,
+        )
+        return {"outfits": outfits, "today": today}
 
     @app.post("/api/costume")
     async def api_set_costume(req: CostumeRequest, request: Request):
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        from .image_gen_constants import OUTFIT_UNLOCK_LEVELS
-        valid = list(OUTFIT_UNLOCK_LEVELS.keys())
-        if req.costume not in valid:
+        from . import wardrobe
+        aff = await affection.get_state(user_id)
+        cat = wardrobe.catalog()
+        oid = wardrobe.canonical_id(req.costume, cat)
+        if not oid or not wardrobe.is_visible(cat[oid], aff.level):
+            valid = [o.id for o in cat.values() if wardrobe.is_visible(o, aff.level)]
             return JSONResponse({"error": f"Invalid. Choose from: {valid}"}, status_code=400)
         # Wardrobe gating: a costume can only be worn once its affection unlock
         # level is reached. Derived on read — no affection mutation here.
-        aff = await affection.get_state(user_id)
-        unlock_level = OUTFIT_UNLOCK_LEVELS[req.costume]
+        unlock_level = cat[oid].unlock_level
         if aff.level < unlock_level:
             return JSONResponse(
-                {"error": f"'{req.costume}' is locked. Requires affection level {unlock_level} "
+                {"error": f"'{oid}' is locked. Requires affection level {unlock_level} "
                           f"(you are at {aff.level})."},
                 status_code=403,
             )
-        await memory.store_fact("costume", req.costume, user_id=user_id)
+        # His favourite (biases her own daily picks) + she wears it today.
+        await memory.store_fact("costume", oid, user_id=user_id)
+        try:
+            await wardrobe.set_requested(user_id, oid, aff.level)
+        except Exception as e:
+            logger.warning("Could not set today's outfit: %s", e)
         try:
             from . import audit
             ip = request.client.host if request.client else None
             await audit.log(
                 audit.EVENT_COSTUME_CHANGED, user_id=user_id, ip_address=ip,
                 request_id=getattr(request.state, "request_id", None),
-                metadata={"costume": req.costume},
+                metadata={"costume": oid},
             )
         except Exception:
             pass
-        return {"costume": req.costume}
+        return {"costume": oid}
 
     # ── STT proxy ──────────────────────────────────────────────────────────
 

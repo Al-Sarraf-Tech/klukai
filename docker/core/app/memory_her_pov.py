@@ -353,8 +353,9 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
     """Full pipeline with WS status updates. Never raises out of task."""
     from .context import affection
     from . import memory_archive
-    from .context import memory, ws
-    from .image_gen import build_prompt, generate_image, is_outfit_unlocked
+    from .context import ws
+    from .image_gen import build_prompt, generate_image
+    from .her_day import render_costume
 
     try:
         await _set_job(job_id, status="searching", phase="searching",
@@ -424,9 +425,8 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
         except Exception:
             pass
 
-        costume = await memory.recall_fact("costume", user_id)
-        if not (costume and is_outfit_unlocked(costume, level)):
-            costume = None
+        # She draws herself in what she has on today.
+        costume = await render_costume(user_id, level)
 
         # The Commander's wall clock, not the container's UTC — otherwise an
         # evening portrait gets rendered with 1am lighting.

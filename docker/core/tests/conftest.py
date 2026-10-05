@@ -267,3 +267,13 @@ def personality_config(personality_config_path):
     """Load and return the personality config dict."""
     from app.personality import reload_personality
     return reload_personality(personality_config_path)
+
+
+@pytest.fixture(autouse=True)
+def _reset_wardrobe_cache():
+    """Her Day caches today's row per user in-process — never leak it across tests."""
+    from app import wardrobe
+
+    wardrobe.clear_cache()
+    yield
+    wardrobe.clear_cache()

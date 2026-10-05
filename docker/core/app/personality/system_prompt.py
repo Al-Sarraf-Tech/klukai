@@ -58,6 +58,8 @@ def assemble_system_prompt(
     anniversaries: list[dict] | None = None,
     comfort_objects: list[dict] | None = None,
     crown_jewel: dict | None = None,
+    current_outfit: str | None = None,
+    current_location: str | None = None,
 ) -> str:
     """Assemble the full Klukai system prompt from all components."""
     p = load_personality(personality_path)
@@ -86,7 +88,7 @@ def assemble_system_prompt(
         build_speech_guidelines(p, affection_level),
         build_behavioral_grammar_block(affection_level),
         build_affection_block(affection_score, affection_level, level_name, p),
-        build_context_block(mood, affection_level, days_together),
+        build_context_block(mood, affection_level, days_together, current_outfit, current_location),
         build_mood_bleed_block(mood),
         build_anniversary_block(anniversaries),
         build_comfort_objects_block(comfort_objects, affection_level),

@@ -11,14 +11,16 @@ is a content gate (matched in app/image_gen.py:_select_outfit).
 
 from __future__ import annotations
 
+# Hairstyle is NOT here: it changes per outfit (ponytail on duty, down in the
+# wedding and maid outfits), so each wardrobe entry's image_tags carries it.
 KLUKAI_IDENTITY = (
-    "1girl, hk416 \\(girls' frontline\\), silver hair, green eyes, long hair, ponytail, "
-    "hair ornament, girls' frontline, slim waist, athletic body, toned, slender figure, "
+    "1girl, hk416 \\(girls' frontline\\), silver hair, green eyes, very long hair, "
+    "teardrop facial mark, cross hair ornament, girls' frontline, slim waist, athletic body, toned, slender figure, "
     "long legs, beautiful detailed eyes, light blush, detailed skin, "
     "perfect anatomy, delicate collarbone, navel, medium breasts, elegant neck, "
     "soft lips, detailed face, expressive eyes, eyelashes"
 )
-KLUKAI_DEFAULT_OUTFIT = "tactical clothes, black gloves, thighhighs, military"
+KLUKAI_DEFAULT_OUTFIT = "high ponytail, tactical clothes, black gloves, thighhighs, military"
 
 OUTFIT_MAP = {
     # Intimate / risque
@@ -382,29 +384,12 @@ TIME_OF_DAY_TAGS = {
     "night": "night, moonlight, soft ambient lamplight",
 }
 
-# ── Unlockable wardrobe ───────────────────────────────────────────────────
-# Affection level (0-9) required to unlock each costume. "Unlocked" is DERIVED
-# on read (affection_level >= unlock_level) — there is no wardrobe table and no
-# affection mutation. Some outfits are free from the start (0); the more
-# intimate / special skins gate behind a closer bond.
-OUTFIT_UNLOCK_LEVELS: dict[str, int] = {
-    "blazing_star": 0,
-    "speed_star": 0,
-    "astral_luminous": 4,
-    "cerulean_breaker": 2,
-    "midnight_sovereign": 6,
-    "starlit_vow": 8,
-}
+# ── Wardrobe ─────────────────────────────────────────────────────────────
+# Unlock levels and outfit tags live in the wardrobe catalog (``costumes:`` in
+# config/personality.yaml, read by app/wardrobe.py) — one source of truth for
+# the prompt, images, gates and the PWA.
 
-# Danbooru-style tag block for each unlockable costume. Injected into the
-# positive prompt (just before the scene tags) when a costume is selected, so
-# the chosen skin actually changes the rendered outfit. Kept concise.
-OUTFIT_COSTUME_TAGS: dict[str, str] = {
-    "blazing_star": "red and gold battle dress, ornate gold trim, flowing skirt, elegant",
-    "speed_star": "white racing bodysuit, blue accents, sporty, sleek, aerodynamic",
-    "astral_luminous": "shimmering star-patterned gown, celestial motifs, glowing accents, ethereal",
-    "cerulean_breaker": "cerulean blue tactical suit, silver plating, sleek armor, futuristic",
-    "midnight_sovereign": "midnight black evening gown, silver embroidery, regal, refined",
-    "starlit_vow": "white bridal gown, lace veil, delicate, luminous, intimate",
-}
-
+# Scene keywords that DO override what she is wearing today: an explicit bath
+# or bed scene is not rendered in battle-maid kit. Everything else in
+# OUTFIT_MAP (lighting words like "morning"/"night") yields to today's outfit.
+SCENE_OUTFIT_KEYWORDS: tuple[str, ...] = ("bath", "lingerie", "underwear", "bed", "sleep")

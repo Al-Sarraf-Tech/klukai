@@ -292,7 +292,7 @@ class TestUserExport:
             ("test annotation", "slice_of_life", ["tag1"], "test prompt",
              datetime(2026, 3, 1, tzinfo=timezone.utc)),
         ]
-        row_batches = [msg_rows, firsts_rows, gifts_rows, memories_rows]
+        row_batches = [msg_rows, firsts_rows, gifts_rows, [], memories_rows]
 
         class FakeConn:
             def __init__(self):
@@ -337,8 +337,8 @@ class TestUserExport:
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/export", "GET")
 
-        # Only 3 queries expected (no message query): firsts, gifts, memories
-        row_batches = [[], [], []]
+        # No message query: firsts, gifts, wardrobe history, memories
+        row_batches = [[], [], [], []]
 
         class FakeConn:
             def __init__(self):

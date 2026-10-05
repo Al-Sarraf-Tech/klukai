@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 
 import httpx
@@ -36,10 +37,9 @@ from app.image_gen_constants import (
     MISSION_SCENE_TAGS,
     MOOD_EXPRESSION_TAGS,
     NEGATIVE_TAGS,
-    OUTFIT_COSTUME_TAGS,
     OUTFIT_MAP,
-    OUTFIT_UNLOCK_LEVELS,
     QUALITY_TAGS,
+    SCENE_OUTFIT_KEYWORDS,
     SITUATION_KEYWORDS,
     SQUAD_KEYWORDS,
     TIME_OF_DAY_TAGS,
@@ -63,10 +63,9 @@ __all__ = [
     "MISSION_SCENE_TAGS",
     "MOOD_EXPRESSION_TAGS",
     "NEGATIVE_TAGS",
-    "OUTFIT_COSTUME_TAGS",
     "OUTFIT_MAP",
-    "OUTFIT_UNLOCK_LEVELS",
     "QUALITY_TAGS",
+    "SCENE_OUTFIT_KEYWORDS",
     "SITUATION_KEYWORDS",
     "SQUAD_KEYWORDS",
     "TIME_OF_DAY_TAGS",
@@ -158,7 +157,7 @@ def build_mission_prompt(
 
     # Klukai is always in mission images
     parts.append(KLUKAI_IDENTITY)
-    parts.append("tactical gear, body armor, combat vest, rifle, intense")
+    parts.append("high ponytail, tactical gear, body armor, combat vest, rifle, intense")
 
     # Add injury tags to Klukai if she's hurt
     if injuries and "klukai_injured" in injuries:
@@ -209,7 +208,6 @@ def needs_image(message: str) -> bool:
 
 def is_couple_scene(text: str) -> bool:
     """Detect if the request is for a scene with both Klukai and the Commander."""
-    import re
 
     lower = text.lower()
     return any(
@@ -235,13 +233,18 @@ def _select_outfit(context: str, outfit_map: dict[str, str], default: str) -> st
 def is_outfit_unlocked(costume: str, affection_level: int) -> bool:
     """Return whether ``costume`` is unlocked at the given affection level.
 
-    "Unlocked" is DERIVED on read — there is no wardrobe table. An unknown
-    costume id is treated as locked (fail-closed). Outfits with an unlock
-    level of 0 are always available.
+    Delegates to the wardrobe catalog (app/wardrobe.py). Legacy ids map
+    forward; an unknown id is locked (fail-closed).
     """
-    if costume not in OUTFIT_UNLOCK_LEVELS:
-        return False
-    return affection_level >= OUTFIT_UNLOCK_LEVELS[costume]
+    from . import wardrobe
+
+    return wardrobe.is_unlocked(costume, affection_level)
+
+
+def _explicit_scene(text: str) -> bool:
+    """An explicit bath/bed/lingerie scene, which outranks today's outfit."""
+    lower = text.lower()
+    return any(re.search(rf"\b{kw}", lower) for kw in SCENE_OUTFIT_KEYWORDS)
 
 
 def build_prompt(
@@ -267,10 +270,10 @@ def build_prompt(
             ignored (no descriptor injected).
         time_of_day: One of morning/afternoon/evening/night, or None. When set,
             injects a short lighting/time cue before the scene tags.
-        costume: Optional unlockable-wardrobe id (see OUTFIT_COSTUME_TAGS). When
-            provided and recognized, its tag block REPLACES the keyword-matched
-            outfit so the chosen skin actually drives the render. Unknown ids
-            fall through to the existing keyword-context outfit logic.
+        costume: Optional wardrobe id (app/wardrobe.py catalog) — what she is
+            wearing. Its tag block replaces the keyword-matched outfit, unless
+            the scene is explicitly a bath/bed/lingerie one. Unknown ids fall
+            through to the keyword-context outfit logic.
     """
     parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
 
@@ -291,11 +294,13 @@ def build_prompt(
 
     # Context for outfit matching: use full context (conversation + scene tags)
     outfit_context = f"{context} {scene_tags}" if context else scene_tags
-    # A selected (unlocked) wardrobe costume overrides the keyword-matched
-    # outfit so the chosen skin actually changes the image; otherwise fall back
-    # to the existing keyword-context outfit selection.
-    if costume and costume in OUTFIT_COSTUME_TAGS:
-        klukai_outfit = OUTFIT_COSTUME_TAGS[costume]
+    # What she is wearing today overrides the keyword-matched outfit, except
+    # for an explicit bath/bed scene; otherwise fall back to keyword selection.
+    from . import wardrobe
+
+    costume_tags = wardrobe.image_tags(costume) if costume else None
+    if costume_tags and not _explicit_scene(outfit_context):
+        klukai_outfit = costume_tags
     else:
         klukai_outfit = _select_outfit(
             outfit_context, OUTFIT_MAP, KLUKAI_DEFAULT_OUTFIT

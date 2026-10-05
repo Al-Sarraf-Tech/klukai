@@ -186,7 +186,7 @@ def pipeline():
     save_image = AsyncMock(return_value="mem-123")
     generate_image = AsyncMock(return_value=b"\x89PNG-bytes")
     build_prompt = MagicMock(return_value="a prompt")
-    is_outfit_unlocked = MagicMock(return_value=True)
+    render_costume = AsyncMock(return_value=None)
 
     pov = {
         "annotation": "I kept this one. Don't ask me why.",
@@ -212,7 +212,7 @@ def pipeline():
         patch("app.memory_archive.save_image", save_image),
         patch("app.image_gen.generate_image", generate_image),
         patch("app.image_gen.build_prompt", build_prompt),
-        patch("app.image_gen.is_outfit_unlocked", is_outfit_unlocked),
+        patch("app.her_day.render_costume", render_costume),
         patch.object(hp, "pick_exchange", AsyncMock(return_value=exchange)),
         patch.object(hp, "compose_pov", AsyncMock(return_value=dict(pov))),
         # the pipeline paces its WS delivery; don't pay for it in the suite
@@ -226,7 +226,7 @@ def pipeline():
             save_image=save_image,
             generate_image=generate_image,
             build_prompt=build_prompt,
-            is_outfit_unlocked=is_outfit_unlocked,
+            render_costume=render_costume,
             pov=pov,
             exchange=exchange,
         )
@@ -349,27 +349,20 @@ class TestRunHerPovAffection:
 
 
 class TestRunHerPovCostume:
+    """She draws herself in what she has on today (gating lives in her_day)."""
+
     @pytest.mark.asyncio
-    async def test_unlocked_costume_is_used(self, clean_jobs, pipeline):
-        pipeline.memory.recall_fact = AsyncMock(return_value="winter coat")
-        pipeline.is_outfit_unlocked.return_value = True
+    async def test_todays_outfit_is_used(self, clean_jobs, pipeline):
+        pipeline.render_costume.return_value = "winter_patrol"
 
         await hp.run_her_pov("claude", "job-1")
 
-        assert pipeline.build_prompt.call_args.kwargs["costume"] == "winter coat"
+        assert pipeline.build_prompt.call_args.kwargs["costume"] == "winter_patrol"
+        pipeline.render_costume.assert_awaited_once_with("claude", pipeline.aff_state.level)
 
     @pytest.mark.asyncio
-    async def test_locked_costume_is_dropped(self, clean_jobs, pipeline):
-        pipeline.memory.recall_fact = AsyncMock(return_value="locked outfit")
-        pipeline.is_outfit_unlocked.return_value = False
-
-        await hp.run_her_pov("claude", "job-1")
-
-        assert pipeline.build_prompt.call_args.kwargs["costume"] is None
-
-    @pytest.mark.asyncio
-    async def test_no_remembered_costume(self, clean_jobs, pipeline):
-        pipeline.memory.recall_fact = AsyncMock(return_value=None)
+    async def test_no_wearable_outfit_falls_back(self, clean_jobs, pipeline):
+        pipeline.render_costume.return_value = None
 
         await hp.run_her_pov("claude", "job-1")
 

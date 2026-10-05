@@ -155,11 +155,18 @@ def build_mood_bleed_block(mood: str = "composed") -> str:
     return "\n".join(lines)
 
 
-def build_context_block(mood: str = "composed", affection_level: int = 0, days_together: int = 0) -> str:
+def build_context_block(
+    mood: str = "composed",
+    affection_level: int = 0,
+    days_together: int = 0,
+    current_outfit: str | None = None,
+    current_location: str | None = None,
+) -> str:
     """Build current context: military time, day, operational status, outfit.
 
     Times are the Commander's wall clock (America/Chicago via ``now_local``),
-    not the server's UTC clock."""
+    not the server's UTC clock. ``current_outfit`` / ``current_location`` come
+    from Her Day (app/her_day.py); when absent the hour-based defaults stand."""
     now = now_local()
     hour = now.hour
 
@@ -189,6 +196,11 @@ def build_context_block(mood: str = "composed", affection_level: int = 0, days_t
 
     day_name = now.strftime("%A")
     mil_time = now.strftime("%H%M")
+    location = (
+        f"The Elmo (Mobile Base Vehicle) — {current_location}"
+        if current_location
+        else "The Elmo (Mobile Base Vehicle) — command deck or private quarters depending on time."
+    )
 
     date_line = ""
     if days_together > 0:
@@ -208,7 +220,7 @@ def build_context_block(mood: str = "composed", affection_level: int = 0, days_t
     return (
         f"OPERATIONAL CONTEXT: {mil_time} hours, {day_name} — {time_period} "
         f"({now.strftime('%Y-%m-%d')}). {behavior}\n"
-        f"LOCATION: The Elmo (Mobile Base Vehicle) — command deck or private quarters depending on time.\n"
-        f"CURRENT OUTFIT: {outfit}\n"
+        f"LOCATION: {location}\n"
+        f"CURRENT OUTFIT: {current_outfit or outfit}\n"
         f"EMOTIONAL STATE: {mood}.{date_line}"
     )

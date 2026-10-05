@@ -115,6 +115,10 @@ class WSManager:
     async def send_mood(self, user_id: str, mood: str) -> None:
         await self.send(user_id, {"type": "mood", "mood": mood})
 
+    async def send_outfit(self, user_id: str, outfit: dict) -> None:
+        """She changed (his request was granted) — the PWA updates its chip."""
+        await self.send(user_id, {"type": "outfit", "outfit": outfit})
+
     async def send_proactive(
         self, user_id: str, message: str, *, persist: bool = True
     ) -> None:
