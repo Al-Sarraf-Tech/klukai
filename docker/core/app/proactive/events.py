@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 # A quiet-day pattern must be at least this confident to warrant a check-in.
 _QUIET_DAY_CONFIDENCE_FLOOR = 0.6
 
+# A dream is a message from someone who just woke up. If he was talking to her
+# in the last two hours, she was awake too (see the 0200 watch).
+DREAM_QUIET_AFTER_ACTIVITY = timedelta(hours=2)
+
 # ── Event dialogue content (YAML-sourced, literal fallbacks) ──────────────────
 # Sourced from ``proactive_content`` in personality.yaml so the lines can be
 # tuned without a code change. Each literal below is the fallback used verbatim
@@ -373,7 +377,12 @@ class EventsMixin(_EngineBase):
             return
         if self._affection_level < 5:
             return
-        if self._muted_until and now_local() < self._muted_until:
+        now = now_local()
+        if self._muted_until and now < self._muted_until:
+            return
+        # The 0200 watch: on a night he's awake she isn't dreaming, she's up
+        # with him. Stand down if he messaged within DREAM_QUIET_AFTER_ACTIVITY.
+        if self._last_message_time and now - self._last_message_time < DREAM_QUIET_AFTER_ACTIVITY:
             return
 
         # 40% chance to fire (not every night)

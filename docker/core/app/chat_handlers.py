@@ -351,6 +351,13 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             proactive.mark_leaving()
         system_prompt += f"\n\n{build_departure_block(_p, goodbye, aff_state.level)}"
 
+    # The 0200 watch: 00:30-04:29 local she is already up, quieter and
+    # protective, and after a run of late nights she sends him to bed.
+    from .night_watch import night_watch_prompt_block
+    watch_block = await night_watch_prompt_block(user_id, _p, aff_state.level, memory)
+    if watch_block:
+        system_prompt += f"\n\n{watch_block}"
+
     birthday_block = await rituals.birthday_prompt_block(
         user_id, _p, aff_state.first_interaction, content,
     )
