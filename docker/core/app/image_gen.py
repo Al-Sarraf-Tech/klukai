@@ -881,6 +881,7 @@ async def generate_inpaint_set(
     accept: Callable[[str, bytes], bool] | None = None,
     retries: int = 2,
     retry_denoise_step: float = 0.0,
+    fallback: Callable[[str, list[bytes]], bytes | None] | None = None,
 ) -> dict[str, bytes]:
     """A base and its inpaint branches under ONE lease and ONE model load.
 
@@ -889,15 +890,18 @@ async def generate_inpaint_set(
     ``on_image(name, png)`` fires as each image lands ("base" first), so the
     caller can show it before the rest are done. A branch ``accept`` rejects
     is re-run with the next seed, up to ``retries`` times, each time with its
-    denoise raised by ``retry_denoise_step``. VRAM is freed once, at the end. Returns the accepted images ("base" only if rendered here);
-    empty if the lease was refused or the base failed.
+    denoise raised by ``retry_denoise_step``. If a branch is still rejected
+    after the last retry, ``fallback(name, candidates)`` may pick one of the
+    rejected renders (or return None to leave the branch missing). VRAM is
+    freed once, at the end. Returns the accepted images ("base" only if
+    rendered here); empty if the lease was refused or the base failed.
     """
     result = await _leased(lambda lease: _inpaint_set_inner(
         lease, base_prompt=base_prompt, base_png=base_png, plan=plan, seed=seed,
         width=width, height=height, sfw=sfw, negative_extra=negative_extra,
         base_sampling=base_sampling, inpaint_sampling=inpaint_sampling,
         on_image=on_image, accept=accept, retries=retries,
-        retry_denoise_step=retry_denoise_step,
+        retry_denoise_step=retry_denoise_step, fallback=fallback,
     ))
     return result or {}
 
@@ -919,6 +923,7 @@ async def _inpaint_set_inner(
     accept: Callable[[str, bytes], bool] | None,
     retries: int,
     retry_denoise_step: float = 0.0,
+    fallback: Callable[[str, list[bytes]], bytes | None] | None = None,
 ) -> dict[str, bytes]:
     results: dict[str, bytes] = {}
     try:
@@ -943,6 +948,7 @@ async def _inpaint_set_inner(
             return results
         masks = {b.name: str(m) for b, m in zip(branches, mask_names, strict=True)}
         pending = list(branches)
+        candidates: dict[str, list[bytes]] = {}
         for attempt in range(retries + 1):
             escalated = [
                 replace(b, denoise=min(1.0, b.denoise + attempt * retry_denoise_step)) for b in pending
@@ -958,14 +964,26 @@ async def _inpaint_set_inner(
                     continue  # lost, not rejected: no point re-running it
                 if accept is not None and not accept(branch.name, png):
                     rejected.append(branch)
+                    candidates.setdefault(branch.name, []).append(png)
                     continue
                 results[branch.name] = png
                 if on_image is not None:
                     await on_image(branch.name, png)
             if not rejected:
                 break
-            logger.info("Re-running rejected inpaint branches: %s", [b.name for b in rejected])
             pending = rejected
+            if attempt < retries:
+                logger.info("Re-running rejected inpaint branches: %s", [b.name for b in rejected])
+        else:
+            # Retries exhausted: the caller may still take its best rejected render.
+            for branch in pending:
+                chosen = fallback(branch.name, candidates[branch.name]) if fallback else None
+                if chosen is None:
+                    continue
+                logger.info("Accepting the best rejected render for %s", branch.name)
+                results[branch.name] = chosen
+                if on_image is not None:
+                    await on_image(branch.name, chosen)
         return results
     finally:
         # The graph's history is already complete, so a short settle suffices.

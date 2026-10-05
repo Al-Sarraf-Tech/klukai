@@ -279,6 +279,49 @@ class TestInpaintSet:
         assert calls["n"] == 2  # talk was lost (not retried); blink retried once
 
     @pytest.mark.asyncio
+    async def test_exhausted_branch_may_take_its_best_rejected_render(self):
+        env = _Env()
+        seen = []
+
+        async def run_graph(graph, lease):
+            saves = _saves(graph)
+            return {saves[name]: f"{name}{len(seen)}".encode() for name in saves}
+
+        def fallback(name, candidates):
+            seen.append((name, list(candidates)))
+            return candidates[-1]
+
+        landed = []
+
+        async def on_image(name, png):
+            landed.append(name)
+
+        with env, patch("app.image_gen._run_graph", new=run_graph):
+            out = await ig.generate_inpaint_set(
+                base_prompt="", base_png=b"B", seed=1, retries=1, on_image=on_image,
+                accept=lambda n, p: n != "blink", fallback=fallback,
+                plan=_plan([_branch("blink"), _branch("talk")]),
+            )
+        assert seen == [("blink", [b"blink0", b"blink0"])]
+        assert out == {"talk": b"talk0", "blink": b"blink0"}
+        assert landed == ["talk", "blink"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_may_decline(self):
+        env = _Env()
+
+        async def run_graph(graph, lease):
+            return {v: b"x" for v in _saves(graph).values()}
+
+        with env, patch("app.image_gen._run_graph", new=run_graph):
+            out = await ig.generate_inpaint_set(
+                base_prompt="", base_png=b"B", seed=1, retries=0,
+                accept=lambda n, p: False, fallback=lambda n, c: None,
+                plan=_plan([_branch("blink")]),
+            )
+        assert out == {}
+
+    @pytest.mark.asyncio
     async def test_unconfirmed_cleanup_rejects_the_set(self):
         env = _Env(free=False)
         with env:
@@ -364,6 +407,24 @@ class TestSetPlan:
         # Composite: outside the mask the base is untouched.
         full = plan.composite("blink", skin)
         assert full.getpixel((5, 5)) == plan.base.getpixel((5, 5))
+
+    @pytest.mark.asyncio
+    async def test_blink_fallback_takes_the_most_closed_if_half_shut(self):
+        plan = pt._SetPlan("claude", "speed_star", 4, ["blink", "talk"])
+        await plan(_portrait_png())
+        skin = _png((pt.CROP_PX, pt.CROP_PX), (235, 225, 230))
+        open_eyes = plan.base.crop(plan.box).resize((pt.CROP_PX, pt.CROP_PX))
+        buf = io.BytesIO()
+        open_eyes.save(buf, "PNG")
+        wide_open = buf.getvalue()
+        assert plan.fallback("blink", [wide_open, skin]) == skin  # the most-closed one
+        assert plan.fallback("blink", [wide_open]) is None         # still wide open: no blink
+        assert plan.fallback("talk", [skin]) is None                # only blink falls back
+        assert plan.fallback("blink", []) is None
+
+    def test_fallback_needs_a_planned_base(self):
+        plan = pt._SetPlan("claude", "speed_star", 4, ["blink"])
+        assert plan.fallback("blink", [b"x"]) is None
 
     def test_unjudgeable_blinks_are_accepted(self):
         plan = pt._SetPlan("claude", "speed_star", 4, ["blink"])

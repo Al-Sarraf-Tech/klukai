@@ -162,6 +162,10 @@ CROP_CENTER_DY = 0.3  # crop centre sits this far below the eye line
 FRAME_NEGATIVES = {"blink": "(open eyes:1.3), green eyes, pupils, looking at viewer"}
 BLINK_RETRY_DENOISE = 0.06  # a rejected blink is re-rolled at +0.06 denoise (0.85 → 0.91 → 0.97)
 BLINK_OPEN_RATIO = 0.25  # a blink keeping >25% of the base's iris pixels didn't close
+# When every re-roll still fails (live: blazing_star, whose cap shades the
+# eyes), keep the most-closed attempt if it hides at least half the iris — a
+# blink is on screen for ~110 ms and passes through half-closed anyway.
+BLINK_FALLBACK_RATIO = 0.5
 BLINK_MIN_IRIS = 40      # fewer iris pixels than this in the base: can't judge, accept
 
 # Idle backfill of the other unlocked outfits (opt-in: PORTRAIT_BACKFILL=1).
@@ -475,15 +479,25 @@ class _SetPlan:
         full.paste(region, (x0, y0))
         return full
 
+    def _open_ratio(self, frame: str, crop_png: bytes) -> float:
+        """Share of the base's iris pixels still visible in a render (0 = shut)."""
+        before = _iris_pixels(self.base, self.masks[frame])
+        if before < BLINK_MIN_IRIS:
+            return 0.0
+        return _iris_pixels(self.composite(frame, crop_png), self.masks[frame]) / before
+
     def accept(self, frame: str, crop_png: bytes) -> bool:
         """Blink must actually close her eyes; every other frame is taken as is."""
         if frame != "blink" or self.base is None:
             return True
-        before = _iris_pixels(self.base, self.masks[frame])
-        if before < BLINK_MIN_IRIS:
-            return True
-        after = _iris_pixels(self.composite(frame, crop_png), self.masks[frame])
-        return after <= BLINK_OPEN_RATIO * before
+        return self._open_ratio(frame, crop_png) <= BLINK_OPEN_RATIO
+
+    def fallback(self, frame: str, crop_pngs: list[bytes]) -> bytes | None:
+        """After the last re-roll: the most-closed blink, if it's at least half shut."""
+        if frame != "blink" or self.base is None or not crop_pngs:
+            return None
+        ratio, best = min(((self._open_ratio(frame, p), i) for i, p in enumerate(crop_pngs)))
+        return crop_pngs[best] if ratio <= BLINK_FALLBACK_RATIO else None
 
 
 async def _chain(user_id: str, outfit_id: str, level: int, delay_s: float = 0) -> bool:
@@ -528,6 +542,7 @@ async def _chain(user_id: str, outfit_id: str, level: int, delay_s: float = 0) -
             base_sampling=image_gen.Sampling(steps=BASE_STEPS),
             inpaint_sampling=image_gen.Sampling(steps=INPAINT_STEPS),
             on_image=on_image, accept=plan.accept, retry_denoise_step=BLINK_RETRY_DENOISE,
+            fallback=plan.fallback,
         )
         await asyncio.gather(*writes)
         if existing_frames(user_id, outfit_id) != set(FRAME_NAMES):
@@ -630,7 +645,8 @@ async def portrait_state(user_id: str, outfit_id: str, level: int, *, game_activ
     if len(have) == len(FRAME_NAMES):
         status = "ready"
     elif game_active or _backing_off(key):
-        status = "unavailable"
+        # Nothing more is coming right now; whatever exists is what she has.
+        status = "ready" if "base" in have else "unavailable"
     else:
         ensure_generation(user_id, outfit_id, level)
         status = "partial" if "base" in have else "pending"

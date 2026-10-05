@@ -464,16 +464,25 @@ class TestState:
         assert state["frames"]["blink"] and state["frames"]["talk"] is None
 
     @pytest.mark.asyncio
-    async def test_unavailable_during_a_game_or_backoff(self):
+    async def test_game_or_backoff_settles_on_what_exists(self):
+        # With a base on disk she has a portrait: "ready" (no false "GPU busy"),
+        # the missing frames simply don't animate.
         _write_all(frames=("base",))
         with patch("app.portrait.ensure_generation") as ensure:
             state = await pt.portrait_state("claude", "speed_star", 4, game_active=True)
-        assert state["status"] == "unavailable"
-        assert state["frames"]["base"]
+        assert state["status"] == "ready"
+        assert state["frames"]["base"] and state["frames"]["blink"] is None
         ensure.assert_not_called()
         pt._failed_at[pt._key("claude", "speed_star")] = pt.time.monotonic()
         state = await pt.portrait_state("claude", "speed_star", 4, game_active=False)
+        assert state["status"] == "ready"
+
+    @pytest.mark.asyncio
+    async def test_unavailable_only_without_a_base(self):
+        with patch("app.portrait.ensure_generation") as ensure:
+            state = await pt.portrait_state("claude", "night_ride", 4, game_active=True)
         assert state["status"] == "unavailable"
+        ensure.assert_not_called()
 
 
 class TestRefresh:
