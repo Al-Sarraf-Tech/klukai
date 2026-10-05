@@ -283,6 +283,7 @@ _RATE_LIMIT_BUCKETS: dict[str, str] = {
     "/api/gift":               "gift",
     "/api/mission":            "mission",
     "/api/memories/search":    "search",
+    "/api/portrait/refresh":   "portrait_refresh",
 }
 
 
