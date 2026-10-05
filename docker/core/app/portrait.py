@@ -4,7 +4,7 @@ Per (user, outfit) the app keeps six frames under
 ``/images/portraits/{STYLE_VERSION}/{user_id}/{outfit_id}/``:
 
 - ``base.webp``: a txt2img portrait (fixed composition: upper body, facing
-  the viewer, centred, plain soft background) with a deterministic seed per
+  the viewer, centred, a dark gradient backdrop with depth) with a deterministic seed per
   (user, outfit). Its lossless source is kept as ``base.png``.
 - ``blink``, ``talk``, ``smile``, ``blush`` and ``annoyed``: masked img2img
   (inpaint) of that base. Her eyes are located in the base (her canon green
@@ -45,34 +45,56 @@ FRAME_NAMES = ("base", "blink", "talk", "smile", "blush", "annoyed")
 SOURCE_NAME = "base.png"
 WIDTH, HEIGHT = 832, 1216
 
-# Canon palette anchors. Left alone, the LoRA plus outfit accents render her
-# hair saturated cyan/royal blue and some outfits cast the skin pink/magenta;
-# canon is pale silver, near-white with a cool tint, and natural pale skin.
-# Tuned on live renders of speed_star, night_ride and blazing_star: these
-# weights land silver with a cool tint (stronger "muted colors"/"grey hair"
-# washed night_ride out to line art and turned speed_star dull grey).
-PALETTE_ANCHORS = (
-    "(silver hair:1.4), (white hair:1.1), (pale blue-tinted white hair:1.1), "
-    "soft colors, fair skin, natural skin tone"
-)
+# Canon palette anchors: pale silver hair (near-white, cool tint), natural pale
+# skin. v2's heavier weights ((silver hair:1.4) + white + "pale blue-tinted
+# white" + "soft colors") flattened the face into a white plane; v3 keeps the
+# hair silver with lighter weights and anchors the skin explicitly, because
+# bare shoulders otherwise drift tan/orange/pink under the lighting below.
+PALETTE_ANCHORS = "(silver hair:1.15), (white hair:0.8), (pale skin:1.15), natural skin tone"
+
+# The portrait negative (palette guard, form, backdrop, closures). Tuned on
+# live renders of all 19 outfits as the test user:
+# - hair/skin: no cyan/blue hair; no blue, pink, red, tan or orange skin
+#   (strapless outfits went pink-red, hoodies tan at the neck);
+# - form: the v2 look was posterized and unshaded, so flat color, no
+#   shading, high contrast, posterization and overexposure are pushed away,
+#   and glowing eyes (her irises rendered as neon discs);
+# - backdrop: no white/light/plain or glowing background (banning only a
+#   pure black one turned the backdrop near-white);
+# - closures: portraits never show an unzipped front or cleavage (the
+#   Klukadile onesie and the pajama shirt opened below level 8 without it);
+# - Blazing Star's black leotard read royal blue under the rim light.
 PALETTE_NEGATIVE = (
     "(blue hair:1.2), (cyan hair:1.3), aqua hair, oversaturated, "
-    "(blue skin:1.2), (pink skin:1.1)"
+    "(blue skin:1.2), (pink skin:1.3), (red skin:1.2), (tan:1.2), (dark skin:1.2), (orange skin:1.2), "
+    "flat color, (no shading:1.2), monochrome, (glowing eyes:1.3), "
+    "(high contrast:1.2), (posterization:1.2), (overexposed:1.2), "
+    "(white background:1.2), (light background:1.2), (simple background:1.1), "
+    "(glowing background:1.2), (bright background:1.2), lens flare, "
+    "(unzipped:1.4), (cleavage:1.2), (blue leotard:1.2), (blue bodysuit:1.2)"
 )
-# Shared quality tags that push saturation; dropped for portraits only.
-_PORTRAIT_DROPPED_TAGS = ("vivid colors, ",)
+# Shared quality tags dropped for portraits only: "vivid colors" fights the
+# canon palette, and film grain speckles the dark backdrop.
+_PORTRAIT_DROPPED_TAGS = ("vivid colors, ", ", film grain")
 
-# A dark navy backdrop matching the companion stage (#12151e), so the frame's
-# edges vanish into the page instead of showing a light-grey card; a soft rim
-# light keeps her silhouette off the dark.
+# v3: form and depth instead of a flat cut-out on black. A dark gradient with
+# a hint of navy, soft bokeh and a few light particles blends into the
+# companion stage (#12151e) while giving depth; soft lighting from the side,
+# strong soft shading and only a light rim give her face and hair volume; eye
+# reflections give the eyes life. Strong blue backdrop weights turned the
+# whole frame royal blue; none (or "blue background" in the negative) went
+# pure black with no depth.
 COMPOSITION = (
     "solo, portrait, upper body, facing viewer, centered, straight-on, "
-    "simple background, dark background, dark navy background, soft rim lighting, "
+    "(dark gradient background:1.2), (dark blue background:0.7), (bokeh:1.0), "
+    "depth of field, blurry background, (light particles:0.7), "
+    "(soft lighting:1.2), (soft shading:1.3), (sidelighting:0.9), (rim lighting:0.5), "
+    "detailed eyes, (eye reflection:1.1), shiny hair, "
     + PALETTE_ANCHORS
 )
 # Bump when COMPOSITION/style changes: frames live under a versioned root, so
 # a new style is drawn fresh instead of serving stale cached frames.
-STYLE_VERSION = "v2"
+STYLE_VERSION = "v3"
 BASE_EXPRESSION = "looking at viewer, neutral expression, closed mouth"
 
 # frame -> (expression tags, inpaint denoise). Tuned on live renders as the

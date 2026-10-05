@@ -53,6 +53,17 @@ class TestCatalog:
         assert "midnight_sovereign" not in cat
         assert "starlit_vow" not in cat
 
+    def test_portrait_tag_fixes_hold(self, cat):
+        """Fixes from live v3 portrait renders of every outfit."""
+        assert "(black leotard:1.3)" in cat["blazing_star"].image_tags  # read royal blue
+        assert "long sleeves" in cat["off_duty_cap"].image_tags  # hoodie became a crop top
+        assert "flip-flops" not in cat["cerulean_breaker"].image_tags  # pulled the frame to full body
+        assert "(grey jumpsuit:1.2)" in cat["hangar_coveralls"].image_tags  # jumpsuit vanished
+        assert "(metal-framed glasses:1.3)" in cat["drawing_night"].image_tags  # glasses dropped
+        assert "(fully buttoned:1.3)" in cat["sleepless_watch"].image_tags  # shirt fell open
+        onesie = cat["klukadile_pajamas"].image_tags
+        assert "(fully zipped:1.4)" in onesie and "(turtleneck:1.2)" in onesie  # opened to the navel
+
     def test_every_outfit_has_tags_name_and_a_hairstyle(self, cat):
         for o in cat.values():
             assert o.image_tags, o.id
@@ -61,7 +72,7 @@ class TestCatalog:
 
     def test_canon_tags_match_the_official_art(self, cat):
         assert "black bikini" in cat["cerulean_breaker"].image_tags
-        assert "holding surfboard" in cat["cerulean_breaker"].image_tags
+        assert "surfboard under arm" in cat["cerulean_breaker"].image_tags
         assert "armor" not in cat["cerulean_breaker"].image_tags
         assert "checkered clothes" in cat["astral_luminous"].image_tags
         assert "gown" not in cat["astral_luminous"].image_tags

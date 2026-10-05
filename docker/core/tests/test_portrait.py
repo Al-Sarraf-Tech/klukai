@@ -95,7 +95,7 @@ class TestPrompts:
         with patch("app.portrait.build_prompt", return_value="P") as bp:
             assert pt.portrait_prompt("speed_star", 4, "base") == "P"
         scene = bp.call_args.args[0]
-        for tag in ("upper body", "facing viewer", "centered", "simple background"):
+        for tag in ("upper body", "facing viewer", "centered", "(dark gradient background:1.2)"):
             assert tag in scene
         assert pt.BASE_EXPRESSION in scene
         kw = bp.call_args.kwargs
@@ -110,12 +110,37 @@ class TestPrompts:
 
     def test_canon_palette_is_anchored_and_vivid_colors_dropped(self):
         prompt = pt.portrait_prompt("speed_star", 4, "base")
-        assert "(silver hair:1.4)" in prompt and "fair skin" in prompt
-        assert "vivid colors" not in prompt
+        assert "(silver hair:1.15)" in prompt and "(pale skin:1.15)" in prompt
+        assert "vivid colors" not in prompt and "film grain" not in prompt
+        assert ", ," not in prompt  # dropping a tag leaves no empty slot
         assert "masterpiece" in prompt  # the rest of the quality block stays
         for frame in pt.EXPRESSIONS:
             assert pt.PALETTE_ANCHORS in pt.portrait_prompt("speed_star", 4, frame)
         assert "cyan hair" in pt.PALETTE_NEGATIVE and "pink skin" in pt.PALETTE_NEGATIVE
+
+    def test_v3_style_has_form_depth_and_a_stage_dark_backdrop(self):
+        """v3 replaces v2's flat cut-out on black: shading, light from the
+        side, eye reflections, and a dark gradient with bokeh for depth."""
+        assert pt.STYLE_VERSION == "v3"
+        for tag in ("(soft shading:1.3)", "(soft lighting:1.2)", "(eye reflection:1.1)",
+                    "(dark gradient background:1.2)", "(bokeh:1.0)", "depth of field"):
+            assert tag in pt.COMPOSITION, tag
+        # v2's flattening recipe is gone.
+        for tag in ("simple background", "dark navy background", "soft colors", "(silver hair:1.4)"):
+            assert tag not in pt.COMPOSITION, tag
+        # ...and pushed away in the negative, with the light backdrops it fell back to.
+        for tag in ("flat color", "(no shading:1.2)", "(posterization:1.2)", "(glowing eyes:1.3)",
+                    "(white background:1.2)", "(simple background:1.1)"):
+            assert tag in pt.PALETTE_NEGATIVE, tag
+
+    def test_portrait_negative_keeps_skin_natural_and_fronts_closed(self):
+        for tag in ("(tan:1.2)", "(orange skin:1.2)", "(red skin:1.2)",
+                    "(unzipped:1.4)", "(cleavage:1.2)", "(blue leotard:1.2)"):
+            assert tag in pt.PALETTE_NEGATIVE, tag
+
+    def test_v3_frames_live_under_their_own_root(self, monkeypatch):
+        monkeypatch.setenv("IMAGES_DIR", "/images")
+        assert pt.portraits_root() == Path("/images/portraits/v3")
 
     def test_other_renders_keep_vivid_colors(self):
         from app.image_gen import build_prompt
