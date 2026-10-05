@@ -1,6 +1,3 @@
-@TestOn('browser')
-library;
-
 // Widget tests for MoodIndicator: mood -> label + color mapping.
 //
 // Imports main.dart (GFL2Colors) transitively, which pulls package:web, so run

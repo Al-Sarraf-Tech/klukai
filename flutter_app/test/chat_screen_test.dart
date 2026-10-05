@@ -32,6 +32,7 @@ import 'package:companion_app/services/websocket_service.dart';
 import 'package:companion_app/widgets/message_bubble.dart';
 import 'package:companion_app/widgets/heartbeat_sensor.dart';
 
+import 'support/fake_browser.dart';
 import 'support/her_day_fixtures.dart';
 
 /// In-memory stand-in for [WebSocketService]. Overrides every transport method
@@ -101,6 +102,15 @@ class FakeWebSocketService implements WebSocketService {
 
   @override
   void disconnect() => setConnected(false);
+
+  /// Counts redials requested by the screen (page resume).
+  int reconnectNowCalls = 0;
+
+  @override
+  void reconnectNow() => reconnectNowCalls++;
+
+  @override
+  List<Duration> get reconnectDelays => const [];
 
   @override
   void dispose() {
@@ -443,6 +453,60 @@ void main() {
       expect(find.byKey(const Key('her-day-status')), findsNothing);
       expect(find.text('KLUKAI'), findsOneWidget);
       expect(tester.takeException(), isNull);
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — browser seam (companion, resume, voice)', () {
+    Future<(FakeWebSocketService, FakeBrowserPlatform)> pumpWithBrowser(
+      WidgetTester tester,
+      FakeBrowserPlatform browser,
+    ) async {
+      web.window.localStorage.setItem('klukai_token', 'test-token');
+      final fake = FakeWebSocketService();
+      await tester.pumpWidget(MaterialApp(
+        home: ChatScreen(
+          serverUrl: 'http://localhost:0',
+          webSocketService: fake,
+          wardrobeService: FakeWardrobeService(),
+          browser: browser,
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+      return (fake, browser);
+    }
+
+    testWidgets('Companion opens companion.html in a new window on desktop', (tester) async {
+      final (fake, browser) = await pumpWithBrowser(tester, FakeBrowserPlatform());
+      await tester.tap(find.byKey(const Key('chat-header-companion')));
+      expect(browser.opened, [('companion.html', true)]);
+      fake.dispose();
+    });
+
+    testWidgets('Companion navigates in place inside the iOS home-screen app', (tester) async {
+      final (fake, browser) = await pumpWithBrowser(
+          tester, FakeBrowserPlatform(isIos: true, isStandalone: true));
+      await tester.tap(find.byKey(const Key('chat-header-companion')));
+      expect(browser.opened, [('companion.html', false)]);
+      fake.dispose();
+    });
+
+    testWidgets('resume with the link down redials immediately', (tester) async {
+      final (fake, browser) = await pumpWithBrowser(tester, FakeBrowserPlatform());
+      fake.setConnected(false);
+      await tester.pump();
+      browser.resume.add(null);
+      await tester.pump();
+      expect(fake.reconnectNowCalls, 1);
+      fake.dispose();
+    });
+
+    testWidgets('voice frames go through the unlocked voice channel', (tester) async {
+      final (fake, browser) = await pumpWithBrowser(tester, FakeBrowserPlatform());
+      fake.emit({'type': 'voice_audio', 'audio': 'UklGRg=='});
+      await tester.pump();
+      expect(browser.voices, ['data:audio/wav;base64,UklGRg==']);
       fake.dispose();
     });
   });

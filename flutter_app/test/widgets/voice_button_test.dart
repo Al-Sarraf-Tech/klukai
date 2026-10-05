@@ -1,6 +1,3 @@
-@TestOn('browser')
-library;
-
 // Widget tests for VoiceButton: idle vs recording icon, enabled/disabled tap
 // gating, and tap callbacks.
 //

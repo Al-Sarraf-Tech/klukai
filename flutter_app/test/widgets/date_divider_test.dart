@@ -1,6 +1,3 @@
-@TestOn('browser')
-library;
-
 // Widget tests for DateDivider: relative date labelling.
 //
 // Imports main.dart (GFL2Colors) -> package:web, so run under chrome:

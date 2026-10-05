@@ -113,7 +113,7 @@ class ScheduleStrip extends StatelessWidget {
     if (blocks.isEmpty) {
       return Text('No schedule filed.',
           style: TextStyle(
-              color: GFL2Colors.textDim.withValues(alpha: 0.6), fontSize: 11, fontFamily: _mono));
+              color: GFL2Colors.textMuted, fontSize: 11, fontFamily: _mono));
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -146,7 +146,7 @@ class ScheduleStrip extends StatelessWidget {
             child: Text(
               b.timeRange,
               style: TextStyle(
-                color: current ? GFL2Colors.primary : GFL2Colors.textDim.withValues(alpha: 0.7),
+                color: current ? GFL2Colors.primary : GFL2Colors.textMuted,
                 fontSize: 10,
                 fontWeight: current ? FontWeight.w700 : FontWeight.w400,
                 fontFamily: _mono,
@@ -218,14 +218,14 @@ class HerDaySheet extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 outfit.sourceLine.isEmpty ? outfit.name : '${outfit.name} — ${outfit.sourceLine}',
-                style: TextStyle(color: GFL2Colors.textDim.withValues(alpha: 0.9), fontSize: 11),
+                style: TextStyle(color: GFL2Colors.textMuted, fontSize: 11),
               ),
             ],
             if (weather != null && weather.label.isNotEmpty) ...[
               const SizedBox(height: 2),
               Text(weather.label,
                   style: TextStyle(
-                      color: GFL2Colors.textDim.withValues(alpha: 0.7),
+                      color: GFL2Colors.textMuted,
                       fontSize: 10,
                       fontFamily: _mono)),
             ],

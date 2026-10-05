@@ -16,5 +16,10 @@ class GFL2Colors {
   static const success = Color(0xFF4ADE80);     // Green
   static const danger = Color(0xFFEF4444);      // Red
   static const textPrimary = Color(0xFFD4DDE6); // Light silver
-  static const textDim = Color(0xFF6B7D8D);     // Muted
+  static const textDim = Color(0xFF6B7D8D);     // Muted (decorative / large text only)
+
+  /// Secondary text that must stay readable: >= 4.5:1 (WCAG AA, small text)
+  /// on [background], [surface] and [panel]. `textDim` with alpha 0.5-0.7
+  /// measured 1.8-2.6:1 on [surface], unreadable on a phone in daylight.
+  static const textMuted = Color(0xFF8C9BAA);
 }

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../main.dart';
+import '../theme/gfl2_colors.dart';
 
 String _frameToolName(String toolName) {
   final lower = toolName.toLowerCase();
