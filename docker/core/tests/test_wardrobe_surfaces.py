@@ -18,7 +18,7 @@ from app.personality.state_blocks import build_wardrobe_block
 class TestImagePrompt:
     def test_todays_outfit_drives_the_render(self):
         prompt = build_prompt("standing on the deck", costume="cerulean_breaker")
-        assert "black bikini" in prompt and "holding surfboard" in prompt
+        assert "black bikini" in prompt and "surfboard under arm" in prompt
 
     def test_legacy_id_renders_the_canon_gown(self):
         assert "wedding dress" in build_prompt("chapel", costume="starlit_vow")

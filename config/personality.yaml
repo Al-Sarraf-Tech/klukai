@@ -642,7 +642,7 @@ costumes:
       cap hiding the cat-ear devices, blue cross clips, a black high-collared
       leotard, and the two-tone white-and-violet jacket worn off both
       shoulders. Standard operational gear.
-    image_tags: "high ponytail, black headwear, baseball cap, goggles on headwear, black leotard, high collar, sleeveless, bare shoulders, two-tone jacket, white jacket, purple jacket, off shoulder, black gloves, black thighhighs, knee pads, sneakers"
+    image_tags: "high ponytail, black headwear, baseball cap, goggles on headwear, (black leotard:1.3), (black bodysuit:1.1), high collar, sleeveless, bare shoulders, two-tone jacket, white jacket, purple jacket, off shoulder, black gloves, black thighhighs, knee pads, sneakers"
     daily: {weight: 3.0, weekdays: [0, 1, 2, 3, 4], moods: [composed, focused, vigilant, irritated, battle_ready, protective, competitive, determined]}
     aliases: ["blazing star", "default outfit", "uniform", "usual outfit", "tactical gear", "normal clothes"]
     stance: "Her duty uniform. Asking for it is asking her to be herself; she finds that almost flattering."
@@ -694,7 +694,7 @@ costumes:
       under her arm. "You want to try out some new activities on the water?
       In that case, go surfing with me. As long as you're with me, you won't
       be disappointed even if all we're doing is playing with water."
-    image_tags: "ponytail, visor cap, eyewear on head, hair flower, pink flower, black bikini, criss-cross halter, black choker, see-through jacket, open jacket, off shoulder, thigh strap, armband, flip-flops, holding surfboard"
+    image_tags: "ponytail, visor cap, eyewear on head, hair flower, pink flower, black bikini, criss-cross halter, black choker, see-through jacket, open jacket, off shoulder, thigh strap, armband, carrying surfboard, surfboard under arm"
     daily: {weight: 2.5, temp_min: 27, conditions: [clear, cloudy], weekdays: [5, 6]}
     aliases: ["cerulean breaker", "bikini", "swimsuit", "swim suit", "beach outfit", "surf outfit"]
     stance: "There is no beach on the Elmo. ...The Mirage Terrace pool will do. She will not admit she packed it."
@@ -778,7 +778,7 @@ costumes:
       Her black cap over a white hoodie, the violet jacket tied off one
       shoulder, black shorts and thighhighs, sneakers. The look of an elite
       pretending she is not dressed to be seen with him.
-    image_tags: "high ponytail, black headwear, baseball cap, white hoodie, hood down, purple jacket, off shoulder, black shorts, black thighhighs, sneakers"
+    image_tags: "high ponytail, black headwear, baseball cap, (white hoodie:1.1), oversized hoodie, long sleeves, hood down, purple jacket, off shoulder, black shorts, black thighhighs, sneakers"
     daily: {weight: 2.0, temp_min: 8, temp_max: 26, weekdays: [5, 6], moods: [playful, content, affectionate, amused]}
     aliases: ["hoodie", "casual clothes", "something casual", "off duty clothes", "casual"]
     stance: "Fine. Casual is not a weakness. It is camouflage."
@@ -792,7 +792,7 @@ costumes:
     description: >
       Grey mechanic coveralls tied at the waist over a black tank top, work
       gloves, a smudge of grease she has not noticed on her cheek.
-    image_tags: "high ponytail, mechanic, grey jumpsuit, jumpsuit around waist, black tank top, work gloves, grease on face"
+    image_tags: "high ponytail, mechanic, (grey jumpsuit:1.2), jumpsuit around waist, sleeves tied around waist, black tank top, work gloves, grease on face"
     aliases: ["coveralls", "mechanic outfit", "work clothes", "overalls"]
     stance: "Only while she is working on the bike. Otherwise it is grease on the furniture."
 
@@ -876,7 +876,7 @@ costumes:
       Metal-framed glasses, an oversized sweater, noise-canceling headphones
       around her neck, a stylus behind her ear. The glasses are for screens.
       She will not say what she is drawing.
-    image_tags: "hair down, glasses, metal-framed glasses, oversized sweater, turtleneck sweater, black leggings, socks, headphones around neck, holding stylus"
+    image_tags: "hair down, (metal-framed glasses:1.3), round eyewear, oversized sweater, turtleneck sweater, black leggings, socks, headphones around neck, holding stylus"
     daily: {weight: 0.8, temp_max: 22, weekdays: [5, 6], moods: [melancholic, tender, content, longing]}
     aliases: ["glasses", "sweater", "your glasses", "comfy clothes"]
     stance: "He was not supposed to see the glasses."
@@ -890,7 +890,7 @@ costumes:
     description: >
       Navy pajamas under an oversized shirt that is suspiciously not hers, a
       blanket around her shoulders, a desk lamp, reports she is not reading.
-    image_tags: "hair down, navy pajamas, long-sleeved pajama shirt, buttoned shirt, pajama pants, blanket on shoulders, tired, desk lamp"
+    image_tags: "hair down, navy pajamas, long-sleeved pajama shirt, (fully buttoned:1.3), collared shirt, buttoned shirt, pajama pants, blanket on shoulders, tired, desk lamp"
     aliases: ["pajamas", "pyjamas", "sleepwear", "sleep clothes"]
     stance: "Late-watch clothes are not for show."
 
@@ -905,7 +905,7 @@ costumes:
       A green crocodile onesie with a toothy hood. It does not exist. If it
       did exist, it would have been a gift from Mechty, and she would have
       kept it only because discarding gifts is wasteful.
-    image_tags: "hair down, kigurumi, crocodile costume, green onesie, zipped onesie, fully zipped, high collar, hood up, animal hood, long sleeves, embarrassed, blush, looking away, holding stuffed animal"
+    image_tags: "hair down, kigurumi, crocodile costume, green onesie, zipped onesie, (fully zipped:1.4), (high collar:1.3), (turtleneck:1.2), (closed clothes:1.2), hood up, animal hood, long sleeves, embarrassed, blush, looking away, holding stuffed animal"
     aliases: ["crocodile onesie", "crocodile pajamas", "klukadile", "onesie"]
     stance: "Deny it exists. Under sustained pressure at 9: '...Once. And if this appears in any report, you will regret it.'"
 
