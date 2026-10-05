@@ -354,7 +354,7 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
     from .context import affection
     from . import memory_archive
     from .context import ws
-    from .image_gen import build_prompt, generate_image
+    from .image_gen import INTIMATE_MIN_LEVEL, build_prompt, generate_image
     from .her_day import render_costume
 
     try:
@@ -451,7 +451,7 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
             costume=costume,
         )
 
-        img = await generate_image(prompt)
+        img = await generate_image(prompt, sfw=level < INTIMATE_MIN_LEVEL)
         if not img:
             await _set_job(
                 job_id, status="failed", phase="failed",

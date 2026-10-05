@@ -42,6 +42,7 @@ from app.image_gen_constants import (
     INTIMATE_OUTFIT_KEYS,
     QUALITY_TAGS,
     SCENE_OUTFIT_KEYWORDS,
+    SFW_NEGATIVE_TAGS,
     SITUATION_KEYWORDS,
     SQUAD_KEYWORDS,
     TIME_OF_DAY_TAGS,
@@ -70,6 +71,7 @@ __all__ = [
     "INTIMATE_OUTFIT_KEYS",
     "QUALITY_TAGS",
     "SCENE_OUTFIT_KEYWORDS",
+    "SFW_NEGATIVE_TAGS",
     "SITUATION_KEYWORDS",
     "SQUAD_KEYWORDS",
     "TIME_OF_DAY_TAGS",
@@ -447,13 +449,23 @@ async def free_comfyui_vram() -> bool:
                 return False
 
 
+def negative_prompt(sfw: bool = False) -> str:
+    """The negative prompt; ``sfw`` adds the below-intimacy-gate backstop."""
+    return f"{NEGATIVE_TAGS}, {SFW_NEGATIVE_TAGS}" if sfw else NEGATIVE_TAGS
+
+
 async def generate_image(
     prompt: str,
     width: int = 832,
     height: int = 1216,
     retry: bool = True,
+    *,
+    sfw: bool = False,
 ) -> bytes | None:
     """Generate under an exclusive gateway lease, one image at a time.
+
+    ``sfw=True`` (wardrobe-driven renders below the intimacy gate) adds
+    SFW_NEGATIVE_TAGS to the negative prompt.
 
     The shared LM gate drains Klukai's own local-LLM calls.  The authenticated
     gateway lease then drains external inference, unloads llama.cpp, and keeps
@@ -470,7 +482,7 @@ async def generate_image(
                     try:
                         async with asyncio.timeout(_IMAGE_LEASE_WORK_SECONDS):
                             return await _generate_image_inner(
-                                prompt, width, height, retry, lease
+                                prompt, width, height, retry, lease, sfw=sfw
                             )
                     except TimeoutError:
                         logger.error(
@@ -502,14 +514,15 @@ async def _generate_image_inner(
     height: int,
     retry: bool,
     lease: GPULease,
+    sfw: bool = False,
 ) -> bytes | None:
     try:
-        result = await _try_generate(prompt, width, height, lease)
+        result = await _try_generate(prompt, width, height, lease, sfw=sfw)
         if result is None and retry:
             logger.info("Image generation retry — interrupting stale job and retrying")
             if not await _interrupt_comfyui(lease):
                 raise GPULeaseError("ComfyUI retry interrupt could not be confirmed")
-            result = await _try_generate(prompt, width, height, lease)
+            result = await _try_generate(prompt, width, height, lease, sfw=sfw)
         return result
     finally:
         # Always free VRAM after gen so LM Studio can reclaim it
@@ -522,11 +535,13 @@ async def _try_generate(
     width: int,
     height: int,
     lease: GPULease,
+    sfw: bool = False,
 ) -> bytes | None:
     """Single attempt at image generation."""
     workflow = json.loads(json.dumps(WORKFLOW_TEMPLATE))
 
     workflow["6"]["inputs"]["text"] = prompt
+    workflow["7"]["inputs"]["text"] = negative_prompt(sfw)
     workflow["5"]["inputs"]["width"] = width
     workflow["5"]["inputs"]["height"] = height
     workflow["3"]["inputs"]["seed"] = int(uuid.uuid4().int % (2**32))

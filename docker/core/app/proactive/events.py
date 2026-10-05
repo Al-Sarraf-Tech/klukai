@@ -495,7 +495,7 @@ class EventsMixin(_EngineBase):
         try:
             from .. import memory_archive
             from ..her_day import render_costume
-            from ..image_gen import build_prompt, generate_image
+            from ..image_gen import INTIMATE_MIN_LEVEL, build_prompt, generate_image
 
             # She draws herself in what she has on today.
             costume = await render_costume("jalsarraf", self._affection_level)
@@ -505,7 +505,7 @@ class EventsMixin(_EngineBase):
                 mood=self._last_mood, time_of_day=_time_of_day(now.hour),
                 costume=costume,
             )
-            img = await generate_image(prompt)
+            img = await generate_image(prompt, sfw=self._affection_level < INTIMATE_MIN_LEVEL)
             if not img:
                 return
 

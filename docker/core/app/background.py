@@ -18,6 +18,7 @@ from .db import get_conn_autocommit
 from .fact_extractor import create_episode_summary, extract_facts
 from .helpers import enhance_image_prompt as _enhance_image_prompt
 from .image_gen import build_prompt, generate_image, is_couple_scene, is_landscape
+from .image_gen_constants import INTIMATE_MIN_LEVEL
 from .models import SessionState
 from .personality import load_personality
 
@@ -438,7 +439,10 @@ async def background_image_gen(
         else:
             width, height = 832, 1216
 
-        img_bytes = await generate_image(full_prompt, width=width, height=height)
+        img_bytes = await generate_image(
+            full_prompt, width=width, height=height,
+            sfw=aff_level < INTIMATE_MIN_LEVEL,
+        )
         if img_bytes:
             import base64 as b64
 

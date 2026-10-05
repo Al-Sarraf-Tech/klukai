@@ -554,7 +554,7 @@ class TestImageGen:
              patch.object(bg, "build_prompt", return_value="p"), \
              patch.object(bg, "generate_image", new=gen):
             await bg.background_image_gen("portrait of klukai", user_id="u1")
-        assert gen.await_args.kwargs == {"width": 832, "height": 1216}
+        assert gen.await_args.kwargs["width"] == 832 and gen.await_args.kwargs["height"] == 1216
 
     async def test_landscape_dimensions_swapped(self, bg_mocks):
         gen = AsyncMock(return_value=None)
@@ -565,7 +565,7 @@ class TestImageGen:
              patch.object(bg, "build_prompt", return_value="p"), \
              patch.object(bg, "generate_image", new=gen):
             await bg.background_image_gen("wide vista", user_id="u1")
-        assert gen.await_args.kwargs == {"width": 1216, "height": 832}
+        assert gen.await_args.kwargs["width"] == 1216 and gen.await_args.kwargs["height"] == 832
 
     async def test_successful_image_archived_and_sent(self, bg_mocks):
         with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
@@ -646,10 +646,11 @@ class TestImageGen:
              patch.object(bg, "is_landscape", return_value=False), \
              patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
              patch.object(bg, "build_prompt", new=build), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)):
+             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)) as gen:
             await bg.background_image_gen("draw yourself", user_id="u1")
         assert build.call_args.kwargs["costume"] == "astral_luminous"
         render.assert_awaited_once_with("u1", 8)
+        assert gen.await_args.kwargs["sfw"] is False  # at the intimacy gate
 
     async def test_no_wearable_costume_not_threaded(self, bg_mocks):
         # Gating lives in her_day.render_costume; None means keyword fallback.
@@ -661,9 +662,10 @@ class TestImageGen:
              patch.object(bg, "is_landscape", return_value=False), \
              patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
              patch.object(bg, "build_prompt", new=build), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)):
+             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)) as gen:
             await bg.background_image_gen("draw yourself", user_id="u1")
         assert build.call_args.kwargs["costume"] is None
+        assert gen.await_args.kwargs["sfw"] is True  # level 2: backstop on
 
 
 # ── background_recall ─────────────────────────────────────────────────────────

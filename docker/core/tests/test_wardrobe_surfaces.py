@@ -101,3 +101,53 @@ class TestContextBlock:
         block = self._block()
         assert "CURRENT OUTFIT: Blazing Star tactical gear." in block
         assert "command deck or private quarters depending on time" in block
+
+
+class TestSfwBackstop:
+    def test_negative_prompt(self):
+        from app.image_gen import negative_prompt
+        from app.image_gen_constants import NEGATIVE_TAGS
+
+        assert negative_prompt() == NEGATIVE_TAGS
+        sfw = negative_prompt(sfw=True)
+        assert sfw.startswith(NEGATIVE_TAGS) and "nude" in sfw and "topless" in sfw
+
+    @pytest.mark.asyncio
+    async def test_sfw_negative_reaches_the_workflow(self):
+        from unittest.mock import MagicMock
+
+        import app.image_gen as ig
+
+        captured = {}
+
+        class _Resp:
+            status_code = 500
+
+            def json(self):
+                return {}
+
+        async def post(url, json=None, **_):
+            captured["workflow"] = json
+            return _Resp()
+
+        client = MagicMock()
+        client.post = post
+        with patch.object(ig, "_get_http", return_value=client), \
+             patch.object(ig, "_lease_headers", return_value={}, create=True):
+            try:
+                await ig._try_generate("p", 832, 1216, MagicMock(), sfw=True)
+            except Exception:
+                pass
+        wf = captured.get("workflow") or {}
+        prompt = wf.get("prompt", wf)
+        assert "topless" in prompt["7"]["inputs"]["text"]
+
+    def test_originals_spell_out_their_inner_layers(self):
+        from app import wardrobe
+
+        cat = wardrobe.catalog()
+        for oid in ("winter_patrol", "red_scarf_sortie", "dress_uniform"):
+            assert "buttoned" in cat[oid].image_tags, oid
+        assert "zipped onesie" in cat["klukadile_pajamas"].image_tags
+        assert "pajama pants" in cat["sleepless_watch"].image_tags
+        assert "navel" not in KLUKAI_IDENTITY

@@ -17,7 +17,7 @@ KLUKAI_IDENTITY = (
     "1girl, hk416 \\(girls' frontline\\), silver hair, green eyes, very long hair, "
     "teardrop facial mark, cross hair ornament, girls' frontline, slim waist, athletic body, toned, slender figure, "
     "long legs, beautiful detailed eyes, light blush, detailed skin, "
-    "perfect anatomy, delicate collarbone, navel, medium breasts, elegant neck, "
+    "perfect anatomy, delicate collarbone, medium breasts, elegant neck, "
     "soft lips, detailed face, expressive eyes, eyelashes"
 )
 KLUKAI_DEFAULT_OUTFIT = "high ponytail, tactical clothes, black gloves, thighhighs, military"
@@ -260,6 +260,14 @@ NEGATIVE_TAGS = (
     "thick thighs, wide hips, chubby, plump, fat, overweight, huge breasts, "
     "androgynous, feminine boy, crossdressing, male in female clothes, "
     "flat chest, child, loli, shota"
+)
+
+# Added to the negative prompt for wardrobe-driven renders below the intimacy
+# gate (INTIMATE_MIN_LEVEL). Outfit tags that leave a layer unspecified ("open
+# coat") let the model fill it with skin; this is the backstop to the tags.
+SFW_NEGATIVE_TAGS = (
+    "nsfw, nude, naked, nipples, topless, bare breasts, breasts out, no bra, "
+    "underwear, panties, lingerie, open clothes, unbuttoned, exposed chest"
 )
 
 KLUKAI_LORA = "Klukai_GFL2_IL-03.safetensors"
