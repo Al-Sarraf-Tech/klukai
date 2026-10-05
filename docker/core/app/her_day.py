@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+import re
 from dataclasses import dataclass
 from datetime import date
 
@@ -215,3 +216,26 @@ async def render_costume(user_id: str, level: int) -> str | None:
     except Exception:
         return None
     return now.outfit.id if now.outfit.image_tags else None
+
+
+_DRINK = re.compile(
+    r"\b(?:tea|coffee|latte|espresso|cocoa|drink|something to drink|thirsty|a cup|racing calm)\b"
+)
+
+
+def tea_time_block(now: HerNow, message: str, level: int, p: dict | None = None) -> str:
+    """Per-message block when he orders a drink while she works the counter."""
+    if now.override or not now.block or now.block.id != "tea_counter":
+        return ""
+    lower = message.lower()
+    if not _DRINK.search(lower):
+        return ""
+    cfg = (load_personality() if p is None else p).get("tea_time") or {}
+    special = str(cfg.get("special", "Racing Calm"))
+    lines = [
+        f"TEA TIME: {' '.join(str(cfg.get('guidance', '')).split())}",
+        f"Your special: {special} — {' '.join(str(cfg.get('special_canon', '')).split())}",
+    ]
+    if special.lower() in lower and level >= 5:
+        lines.append(" ".join(str(cfg.get("heartfelt", "")).split()))
+    return "\n".join(line for line in lines if line.strip())

@@ -285,6 +285,9 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
                 ))
         outfit_line = her_now.outfit_line(aff_state.level)
         location_line = her_now.location_line()
+        tea_block = her_day.tea_time_block(her_now, content, aff_state.level)
+        if tea_block:
+            outfit_request_block = "\n\n".join(b for b in (outfit_request_block, tea_block) if b)
     except Exception as e:
         logger.warning("Her Day unavailable this turn: %s", e)
 

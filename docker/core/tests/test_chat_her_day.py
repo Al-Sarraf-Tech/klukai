@@ -121,3 +121,14 @@ def test_request_block_from_real_catalog_round_trip():
         occasions_today=frozenset(), hour=15,
     ))
     assert "Speed Star" in block and "you are now wearing" in block
+
+
+class TestTeaTimeInChat:
+    @pytest.mark.asyncio
+    async def test_counter_duty_serves_his_order(self):
+        block = hd.Block("midday", 12, 14, "tea_counter", "Lounge", "Tea Time counter duty")
+        now = hd.HerNow(day=date(2026, 10, 5), hour=13, outfit=w.catalog()["blazing_star"],
+                        outfit_source="auto", outfit_reason="A duty day.", location="Lounge",
+                        activity="Tea Time counter duty", block=block, blocks=[block])
+        sys_prompt, _, _, _ = await _turn("One Racing Calm, please", her_now=AsyncMock(return_value=now))
+        assert "TEA TIME:" in sys_prompt

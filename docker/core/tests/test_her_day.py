@@ -211,3 +211,38 @@ class TestRenderCostume:
     async def test_tagless_stand_in_falls_back(self, stubbed):
         with patch("app.wardrobe.lookup", return_value=w.FALLBACK):
             assert await hd.render_costume("claude", 5) is None
+
+
+class TestTeaTime:
+    def _now(self, block_id="tea_counter", override=None):
+        block = hd.Block("midday", 12, 14, block_id, "Lounge", "Tea Time counter duty")
+        return hd.HerNow(day=MONDAY, hour=13, outfit=w.FALLBACK, outfit_source="auto",
+                         outfit_reason="", location="Lounge", activity="x", block=block,
+                         blocks=[block], override=override)
+
+    def test_serves_when_he_orders(self):
+        block = hd.tea_time_block(self._now(), "Can I get a coffee?", 3)
+        assert block.startswith("TEA TIME:")
+        assert "Racing Calm" in block and "mint" in block
+        assert "made with him in mind" not in block
+
+    def test_heartfelt_when_he_orders_her_special_at_five(self):
+        assert "made with him in mind" in hd.tea_time_block(self._now(), "one Racing Calm please", 5)
+        assert "made with him in mind" not in hd.tea_time_block(self._now(), "one Racing Calm please", 4)
+
+    @pytest.mark.parametrize("now_kw,msg", [
+        ({"block_id": "hangar_afternoon"}, "coffee?"),
+        ({"override": "gaming"}, "coffee?"),
+        ({}, "how was the briefing"),
+    ])
+    def test_silent_otherwise(self, now_kw, msg):
+        assert hd.tea_time_block(self._now(**now_kw), msg, 9) == ""
+
+    def test_no_block(self):
+        now = hd.HerNow(day=MONDAY, hour=13, outfit=w.FALLBACK, outfit_source="auto",
+                        outfit_reason="", location="The Elmo", activity="", block=None, blocks=[])
+        assert hd.tea_time_block(now, "tea", 9) == ""
+
+    def test_defaults_without_config(self):
+        block = hd.tea_time_block(self._now(), "tea", 3, p={})
+        assert "Your special: Racing Calm" in block
