@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import hashlib
 import os
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 
 import httpx
 
@@ -29,6 +31,8 @@ from app.image_gen_constants import (
     COUPLE_KEYWORDS,
     COUPLE_TAGS,
     IMAGE_KEYWORDS,
+    IMG2IMG_TEMPLATE,
+    INPAINT_NODES,
     KLUKAI_DEFAULT_OUTFIT,
     KLUKAI_IDENTITY,
     KLUKAI_LORA,
@@ -58,6 +62,8 @@ __all__ = [
     "COUPLE_KEYWORDS",
     "COUPLE_TAGS",
     "IMAGE_KEYWORDS",
+    "IMG2IMG_TEMPLATE",
+    "INPAINT_NODES",
     "KLUKAI_DEFAULT_OUTFIT",
     "KLUKAI_IDENTITY",
     "KLUKAI_LORA",
@@ -82,6 +88,7 @@ __all__ = [
     "detect_squad_members",
     "free_comfyui_vram",
     "generate_image",
+    "generate_img2img",
     "is_couple_scene",
     "is_landscape",
     "is_outfit_unlocked",
@@ -270,6 +277,7 @@ def build_prompt(
     time_of_day: str | None = None,
     costume: str | None = None,
     request: str | None = None,
+    affection_tags: bool = True,
 ) -> str:
     """Build the full positive prompt with quality tags, LoRA trigger, and character identities.
 
@@ -290,11 +298,14 @@ def build_prompt(
             through to the keyword-context outfit logic.
         request: His own words for this image, when known. Only these (never
             her replies in ``context``) can make it an explicit bath/bed scene.
+        affection_tags: Inject the affection-level expression/setting tags.
+            Live Portrait turns this off: its frames set the expression
+            themselves and need a neutral, setting-free base.
     """
     parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
 
     # Add affection-aware mood tags
-    mood_tags = AFFECTION_MOOD_TAGS.get(affection_level, "")
+    mood_tags = AFFECTION_MOOD_TAGS.get(affection_level, "") if affection_tags else ""
     if mood_tags:
         parts.append(mood_tags)
 
@@ -461,16 +472,51 @@ async def generate_image(
     retry: bool = True,
     *,
     sfw: bool = False,
+    seed: int | None = None,
 ) -> bytes | None:
     """Generate under an exclusive gateway lease, one image at a time.
 
     ``sfw=True`` (wardrobe-driven renders below the intimacy gate) adds
-    SFW_NEGATIVE_TAGS to the negative prompt.
+    SFW_NEGATIVE_TAGS to the negative prompt. ``seed`` pins the sampler seed
+    (Live Portrait bases); by default every render gets a fresh one.
 
     The shared LM gate drains Klukai's own local-LLM calls.  The authenticated
     gateway lease then drains external inference, unloads llama.cpp, and keeps
     all model loads blocked for the complete ComfyUI operation.
     """
+    return await _leased(
+        lambda lease: _generate_image_inner(
+            prompt, width, height, retry, lease, sfw=sfw, seed=seed
+        )
+    )
+
+
+async def generate_img2img(
+    source_png: bytes,
+    prompt: str,
+    *,
+    denoise: float,
+    seed: int,
+    sfw: bool = False,
+    mask_png: bytes | None = None,
+) -> bytes | None:
+    """img2img from ``source_png`` under the same lease path as generate_image.
+
+    The source is uploaded through the gateway facade, encoded, and re-sampled
+    with ``denoise`` (0 = identical, 1 = ignore the source) on the same
+    checkpoint + LoRA chain. With ``mask_png`` (white = repaint) only the
+    masked region changes and everything else is the source pixel for pixel
+    (the Live Portrait expression frames).
+    """
+    return await _leased(
+        lambda lease: _img2img_inner(
+            source_png, prompt, denoise, seed, sfw, lease, mask_png=mask_png
+        )
+    )
+
+
+async def _leased(render: Callable[[GPULease], Awaitable[bytes | None]]) -> bytes | None:
+    """Run ``render`` under the image lock, LM gate and one ComfyUI GPU lease."""
     async with _image_gen_lock:
         # Lazy import avoids coupling image prompt helpers to the LLM router at
         # module import time.
@@ -481,9 +527,7 @@ async def generate_image(
                 async with gpu_lease("comfyui") as lease:
                     try:
                         async with asyncio.timeout(_IMAGE_LEASE_WORK_SECONDS):
-                            return await _generate_image_inner(
-                                prompt, width, height, retry, lease, sfw=sfw
-                            )
+                            return await render(lease)
                     except TimeoutError:
                         logger.error(
                             "Image generation exceeded the bounded GPU lease window"
@@ -515,19 +559,79 @@ async def _generate_image_inner(
     retry: bool,
     lease: GPULease,
     sfw: bool = False,
+    seed: int | None = None,
 ) -> bytes | None:
     try:
-        result = await _try_generate(prompt, width, height, lease, sfw=sfw)
+        result = await _try_generate(prompt, width, height, lease, sfw=sfw, seed=seed)
         if result is None and retry:
             logger.info("Image generation retry — interrupting stale job and retrying")
             if not await _interrupt_comfyui(lease):
                 raise GPULeaseError("ComfyUI retry interrupt could not be confirmed")
-            result = await _try_generate(prompt, width, height, lease, sfw=sfw)
+            result = await _try_generate(prompt, width, height, lease, sfw=sfw, seed=seed)
         return result
     finally:
         # Always free VRAM after gen so LM Studio can reclaim it
         if not await _free_comfyui_vram(lease):
             raise GPULeaseError("ComfyUI VRAM cleanup could not be confirmed")
+
+
+async def _img2img_inner(
+    source_png: bytes,
+    prompt: str,
+    denoise: float,
+    seed: int,
+    sfw: bool,
+    lease: GPULease,
+    mask_png: bytes | None = None,
+) -> bytes | None:
+    """Upload the source (and mask), then one img2img attempt; VRAM is always freed."""
+    try:
+        name = await _upload_image(source_png, lease)
+        if name is None:
+            return None
+        workflow = json.loads(json.dumps(IMG2IMG_TEMPLATE))
+        if mask_png is not None:
+            mask_name = await _upload_image(mask_png, lease)
+            if mask_name is None:
+                return None
+            workflow.update(json.loads(json.dumps(INPAINT_NODES)))
+            workflow["13"]["inputs"]["image"] = mask_name
+            workflow["3"]["inputs"]["latent_image"] = ["14", 0]
+            workflow["3"]["inputs"]["model"] = ["16", 0]
+            workflow["9"]["inputs"]["images"] = ["15", 0]
+        workflow["6"]["inputs"]["text"] = prompt
+        workflow["7"]["inputs"]["text"] = negative_prompt(sfw)
+        workflow["11"]["inputs"]["image"] = name
+        workflow["3"]["inputs"]["seed"] = int(seed) % (2**32)
+        workflow["3"]["inputs"]["denoise"] = max(0.0, min(1.0, float(denoise)))
+        return await _run_workflow(workflow, lease)
+    finally:
+        if not await _free_comfyui_vram(lease):
+            raise GPULeaseError("ComfyUI VRAM cleanup could not be confirmed")
+
+
+async def _upload_image(png: bytes, lease: GPULease) -> str | None:
+    """Upload a source image to ComfyUI's input folder; returns its LoadImage name."""
+    try:
+        client = _get_http()
+        r = await client.post(
+            f"{COMFYUI_URL}/upload/image",
+            headers=gpu_lease_auth_headers(lease),
+            # Content-addressed name + overwrite: re-uploading the same base or
+            # mask reuses one input file instead of piling up copies.
+            files={"image": (f"klukai_src_{hashlib.sha256(png).hexdigest()[:16]}.png", png, "image/png")},
+            data={"type": "input", "overwrite": "true"},
+        )
+        if r.status_code != 200:
+            logger.error("ComfyUI upload failed: HTTP %s", r.status_code)
+            return None
+        data = r.json()
+        name = str(data.get("name") or "")
+        sub = str(data.get("subfolder") or "")
+        return (f"{sub}/{name}" if sub else name) or None
+    except Exception as e:
+        logger.error("ComfyUI upload failed: %s", e)
+        return None
 
 
 async def _try_generate(
@@ -536,6 +640,7 @@ async def _try_generate(
     height: int,
     lease: GPULease,
     sfw: bool = False,
+    seed: int | None = None,
 ) -> bytes | None:
     """Single attempt at image generation."""
     workflow = json.loads(json.dumps(WORKFLOW_TEMPLATE))
@@ -544,8 +649,14 @@ async def _try_generate(
     workflow["7"]["inputs"]["text"] = negative_prompt(sfw)
     workflow["5"]["inputs"]["width"] = width
     workflow["5"]["inputs"]["height"] = height
-    workflow["3"]["inputs"]["seed"] = int(uuid.uuid4().int % (2**32))
+    workflow["3"]["inputs"]["seed"] = (
+        int(seed) % (2**32) if seed is not None else int(uuid.uuid4().int % (2**32))
+    )
+    return await _run_workflow(workflow, lease)
 
+
+async def _run_workflow(workflow: dict, lease: GPULease) -> bytes | None:
+    """Queue ``workflow``, poll its history, and fetch the first output image."""
     try:
         client = _get_http()
         r = await client.post(
