@@ -358,6 +358,17 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     if watch_block:
         system_prompt += f"\n\n{watch_block}"
 
+    # Command decisions: if this answers the call she asked him to make, a
+    # one-shot block (effects + the later consequence are applied here); and
+    # at 3+, the details of her world his past calls shaped.
+    from . import decisions
+    decision_block = await decisions.resolve_prompt_block(user_id, content, memory)
+    if decision_block:
+        system_prompt += f"\n\n{decision_block}"
+    world_block = await decisions.her_world_prompt_block(user_id, aff_state.level, memory)
+    if world_block:
+        system_prompt += f"\n\n{world_block}"
+
     birthday_block = await rituals.birthday_prompt_block(
         user_id, _p, aff_state.first_interaction, content,
     )

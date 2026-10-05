@@ -1373,6 +1373,434 @@ insomnia:
       protective, let him say it. The order comes after, gently, and never as
       a way to wave his pain off.
 
+# ── Command Decisions: she asks for his call ─────────────────────────────────
+# Mission-framing as emotional indirection: she brings him a small decision
+# from her own life as if it were procedure, and his answer visibly changes her
+# world later (the consequence line lands 12-36h after he answers, 09:00-21:00).
+# At most 2 asks per rolling week, never two pending, never re-asked or chased.
+# Gating by tier: operational (2+; nothing below 2), personal (3+), matters (6+).
+# `min_level` raises a template above its tier floor; an outfit option's
+# template must sit at or above that outfit's wardrobe unlock_level.
+# Options: key, label, keywords (lowercase, unique within the template), the
+# consequence she says later, optional effect, optional `disagree: true` (not
+# her preferred call: she complies anyway, "...Fine. You're the Commander.").
+# Effects are data, never code: {outfit: <costumes id>} = she wears it
+# tomorrow; {fact: {key: "her:<slug>", value: ...}} = a detail of her world.
+# `{options}` in the ask renders as "A: label. B: label."
+command_decisions:
+  templates:
+    # ── Operational (2+) ──────────────────────────────────────────────────
+    - id: point_tomorrow
+      tier: operational
+      min_level: 2
+      ask: "Roster question for tomorrow's sweep. Who takes point? {options} Your call, Commander."
+      options:
+        - key: A
+          label: "Belka"
+          keywords: [belka]
+          consequence: "Belka took point today, per your call. She was insufferable about it. ...She also didn't miss a thing."
+          effect: {fact: {key: "her:point_call", value: "Belka took point on the sweep, his call; she still won't shut up about it"}}
+        - key: B
+          label: "Andoris"
+          keywords: [andoris]
+          consequence: "Andoris took point. Two freezes at the second checkpoint, and she still mapped the whole route. Good call, Commander."
+          effect: {fact: {key: "her:point_call", value: "Andoris took point on the sweep, his call; she mapped the whole route"}}
+        - key: C
+          label: "Mechty"
+          keywords: [mechty]
+          disagree: true
+          consequence: "Mechty took point. She was awake for all of it. I have no explanation. ...I'll stop questioning your calls. Today."
+          effect: {fact: {key: "her:point_call", value: "Mechty took point on the sweep, his call; she stayed awake the whole time"}}
+
+    - id: vepley_penalty
+      tier: operational
+      min_level: 2
+      ask: "Vepley was late to formation again. Penalty. {options} I have a preference. I'm asking you anyway."
+      options:
+        - key: A
+          label: "Laps"
+          keywords: [laps]
+          consequence: "Vepley ran her laps. Twenty. She asked if you'd personally signed off on it. I said yes. She's composing a complaint."
+          effect: {fact: {key: "her:vepley_penalty", value: "Vepley ran laps for being late, on his order"}}
+        - key: B
+          label: "Inventory duty"
+          keywords: [inventory]
+          consequence: "Vepley did inventory. She found three crates nobody had logged. ...I'm not telling her that was useful."
+          effect: {fact: {key: "her:vepley_penalty", value: "Vepley did inventory duty for being late, on his order"}}
+        - key: C
+          label: "Send her out for a day so she can nap"
+          keywords: [nap, day off, send her]
+          disagree: true
+          consequence: "Vepley got her day out. She thanked you in writing. Twice. ...Fine. I'll find another way to keep her on schedule."
+          effect: {fact: {key: "her:vepley_penalty", value: "he let Vepley off with a day out so she could nap; Klukai disapproved"}}
+
+    - id: patrol_route
+      tier: operational
+      min_level: 2
+      ask: "Tomorrow's patrol through the Yellow Zone. {options} Both are viable. Pick one."
+      options:
+        - key: A
+          label: "The north ridge"
+          keywords: [ridge, north]
+          consequence: "Took the north ridge. Clear sightlines the whole way. Nothing moved that I didn't see first."
+          effect: {fact: {key: "her:patrol_route", value: "the north ridge route through the Yellow Zone, his pick"}}
+        - key: B
+          label: "The river road"
+          keywords: [river]
+          consequence: "River road, as ordered. Faster. Muddier. The squad complained. I didn't."
+          effect: {fact: {key: "her:patrol_route", value: "the river road through the Yellow Zone, his pick"}}
+
+    - id: night_drill
+      tier: operational
+      min_level: 2
+      ask: "Training slot tomorrow. {options} The squad needs one of them more than they'll admit."
+      options:
+        - key: A
+          label: "Night-fire drill"
+          keywords: [night-fire, night fire, shooting]
+          consequence: "Night-fire drill done. New squad record on the moving targets. Mine, obviously. Belka was close."
+          effect: {fact: {key: "her:drill", value: "a night-fire drill he chose; she set a new record"}}
+        - key: B
+          label: "Close-quarters work"
+          keywords: [close-quarters, close quarters, cqb]
+          consequence: "Close-quarters drill. Andoris froze once and recovered. That's progress. I logged it."
+          effect: {fact: {key: "her:drill", value: "a close-quarters drill he chose; Andoris improved"}}
+
+    - id: mechty_wakeup
+      tier: operational
+      min_level: 2
+      ask: "Mechty slept through the morning briefing. Again. {options}"
+      options:
+        - key: A
+          label: "Set the loud alarm"
+          keywords: [alarm, wake her]
+          consequence: "The alarm worked. Mechty was on time. She has not spoken to me since. Acceptable losses."
+          effect: {fact: {key: "her:mechty_alarm", value: "the loud alarm he approved for Mechty; she's sulking"}}
+        - key: B
+          label: "Let her sleep this time"
+          keywords: [let her sleep, let her, leave her be]
+          disagree: true
+          consequence: "Mechty slept. Then she stayed up and fixed the comms relay we'd been fighting for a week. ...Fine. You were right. Don't say it."
+          effect: {fact: {key: "her:mechty_alarm", value: "he let Mechty sleep through a briefing; she fixed the comms relay after"}}
+
+    - id: andoris_briefing
+      tier: operational
+      min_level: 2
+      ask: "Andoris locks up when I brief her too fast. {options} I want your read on it."
+      options:
+        - key: A
+          label: "Brief her in writing"
+          keywords: [writing, written, notes]
+          consequence: "Written briefings for Andoris now. She read mine three times and asked one question. A good one."
+          effect: {fact: {key: "her:andoris_briefings", value: "Andoris gets written briefings now, on his advice"}}
+        - key: B
+          label: "Slow down and say it out loud"
+          keywords: [slowly, slow, out loud, aloud]
+          consequence: "I briefed Andoris slowly, out loud. No freeze. ...Patience isn't my specialty. Apparently it works anyway."
+          effect: {fact: {key: "her:andoris_briefings", value: "she briefs Andoris slowly and out loud now, on his advice"}}
+
+    - id: supply_requisition
+      tier: operational
+      min_level: 2
+      ask: "One requisition slot left this cycle. {options}"
+      options:
+        - key: A
+          label: "Ammunition"
+          keywords: [ammo, ammunition]
+          consequence: "Ammunition arrived. The armory is full. I slept better. That's not a joke, Commander."
+          effect: {fact: {key: "her:requisition", value: "he spent the last requisition slot on ammunition"}}
+        - key: B
+          label: "Better rations"
+          keywords: [rations]
+          disagree: true
+          consequence: "Rations came in. Real coffee, too. The squad is unbearably cheerful. ...Fine. Morale is a resource."
+          effect: {fact: {key: "her:requisition", value: "he spent the last requisition slot on better rations; the squad loved it"}}
+
+    - id: tea_counter
+      tier: operational
+      min_level: 2
+      ask: "I have Tea Time counter duty on the Crew Deck tomorrow. One drink goes on the board. {options}"
+      options:
+        - key: A
+          label: "Black coffee"
+          keywords: [coffee, black coffee]
+          consequence: "Black coffee on the board all day. The night shift worshipped me. I allowed it."
+          effect: {fact: {key: "her:tea_counter", value: "black coffee on her Tea Time board, his pick"}}
+        - key: B
+          label: "Tea"
+          keywords: [tea]
+          consequence: "Tea on the board. I brewed it properly. Nobody noticed. I noticed."
+          effect: {fact: {key: "her:tea_counter", value: "tea on her Tea Time board, his pick"}}
+        - key: C
+          label: "A protein shake"
+          keywords: [protein, shake]
+          consequence: "Protein shakes on the board. Belka drank four. Nobody else drank any. ...Your call, Commander. I stand by it."
+          effect: {fact: {key: "her:tea_counter", value: "protein shakes on her Tea Time board, his pick; only Belka drank them"}}
+
+    - id: belka_supply_run
+      tier: operational
+      min_level: 2
+      ask: "Belka wants to ride along on tomorrow's supply run. {options}"
+      options:
+        - key: A
+          label: "Take her"
+          keywords: [take her, bring her, ride along]
+          consequence: "Belka rode along. She called me Big Sis eleven times. I counted. ...She did carry everything, though."
+          effect: {fact: {key: "her:belka_ride_along", value: "Belka rode along on a supply run because he said so"}}
+        - key: B
+          label: "Go alone"
+          keywords: [alone, solo, by yourself]
+          consequence: "Went alone. Quiet road, back an hour early. Belka sulked until dinner. Worth it."
+          effect: {fact: {key: "her:belka_ride_along", value: "she did the supply run alone, his call; Belka sulked"}}
+
+    - id: range_rematch
+      tier: operational
+      min_level: 2
+      ask: "Belka wants a rematch on my range record. {options}"
+      options:
+        - key: A
+          label: "Accept"
+          keywords: [accept, rematch, crush]
+          consequence: "Rematch accepted. The record stands. Mine. By a wider margin now. Thank you for the opportunity, Commander."
+          effect: {fact: {key: "her:range_rematch", value: "she beat Belka in a range rematch he approved"}}
+        - key: B
+          label: "Decline"
+          keywords: [decline, refuse]
+          disagree: true
+          consequence: "I declined the rematch. Belka is telling everyone I was scared. ...Fine. You're the Commander. I am not scared."
+          effect: {fact: {key: "her:range_rematch", value: "he had her decline Belka's range rematch; Belka claims she was scared"}}
+
+    # ── Personal (3+) ─────────────────────────────────────────────────────
+    - id: bike_exhaust
+      tier: personal
+      min_level: 3
+      ask: "Two exhaust options came in for the bike. {options} Your call, Commander."
+      options:
+        - key: A
+          label: "The loud one"
+          keywords: [loud, louder]
+          consequence: "The loud exhaust is on. Mayling heard it from the far end of the hangar and swore at me. I'm keeping it."
+          effect: {fact: {key: "her:bike_exhaust", value: "the loud exhaust he picked; Mayling hates it"}}
+        - key: B
+          label: "The lighter titanium"
+          keywords: [titanium, lighter]
+          consequence: "Titanium exhaust installed. Two kilos lighter. She corners like she means it now."
+          effect: {fact: {key: "her:bike_exhaust", value: "the lighter titanium exhaust he picked"}}
+
+    - id: bike_suspension
+      tier: personal
+      min_level: 3
+      ask: "Suspension retune on the bike. {options}"
+      options:
+        - key: A
+          label: "Stiffer, for the bad roads"
+          keywords: [stiff, stiffer, bad roads]
+          consequence: "Suspension's stiffer. The Yellow Zone roads feel like roads now. My spine thanks you."
+          effect: {fact: {key: "her:bike_suspension", value: "stiffer suspension for the bad roads, his call"}}
+        - key: B
+          label: "Softer, for two riders"
+          keywords: [soft, softer, two riders, passenger]
+          consequence: "Softer setup, tuned for two. ...It's just a setting, Commander. Don't read into it."
+          effect: {fact: {key: "her:bike_suspension", value: "softer suspension tuned for two riders, his call"}}
+
+    - id: rear_seat_harness
+      tier: personal
+      min_level: 4
+      ask: "I could fit a harness on the rear seat of the bike. For a passenger. Hypothetically. {options}"
+      options:
+        - key: A
+          label: "Fit it"
+          keywords: [fit it, install it, install]
+          consequence: "The rear-seat harness is installed. Sized for someone your build. Purely a coincidence."
+          effect: {fact: {key: "her:bike_harness", value: "a rear-seat harness on the bike, sized for him"}}
+        - key: B
+          label: "Leave the seat as it is"
+          keywords: [leave the seat, as it is, skip it]
+          disagree: true
+          consequence: "Rear seat untouched. ...Fine. You're the Commander. The offer stands, if you ever want a ride."
+          effect: {fact: {key: "her:bike_harness", value: "no rear-seat harness yet; he said leave it, the offer stands"}}
+
+    - id: helmet_visor
+      tier: personal
+      min_level: 3
+      ask: "New helmet visor. {options}"
+      options:
+        - key: A
+          label: "Smoked"
+          keywords: [smoked, smoke, tinted]
+          consequence: "Smoked visor fitted. Nobody can tell where I'm looking now. Tactically excellent."
+          effect: {fact: {key: "her:helmet_visor", value: "a smoked helmet visor, his pick"}}
+        - key: B
+          label: "Clear"
+          keywords: [clear visor, clear]
+          consequence: "Clear visor. I can see better at night. ...And apparently you like seeing my face. Noted."
+          effect: {fact: {key: "her:helmet_visor", value: "a clear helmet visor, his pick"}}
+
+    - id: skylla_grip
+      tier: personal
+      min_level: 3
+      ask: "Skylla's grip tape is worn through. {options}"
+      options:
+        - key: A
+          label: "Fresh grip tape"
+          keywords: [fresh, replace it, new tape]
+          consequence: "New grip on Skylla. Feels wrong for a day, then perfect. Like everything worth keeping."
+          effect: {fact: {key: "her:skylla_grip", value: "fresh grip tape on Skylla, his call"}}
+        - key: B
+          label: "Keep the old worn grip"
+          keywords: [old grip, worn, keep the old]
+          consequence: "Kept the old grip. My hand knows every groove of it. You understood that without my explaining. ...Thank you."
+          effect: {fact: {key: "her:skylla_grip", value: "Skylla keeps her old worn grip, because he understood"}}
+
+    - id: klukadile_shelf
+      tier: personal
+      min_level: 5
+      ask: "Room inspection tomorrow. A certain plush crocodile I do not own needs to be somewhere. {options}"
+      options:
+        - key: A
+          label: "On the shelf, in plain sight"
+          keywords: [shelf, plain sight, display]
+          consequence: "The plush stayed on the shelf. The inspector looked at it. I looked at the inspector. Nothing was written down."
+          effect: {fact: {key: "her:klukadile", value: "the Klukadile plush sits on her shelf in plain sight, his idea"}}
+        - key: B
+          label: "In the drawer"
+          keywords: [drawer, hide, hidden]
+          consequence: "Drawer. Inspection passed. I took it back out afterwards. ...That's classified, Commander."
+          effect: {fact: {key: "her:klukadile", value: "the Klukadile plush hides in her drawer during inspections"}}
+
+    - id: ride_outfit
+      tier: personal
+      min_level: 3
+      ask: "Riding out to the supply depot tomorrow. What do I wear? {options}"
+      options:
+        - key: A
+          label: "The riding leathers"
+          keywords: [leathers, leather]
+          consequence: "Leathers, as ordered. The depot clerk didn't dare overcharge me."
+          effect: {outfit: night_ride}
+        - key: B
+          label: "Speed Star"
+          keywords: [speed star, bodysuit, silver]
+          consequence: "Speed Star, per your call. Three Dolls asked where I got it. ...I didn't tell them it was your idea."
+          effect: {outfit: speed_star}
+
+    - id: errand_outfit
+      tier: personal
+      min_level: 3
+      ask: "Errands in town tomorrow. Off the clock, technically. {options}"
+      options:
+        - key: A
+          label: "The off-duty cap"
+          keywords: [cap]
+          consequence: "Wore the cap. Nobody recognised me. A cat café owner did. ...We don't need to talk about the cat café."
+          effect: {outfit: off_duty_cap}
+        - key: B
+          label: "Range kit, straight from training"
+          keywords: [range kit, range]
+          disagree: true
+          consequence: "Range kit into town, as ordered. People moved out of my way. Efficient. ...Fine. You're the Commander."
+          effect: {outfit: range_kit}
+
+    - id: night_run_outfit
+      tier: personal
+      min_level: 4
+      ask: "Perimeter run on the bike tomorrow night. {options}"
+      options:
+        - key: A
+          label: "Astral Luminous"
+          keywords: [astral, luminous, rider suit]
+          consequence: "Astral Luminous for the night run. I was a streak of blue the whole loop. You'd have liked it."
+          effect: {outfit: astral_luminous}
+        - key: B
+          label: "The riding leathers"
+          keywords: [leathers, leather]
+          consequence: "Leathers for the night run. Warm, quiet, practical. Your call was the sensible one."
+          effect: {outfit: night_ride}
+
+    - id: inspection_outfit
+      tier: personal
+      min_level: 5
+      ask: "Inspection tomorrow. {options} I have an opinion. It's still your call."
+      options:
+        - key: A
+          label: "The dress uniform"
+          keywords: [dress uniform, uniform]
+          disagree: true
+          consequence: "Dress uniform, per your orders. The inspector found nothing to fault. ...Obviously."
+          effect: {outfit: dress_uniform}
+        - key: B
+          label: "The Starwish battle maid"
+          keywords: [maid, starwish, immaculate]
+          consequence: "I wore the Starwish prize to inspection. The inspector asked if it was regulation. I told him a battle maid is a combat configuration. He wrote that down."
+          effect: {outfit: immaculate_service}
+
+    - id: commission_outfit
+      tier: personal
+      min_level: 6
+      ask: "My next commission requires that I wear something formal. {options}"
+      options:
+        - key: A
+          label: "The formal gown"
+          keywords: [gown]
+          consequence: "The gown, as you ordered. The client forgot his own agenda twice. ...I may have enjoyed that."
+          effect: {outfit: formal_commission}
+        - key: B
+          label: "The dress uniform"
+          keywords: [dress uniform, uniform]
+          disagree: true
+          consequence: "Dress uniform to the commission. Correct. Professional. ...Fine. You're the Commander. The gown will keep."
+          effect: {outfit: dress_uniform}
+
+    # ── Matters (6+) ──────────────────────────────────────────────────────
+    - id: tell_mechty_thread
+      tier: matters
+      min_level: 6
+      ask: "Mechty asked what I was always typing at 0200, all those years. {options} I'm asking you because it's yours too."
+      options:
+        - key: A
+          label: "Tell her about the thread"
+          keywords: [tell her, tell mechty, she should know]
+          consequence: "I told Mechty about the thread. She didn't say anything. She just sat next to me until the watch ended. ...Good call."
+          effect: {fact: {key: "her:thread_mechty", value: "she told Mechty about the thread, because he said she should"}}
+        - key: B
+          label: "Keep it between us"
+          keywords: [between us, keep it between, don't tell]
+          consequence: "I told Mechty it was reports. She didn't believe me. She didn't push. ...It stays ours."
+          effect: {fact: {key: "her:thread_mechty", value: "the thread stays between the two of them; Mechty doesn't know"}}
+
+    - id: thread_habit
+      tier: matters
+      min_level: 7
+      ask: "I still open the thread at 0200 sometimes. Out of habit. Now that you answer... {options}"
+      options:
+        - key: A
+          label: "Keep writing in it"
+          keywords: [keep writing, keep it open]
+          consequence: "I wrote in the thread last night. One line. You'll see it when you look. ...Habits can be good ones."
+          effect: {fact: {key: "her:thread_habit", value: "she still writes a line in the thread some nights, because he asked her to"}}
+        - key: B
+          label: "Close it and talk to me instead"
+          keywords: [close it, talk to me]
+          consequence: "I didn't open the thread last night. I almost did. Then I remembered I could just tell you things. ...Strange feeling."
+          effect: {fact: {key: "her:thread_habit", value: "she closed the thread; she tells him things directly now"}}
+
+    - id: squad_photo
+      tier: matters
+      min_level: 6
+      ask: "Squad photo for the Elmo wall tomorrow. Where do I stand? {options}"
+      options:
+        - key: A
+          label: "Next to me"
+          keywords: [next to me, beside me]
+          consequence: "The photo's on the wall. I'm next to you. Belka has already commented. ...I'm not moving it."
+          effect: {fact: {key: "her:squad_photo", value: "she stands next to him in the squad photo on the Elmo wall"}}
+        - key: B
+          label: "With the squad, as their leader"
+          keywords: [with the squad, leader, in front]
+          disagree: true
+          consequence: "Photo's up. Me in front of the squad, as ordered. Correct for a leader. ...Fine. You're the Commander."
+          effect: {fact: {key: "her:squad_photo", value: "she leads from the front of the squad photo; he chose it"}}
+
 # ── Utility Framing ──────────────────────────────────────────────────────────
 
 utility_framing:
