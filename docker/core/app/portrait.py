@@ -139,6 +139,34 @@ QUIET_MAX_WAIT_S = 30 * 60  # then give up; the next GET re-enqueues
 FAILURE_BACKOFF_S = 300
 SIGN_BUCKET_S = 900         # frame URLs are stable for a bucket, valid 15-30 min
 
+# ── Pipeline speed ───────────────────────────────────────────────────────────
+# The whole set is one GPU lease and one model load: the base, then every
+# missing expression as ONE ComfyUI graph that inpaints an upscaled crop of
+# her head, composited back here at full resolution through the feathered
+# mask (so nothing outside the mask changes). Measured live before the
+# sampler change: base visible ~7.5 s, full set 18-19 s (was ~80 s).
+#   sampler  the model's own (WORKFLOW_TEMPLATE: euler / normal / CFG 4.5)
+#   steps    base 20 (template default is 24; cut for a faster first frame),
+#            inpaint 12 on the crop. Not yet re-checked live with euler/CFG 4.5.
+#   crop     3.4 eye-distances square around the face, sampled at 576 px;
+#            a 2.6x crop at 640 px lacked context (red smears, odd pupils)
+#   blink    verified (her green irises must be gone) and re-rolled with a
+#            new seed and +0.06 denoise, up to twice
+BASE_STEPS = 20
+INPAINT_STEPS = 12
+CROP_PX = 576
+CROP_SIDE_D = 3.4     # crop side, in eye distances
+CROP_CENTER_DY = 0.3  # crop centre sits this far below the eye line
+# Her identity tags ("green eyes, beautiful detailed eyes, expressive eyes")
+# pull the blink back open; this branch-only negative counters them.
+FRAME_NEGATIVES = {"blink": "(open eyes:1.3), green eyes, pupils, looking at viewer"}
+BLINK_RETRY_DENOISE = 0.06  # a rejected blink is re-rolled at +0.06 denoise (0.85 → 0.91 → 0.97)
+BLINK_OPEN_RATIO = 0.25  # a blink keeping >25% of the base's iris pixels didn't close
+BLINK_MIN_IRIS = 40      # fewer iris pixels than this in the base: can't judge, accept
+
+# Idle backfill of the other unlocked outfits (opt-in: PORTRAIT_BACKFILL=1).
+BACKFILL_SILENCE_S = 30 * 60
+
 _SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 _inflight: dict[str, asyncio.Task] = {}
@@ -374,55 +402,136 @@ def _backing_off(key: str) -> bool:
     return True
 
 
-async def _chain(user_id: str, outfit_id: str, level: int) -> bool:
-    """Render whatever is missing: base first, then each expression frame,
-    one image (one GPU lease) at a time. True when the set is complete."""
+def face_box(face: Face, size: tuple[int, int]) -> tuple[int, int, int, int]:
+    """The square head crop (clamped inside the image) the expressions inpaint."""
+    w, h = size
+    side = int(min(CROP_SIDE_D * face.d, w, h))
+    x0 = int(max(0, min(w - side, face.mid_x - side / 2)))
+    y0 = int(max(0, min(h - side, face.eye_y + CROP_CENTER_DY * face.d - side / 2)))
+    return x0, y0, x0 + side, y0 + side
+
+
+def _png(img: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _iris_pixels(img: Image.Image, mask: Image.Image) -> int:
+    """Green-iris pixels under the white of ``mask`` (half resolution)."""
+    box = mask.getbbox()
+    if box is None:
+        return 0
+    small = (max(1, (box[2] - box[0]) // 2), max(1, (box[3] - box[1]) // 2))
+    rgb = img.convert("RGB").crop(box).resize(small).tobytes()
+    m = mask.crop(box).resize(small).tobytes()
+    count = 0
+    for i, weight in enumerate(m):
+        if weight >= 128:
+            hue, sat, val = rgb_to_hsv(rgb[3 * i] / 255, rgb[3 * i + 1] / 255, rgb[3 * i + 2] / 255)
+            if 0.13 <= hue <= 0.45 and sat >= 0.45 and val >= 0.35:
+                count += 1
+    return count
+
+
+class _SetPlan:
+    """One set's geometry: where the face is, the crop, and each frame's mask."""
+
+    def __init__(self, user_id: str, outfit_id: str, level: int, frames: list[str]):
+        self.user_id, self.outfit_id, self.level, self.frames = user_id, outfit_id, level, frames
+        self.base: Image.Image | None = None
+        self.box = (0, 0, 1, 1)
+        self.masks: dict[str, Image.Image] = {}
+
+    async def __call__(self, base_png: bytes) -> tuple[bytes, list]:
+        return await asyncio.to_thread(self._plan, base_png)
+
+    def _plan(self, base_png: bytes) -> tuple[bytes, list]:
+        from .image_gen import InpaintBranch
+
+        self.base = Image.open(io.BytesIO(base_png)).convert("RGB")
+        face = locate_face(base_png)
+        self.box = face_box(face, self.base.size)
+        branches = []
+        for frame in self.frames:
+            mask = Image.open(io.BytesIO(frame_mask(self.base.size, face, frame))).convert("L")
+            self.masks[frame] = mask
+            crop_mask = mask.crop(self.box).resize((CROP_PX, CROP_PX), Image.Resampling.LANCZOS)
+            branches.append(InpaintBranch(
+                frame, portrait_prompt(self.outfit_id, self.level, frame),
+                EXPRESSIONS[frame][1], _png(crop_mask), FRAME_NEGATIVES.get(frame, ""),
+            ))
+        source = self.base.crop(self.box).resize((CROP_PX, CROP_PX), Image.Resampling.LANCZOS)
+        return _png(source), branches
+
+    def composite(self, frame: str, crop_png: bytes) -> Image.Image:
+        """Lay an inpainted crop back on the base: only the mask's white changes."""
+        assert self.base is not None
+        x0, y0, x1, y1 = self.box
+        with Image.open(io.BytesIO(crop_png)) as raw:
+            painted = raw.convert("RGB").resize((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
+        region = Image.composite(painted, self.base.crop(self.box), self.masks[frame].crop(self.box))
+        full = self.base.copy()
+        full.paste(region, (x0, y0))
+        return full
+
+    def accept(self, frame: str, crop_png: bytes) -> bool:
+        """Blink must actually close her eyes; every other frame is taken as is."""
+        if frame != "blink" or self.base is None:
+            return True
+        before = _iris_pixels(self.base, self.masks[frame])
+        if before < BLINK_MIN_IRIS:
+            return True
+        after = _iris_pixels(self.composite(frame, crop_png), self.masks[frame])
+        return after <= BLINK_OPEN_RATIO * before
+
+
+async def _chain(user_id: str, outfit_id: str, level: int, delay_s: float = 0) -> bool:
+    """Render whatever is missing as ONE leased set: the base (unless it is
+    already on disk), then every missing expression in a single graph. Each
+    image is written the moment it lands. True when the set is complete."""
     key = _key(user_id, outfit_id)
     try:
-        await asyncio.sleep(START_DELAY_S)
+        await asyncio.sleep(delay_s)
         from . import image_gen
 
-        sfw = level < image_gen.INTIMATE_MIN_LEVEL
-        seed = portrait_seed(user_id, outfit_id)
         source = frame_dir(user_id, outfit_id) / SOURCE_NAME
         have = existing_frames(user_id, outfit_id)
-        if source.is_file() and "base" in have:
-            base = source.read_bytes()
-        else:
+        base_png = source.read_bytes() if source.is_file() and "base" in have else None
+        if base_png is None:
             have = set()  # frames made from a lost base no longer match it
-            if not await _clear_to_render():
-                return False
-            rendered = await image_gen.generate_image(
-                portrait_prompt(outfit_id, level, "base"),
-                width=WIDTH, height=HEIGHT, sfw=sfw, seed=seed,
-                negative_extra=PALETTE_NEGATIVE,
-            )
-            if not rendered:
-                return _fail(key)
-            base = rendered
-            _write_atomic(source, base)
-            _write_atomic(frame_file(user_id, outfit_id, "base"), await asyncio.to_thread(_to_webp, base))
+        missing = [f for f in EXPRESSIONS if f not in have]
+        if base_png is not None and not missing:
+            return True
+        if not await _clear_to_render():
+            return False
 
-        face: Face | None = None
-        for frame, (_tags, denoise) in EXPRESSIONS.items():
-            if frame in have:
-                continue
-            await asyncio.sleep(0)  # yield between frames
-            if not await _clear_to_render():
-                return False
-            if face is None:
-                face = await asyncio.to_thread(locate_face, base)
-            with Image.open(io.BytesIO(base)) as src:
-                size = src.size
-            img = await image_gen.generate_img2img(
-                base, portrait_prompt(outfit_id, level, frame),
-                denoise=denoise, seed=seed, sfw=sfw,
-                mask_png=await asyncio.to_thread(frame_mask, size, face, frame),
-                negative_extra=PALETTE_NEGATIVE,
-            )
-            if not img:
-                return _fail(key)
-            _write_atomic(frame_file(user_id, outfit_id, frame), await asyncio.to_thread(_to_webp, img))
+        plan = _SetPlan(user_id, outfit_id, level, missing)
+        writes: list[asyncio.Task] = []
+
+        def _write_frame(name: str, png: bytes) -> None:
+            full = plan.composite(name, png)
+            _write_atomic(frame_file(user_id, outfit_id, name), _to_webp(_png(full)))
+
+        async def on_image(name: str, png: bytes) -> None:
+            if name == "base":  # first, and shown straight away
+                _write_atomic(source, png)
+                _write_atomic(frame_file(user_id, outfit_id, "base"), await asyncio.to_thread(_to_webp, png))
+            else:  # encoded in parallel, off the GPU lease's critical path
+                writes.append(asyncio.create_task(asyncio.to_thread(_write_frame, name, png)))
+
+        await image_gen.generate_inpaint_set(
+            base_prompt=portrait_prompt(outfit_id, level, "base"),
+            base_png=base_png, plan=plan, seed=portrait_seed(user_id, outfit_id),
+            width=WIDTH, height=HEIGHT, sfw=level < image_gen.INTIMATE_MIN_LEVEL,
+            negative_extra=PALETTE_NEGATIVE,
+            base_sampling=image_gen.Sampling(steps=BASE_STEPS),
+            inpaint_sampling=image_gen.Sampling(steps=INPAINT_STEPS),
+            on_image=on_image, accept=plan.accept, retry_denoise_step=BLINK_RETRY_DENOISE,
+        )
+        await asyncio.gather(*writes)
+        if existing_frames(user_id, outfit_id) != set(FRAME_NAMES):
+            return _fail(key)
         logger.info("Portrait set complete: %s", key)
         return True
     except Exception as e:
@@ -430,12 +539,16 @@ async def _chain(user_id: str, outfit_id: str, level: int) -> bool:
         return _fail(key)
 
 
-def ensure_generation(user_id: str, outfit_id: str, level: int) -> bool:
-    """Enqueue the chain unless one is running or backing off. True if enqueued."""
+def ensure_generation(user_id: str, outfit_id: str, level: int, *, delay_s: float = 0) -> bool:
+    """Enqueue the chain unless one is running or backing off. True if enqueued.
+
+    ``delay_s`` is for background pre-generation; when he is looking at the
+    portrait there is no artificial wait (the chat-quiet gate still applies).
+    """
     key = _key(user_id, outfit_id)
     if key in _inflight or _backing_off(key):
         return False
-    task = asyncio.create_task(_chain(user_id, outfit_id, level))
+    task = asyncio.create_task(_chain(user_id, outfit_id, level, delay_s))
     _inflight[key] = task
 
     def _done(_task: asyncio.Task, k: str = key) -> None:
@@ -443,6 +556,63 @@ def ensure_generation(user_id: str, outfit_id: str, level: int) -> bool:
 
     task.add_done_callback(_done)
     return True
+
+
+# ── Pre-generation: draw it before he asks ───────────────────────────────────
+
+_background: set[asyncio.Task] = set()
+
+
+async def prewarm(user_id: str, level: int) -> bool:
+    """Draw the set for what she is wearing now, in the background. True if enqueued."""
+    outfit = await current_outfit(user_id, level)
+    if existing_frames(user_id, outfit) == set(FRAME_NAMES):
+        return False
+    return ensure_generation(user_id, outfit, level, delay_s=START_DELAY_S)
+
+
+def prewarm_soon(user_id: str, level: int) -> None:
+    """Fire-and-forget prewarm (today's outfit picked or changed). Never raises."""
+    async def _run() -> None:
+        try:
+            await prewarm(user_id, level)
+        except Exception as e:
+            logger.debug("Portrait prewarm skipped: %s", e)
+
+    try:
+        task = asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        return
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+
+
+def backfill_enabled() -> bool:
+    return os.environ.get("PORTRAIT_BACKFILL", "") == "1"
+
+
+async def backfill_tick(user_id: str) -> str | None:
+    """Idle backfill (opt-in): start ONE missing set for an unlocked outfit she
+    acknowledges, only while nothing else is drawing, no game owns the GPU and
+    he has been silent for BACKFILL_SILENCE_S. Returns the outfit enqueued."""
+    if not backfill_enabled() or _inflight:
+        return None
+    gap = seconds_since_user_message()
+    if gap is not None and gap < BACKFILL_SILENCE_S:
+        return None
+    if await context.router.is_game_active():
+        return None
+    from . import wardrobe
+
+    level = (await context.affection.get_state(user_id)).level
+    for outfit in wardrobe.catalog().values():
+        if not (wardrobe.is_unlocked(outfit.id, level) and wardrobe.is_visible(outfit, level)):
+            continue
+        if existing_frames(user_id, outfit.id) == set(FRAME_NAMES):
+            continue
+        if ensure_generation(user_id, outfit.id, level):
+            return outfit.id
+    return None
 
 
 # ── API-facing state ─────────────────────────────────────────────────────────

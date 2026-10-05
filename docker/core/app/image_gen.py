@@ -10,6 +10,8 @@ import os
 import re
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
+from typing import TypeVar
 
 import httpx
 
@@ -89,6 +91,9 @@ __all__ = [
     "free_comfyui_vram",
     "generate_image",
     "generate_img2img",
+    "generate_inpaint_set",
+    "InpaintBranch",
+    "Sampling",
     "is_couple_scene",
     "is_landscape",
     "is_outfit_unlocked",
@@ -414,9 +419,13 @@ async def _interrupt_comfyui(lease: GPULease) -> bool:
         return False
 
 
-async def _free_comfyui_vram(lease: GPULease) -> bool:
-    """Unload ComfyUI weights, retrying before the gateway lease is released."""
-    await asyncio.sleep(2)  # Let ComfyUI finish post-processing before unloading
+async def _free_comfyui_vram(lease: GPULease, settle_s: float = 2.0) -> bool:
+    """Unload ComfyUI weights, retrying before the gateway lease is released.
+
+    ``settle_s`` lets ComfyUI finish post-processing first; a caller that has
+    already read the finished history (the inpaint set) can pass less.
+    """
+    await asyncio.sleep(settle_s)
     client = _get_http()
     for attempt in range(1, 4):
         try:
@@ -522,7 +531,10 @@ async def generate_img2img(
     )
 
 
-async def _leased(render: Callable[[GPULease], Awaitable[bytes | None]]) -> bytes | None:
+_T = TypeVar("_T")
+
+
+async def _leased(render: Callable[[GPULease], Awaitable[_T]]) -> _T | None:
     """Run ``render`` under the image lock, LM gate and one ComfyUI GPU lease."""
     async with _image_gen_lock:
         # Lazy import avoids coupling image prompt helpers to the LLM router at
@@ -657,8 +669,20 @@ async def _try_generate(
     negative_extra: str | None = None,
 ) -> bytes | None:
     """Single attempt at image generation."""
-    workflow = json.loads(json.dumps(WORKFLOW_TEMPLATE))
+    workflow = _txt2img_workflow(prompt, width, height, sfw, seed, negative_extra)
+    return await _run_workflow(workflow, lease)
 
+
+def _txt2img_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    sfw: bool,
+    seed: int | None,
+    negative_extra: str | None,
+    sampling: Sampling | None = None,
+) -> dict:
+    workflow = json.loads(json.dumps(WORKFLOW_TEMPLATE))
     workflow["6"]["inputs"]["text"] = prompt
     workflow["7"]["inputs"]["text"] = negative_prompt(sfw, negative_extra)
     workflow["5"]["inputs"]["width"] = width
@@ -666,61 +690,284 @@ async def _try_generate(
     workflow["3"]["inputs"]["seed"] = (
         int(seed) % (2**32) if seed is not None else int(uuid.uuid4().int % (2**32))
     )
-    return await _run_workflow(workflow, lease)
+    if sampling is not None:
+        workflow["3"]["inputs"].update(
+            sampler_name=sampling.sampler, scheduler=sampling.scheduler,
+            steps=sampling.steps, cfg=sampling.cfg,
+        )
+    return workflow
+
+
+# History polling: fast at first (a portrait frame is done in ~2s), then 1s.
+_POLL_FAST_S = 0.25
+_POLL_FAST_COUNT = 40
+
+
+async def _queue_and_wait(workflow: dict, lease: GPULease) -> dict | None:
+    """Queue ``workflow`` and wait for its history; returns its outputs or None."""
+    client = _get_http()
+    r = await client.post(
+        f"{COMFYUI_URL}/prompt",
+        headers=gpu_lease_auth_headers(lease),
+        json={"prompt": workflow},
+    )
+    if r.status_code != 200:
+        logger.error("ComfyUI queue failed: %s", r.text[:200])
+        return None
+
+    prompt_id = r.json().get("prompt_id")
+    if not prompt_id:
+        return None
+
+    # Poll for completion (first gen after a model load can be slow)
+    for i in range(300):
+        await asyncio.sleep(_POLL_FAST_S if i < _POLL_FAST_COUNT else 1)
+        r = await client.get(
+            f"{COMFYUI_URL}/history/{prompt_id}",
+            headers=gpu_lease_auth_headers(lease),
+        )
+        if r.status_code == 200:
+            history = r.json()
+            if prompt_id in history:
+                return dict(history[prompt_id].get("outputs", {}))
+
+    logger.warning("Image generation timed out waiting for ComfyUI history")
+    return None
+
+
+async def _fetch_image(img: dict, lease: GPULease) -> bytes | None:
+    r = await _get_http().get(
+        f"{COMFYUI_URL}/view",
+        headers=gpu_lease_auth_headers(lease),
+        params={
+            "filename": img["filename"],
+            "subfolder": img.get("subfolder", ""),
+            "type": img.get("type", "output"),
+        },
+    )
+    if r.status_code != 200:
+        return None
+    logger.info("Image generated: %s (%d bytes)", img["filename"], len(r.content))
+    return r.content
 
 
 async def _run_workflow(workflow: dict, lease: GPULease) -> bytes | None:
     """Queue ``workflow``, poll its history, and fetch the first output image."""
     try:
-        client = _get_http()
-        r = await client.post(
-            f"{COMFYUI_URL}/prompt",
-            headers=gpu_lease_auth_headers(lease),
-            json={"prompt": workflow},
-        )
-        if r.status_code != 200:
-            logger.error("ComfyUI queue failed: %s", r.text[:200])
-            return None
-
-        prompt_id = r.json().get("prompt_id")
-        if not prompt_id:
-            return None
-
-        # Poll for completion (up to 300s — first gen after model load can be slow)
-        for _ in range(300):
-            await asyncio.sleep(1)
-            r = await client.get(
-                f"{COMFYUI_URL}/history/{prompt_id}",
-                headers=gpu_lease_auth_headers(lease),
-            )
-            if r.status_code == 200:
-                history = r.json()
-                if prompt_id in history:
-                    outputs = history[prompt_id].get("outputs", {})
-                    for output in outputs.values():
-                        images = output.get("images", [])
-                        if images:
-                            img = images[0]
-                            r2 = await client.get(
-                                f"{COMFYUI_URL}/view",
-                                headers=gpu_lease_auth_headers(lease),
-                                params={
-                                    "filename": img["filename"],
-                                    "subfolder": img.get("subfolder", ""),
-                                    "type": img.get("type", "output"),
-                                },
-                            )
-                            if r2.status_code == 200:
-                                logger.info(
-                                    "Image generated: %s (%d bytes)",
-                                    img["filename"],
-                                    len(r2.content),
-                                )
-                                return r2.content
-                    return None
-
-        logger.warning("Image generation timed out after 300s")
+        outputs = await _queue_and_wait(workflow, lease)
+        for output in (outputs or {}).values():
+            images = output.get("images", [])
+            if images:
+                return await _fetch_image(images[0], lease)
         return None
     except Exception as e:
         logger.error("Image generation failed: %s", e)
         return None
+
+
+async def _run_graph(workflow: dict, lease: GPULease) -> dict[str, bytes]:
+    """Queue a multi-output graph; returns {SaveImage node id: first image}."""
+    try:
+        outputs = await _queue_and_wait(workflow, lease)
+        result: dict[str, bytes] = {}
+        for node_id, output in (outputs or {}).items():
+            images = output.get("images", [])
+            if images:
+                data = await _fetch_image(images[0], lease)
+                if data:
+                    result[str(node_id)] = data
+        return result
+    except Exception as e:
+        logger.error("Image graph failed: %s", e)
+        return {}
+
+
+# ── One-lease inpaint sets (Live Portrait) ──────────────────────────────────
+
+
+_TEMPLATE_KSAMPLER = WORKFLOW_TEMPLATE["3"]["inputs"]
+
+
+@dataclass(frozen=True)
+class Sampling:
+    """KSampler settings; the defaults are WORKFLOW_TEMPLATE's (the model's own)."""
+
+    sampler: str = _TEMPLATE_KSAMPLER["sampler_name"]
+    scheduler: str = _TEMPLATE_KSAMPLER["scheduler"]
+    steps: int = _TEMPLATE_KSAMPLER["steps"]
+    cfg: float = _TEMPLATE_KSAMPLER["cfg"]
+
+
+@dataclass(frozen=True)
+class InpaintBranch:
+    """One masked re-sample of the shared source (mask: white = repaint)."""
+
+    name: str
+    prompt: str
+    denoise: float
+    mask_png: bytes
+    negative: str = ""  # extra negatives for this branch only
+
+
+InpaintPlan = Callable[[bytes], Awaitable[tuple[bytes, list[InpaintBranch]]]]
+DEFAULT_SAMPLING = Sampling()
+_SET_SETTLE_S = 0.25
+
+
+def _inpaint_graph(
+    source: str,
+    branches: list[InpaintBranch],
+    masks: dict[str, str],
+    seed: int,
+    sfw: bool,
+    negative_extra: str | None,
+    sampling: Sampling,
+) -> tuple[dict, dict[str, str]]:
+    """One ComfyUI graph: a shared checkpoint/LoRA load and source encode, and
+    one masked KSampler -> VAEDecode -> SaveImage branch per expression.
+    Returns the graph and {branch name: SaveImage node id}."""
+    graph: dict = {
+        "4": json.loads(json.dumps(WORKFLOW_TEMPLATE["4"])),
+        "10": json.loads(json.dumps(WORKFLOW_TEMPLATE["10"])),
+        "7": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": negative_prompt(sfw, negative_extra), "clip": ["10", 1]}},
+        "11": {"class_type": "LoadImage", "inputs": {"image": source}},
+        "12": {"class_type": "VAEEncode", "inputs": {"pixels": ["11", 0], "vae": ["4", 2]}},
+        "16": {"class_type": "DifferentialDiffusion", "inputs": {"model": ["10", 0]}},
+    }
+    save_ids: dict[str, str] = {}
+    for i, branch in enumerate(branches):
+        n = 100 + 10 * i
+        ids = [str(n + k) for k in range(6)]
+        graph[ids[0]] = {"class_type": "CLIPTextEncode",
+                         "inputs": {"text": branch.prompt, "clip": ["10", 1]}}
+        negative = ["7", 0]
+        if branch.negative:
+            neg_id = str(n + 9)
+            graph[neg_id] = {"class_type": "CLIPTextEncode", "inputs": {
+                "text": f"{negative_prompt(sfw, negative_extra)}, {branch.negative}", "clip": ["10", 1]}}
+            negative = [neg_id, 0]
+        graph[ids[1]] = {"class_type": "LoadImageMask",
+                         "inputs": {"image": masks[branch.name], "channel": "red"}}
+        graph[ids[2]] = {"class_type": "SetLatentNoiseMask",
+                         "inputs": {"samples": ["12", 0], "mask": [ids[1], 0]}}
+        graph[ids[3]] = {"class_type": "KSampler", "inputs": {
+            "seed": int(seed) % (2**32), "steps": sampling.steps, "cfg": sampling.cfg,
+            "sampler_name": sampling.sampler, "scheduler": sampling.scheduler,
+            "denoise": max(0.0, min(1.0, float(branch.denoise))),
+            "model": ["16", 0], "positive": [ids[0], 0], "negative": negative,
+            "latent_image": [ids[2], 0],
+        }}
+        graph[ids[4]] = {"class_type": "VAEDecode", "inputs": {"samples": [ids[3], 0], "vae": ["4", 2]}}
+        graph[ids[5]] = {"class_type": "SaveImage",
+                         "inputs": {"filename_prefix": f"klukai_set_{branch.name}", "images": [ids[4], 0]}}
+        save_ids[branch.name] = ids[5]
+    return graph, save_ids
+
+
+async def generate_inpaint_set(
+    *,
+    base_prompt: str,
+    base_png: bytes | None,
+    plan: InpaintPlan,
+    seed: int,
+    width: int = 832,
+    height: int = 1216,
+    sfw: bool = False,
+    negative_extra: str | None = None,
+    base_sampling: Sampling = DEFAULT_SAMPLING,
+    inpaint_sampling: Sampling = DEFAULT_SAMPLING,
+    on_image: Callable[[str, bytes], Awaitable[None]] | None = None,
+    accept: Callable[[str, bytes], bool] | None = None,
+    retries: int = 2,
+    retry_denoise_step: float = 0.0,
+) -> dict[str, bytes]:
+    """A base and its inpaint branches under ONE lease and ONE model load.
+
+    Renders the base (unless ``base_png`` is given), lets ``plan(base)`` cut
+    the shared source and masks, then runs every branch as one ComfyUI graph.
+    ``on_image(name, png)`` fires as each image lands ("base" first), so the
+    caller can show it before the rest are done. A branch ``accept`` rejects
+    is re-run with the next seed, up to ``retries`` times, each time with its
+    denoise raised by ``retry_denoise_step``. VRAM is freed once, at the end. Returns the accepted images ("base" only if rendered here);
+    empty if the lease was refused or the base failed.
+    """
+    result = await _leased(lambda lease: _inpaint_set_inner(
+        lease, base_prompt=base_prompt, base_png=base_png, plan=plan, seed=seed,
+        width=width, height=height, sfw=sfw, negative_extra=negative_extra,
+        base_sampling=base_sampling, inpaint_sampling=inpaint_sampling,
+        on_image=on_image, accept=accept, retries=retries,
+        retry_denoise_step=retry_denoise_step,
+    ))
+    return result or {}
+
+
+async def _inpaint_set_inner(
+    lease: GPULease,
+    *,
+    base_prompt: str,
+    base_png: bytes | None,
+    plan: InpaintPlan,
+    seed: int,
+    width: int,
+    height: int,
+    sfw: bool,
+    negative_extra: str | None,
+    base_sampling: Sampling,
+    inpaint_sampling: Sampling,
+    on_image: Callable[[str, bytes], Awaitable[None]] | None,
+    accept: Callable[[str, bytes], bool] | None,
+    retries: int,
+    retry_denoise_step: float = 0.0,
+) -> dict[str, bytes]:
+    results: dict[str, bytes] = {}
+    try:
+        base = base_png
+        if base is None:
+            base = await _run_workflow(_txt2img_workflow(
+                base_prompt, width, height, sfw, seed, negative_extra, base_sampling,
+            ), lease)
+            if base is None:
+                return results
+            results["base"] = base
+            if on_image is not None:
+                await on_image("base", base)
+        source, branches = await plan(base)
+        if not branches:
+            return results
+        uploads = await asyncio.gather(
+            _upload_image(source, lease), *(_upload_image(b.mask_png, lease) for b in branches)
+        )
+        source_name, mask_names = uploads[0], uploads[1:]
+        if source_name is None or any(m is None for m in mask_names):
+            return results
+        masks = {b.name: str(m) for b, m in zip(branches, mask_names, strict=True)}
+        pending = list(branches)
+        for attempt in range(retries + 1):
+            escalated = [
+                replace(b, denoise=min(1.0, b.denoise + attempt * retry_denoise_step)) for b in pending
+            ]
+            graph, save_ids = _inpaint_graph(
+                source_name, escalated, masks, seed + attempt, sfw, negative_extra, inpaint_sampling,
+            )
+            outputs = await _run_graph(graph, lease)
+            rejected: list[InpaintBranch] = []
+            for branch in pending:
+                png = outputs.get(save_ids[branch.name])
+                if png is None:
+                    continue  # lost, not rejected: no point re-running it
+                if accept is not None and not accept(branch.name, png):
+                    rejected.append(branch)
+                    continue
+                results[branch.name] = png
+                if on_image is not None:
+                    await on_image(branch.name, png)
+            if not rejected:
+                break
+            logger.info("Re-running rejected inpaint branches: %s", [b.name for b in rejected])
+            pending = rejected
+        return results
+    finally:
+        # The graph's history is already complete, so a short settle suffices.
+        if not await _free_comfyui_vram(lease, settle_s=_SET_SETTLE_S):
+            raise GPULeaseError("ComfyUI VRAM cleanup could not be confirmed")

@@ -215,84 +215,153 @@ class TestCurrentOutfit:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _crop_png(color=(255, 0, 255)) -> bytes:
+    """What ComfyUI hands back for one branch: a CROP_PX square."""
+    buf = io.BytesIO()
+    Image.new("RGB", (pt.CROP_PX, pt.CROP_PX), color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+class _FakeSet:
+    """Stands in for image_gen.generate_inpaint_set, honouring its contract:
+    base first (unless given), plan(base), then accept + on_image per branch."""
+
+    def __init__(self, base: bytes | None = None, drop=(), crop=None):
+        self.base = base if base is not None else _portrait_png()
+        self.drop = set(drop)
+        self.crop = crop or _crop_png()
+        self.kwargs: dict = {}
+        self.branches: list = []
+        self.source = b""
+        self.calls = 0
+
+    async def __call__(self, **kw):
+        self.calls += 1
+        self.kwargs = kw
+        out = {}
+        base = kw["base_png"]
+        if base is None:
+            base = self.base
+            out["base"] = base
+            await kw["on_image"]("base", base)
+        self.source, self.branches = await kw["plan"](base)
+        for b in self.branches:
+            if b.name in self.drop:
+                continue
+            kw["accept"](b.name, self.crop)
+            out[b.name] = self.crop
+            await kw["on_image"](b.name, self.crop)
+        return out
+
+
 class TestChain:
     @pytest.mark.asyncio
-    async def test_generates_base_then_every_frame(self, fast):
-        base = _png((10, 10, 10))
-        gen = AsyncMock(return_value=base)
-        i2i = AsyncMock(side_effect=lambda src, prompt, **kw: _png((kw["seed"] % 255, 0, 0)))
-        with patch("app.image_gen.generate_image", new=gen), \
-             patch("app.image_gen.generate_img2img", new=i2i):
+    async def test_one_leased_set_renders_base_and_every_frame(self, fast):
+        fake = _FakeSet()
+        with patch("app.image_gen.generate_inpaint_set", new=fake):
             assert await pt._chain("claude", "speed_star", 4) is True
+        assert fake.calls == 1
         assert pt.existing_frames("claude", "speed_star") == set(pt.FRAME_NAMES)
-        seed = pt.portrait_seed("claude", "speed_star")
-        assert gen.await_args.kwargs == {"width": pt.WIDTH, "height": pt.HEIGHT,
-                                        "sfw": True, "seed": seed,
-                                        "negative_extra": pt.PALETTE_NEGATIVE}
-        assert all(c.kwargs["negative_extra"] == pt.PALETTE_NEGATIVE for c in i2i.await_args_list)
-        assert [c.kwargs["denoise"] for c in i2i.await_args_list] == [
-            pt.EXPRESSIONS[f][1] for f in pt.EXPRESSIONS]
-        assert all(c.args[0] == base and c.kwargs["seed"] == seed and c.kwargs["sfw"] is True
-                   and c.kwargs["mask_png"].startswith(b"\x89PNG")
-                   for c in i2i.await_args_list)
-        with Image.open(pt.frame_file("claude", "speed_star", "smile")) as img:
-            assert img.format == "WEBP"
-        assert pt.frame_dir("claude", "speed_star").joinpath(pt.SOURCE_NAME).read_bytes() == base
+        kw = fake.kwargs
+        assert kw["base_png"] is None and kw["seed"] == pt.portrait_seed("claude", "speed_star")
+        assert (kw["width"], kw["height"], kw["sfw"]) == (pt.WIDTH, pt.HEIGHT, True)
+        assert kw["negative_extra"] == pt.PALETTE_NEGATIVE
+        # The model's own sampler/CFG (the template's), portrait step counts.
+        for sampling, steps in ((kw["base_sampling"], pt.BASE_STEPS), (kw["inpaint_sampling"], pt.INPAINT_STEPS)):
+            assert (sampling.sampler, sampling.scheduler, sampling.cfg, sampling.steps) == (
+                "euler", "normal", 4.5, steps)
+        assert kw["retry_denoise_step"] == pt.BLINK_RETRY_DENOISE
+        assert [b.name for b in fake.branches] == list(pt.EXPRESSIONS)
+        assert [b.denoise for b in fake.branches] == [pt.EXPRESSIONS[f][1] for f in pt.EXPRESSIONS]
+        assert fake.branches[0].negative == pt.FRAME_NEGATIVES["blink"]
+        assert all(b.negative == "" for b in fake.branches[1:])
+        with Image.open(io.BytesIO(fake.source)) as src:
+            assert src.size == (pt.CROP_PX, pt.CROP_PX)
+        assert pt.frame_dir("claude", "speed_star").joinpath(pt.SOURCE_NAME).read_bytes() == fake.base
+
+    @pytest.mark.asyncio
+    async def test_frames_change_only_inside_their_mask(self, fast):
+        fake = _FakeSet()
+        with patch("app.image_gen.generate_inpaint_set", new=fake):
+            await pt._chain("claude", "speed_star", 4)
+        base = Image.open(io.BytesIO(fake.base)).convert("RGB")
+        with Image.open(pt.frame_file("claude", "speed_star", "talk")) as img:
+            talk = img.convert("RGB")
+        mouth = (420, 330 + int(0.68 * 120))
+        far = (60, 1150)
+        assert talk.getpixel(mouth)[1] < 60            # magenta landed on the mouth
+        assert all(abs(a - b) <= 6 for a, b in zip(talk.getpixel(far), base.getpixel(far), strict=True))
 
     @pytest.mark.asyncio
     async def test_bonded_portraits_are_not_sfw_forced(self, fast):
-        gen = AsyncMock(return_value=_png())
-        with patch("app.image_gen.generate_image", new=gen), \
-             patch("app.image_gen.generate_img2img", new=AsyncMock(return_value=_png())):
+        fake = _FakeSet()
+        with patch("app.image_gen.generate_inpaint_set", new=fake):
             await pt._chain("claude", "speed_star", 8)
-        assert gen.await_args.kwargs["sfw"] is False
+        assert fake.kwargs["sfw"] is False
 
     @pytest.mark.asyncio
     async def test_resumes_only_missing_frames_from_the_stored_base(self, fast):
         _write_all(frames=("base", "blink", "talk"))
-        gen = AsyncMock()
-        i2i = AsyncMock(return_value=_png())
-        with patch("app.image_gen.generate_image", new=gen), \
-             patch("app.image_gen.generate_img2img", new=i2i):
+        stored = _portrait_png()
+        pt.frame_dir("claude", "speed_star").joinpath(pt.SOURCE_NAME).write_bytes(stored)
+        fake = _FakeSet()
+        with patch("app.image_gen.generate_inpaint_set", new=fake):
             assert await pt._chain("claude", "speed_star", 4) is True
-        gen.assert_not_awaited()
-        assert i2i.await_count == 3
+        assert fake.kwargs["base_png"] == stored
+        assert [b.name for b in fake.branches] == ["smile", "blush", "annoyed"]
+
+    @pytest.mark.asyncio
+    async def test_a_complete_set_does_nothing(self, fast):
+        _write_all()
+        fake = _FakeSet()
+        with patch("app.image_gen.generate_inpaint_set", new=fake):
+            assert await pt._chain("claude", "speed_star", 4) is True
+        assert fake.calls == 0
 
     @pytest.mark.asyncio
     async def test_frames_without_their_base_are_all_redone(self, fast):
         _write_all(frames=("blink", "talk"))
         pt.frame_dir("claude", "speed_star").joinpath(pt.SOURCE_NAME).unlink()
-        i2i = AsyncMock(return_value=_png())
-        with patch("app.image_gen.generate_image", new=AsyncMock(return_value=_png())), \
-             patch("app.image_gen.generate_img2img", new=i2i):
+        fake = _FakeSet()
+        with patch("app.image_gen.generate_inpaint_set", new=fake):
             await pt._chain("claude", "speed_star", 4)
-        assert i2i.await_count == 5
+        assert fake.kwargs["base_png"] is None and len(fake.branches) == 5
 
     @pytest.mark.asyncio
     async def test_base_failure_backs_off(self, fast):
-        with patch("app.image_gen.generate_image", new=AsyncMock(return_value=None)):
+        with patch("app.image_gen.generate_inpaint_set", new=AsyncMock(return_value={})):
             assert await pt._chain("claude", "speed_star", 4) is False
         assert pt._backing_off(pt._key("claude", "speed_star"))
         assert pt.existing_frames("claude", "speed_star") == set()
 
     @pytest.mark.asyncio
-    async def test_frame_failure_keeps_what_was_made_and_backs_off(self, fast):
-        i2i = AsyncMock(side_effect=[_png(), None])
-        with patch("app.image_gen.generate_image", new=AsyncMock(return_value=_png())), \
-             patch("app.image_gen.generate_img2img", new=i2i):
+    async def test_a_lost_frame_keeps_the_rest_and_backs_off(self, fast):
+        fake = _FakeSet(drop={"talk"})
+        with patch("app.image_gen.generate_inpaint_set", new=fake):
             assert await pt._chain("claude", "speed_star", 4) is False
-        assert pt.existing_frames("claude", "speed_star") == {"base", "blink"}
+        assert pt.existing_frames("claude", "speed_star") == set(pt.FRAME_NAMES) - {"talk"}
         assert pt._backing_off(pt._key("claude", "speed_star"))
 
     @pytest.mark.asyncio
-    async def test_stops_when_a_game_starts(self, fast):
-        fast.is_game_active = AsyncMock(side_effect=[False, False, True])
-        i2i = AsyncMock(return_value=_png())
-        with patch("app.image_gen.generate_image", new=AsyncMock(return_value=_png())), \
-             patch("app.image_gen.generate_img2img", new=i2i):
+    async def test_never_while_a_game_owns_the_gpu(self, fast):
+        fast.is_game_active = AsyncMock(return_value=True)
+        fake = _FakeSet()
+        with patch("app.image_gen.generate_inpaint_set", new=fake):
             assert await pt._chain("claude", "speed_star", 4) is False
-        assert i2i.await_count == 1
+        assert fake.calls == 0
         assert not pt._backing_off(pt._key("claude", "speed_star"))  # a game isn't a failure
+
+    @pytest.mark.asyncio
+    async def test_background_delay_is_honoured(self, fast, monkeypatch):
+        sleeps: list[float] = []
+
+        async def _sleep(s):
+            sleeps.append(s)
+
+        monkeypatch.setattr(pt.asyncio, "sleep", _sleep)
+        _write_all()
+        assert await pt._chain("claude", "speed_star", 4, delay_s=7) is True
+        assert sleeps[0] == 7
 
     @pytest.mark.asyncio
     async def test_waits_for_a_quiet_gap_in_the_chat(self, fast, monkeypatch):
@@ -312,13 +381,14 @@ class TestChain:
         monkeypatch.setattr(pt, "seconds_since_user_message", lambda: 1.0)
         monkeypatch.setattr(pt, "QUIET_MAX_WAIT_S", 0)
         assert await pt._wait_for_quiet() is False
-        with patch("app.image_gen.generate_image", new=AsyncMock()) as gen:
+        fake = _FakeSet()
+        with patch("app.image_gen.generate_inpaint_set", new=fake):
             assert await pt._chain("claude", "speed_star", 4) is False
-        gen.assert_not_awaited()
+        assert fake.calls == 0
 
     @pytest.mark.asyncio
     async def test_unexpected_error_is_contained(self, fast):
-        with patch("app.image_gen.generate_image", new=AsyncMock(side_effect=RuntimeError("x"))):
+        with patch("app.image_gen.generate_inpaint_set", new=AsyncMock(side_effect=RuntimeError("x"))):
             assert await pt._chain("claude", "speed_star", 4) is False
         assert pt._backing_off(pt._key("claude", "speed_star"))
 
@@ -342,7 +412,7 @@ class TestEnsure:
             return True
 
         with patch("app.portrait._chain", side_effect=_slow) as chain:
-            assert pt.ensure_generation("claude", "speed_star", 4) is True
+            assert pt.ensure_generation("claude", "speed_star", 4, delay_s=3) is True
             assert pt.ensure_generation("claude", "speed_star", 4) is False
             assert pt.ensure_generation("claude", "night_ride", 4) is True
             await started.wait()
@@ -350,6 +420,7 @@ class TestEnsure:
             await asyncio.gather(*pt._inflight.values())
             await asyncio.sleep(0)
         assert chain.call_count == 2
+        assert chain.call_args_list[0].args == ("claude", "speed_star", 4, 3)
         assert pt._inflight == {}
 
     @pytest.mark.asyncio

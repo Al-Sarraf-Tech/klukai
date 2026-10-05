@@ -304,9 +304,13 @@ WORKFLOW_TEMPLATE: dict = {
         "class_type": "KSampler",
         "inputs": {
             "seed": 0,
-            "steps": 25,
-            "cfg": 7.0,
-            "sampler_name": "euler_ancestral",
+            # The NoobAI-XL model card: Euler (not ancestral) at CFG 4-5. An A/B
+            # at a fixed seed showed CFG 7 euler_a gives a saturated blue cast
+            # and flat skin; CFG 4.5 Euler gives true blacks and shaded skin.
+            # (karras schedules fry this checkpoint; keep "normal".)
+            "steps": 24,
+            "cfg": 4.5,
+            "sampler_name": "euler",
             "scheduler": "normal",
             "denoise": 1.0,
             "model": ["10", 0],
