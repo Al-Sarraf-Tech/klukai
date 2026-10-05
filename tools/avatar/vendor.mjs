@@ -1,6 +1,11 @@
-// Vendors three.js + the addons avatar3d.js needs into flutter_app/web/companion/vendor/.
-// No CDN at runtime (privacy / Brave shields / offline). Bare 'three' imports are
-// rewritten to the relative minified module so no import map is required.
+// Vendors three.js for the companion's 3D window as ONE tree-shaken, minified ES
+// module: flutter_app/web/companion/vendor/three-avatar.min.js. No CDN at
+// runtime (privacy / Brave shields / offline), no import map, one request.
+//
+// The three.js exports are derived from the `THREE.<Name>` uses in avatar3d.js
+// (plus the addons it needs), so the bundle can't drift from the viewer; a node
+// test re-checks this. ~680 KB min / ~170 KB gzip vs ~980 KB / ~245 KB for the
+// six unbundled files it replaces.
 import { build } from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,29 +15,41 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../..');
 const out = path.join(repo, 'flutter_app/web/companion/vendor');
 const three = path.join(here, 'node_modules/three');
-fs.mkdirSync(out, { recursive: true });
+const viewer = path.join(repo, 'flutter_app/web/companion/avatar3d.js');
 
-// three r163+ ships three.module.js + three.core.js and no .min build; bundle+minify into one file.
-await build({
-  entryPoints: [path.join(three, 'build/three.module.js')],
-  bundle: true, minify: true, format: 'esm', target: 'es2020', legalComments: 'inline',
-  outfile: path.join(out, 'three.module.min.js'), logLevel: 'warning',
+export const BUNDLE = 'three-avatar.min.js';
+export const ADDONS = Object.freeze({
+  GLTFLoader: 'three/examples/jsm/loaders/GLTFLoader.js',
+  MeshoptDecoder: 'three/examples/jsm/libs/meshopt_decoder.module.js',
+  OrbitControls: 'three/examples/jsm/controls/OrbitControls.js',
 });
 
-// Addons: copy, flatten relative imports, point 'three' at the vendored module.
-const addons = {
-  'GLTFLoader.js': 'examples/jsm/loaders/GLTFLoader.js',
-  'BufferGeometryUtils.js': 'examples/jsm/utils/BufferGeometryUtils.js',
-  'SkeletonUtils.js': 'examples/jsm/utils/SkeletonUtils.js',
-  'OrbitControls.js': 'examples/jsm/controls/OrbitControls.js',
-  'meshopt_decoder.module.js': 'examples/jsm/libs/meshopt_decoder.module.js',
-};
-for (const [name, rel] of Object.entries(addons)) {
-  let src = fs.readFileSync(path.join(three, rel), 'utf8');
-  src = src.replace(/from\s+'three'/g, "from './three.module.min.js'");
-  src = src.replace(/from\s+'\.\.\/utils\/([A-Za-z]+\.js)'/g, "from './$1'");
-  const banner = `// Vendored from three@${JSON.parse(fs.readFileSync(path.join(three, 'package.json'))).version} (${rel}) by tools/avatar/vendor.mjs. MIT License.\n`;
-  fs.writeFileSync(path.join(out, name), banner + src);
+/** three.js core names the viewer uses (THREE.Foo), sorted. */
+export function coreNamesUsed(src = fs.readFileSync(viewer, 'utf8')) {
+  return [...new Set([...src.matchAll(/\bTHREE\.([A-Z][A-Za-z0-9_]*)/g)].map((m) => m[1]))].sort();
 }
-fs.copyFileSync(path.join(three, 'LICENSE'), path.join(out, 'LICENSE.three.txt'));
-for (const f of fs.readdirSync(out)) console.log(f.padEnd(28), fs.statSync(path.join(out, f)).size);
+
+async function main() {
+  const core = coreNamesUsed();
+  const entry = [
+    `export { ${core.join(', ')} } from 'three';`,
+    ...Object.entries(ADDONS).map(([name, mod]) => `export { ${name} } from '${mod}';`),
+  ].join('\n');
+  fs.mkdirSync(out, { recursive: true });
+  const version = JSON.parse(fs.readFileSync(path.join(three, 'package.json'))).version;
+  await build({
+    stdin: { contents: entry, resolveDir: here, sourcefile: 'three-avatar-entry.js', loader: 'js' },
+    bundle: true, minify: true, format: 'esm', target: 'es2020', legalComments: 'inline',
+    banner: { js: `/* three.js r${version} subset for avatar3d.js — MIT License, see LICENSE.three.txt. Built by tools/avatar/vendor.mjs. */` },
+    outfile: path.join(out, BUNDLE), logLevel: 'warning',
+  });
+  fs.copyFileSync(path.join(three, 'LICENSE'), path.join(out, 'LICENSE.three.txt'));
+  // Remove the previous unbundled files (superseded by the bundle).
+  for (const old of ['three.module.min.js', 'GLTFLoader.js', 'BufferGeometryUtils.js', 'SkeletonUtils.js', 'OrbitControls.js', 'meshopt_decoder.module.js']) {
+    fs.rmSync(path.join(out, old), { force: true });
+  }
+  for (const f of fs.readdirSync(out)) console.log(f.padEnd(24), fs.statSync(path.join(out, f)).size);
+  console.log('exports:', [...core, ...Object.keys(ADDONS)].join(', '));
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

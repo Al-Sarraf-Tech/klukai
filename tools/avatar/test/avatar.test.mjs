@@ -163,3 +163,60 @@ test('rng is deterministic (reproducible builds)', () => {
   const c = rng(417);
   assert.notEqual(rng(416)(), c());
 });
+
+// ── hollow / perf regressions ──────────────────────────────────────────────
+
+import { nextPixelRatio, warmAvatar3D } from '../../../flutter_app/web/companion/avatar3d.js';
+import { coreNamesUsed, ADDONS, BUNDLE } from '../vendor.mjs';
+
+test('viewer never uses polygonOffset (it made double-sided cloth look hollow on Safari/Metal)', () => {
+  const src = fs.readFileSync(path.join(repo, 'flutter_app/web/companion/avatar3d.js'), 'utf8')
+    .replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.doesNotMatch(src, /polygonOffset/);
+});
+
+test('adaptive resolution steps between 1 and the device cap', () => {
+  assert.equal(nextPixelRatio({ avgFrameMs: 40, ratio: 1.5, cap: 1.5 }), 1.25);
+  assert.equal(nextPixelRatio({ avgFrameMs: 40, ratio: 1, cap: 1.5 }), 1);
+  assert.equal(nextPixelRatio({ avgFrameMs: 8, ratio: 1, cap: 1.5 }), 1.25);
+  assert.equal(nextPixelRatio({ avgFrameMs: 8, ratio: 2, cap: 2 }), 2);
+  assert.equal(nextPixelRatio({ avgFrameMs: 16.7, ratio: 1.25, cap: 2 }), 1.25); // 60 fps: hold
+});
+
+test('warmAvatar3D never throws, even without arguments', () => {
+  assert.doesNotThrow(() => warmAvatar3D());
+  assert.doesNotThrow(() => warmAvatar3D({ loadModel: () => Promise.reject(new Error('offline')) }));
+});
+
+test('vendored bundle exports everything the viewer uses', () => {
+  const bundle = fs.readFileSync(path.join(repo, 'flutter_app/web/companion/vendor', BUNDLE), 'utf8');
+  const exported = new Set([...bundle.matchAll(/export\s*\{([^}]*)\}/g)].flatMap((m) => m[1].split(',').map((x) => x.trim().split(/\s+as\s+/).pop())));
+  for (const name of [...coreNamesUsed(), ...Object.keys(ADDONS)]) assert.ok(exported.has(name), `bundle lacks ${name} — run node tools/avatar/vendor.mjs`);
+  assert.doesNotMatch(bundle, /https?:\/\/(cdn|unpkg|jsdelivr)/, 'no CDN references');
+});
+
+test('build config: compression settings and budget', () => {
+  assert.ok(['medium', 'high'].includes(CONFIG.meshoptLevel));
+  assert.ok(CONFIG.resampleTolerance > 0 && CONFIG.resampleTolerance <= 2e-3, 'resample tolerance keeps rotation error ≲0.1°');
+});
+
+test('built GLB structure (skipped when assets/build/klukai.glb is absent)', async (t) => {
+  const glbPath = path.join(repo, 'assets/build/klukai.glb');
+  if (!fs.existsSync(glbPath)) { t.skip('no local build (assets are personal-use, never in CI)'); return; }
+  const { NodeIO } = await import('@gltf-transform/core');
+  const { ALL_EXTENSIONS } = await import('@gltf-transform/extensions');
+  const { MeshoptDecoder } = await import('meshoptimizer');
+  await MeshoptDecoder.ready;
+  const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ 'meshopt.decoder': MeshoptDecoder });
+  assert.ok(fs.statSync(glbPath).size <= CONFIG.budgetBytes);
+  const doc = await io.read(glbPath);
+  const r = doc.getRoot();
+  assert.equal(r.listSkins().length, 1, 'body and head share one skin');
+  const withTargets = r.listMeshes().filter((m) => m.listPrimitives().some((p) => p.listTargets().length));
+  assert.equal(withTargets.length, 1, 'blink morph lives on the head mesh only');
+  assert.deepEqual(withTargets[0].getExtras().targetNames, ['blink']);
+  assert.deepEqual(r.listAnimations().map((a) => a.getName()).sort(), [...REQUIRED_CLIPS].sort());
+  const prims = r.listMeshes().reduce((n, m) => n + m.listPrimitives().length, 0);
+  assert.ok(prims <= 8, `draw calls ${prims}`);
+  for (const tex of r.listTextures()) assert.equal(tex.getMimeType(), 'image/webp');
+});

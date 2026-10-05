@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Klukai 3D inspect</title>
+<style>html,body{margin:0;height:100%}#stage{position:fixed;inset:0}</style></head>
+<body><div id="stage"></div>
+<script type="module">
+  // Multi-angle inspection of the real viewer. Query: bg, yaw, pitch, dist, ty, tx, tz, state, t, glb
+  import { createAvatar3D } from '/flutter_app/web/companion/avatar3d.js';
+  const q = new URLSearchParams(location.search);
+  document.body.style.background = q.get('bg') || '#00c853';
+  window.__events = [];
+  const av = await createAvatar3D(document.getElementById('stage'), {
+    loadModel: async () => (await fetch(q.get('glb') || '/assets/build/klukai.glb', { cache: 'no-store' })).arrayBuffer(),
+    framing: 'full', debug: true, orbit: false, adaptiveResolution: false,
+    onError: (e) => window.__events.push('error:' + e.message),
+  });
+  if (q.get('state')) av.setState(q.get('state'));
+  if (q.has('poff')) { // emulate a GPU that applies polygon offset much more strongly (e.g. Metal depth bias)
+    av.debug.root.traverse((o) => { if (!o.isMesh) return; for (const m of [].concat(o.material)) if (m.polygonOffset) { m.polygonOffsetFactor = +q.get('poff'); m.polygonOffsetUnits = +q.get('poff') * 4; } });
+  }
+  if (q.has('nopoff')) av.debug.root.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) m.polygonOffset = false; });
+  const { camera, THREE } = av.debug;
+  const deg = Math.PI / 180;
+  const yaw = +(q.get('yaw') || 0) * deg, pitch = +(q.get('pitch') || 0) * deg, dist = +(q.get('dist') || 3.4);
+  const t = new THREE.Vector3(+(q.get('tx') || 0), +(q.get('ty') || 0.8), +(q.get('tz') || 0));
+  const place = () => {
+    camera.position.set(t.x + Math.sin(yaw) * Math.cos(pitch) * dist, t.y + Math.sin(pitch) * dist, t.z + Math.cos(yaw) * Math.cos(pitch) * dist);
+    camera.lookAt(t);
+  };
+  // keep our camera every frame (frame() may run on resize)
+  const orig = av.debug.renderer.render.bind(av.debug.renderer);
+  av.debug.renderer.render = (s, c) => { place(); orig(s, c); };
+  window.__info = () => ({ calls: av.debug.renderer.info.render.calls, tris: av.debug.renderer.info.render.triangles, mem: av.debug.renderer.info.memory });
+  window.__events.push('ready');
+</script></body></html>

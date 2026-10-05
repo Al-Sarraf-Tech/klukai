@@ -45,7 +45,7 @@ export const OUTFIT_ATLASES = Object.freeze(['c_ClukaySSR01_slg_cloth1_d.png', '
 export const MATERIALS = Object.freeze({
   // Bare shoulders/arms + hips. Hips sit a few mm under the jacket/shorts and
   // poke through when skinned: shrink them inward (never visible from outside).
-  'Klukai_Body_(Default)': { texture: 'body_d.png', role: 'skin', shrink: { maxY: 1.05, amount: 0.005 } },
+  'Klukai_Body_(Default)': { texture: 'body_d.png', role: 'skin', maxSize: 512, shrink: { maxY: 1.05, amount: 0.005 } },
   'Klukai_Hair': { texture: 'c_Clukay_hair_d.png', role: 'hair', doubleSided: true },
   // Original face atlas. (c_Clukay_face_open_eyes.png from the April attempt
   // painted irises onto the cheeks — wrong UV spot; not used.)
@@ -114,6 +114,9 @@ export const CONFIG = Object.freeze({
   textureMaxSizeHard: 2048,
   webpQuality: 90,
   animationFps: 30,
+  // ~0.1° rotation error: invisible, and ~40% smaller with meshopt filters.
+  resampleTolerance: 1e-3,
+  meshoptLevel: 'high',
   budgetBytes: 15 * 1024 * 1024,
   clips: CLIPS,
   materials: MATERIALS,

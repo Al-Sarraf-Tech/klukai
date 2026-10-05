@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Klukai 3D perf</title>
+<style>html,body{margin:0;height:100%;background:#12151e}#stage{position:fixed;inset:0}</style></head>
+<body><div id="stage"></div>
+<script type="module">
+  // Load + frame-rate probe for avatar3d.js. Results land in window.__perf.
+  const q = new URLSearchParams(location.search);
+  const t0 = performance.now();
+  const { createAvatar3D } = await import('/flutter_app/web/companion/avatar3d.js');
+  const tImport = performance.now();
+  let tFetched = 0;
+  const loadModel = async () => {
+    const r = await fetch(q.get('glb') || '/assets/build/klukai.glb', { cache: 'no-store' });
+    const b = await r.arrayBuffer(); tFetched = performance.now(); return b;
+  };
+  let tReady = 0;
+  const av = await createAvatar3D(document.getElementById('stage'), {
+    loadModel, framing: q.get('framing') || 'upper', debug: true, onReady: () => { tReady = performance.now(); },
+    onError: (e) => { window.__perf = { error: e.message }; },
+  });
+  // first painted frame after ready
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const tFirst = performance.now();
+  if (q.get('state')) av.setState(q.get('state'));
+  // FPS window
+  const secs = +(q.get('secs') || 5);
+  let frames = 0; const start = performance.now(); let worst = 0; let last = start;
+  await new Promise((resolve) => {
+    const tick = (now) => { frames++; worst = Math.max(worst, now - last); last = now; if (now - start < secs * 1000) requestAnimationFrame(tick); else resolve(); };
+    requestAnimationFrame(tick);
+  });
+  const d = av.debug; const info = d.renderer.info;
+  let texBytes = 0; const seen = new Set(); let skinnedMeshes = 0; let verts = 0; let morphMeshes = 0;
+  d.root.traverse((o) => {
+    if (!o.isMesh) return;
+    if (o.isSkinnedMesh) skinnedMeshes++;
+    if (o.morphTargetInfluences?.length) morphMeshes++;
+    verts += o.geometry.attributes.position.count;
+    for (const m of [].concat(o.material)) for (const k of ['map', 'gradientMap']) {
+      const t = m[k]; if (!t || seen.has(t)) continue; seen.add(t);
+      const img = t.image; const w = img?.width || 0, h = img?.height || 0;
+      texBytes += w * h * 4 * (t.generateMipmaps === false ? 1 : 4 / 3);
+    }
+  });
+  window.__perf = {
+    importMs: Math.round(tImport - t0), fetchDoneMs: Math.round(tFetched - t0), readyMs: Math.round(tReady - t0), firstFrameMs: Math.round(tFirst - t0),
+    fps: +(frames / ((performance.now() - start) / 1000)).toFixed(1), worstFrameMs: Math.round(worst),
+    drawCalls: info.render.calls, triangles: info.render.triangles, programs: info.programs?.length,
+    textures: seen.size, textureMB: +(texBytes / 1048576).toFixed(1), skinnedMeshes, morphMeshes, vertices: verts,
+    pixelRatio: d.renderer.getPixelRatio(), stats: av.stats || null,
+  };
+</script></body></html>

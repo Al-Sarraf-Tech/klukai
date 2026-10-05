@@ -9,6 +9,7 @@ GET  /api/avatar/model                            the GLB (Bearer; game-ripped, 
 
 from __future__ import annotations
 
+import gzip
 import logging
 import os
 from pathlib import Path
@@ -23,7 +24,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_AVATAR_MODEL_PATH = "/avatar/klukai.glb"
 FRAME_CACHE = "private, max-age=1800"
-MODEL_CACHE = "private, max-age=86400"
+# Revalidate every load (a 304 is ~free): a rebuilt model reaches him on his
+# next open instead of after a day. The ETag changes with the file.
+MODEL_CACHE = "private, no-cache"
+_MODEL_GZ: dict[str, bytes] = {}  # etag -> gzipped model (one entry)
 
 
 async def _get_user_id(request: Request) -> str | None:
@@ -95,7 +99,19 @@ def register_portrait_routes(app: FastAPI) -> None:
         if not path.is_file():
             return JSONResponse({"error": "Avatar model not found"}, status_code=404)
         etag = _etag(path)
-        headers = {"Cache-Control": MODEL_CACHE, "ETag": etag}
+        headers = {"Cache-Control": MODEL_CACHE, "ETag": etag, "Vary": "Accept-Encoding"}
         if _etag_matches(request.headers.get("if-none-match", ""), etag):
             return Response(status_code=304, headers=headers)
+        if "gzip" in request.headers.get("accept-encoding", "").lower():
+            # Binary glTF isn't compressed by Cloudflare or StaticFiles; gzip
+            # saves ~30% on a phone connection. Compressed once per version.
+            body = _MODEL_GZ.get(etag)
+            if body is None:
+                body = gzip.compress(path.read_bytes(), compresslevel=6)
+                _MODEL_GZ.clear()
+                _MODEL_GZ[etag] = body
+            return Response(
+                body, media_type="model/gltf-binary",
+                headers={**headers, "Content-Encoding": "gzip"},
+            )
         return FileResponse(path, media_type="model/gltf-binary", headers=headers)

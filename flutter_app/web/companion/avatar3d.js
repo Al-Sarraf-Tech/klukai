@@ -1,6 +1,6 @@
 // Klukai 3D avatar window: her rigged model idling and reacting while you chat.
 //
-// ES module, no bundler. three.js is vendored under ./vendor/ (no CDN — privacy,
+// ES module, no bundler. three.js is vendored as ./vendor/three-avatar.min.js (no CDN — privacy,
 // Brave shields, offline). The GLB is personal-use, game-derived content: it is
 // never committed and only reaches the page through `loadModel()` (the app's
 // authenticated API), never a public URL.
@@ -150,13 +150,49 @@ export function detectIOS(nav = globalThis.navigator) {
   return /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && (nav.maxTouchPoints || 0) > 1);
 }
 
+/** Pure: adaptive resolution step. Returns the next pixel ratio given the
+ *  recent average frame time (ms), the current ratio and the device cap. */
+export function nextPixelRatio({ avgFrameMs, ratio, cap, min = 1 }) {
+  if (avgFrameMs > 24 && ratio > min) return Math.max(min, +(ratio - 0.25).toFixed(2)); // < ~42 fps: drop
+  if (avgFrameMs < 12 && ratio < cap) return Math.min(cap, +(ratio + 0.25).toFixed(2)); // lots of headroom: raise
+  return ratio;
+}
+
+let libsPromise = null;
+function importLibs(withOrbit = true) {
+  if (!libsPromise) {
+    // One tree-shaken bundle (tools/avatar/vendor.mjs): three core subset +
+    // GLTFLoader + MeshoptDecoder + OrbitControls.
+    libsPromise = import('./vendor/three-avatar.min.js')
+      .then((m) => ({ THREE: m, GLTFLoader: m.GLTFLoader, MeshoptDecoder: m.MeshoptDecoder, OrbitControls: m.OrbitControls }));
+    libsPromise.catch(() => { libsPromise = null; });
+  }
+  void withOrbit;
+  return libsPromise;
+}
+
+let warmModel = null;
+/**
+ * Optional: call as soon as the 3D window is the selected mode (e.g. at page
+ * init when the saved preference is 3D) to start the three.js imports and the
+ * model download while the rest of the page boots. The next createAvatar3D()
+ * reuses both. Safe to call repeatedly; never throws.
+ */
+export function warmAvatar3D({ loadModel } = {}) {
+  importLibs().catch(() => {});
+  if (typeof loadModel === 'function' && !warmModel) {
+    warmModel = Promise.resolve().then(loadModel);
+    warmModel.catch(() => { warmModel = null; });
+  }
+}
+
 const ROLE_FALLBACK = (name) => (/hair/i.test(name) ? 'hair' : /face|eye/i.test(name) ? 'face' : /cloth/i.test(name) ? 'cloth' : 'skin');
 
 /**
  * Create the avatar view inside `container`.
  * @param {HTMLElement} container
  * @param {{ loadModel: () => Promise<ArrayBuffer>, onReady?: Function, onError?: Function,
- *           framing?: 'upper'|'full', orbit?: boolean }} opts
+ *           framing?: 'upper'|'full', orbit?: boolean, adaptiveResolution?: boolean }} opts
  */
 export async function createAvatar3D(container, opts = {}) {
   const { loadModel, onReady, onError } = opts;
@@ -171,18 +207,24 @@ export async function createAvatar3D(container, opts = {}) {
   if (typeof loadModel !== 'function') { fail(new Error('createAvatar3D: loadModel() is required')); return stub; }
   if (!hasWebGL()) { fail(new Error('WebGL is not available')); return stub; }
 
+  const stats = { t0: performance.now() };
+  const mark = (k) => { stats[k] = Math.round(performance.now() - stats.t0); };
+  // Model download and library imports run in parallel (and may already be
+  // in flight from warmAvatar3D()).
+  const modelPromise = warmModel || Promise.resolve().then(loadModel);
+  warmModel = null;
+  modelPromise.then(() => mark('fetchMs'), () => {});
   let THREE; let GLTFLoader; let MeshoptDecoder; let OrbitControls;
   try {
-    THREE = await import('./vendor/three.module.min.js');
-    ({ GLTFLoader } = await import('./vendor/GLTFLoader.js'));
-    ({ MeshoptDecoder } = await import('./vendor/meshopt_decoder.module.js'));
-    if (opts.orbit !== false) ({ OrbitControls } = await import('./vendor/OrbitControls.js'));
-  } catch (e) { fail(e); return stub; }
+    ({ THREE, GLTFLoader, MeshoptDecoder, OrbitControls } = await importLibs());
+    if (opts.orbit === false) OrbitControls = null;
+    mark('importMs');
+  } catch (e) { modelPromise.catch(() => {}); fail(e); return stub; }
 
   const isIOS = detectIOS();
   const size = () => ({ w: Math.max(1, container.clientWidth || 1), h: Math.max(1, container.clientHeight || 1) });
   let { w, h } = size();
-  const rs = renderSettings({ devicePixelRatio: globalThis.devicePixelRatio, width: w, height: h, isIOS });
+  let rs = renderSettings({ devicePixelRatio: globalThis.devicePixelRatio, width: w, height: h, isIOS });
 
   let renderer;
   try {
@@ -202,19 +244,19 @@ export async function createAvatar3D(container, opts = {}) {
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(26, w / h, 0.05, 30);
-  scene.add(new THREE.HemisphereLight(0xfff4f0, 0x6a6f8a, 1.6));
-  const key = new THREE.DirectionalLight(0xffffff, 1.9);
-  key.position.set(0.6, 2.2, 2.4);
+  // Two lights only (cheaper per pixel on phones): a sky/ground fill that keeps
+  // shadow sides readable on a dark stage, and one key light for toon form.
+  scene.add(new THREE.HemisphereLight(0xf3f1ff, 0x5a5f78, 1.75));
+  const key = new THREE.DirectionalLight(0xffffff, 2.1);
+  key.position.set(0.9, 2.0, 2.2);
   scene.add(key);
-  const fill = new THREE.DirectionalLight(0xc8d8ff, 0.5);
-  fill.position.set(-1.5, 1.2, 1.0);
-  scene.add(fill);
 
   // ── state ────────────────────────────────────────────────────────────────
   let disposed = false;
   let ready = false;
   let paused = false;
   let rafId = 0;
+  let frameAcc = 0; let frameN = 0; let fpsAvg = 0; let lastNow = 0; // adaptive resolution
   let root = null;
   let mixer = null;
   let skinned = [];
@@ -260,9 +302,10 @@ export async function createAvatar3D(container, opts = {}) {
       gradientMap: role === 'face' ? faceRamp : bodyRamp,
       side: src.side,
     });
-    if (role === 'cloth') { // win depth ties against the skin underneath
-      m.polygonOffset = true; m.polygonOffsetFactor = -1; m.polygonOffsetUnits = -2;
-    }
+    // No polygonOffset: on double-sided cloth it is slope-scaled and GPU-
+    // dependent (Safari/Metal applies far more bias), which pulled the jacket's
+    // inner/back layers through the front — she looked "hollow". Skin that
+    // z-fought under clothes is removed/shrunk in the build instead.
     m.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, rimUniforms);
       shader.fragmentShader = shader.fragmentShader
@@ -270,18 +313,19 @@ export async function createAvatar3D(container, opts = {}) {
         .replace('#include <opaque_fragment>',
           'outgoingLight += uRimColor * pow(1.0 - saturate(dot(normal, geometryViewDir)), uRimPower) * uRimStrength;\n#include <opaque_fragment>');
     };
-    m.customProgramCacheKey = () => `klukai-toon-${role}`;
+    m.customProgramCacheKey = () => 'klukai-toon'; // one program (per sidedness) for every toon part
     return m;
   }
 
   // ── load ─────────────────────────────────────────────────────────────────
   try {
-    const buf = await loadModel();
+    const buf = await modelPromise;
     if (disposed) return stub;
     if (!(buf instanceof ArrayBuffer) && !ArrayBuffer.isView(buf)) throw new Error('loadModel() must resolve to an ArrayBuffer');
     const data = ArrayBuffer.isView(buf) ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf;
     const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
     const gltf = await new Promise((resolve, reject) => loader.parse(data, '', resolve, reject));
+    mark('parseMs');
     if (disposed) { disposeObject(gltf.scene); return stub; }
     root = gltf.scene;
     root.traverse((o) => {
@@ -408,11 +452,28 @@ export async function createAvatar3D(container, opts = {}) {
   }
 
   const headTilt = new THREE.Euler();
+  // Adaptive resolution: every ~2 s compare the average frame time against
+  // the budget and step the pixel ratio (between 1 and the device cap).
+  const adaptive = opts.adaptiveResolution !== false;
+  function adapt(now) {
+    if (lastNow) { frameAcc += now - lastNow; frameN++; }
+    lastNow = now;
+    if (frameAcc < 2000) return;
+    const avg = frameAcc / frameN;
+    fpsAvg = 1000 / avg;
+    frameAcc = 0; frameN = 0;
+    if (!adaptive) return;
+    const cur = renderer.getPixelRatio();
+    const next = nextPixelRatio({ avgFrameMs: avg, ratio: cur, cap: rs.pixelRatio });
+    if (next !== cur) { renderer.setPixelRatio(next); renderer.setSize(w, h, false); }
+  }
+
   function tick() {
     rafId = 0;
     if (disposed || paused) return;
     const dt = Math.min(clock.getDelta(), 0.1);
     const now = performance.now();
+    adapt(now);
 
     // speaking: smooth the level, layer the talking clip over the base state
     speaking += (speakingTarget - speaking) * Math.min(1, dt * 12);
@@ -456,7 +517,7 @@ export async function createAvatar3D(container, opts = {}) {
     rafId = requestAnimationFrame(tick);
   }
   function start() { if (!rafId && !disposed && !paused) { clock.getDelta(); rafId = requestAnimationFrame(tick); } }
-  function stop() { if (rafId) cancelAnimationFrame(rafId); rafId = 0; }
+  function stop() { if (rafId) cancelAnimationFrame(rafId); rafId = 0; lastNow = 0; frameAcc = 0; frameN = 0; }
 
   // ── lifecycle ────────────────────────────────────────────────────────────
   const onVisibility = () => {
@@ -502,6 +563,11 @@ export async function createAvatar3D(container, opts = {}) {
   const api = {
     get ready() { return ready; },
     get state() { return stateName; },
+    /** Load timings (ms since create) + live render stats, for logging/diagnostics. */
+    get stats() {
+      const i = renderer.info;
+      return { ...stats, t0: undefined, pixelRatio: renderer.getPixelRatio(), drawCalls: i.render.calls, triangles: i.render.triangles, programs: i.programs?.length ?? 0, textures: i.memory.textures, fps: Math.round(fpsAvg) };
+    },
     setState(name) {
       if (disposed || !STATES.includes(name)) return;
       const prev = stateName;
@@ -520,7 +586,8 @@ export async function createAvatar3D(container, opts = {}) {
       if (disposed) return;
       ({ w, h } = size());
       const s = renderSettings({ devicePixelRatio: globalThis.devicePixelRatio, width: w, height: h, isIOS });
-      renderer.setPixelRatio(s.pixelRatio);
+      rs = s; // new cap (orientation/size change); keep any adaptive step below it
+      renderer.setPixelRatio(Math.min(renderer.getPixelRatio(), s.pixelRatio));
       renderer.setSize(w, h, false);
       frame();
       if (paused) renderer.render(scene, camera);
@@ -528,6 +595,17 @@ export async function createAvatar3D(container, opts = {}) {
     dispose() { if (!disposed) teardown(); },
   };
 
+  if (opts.debug) {
+    // Test/inspection hook only (tools/avatar): direct access to the scene graph.
+    api.debug = { THREE, scene, camera, renderer, get root() { return root; }, controls, frame, mixer };
+  }
+  // Compile shaders off the critical path where the browser supports it
+  // (KHR_parallel_shader_compile), so the first frame doesn't hitch.
+  try { if (renderer.compileAsync) await renderer.compileAsync(scene, camera); } catch { /* fall back to lazy compile */ }
+  if (disposed) return stub;
+  mark('compileMs');
+  renderer.render(scene, camera);
+  mark('firstFrameMs');
   ready = true;
   paused = typeof document !== 'undefined' && document.hidden;
   start();

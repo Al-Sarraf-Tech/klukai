@@ -16,7 +16,7 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { NodeIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS, EXTTextureWebP } from '@gltf-transform/extensions';
-import { dedup, prune, resample, meshopt } from '@gltf-transform/functions';
+import { dedup, prune, resample, meshopt, join, compactPrimitive } from '@gltf-transform/functions';
 import { PropertyType } from '@gltf-transform/core';
 import { MeshoptEncoder, MeshoptDecoder } from 'meshoptimizer';
 import sharp from 'sharp';
@@ -146,6 +146,16 @@ for (const m of obj.materials) {
     parts.push({ name: m, source: m, texture: cfg.texture, faces, cfg });
   }
 }
+if (!DEBUG) { // one draw call per (texture, role, sidedness)
+  const merged = new Map();
+  for (const p of parts) {
+    const key = `${p.texture}|${p.cfg.role}|${!!p.cfg.doubleSided}`;
+    if (merged.has(key)) merged.get(key).faces.push(...p.faces);
+    else merged.set(key, { ...p, faces: [...p.faces] });
+  }
+  parts.length = 0;
+  parts.push(...merged.values());
+}
 const attrNames = ['position', 'normal', 'uv', 'skinIndex', 'skinWeight'];
 const out = new THREE.BufferGeometry();
 const totalTris = parts.reduce((n, p) => n + p.faces.length, 0);
@@ -243,6 +253,32 @@ scene.add(root);
 const glb = await new GLTFExporter().parseAsync(scene, { binary: true, animations: clips, onlyVisible: false });
 log(`raw export ${(glb.byteLength / 1048576).toFixed(1)} MB`);
 
+/**
+ * Moves primitives whose "blink" morph target actually moves vertices into a
+ * separate skinned mesh (same skin), and strips the all-zero target from the
+ * rest, so the ~30k body vertices skip morph work in the vertex shader.
+ */
+function splitHeadMesh(document) {
+  const r = document.getRoot();
+  const mesh = r.listMeshes()[0];
+  const node = r.listNodes().find((n) => n.getMesh() === mesh);
+  const head = document.createMesh('KlukaiHead').setWeights([0]).setExtras({ targetNames: ['blink'] });
+  for (const prim of mesh.listPrimitives()) {
+    const target = prim.listTargets()[0];
+    const pos = target?.getAttribute('POSITION');
+    let moves = false;
+    if (pos) { const a = pos.getArray(); for (let i = 0; i < a.length && !moves; i++) moves = Math.abs(a[i]) > 1e-7; }
+    if (moves) { mesh.removePrimitive(prim); head.addPrimitive(prim); }
+    else for (const t of prim.listTargets()) { prim.removeTarget(t); t.dispose(); }
+  }
+  if (!head.listPrimitives().length) { head.dispose(); return; }
+  mesh.setWeights([]).setExtras({});
+  const headNode = document.createNode('KlukaiHead').setMesh(head).setSkin(node.getSkin());
+  const parent = node.getParentNode();
+  if (parent) parent.addChild(headNode); else r.listScenes()[0].addChild(headNode);
+  log(`head mesh: ${head.listPrimitives().length} primitives carry the blink morph; body: ${mesh.listPrimitives().length}`);
+}
+
 // ── 5. Textures, materials, compression (glTF-Transform) ────────────────────
 await MeshoptEncoder.ready;
 await MeshoptDecoder.ready;
@@ -276,7 +312,8 @@ for (const m of doc.getRoot().listMaterials()) {
   if (!part) fail(`exported material without a part: ${m.getName()}`);
   const cfg = part.cfg;
   m.setMetallicFactor(0).setRoughnessFactor(1).setAlphaMode('OPAQUE').setDoubleSided(!!cfg.doubleSided);
-  m.setExtras({ role: cfg.role || 'debug', source: part.source, dropped: !!cfg.drop });
+  m.setExtras(DEBUG ? { role: cfg.role || 'debug', source: part.source, dropped: !!cfg.drop } : { role: cfg.role });
+  if (!DEBUG) m.setName(path.basename(part.texture || part.name, '.png'));
   if (part.texture) {
     m.setBaseColorTexture(await textureFor(part.texture, Math.min(cfg.maxSize || CONFIG.textureMaxSize, CONFIG.textureMaxSizeHard)));
   } else {
@@ -292,14 +329,31 @@ doc.getRoot().getAsset().generator = 'klukai tools/avatar/build.mjs (personal us
 
 const dedupTypes = [PropertyType.ACCESSOR, PropertyType.MESH, PropertyType.TEXTURE];
 if (!DEBUG) dedupTypes.push(PropertyType.MATERIAL);
-const ops = [resample({ tolerance: 1e-4 }), dedup({ propertyTypes: dedupTypes }), prune({ keepAttributes: false })];
-if (!DEBUG) ops.push(meshopt({ encoder: MeshoptEncoder, level: 'medium' }));
+const resampleTol = +(process.env.AVATAR_RESAMPLE_TOL || CONFIG.resampleTolerance);
+const meshoptLevel = process.env.AVATAR_MESHOPT_LEVEL || CONFIG.meshoptLevel;
+const ops = [resample({ tolerance: resampleTol }), dedup({ propertyTypes: dedupTypes }), prune({ keepAttributes: false })];
+// 'scene' quantization volume: head + body meshes keep sharing one skin.
+if (!DEBUG) ops.push(meshopt({ encoder: MeshoptEncoder, level: meshoptLevel, quantizationVolume: 'scene' }));
+if (!DEBUG) {
+  // Fewer draw calls: identical materials (same texture/role/sidedness) merge,
+  // then primitives sharing a material join. Morph targets only on the head.
+  // GLTFExporter shares one attribute set across all primitives of a mesh;
+  // give each primitive its own compact vertex subset first.
+  for (const m of doc.getRoot().listMeshes()) for (const prim of m.listPrimitives()) compactPrimitive(prim);
+  await doc.transform(dedup({ propertyTypes: [PropertyType.MATERIAL] }), join({ keepNamed: false }));
+  splitHeadMesh(doc);
+}
 await doc.transform(...ops);
 
-const outFile = path.join(repo, DEBUG ? CONFIG.outFile.replace(/\.glb$/, '.debug.glb') : CONFIG.outFile);
+const outFile = process.env.AVATAR_OUT ? path.resolve(process.env.AVATAR_OUT) : path.join(repo, DEBUG ? CONFIG.outFile.replace(/\.glb$/, '.debug.glb') : CONFIG.outFile);
 fs.mkdirSync(path.dirname(outFile), { recursive: true });
 const bytes = await io.writeBinary(doc);
-fs.writeFileSync(outFile, bytes);
+if (!DEBUG && bytes.byteLength > CONFIG.budgetBytes) fail(`GLB ${(bytes.byteLength / 1048576).toFixed(2)} MB exceeds budget`);
+// The output dir is bind-mounted read-only into the live container: write a
+// temp file and rename it, so the served GLB is always complete.
+const tmpFile = `${outFile}.tmp-${process.pid}`;
+fs.writeFileSync(tmpFile, bytes);
+fs.renameSync(tmpFile, outFile);
 
 const mb = bytes.byteLength / 1048576;
 log(`wrote ${path.relative(repo, outFile)} ${mb.toFixed(2)} MB`);

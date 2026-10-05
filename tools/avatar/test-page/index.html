@@ -8,6 +8,8 @@
   html, body { margin: 0; height: 100%; }
   /* Backdrop proves the canvas is transparent. */
   body { background: linear-gradient(160deg, #1d2240 0%, #3a2c5c 55%, #7a4f6d 100%); font: 12px system-ui, sans-serif; color: #fff; }
+  /* ?bg=stage reproduces the live companion stage (companion.css .stage) */
+  body.stage-bg { background: radial-gradient(120% 70% at 50% 35%, rgba(79,195,247,0.10), transparent 70%), linear-gradient(180deg, #0e1220 0%, #12151e 55%, #0b0d14 100%); }
   #stage { position: fixed; inset: 0; }
   #hud { position: fixed; left: 8px; bottom: 8px; opacity: .75; }
 </style>
@@ -19,6 +21,7 @@
   import { createAvatar3D } from '/flutter_app/web/companion/avatar3d.js';
   const q = new URLSearchParams(location.search);
   const hud = document.getElementById('hud');
+  if (q.get('bg') === 'stage') document.body.classList.add('stage-bg');
   window.__events = [];
   // Stand-in for the app's authenticated fetch: resolves to an ArrayBuffer.
   const loadModel = async () => {
@@ -28,7 +31,7 @@
   };
   const av = await createAvatar3D(document.getElementById('stage'), {
     loadModel,
-    framing: q.get('framing') || 'upper',
+    framing: q.get('framing') || 'upper', adaptiveResolution: false, // stable screenshots under SwiftShader
     onReady: () => { window.__events.push('ready'); },
     onError: (e) => { window.__events.push('error:' + e.message); hud.textContent = 'error: ' + e.message; },
   });

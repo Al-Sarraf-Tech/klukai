@@ -1,9 +1,10 @@
 <!doctype html><meta charset="utf-8"><title>avatar inspect</title>
 <style>html,body{margin:0;height:100%;background:#7a8590}canvas{display:block}</style>
+<script type="importmap">{"imports":{"three":"/tools/avatar/node_modules/three/build/three.module.js","three/addons/":"/tools/avatar/node_modules/three/examples/jsm/"}}</script>
 <script type="module">
-import * as THREE from '/flutter_app/web/companion/vendor/three.module.min.js';
-import { GLTFLoader } from '/flutter_app/web/companion/vendor/GLTFLoader.js';
-import { MeshoptDecoder } from '/flutter_app/web/companion/vendor/meshopt_decoder.module.js';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 const q = new URLSearchParams(location.search);
 const W = innerWidth, H = innerHeight;
 const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });

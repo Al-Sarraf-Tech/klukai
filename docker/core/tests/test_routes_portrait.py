@@ -141,7 +141,8 @@ class TestAvatarModel:
         assert r.status_code == 200
         assert r.content.startswith(b"glTF")
         assert r.headers["content-type"] == "model/gltf-binary"
-        assert r.headers["cache-control"] == "private, max-age=86400"
+        assert r.headers["cache-control"] == "private, no-cache"  # a rebuild reaches him at once
+        assert r.headers["vary"] == "Accept-Encoding"
         etag = r.headers["etag"]
         assert etag.startswith('"') and etag.endswith('"')
 
@@ -154,6 +155,23 @@ class TestAvatarModel:
         assert star.status_code == 304
         stale = client.get("/api/avatar/model", headers={**AUTH, "If-None-Match": '"old"'})
         assert stale.status_code == 200
+
+    def test_gzip_when_accepted_and_compressed_once_per_version(self, client, tmp_path):
+        from app import routes_portrait
+
+        routes_portrait._MODEL_GZ.clear()
+        (tmp_path / "klukai.glb").write_bytes(b"glTF" + b"\x01" * 4096)
+        plain = client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": "identity"})
+        assert "content-encoding" not in plain.headers
+        assert plain.content.startswith(b"glTF")
+        gz = client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": "gzip, br"})
+        assert gz.headers["content-encoding"] == "gzip"
+        assert gz.content.startswith(b"glTF")  # the client inflates it
+        assert int(gz.headers["content-length"]) < 4100
+        assert list(routes_portrait._MODEL_GZ) == [gz.headers["etag"]]
+        cached = routes_portrait._MODEL_GZ[gz.headers["etag"]]
+        client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": "gzip"})
+        assert routes_portrait._MODEL_GZ[gz.headers["etag"]] is cached
 
     def test_default_path(self, client, monkeypatch):
         monkeypatch.delenv("AVATAR_MODEL_PATH")

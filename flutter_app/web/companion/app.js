@@ -268,6 +268,11 @@ function boot() {
 
   portrait.setFrames({});
   ambience.start();
+  // 3D was his last view: start fetching three.js + the model now, in
+  // parallel with the socket and the tap-to-begin, so it's ready on wake.
+  if (prefs.mode === "model") {
+    import("./avatar3d.js").then((m) => m.warmAvatar3D?.({ loadModel: api.model })).catch(() => {});
+  }
   socket.start();
   refreshDay();
   refreshPortrait();
