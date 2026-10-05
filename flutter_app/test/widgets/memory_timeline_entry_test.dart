@@ -1,6 +1,3 @@
-@TestOn('browser')
-library;
-
 // Widget tests for MemoryTimelineEntry: timestamp framing, scene tags,
 // annotation, and the "saved by" badge (klukai vs commander).
 //

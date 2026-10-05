@@ -1,6 +1,3 @@
-@TestOn('browser')
-library;
-
 // Widget tests for ToolStatusIndicator: tool-name framing + in-progress vs
 // done visuals.
 //

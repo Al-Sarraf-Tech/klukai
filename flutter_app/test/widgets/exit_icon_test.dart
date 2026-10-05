@@ -1,6 +1,3 @@
-@TestOn('browser')
-library;
-
 // Widget tests for ExitIcon (a CustomPainter). No main.dart dependency.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

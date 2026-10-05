@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import '../main.dart';
+import '../theme/gfl2_colors.dart';
 import '../models/memory.dart';
 
 class MemoryTimelineEntry extends StatefulWidget {

@@ -1,6 +1,3 @@
-@TestOn('browser')
-library;
-
 // Widget tests for HeartbeatSensor: BPM readout, color, icon, ECG painter.
 // No main.dart dependency (runs on VM or chrome).
 //
