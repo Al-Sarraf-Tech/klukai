@@ -442,7 +442,7 @@ class TestEnsureToday:
         assert params[0] == "claude" and params[1] == _NOW.date()
         assert json.loads(params[4]) == {"temp_c": 9.0, "condition": "cloudy"}
 
-    async def test_lost_insert_race_still_returns_a_row(self, clock, memory):
+    async def test_row_missing_after_insert_is_not_persisted(self, clock, memory):
         conn = _conn()
         conn.execute = AsyncMock(side_effect=[
             _cursor(fetchone=None), _cursor(fetchall=[]), _cursor(fetchone=None),
@@ -453,7 +453,8 @@ class TestEnsureToday:
              patch("app.rituals.get_birthday", new=AsyncMock(return_value=None)):
             row = await w.ensure_today("claude", 0)
         assert row.day == _NOW.date()
-        assert row.weather is None
+        assert row.persisted is False
+        assert row.base_outfit_id == w.DEFAULT_OUTFIT
 
     async def test_db_down_defaults_and_retries_later(self, clock):
         with patch("app.db.get_conn", side_effect=RuntimeError("pool")):
@@ -515,7 +516,7 @@ class TestFavoriteAndHistory:
 
 class TestHandleRequest:
     async def _run(self, row, oid, level, *, current="blazing_star", conn=None):
-        w._today_cache["claude"] = (0.0, row, True)
+        w._today_cache["claude"] = (0.0, row)
         with patch("app.wardrobe.now_local", return_value=_NOW), \
              patch("app.rituals.get_birthday", new=AsyncMock(return_value=None)), \
              patch("app.db.get_conn_autocommit", return_value=conn or _conn()):
@@ -528,7 +529,7 @@ class TestHandleRequest:
         assert out.decision == "comply"
         sql, params = conn.execute.await_args.args
         assert "UPDATE companion_her_day SET requested_outfit_id" in sql
-        assert params == ("speed_star", 1, "claude", _NOW.date())
+        assert params == ("speed_star", 1, "claude", _NOW.date(), 1, w.MAX_REQUESTS_PER_DAY)
         cached = w._today_cache["claude"][1]
         assert (cached.requested_outfit_id, cached.request_changes) == ("speed_star", 1)
 
@@ -545,15 +546,67 @@ class TestHandleRequest:
         assert out.decision == "refuse"
         assert w._today_cache["claude"][1].requested_outfit_id is None
 
+    async def test_cap_hit_by_another_device_is_a_refusal(self):
+        cur = MagicMock(rowcount=0)
+        conn = _conn()
+        conn.execute = AsyncMock(return_value=cur)
+        row = w.HerDayRow(_NOW.date(), "blazing_star", "A duty day.", request_changes=1)
+        out = await self._run(row, "speed_star", 5, conn=conn)
+        assert out.decision == "refuse"
+
+    async def test_standin_row_never_takes_a_request(self):
+        conn = _conn()
+        row = w.HerDayRow(_NOW.date(), "blazing_star", "x", persisted=False)
+        out = await self._run(row, "speed_star", 5, conn=conn)
+        assert out.decision == "refuse"
+        conn.execute.assert_not_awaited()
+
+    async def test_deployed_is_not_now(self):
+        w._today_cache["claude"] = (0.0, w.HerDayRow(_NOW.date(), "blazing_star", "x"))
+        with patch("app.wardrobe.now_local", return_value=_NOW), \
+             patch("app.rituals.get_birthday", new=AsyncMock(return_value=None)):
+            out = await w.handle_request("claude", "speed_star", 5, current_id="blazing_star", deployed=True)
+        assert out.decision == "not_now"
+
 
 class TestSetRequested:
+    async def test_standin_row_raises(self, clock):
+        w._today_cache["claude"] = (10**12, w.HerDayRow(_NOW.date(), "blazing_star", "x", persisted=False))
+        with patch("app.wardrobe.time.monotonic", return_value=10**12), pytest.raises(RuntimeError):
+            await w.set_requested("claude", "speed_star", 5)
+
+    async def test_first_touch_and_pick_are_serialized(self, clock, memory):
+        """A slow first touch can't overwrite his pick recorded meanwhile."""
+        gate = asyncio.Event()
+        stored = ("blazing_star", "A duty day.", None, 0, None)
+        calls = {"n": 0}
+
+        async def slow_load(user_id, day):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                await gate.wait()
+            return w._row_from_db(day, stored)
+
+        conn_ac = _conn()
+        with patch("app.wardrobe._load_row", new=slow_load), \
+             patch("app.db.get_conn_autocommit", return_value=conn_ac):
+            first = asyncio.create_task(w.ensure_today("claude", 5))
+            await asyncio.sleep(0)
+            pick = asyncio.create_task(w.set_requested("claude", "speed_star", 5))
+            await asyncio.sleep(0)
+            gate.set()
+            await asyncio.gather(first, pick)
+        assert w._today_cache["claude"][1].requested_outfit_id == "speed_star"
+
     async def test_ui_pick_does_not_count_toward_the_cap(self, clock):
         row = w.HerDayRow(_NOW.date(), "blazing_star", "A duty day.", request_changes=1)
-        w._today_cache["claude"] = (0.0, row, True)
+        w._today_cache["claude"] = (0.0, row)
         conn = _conn()
         with patch("app.db.get_conn_autocommit", return_value=conn):
             await w.set_requested("claude", "immaculate_service", 5)
-        assert conn.execute.await_args.args[1] == ("immaculate_service", 0, "claude", _NOW.date())
+        assert conn.execute.await_args.args[1] == (
+            "immaculate_service", 0, "claude", _NOW.date(), 0, w.MAX_REQUESTS_PER_DAY,
+        )
         cached = w._today_cache["claude"][1]
         assert (cached.requested_outfit_id, cached.request_changes) == ("immaculate_service", 1)
 
@@ -577,7 +630,8 @@ class TestDecidedOutfit:
     async def test_first_touch_uses_his_call(self, clock, memory):
         memory.recall_fact.return_value = json.dumps({"date": "2026-10-04", "outfit_id": "speed_star"})
         conn = _conn()
-        conn.execute = AsyncMock(side_effect=[_cursor(fetchone=None), _cursor(fetchone=None)])
+        stored = ("speed_star", "His call — she asked, he decided.", None, 0, None)
+        conn.execute = AsyncMock(side_effect=[_cursor(fetchone=None), _cursor(fetchone=stored)])
         conn_ac = _conn()
         with patch("app.db.get_conn", return_value=conn), \
              patch("app.db.get_conn_autocommit", return_value=conn_ac), \
@@ -585,3 +639,62 @@ class TestDecidedOutfit:
             row = await w.ensure_today("claude", 5)
         assert row.base_outfit_id == "speed_star"
         assert row.base_reason.startswith("His call")
+
+
+class TestReviewFixes:
+    def test_day_turns_over_at_five(self):
+        assert w.her_date(datetime(2026, 10, 5, 0, 40)) == date(2026, 10, 4)
+        assert w.her_date(datetime(2026, 10, 5, 4, 59)) == date(2026, 10, 4)
+        assert w.her_date(datetime(2026, 10, 5, 5, 0)) == date(2026, 10, 5)
+
+    @pytest.mark.parametrize("msg", [
+        "I'm going to wear a coat today",
+        "I'll be in a meeting so I need something nice",
+        "you'd be in big trouble if Belka saw the maid photos",
+        "you shouldn't wear the bikini, it's freezing",
+        "I'll wear my glasses",
+        "you can't wear the maid outfit to a briefing",
+        "wear the uniform. The maid outfit is for tomorrow",
+    ])
+    def test_ordinary_sentences_are_not_requests(self, msg):
+        out = w.detect_outfit_request(msg)
+        if msg.startswith("wear the uniform"):
+            assert out == "blazing_star"  # the tail stops at the sentence
+        else:
+            assert out is None
+
+    @pytest.mark.parametrize("msg,expected", [
+        ("I want you to wear the maid outfit", "immaculate_service"),
+        ("Klukai, wear the coat", "winter_patrol"),
+        ("please put on the rider suit", "speed_star"),
+        ("you should wear the bikini today", "cerulean_breaker"),
+    ])
+    def test_addressed_requests(self, msg, expected):
+        assert w.detect_outfit_request(msg) == expected
+
+    def test_oath_only_on_its_own_days(self, cat):
+        o = cat["indigo_oath"]
+        kw = dict(current_id="blazing_star", request_changes=0, hour=12)
+        assert w.decide_request(o, 8, occasions_today=frozenset({"halloween"}), **kw).decision == "not_today"
+        assert w.decide_request(o, 8, occasions_today=frozenset({"commander_birthday"}), **kw).decision == "comply"
+
+    def test_ui_mode(self, cat):
+        kw = dict(current_id="blazing_star", occasions_today=frozenset(), hour=12)
+        # Unlock level is the permission in the PWA; no reticence, no cap…
+        assert w.decide_request(cat["cerulean_breaker"], 2, request_changes=0, ui=True, **kw).decision == "comply"
+        assert w.decide_request(cat["speed_star"], 5, request_changes=9, ui=True, **kw).decision == "comply"
+        # …but the onesie, the oath and the seasons still hold.
+        assert w.decide_request(cat["klukadile_pajamas"], 9, request_changes=0, ui=True, **kw).decision == "deny"
+        assert w.decide_request(cat["indigo_oath"], 8, request_changes=0, ui=True, **kw).decision == "not_today"
+        assert w.decide_request(cat["black_cat_ops"], 5, request_changes=0, ui=True, **kw).decision == "occasion_only"
+
+    async def test_warm_today(self):
+        aff = MagicMock()
+        aff.get_state = AsyncMock(return_value=MagicMock(level=4))
+        ensure = AsyncMock()
+        with patch("app.context.affection", aff), patch("app.wardrobe.ensure_today", ensure):
+            await w.warm_today("claude")
+        ensure.assert_awaited_once_with("claude", 4)
+        aff.get_state = AsyncMock(side_effect=RuntimeError("x"))
+        with patch("app.context.affection", aff):
+            await w.warm_today("claude")  # never raises

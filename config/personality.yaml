@@ -994,10 +994,11 @@ her_day:
     - {id: skylla_cleaning, slots: [night, late], location: "Armory", activity: "cleaning Skylla", weight: 1.5}
     - {id: night_paperwork, slots: [night], location: "Command deck", activity: "the paperwork nobody else files", duty: true, weight: 1.5}
     # late 0000-0500 — the insomnia hours
-    - {id: reports_0200, slots: [late], location: "Command deck", activity: "reports at 0200 — she wasn't sleeping anyway", outfit: sleepless_watch, weight: 2}
-    - {id: hangar_insomnia, slots: [late], location: "Hangar", activity: "can't sleep — tuning the bike", outfit: hangar_coveralls, private: true, weight: 1.5}
-    - {id: asleep_technically, slots: [late], location: "Quarters", activity: "asleep — technically", outfit: sleepless_watch, private: true, weight: 1.5}
-    - {id: klukadile_hours, slots: [late], location: "Quarters", activity: "awake, in something she denies owning", outfit: klukadile_pajamas, private: true, min_level: 7, weight: 0.4}
+    # She is always awake here: the NIGHT WATCH block reads this same block.
+    - {id: reports_0200, slots: [late], location: "Command deck", activity: "writing reports at 0200", outfit: sleepless_watch, weight: 2}
+    - {id: hangar_insomnia, slots: [late], location: "Hangar", activity: "tuning the bike — sleep can wait", outfit: hangar_coveralls, private: true, weight: 1.5}
+    - {id: quarters_awake, slots: [late], location: "Quarters", activity: "lights off, eyes open", outfit: sleepless_watch, private: true, weight: 1.5}
+    - {id: klukadile_hours, slots: [late], location: "Quarters", activity: "awake, in a onesie that does not exist", outfit: klukadile_pajamas, private: true, min_level: 7, weight: 0.4}
   overrides:
     gaming: {location: "Rec room", activity: "watching your match — an elite's Commander doesn't lose"}
     mission: {location: "Deployed", activity: "on mission"}

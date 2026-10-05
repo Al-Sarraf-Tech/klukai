@@ -23,7 +23,7 @@ import random
 import re
 import time
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from .personality.loader import load_personality
 from .proactive.state import now_local
@@ -39,6 +39,10 @@ DEFAULT_REASON = "Standard operational gear."
 LEGACY_ALIASES = {"midnight_sovereign": "formal_commission", "starlit_vow": "indigo_oath"}
 
 MAX_REQUESTS_PER_DAY = 2
+# Her day turns over at 0500, not midnight: the insomnia hours belong to the
+# night before, and a 00:40 message must not pick tomorrow's clothes from a
+# 2 °C night reading.
+DAY_START_HOUR = 5
 _WEATHER_TIMEOUT_S = 2.5
 _FAILURE_RETRY_S = 300.0
 
@@ -308,13 +312,27 @@ class HerDayRow:
     requested_outfit_id: str | None = None
     request_changes: int = 0
     weather: dict | None = None
+    persisted: bool = True  # False = a fail-soft stand-in with no DB row behind it
 
 
-_today_cache: dict[str, tuple[float, HerDayRow, bool]] = {}
+def her_date(now: datetime) -> date:
+    """The day she is living at ``now`` (turns over at DAY_START_HOUR)."""
+    return (now - timedelta(hours=DAY_START_HOUR)).date()
+
+
+_today_cache: dict[str, tuple[float, HerDayRow]] = {}
+_locks: dict[str, asyncio.Lock] = {}
+
+
+def _lock(user_id: str) -> asyncio.Lock:
+    """Serializes first-touch and request writes per Commander, so a slow
+    first touch can never overwrite a request recorded meanwhile."""
+    return _locks.setdefault(user_id, asyncio.Lock())
 
 
 def clear_cache() -> None:
     _today_cache.clear()
+    _locks.clear()
 
 
 def _row_from_db(day: date, r: tuple) -> HerDayRow:
@@ -423,69 +441,99 @@ async def _quick_weather() -> dict | None:
 async def ensure_today(user_id: str, level: int, *, mood: str | None = None) -> HerDayRow:
     """Today's row, picking (and persisting) her outfit on first touch of the day.
 
-    Fail-soft: on any DB error she wears Blazing Star and we retry in 5 minutes.
+    Fail-soft: on any DB error she wears Blazing Star (``persisted=False``) and
+    the DB is retried after 5 minutes.
     """
-    day = now_local().date()
-    cached = _today_cache.get(user_id)
-    if cached and cached[1].day == day and (cached[2] or time.monotonic() - cached[0] < _FAILURE_RETRY_S):
-        return cached[1]
-    try:
-        row = await _load_row(user_id, day)
-        if row is None:
-            from .rituals import get_birthday
+    day = her_date(now_local())
+    async with _lock(user_id):
+        cached = _today_cache.get(user_id)
+        if cached and cached[1].day == day and (
+            cached[1].persisted or time.monotonic() - cached[0] < _FAILURE_RETRY_S
+        ):
+            return cached[1]
+        try:
+            row = await _load_row(user_id, day)
+            if row is None:
+                from .rituals import get_birthday
 
-            p = load_personality()
-            cat = catalog(p)
-            weather = await _quick_weather()
-            decided = await decided_outfit(user_id, day, level, cat)
-            if decided:
-                oid, reason = decided, "His call — she asked, he decided."
-            else:
-                oid, reason = pick_daily_outfit(
-                    cat, day, level,
-                    weather=weather,
-                    mood=mood,
-                    favorite=await favorite_outfit(user_id),
-                    recent=await recent_outfits(user_id, day),
-                    occasions=occasions_on(day, p, await get_birthday(user_id)),
-                    seed=user_id,
-                )
-            await _insert_row(user_id, HerDayRow(day, oid, reason, weather=weather))
-            # Re-read: a concurrent first touch may have won the insert.
-            row = await _load_row(user_id, day) or HerDayRow(day, oid, reason, weather=weather)
-        _today_cache[user_id] = (time.monotonic(), row, True)
+                p = load_personality()
+                cat = catalog(p)
+                weather = await _quick_weather()
+                decided = await decided_outfit(user_id, day, level, cat)
+                if decided:
+                    oid, reason = decided, "His call — she asked, he decided."
+                else:
+                    oid, reason = pick_daily_outfit(
+                        cat, day, level,
+                        weather=weather,
+                        mood=mood,
+                        favorite=await favorite_outfit(user_id),
+                        recent=await recent_outfits(user_id, day),
+                        occasions=occasions_on(day, p, await get_birthday(user_id)),
+                        seed=user_id,
+                    )
+                await _insert_row(user_id, HerDayRow(day, oid, reason, weather=weather))
+                # Re-read: the row actually stored (a concurrent writer may have won).
+                row = await _load_row(user_id, day)
+                if row is None:
+                    raise RuntimeError("her day row missing after insert")
+        except Exception as e:
+            logger.warning("Her Day unavailable, defaulting outfit: %s", e)
+            row = HerDayRow(day, DEFAULT_OUTFIT, DEFAULT_REASON, persisted=False)
+        _today_cache[user_id] = (time.monotonic(), row)
+        return row
+
+
+async def warm_today(user_id: str) -> None:
+    """On connect: pick today's outfit in the background (never raises)."""
+    from .context import affection
+
+    try:
+        await ensure_today(user_id, (await affection.get_state(user_id)).level)
     except Exception as e:
-        logger.warning("Her Day unavailable, defaulting outfit: %s", e)
-        row = HerDayRow(day, DEFAULT_OUTFIT, DEFAULT_REASON)
-        _today_cache[user_id] = (time.monotonic(), row, False)
-    return row
+        logger.debug("Her Day warm-up skipped: %s", e)
 
 
 # ── His requests ───────────────────────────────────────────────────────────
 
 _VERBS = (
-    r"wear|put on|change into|change in to|change to|switch into|switch to|dress in|"
-    r"dress up in|try on|slip into|get into|get in|show up in|be in|see you in"
+    r"wear|put on|change into|change in to|switch into|switch to|dress in|"
+    r"dress up in|try on|slip into"
 )
-_NEGATION = re.compile(r"\b(?:don'?t|do not|never|stop|quit|no more|not)\s+(?:\w+\s+){0,2}$")
+# Phrasings with "you" built in: "I want to see you in the maid outfit".
+_YOU_IN = r"(?:see|want|need) you in"
+_NEGATION = re.compile(
+    r"\b(?:don'?t|do not|never|stop|quit|no more|not|can'?t|cannot|won'?t|shouldn'?t|"
+    r"mustn'?t|wouldn'?t|couldn'?t|didn'?t|doesn'?t)\s+(?:\w+\s+){0,2}$"
+)
 _QUESTION_ABOUT = re.compile(r"\b(?:do|did|have) you (?:ever |still |even )?$")
+# The wear-verb must be addressed to HER: an imperative opening a clause
+# ("Klukai, wear...", "please put on..."), or you-led ("can you", "would you",
+# "I want you to", "you should"). "I'm going to wear a coat" is about him.
+_ADDRESSED = re.compile(
+    r"(?:^|[.!?;,:]\s*|\b(?:please|just|now|go|and|so|then|ok|okay|hey)\s+)$"
+    r"|\byou(?:'d| would| could| can| will| might| should| to)?\s+(?:please\s+|maybe\s+|just\s+)?$"
+)
 
 
 def detect_outfit_request(message: str, cat: dict[str, Outfit] | None = None) -> str | None:
-    """A request to change into a named outfit → its id, else None.
+    """A request for HER to change into a named outfit → its id, else None.
 
-    High precision on purpose: needs a wear-verb before a catalog alias, and
-    ignores negations ("don't wear the maid outfit") and idle questions ("do
-    you ever wear...").
+    High precision on purpose — every hit is a real decision (a change, a
+    counted request, or a refusal he never asked for). Needs a wear-verb
+    addressed to her, a catalog alias in the same sentence, and no negation
+    or idle question ("don't wear...", "do you ever wear...").
     """
     cat = catalog() if cat is None else cat
     lower = " ".join(message.lower().split())
     aliases = [(alias, o.id) for o in cat.values() for alias in (*o.aliases, o.name.lower())]
-    for verb in re.finditer(rf"\b(?:{_VERBS})\b", lower):
+    for verb in re.finditer(rf"\b(?:{_YOU_IN}|{_VERBS})\b", lower):
         before = lower[: verb.start()]
         if _NEGATION.search(before) or _QUESTION_ABOUT.search(before):
             continue
-        tail = lower[verb.end(): verb.end() + 48]
+        if not verb.group(0).endswith("you in") and not _ADDRESSED.search(before):
+            continue
+        tail = re.split(r"[.!?;]", lower[verb.end(): verb.end() + 48], maxsplit=1)[0]
         # The outfit named FIRST after the verb wins ("wear the coat over the
         # maid uniform" is the coat); at the same spot, the longest alias.
         hits = [
@@ -515,6 +563,11 @@ def _band_note(level: int) -> str:
     return "Comply, curtly, for practical reasons only."
 
 
+# Days that "matter" enough for the wedding gown below the oath: its own
+# occasions (White Day) and his birthday — not Halloween or Christmas week.
+_OATH_DAYS = frozenset({"commander_birthday"})
+
+
 def decide_request(
     o: Outfit,
     level: int,
@@ -523,8 +576,17 @@ def decide_request(
     request_changes: int,
     occasions_today: frozenset[str],
     hour: int,
+    deployed: bool = False,
+    ui: bool = False,
 ) -> RequestOutcome:
-    """Deterministic outcome of 'wear X'. The LLM only voices it."""
+    """Deterministic outcome of 'wear X'. The LLM only voices it.
+
+    ``ui=True`` is the PWA wardrobe button: the unlock level already is the
+    permission there, so the low-affection reticence and the daily cap don't
+    apply — but the onesie, the oath, the seasons and the hour still do.
+    """
+    if deployed:
+        return RequestOutcome(o.id, "not_now", "You're deployed. Not now — the mission kit stays on.")
     if o.deny:
         return RequestOutcome(o.id, "deny", "Deny the thing exists. Flatly. Change the subject.")
     if level < o.visible_at:
@@ -538,70 +600,84 @@ def decide_request(
             else "Refuse, but hint — in your voice — that it's a matter of trust, not time."
         )
         return RequestOutcome(o.id, "locked", hint)
-    if level < 3 and o.category not in ("duty", "weather", "training"):
+    if not ui and level < 3 and o.category not in ("duty", "weather", "training"):
         return RequestOutcome(o.id, "refuse", "'My attire is not a topic for discussion, Commander.'")
-    if o.category == "oath" and level < 9 and not occasions_today:
+    if o.category == "oath" and level < 9 and not occasions_today & (_OATH_DAYS | set(o.occasions)):
         return RequestOutcome(o.id, "not_today", "'...Not today. Ask me on a day that matters.'")
     if o.category == "seasonal" and not (occasions_today & set(o.occasions)):
         return RequestOutcome(o.id, "occasion_only", "Wrong season for it. Say so, dryly.")
     if o.category == "sleep" and 5 <= hour < 21:
         return RequestOutcome(o.id, "not_now", "Late-watch clothes are not for daytime. Decline.")
-    if request_changes >= MAX_REQUESTS_PER_DAY:
+    if not ui and request_changes >= MAX_REQUESTS_PER_DAY:
         return RequestOutcome(o.id, "limit", "'I am not a mannequin, Commander.' You do not change again today.")
     return RequestOutcome(o.id, "comply", _band_note(level))
 
 
-async def _record_request(user_id: str, day: date, oid: str, *, count: bool = True) -> None:
+async def _record_request(user_id: str, day: date, oid: str, *, count: bool = True) -> bool:
+    """Persist his outfit for today. A counted request only lands while under
+    the daily cap (atomic — two devices can't sneak a third change through).
+    Returns whether a row was updated."""
     from .db import get_conn_autocommit
 
     async with get_conn_autocommit() as conn:
-        await conn.execute(
+        cur = await conn.execute(
             "UPDATE companion_her_day SET requested_outfit_id = %s, "
             "request_changes = request_changes + %s, updated_at = NOW() "
-            "WHERE user_id = %s AND day = %s",
-            (oid, 1 if count else 0, user_id, day),
+            "WHERE user_id = %s AND day = %s AND (%s = 0 OR request_changes < %s)",
+            (oid, 1 if count else 0, user_id, day, 1 if count else 0, MAX_REQUESTS_PER_DAY),
         )
+        return bool(cur.rowcount)
 
 
 async def set_requested(user_id: str, oid: str, level: int) -> None:
     """His pick from the PWA wardrobe: she wears it for the rest of today.
 
-    The dorm "change outfit" button, as in GFL2 — not a chat request, so it
-    neither runs the request ladder nor counts toward the daily request cap.
+    The dorm "change outfit" button, as in GFL2 — gated by ``decide_request``
+    in UI mode by the caller, and never counted toward the daily request cap.
+    Raises if it could not be persisted.
     """
     row = await ensure_today(user_id, level)
-    await _record_request(user_id, row.day, oid, count=False)
-    _today_cache[user_id] = (time.monotonic(), replace(row, requested_outfit_id=oid), True)
+    async with _lock(user_id):
+        if not row.persisted or not await _record_request(user_id, row.day, oid, count=False):
+            raise RuntimeError("her day not persisted; outfit not changed")
+        _today_cache[user_id] = (time.monotonic(), replace(row, requested_outfit_id=oid))
+
+
+async def occasions_for(user_id: str, day: date) -> frozenset[str]:
+    from .rituals import get_birthday
+
+    return occasions_on(day, None, await get_birthday(user_id))
 
 
 async def handle_request(
-    user_id: str, oid: str, level: int, *, current_id: str, mood: str | None = None,
+    user_id: str, oid: str, level: int, *, current_id: str,
+    mood: str | None = None, deployed: bool = False,
 ) -> RequestOutcome:
     """Decide his request and, if she agrees, make it so for the rest of today."""
     cat = catalog()
     row = await ensure_today(user_id, level, mood=mood)
-    now = now_local()
-    from .rituals import get_birthday
-
-    birthday = await get_birthday(user_id)
     outcome = decide_request(
         cat[oid], level,
         current_id=current_id,
         request_changes=row.request_changes,
-        occasions_today=occasions_on(now.date(), None, birthday),
-        hour=now.hour,
+        occasions_today=await occasions_for(user_id, row.day),
+        hour=now_local().hour,
+        deployed=deployed,
     )
-    if outcome.decision == "comply":
+    if outcome.decision != "comply":
+        return outcome
+    async with _lock(user_id):
         try:
-            await _record_request(user_id, row.day, oid)
-            _today_cache[user_id] = (
-                time.monotonic(),
-                replace(row, requested_outfit_id=oid, request_changes=row.request_changes + 1),
-                True,
-            )
+            recorded = row.persisted and await _record_request(user_id, row.day, oid)
         except Exception as e:
             logger.warning("Could not record outfit request: %s", e)
+            recorded = False
+        if not recorded:
             return RequestOutcome(oid, "refuse", "Something came up; you don't change right now. Don't explain.")
+        _today_cache[user_id] = (
+            time.monotonic(),
+            replace(row, requested_outfit_id=oid, request_changes=row.request_changes + 1),
+        )
     return outcome
 
 

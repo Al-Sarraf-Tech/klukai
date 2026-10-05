@@ -428,6 +428,7 @@ async def background_image_gen(
         full_prompt = build_prompt(
             scene_tags, couple=couple, affection_level=aff_level,
             context=full_context, squad_members=squad_members, costume=costume,
+            request=user_request,
         )
         logger.info("Image prompt (aff=%d): %s", aff_level, full_prompt[:300])
 

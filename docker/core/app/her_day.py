@@ -56,12 +56,17 @@ def _rng(seed: str, day: date) -> random.Random:
 
 
 def build_day(cfg: dict, day: date, level: int, *, weather: dict | None = None, seed: str = "") -> list[Block]:
-    """The day's roster, one block per slot, ordered by start hour."""
+    """The day's roster, one block per slot, in her day's order (0500 → 0500)."""
     rng = _rng(seed, day)
     condition = (weather or {}).get("condition")
     activities = [a for a in cfg.get("activities") or () if isinstance(a, dict)]
     blocks: list[Block] = []
-    for slot, (start, end) in sorted((cfg.get("slots") or {}).items(), key=lambda kv: kv[1][0]):
+    # Ordered from her day's start (0500): the insomnia hours close the day.
+    slots = sorted(
+        (cfg.get("slots") or {}).items(),
+        key=lambda kv: (int(kv[1][0]) - wardrobe.DAY_START_HOUR) % 24,
+    )
+    for slot, (start, end) in slots:
         candidates = [
             a for a in activities
             if slot in (a.get("slots") or ())
@@ -96,7 +101,10 @@ def effective_outfit(
     if base and not wardrobe.is_unlocked(base, level, cat):
         base = None
     special = base is not None and cat[base].category in _ROSTER_PROOF
-    if not special and block and block.outfit and wardrobe.is_unlocked(block.outfit, level, cat):
+    # Block kit for her private life shows only once he's allowed to see that
+    # life (affection 3) — otherwise "Off duty" + "Hangar Coveralls" leaks it.
+    visible = block is not None and (not block.private or level >= 3)
+    if not special and visible and block.outfit and wardrobe.is_unlocked(block.outfit, level, cat):
         return str(block.outfit), "roster"
     if base:
         return base, "auto"

@@ -163,6 +163,12 @@ class TestBlock:
     def test_canon_insomnia_reaches_the_block(self, p):
         assert p["insomnia"]["canon"].split(".")[0] in nw.build_night_watch_block(p, _t(2), 0, 0, False)
 
+    def test_her_day_roster_overrides_the_insomnia_list(self, p):
+        block = nw.build_night_watch_block(p, _t(2), 3, 0, False, activity="at the Hangar, tuning the bike")
+        assert "Right now you are at the Hangar, tuning the bike." in block
+        for act in p["insomnia"]["activities"]:
+            assert act not in block
+
     def test_activity_is_stable_for_a_night_and_varies_across_nights(self, p):
         acts = p["insomnia"]["activities"]
         a1 = nw.build_night_watch_block(p, _t(1), 3, 0, False)
@@ -230,6 +236,12 @@ class TestBlock:
 
 
 class TestPromptBlock:
+    async def test_roster_activity_threads_through(self, p):
+        block = await nw.night_watch_prompt_block(
+            "claude", p, 3, _memory([]), now=_t(2), activity="at the Armory, cleaning Skylla",
+        )
+        assert "Right now you are at the Armory, cleaning Skylla." in block
+
     @pytest.mark.asyncio
     async def test_daytime_is_silent_and_touches_nothing(self, p):
         mem = _memory([])

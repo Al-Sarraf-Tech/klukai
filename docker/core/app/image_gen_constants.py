@@ -390,6 +390,9 @@ TIME_OF_DAY_TAGS = {
 # the prompt, images, gates and the PWA.
 
 # Scene keywords that DO override what she is wearing today: an explicit bath
-# or bed scene is not rendered in battle-maid kit. Everything else in
-# OUTFIT_MAP (lighting words like "morning"/"night") yields to today's outfit.
-SCENE_OUTFIT_KEYWORDS: tuple[str, ...] = ("bath", "lingerie", "underwear", "bed", "sleep")
+# or bed scene is not rendered in battle-maid kit. Whole words, in HIS request
+# — and, like every intimate outfit, only at the bond where graphic intimacy
+# opens (INTIMATE_MIN_LEVEL). Lighting words ("morning", "night") never strip her.
+SCENE_OUTFIT_KEYWORDS: tuple[str, ...] = ("bath", "bathing", "lingerie", "underwear", "bed", "sleep", "sleeping")
+INTIMATE_MIN_LEVEL = 8
+INTIMATE_OUTFIT_KEYS = frozenset({"bed", "sleep", "morning", "bath", "underwear", "lingerie"})

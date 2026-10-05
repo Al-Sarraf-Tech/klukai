@@ -114,7 +114,8 @@ def register_extras(app: FastAPI) -> None:
             {
                 "id": o.id, "name": o.name, "blurb": o.blurb, "category": o.category,
                 "source": o.source, "unlock_level": o.unlock_level,
-                "unlocked": level >= o.unlock_level, "current": o.id == now.outfit.id,
+                "unlocked": level >= o.unlock_level and not o.deny,
+                "current": o.id == now.outfit.id,
             }
             for o in wardrobe.catalog().values()
             if wardrobe.is_visible(o, level)
@@ -144,6 +145,21 @@ def register_extras(app: FastAPI) -> None:
                 {"error": f"'{oid}' is locked. Requires affection level {unlock_level} "
                           f"(you are at {aff.level})."},
                 status_code=403,
+            )
+        # The same decision table as a chat request (UI mode: the unlock level
+        # is the permission, no daily cap) — the onesie, the oath "on a day that
+        # matters", the seasons and the hour hold here too.
+        from . import her_day
+        now = await her_day.her_now(user_id, aff.level, mission=her_day.active_mission())
+        row = await wardrobe.ensure_today(user_id, aff.level)
+        outcome = wardrobe.decide_request(
+            cat[oid], aff.level, current_id=now.outfit.id, request_changes=0,
+            occasions_today=await wardrobe.occasions_for(user_id, row.day),
+            hour=now.hour, deployed=now.override == "mission", ui=True,
+        )
+        if outcome.decision not in ("comply", "already"):
+            return JSONResponse(
+                {"error": f"'{oid}' not now.", "decision": outcome.decision}, status_code=403,
             )
         # His favourite (biases her own daily picks) + she wears it today.
         await memory.store_fact("costume", oid, user_id=user_id)

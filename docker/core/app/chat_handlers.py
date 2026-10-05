@@ -60,6 +60,11 @@ from .personality import (
 
 logger = logging.getLogger(__name__)
 
+# Her Day on the chat path: wait this long for today's row (normally warm from
+# connect), and this long for the whole outfit/location step, then go without.
+_HER_DAY_WARM_BUDGET_S = 1.5
+_HER_DAY_TURN_BUDGET_S = 3.0
+
 from app.reflect_helpers import (  # noqa: F401,E402
     _maybe_oath_on_connect,
     _maybe_reflect_on_return,
@@ -257,21 +262,32 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Her Day — what she has on and where she is right now. His outfit
     # request, if any, is decided deterministically HERE, before the prompt:
     # this reply already knows the outcome, and an image requested in the same
-    # message renders the change. Fail-soft: the hour-based defaults stand.
+    # message renders the change. Bounded and fail-soft: the row is normally
+    # warm from connect; if not, the hour-based defaults stand this turn while
+    # the (shielded) pick finishes in the background for the next one.
     outfit_line: str | None = None
     location_line: str | None = None
+    her_where: str | None = None
     outfit_request_block = ""
-    try:
+    from .helpers import detect_goodbye as _detect_goodbye
+    leaving = bool(_detect_goodbye(content))
+
+    async def _her_day_turn() -> None:
+        nonlocal outfit_line, location_line, her_where, outfit_request_block
+        warm = asyncio.ensure_future(wardrobe.ensure_today(user_id, aff_state.level, mood=session.mood))
+        await asyncio.wait_for(asyncio.shield(warm), _HER_DAY_WARM_BUDGET_S)
         game_active = await router.is_game_active()
         her_now = await her_day.her_now(
             user_id, aff_state.level, mood=session.mood,
             game_active=game_active, mission=mission_desc,
         )
-        requested = wardrobe.detect_outfit_request(content)
+        # A goodbye or the bed order ends the exchange; don't start a fitting.
+        requested = None if leaving else wardrobe.detect_outfit_request(content)
         if requested:
             outcome = await wardrobe.handle_request(
                 user_id, requested, aff_state.level,
                 current_id=her_now.outfit.id, mood=session.mood,
+                deployed=bool(mission_desc),
             )
             outfit_request_block = wardrobe.request_block(outcome)
             if outcome.decision == "comply":
@@ -285,10 +301,15 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
                 ))
         outfit_line = her_now.outfit_line(aff_state.level)
         location_line = her_now.location_line()
-        tea_block = her_day.tea_time_block(her_now, content, aff_state.level)
+        if her_now.activity:
+            her_where = f"at the {her_now.location}, {her_now.activity}"
+        tea_block = "" if leaving else her_day.tea_time_block(her_now, content, aff_state.level)
         if tea_block:
             outfit_request_block = "\n\n".join(b for b in (outfit_request_block, tea_block) if b)
-    except Exception as e:
+
+    try:
+        await asyncio.wait_for(_her_day_turn(), _HER_DAY_TURN_BUDGET_S)
+    except Exception as e:  # incl. TimeoutError — she is never kept waiting on her wardrobe
         logger.warning("Her Day unavailable this turn: %s", e)
 
     system_prompt = assemble_system_prompt(
@@ -393,7 +414,9 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # The 0200 watch: 00:30-04:29 local she is already up, quieter and
     # protective, and after a run of late nights she sends him to bed.
     from .night_watch import night_watch_prompt_block
-    watch_block = await night_watch_prompt_block(user_id, _p, aff_state.level, memory)
+    watch_block = await night_watch_prompt_block(
+        user_id, _p, aff_state.level, memory, activity=her_where,
+    )
     if watch_block:
         system_prompt += f"\n\n{watch_block}"
 

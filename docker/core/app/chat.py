@@ -217,6 +217,10 @@ def register_websocket(app: FastAPI) -> None:
         # fee settlement (once a month) — self-guarded per period.
         from . import rituals
         ws.track_task(user_id, _asyncio.create_task(rituals.on_connect(user_id)))
+        # Her Day: pick today's outfit (DB + weather) now, while he types —
+        # the chat turn only ever reads the cached row.
+        from . import wardrobe
+        ws.track_task(user_id, _asyncio.create_task(wardrobe.warm_today(user_id)))
 
         try:
             while True:

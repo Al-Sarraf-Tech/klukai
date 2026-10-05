@@ -68,9 +68,13 @@ def register_wardrobe_routes(app: FastAPI) -> None:
         except Exception as e:
             logger.warning("Wardrobe history unavailable: %s", e)
             rows = []
+        level = (await context.affection.get_state(user_id)).level
         cat = wardrobe.catalog()
+        # Days in an outfit she no longer acknowledges at his level are left out.
         return {
             "history": [
-                {**r, "name": wardrobe.lookup(r["outfit_id"], cat).name} for r in rows
+                {**r, "name": o.name}
+                for r in rows
+                if wardrobe.is_visible(o := wardrobe.lookup(r["outfit_id"], cat), level)
             ]
         }

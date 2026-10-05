@@ -132,3 +132,48 @@ class TestTeaTimeInChat:
                         activity="Tea Time counter duty", block=block, blocks=[block])
         sys_prompt, _, _, _ = await _turn("One Racing Calm, please", her_now=AsyncMock(return_value=now))
         assert "TEA TIME:" in sys_prompt
+
+
+class TestReviewFixesInChat:
+    @pytest.mark.asyncio
+    async def test_goodbye_skips_the_fitting(self):
+        her_now = AsyncMock(return_value=_now())
+        sys_prompt, _, handle, _ = await _turn("wear the maid outfit tomorrow, goodnight", her_now=her_now)
+        handle.assert_not_awaited()
+        assert "WARDROBE REQUEST" not in sys_prompt
+
+    @pytest.mark.asyncio
+    async def test_deployed_flag_reaches_the_decision(self):
+        her_now = AsyncMock(return_value=_now())
+        outcome = w.RequestOutcome("immaculate_service", "not_now", "Deployed.")
+        with patch("app.chat_handlers.proactive") as pro:
+            pro.mission_active = False
+        _, _, handle, _ = await _turn("wear the maid outfit", her_now=her_now, request_outcome=outcome)
+        assert handle.await_args.kwargs["deployed"] is False
+
+    @pytest.mark.asyncio
+    async def test_slow_wardrobe_never_holds_the_reply(self):
+        import asyncio as aio
+
+        # The harness stubs asyncio.sleep, so block on an Event released by a
+        # loop timer well after the 0.01s budget (the shielded pick finishes).
+        late = aio.Event()
+
+        async def slow(*a, **k):
+            aio.get_running_loop().call_later(0.2, late.set)
+            await late.wait()
+
+        her_now = AsyncMock(return_value=_now())
+        with patch("app.wardrobe.ensure_today", new=slow), \
+             patch("app.chat_handlers._HER_DAY_WARM_BUDGET_S", 0.01):
+            sys_prompt, kwargs, _, _ = await _turn("hey", her_now=her_now)
+        assert kwargs["current_outfit"] is None
+        her_now.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_night_watch_reads_her_roster(self):
+        her_now = AsyncMock(return_value=_now())
+        watch = AsyncMock(return_value="")
+        with patch("app.night_watch.night_watch_prompt_block", watch):
+            await _turn("still up?", her_now=her_now)
+        assert watch.await_args.kwargs["activity"] == "at the Hangar, tuning the suspension"

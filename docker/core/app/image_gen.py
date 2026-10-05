@@ -38,6 +38,8 @@ from app.image_gen_constants import (
     MOOD_EXPRESSION_TAGS,
     NEGATIVE_TAGS,
     OUTFIT_MAP,
+    INTIMATE_MIN_LEVEL,
+    INTIMATE_OUTFIT_KEYS,
     QUALITY_TAGS,
     SCENE_OUTFIT_KEYWORDS,
     SITUATION_KEYWORDS,
@@ -64,6 +66,8 @@ __all__ = [
     "MOOD_EXPRESSION_TAGS",
     "NEGATIVE_TAGS",
     "OUTFIT_MAP",
+    "INTIMATE_MIN_LEVEL",
+    "INTIMATE_OUTFIT_KEYS",
     "QUALITY_TAGS",
     "SCENE_OUTFIT_KEYWORDS",
     "SITUATION_KEYWORDS",
@@ -242,9 +246,16 @@ def is_outfit_unlocked(costume: str, affection_level: int) -> bool:
 
 
 def _explicit_scene(text: str) -> bool:
-    """An explicit bath/bed/lingerie scene, which outranks today's outfit."""
+    """An explicit bath/bed/lingerie scene (whole words), which outranks today's outfit."""
     lower = text.lower()
-    return any(re.search(rf"\b{kw}", lower) for kw in SCENE_OUTFIT_KEYWORDS)
+    return any(re.search(rf"\b{kw}\b", lower) for kw in SCENE_OUTFIT_KEYWORDS)
+
+
+def _outfit_map_for(affection_level: int) -> dict[str, str]:
+    """OUTFIT_MAP minus the intimate outfits below the intimacy gate."""
+    if affection_level >= INTIMATE_MIN_LEVEL:
+        return OUTFIT_MAP
+    return {k: v for k, v in OUTFIT_MAP.items() if k not in INTIMATE_OUTFIT_KEYS}
 
 
 def build_prompt(
@@ -256,6 +267,7 @@ def build_prompt(
     mood: str = "composed",
     time_of_day: str | None = None,
     costume: str | None = None,
+    request: str | None = None,
 ) -> str:
     """Build the full positive prompt with quality tags, LoRA trigger, and character identities.
 
@@ -274,6 +286,8 @@ def build_prompt(
             wearing. Its tag block replaces the keyword-matched outfit, unless
             the scene is explicitly a bath/bed/lingerie one. Unknown ids fall
             through to the keyword-context outfit logic.
+        request: His own words for this image, when known. Only these (never
+            her replies in ``context``) can make it an explicit bath/bed scene.
     """
     parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
 
@@ -299,11 +313,14 @@ def build_prompt(
     from . import wardrobe
 
     costume_tags = wardrobe.image_tags(costume) if costume else None
-    if costume_tags and not _explicit_scene(outfit_context):
+    explicit = affection_level >= INTIMATE_MIN_LEVEL and _explicit_scene(
+        request if request is not None else outfit_context
+    )
+    if costume_tags and not explicit:
         klukai_outfit = costume_tags
     else:
         klukai_outfit = _select_outfit(
-            outfit_context, OUTFIT_MAP, KLUKAI_DEFAULT_OUTFIT
+            outfit_context, _outfit_map_for(affection_level), KLUKAI_DEFAULT_OUTFIT
         )
 
     if couple:

@@ -34,8 +34,8 @@ def _row(base="blazing_star", requested=None, weather=None, day=SUNDAY):
 class TestBuildDay:
     def test_one_block_per_slot_in_order(self, cfg):
         blocks = hd.build_day(cfg, MONDAY, 5, seed="claude")
-        assert [b.slot for b in blocks] == ["late", "early", "morning", "midday", "afternoon", "evening", "night"]
-        assert [b.start for b in blocks] == sorted(b.start for b in blocks)
+        # Her day runs 0500 → 0500: the insomnia hours close it.
+        assert [b.slot for b in blocks] == ["early", "morning", "midday", "afternoon", "evening", "night", "late"]
 
     def test_deterministic_per_day_and_seed(self, cfg):
         a = hd.build_day(cfg, MONDAY, 5, seed="claude")
@@ -98,6 +98,11 @@ class TestEffectiveOutfit:
     def test_special_day_survives_the_roster(self, cat):
         block = hd.Block("afternoon", 14, 18, "h", "Hangar", "x", outfit="hangar_coveralls")
         assert hd.effective_outfit(_row(base="black_cat_ops"), block, 5, cat) == ("black_cat_ops", "auto")
+
+    def test_private_block_kit_hidden_below_three(self, cat):
+        block = hd.Block("afternoon", 14, 18, "h", "Hangar", "x", private=True, outfit="hangar_coveralls")
+        assert hd.effective_outfit(_row(), block, 2, cat) == ("blazing_star", "auto")
+        assert hd.effective_outfit(_row(), block, 3, cat) == ("hangar_coveralls", "roster")
 
     def test_locked_block_kit_falls_back_to_base(self, cat):
         block = hd.Block("late", 0, 5, "r", "Command deck", "x", outfit="sleepless_watch")  # unlock 6
@@ -166,8 +171,9 @@ class TestHerNow:
         assert now.outfit_line(5).startswith(now.outfit.name)
         sched = now.schedule(5)
         assert sum(s["current"] for s in sched) == 1
-        assert sched[0]["start"] == "0000"
-        assert sched[-1]["end"] == "0000"  # 22-24 renders as midnight
+        assert sched[0]["start"] == "0500"
+        assert sched[-2]["end"] == "0000"  # 22-24 renders as midnight
+        assert sched[-1]["start"] == "0000" and sched[-1]["end"] == "0500"
         status = now.status(5)
         assert status["label"] == f"{status['location']} · {status['activity']}"
 

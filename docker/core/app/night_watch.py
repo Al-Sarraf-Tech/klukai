@@ -168,17 +168,21 @@ def _tier(cfg: dict, level: int) -> str:
 
 def build_night_watch_block(
     p: dict, now: datetime, affection_level: int, late_nights: int, thread_ok: bool,
+    activity: str | None = None,
 ) -> str:
     """The NIGHT WATCH block for a message at ``now`` (inside the watch).
 
     ``late_nights`` is how many of the previous 3 nights he was up past 01:00;
-    ``thread_ok`` allows the once-per-night thread reference.
+    ``thread_ok`` allows the once-per-night thread reference. ``activity`` is
+    what Her Day's roster says she is doing, so the prompt, the LOCATION line
+    and the PWA status agree; without it, the insomnia list picks one.
     """
     cfg = _cfg(p)
-    activities = cfg.get("activities")
-    if not isinstance(activities, list) or not activities:
-        activities = INSOMNIA_FALLBACK["activities"]
-    activity = activities[now.date().toordinal() % len(activities)]
+    if not activity:
+        activities = cfg.get("activities")
+        if not isinstance(activities, list) or not activities:
+            activities = INSOMNIA_FALLBACK["activities"]
+        activity = activities[now.date().toordinal() % len(activities)]
 
     lines = [
         f"NIGHT WATCH ({now.strftime('%H%M')} hours; you were already awake):",
@@ -213,7 +217,7 @@ def build_night_watch_block(
 
 async def night_watch_prompt_block(
     user_id: str, p: dict, affection_level: int, memory: Any,
-    now: datetime | None = None,
+    now: datetime | None = None, activity: str | None = None,
 ) -> str:
     """Per-message entry point. Records tonight if late; returns the block
     inside the watch, otherwise ``""``. Never raises."""
@@ -231,6 +235,7 @@ async def night_watch_prompt_block(
         )
         block = build_night_watch_block(
             p, now, affection_level, count_recent_late_nights(nights, tonight), thread_ok,
+            activity=activity,
         )
         if thread_ok:
             _thread_ref_nights[user_id] = tonight

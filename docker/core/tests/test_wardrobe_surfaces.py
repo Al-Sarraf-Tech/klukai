@@ -23,10 +23,25 @@ class TestImagePrompt:
     def test_legacy_id_renders_the_canon_gown(self):
         assert "wedding dress" in build_prompt("chapel", costume="starlit_vow")
 
-    def test_explicit_bath_scene_outranks_the_outfit(self):
-        prompt = build_prompt("onsen", context="draw us in the bath", costume="immaculate_service")
+    def test_explicit_bath_scene_outranks_the_outfit_at_eight(self):
+        prompt = build_prompt("onsen", context="draw us in the bath", costume="immaculate_service",
+                              affection_level=8, request="draw us in the bath")
         assert "maid" not in prompt
         assert "steam" in prompt
+
+    def test_intimate_outfits_never_leak_below_eight(self):
+        prompt = build_prompt("onsen", context="draw us in the bath", costume="immaculate_service",
+                              affection_level=7, request="draw us in the bath")
+        assert "maid headdress" in prompt and "towel" not in prompt
+        # No costume: the keyword fallback is gated too.
+        for ctx in ("good morning sleepyhead", "Bed. That's an order.", "underwear"):
+            p = build_prompt("portrait", context=ctx, affection_level=1)
+            assert KLUKAI_DEFAULT_OUTFIT in p, ctx
+
+    def test_only_his_words_make_it_a_bed_scene(self):
+        prompt = build_prompt("selfie", context="Bed. That's an order.\nsend me a selfie",
+                              costume="blazing_star", affection_level=9, request="send me a selfie")
+        assert "baseball cap" in prompt and "lingerie" not in prompt
 
     def test_lighting_words_no_longer_strip_her(self):
         # "morning" used to swap in the bare-legs shirt; today's outfit stands.
