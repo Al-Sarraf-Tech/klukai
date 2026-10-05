@@ -49,12 +49,12 @@ html, body {
   object-position: 50% 100%; opacity: 0; transition: opacity 0.6s ease;
   -webkit-user-drag: none; pointer-events: none;
   /* soft feather into the backdrop instead of a hard card edge: sides fade
-     radially, the bottom fades into the dock (both masks intersect) */
+     radially, the top edge softens, the bottom fades into the dock (masks intersect) */
   -webkit-mask-image: radial-gradient(85% 75% at 50% 45%, #000 60%, transparent 100%),
-                      linear-gradient(180deg, #000 72%, transparent 97%);
+                      linear-gradient(180deg, transparent 0%, #000 6%, #000 72%, transparent 97%);
   -webkit-mask-composite: source-in;
           mask-image: radial-gradient(85% 75% at 50% 45%, #000 60%, transparent 100%),
-                      linear-gradient(180deg, #000 72%, transparent 97%);
+                      linear-gradient(180deg, transparent 0%, #000 6%, #000 72%, transparent 97%);
           mask-composite: intersect;
 }
 .frame.on { opacity: 1; }
