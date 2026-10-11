@@ -89,18 +89,46 @@ void main() {
       expect(next.affectionLevelName, base.affectionLevelName);
     });
 
-    test('inputLockReason is intentionally cleared when unspecified', () {
-      // NOTE: copyWith assigns inputLockReason directly (no ?? fallback),
-      // so calling copyWith without it resets the reason to null even if it
-      // was previously set. This is the documented behavior of the model.
+    test('inputLockReason survives unrelated updates while locked', () {
+      // A mood or typing frame landing mid-reply must not drop the reason:
+      // the composer hint read "// STANDBY..." instead of the real one, and
+      // the reason-gated unlock timers no longer recognised their own lock.
       const locked = CompanionState(
         isInputLocked: true,
-        inputLockReason: 'mood_swing',
+        inputLockReason: 'RECEIVING TRANSMISSION',
       );
-      final next = locked.copyWith(isTyping: true);
+      final next = locked.copyWith(isTyping: true, mood: 'tender');
       expect(next.isTyping, isTrue);
-      expect(next.isInputLocked, isTrue); // bool still preserved via ??
-      expect(next.inputLockReason, isNull); // reason dropped by design
+      expect(next.isInputLocked, isTrue);
+      expect(next.inputLockReason, 'RECEIVING TRANSMISSION');
+    });
+
+    test('inputLockReason is released together with the lock', () {
+      const locked = CompanionState(
+        isInputLocked: true,
+        inputLockReason: 'IMAGE INCOMING',
+      );
+      expect(locked.copyWith(isInputLocked: false).inputLockReason, isNull);
+      expect(
+        locked.copyWith(isInputLocked: false, inputLockReason: null).inputLockReason,
+        isNull,
+      );
+    });
+
+    test('a new lock reason replaces the old one', () {
+      const locked = CompanionState(
+        isInputLocked: true,
+        inputLockReason: 'HEARTBEAT SURGE',
+      );
+      final next = locked.copyWith(inputLockReason: 'RECEIVING TRANSMISSION');
+      expect(next.inputLockReason, 'RECEIVING TRANSMISSION');
+    });
+
+    test('a reason given without the lock is not kept', () {
+      // Unlocked state never carries a stale reason for the hint to show.
+      final next = base.copyWith(inputLockReason: 'ghost');
+      expect(next.isInputLocked, isFalse);
+      expect(next.inputLockReason, isNull);
     });
 
     test('can set a fresh inputLockReason', () {

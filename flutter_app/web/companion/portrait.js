@@ -14,6 +14,7 @@ export function createPortrait(root, {
   caf = (id) => cancelAnimationFrame(id),
   now = () => performance.now(),
   rand = Math.random,
+  onFrameError = () => {}, // (layer, url): an <img> failed to load, e.g. an expired signed URL
 } = {}) {
   const el = {
     base: root.querySelector(".frame-base"),
@@ -21,6 +22,11 @@ export function createPortrait(root, {
     blink: root.querySelector(".frame-blink"),
     talk: root.querySelector(".frame-talk"),
   };
+  // Signed frame URLs expire after 15–30 min; an expression first requested
+  // after that 403s and, unreported, would never show again this session.
+  for (const [layer, node] of Object.entries(el)) {
+    node?.addEventListener?.("error", () => onFrameError(layer, node.getAttribute("src")));
+  }
   let frames = {};
   let expression = "base";
   let level = 0;
@@ -48,14 +54,15 @@ export function createPortrait(root, {
   }
 
   function blink(closedMs, double) {
-    // A closing eye mid-word looks wrong; let the mouth finish first.
-    if (frames.blink && level <= 0.06) {
-      on(el.blink, true);
-      setTimer(() => {
-        on(el.blink, false);
-        if (double) setTimer(() => blink(closedMs, false), 140);
-      }, closedMs);
-    }
+    // A closing eye mid-word looks wrong (and there may be no blink frame yet):
+    // skip this one but always book the next, or she stops blinking for good.
+    if (!frames.blink || level > 0.06) { scheduleBlink(); return; }
+    on(el.blink, true);
+    setTimer(() => {
+      on(el.blink, false);
+      // Second half of a double blink; it books the next blink itself.
+      if (double) setTimer(() => blink(closedMs, false), 140);
+    }, closedMs);
     if (!double) scheduleBlink();
   }
 

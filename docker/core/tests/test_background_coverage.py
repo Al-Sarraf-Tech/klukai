@@ -270,17 +270,30 @@ class TestExtractionMilestones:
         assert session.mission_interval == 30
         assert session.mission_description
 
+    @staticmethod
+    def _real_set_last_mood(proactive) -> None:
+        """Mirror the engine: set_last_mood overwrites _last_mood. With a bare
+        MagicMock the old mood survived the call, so the check that compared
+        against _last_mood AFTER set_last_mood passed here while being dead
+        code in production (it only ever saw the new mood)."""
+        proactive.set_last_mood.side_effect = (
+            lambda mood, **_kw: setattr(proactive, "_last_mood", mood)
+        )
+
     async def test_vigilant_starts_mission_only_after_battle_ready(self, bg_mocks):
-        """vigilant joins mission_moods only when prev mood was battle_ready."""
+        """vigilant joins mission_moods only when the PREVIOUS mood was battle_ready."""
         bg_mocks.extract_facts.return_value = _base_extract_result(mood="vigilant")
         bg_mocks.proactive._last_mood = "battle_ready"
+        self._real_set_last_mood(bg_mocks.proactive)
         bg_mocks.proactive.mission_active = False
         await bg.background_extraction("m", "r", _session(2), user_id="u1")
         bg_mocks.proactive.start_mission.assert_called_once()
+        assert bg_mocks.proactive._last_mood == "vigilant"  # the new mood was still recorded
 
     async def test_vigilant_no_mission_when_prev_mood_calm(self, bg_mocks):
         bg_mocks.extract_facts.return_value = _base_extract_result(mood="vigilant")
         bg_mocks.proactive._last_mood = "composed"
+        self._real_set_last_mood(bg_mocks.proactive)
         bg_mocks.proactive.mission_active = False
         await bg.background_extraction("m", "r", _session(2), user_id="u1")
         bg_mocks.proactive.start_mission.assert_not_called()
@@ -527,6 +540,45 @@ class TestCompaction:
         assert ct.await_count == 1
         assert session.turns == original_turns
         assert session.context_summary is None
+        bg_mocks.memory.save_session.assert_not_awaited()
+
+    async def test_turn_appended_during_compaction_survives(self, bg_mocks):
+        """The chat keeps going while the LLM summarises. Replacing the list
+        with the stale "recent" slice dropped whatever was appended meanwhile;
+        deleting the compacted prefix in place keeps it."""
+        session = _session(turn_count=10)
+        appended = {"role": "user", "content": "sent while compacting"}
+
+        async def _slow_compact(old_turns):
+            session.turns.append(appended)  # a new turn lands mid-flight
+            return "Condensed summary."
+
+        with patch("app.fact_extractor.compact_turns", new=_slow_compact):
+            await bg.background_compaction(session, user_id="u1")
+
+        assert session.context_summary == "Condensed summary."
+        assert session.turns[-1] == appended
+        # COMPACT_KEEP_RAW raw turns kept (Turn 6..9) plus the one that arrived.
+        assert len(session.turns) == bg_mocks.context.COMPACT_KEEP_RAW + 1
+        assert session.turns[0] == {"role": "user", "content": "Turn 6"}
+        bg_mocks.memory.save_session.assert_awaited_once()
+
+    async def test_compaction_aborts_when_prefix_changed_underneath(self, bg_mocks):
+        """If the turns being compacted are no longer at the head of the live
+        list (another compaction, a session restore), the summary is stale:
+        leave the session alone rather than apply it."""
+        session = _session(turn_count=10)
+        fresh = [{"role": "user", "content": f"fresh {i}"} for i in range(4)]
+
+        async def _racing_compact(old_turns):
+            session.turns[:] = fresh
+            return "Stale summary."
+
+        with patch("app.fact_extractor.compact_turns", new=_racing_compact):
+            await bg.background_compaction(session, user_id="u1")
+
+        assert session.context_summary is None
+        assert session.turns == fresh
         bg_mocks.memory.save_session.assert_not_awaited()
 
 

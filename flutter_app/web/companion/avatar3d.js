@@ -8,6 +8,7 @@
 //   import { createAvatar3D, moodToState } from './avatar3d.js';
 //   const av = await createAvatar3D(el, { loadModel: () => api.avatarGlb(), onReady, onError });
 //   av.setMood('quietly_pleased'); av.setSpeaking(level); av.setState('greet');
+//   av.setPaused(true); // parked behind another view: no render loop until setPaused(false)
 //
 // The pure parts (moodToState, STATE_CLIPS) import nothing heavy, so they run
 // under `node --test` (tools/avatar/test). three.js is loaded lazily.
@@ -200,8 +201,10 @@ export async function createAvatar3D(container, opts = {}) {
   const fail = (err) => {
     try { onError?.(err instanceof Error ? err : new Error(String(err))); } catch { /* caller's handler threw */ }
   };
+  // Returned whenever the view can't be built; `ready` is false so the caller
+  // can tell it from a live avatar (and try again later instead of keeping it).
   const stub = {
-    setState() {}, setMood() {}, setSpeaking() {}, setFraming() {}, resize() {}, dispose() {},
+    setState() {}, setMood() {}, setSpeaking() {}, setFraming() {}, setPaused() {}, resize() {}, dispose() {},
     get ready() { return false; }, get state() { return 'idle'; },
   };
   if (typeof loadModel !== 'function') { fail(new Error('createAvatar3D: loadModel() is required')); return stub; }
@@ -255,6 +258,16 @@ export async function createAvatar3D(container, opts = {}) {
   let disposed = false;
   let ready = false;
   let paused = false;
+  let userPaused = false; // api.setPaused(): parked behind another view
+  let contextLost = false;
+  // Assigned in the lifecycle section below, after the model loads — but
+  // teardown() also runs from the load `catch`. Declared here (not `const`
+  // down there) or that call hit the temporal dead zone, threw, and the
+  // renderer/canvas were never disposed: one leaked WebGL context per retry.
+  let onVisibility = null;
+  let onLost = null;
+  let onRestored = null;
+  let ro = null;
   let rafId = 0;
   let frameAcc = 0; let frameN = 0; let fpsAvg = 0; let lastNow = 0; // adaptive resolution
   let root = null;
@@ -520,17 +533,18 @@ export async function createAvatar3D(container, opts = {}) {
   function stop() { if (rafId) cancelAnimationFrame(rafId); rafId = 0; lastNow = 0; frameAcc = 0; frameN = 0; }
 
   // ── lifecycle ────────────────────────────────────────────────────────────
-  const onVisibility = () => {
-    paused = document.hidden || contextLost;
+  // One rule for the render loop: it runs only while the page is visible, the
+  // GL context is live, and the caller hasn't parked the view (setPaused).
+  function syncPaused() {
+    paused = (typeof document !== 'undefined' && document.hidden) || contextLost || userPaused;
     if (paused) stop(); else start();
-  };
-  let contextLost = false;
-  const onLost = (e) => { e.preventDefault(); contextLost = true; paused = true; stop(); };
-  const onRestored = () => { contextLost = false; paused = document.hidden; frame(); start(); };
+  }
+  onVisibility = syncPaused;
+  onLost = (e) => { e.preventDefault(); contextLost = true; syncPaused(); };
+  onRestored = () => { contextLost = false; frame(); syncPaused(); };
   document.addEventListener('visibilitychange', onVisibility);
   canvas.addEventListener('webglcontextlost', onLost, false);
   canvas.addEventListener('webglcontextrestored', onRestored, false);
-  let ro = null;
   if (typeof ResizeObserver === 'function') { ro = new ResizeObserver(() => api.resize()); ro.observe(container); }
 
   function disposeObject(obj) {
@@ -546,9 +560,9 @@ export async function createAvatar3D(container, opts = {}) {
   function teardown() {
     disposed = true;
     stop();
-    document.removeEventListener('visibilitychange', onVisibility);
-    canvas.removeEventListener('webglcontextlost', onLost);
-    canvas.removeEventListener('webglcontextrestored', onRestored);
+    if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);
+    if (onLost) canvas.removeEventListener('webglcontextlost', onLost);
+    if (onRestored) canvas.removeEventListener('webglcontextrestored', onRestored);
     ro?.disconnect();
     controls?.dispose();
     if (mixer) { mixer.removeEventListener('finished', onFinished); mixer.stopAllAction(); mixer.uncacheRoot(root); }
@@ -592,6 +606,11 @@ export async function createAvatar3D(container, opts = {}) {
       frame();
       if (paused) renderer.render(scene, camera);
     },
+    /** Park the view while another one shows: no render loop until setPaused(false). */
+    setPaused(on) {
+      userPaused = Boolean(on);
+      if (!disposed && ready) syncPaused();
+    },
     dispose() { if (!disposed) teardown(); },
   };
 
@@ -607,8 +626,7 @@ export async function createAvatar3D(container, opts = {}) {
   renderer.render(scene, camera);
   mark('firstFrameMs');
   ready = true;
-  paused = typeof document !== 'undefined' && document.hidden;
-  start();
+  syncPaused();
   try { onReady?.(api); } catch { /* caller's handler threw */ }
   return api;
 }

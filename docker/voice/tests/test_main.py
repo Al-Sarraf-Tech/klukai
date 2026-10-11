@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import sys
+import tempfile
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -374,6 +377,217 @@ def test_failed_xtts_cpu_handoff_keeps_model_for_fail_closed_retry(monkeypatch):
     assert caught.value.status_code == 503
     assert voice._tts_model is model
     assert voice._tts_ready is True
+
+
+class _FakeWhisper:
+    """faster-whisper shape: transcribe() returns a LAZY generator + info.
+
+    The generator records whether it was consumed on a thread with a running
+    event loop; the real decode happens during consumption, so consuming it
+    on the loop is the bug under test.
+    """
+
+    def __init__(self, texts=("hello", "commander"), raise_on_consume=None):
+        self.texts = texts
+        self.raise_on_consume = raise_on_consume
+        self.paths: list[str] = []
+        self.consumed_on_loop: bool | None = None
+
+    def _segments(self):
+        try:
+            asyncio.get_running_loop()
+            self.consumed_on_loop = True
+        except RuntimeError:
+            self.consumed_on_loop = False
+        if self.raise_on_consume is not None:
+            raise self.raise_on_consume
+        for text in self.texts:
+            yield SimpleNamespace(text=text)
+
+    def transcribe(self, path, beam_size):
+        assert beam_size == 5
+        self.paths.append(path)
+        assert Path(path).is_file()  # the body must already be on disk
+        return self._segments(), SimpleNamespace(language="en", duration=1.5)
+
+
+def _stt_ready(monkeypatch, model):
+    monkeypatch.setattr(voice, "_load_whisper", lambda: model)
+    monkeypatch.setattr(voice, "_last_whisper_use", 0.0)
+    monkeypatch.setattr(voice, "VOICE_API_TOKEN", "voice-secret")
+    return {"Authorization": "Bearer voice-secret"}
+
+
+def test_transcribe_sync_joins_segments_off_the_loop():
+    """The join (= the decode) must happen in the worker, not after to_thread
+    hands back a lazy generator."""
+    model = _FakeWhisper()
+
+    async def scenario():
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+            tmp.write(b"opus")
+        try:
+            return await asyncio.to_thread(voice._transcribe_sync, model, tmp.name)
+        finally:
+            voice._unlink_quietly(tmp.name)
+
+    text, info = asyncio.run(scenario())
+
+    assert text == "hello commander"
+    assert info.language == "en"
+    assert model.consumed_on_loop is False
+
+
+def test_stt_decodes_in_the_worker_thread_and_cleans_its_temp_file(monkeypatch):
+    """Regression: only model.transcribe() ran in to_thread; the generator
+    was joined on the event loop, freezing /health and /tts for the whole
+    clip."""
+    model = _FakeWhisper()
+    headers = _stt_ready(monkeypatch, model)
+
+    with TestClient(voice.app) as client:
+        response = client.post(
+            "/stt",
+            json={"audio": base64.b64encode(b"opus-bytes").decode()},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"text": "hello commander", "language": "en", "duration": 1.5}
+    assert model.consumed_on_loop is False
+    assert len(model.paths) == 1
+    assert not Path(model.paths[0]).exists()
+    assert voice._last_whisper_use > 0
+
+
+def test_stt_rejects_oversized_audio_before_decoding(monkeypatch):
+    model = _FakeWhisper()
+    headers = _stt_ready(monkeypatch, model)
+
+    with TestClient(voice.app) as client:
+        response = client.post(
+            "/stt", json={"audio": "A" * 8_000_001}, headers=headers
+        )
+
+    assert response.status_code == 422
+    assert model.paths == []
+
+
+def test_stt_decode_failure_reports_error_and_removes_temp_file(monkeypatch):
+    model = _FakeWhisper(raise_on_consume=RuntimeError("ctranslate2 exploded"))
+    headers = _stt_ready(monkeypatch, model)
+
+    with TestClient(voice.app) as client:
+        response = client.post(
+            "/stt",
+            json={"audio": base64.b64encode(b"opus-bytes").decode()},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"text": "", "error": "ctranslate2 exploded"}
+    assert not Path(model.paths[0]).exists()
+
+
+def test_stt_bad_base64_never_creates_a_temp_file(monkeypatch):
+    model = _FakeWhisper()
+    headers = _stt_ready(monkeypatch, model)
+    created = []
+    real_ntf = voice.tempfile.NamedTemporaryFile
+
+    def recording_ntf(*args, **kwargs):
+        tmp = real_ntf(*args, **kwargs)
+        created.append(tmp.name)
+        return tmp
+
+    monkeypatch.setattr(voice.tempfile, "NamedTemporaryFile", recording_ntf)
+
+    with TestClient(voice.app) as client:
+        response = client.post("/stt", json={"audio": "%%%not-base64%%%"}, headers=headers)
+
+    assert response.json()["text"] == ""
+    assert "error" in response.json()
+    assert created == []
+    assert model.paths == []
+
+
+def test_stt_upload_decodes_in_the_worker_and_cleans_its_temp_file(monkeypatch):
+    model = _FakeWhisper(texts=("field", "report"))
+    headers = _stt_ready(monkeypatch, model)
+
+    with TestClient(voice.app) as client:
+        response = client.post(
+            "/stt/upload",
+            files={"audio": ("clip.ogg", b"ogg-bytes", "audio/ogg")},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "field report"
+    assert model.consumed_on_loop is False
+    assert model.paths[0].endswith(".ogg")
+    assert not Path(model.paths[0]).exists()
+
+
+def test_stt_upload_failure_removes_temp_file(monkeypatch):
+    model = _FakeWhisper(raise_on_consume=RuntimeError("decode failed"))
+    headers = _stt_ready(monkeypatch, model)
+
+    with TestClient(voice.app) as client:
+        response = client.post(
+            "/stt/upload",
+            files={"audio": ("clip.webm", b"webm-bytes", "audio/webm")},
+            headers=headers,
+        )
+
+    assert response.json() == {"text": "", "error": "decode failed"}
+    assert not Path(model.paths[0]).exists()
+
+
+def test_stt_upload_reads_the_body_before_opening_a_temp_file(monkeypatch):
+    """Regression: the upload was read INSIDE the NamedTemporaryFile block,
+    so a read that failed left a nameless temp file behind forever."""
+    model = _FakeWhisper()
+    _stt_ready(monkeypatch, model)  # handler is called directly; no HTTP auth
+    created = []
+    real_ntf = voice.tempfile.NamedTemporaryFile
+
+    def recording_ntf(*args, **kwargs):
+        tmp = real_ntf(*args, **kwargs)
+        created.append(tmp.name)
+        return tmp
+
+    monkeypatch.setattr(voice.tempfile, "NamedTemporaryFile", recording_ntf)
+
+    class BrokenUpload:
+        filename = "clip.webm"
+
+        async def read(self):
+            raise RuntimeError("client went away")
+
+    result = asyncio.run(voice.stt_upload(BrokenUpload()))
+
+    assert result == {"text": "", "error": "client went away"}
+    assert created == []
+    assert model.paths == []
+
+
+def test_stt_without_a_loaded_model_degrades(monkeypatch):
+    headers = _stt_ready(monkeypatch, None)
+    with TestClient(voice.app) as client:
+        response = client.post("/stt", json={"audio": "AAAA"}, headers=headers)
+        upload = client.post(
+            "/stt/upload",
+            files={"audio": ("clip.webm", b"x", "audio/webm")},
+            headers=headers,
+        )
+    assert response.json() == {"text": "", "error": "Whisper not loaded"}
+    assert upload.json() == {"text": "", "error": "Whisper not loaded"}
+
+
+def test_unlink_quietly_tolerates_blank_and_missing_paths(tmp_path):
+    voice._unlink_quietly("")
+    voice._unlink_quietly(str(tmp_path / "never-existed.webm"))
 
 
 def test_cancelled_tts_keeps_access_lock_until_native_worker_finishes(

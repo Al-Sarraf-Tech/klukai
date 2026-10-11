@@ -18,6 +18,8 @@ Design:
 - The WAV is written under ``AUDIO_DIR`` (``/audio`` volume), named ``{uuid}.wav``,
   mirroring how memory_archive writes image files under ``IMAGES_DIR``.
 - A row lands in ``companion_voice_notes`` (migration 151), scoped per user.
+- What she reads aloud is the text minus stage directions ("(she smiles)",
+  "*nods*"), clipped at a sentence end; the full text is stored as the prompt.
 
 FAIL-SOFT: every failure mode — voice service down/non-200, disk write error,
 DB insert error — is logged at WARNING and returns ``None`` (no row, no partial
@@ -36,6 +38,7 @@ from pathlib import Path
 import httpx
 
 from .db import get_pool
+from .helpers import strip_actions_for_tts, tts_clip
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,13 @@ async def save_voice_note(
     if not text or not text.strip():
         return None
 
+    # Stage directions are not read aloud; a letter that is nothing but
+    # directions has no voice to give it, so there is no letter.
+    speech = tts_clip(strip_actions_for_tts(text), _MAX_TTS_CHARS)
+    if not speech:
+        logger.info("Voice letter for %s had no speakable text — skipped", user_id)
+        return None
+
     note_id = str(uuid.uuid4())
     filename = f"{note_id}.wav"
 
@@ -88,7 +98,7 @@ async def save_voice_note(
         ) as client:
             r = await post_leased_tts(
                 client,
-                {"text": text.strip()[:_MAX_TTS_CHARS], "language": language},
+                {"text": speech, "language": language},
                 timeout=60.0,
             )
         if r.status_code != 200:

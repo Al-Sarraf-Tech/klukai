@@ -60,6 +60,11 @@ class WebSocketService {
   /// Drop whatever channel we have and dial again now — used when the page
   /// comes back from the background, where iOS has usually killed the socket
   /// without telling us. No-op after an intentional disconnect.
+  ///
+  /// Reports the link as down before dialing: the old channel is gone and the
+  /// new one hasn't spoken yet, so `isConnected` is false and listeners must
+  /// see the same (the chat screen refetches history on the false→true edge,
+  /// and must not offer the composer on a socket that isn't open).
   void reconnectNow() {
     if (_intentionalClose || _disposed || _url.isEmpty) return;
     _reconnectTimer?.cancel();
@@ -67,6 +72,7 @@ class WebSocketService {
     final old = _channel;
     _channel = null; // detach first: its late onDone must not touch the new one
     _confirmed = false;
+    _emitConnection(false);
     try {
       old?.sink.close();
     } catch (_) {}

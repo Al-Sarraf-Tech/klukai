@@ -336,6 +336,19 @@ class LLMRouter:
                 self._lmstudio_available = False
                 self._lmstudio_last_check = time.monotonic()
                 local_error: Exception | None = None
+            except httpx.HTTPStatusError as e:
+                # The gateway answered, so it is up. A 503 is the game-mode
+                # block on this model; a 400/500 is this request (context
+                # overflow, bad body). Neither is a reason to take the whole
+                # gateway down for 15s. Drop the game-active cache so the next
+                # route() re-reads /health and picks the gaming model if a game
+                # just started.
+                logger.warning(
+                    "LLM %s/%s HTTP %s — gateway stays available",
+                    config.provider, config.model, e.response.status_code,
+                )
+                self._game_active_last_check = 0.0
+                local_error = e
             except Exception as e:
                 error_msg = str(e) or type(e).__name__
                 logger.warning(

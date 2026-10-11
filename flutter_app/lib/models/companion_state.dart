@@ -32,6 +32,7 @@ class CompanionState {
     bool? isInputLocked,
     String? inputLockReason,
   }) {
+    final locked = isInputLocked ?? this.isInputLocked;
     return CompanionState(
       mood: mood ?? this.mood,
       isConnected: isConnected ?? this.isConnected,
@@ -40,8 +41,11 @@ class CompanionState {
       affectionScore: affectionScore ?? this.affectionScore,
       affectionLevel: affectionLevel ?? this.affectionLevel,
       affectionLevelName: affectionLevelName ?? this.affectionLevelName,
-      isInputLocked: isInputLocked ?? this.isInputLocked,
-      inputLockReason: inputLockReason,
+      isInputLocked: locked,
+      // The reason belongs to the lock: it survives unrelated updates (a mood
+      // or typing frame mid-reply used to drop it, flickering the composer
+      // hint to "// STANDBY...") and is released together with the lock.
+      inputLockReason: locked ? (inputLockReason ?? this.inputLockReason) : null,
     );
   }
 }

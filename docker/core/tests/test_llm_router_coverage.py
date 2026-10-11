@@ -452,6 +452,34 @@ class TestStreamFailureLocalOnly:
         out = [t async for t in r.stream("sys", [], cfg)]
         assert out == ["Communications disrupted, Commander. Standby for reconnection."]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [503, 400, 500])
+    async def test_http_status_error_keeps_gateway_available(self, status):
+        """The gateway ANSWERED (503 game-mode block, 400/500 for this request):
+        the sentinel is still the reply, but the gateway is not marked down for
+        15s, and the game-active cache is dropped so the next route() re-reads
+        /health and can pick the gaming model."""
+        from app.llm_router import FAILURE_SENTINEL
+
+        r = LLMRouter()
+        r._lmstudio_available = True
+        r._lmstudio_last_check = 123.0
+        r._game_active_last_check = 999.0
+        cfg = LLMConfig(provider="lmstudio", model=LOCAL_CASUAL, base_url=LM_STUDIO_URL)
+
+        async def _refused(sp, msgs, c):
+            raise httpx.HTTPStatusError(
+                str(status), request=MagicMock(), response=MagicMock(status_code=status)
+            )
+            yield  # pragma: no cover
+
+        r._stream_lmstudio = _refused
+        out = [t async for t in r.stream("sys", [], cfg)]
+        assert out == [FAILURE_SENTINEL]
+        assert r._lmstudio_available is True
+        assert r._lmstudio_last_check == 123.0  # breaker clock untouched
+        assert r._game_active_last_check == 0.0  # forces a /health re-read
+
 
 # ── _stream_lmstudio SSE parsing (lines 428-475) ────────────────────────────
 

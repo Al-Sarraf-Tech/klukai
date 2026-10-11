@@ -135,10 +135,35 @@ def enhance_image_prompt(user_request: str, couple: bool = False) -> str:
 
 
 def strip_actions_for_tts(text: str) -> str:
-    """Remove all parenthetical actions from text for natural voice output."""
+    """Remove stage directions — "(she smiles)" and "*nods*" — for natural voice output."""
     text = re.sub(r'\([^)]*\)', '', text)
+    text = re.sub(r'\*[^*]*\*', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
+
+
+# Sentence enders tts_clip may cut after. The trailing space/newline keeps a
+# decimal point ("2.5") or an abbreviation mid-sentence from counting.
+_TTS_BOUNDARIES = (". ", "! ", "? ", ".\n")
+
+
+def tts_clip(text: str, limit: int = 500) -> str:
+    """Cap text for XTTS at ``limit`` chars, cutting at the last sentence end.
+
+    XTTS rejects very long inputs, and a hard cut leaves her trailing off
+    mid-word. When the text is over the limit, cut after the last sentence
+    boundary inside it; fall back to a hard cut only when that boundary is so
+    early (before ``limit // 3``) that it would drop most of the clip.
+    """
+    if len(text) <= limit:
+        return text
+    # Search one char past the limit so a sentence ending exactly at the
+    # limit (its space falling just outside) still counts.
+    window = text[: limit + 1]
+    cut = max(window.rfind(b) for b in _TTS_BOUNDARIES)
+    if cut < limit // 3:
+        return text[:limit]
+    return text[: cut + 1]
 
 
 # ── Intent detection ─────────────────────────────────────────────────────────
@@ -393,7 +418,8 @@ _WORKPLACE = r"(?:work|class|school|the\s+gym|my\s+shift|a\s+meeting|practice)"
 _NOT_A_GOODNIGHT = r"(?!\s+(?:on|with|in|through|early|late|more|better|properly|stor)\w*\b)"
 
 _NIGHT_PHRASES = tuple(re.compile(p) for p in (
-    r"\bgood\s*-?\s*night\b(?!\s+stor)",
+    # "good night's sleep" describes a night already slept, not this one.
+    r"\bgood\s*-?\s*night\b(?!\s*'s\b)(?!\s+stor)",
     r"\bg'?night\b|\bg'?nite\b|\bgn\b",
     r"\bnighty?\s*-?\s*night\b|\bnite\s*-?\s*nite\b",
     r"\bsweet\s+dreams\b",
@@ -447,6 +473,11 @@ _OTHER_SUBJECTS = frozenset({
     "we're", "let's", "lets",
 }) | frozenset(SQUAD_KEYWORDS)
 _WISHES = frozenset({"want", "wanna", "wait", "hope", "hate", "love", "like", "miss"})
+# "it was a good night", "had a good night's sleep", "what a good night": the
+# phrase describes a night that already happened, not one he is heading into.
+_PAST_ARTICLE = frozenset({
+    ("was", "a"), ("had", "a"), ("what", "a"), ("such", "a"), ("quite", "a"),
+})
 
 
 def _goodbye_blocked(prefix: str) -> bool:
@@ -455,11 +486,23 @@ def _goodbye_blocked(prefix: str) -> bool:
     return (
         any(w in _NEGATIONS for w in words[-4:])
         or any(w in _OTHER_SUBJECTS or w in _WISHES for w in words[-2:])
+        or tuple(words[-2:]) in _PAST_ARTICLE
     )
 
 
-def _clause_kind(clause: str, min_end: int) -> GoodbyeKind | None:
-    """Goodbye kind for one clause; matches ending before ``min_end`` don't count."""
+def _next_clause_has_substance(rest: str) -> bool:
+    """True when the clause after this one says more than a name or a filler."""
+    m = _CLAUSE.match(rest)
+    return bool(m) and any(w not in _ALONE_STRIP for w in _WORD.findall(m.group()))
+
+
+def _clause_kind(clause: str, min_end: int, rest: str = "") -> GoodbyeKind | None:
+    """Goodbye kind for one clause; matches ending before ``min_end`` don't count.
+
+    ``rest`` is the text after the clause, consulted only for a bare
+    ``"later,"``: opening a longer thought ("Later, I want to try the new
+    route") it is a time reference, while "Later, Klukai" is still a sign-off.
+    """
     if clause.rstrip().endswith("?"):
         return None
     core = [w for w in _WORD.findall(clause) if w not in _ALONE_STRIP]
@@ -475,6 +518,8 @@ def _clause_kind(clause: str, min_end: int) -> GoodbyeKind | None:
                 if m.end() >= min_end and not _goodbye_blocked(clause[:m.start()]):
                     return kind
     if alone in _LEAVE_ALONE:
+        if clause.rstrip().endswith(",") and _next_clause_has_substance(rest):
+            return None
         return "leave"
     return None
 
@@ -494,7 +539,7 @@ def detect_goodbye(message: str) -> GoodbyeKind | None:
     tail_from = len(text) - _GOODBYE_TAIL_CHARS if len(text) > _GOODBYE_MAX_LEN else 0
     found: set[str] = set()
     for m in _CLAUSE.finditer(text):
-        kind = _clause_kind(m.group(), tail_from - m.start())
+        kind = _clause_kind(m.group(), tail_from - m.start(), rest=text[m.end():])
         if kind:
             found.add(kind)
     if "night" in found:

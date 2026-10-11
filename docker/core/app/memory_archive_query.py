@@ -65,7 +65,12 @@ async def list_memories(
     month: str | None = None,
     user_id: str = "jalsarraf",
 ) -> list[dict]:
-    """List kept memories, optionally filtered by category and/or month (YYYY-MM), scoped to user."""
+    """List kept memories, optionally filtered by category and/or month (YYYY-MM), scoped to user.
+
+    Fails closed — mirror of get_timeline/get_categories: a DB outage
+    propagates (the route returns 503) instead of rendering as an empty
+    album that looks like a wiped archive.
+    """
     try:
         async with get_conn() as conn:
             conditions = ["kept = true", "user_id = %s"]
@@ -109,7 +114,7 @@ async def list_memories(
             ]
     except Exception as e:
         logger.error("Failed to list memories: %s", e)
-        return []
+        raise
 
 async def get_timeline(user_id: str = "jalsarraf") -> list[dict]:
     """Return month/year groups with memory counts for the archive timeline.

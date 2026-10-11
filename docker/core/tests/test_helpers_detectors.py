@@ -178,12 +178,20 @@ class TestFixNarration:
 
 class TestStripActionsForTts:
     def test_removes_parenthetical_actions(self):
-        """strip_actions_for_tts removes (parenthesized) narration, not *asterisks*."""
+        """strip_actions_for_tts removes (parenthesized) narration."""
         from app.helpers import strip_actions_for_tts
         result = strip_actions_for_tts("(she smiles) Hello, Commander.")
         assert "(" not in result
         assert "she smiles" not in result
         assert "Commander" in result
+
+    def test_removes_asterisk_actions(self):
+        """... and *asterisk* directions, which XTTS used to read aloud."""
+        from app.helpers import strip_actions_for_tts
+        result = strip_actions_for_tts("*she smiles* Hello, Commander.")
+        assert "*" not in result
+        assert "she smiles" not in result
+        assert result == "Hello, Commander."
 
     def test_passthrough_plain_text(self):
         from app.helpers import strip_actions_for_tts

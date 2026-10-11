@@ -14,7 +14,7 @@ from datetime import timedelta
 
 from ..events import publish as publish_event
 from .base import _EngineBase
-from .state import now_local
+from .state import QUIET_HOUR_END, QUIET_HOUR_START, now_local
 from .templates import (
     QUIET_DAY_MESSAGES,
     ROMANCE_MESSAGES,
@@ -217,6 +217,11 @@ class EventsMixin(_EngineBase):
         if self._goodbye_hold_active(now):
             return
 
+        # Guard: quiet hours (local wall clock). The cron stops at 22:45, but a
+        # misfire replay or a DST shift must never land a lore line after 2300.
+        if QUIET_HOUR_START <= now.hour or now.hour < QUIET_HOUR_END:
+            return
+
         # Guard: never ping the Commander mid-match
         if self._game_active_probe is not None and await self._game_active_probe():
             return
@@ -379,6 +384,9 @@ class EventsMixin(_EngineBase):
             return
         now = now_local()
         if self._muted_until and now < self._muted_until:
+            return
+        # He said goodnight (or "gotta go"): a dream is still a ping. Let him go.
+        if self._goodbye_hold_active(now):
             return
         # The 0200 watch: on a night he's awake she isn't dreaming, she's up
         # with him. Stand down if he messaged within DREAM_QUIET_AFTER_ACTIVITY.

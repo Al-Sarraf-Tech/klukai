@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app.image_gen as ig
 from app.gpu_lease import (
+    GPU_LEASE_ACQUIRE_READ_TIMEOUT_SECONDS,
     GPU_LEASE_HEADER,
     GPU_LEASE_TTL_SECONDS,
     GPULease,
@@ -580,9 +581,27 @@ class TestGenerateImageInner:
 
 
 class TestGenerateImagePublic:
-    def test_render_deadline_leaves_two_minute_lease_safety_margin(self):
-        assert ig._IMAGE_LEASE_WORK_SECONDS == 480
-        assert ig._IMAGE_LEASE_WORK_SECONDS <= GPU_LEASE_TTL_SECONDS - 120
+    def test_render_deadline_fits_inside_the_lease_after_a_slow_acquire(self):
+        """The render budget is derived, not pinned: TTL minus the worst-case
+        acquire (the gateway's clock starts before we hold a token, and the
+        acquire read deadline is 150s) minus 30s of cleanup/release.
+
+        This used to pin 480 (= TTL - 120): a 150s acquire plus a 480s render
+        ran past the 600s TTL, so the post-render /free saw an expired lease
+        and a finished image was discarded.
+        """
+        assert ig._IMAGE_LEASE_WORK_SECONDS == 420
+        assert ig._IMAGE_LEASE_WORK_SECONDS == (
+            GPU_LEASE_TTL_SECONDS
+            - GPU_LEASE_ACQUIRE_READ_TIMEOUT_SECONDS
+            - ig._IMAGE_LEASE_CLEANUP_SECONDS
+        )
+        assert (
+            GPU_LEASE_ACQUIRE_READ_TIMEOUT_SECONDS
+            + ig._IMAGE_LEASE_WORK_SECONDS
+            + ig._IMAGE_LEASE_CLEANUP_SECONDS
+            <= GPU_LEASE_TTL_SECONDS
+        )
 
     @pytest.mark.asyncio
     async def test_delegates_through_semaphore(self):

@@ -670,6 +670,7 @@ def ctx():
     affection.get_state = AsyncMock(return_value=SimpleNamespace(level=5))
     proactive = MagicMock()
     proactive._can_send = MagicMock(return_value=True)
+    proactive._goodbye_hold_active = MagicMock(return_value=False)
     proactive._proactive_count_today = 0
     proactive._last_proactive_answered = True
     router = MagicMock()
@@ -765,6 +766,27 @@ class TestDeliver:
         ctx.router.is_game_active.side_effect = RuntimeError("gateway down")
         await op_brief.deliver("claude", _action())
         ctx.ws.send_proactive.assert_awaited_once()
+
+    async def test_goodbye_hold_is_held_and_retried_not_dropped(self, ctx):
+        """He said "gotta go" at 20:00: the 20:30 OPORD waits like a mid-game
+        slot instead of being refused by the guard and closed as delivered."""
+        ctx.proactive._goodbye_hold_active.return_value = True
+        await op_brief.deliver("claude", _action())
+        ctx.ws.send_proactive.assert_not_awaited()
+        ctx.proactive._can_send.assert_not_called()
+        ctx.complete.assert_not_awaited()
+        ctx.schedule.assert_awaited_once_with(_action(), user_id="claude",
+                                              delay_seconds=op_brief.HOLD_STEP_SECONDS)
+
+    async def test_goodbye_hold_past_window_drops_and_closes_debrief(self, ctx):
+        """A goodnight hold that outlasts the deadline drops the slot; the
+        debrief still closes the chain so it can never fire the next day."""
+        ctx.proactive._goodbye_hold_active.return_value = True
+        with patch.object(op_brief, "now_local", return_value=datetime(2026, 10, 8, 22, 46)):
+            await op_brief.deliver("claude", _action(slot="debrief", due="2026-10-08T19:00:00"))
+        ctx.schedule.assert_not_awaited()
+        ctx.ws.send_proactive.assert_not_awaited()
+        ctx.complete.assert_awaited_once_with(EVENT_ID, "claude")
 
     async def test_proactive_guard_suppresses(self, ctx):
         ctx.proactive._can_send.return_value = False  # muted / quiet hours / cap

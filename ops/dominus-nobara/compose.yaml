@@ -104,6 +104,13 @@ services:
     init: true
     restart: unless-stopped
     read_only: true
+    # The gateway buffers request bodies in process (capped at 64 MiB by
+    # MAX_REQUEST_BODY_BYTES in gateway/main.py). These cgroup ceilings are
+    # the backstop behind that cap so one misbehaving client cannot grow the
+    # CPU-only gateway into the host's memory. The /tmp tmpfs below counts
+    # against mem_limit. Pinned by tests/test_compose_contract.py.
+    mem_limit: 512m
+    pids_limit: 256
     environment:
       LLAMA_CPP_URL: http://llama-router:8080
       COMFYUI_URL: http://comfyui:8188

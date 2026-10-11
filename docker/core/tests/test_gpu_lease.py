@@ -13,8 +13,10 @@ from app.gpu_lease import (
     GPU_LEASE_ACQUIRE_PATH,
     GPU_LEASE_CONNECT_TIMEOUT_SECONDS,
     GPU_LEASE_HEADER,
+    GPU_LEASE_RELEASE_ATTEMPTS,
     GPU_LEASE_RELEASE_READ_TIMEOUT_SECONDS,
     GPU_LEASE_RELEASE_PATH,
+    GPU_LEASE_RELEASE_RETRY_BACKOFF_SECONDS,
     GPU_LEASE_TTL_SECONDS,
     GPULease,
     GPULeaseError,
@@ -193,16 +195,56 @@ async def test_release_retries_gateway_cleanup_failure_without_leaking_token(
     client = MagicMock()
     client.post = AsyncMock(side_effect=[_Response(503), _Response(200)])
 
-    await release_gpu_lease(client, lease)
+    # The retry pause is real seconds now (see the backoff test); skip it here.
+    with patch("app.gpu_lease.asyncio.sleep", new=AsyncMock()) as sleep:
+        await release_gpu_lease(client, lease)
 
     assert GPU_LEASE_RELEASE_READ_TIMEOUT_SECONDS == 90.0
     assert client.post.await_count == 2
+    sleep.assert_awaited_once_with(4.0)
     for call in client.post.await_args_list:
         assert "opaque-lease-capability" not in call.args[0]
         assert call.kwargs["json"] == {"lease_token": "opaque-lease-capability"}
         timeout = call.kwargs["timeout"]
         assert timeout.connect == GPU_LEASE_CONNECT_TIMEOUT_SECONDS
         assert timeout.read == GPU_LEASE_RELEASE_READ_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_release_retries_are_spaced_to_outlast_gateway_cleanup(monkeypatch):
+    """The gateway can spend up to ~10s coordinating workload cleanup before
+    it answers a release. Retries 0.25s apart all landed inside that window
+    and saw the same 5xx; 4s then 8s (12s total) reaches past it."""
+    monkeypatch.setenv("LM_STUDIO_TOKEN", "gateway-secret")
+    lease = GPULease(ttl_seconds=600, token="opaque-lease-capability")
+    client = MagicMock()
+    client.post = AsyncMock(
+        side_effect=[_Response(503), _Response(502), _Response(204)]
+    )
+
+    with patch("app.gpu_lease.asyncio.sleep", new=AsyncMock()) as sleep:
+        await release_gpu_lease(client, lease)
+
+    assert GPU_LEASE_RELEASE_RETRY_BACKOFF_SECONDS == (4.0, 8.0)
+    assert sum(GPU_LEASE_RELEASE_RETRY_BACKOFF_SECONDS) > 10.0
+    assert client.post.await_count == 3
+    assert [c.args[0] for c in sleep.await_args_list] == [4.0, 8.0]
+
+
+@pytest.mark.asyncio
+async def test_release_gives_up_after_the_last_spaced_retry(monkeypatch):
+    monkeypatch.setenv("LM_STUDIO_TOKEN", "gateway-secret")
+    lease = GPULease(ttl_seconds=600, token="opaque-lease-capability")
+    client = MagicMock()
+    client.post = AsyncMock(return_value=_Response(503))
+
+    with patch("app.gpu_lease.asyncio.sleep", new=AsyncMock()) as sleep:
+        with pytest.raises(GPULeaseError, match="release failed with HTTP 503"):
+            await release_gpu_lease(client, lease)
+
+    assert client.post.await_count == GPU_LEASE_RELEASE_ATTEMPTS
+    # No sleep after the final attempt.
+    assert sleep.await_count == GPU_LEASE_RELEASE_ATTEMPTS - 1
 
 
 @pytest.mark.asyncio

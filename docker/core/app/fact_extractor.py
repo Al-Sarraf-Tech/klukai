@@ -196,7 +196,9 @@ async def extract_facts(
             max_tokens=2048, temperature=0.1,
         )
 
-    if not result:
+    # parse_json hands back whatever the model emitted; a top-level list or
+    # string has no .get and would escape a function that promises not to raise.
+    if not result or not isinstance(result, dict):
         return dict(_DEFAULT_RESULT)
 
     # Validate mood
@@ -371,7 +373,10 @@ async def generate_mission_update(
             max_tokens=150, temperature=0.6,
         )
 
-    return text or "...Static on the line. Update delayed."
+    # No canned substitute: with the GPU host powered off this ran every
+    # ~15 minutes, and callers persisted and pushed the placeholder as if it
+    # were a real field report, all night.
+    return text  # "" on failure; callers decide
 
 
 async def generate_romance_message(

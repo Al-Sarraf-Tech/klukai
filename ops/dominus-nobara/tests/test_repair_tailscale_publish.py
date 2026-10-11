@@ -151,6 +151,24 @@ class RepairTailscalePublishTests(unittest.TestCase):
         self.stub("tailscale", "#!/usr/bin/env bash\nexit 1\n")
         self.assertEqual(self.run_script("--wait-for-address"), "")
 
+    def test_dockerd_drop_in_tolerates_a_missing_repair_binary(self) -> None:
+        # The drop-in's own comment: Tailscale being down must not stop Docker.
+        # Without the `-` prefix, a missing or non-executable installed repair
+        # script makes docker.service refuse to start, which is the opposite
+        # failure mode. The script's exit code is already 0 on timeout; the
+        # prefix covers the exec failure the script itself cannot.
+        drop_in = (
+            ROOT / "systemd/docker.service.d/20-tailscale-address.conf"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "ExecStartPre=-/usr/local/sbin/dominus-repair-tailscale-publish"
+            " --wait-for-address",
+            drop_in,
+        )
+        self.assertNotIn("ExecStartPre=/usr/local/sbin", drop_in)
+        self.assertIn("Wants=tailscaled.service", drop_in)
+        self.assertNotIn("Requires=tailscaled.service", drop_in)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -29,12 +29,20 @@ async def close() -> None:
         _redis = None
 
 
-async def publish(event_type: str, data: str = "", **kwargs) -> None:
-    """Publish an event to companion:events channel."""
+async def publish(event_type: str, data: str = "", **kwargs) -> int:
+    """Publish an event to companion:events channel.
+
+    Returns the number of subscribers Redis delivered to (0 when Redis is
+    not configured or the publish failed). Pub/sub has no queue: an event
+    published while nobody is subscribed is gone, so callers that hand off
+    work this way (her_pov enqueue) use the count to know the hand-off landed.
+    """
     if _redis is None:
-        return
+        return 0
     event = {"type": event_type, "data": data, **kwargs}
     try:
-        await _redis.publish(CHANNEL, json.dumps(event))
+        received = await _redis.publish(CHANNEL, json.dumps(event))
     except Exception as e:
         logger.warning("Failed to publish event: %s", e)
+        return 0
+    return int(received or 0)

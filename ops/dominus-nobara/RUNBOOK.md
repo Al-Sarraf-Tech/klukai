@@ -101,8 +101,26 @@ and `8390`, and it does nothing while `/run/user/1000/dominus-gpu/game-active`
 exists. `dominus-publish-repair.timer` runs it, and the stack unit runs it
 after `compose up`. `systemd/docker.service.d/20-tailscale-address.conf` makes
 dockerd wait up to 60 seconds for the address first, then starts anyway so a
-Tailscale outage cannot wedge the rest of Docker. Do not "fix" a closed
+Tailscale outage cannot wedge the rest of Docker; its `ExecStartPre` is
+`-`-prefixed so a missing or non-executable installed repair script is logged
+and skipped rather than stopping `docker.service`. Do not "fix" a closed
 `1234` with `docker restart`.
+
+Gateway authentication. A request that arrives through the Tailscale-bound
+`1234` publish reaches the container from docker-proxy's address
+(`172.19.0.1`; `127.0.0.1` or the `100.64.0.0/10` tailnet range if the
+topology changes). From those sources the gateway accepts a token-less request
+only for the surface a stock `aichat` client uses: `/v1/*`, `GET
+/api/v0/models` (listing and per-model detail), and `GET /api/v1/models`.
+Model load and unload under both `/api/v0` and `/api/v1`, `/api/v1/gpu/lease/*`,
+and the `/api/v1/comfy/*` facade always require the `LM_STUDIO_TOKEN` bearer
+from every source, because any tailnet node and any host-originated process
+look identical to the gateway. Sibling containers never match the bypass and
+always need the bearer. The gateway also refuses request bodies over 64 MiB
+with `413`, answers `/v1/*` with `503 inference_busy` and `Retry-After: 5`
+after waiting 120 seconds behind a request that is still streaming, and
+reports `inference_busy` in `/health`; a long-lived `true` with `upstream:
+ok` means a client stopped reading its stream, not that llama.cpp is down.
 
 The pinned external linux/amd64 manifests are:
 

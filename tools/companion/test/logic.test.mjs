@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   MOODS, moodToExpression, moodBrightness, SCENES, chordNotes, midiToHz,
-  sceneFor, nextBlink, mouthOpen, reduceFrame, speakable,
+  sceneFor, nextBlink, mouthOpen, reduceFrame, speakable, isFailureSentinel,
 } from "../../../flutter_app/web/companion/logic.js";
 
 test("the mood list matches the backend's VALID_MOODS exactly", () => {
@@ -86,7 +86,8 @@ test("the mouth flaps only with sound, faster when louder", () => {
 });
 
 test("frames reduce into the stage and request side effects", () => {
-  let { state, effects } = reduceFrame({ line: "", mood: "composed" }, { type: "thinking" });
+  // As ws_manager.send_thinking sends it: a status line in `text`.
+  let { state, effects } = reduceFrame({ line: "", mood: "composed" }, { type: "thinking", text: "Composing response..." });
   assert.equal(state.thinking, true);
   ({ state, effects } = reduceFrame(state, { type: "token", text: "Com" }));
   ({ state, effects } = reduceFrame(state, { type: "token", text: "mander." }));
@@ -111,13 +112,57 @@ test("frames reduce into the stage and request side effects", () => {
   assert.deepEqual(reduceFrame(state, { type: "proactive", message: "Report." }).effects,
     [{ kind: "speak", text: "Report." }]);
   assert.deepEqual(reduceFrame(state, { type: "proactive" }).effects, []);
-  assert.deepEqual(reduceFrame(state, { type: "voice_audio", audio: "QUJD" }).effects,
-    [{ kind: "play-audio", audio: "QUJD" }]);
+  // The server's voice_audio clip (its TTS for PWA voice input) is not a stage
+  // channel: every reply is already spoken once from its `done` text, so the
+  // clip used to make her say voice-input replies twice.
+  assert.deepEqual(reduceFrame(state, { type: "voice_audio", audio: "QUJD" }).effects, []);
   assert.deepEqual(reduceFrame(state, { type: "voice_audio" }).effects, []);
   const err = reduceFrame({ thinking: true, streaming: true }, { type: "error" }).state;
   assert.equal(err.thinking || err.streaming, false);
   assert.deepEqual(reduceFrame(state, { type: "affection" }).state, state);
   assert.deepEqual(reduceFrame(state, null).effects, []);
+});
+
+test("thinking follows the server's status text and clears on its empty frame, proactive and error", () => {
+  let { state } = reduceFrame({ thinking: false }, { type: "thinking", text: "Composing response..." });
+  assert.equal(state.thinking, true);
+  // The backend clears its bubble with {"type":"thinking","content":""}.
+  ({ state } = reduceFrame(state, { type: "thinking", content: "" }));
+  assert.equal(state.thinking, false);
+  ({ state } = reduceFrame(state, { type: "thinking", content: "Warming up image systems" }));
+  assert.equal(state.thinking, true);
+  ({ state } = reduceFrame(state, { type: "thinking", text: "" }));
+  assert.equal(state.thinking, false);
+  ({ state } = reduceFrame(state, { type: "thinking" }));
+  assert.equal(state.thinking, false, "a thinking frame with no text clears, it doesn't hang");
+  // A proactive line is her speaking: she is no longer thinking.
+  ({ state } = reduceFrame({ thinking: true }, { type: "proactive", message: "Report." }));
+  assert.equal(state.thinking, false);
+  ({ state } = reduceFrame({ thinking: true }, { type: "proactive" }));
+  assert.equal(state.thinking, false);
+  ({ state } = reduceFrame({ thinking: true, streaming: true }, { type: "error", message: "STT failed" }));
+  assert.equal(state.thinking, false);
+  assert.equal(state.streaming, false);
+});
+
+test("the failure sentinel is shown but never spoken", () => {
+  const SENTINEL = "Communications disrupted, Commander. Standby for reconnection.";
+  assert.equal(isFailureSentinel(SENTINEL), true);
+  assert.equal(isFailureSentinel("  Communications disrupted."), true);
+  assert.equal(isFailureSentinel("Communications are fine, Commander."), false);
+  assert.equal(isFailureSentinel(null), false);
+  // Streamed as her reply while the GPU host is off.
+  let { state, effects } = reduceFrame({ line: "", thinking: true }, { type: "token", text: SENTINEL });
+  ({ state, effects } = reduceFrame(state, { type: "done", message_id: "m1" }));
+  assert.equal(state.line, SENTINEL, "the subtitle still shows it");
+  assert.equal(state.thinking, false);
+  assert.deepEqual(effects, [], "no speak effect for the sentinel");
+  // Also when the server sends the final text explicitly, or as a proactive line.
+  assert.deepEqual(reduceFrame({ line: "" }, { type: "done", text: SENTINEL }).effects, []);
+  assert.deepEqual(reduceFrame({ line: "" }, { type: "proactive", message: SENTINEL }).effects, []);
+  // A real reply still speaks.
+  assert.deepEqual(reduceFrame({ line: "" }, { type: "done", text: "Standing by, Commander." }).effects,
+    [{ kind: "speak", text: "Standing by, Commander." }]);
 });
 
 test("stage directions never reach her voice", () => {

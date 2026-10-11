@@ -151,6 +151,11 @@ class CircuitBreaker:
         if self._state == State.HALF_OPEN:
             # Serialize the probe — only one concurrent call allowed.
             async with self._half_open_lock:
+                # Callers queued behind the probe see its outcome here: it has
+                # already closed or re-tripped the breaker, so they are not a
+                # second probe. Reject them; the next call sees the new state.
+                if self._state != State.HALF_OPEN:
+                    raise CircuitOpen(f"breaker probe already settled for {self.cfg.name!r}")
                 self._last_probe = now
                 try:
                     result = await fn(*args, **kwargs)
@@ -174,6 +179,9 @@ class CircuitBreaker:
     def force_open(self) -> None:
         """Trip the breaker. Used by chaos drills + manual ops."""
         self._state = State.OPEN
+        # Same anchoring as _trip(): without it the very next call promotes
+        # the breaker to half-open and probes the dep the drill just cut off.
+        self._last_probe = time.time()
         _record_state_transition(self.cfg.name, State.OPEN)
 
     def force_close(self) -> None:

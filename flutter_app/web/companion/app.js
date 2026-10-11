@@ -2,7 +2,7 @@
 // a generative score, and a chat dock, all on the same session as the PWA
 // (messages sent here appear there too: the server fans out to every device).
 
-import { readToken, clearToken, createApi, wsUrl, createSocket } from "./net.js";
+import { readToken, clearToken, createApi, AuthExpired, wsUrl, createSocket } from "./net.js";
 import { moodToExpression, sceneFor, reduceFrame } from "./logic.js";
 import { createPortrait } from "./portrait.js";
 import { createAmbience, ambienceKind } from "./ambience.js";
@@ -13,6 +13,8 @@ const $ = (id) => document.getElementById(id);
 const PREFS_KEY = "klukai_companion_prefs";
 const DAY_REFRESH_MS = 5 * 60 * 1000;
 const PORTRAIT_POLL_MS = 15000;
+const FRAME_ERROR_REFRESH_MS = 500;    // several frames 403 at once: one refresh for all of them
+const FRAME_ERROR_COOLDOWN_MS = 15000; // and if the fresh URLs fail too, don't loop on it
 const TINTS = {
   base: "rgba(79, 195, 247, 0.10)", smile: "rgba(232, 140, 165, 0.14)",
   blush: "rgba(232, 140, 165, 0.20)", annoyed: "rgba(232, 146, 62, 0.14)",
@@ -34,7 +36,7 @@ function boot() {
   const stage = $("stage");
   const prefs = loadPrefs();
   const api = createApi({ token, onAuthExpired: toLogin });
-  const portrait = createPortrait($("portrait"));
+  const portrait = createPortrait($("portrait"), { onFrameError: onPortraitFrameError });
   const ambience = createAmbience($("ambience"));
   let state = { line: "", mood: "composed", thinking: false, streaming: false };
   let day = null;
@@ -42,6 +44,10 @@ function boot() {
   let voice = null;
   let avatar = null;
   let portraitTimer = null;
+  let portraitSeq = 0;           // refreshPortrait() calls in flight: only the newest may apply
+  let portraitHasFrames = false; // she has real frames showing (keep them through a blip)
+  let frameErrorTimer = null;
+  let lastFrameErrorRefresh = 0;
   let noticeTimer = null;
   let awake = false;
 
@@ -86,25 +92,57 @@ function boot() {
   }
 
   async function refreshPortrait() {
+    const seq = ++portraitSeq;
     clearTimeout(portraitTimer);
+    portraitTimer = null;
+    let p;
     try {
-      const p = await api.portrait();
-      portrait.setFrames(p.frames || {}, { pending: !p.frames?.base });
-      applyMood();
-      if (p.status === "pending" || p.status === "partial") {
-        portraitTimer = setTimeout(refreshPortrait, PORTRAIT_POLL_MS);
-        // Only while she has no portrait at all; once the base exists the
-        // remaining expression frames fill in silently.
-        notice(p.frames?.base ? "" : "She's getting ready — her portrait is being drawn.", 0);
-      } else if (p.status === "unavailable") {
-        notice("She's off-camera for now — the GPU is busy.", 6000);
-      } else {
-        notice("");
-      }
+      p = await api.portrait();
     } catch (e) {
-      portrait.setFrames({}); // her official portrait until frames exist
-      if (e.status && e.status !== 404) portraitTimer = setTimeout(refreshPortrait, PORTRAIT_POLL_MS * 4);
+      // A newer call owns the state now (its result or retry supersedes ours),
+      // or we're on our way to the login page.
+      if (seq !== portraitSeq || e instanceof AuthExpired) return;
+      if (e.status === 404) {
+        // She has no portrait yet: her official one, no polling (an `outfit`
+        // frame refreshes when hers is drawn).
+        portraitHasFrames = false;
+        portrait.setFrames({});
+        return;
+      }
+      // Network blip (no status) or 5xx: keep her last good frames — the
+      // fallback only if there never were any — and try again later.
+      if (!portraitHasFrames) portrait.setFrames({});
+      portraitTimer = setTimeout(refreshPortrait, PORTRAIT_POLL_MS * 4);
+      return;
     }
+    if (seq !== portraitSeq) return; // stale: a newer response already applied
+    portraitHasFrames = Boolean(p.frames?.base);
+    portrait.setFrames(p.frames || {}, { pending: !portraitHasFrames });
+    applyMood();
+    if (p.status === "pending" || p.status === "partial") {
+      portraitTimer = setTimeout(refreshPortrait, PORTRAIT_POLL_MS);
+      // Only while she has no portrait at all; once the base exists the
+      // remaining expression frames fill in silently.
+      notice(portraitHasFrames ? "" : "She's getting ready — her portrait is being drawn.", 0);
+    } else if (p.status === "unavailable") {
+      notice("She's off-camera for now — the GPU is busy.", 6000);
+    } else {
+      notice("");
+    }
+  }
+
+  // A frame <img> failed to load — in practice a signed URL that expired
+  // (15–30 min) before that expression was first shown. Fetch fresh URLs once,
+  // shortly after, however many frames fail together.
+  function onPortraitFrameError() {
+    if (frameErrorTimer) return;
+    frameErrorTimer = setTimeout(() => {
+      frameErrorTimer = null;
+      const now = Date.now();
+      if (now - lastFrameErrorRefresh < FRAME_ERROR_COOLDOWN_MS) return;
+      lastFrameErrorRefresh = now;
+      refreshPortrait();
+    }, FRAME_ERROR_REFRESH_MS);
   }
 
   function onFrame(frame) {
@@ -115,8 +153,9 @@ function boot() {
     if (state.mood !== prevMood) applyMood();
     if (state.thinking) avatar?.setState("thinking");
     for (const fx of effects) {
+      // One voice channel: her reply is spoken from its `done` text. The
+      // server's `voice_audio` clips are dropped in logic.js (see reduceFrame).
       if (fx.kind === "speak") voice?.speak(fx.text);
-      else if (fx.kind === "play-audio") voice?.play(fx.audio);
       else if (fx.kind === "refresh-portrait") refreshPortrait();
       else if (fx.kind === "refresh-day") refreshDay();
     }
@@ -184,15 +223,18 @@ function boot() {
         notice("Loading her 3D model…", 0);
         try {
           const { createAvatar3D } = await import("./avatar3d.js");
-          avatar = await createAvatar3D(model, {
+          const av = await createAvatar3D(model, {
             loadModel: api.model,
             onReady: () => notice(""),
             onError: (e) => {
               notice(e && e.status === 404 ? "Her 3D model isn't installed on the server yet." : "3D isn't available on this device.", 6000);
-              avatar = null;
               setMode("portrait");
             },
           });
+          // On failure createAvatar3D reports through onError and then returns
+          // an inert stub (ready: false). Storing that made the 3D button dead
+          // for the session; with null the next tap tries again.
+          avatar = av && av.ready ? av : null;
           avatar?.setMood(state.mood);
         } catch {
           notice("3D isn't available on this device.", 6000);
@@ -205,6 +247,10 @@ function boot() {
       model.hidden = true;
       portrait.setActive(awake);
     }
+    // Hiding the 3D section alone left its renderer ticking at 60 fps behind
+    // the portrait; park it. prefs.mode, not `mode`: he may have switched back
+    // while the model was still loading.
+    avatar?.setPaused(prefs.mode !== "model");
     syncButtons();
   }
 
@@ -261,6 +307,7 @@ function boot() {
       ambience.start();
       portrait.setActive(awake && prefs.mode === "portrait");
       refreshDay();
+      refreshPortrait(); // her frames may have expired, or finished drawing, while away
     }
   });
   window.addEventListener("pageshow", () => socket.resume());

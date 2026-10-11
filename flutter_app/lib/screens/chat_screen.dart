@@ -100,7 +100,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   late final BrowserPlatform _browser = widget.browser ?? defaultBrowserPlatform();
   StreamSubscription<void>? _resumeSub;
-  DateTime _lastFrameAt = DateTime.now();
+
+  /// When the page left the screen (tab hidden, app switched, device locked);
+  /// null while it is showing. Set by the lifecycle observer, consumed by
+  /// [_onPageResume]: together they measure how long she was actually away,
+  /// which is what decides whether the socket can still be trusted.
+  DateTime? _hiddenAt;
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
@@ -193,11 +198,36 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// for the backoff, and refresh where she is.
   void _onPageResume() {
     if (!mounted) return;
-    final silentFor = DateTime.now().difference(_lastFrameAt);
-    if (widget.resumePolicy.shouldReconnect(connected: _ws.isConnected, sinceLastFrame: silentFor)) {
+    final hiddenAt = _hiddenAt;
+    _hiddenAt = null;
+    // How long the page was away — not how long the socket has been quiet. A
+    // one-second tab switch after a quiet stretch of chat must leave a healthy
+    // socket alone: the server cancels in-flight work (an image, say) when
+    // the old socket closes.
+    final awayFor =
+        hiddenAt == null ? Duration.zero : DateTime.now().difference(hiddenAt);
+    if (widget.resumePolicy.shouldReconnect(connected: _ws.isConnected, sinceLastFrame: awayFor)) {
       _ws.reconnectNow(); // the connection listener reloads history on success
     }
     _loadHerDay();
+  }
+
+  /// The web engine reports `hidden` when the tab or app leaves the screen
+  /// and `resumed` when it is back; a bare `inactive` is only the window
+  /// losing focus while still visible — no reason to doubt the socket. The
+  /// visibility change that brings `resumed` also fires the browser seam's
+  /// onResume, where [_onPageResume] consumes the timestamp.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        _hiddenAt ??= DateTime.now();
+      case AppLifecycleState.resumed:
+      case AppLifecycleState.inactive:
+        break;
+    }
   }
 
   /// Opens the Companion page: a new window on desktop, the same window in an
@@ -277,10 +307,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         if (!mounted) return;
         _mergeHistory(messages);
         _scrollToBottom(instant: true);
-      } else if (response.statusCode != 401 && mounted) {
+      } else if (response.statusCode == 401) {
+        // Expired token. Don't wait for the WebSocket's 4001 close — under
+        // uvicorn that close never reaches the client, and the app would sit
+        // soft-locked on LINK DOWN with an empty transcript. Back to login.
+        if (mounted) _handleAuthExpired();
+      } else if (mounted) {
         // Don't render an empty conversation when the server actually errored —
         // history is sacred; offer a retry so it can't be mistaken for "wiped".
-        // (401 is handled by the auth-expiry redirect, not a retry.)
         _showHistoryError();
       }
     } catch (e) {
@@ -355,7 +389,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     try {
       final uri = Uri.parse('${widget.serverUrl}/api/affection');
       final response = await http.get(uri, headers: _authHeaders);
-      if (response.statusCode == 200 && mounted) {
+      if (!mounted) return;
+      if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         setState(() {
           _state = _state.copyWith(
@@ -365,6 +400,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 data['level_name'] as String? ?? 'Cold Assessment',
           );
         });
+      } else if (response.statusCode == 401) {
+        _handleAuthExpired(); // same soft-lock as _loadHistory; see there
       }
     } catch (e) {
       debugPrint('Failed to load affection: $e');
@@ -393,7 +430,20 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _ws.connectionState.listen((connected) {
       if (!mounted) return;
       final wasConnected = _state.isConnected;
-      setState(() => _state = _state.copyWith(isConnected: connected));
+      int? cutOff;
+      setState(() {
+        _state = _state.copyWith(isConnected: connected);
+        // The link died (or was redialed) mid-reply: no more tokens are coming
+        // for that bubble. Freeze it where it stands so the next reply gets a
+        // bubble of its own instead of being appended to a dead one, and free
+        // the composer instead of leaving it locked for the 60s safety timer.
+        if (!connected) cutOff = _finalizeStreamingBubble();
+      });
+      if (!connected) {
+        _clearWarmupHint();
+        _unlockInput();
+        if (cutOff != null) _prepareMessageLayout(cutOff!);
+      }
       if (connected && !wasConnected) {
         // (Re)connected — refetch recent history and merge by id so anything
         // missed while the link was down appears, without duplicates.
@@ -415,14 +465,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _handleWSMessage(Map<String, dynamic> msg) {
-    _lastFrameAt = DateTime.now();
     final type = msg['type'] as String?;
 
     switch (type) {
       case 'token':
         final text = msg['text'] as String? ?? '';
         _clearWarmupHint(); // she's replying — drop any "waking up" notice
-        if (!_state.isInputLocked) {
+        // The first token always (re)arms the lock for the whole reply. A
+        // shorter lock may be active (proactive 1.5s, image 2s, heartbeat 5s);
+        // left alone it would lapse mid-reply, freeing the composer while she
+        // is still talking. Later tokens only re-arm if the lock has lapsed.
+        if (_streamingId == null || !_state.isInputLocked) {
           _lockInput(
             'RECEIVING TRANSMISSION',
             timeout: const Duration(seconds: 60),
@@ -454,28 +507,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
       case 'done':
         final model = msg['model'] as String?;
+        // done.text is her reply after the server's narration fix-ups (e.g.
+        // <think> blocks stripped). Showing it instead of the raw stream also
+        // keeps the next history merge from adding a second copy of the line.
+        final finalText = msg['text'];
         int? completedIdx;
         setState(() {
-          if (_streamingId != null) {
-            completedIdx = _messages.indexWhere((m) => m.id == _streamingId);
-            if (completedIdx! >= 0) {
-              _messages[completedIdx!] = _messages[completedIdx!].copyWith(
-                isStreaming: false,
-                model: model,
-              );
-            }
-          }
-          _streamingBuffer = '';
-          _streamingId = null;
-          _thinkingText = null;
-          _activeTools.clear();
-          _state = _state.copyWith(isTyping: false, currentModel: model);
+          completedIdx = _finalizeStreamingBubble(
+            content: finalText is String && finalText.isNotEmpty
+                ? finalText
+                : null,
+            model: model,
+          );
+          _state = _state.copyWith(currentModel: model);
         });
         _clearWarmupHint();
         _unlockInput();
-        if (completedIdx != null && completedIdx! >= 0) {
-          _prepareMessageLayout(completedIdx!);
-        }
+        if (completedIdx != null) _prepareMessageLayout(completedIdx!);
         _playNotificationSound();
 
       case 'read_receipt':
@@ -492,9 +540,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
       case 'thinking':
         _clearWarmupHint(); // a real status arrived; don't overwrite it later
+        // Older frames carry `text`, current ones `content`. An empty frame is
+        // the backend clearing its status line — it must take the spinner
+        // down, not leave a permanent PROCESSING behind.
+        final status = msg['text'] as String? ?? msg['content'] as String?;
         setState(() {
-          _state = _state.copyWith(isTyping: true);
-          _thinkingText = msg['text'] as String?;
+          if (status == null || status.isEmpty) {
+            _state = _state.copyWith(isTyping: false);
+            _thinkingText = null;
+          } else {
+            _state = _state.copyWith(isTyping: true);
+            _thinkingText = status;
+          }
         });
 
       case 'tool_use':
@@ -676,17 +733,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       case 'error':
         // Backend hit a snag (handler crash / stream failure). Clear all the
         // in-flight indicators — including the warmup hint — so the UI never
-        // sticks on "WAKING UP", and show her message as a normal bubble.
+        // sticks on "WAKING UP", and show her message as a normal bubble. A
+        // reply cut off mid-stream keeps what arrived, frozen: no cursor
+        // blinking forever on a bubble nothing will ever finish.
         _clearWarmupHint();
         final errText =
             msg['message'] as String? ??
             '...Something glitched on my end, Commander. Try again.';
+        int? cutOff;
         setState(() {
-          _streamingBuffer = '';
-          _streamingId = null;
-          _thinkingText = null;
-          _activeTools.clear();
-          _state = _state.copyWith(isTyping: false);
+          cutOff = _finalizeStreamingBubble();
           _messages.add(
             ChatMessage(
               id: 'error-${DateTime.now().millisecondsSinceEpoch}',
@@ -696,8 +752,37 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           );
         });
         _unlockInput();
+        if (cutOff != null) _prepareMessageLayout(cutOff!);
         _scrollToBottom();
     }
+  }
+
+  /// Ends the in-progress reply where it stands: the streaming bubble (if any)
+  /// stops blinking and keeps what streamed — or takes [content], the server's
+  /// final text — and every per-reply indicator (buffer, status line, tool
+  /// list, typing) is reset. Shared by `done`, `error` and a dropped link.
+  /// Must be called inside setState. Returns the finalized bubble's index so
+  /// the caller can prepare its layout, or null when nothing was streaming.
+  int? _finalizeStreamingBubble({String? content, String? model}) {
+    int? idx;
+    final id = _streamingId;
+    if (id != null) {
+      final i = _messages.indexWhere((m) => m.id == id);
+      if (i >= 0) {
+        _messages[i] = _messages[i].copyWith(
+          isStreaming: false,
+          content: content,
+          model: model,
+        );
+        idx = i;
+      }
+    }
+    _streamingBuffer = '';
+    _streamingId = null;
+    _thinkingText = null;
+    _activeTools.clear();
+    _state = _state.copyWith(isTyping: false);
+    return idx;
   }
 
   void _sendMessage() {
@@ -778,6 +863,31 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// The push-to-talk clip went nowhere: STT is down (the GPU host is off),
+  /// timed out, or heard nothing. Short, in her register; the keyboard works.
+  void _showVoiceLinkError() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text(
+          '// VOICE LINK GARBLED — try again or type.',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            letterSpacing: 1.0,
+            fontSize: 12,
+          ),
+        ),
+        backgroundColor: GFL2Colors.surface,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+          side: BorderSide(color: GFL2Colors.danger.withValues(alpha: 0.4)),
+        ),
+      ),
+    );
+  }
+
   /// Keyboard scroll-navigation for the message list: PageUp/PageDown jump a
   /// near-viewport, Home/End jump to the extremes. Returns
   /// [KeyEventResult.handled] when it consumes a nav key (so the keystroke is
@@ -820,38 +930,52 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     return KeyEventResult.handled;
   }
 
+  /// Whisper on a cold GPU takes a while; a powered-off GPU host hangs the
+  /// proxy until it gives up. Bound the wait so he isn't left wondering.
+  static const _sttTimeout = Duration(seconds: 35);
+
   Future<void> _transcribeAndSend(String audioBase64) async {
+    var text = '';
     try {
       final serverUrl = widget.serverUrl;
-      final response = await http.post(
-        Uri.parse('$serverUrl/api/stt'),
-        headers: _authHeaders,
-        body: jsonEncode({'audio': audioBase64}),
-      );
+      final response = await http
+          .post(
+            Uri.parse('$serverUrl/api/stt'),
+            headers: _authHeaders,
+            body: jsonEncode({'audio': audioBase64}),
+          )
+          .timeout(_sttTimeout);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final text = (data['text'] as String? ?? '').trim();
-        if (text.isNotEmpty) {
-          if (!_ws.sendMessage(text)) {
-            _showSendError();
-            return;
-          }
-          if (!mounted) return;
-          setState(() {
-            _messages.add(
-              ChatMessage(
-                id: 'user-${DateTime.now().millisecondsSinceEpoch}',
-                role: 'user',
-                content: text,
-              ),
-            );
-          });
-          _scrollToBottom();
-        }
+        text = (data['text'] as String? ?? '').trim();
+      } else {
+        debugPrint('STT failed: HTTP ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('STT failed: $e');
     }
+    if (!mounted) return;
+    // GPU host off (502), request timed out, or nothing intelligible came
+    // back: say so instead of swallowing his words.
+    if (text.isEmpty) {
+      _showVoiceLinkError();
+      return;
+    }
+    if (!_ws.sendMessage(text)) {
+      _showSendError();
+      return;
+    }
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          id: 'user-${DateTime.now().millisecondsSinceEpoch}',
+          role: 'user',
+          content: text,
+        ),
+      );
+    });
+    _scrollToBottom();
+    _startWarmupHint(); // same cold-model wait as a typed message
   }
 
   List<String> _getStarters() {
@@ -1279,10 +1403,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             );
             if (msgDate != prevDate) showDivider = true;
           }
-          // Use canvas bubble for finalized Klukai messages (markdown rendering)
+          // Use canvas bubble for finalized Klukai text (markdown rendering).
+          // An image goes through MessageBubble: the canvas bubble only draws
+          // text (it would show the literal "[IMAGE]") and has no speaker.
           final bubble =
               (msg.role == 'assistant' &&
                   !msg.isStreaming &&
+                  msg.imageData == null &&
                   PretextService.isReady)
               ? CanvasMessageBubble(message: msg)
               : MessageBubble(message: msg);
@@ -1384,9 +1511,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             enabled: !_inputDisabled,
             onTapDown: () async {
               setState(() => _isRecording = true);
+              // start() resolves false when the mic was refused or the gesture
+              // ended before it arrived: nothing is recording, so don't show
+              // it as if it were.
+              var started = false;
               try {
-                await _jsStartRecording().toDart;
+                started = (await _jsStartRecording().toDart).toDart;
               } catch (_) {}
+              if (!started && mounted) setState(() => _isRecording = false);
             },
             onTapUp: () async {
               setState(() => _isRecording = false);

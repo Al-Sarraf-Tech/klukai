@@ -7,7 +7,6 @@ import logging
 import os
 import re
 from contextlib import asynccontextmanager
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -29,6 +28,7 @@ from .chat import register_websocket
 from .db import init_pool, close_pool, get_pool
 from .events import init as events_init, close as events_close
 from .helpers import fix_narration as _fix_narration
+from .llm_router import FAILURE_SENTINEL
 from .models import SessionState
 from .personality import load_personality
 from .push import send_push
@@ -83,7 +83,13 @@ async def run_migration() -> None:
 async def generate_daily_recap(affection_level: int, user_id: str = "jalsarraf") -> str | None:
     """Generate a daily recap by summarizing today's messages via LLM."""
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
+        from .proactive.state import LOCAL_TZ, now_local
+
+        # "Today" is the Commander's day. The container runs UTC and the DB
+        # session zone is UTC too, so `created_at::date` compared with the
+        # container's date meant the 21:00 Chicago run only counted messages
+        # after 19:00 local — rarely four, so the recap silently never fired.
+        today = now_local().date()
         pool = get_pool()
         async with pool.connection() as conn:
             rows = await (
@@ -91,10 +97,11 @@ async def generate_daily_recap(affection_level: int, user_id: str = "jalsarraf")
                     # Skip her own check-ins — recapping them back at her turns
                     # the daily recap into an echo chamber.
                     "SELECT role, content FROM companion_messages "
-                    "WHERE user_id = %s AND created_at::date = %s::date "
+                    "WHERE user_id = %s "
+                    "AND (created_at AT TIME ZONE %s)::date = %s::date "
                     "AND COALESCE(model, '') <> 'proactive' "
                     "ORDER BY created_at ASC LIMIT 40",
-                    (user_id, today,),
+                    (user_id, str(LOCAL_TZ), today),
                 )
             ).fetchall()
 
@@ -123,21 +130,35 @@ async def generate_daily_recap(affection_level: int, user_id: str = "jalsarraf")
         full = []
         async for token in router.stream(prompt, [{"role": "user", "content": prompt}], config):
             full.append(token)
-        return "".join(full) if full else None
+        recap = "".join(full)
+        # With the GPU host down the stream is the sentinel — that is not her
+        # evening log, and delivering it would push an outage notice as her words.
+        if not recap or recap.startswith(FAILURE_SENTINEL):
+            return None
+        return recap
     except Exception as e:
         logger.warning("Daily recap generation failed: %s", e)
         return None
 
 
-async def proactive_callback(message: str) -> None:
-    """Deliver a proactive message to ALL connected users via WebSocket or push."""
-    delivered = False
-    for user_id in list(ws._connections.keys()):
-        if ws.is_connected(user_id):
-            await ws.send_proactive(user_id, message)
-            delivered = True
-    if not delivered:
-        await send_push(title="Klukai", body=message)
+async def proactive_callback(message: str) -> bool:
+    """Deliver a proactive line: into history always, then live or by push.
+
+    Scheduled proactivity is single-user (see the engine's BOUNDARY note), so
+    this addresses the Commander. ``send_proactive`` persists the row even
+    with no device connected — she spoke, it lands in history either way —
+    then a connected device has it live, otherwise it goes out as a push.
+
+    Returns True iff someone actually received it. The engine's ``_deliver``
+    treats False as not delivered, so a promise follow-up that reached no one
+    (offline, no push subscriber) is not marked as sent.
+    """
+    from .decisions import PRIMARY_USER
+
+    await ws.send_proactive(PRIMARY_USER, message)
+    if ws.is_connected(PRIMARY_USER):
+        return True
+    return (await send_push(title="Klukai", body=message)) > 0
 
 
 @asynccontextmanager

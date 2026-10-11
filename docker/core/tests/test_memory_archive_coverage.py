@@ -376,6 +376,52 @@ class TestSaveImage:
             )
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_failed_insert_removes_the_written_files(self):
+        """Regression: the PNG, WebP and thumbnail were written BEFORE the
+        INSERT; when the INSERT failed they stayed on the volume forever with
+        no row pointing at them. The failure path must unlink all three."""
+        from app.memory_archive import save_image
+
+        conn = _RecordingConn()
+        conn.execute = AsyncMock(side_effect=RuntimeError("insert failed"))
+        fixed_uuid = "77777777-0000-0000-0000-000000000000"
+
+        async with _save_image_env(conn, fixed_uuid=fixed_uuid):
+            # autospec keeps the method binding so `self` (the path) is recorded.
+            with patch("app.memory_archive.Path.unlink", autospec=True) as unlink:
+                result = await save_image(
+                    image_bytes=b"x", prompt="p", conversation_id="c",
+                    curation={"annotation": "A specific line about the hangar at dawn."},
+                )
+
+        assert result is None
+        assert unlink.call_count == 3
+        for call in unlink.call_args_list:
+            assert call.kwargs == {"missing_ok": True}
+        unlinked = {c.args[0].name for c in unlink.call_args_list}
+        assert unlinked == {
+            f"{fixed_uuid}.png", f"{fixed_uuid}.webp", f"{fixed_uuid}_thumb.webp",
+        }
+
+    @pytest.mark.asyncio
+    async def test_cleanup_failure_still_returns_none(self):
+        """Removing an orphan is best-effort; it must not turn into a raise."""
+        from app.memory_archive import save_image
+
+        conn = _RecordingConn()
+        conn.execute = AsyncMock(side_effect=RuntimeError("insert failed"))
+
+        async with _save_image_env(conn):
+            with patch("app.memory_archive.Path.unlink",
+                       side_effect=PermissionError("read-only volume")):
+                result = await save_image(
+                    image_bytes=b"x", prompt="p", conversation_id="c",
+                    curation={"annotation": "A specific line about the hangar at dawn."},
+                )
+
+        assert result is None
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # _generate_thumbnail — geometry + failure safety (lines 229-236)

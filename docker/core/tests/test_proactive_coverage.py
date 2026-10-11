@@ -295,6 +295,21 @@ class TestFireUpdate:
             await t._fire_update(elapsed_minutes=10, major_event=None)  # no raise
         cb.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_fire_update_skips_when_llm_returns_empty(self):
+        """GPU host off → the generator returns "" (no cloud fallback). The
+        tick is skipped and logged; nothing canned lands in his history."""
+        t = MissionTimer()
+        t.update_count = 3
+        cb = AsyncMock()
+        t._callback = cb
+        with patch("app.fact_extractor.generate_mission_update", AsyncMock(return_value="")), \
+             patch("app.proactive.mission.logger") as log:
+            await t._fire_update(elapsed_minutes=90, major_event=None)
+        cb.assert_not_awaited()
+        assert log.info.call_args.args[0] == "Mission update #%d skipped: LLM unavailable"
+        assert log.info.call_args.args[1] == 3
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # stop_mission dispatch + _set_post_mission_physical  (479-489, 495-499)
@@ -674,6 +689,24 @@ class TestRandomEvent:
         with _patch_now():
             await e._random_event()
         e._on_message_callback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("when", [
+        datetime(2026, 5, 17, 23, 15, 0),  # first quiet minute slot
+        datetime(2026, 5, 17, 7, 45, 0),   # last quiet-hour slot before 0800
+    ])
+    async def test_quiet_hours_block_even_with_a_winning_roll(self, when):
+        """_random_event bypasses _can_send(), so it must check quiet hours
+        itself — a misfire replay at 23:15 must never wake him."""
+        e = _engine_for_random_event(affection=0)
+        with _patch_now(when), \
+             patch("app.proactive.events.random.random", return_value=0.0), \
+             patch("app.personality.load_personality",
+                   return_value={"random_events": _EVENTS_CFG}) as load:
+            await e._random_event()
+        e._on_message_callback.assert_not_awaited()
+        load.assert_not_called()  # refused before the roll, not after
+        assert e._random_events_today == 0
 
     @pytest.mark.asyncio
     async def test_probability_roll_above_chance_skips(self):
@@ -1809,7 +1842,10 @@ class TestAnniversarySendFailure:
         fake_ws.is_connected = MagicMock(return_value=True)
         fake_ws.send_proactive = AsyncMock(side_effect=RuntimeError("ws closed"))
 
-        with patch("app.db.get_pool", return_value=pool), \
+        # Freeze the send gate's clock at 08:00 local so the test does not
+        # depend on whether it runs inside the Commander's quiet hours.
+        with _patch_now(datetime(2026, 5, 17, 8, 0, 0)), \
+             patch("app.db.get_pool", return_value=pool), \
              patch("app.context.ws", fake_ws), \
              patch("app.proactive.milestones.logger") as log:
             await e._anniversary_check()  # must not raise

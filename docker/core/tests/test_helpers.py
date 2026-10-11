@@ -15,6 +15,7 @@ from app.helpers import (
     fix_narration as _fix_narration,
     parse_interval_minutes as _parse_interval_minutes,
     strip_actions_for_tts as _strip_actions_for_tts,
+    tts_clip,
     wants_mission_cancel as _wants_mission_cancel,
     wants_mission_start as _wants_mission_start,
     wants_recall as _wants_recall,
@@ -150,6 +151,54 @@ class TestStripActionsForTTS:
     def test_collapses_whitespace(self):
         result = _strip_actions_for_tts("Start  (action)  end")
         assert "  " not in result
+
+    def test_removes_asterisk_directions(self):
+        """*stage directions* were read aloud by XTTS — stripped like parentheticals."""
+        assert _strip_actions_for_tts("*nods slowly* Acknowledged, Commander.") == "Acknowledged, Commander."
+
+    def test_removes_mixed_directions(self):
+        result = _strip_actions_for_tts("(she smiles) *a short nod* Yes. *looks away* Indeed.")
+        assert result == "Yes. Indeed."
+
+    def test_only_directions_leaves_nothing(self):
+        assert _strip_actions_for_tts("(she nods) *silence*") == ""
+
+
+# ── TTS clipping ─────────────────────────────────────────────────────────────
+
+
+class TestTtsClip:
+    """XTTS gets at most one clip's worth, cut after a sentence, not mid-word."""
+
+    def test_text_under_limit_is_unchanged(self):
+        assert tts_clip("Short enough.", limit=50) == "Short enough."
+        assert tts_clip("x" * 500) == "x" * 500  # exactly at the default limit
+
+    def test_cuts_after_the_last_sentence_end_inside_the_limit(self):
+        text = "First sentence here. Second sentence here. Third sentence that runs long."
+        out = tts_clip(text, limit=50)
+        assert out == "First sentence here. Second sentence here."
+
+    def test_question_and_exclamation_are_boundaries(self):
+        assert tts_clip("Really? Yes! And then more words follow", limit=20) == "Really? Yes!"
+
+    def test_newline_after_a_period_is_a_boundary(self):
+        assert tts_clip("Line one.\nLine two continues on and on", limit=20) == "Line one."
+
+    def test_sentence_ending_exactly_at_the_limit_is_kept(self):
+        head = "a" * 19 + "."  # 20 chars, period at index 19, space at index 20
+        assert tts_clip(head + " and a tail", limit=20) == head
+
+    def test_falls_back_to_hard_cut_when_boundary_is_too_early(self):
+        text = "Hi. " + "y" * 100  # only boundary is before limit // 3
+        assert tts_clip(text, limit=60) == text[:60]
+
+    def test_no_boundary_at_all_is_a_hard_cut(self):
+        assert tts_clip("x" * 900) == "x" * 500
+
+    def test_decimal_point_is_not_a_boundary(self):
+        text = "The ratio is 2.5 which is fine. " + "z" * 100
+        assert tts_clip(text, limit=40) == "The ratio is 2.5 which is fine."
 
 
 # ── Intent detection ─────────────────────────────────────────────────────────

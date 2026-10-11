@@ -7,10 +7,17 @@ library;
 // message_bubble.dart uses dart:js_interop + package:web (in tap handlers) and
 // imports main.dart, so this MUST run under chrome:
 //   flutter test --platform chrome test/widgets/message_bubble_test.dart
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:companion_app/widgets/message_bubble.dart';
 import 'package:companion_app/models/message.dart';
+
+import '../support/fake_browser.dart';
 
 Widget _wrap(Widget child) => MaterialApp(
   home: Scaffold(body: SizedBox(width: 400, child: child)),
@@ -147,6 +154,70 @@ void main() {
       expect(find.byType(SelectableText), findsNothing);
       // A download affordance is overlaid on the image.
       expect(find.byIcon(Icons.download), findsOneWidget);
+    });
+  });
+
+  group('MessageBubble — her voice (speaker control)', () {
+    const offline = '// VOICE SYNTH OFFLINE — her words stand.';
+
+    testWidgets('a failed TTS request drops the spinner and says so', (
+      tester,
+    ) async {
+      // The GPU host is routinely powered off: /api/tts then 502s (or hangs —
+      // the request is bounded by a timeout). Neither may leave the speaker
+      // spinning, and neither may fail in silence.
+      final gate = Completer<http.Response>();
+      final client = MockClient((req) {
+        expect(req.url.path, '/api/tts');
+        return gate.future;
+      });
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: _msg(),
+            client: client,
+            browser: FakeBrowserPlatform(),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.byIcon(Icons.volume_up_outlined));
+      await tester.pump();
+      // Request in flight: the speaker is a spinner.
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byIcon(Icons.volume_up_outlined), findsNothing);
+
+      gate.complete(http.Response('voice service unavailable', 502));
+      await tester.pump();
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.byIcon(Icons.volume_up_outlined), findsOneWidget);
+      expect(find.text(offline), findsOneWidget);
+      // Let the snackbar run its course.
+      await tester.pump(const Duration(seconds: 5));
+    });
+
+    testWidgets('a good TTS reply plays through the unlocked voice channel', (
+      tester,
+    ) async {
+      final browser = FakeBrowserPlatform();
+      final client = MockClient((req) async {
+        expect(req.url.path, '/api/tts');
+        expect(jsonDecode(req.body)['language'], 'en');
+        return http.Response(jsonEncode({'audio': 'UklGRg=='}), 200);
+      });
+      await tester.pumpWidget(
+        _wrap(MessageBubble(message: _msg(), client: client, browser: browser)),
+      );
+      await tester.pump();
+
+      await tester.tap(find.byIcon(Icons.volume_up_outlined));
+      await tester.pump();
+      await tester.pump();
+      expect(browser.voices, ['data:audio/wav;base64,UklGRg==']);
+      expect(find.text(offline), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
     });
   });
 

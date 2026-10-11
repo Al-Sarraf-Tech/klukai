@@ -253,6 +253,15 @@ class ComposeContractTests(unittest.TestCase):
         self.assertTrue(any("895-second timer-safety cutoff" in item for item in errors))
         self.assertTrue(any("matching STT/TTS TTLs" in item for item in errors))
 
+    def test_gateway_carries_memory_and_pid_ceilings(self) -> None:
+        # The gateway buffers request bodies in process (bounded in code at
+        # MAX_REQUEST_BODY_BYTES); these cgroup limits are the backstop so a
+        # misbehaving client cannot grow the CPU-only gateway into host
+        # memory. Compose renders mem_limit as a byte-count string.
+        gateway = self.document["services"]["lmstudio-compat"]
+        self.assertEqual(int(gateway["mem_limit"]), 512 * 1024 * 1024)
+        self.assertEqual(int(gateway["pids_limit"]), 256)
+
     def test_public_port_must_use_literal_tailscale_address(self) -> None:
         document = copy.deepcopy(self.document)
         document["services"]["lmstudio-compat"]["ports"][0]["host_ip"] = "0.0.0.0"

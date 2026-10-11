@@ -5,7 +5,7 @@ This file targets the two untested generators:
 
   * generate_mission_update (lines 208-226): prompt assembly with the
     major-event / nominal and active-events / blank conditional lines, plus
-    the fallback string when the LLM returns empty.
+    the empty string (no canned fallback) when the LLM returns empty.
   * generate_romance_message (lines 233-249): prompt assembly with the
     context-summary default, plus the empty-LLM fallback.
 
@@ -95,14 +95,21 @@ class TestGenerateMissionUpdate:
         assert "Active:" not in p
 
     @pytest.mark.asyncio
-    async def test_empty_llm_returns_static_fallback(self):
-        """Empty/falsy LLM output → the canned 'Static on the line' fallback."""
+    async def test_empty_llm_returns_empty_not_a_canned_line(self):
+        """Empty/falsy LLM output → "" so callers can skip the update.
+
+        Regression: this used to substitute "...Static on the line. Update
+        delayed." Callers treated it as a real field report, so with the GPU
+        host powered off an active mission pushed and persisted that line
+        every ~15 minutes all night. The LLM is local-only; no fallback text.
+        """
         with patch("app.llm_router.get_lm_gate", return_value=_NoopGate()), \
              patch("app.fact_extractor.call_llm_text", new=AsyncMock(return_value="")):
             out = await fact_extractor.generate_mission_update(
                 "Hold the line", 5, 1, None, [], 0,
             )
-        assert out == "...Static on the line. Update delayed."
+        assert out == ""
+        assert "Static" not in out
 
 
 # ═══════════════════════════════════════════════════════════════════════════

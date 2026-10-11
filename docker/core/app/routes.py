@@ -23,12 +23,15 @@ from .helpers import (
     client_ip,
     fix_narration as _fix_narration,
     strip_actions_for_tts as _strip_actions_for_tts,
+    tts_clip as _tts_clip,
 )
 from .image_gen import generate_image
+from .llm_router import FAILURE_SENTINEL
 from .lm_gateway import lm_studio_auth_headers
 from .models import SessionState
 from .personality import load_personality
 from .push import add_subscription, get_vapid_public_key
+from .voice_client import voice_url as _voice_url
 
 
 # ── Request models ────────────────────────────────────────────────────────
@@ -45,7 +48,9 @@ class TTSRequest(BaseModel):
 
 
 class STTRequest(BaseModel):
-    audio: str = Field(min_length=1)
+    # Same ceiling as the voice service's own STTRequest (~6 MB of audio once
+    # decoded): refuse at validation rather than proxy a multi-MB body to it.
+    audio: str = Field(min_length=1, max_length=8_000_000)
 
 
 class ImageGenRequest(BaseModel):
@@ -276,9 +281,8 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
         # Voice service
         try:
-            voice_url = os.environ.get("VOICE_URL", "http://100.107.121.5:8301")
             async with _hx.AsyncClient(timeout=5.0) as c:
-                resp = await c.get(f"{voice_url}/health")
+                resp = await c.get(f"{_voice_url()}/health")
                 results["voice"] = {
                     "status": "ok" if resp.status_code == 200 else "degraded"
                 }
@@ -340,16 +344,28 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             async with httpx.AsyncClient(
                 timeout=60.0, trust_env=False, follow_redirects=False
             ) as client:
-                r = await post_leased_tts(
-                    client,
-                    {"text": tts_text[:500], "language": req.language},
-                    timeout=60.0,
+                # Bound the WHOLE leased call — gate wait, GPU lease, synth —
+                # not just the HTTP leg the client timeout covers.
+                r = await asyncio.wait_for(
+                    post_leased_tts(
+                        client,
+                        {"text": _tts_clip(tts_text), "language": req.language},
+                        timeout=60.0,
+                    ),
+                    timeout=45.0,
                 )
                 if r.status_code == 200:
                     import base64
 
                     return {"audio": base64.b64encode(r.content).decode()}
-                return JSONResponse({"error": "TTS failed"}, status_code=r.status_code)
+                # Never forward the upstream status: a VOICE_API_TOKEN mismatch
+                # is a 401 from the voice host, and the stage's net.js reads any
+                # 401 as HIS session expiring and logs him out.
+                logger.error("TTS upstream HTTP %s", r.status_code)
+                return JSONResponse({"error": "TTS failed"}, status_code=502)
+        except TimeoutError:
+            logger.warning("TTS timed out waiting on the voice GPU lease")
+            return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
         except Exception:
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
 
@@ -502,9 +518,12 @@ async def _run_mission(user_id: str, affection_level: int) -> None:
             prompt, [{"role": "user", "content": prompt}], config
         ):
             full.append(token)
+        narrative = "".join(full)
+        # A down GPU host streams the sentinel; that is not her debrief, so
+        # the canned line stands in rather than an outage notice in her voice.
         report = (
-            _fix_narration("".join(full))
-            if full
+            _fix_narration(narrative)
+            if narrative and not narrative.startswith(FAILURE_SENTINEL)
             else f"Sortie complete. I found {gift}. Take it."
         )
 

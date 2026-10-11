@@ -165,6 +165,61 @@ class TestSaveVoiceNoteHappy:
         # … but the full text is persisted as text_prompt.
         assert conn.executed[0][1][2] == long_text
 
+    @pytest.mark.asyncio
+    async def test_long_text_is_clipped_at_a_sentence_end(self, tmp_path, monkeypatch):
+        """The cap cuts after a sentence, not mid-word."""
+        from app import voice_archive
+
+        monkeypatch.setattr(voice_archive, "AUDIO_DIR", tmp_path)
+        conn = _RecordingConn()
+        post = _voice_post(200)
+        long_text = "Welcome back, Commander. " * 40  # 1000 chars
+
+        with patch("httpx.AsyncClient.post", post), \
+             patch("app.voice_archive.get_pool", return_value=_Pool(conn)), \
+             patch("app.helpers.voice_auth_headers", return_value={}):
+            await voice_archive.save_voice_note(long_text, user_id="alice")
+
+        sent = post.await_args.kwargs["json"]["text"]
+        assert len(sent) <= 500
+        assert sent.endswith("Welcome back, Commander.")
+
+    @pytest.mark.asyncio
+    async def test_stage_directions_are_not_read_aloud(self, tmp_path, monkeypatch):
+        """"(she smiles)" and "*a pause*" are stripped from what XTTS reads;
+        the full greeting is still stored as the prompt."""
+        from app import voice_archive
+
+        monkeypatch.setattr(voice_archive, "AUDIO_DIR", tmp_path)
+        conn = _RecordingConn()
+        post = _voice_post(200)
+        text = "(she looks up from the data pad) *a pause* Welcome back, Commander."
+
+        with patch("httpx.AsyncClient.post", post), \
+             patch("app.voice_archive.get_pool", return_value=_Pool(conn)), \
+             patch("app.helpers.voice_auth_headers", return_value={}):
+            note_id = await voice_archive.save_voice_note(text, user_id="alice")
+
+        assert note_id is not None
+        assert post.await_args.kwargs["json"]["text"] == "Welcome back, Commander."
+        assert conn.executed[0][1][2] == text
+
+    @pytest.mark.asyncio
+    async def test_only_stage_directions_skips_synth_entirely(self, tmp_path, monkeypatch):
+        """Nothing speakable -> no GPU lease, no voice call, no row."""
+        from app import voice_archive
+
+        monkeypatch.setattr(voice_archive, "AUDIO_DIR", tmp_path)
+        post = _voice_post(200)
+        with patch("httpx.AsyncClient.post", post), \
+             patch("app.voice_archive.get_pool") as gp:
+            note_id = await voice_archive.save_voice_note("(she nods) *silence*", user_id="alice")
+
+        assert note_id is None
+        post.assert_not_called()
+        gp.assert_not_called()
+        assert list(tmp_path.iterdir()) == []
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # save_voice_note — FAIL-SOFT (every failure → None, no row)

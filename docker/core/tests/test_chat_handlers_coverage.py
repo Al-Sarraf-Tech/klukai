@@ -239,9 +239,10 @@ class TestDirectStreamingPath:
         from app.chat_handlers import _handle_message
 
         with _patched_pipeline() as ns:
-            await _handle_message("   ", _fresh_session())
+            result = await _handle_message("   ", _fresh_session())
 
-        # Nothing should have been routed or persisted.
+        # Nothing should have been routed or persisted, and nothing was said.
+        assert result is None
         ns.router.needs_agent.assert_not_called()
         ns.memory.add_turn.assert_not_called()
         ns.ws.send_done.assert_not_called()
@@ -280,13 +281,15 @@ class TestDirectStreamingPath:
 
         session = _fresh_session()
         with _patched_pipeline(stream_tokens=["Acknowledged."]) as ns:
-            await _handle_message("Long enough to recall properly", session)
+            result = await _handle_message("Long enough to recall properly", session)
             await _drain_tasks()
 
         roles = [c.args[1] for c in ns.memory.add_turn.call_args_list]
         assert roles == ["user", "assistant"]
-        # Assistant content is the reassembled stream.
+        # Assistant content is the reassembled stream, and it is what the
+        # caller gets back (the voice path speaks exactly this).
         assert ns.memory.add_turn.call_args_list[-1].args[2] == "Acknowledged."
+        assert result == "Acknowledged."
 
     @pytest.mark.asyncio
     async def test_messages_persisted_to_postgres(self):
@@ -907,6 +910,161 @@ class TestStreamFailureHandling:
 
         types = [c.args[1].get("type") for c in ns.ws.send.call_args_list]
         assert "warning" in types
+
+
+# ── Tests: turns she could not answer (dominus off / stream died) ──────────────
+
+
+def _prior_exchange():
+    return [
+        {"role": "user", "content": "earlier question"},
+        {"role": "assistant", "content": "earlier answer"},
+    ]
+
+
+class TestNoAnswerTurns:
+    """When her core produces nothing — the gateway is down before any token,
+    the stream dies, or the agent loop gives up — the Commander's message is
+    kept in PostgreSQL, but the non-answer is not recorded as hers, not mined
+    for facts/mood, and the orphan user turn is taken back out of the live
+    window so retries during a power cycle cannot evict real history."""
+
+    @pytest.mark.asyncio
+    async def test_route_runtime_error_degrades_in_band(self):
+        """dominus-nobara powered off: route() raises RuntimeError. That is
+        normal, so no traceback path / "something glitched" error frame — the
+        sentinel is streamed as the reply and the turn finalises cleanly."""
+        from app.chat_handlers import _handle_message
+        from app.llm_router import FAILURE_SENTINEL
+
+        session = _fresh_session(turns=_prior_exchange(), turn_count=2)
+        with _patched_pipeline() as ns:
+            ns.router.route = AsyncMock(side_effect=RuntimeError("No local LLM backend available"))
+            result = await _handle_message("Are you there, Klukai?", session)
+            await _drain_tasks()
+
+        assert result is None
+        ns.ws.send_token.assert_awaited_once_with("default", FAILURE_SENTINEL)
+        ns.ws.send_done.assert_awaited_once()
+        assert ns.ws.send_done.await_args.args[2] == "offline"
+        types = [c.args[1].get("type") for c in ns.ws.send.call_args_list]
+        assert "error" not in types
+        # SACRED: his message reached PostgreSQL; nothing of hers was invented.
+        assert [c.args[1] for c in ns.store_message.call_args_list] == ["user"]
+        # Live window: back to the last real exchange, count consistent.
+        assert session.turns == _prior_exchange()
+        assert session.turn_count == 2
+        ns.memory.save_session.assert_awaited()
+        ns.background_extraction.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sentinel_reply_is_not_recorded_or_mined(self):
+        """The pre-token failure sentinel used to be add_turn'd, stored,
+        read-receipted and fed to extraction (mood reset to composed, streak
+        credited, sentinel in long-term memory). None of that now."""
+        from app.chat_handlers import _handle_message
+        from app.llm_router import FAILURE_SENTINEL
+
+        session = _fresh_session(turns=_prior_exchange(), turn_count=2)
+        with _patched_pipeline(stream_tokens=[FAILURE_SENTINEL], wants_recall_val=True) as ns:
+            result = await _handle_message("do you remember the mission", session)
+            await _drain_tasks()
+
+        assert result is None
+        # The UI still saw the sentinel bubble and the done frame.
+        ns.ws.send_token.assert_awaited_once_with("default", FAILURE_SENTINEL)
+        ns.ws.send_done.assert_awaited_once()
+        # Not hers: only the user turn was added/stored, no read receipt.
+        assert [c.args[1] for c in ns.memory.add_turn.call_args_list] == ["user"]
+        assert [c.args[1] for c in ns.store_message.call_args_list] == ["user"]
+        types = [c.args[1].get("type") for c in ns.ws.send.call_args_list]
+        assert "read_receipt" not in types
+        # No follow-ups of any kind.
+        ns.background_recall.assert_not_called()
+        ns.background_extraction.assert_not_called()
+        ns.background_compaction.assert_not_called()
+        # Orphan user turn dropped from the live window.
+        assert session.turns == _prior_exchange()
+        assert session.turn_count == 2
+
+    @pytest.mark.asyncio
+    async def test_midstream_failure_does_not_persist_partial_reply(self):
+        """A truncated answer is not hers either: no assistant add_turn/store,
+        and the user turn is dropped so his re-send has clean context."""
+        from app.chat_handlers import _handle_message
+        from app.llm_router import LLMStreamFailed
+
+        session = _fresh_session(turns=_prior_exchange(), turn_count=2)
+        with _patched_pipeline() as ns:
+            async def _stream(system_prompt, messages, config):
+                yield "Partial sentence."
+                raise LLMStreamFailed("upstream died")
+
+            ns.router.stream = _stream
+            result = await _handle_message("Tell me something long enough", session)
+            await _drain_tasks()
+
+        assert result is None
+        assert [c.args[1] for c in ns.memory.add_turn.call_args_list] == ["user"]
+        assert [c.args[1] for c in ns.store_message.call_args_list] == ["user"]
+        assert session.turns == _prior_exchange()
+        assert session.turn_count == 2
+
+    @pytest.mark.asyncio
+    async def test_midstream_failure_drops_unflushed_buffer(self):
+        """The unflushed tail is NOT sent after the error frame — a token
+        following an error opens a stray second bubble in the client. `done`
+        still goes out so clients unlock."""
+        from app.chat_handlers import _handle_message
+        from app.llm_router import LLMStreamFailed
+
+        with _patched_pipeline() as ns:
+            async def _stream(system_prompt, messages, config):
+                yield "Partial"  # no sentence ender, under the flush threshold
+                raise LLMStreamFailed("upstream died")
+
+            ns.router.stream = _stream
+            await _handle_message("Tell me something long enough", _fresh_session())
+            await _drain_tasks()
+
+        ns.ws.send_token.assert_not_called()
+        types = [c.args[1].get("type") for c in ns.ws.send.call_args_list]
+        assert "error" in types
+        ns.ws.send_done.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_agent_failure_line_is_not_recorded(self):
+        """The agent loop's own give-up line shares the sentinel's opening
+        words; it is a non-answer too."""
+        from app.chat_handlers import _handle_message
+
+        session = _fresh_session()
+        with _patched_pipeline(
+            needs_agent=True,
+            agent_response="Communications disrupted, Commander. I'll respond with what I have.",
+        ) as ns:
+            result = await _handle_message("what is the price of bitcoin", session)
+            await _drain_tasks()
+
+        assert result is None
+        assert [c.args[1] for c in ns.memory.add_turn.call_args_list] == ["user"]
+        assert [c.args[1] for c in ns.store_message.call_args_list] == ["user"]
+        ns.background_extraction.assert_not_called()
+        assert session.turns == []
+
+    @pytest.mark.asyncio
+    async def test_drop_leaves_a_window_not_ending_in_a_user_turn_alone(self):
+        """Defensive: if the live window's last turn is not his (another
+        writer got there first), nothing is popped and nothing re-saved."""
+        from app.chat_handlers import _drop_unanswered_turn
+
+        session = _fresh_session(turns=_prior_exchange(), turn_count=2)
+        with _patched_pipeline() as ns:
+            await _drop_unanswered_turn("sid", session)
+
+        assert session.turns == _prior_exchange()
+        assert session.turn_count == 2
+        ns.memory.save_session.assert_not_awaited()
 
 
 # ─────────────────────────────────────────────────────────────────────────

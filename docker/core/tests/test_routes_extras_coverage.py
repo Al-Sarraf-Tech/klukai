@@ -541,6 +541,7 @@ class TestSTTProxy:
         from app.routes import STTRequest
 
         fake_resp = MagicMock()
+        fake_resp.status_code = 200
         fake_resp.json = MagicMock(return_value={"text": "hello commander"})
 
         class FakeClient:
@@ -565,6 +566,80 @@ class TestSTTProxy:
             result = await handler(STTRequest(audio="abc"), _mk_request())
 
         assert result == {"text": "hello commander"}
+
+    @staticmethod
+    def _client_returning(resp):
+        class FakeClient:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return None
+
+            async def post(self, url, json, headers=None):
+                FakeClient.posted_url = url
+                return resp
+
+        return FakeClient
+
+    @pytest.mark.asyncio
+    async def test_upstream_non_200_is_502(self):
+        """The PWA treats any 200 as a transcript; an upstream failure that
+        came back as 200 made it silently do nothing."""
+        import json as _json
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/stt", "POST")
+        from app.routes import STTRequest
+
+        resp = MagicMock()
+        resp.status_code = 500
+        resp.json = MagicMock(return_value={"error": "whisper crashed"})
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.httpx.AsyncClient", self._client_returning(resp)):
+            out = await handler(STTRequest(audio="abc"), _mk_request())
+
+        assert out.status_code == 502
+        assert _json.loads(out.body) == {"error": "Voice service unavailable"}
+
+    @pytest.mark.asyncio
+    async def test_error_body_is_502_transcription_failed(self):
+        import json as _json
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/stt", "POST")
+        from app.routes import STTRequest
+
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json = MagicMock(return_value={"error": "no speech detected"})
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.httpx.AsyncClient", self._client_returning(resp)):
+            out = await handler(STTRequest(audio="abc"), _mk_request())
+
+        assert out.status_code == 502
+        assert _json.loads(out.body) == {"error": "Transcription failed"}
+
+    @pytest.mark.asyncio
+    async def test_stt_url_honours_trailing_slash_in_voice_url(self):
+        """A trailing slash in VOICE_URL must not produce `//stt` (a 404)."""
+        import os
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/stt", "POST")
+        from app.routes import STTRequest
+
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json = MagicMock(return_value={"text": "ok"})
+        client = self._client_returning(resp)
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.httpx.AsyncClient", client), \
+             patch.dict(os.environ, {"VOICE_URL": "http://voice.local:8301/"}):
+            result = await handler(STTRequest(audio="abc"), _mk_request())
+
+        assert result == {"text": "ok"}
+        assert client.posted_url == "http://voice.local:8301/stt"
 
     @pytest.mark.asyncio
     async def test_returns_503_when_voice_unavailable(self):

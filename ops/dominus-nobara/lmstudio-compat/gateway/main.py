@@ -55,6 +55,16 @@ VOICE_CLEANUP_REQUEST_SECONDS = 15.0
 GPU_WORKLOAD_CLEANUP_SECONDS = 60.0
 COMFY_PROXY_REQUEST_SECONDS = 120.0
 MAX_RESIDENT_ROUTER_MODELS = 1
+# /v1/* holds the coordination lock from admission until the relayed body is
+# fully consumed, so a client that stops reading (or a half-open peer) would
+# otherwise queue every later inference request behind it indefinitely while
+# /health stays green. Later requests wait this long, then fail fast with a
+# retry hint. The upstream read timeout is a separate, longer budget.
+INFERENCE_COORDINATION_WAIT_SECONDS = 120.0
+# Request bodies are buffered in gateway memory before forwarding. This caps
+# what one client can make the gateway hold; the compose mem_limit is the
+# backstop behind it.
+MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
 
 _REQUEST_HEADER_ALLOWLIST = {
     "accept",
@@ -127,15 +137,58 @@ def _from_tailnet(request: Request) -> bool:
     )
 
 
+# The token-less tailnet bypass exists for one reason (commit 36dcc7c): aichat
+# on amarillo targets a literal LM Studio and has never sent a bearer. It only
+# needs the OpenAI inference surface and the read-only catalog listings. The
+# bypass therefore covers exactly that surface. Everything that changes GPU
+# state -- model load/unload, the GPU lease, and the ComfyUI facade behind a
+# lease token -- keeps requiring the real bearer from every source, because
+# "tailnet" here also means any host-originated process (127.0.0.1) and any
+# node that joined the tailnet. Deny prefixes win over allow prefixes; a path
+# matching neither requires the token.
+_TAILNET_BYPASS_ALLOW_PREFIXES = (
+    "/v1/",
+    "/api/v0/models",
+    "/api/v1/models",
+)
+_TAILNET_BYPASS_DENY_PREFIXES = (
+    "/api/v0/models/load",
+    "/api/v0/models/unload",
+    "/api/v1/models/load",
+    "/api/v1/models/unload",
+    "/api/v1/gpu",
+    "/api/v1/comfy",
+)
+
+
+def _bypass_allowed(request: Request) -> bool:
+    """Grant token-less access only to tailnet-looking sources, and only for
+    the inference/catalog surface aichat needs."""
+
+    if not _from_tailnet(request):
+        return False
+    path = request.url.path
+    if path.startswith(_TAILNET_BYPASS_DENY_PREFIXES):
+        return False
+    return path.startswith(_TAILNET_BYPASS_ALLOW_PREFIXES)
+
+
 def _authorized(request: Request, expected: str | None) -> bool:
     if expected is None:
         return True
     authorization = request.headers.get("authorization", "")
     scheme, separator, supplied = authorization.partition(" ")
+    # Starlette decodes header bytes as latin-1, and compare_digest(str, str)
+    # raises TypeError for non-ASCII input, which would surface as HTTP 500
+    # instead of 401. Compare the raw header bytes against the UTF-8 token:
+    # encoding the latin-1 string back to latin-1 recovers the exact bytes the
+    # client sent, so a UTF-8 token still matches when the client sends it.
     return (
         bool(separator)
         and scheme.lower() == "bearer"
-        and secrets.compare_digest(supplied, expected)
+        and secrets.compare_digest(
+            supplied.encode("latin-1", "replace"), expected.encode("utf-8")
+        )
     )
 
 
@@ -302,9 +355,48 @@ def _openai_model(model: Model) -> dict[str, Any]:
     return result
 
 
+def _payload_too_large() -> JSONResponse:
+    return _error(
+        413,
+        f"Request body exceeds the gateway limit of {MAX_REQUEST_BODY_BYTES} bytes",
+        "invalid_request_error",
+        "payload_too_large",
+    )
+
+
+async def _bounded_body(request: Request) -> bytes | JSONResponse:
+    """Read the request body without letting the client size gateway memory.
+
+    A declared Content-Length above the limit is refused before any body byte
+    is read. A chunked (or lying) client is cut off as soon as the streamed
+    total crosses the same limit. Callers must not read the body again.
+    """
+
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > MAX_REQUEST_BODY_BYTES:
+                return _payload_too_large()
+        except ValueError:
+            # uvicorn/h11 reject a malformed Content-Length before the app
+            # sees it; the streamed accounting below still applies regardless.
+            pass
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_REQUEST_BODY_BYTES:
+            return _payload_too_large()
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def _json_object(request: Request) -> dict[str, Any] | JSONResponse:
+    body = await _bounded_body(request)
+    if isinstance(body, JSONResponse):
+        return body
     try:
-        payload = await request.json()
+        payload = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return _error(
             400, "Request body must be valid JSON", "invalid_request_error", 400
@@ -728,7 +820,7 @@ def create_app(
     async def bearer_authentication(request: Request, call_next: Any) -> Response:
         if (
             request.url.path == "/health"
-            or _from_tailnet(request)
+            or _bypass_allowed(request)
             or _authorized(request, config.gateway_token)
         ):
             return await call_next(request)
@@ -866,6 +958,10 @@ def create_app(
                 "gpu_lease_workload": lease_workload,
                 "gpu_lease_remaining_seconds": lease_remaining_seconds,
                 "model_idle_ttl_seconds": MODEL_IDLE_TTL_SECONDS,
+                # True while /v1/* (or a lease operation) holds the
+                # coordination lock. A long-lived True with a green upstream
+                # is the "stalled client wedged inference" signature.
+                "inference_busy": application.state.coordination_lock.locked(),
             }
         )
 
@@ -1221,7 +1317,9 @@ def create_app(
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     )
     async def proxy_comfyui(endpoint: str, request: Request) -> Response:
-        body = await request.body()
+        body = await _bounded_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         headers = {
             key: value
             for key, value in request.headers.items()
@@ -1304,7 +1402,9 @@ def create_app(
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     )
     async def proxy_openai(endpoint: str, request: Request) -> Response:
-        body = await request.body()
+        body = await _bounded_body(request)
+        if isinstance(body, JSONResponse):
+            return body
         payload: dict[str, Any] | None = None
         model: Model | None = None
         content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
@@ -1348,7 +1448,22 @@ def create_app(
         )
         wants_stream = payload is not None and payload.get("stream") is True
         coordination_lock: asyncio.Lock = application.state.coordination_lock
-        await coordination_lock.acquire()
+        # Not _bounded_coordination_lock: the streaming path must keep holding
+        # the lock after this function returns, until relay() finishes.
+        try:
+            await asyncio.wait_for(
+                coordination_lock.acquire(),
+                timeout=INFERENCE_COORDINATION_WAIT_SECONDS,
+            )
+        except TimeoutError:
+            busy = _error(
+                503,
+                "Another inference request is still in flight",
+                "unavailable_error",
+                "inference_busy",
+            )
+            busy.headers["Retry-After"] = "5"
+            return busy
         if game_active(model):
             coordination_lock.release()
             return game_block()

@@ -7,12 +7,13 @@ to exercise the code paths in isolation.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.proactive import ProactiveEngine
+from app.proactive.engine import IDLE_AFTER
 
 
 class TestDeliver:
@@ -49,6 +50,34 @@ class TestDeliver:
         cb.assert_awaited_once_with("Klukai message")
         assert e._proactive_count_today == 1
         assert e._last_proactive_answered is False
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_callback_reports_delivery(self):
+        e = ProactiveEngine()
+        e._on_message_callback = AsyncMock(return_value=True)
+        with patch("app.proactive.engine.now_local", return_value=datetime(2026, 5, 17, 14, 0, 0)), \
+             patch("app.proactive.engine.publish_event", new=AsyncMock()):
+            assert await e._deliver("Klukai message") is True
+
+    @pytest.mark.asyncio
+    async def test_legacy_none_result_still_counts_as_delivered(self):
+        """A callback that returns nothing (the old contract) is "sent"."""
+        e = ProactiveEngine()
+        e._on_message_callback = AsyncMock(return_value=None)
+        with patch("app.proactive.engine.now_local", return_value=datetime(2026, 5, 17, 14, 0, 0)), \
+             patch("app.proactive.engine.publish_event", new=AsyncMock()):
+            assert await e._deliver("Klukai message") is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_nobody_received_it(self):
+        """main.proactive_callback returns False when no socket took the line
+        and the push went nowhere — _deliver must not claim it was sent."""
+        e = ProactiveEngine()
+        e._on_message_callback = AsyncMock(return_value=False)
+        with patch("app.proactive.engine.now_local", return_value=datetime(2026, 5, 17, 14, 0, 0)), \
+             patch("app.proactive.engine.publish_event", new=AsyncMock()):
+            assert await e._deliver("Klukai message") is False
+        e._on_message_callback.assert_awaited_once_with("Klukai message")
 
 
 class TestMorningCheckin:
@@ -174,6 +203,34 @@ class TestIdleCheck:
             mock_dt.return_value = datetime(2026, 5, 17, 14, 0, 0)
             await e._idle_check()
         cb.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_he_spoke_recently(self):
+        """An "idle" nudge to someone who wrote 20 minutes ago is not idle
+        detection — the check must look at _last_message_time."""
+        e = ProactiveEngine()
+        cb = AsyncMock()
+        e._on_message_callback = cb
+        now = datetime(2026, 5, 17, 14, 0, 0)
+        e._last_message_time = now - timedelta(minutes=20)
+        with patch("app.proactive.engine.now_local", return_value=now), \
+             patch("app.proactive.engine.publish_event", new=AsyncMock()):
+            await e._idle_check()
+        cb.assert_not_awaited()
+        assert e._proactive_count_today == 0
+
+    @pytest.mark.asyncio
+    async def test_fires_once_idle_for_the_threshold(self):
+        e = ProactiveEngine()
+        cb = AsyncMock()
+        e._on_message_callback = cb
+        now = datetime(2026, 5, 17, 14, 0, 0)
+        e._last_message_time = now - IDLE_AFTER  # exactly 90 min: idle
+        with patch("app.proactive.engine.now_local", return_value=now), \
+             patch("app.proactive.engine.publish_event", new=AsyncMock()):
+            await e._idle_check()
+        cb.assert_awaited_once()
+        assert IDLE_AFTER == timedelta(minutes=90)
 
 
 class TestMissionReport:

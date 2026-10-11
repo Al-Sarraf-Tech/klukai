@@ -19,7 +19,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logging.basicConfig(
     level=logging.INFO,
@@ -470,7 +470,30 @@ async def text_to_speech(
 
 
 class STTRequest(BaseModel):
-    audio: str
+    # ~6MB of audio once decoded; a larger body is rejected at validation
+    # instead of being base64-decoded into memory under the access lock.
+    audio: str = Field(max_length=8_000_000)
+
+
+def _transcribe_sync(model, path: str):
+    """Run faster-whisper to completion on the calling (worker) thread.
+
+    ``transcribe()`` only prepares a lazy generator; the actual decoding runs
+    while the segments are consumed. Joining them here keeps that CPU-bound
+    work inside the ``asyncio.to_thread`` worker. Joining on the event loop
+    froze /health and /tts for the length of the clip.
+    """
+    segments, info = model.transcribe(path, beam_size=5)
+    text = " ".join(s.text for s in segments).strip()
+    return text, info
+
+
+def _unlink_quietly(path: str) -> None:
+    if path:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
 
 
 @app.post("/stt", dependencies=[Depends(require_token)])
@@ -482,28 +505,25 @@ async def speech_to_text(req: STTRequest):
         if model is None:
             return {"text": "", "error": "Whisper not loaded"}
 
+        tmp_path = ""
         try:
             audio_bytes = base64.b64decode(req.audio)
+            # Record the name before writing so a failed write still unlinks.
             with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
-                tmp.write(audio_bytes)
                 tmp_path = tmp.name
-            try:
-                segments, info = await asyncio.to_thread(
-                    model.transcribe, tmp_path, beam_size=5
-                )
-                text = " ".join(s.text for s in segments).strip()
-                return {
-                    "text": text,
-                    "language": info.language,
-                    "duration": info.duration,
-                }
-            finally:
-                os.unlink(tmp_path)
+                tmp.write(audio_bytes)
+            text, info = await asyncio.to_thread(_transcribe_sync, model, tmp_path)
+            return {
+                "text": text,
+                "language": info.language,
+                "duration": info.duration,
+            }
         except Exception as e:
             logger.error("STT failed: %s", e)
             return {"text": "", "error": str(e)}
         finally:
             _last_whisper_use = time.monotonic()
+            _unlink_quietly(tmp_path)
 
 
 @app.post("/stt/upload", dependencies=[Depends(require_token)])
@@ -515,28 +535,24 @@ async def stt_upload(audio: UploadFile = File(...)):
         if model is None:
             return {"text": "", "error": "Whisper not loaded"}
 
+        tmp_path = ""
         try:
-            with tempfile.NamedTemporaryFile(
-                suffix=f".{audio.filename.split('.')[-1] if audio.filename else 'webm'}",
-                delete=False,
-            ) as tmp:
-                content = await audio.read()
-                tmp.write(content)
+            # Read the body BEFORE creating the temp file: an upload that fails
+            # mid-read used to leave a nameless temp file behind forever.
+            content = await audio.read()
+            suffix = f".{audio.filename.split('.')[-1] if audio.filename else 'webm'}"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp_path = tmp.name
-            try:
-                segments, info = await asyncio.to_thread(
-                    model.transcribe, tmp_path, beam_size=5
-                )
-                text = " ".join(s.text for s in segments).strip()
-                return {
-                    "text": text,
-                    "language": info.language,
-                    "duration": info.duration,
-                }
-            finally:
-                os.unlink(tmp_path)
+                tmp.write(content)
+            text, info = await asyncio.to_thread(_transcribe_sync, model, tmp_path)
+            return {
+                "text": text,
+                "language": info.language,
+                "duration": info.duration,
+            }
         except Exception as e:
             logger.error("STT upload failed: %s", e)
             return {"text": "", "error": str(e)}
         finally:
             _last_whisper_use = time.monotonic()
+            _unlink_quietly(tmp_path)

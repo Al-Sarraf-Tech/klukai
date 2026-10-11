@@ -66,11 +66,21 @@ class TestDetectGoodbyeNight:
         "it's past my bedtime",
         "bye, goodnight",
         "Gotta go, it's past my bedtime",
+        "have a good night",
+        "Hope you have a good night, Klukai",
     ])
     def test_positive(self, msg):
         assert detect_goodbye(msg) == "night"
 
     @pytest.mark.parametrize("msg", [
+        # A night already slept / already had is not one he is heading into.
+        "I had a good night's sleep",
+        "Hope you had a good night's sleep",
+        "It was a good night, thanks for asking",
+        "That was a good night",
+        "What a good night that was",
+        "such a good night",
+        "quite a good night, honestly",
         "I couldn't sleep last night",
         "did you sleep?",
         "did you sleep well",
@@ -136,6 +146,8 @@ class TestDetectGoodbyeLeave:
         "heading to the gym",
         "later!",
         "ok later then",
+        "Later, Klukai",
+        "later, love",
         "peace out",
         "I'm off.",
         "I'm leaving",
@@ -147,6 +159,9 @@ class TestDetectGoodbyeLeave:
         assert detect_goodbye(msg) == "leave"
 
     @pytest.mark.parametrize("msg", [
+        # A bare "later," opening a longer thought is a time reference.
+        "Later, I want to try the new route",
+        "Later, we should check the bike",
         "standby",
         "maybe later we can ride",
         "I hate goodbyes",
@@ -423,6 +438,17 @@ class TestAmbientEventsRespectTheHold:
              patch("app.proactive.events.random.random", return_value=0.0):
             await e._random_event()
         e._on_message_callback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dream_event_held(self):
+        """A dream at 0237 is still a ping. After goodnight, she lets him sleep."""
+        e = _held_engine()
+        with patch("app.proactive.events.now_local", return_value=_HELD), \
+             patch("app.proactive.events.random.random") as roll:
+            await e._dream_event()
+        roll.assert_not_called()  # refused before the 40% fire gate
+        e._on_message_callback.assert_not_awaited()
+        assert e._dream_delivered_today is False
 
     @pytest.mark.asyncio
     async def test_romance_window_held_after_delay(self):

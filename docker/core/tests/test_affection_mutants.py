@@ -113,9 +113,11 @@ def freeze_time():
         def now(cls, tz=None):
             return FIXED_NOW
 
-    with patch("app.affection.date", _FixedDate), patch(
-        "app.affection.datetime", _FixedDateTime
-    ):
+    # The day boundary is now_local().date() (the Commander's day), so that is
+    # what pins FIXED_TODAY; date/datetime are patched for first_interaction.
+    with patch("app.affection.now_local", return_value=FIXED_NOW), \
+         patch("app.affection.date", _FixedDate), \
+         patch("app.affection.datetime", _FixedDateTime):
         yield
 
 
