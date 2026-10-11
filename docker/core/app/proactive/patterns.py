@@ -19,7 +19,7 @@ import logging
 from datetime import datetime
 
 from .base import _EngineBase
-from .state import now_local
+from .state import LOCAL_TZ, now_local
 
 logger = logging.getLogger(__name__)
 
@@ -85,18 +85,22 @@ class PatternsMixin(_EngineBase):
         # rows: (dow 0..6, msg_count, distinct_days_active_on_that_weekday)
         # NB: use make_interval(days => %s) — a "%s" inside a quoted INTERVAL
         # string literal is NOT a psycopg placeholder, so it can't be bound.
+        # Day boundaries are the Commander's: created_at is TIMESTAMPTZ and the
+        # server runs UTC, so without the shift his 20:00 Saturday lands on
+        # Sunday and the DOW never lines up with the now_local().weekday() the
+        # quiet-day check compares it against.
         try:
             async with get_conn() as conn:
                 rows = await (await conn.execute(
-                    "SELECT EXTRACT(DOW FROM created_at)::int AS dow, "
+                    "SELECT EXTRACT(DOW FROM created_at AT TIME ZONE %s)::int AS dow, "
                     "       COUNT(*) AS msgs, "
-                    "       COUNT(DISTINCT created_at::date) AS active_days "
+                    "       COUNT(DISTINCT (created_at AT TIME ZONE %s)::date) AS active_days "
                     "FROM companion_messages "
                     "WHERE user_id = %s "
                     "  AND role = 'user' "
                     "  AND created_at > NOW() - make_interval(days => %s) "
                     "GROUP BY dow",
-                    (user_id, _PATTERN_WINDOW_DAYS),
+                    (LOCAL_TZ.key, LOCAL_TZ.key, user_id, _PATTERN_WINDOW_DAYS),
                 )).fetchall()
         except Exception as e:
             logger.debug("Activity pattern query failed for %s: %s", user_id, e)

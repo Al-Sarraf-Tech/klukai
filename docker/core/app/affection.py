@@ -14,6 +14,7 @@ from .db import get_conn, get_conn_autocommit
 from .events import publish as publish_event
 from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
 from .personality import load_personality
+from .proactive.state import now_local
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +246,9 @@ class AffectionManager:
     ) -> AffectionChange:
         """Core affection adjustment logic — shared by both paths."""
         state = await self.get_state(user_id)
-        today = date.today()
+        # His day, not the container's: the server runs UTC, so date.today()
+        # rolled the daily cap and the streak over at 18:00/19:00 Chicago.
+        today = now_local().date()
 
         # Reset daily counter if new day
         if state.last_interaction_date != today:
@@ -412,7 +415,7 @@ class AffectionManager:
         if state.last_interaction_date is None:
             return
 
-        today = date.today()
+        today = now_local().date()  # same local day boundary as _apply_delta
         days_absent = (today - state.last_interaction_date).days
 
         if days_absent <= 1:

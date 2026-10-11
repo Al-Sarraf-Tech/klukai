@@ -8,8 +8,9 @@ All external dependencies are mocked deterministically:
   * The PostgreSQL pool (get_conn / get_conn_autocommit) is replaced with an
     async context manager whose execute/fetchone are fully under test control.
   * The classification LLM (httpx + llm_router gate) is mocked.
-  * date.today() / datetime.now() are frozen via patch so deltas, daily-cap
-    resets, consecutive-day streaks and decay windows are reproducible.
+  * now_local() (the Commander's day boundary) / datetime.now() are frozen via
+    patch so deltas, daily-cap resets, consecutive-day streaks and decay
+    windows are reproducible.
 
 This file is intentionally independent of conftest's MagicMock affection
 fixtures — it constructs real AffectionState/AffectionManager objects so the
@@ -129,11 +130,14 @@ FIXED_NOW = datetime(2026, 5, 20, 12, 0, 0)
 
 @pytest.fixture
 def freeze_time():
-    """Freeze app.affection.date.today() and datetime.now() to FIXED_TODAY/NOW.
+    """Freeze the affection clock to FIXED_TODAY/NOW.
 
-    affection.py imports `from datetime import date, datetime`, so we patch the
-    names in the affection module namespace. We subclass to keep date/datetime
-    arithmetic (subtraction, .days) working normally.
+    The day boundary (daily cap, streak, decay) comes from ``now_local().date()``
+    — the Commander's America/Chicago day, not the UTC container's — so
+    ``app.affection.now_local`` is pinned to FIXED_NOW. ``datetime.now()`` (used
+    for ``first_interaction``) is pinned too; affection.py imports
+    `from datetime import date, datetime`, so we patch the names in the module
+    namespace and subclass to keep date/datetime arithmetic working normally.
     """
 
     class _FixedDate(date):
@@ -146,9 +150,9 @@ def freeze_time():
         def now(cls, tz=None):
             return FIXED_NOW
 
-    with patch("app.affection.date", _FixedDate), patch(
-        "app.affection.datetime", _FixedDateTime
-    ):
+    with patch("app.affection.now_local", return_value=FIXED_NOW), \
+         patch("app.affection.date", _FixedDate), \
+         patch("app.affection.datetime", _FixedDateTime):
         yield
 
 
@@ -542,6 +546,34 @@ class TestApplyDeltaDayRollover:
         assert manager._states["alice"].consecutive_days == 1
         assert change.delta == 1
 
+    @pytest.mark.asyncio
+    async def test_day_boundary_is_the_commanders_not_utc(self, manager):
+        """23:30 in Chicago is 04:30 UTC the next day. The container runs UTC,
+        so date.today() would roll the cap and streak over at 19:00 local; the
+        boundary must follow now_local() instead."""
+        local_late_evening = datetime(2026, 5, 20, 23, 30, 0)   # still the 20th for him
+        utc_tomorrow = date(2026, 5, 21)                         # what date.today() says
+
+        class _UtcDate(date):
+            @classmethod
+            def today(cls):
+                return utc_tomorrow
+
+        manager._states["alice"] = AffectionState(
+            score=100, level=2, last_interaction_date=date(2026, 5, 20),
+            consecutive_days=3, daily_points_earned=8,  # cap already spent today
+        )
+        with _patch_db(), \
+             patch("app.affection.now_local", return_value=local_late_evening), \
+             patch("app.affection.date", _UtcDate):
+            change = await manager._apply_delta("greeting", 1, "alice")
+        state = manager._states["alice"]
+        # Same local day: no streak bump, no cap reset, so the gain is clamped to 0.
+        assert state.last_interaction_date == date(2026, 5, 20)
+        assert state.consecutive_days == 3
+        assert state.daily_points_earned == 8
+        assert change.delta == 0
+
 
 # ── apply_classification / classify_and_adjust: thin wrappers ────────────────
 
@@ -707,6 +739,20 @@ class TestAbsenceDecay:
         with _patch_db(), patch.object(manager, "_save_state", new=AsyncMock()) as save:
             await manager._apply_absence_decay("alice")
         # days_absent == 0 → no decay applied.
+        save.assert_not_awaited()
+        assert manager._states["alice"].score == 100
+
+    @pytest.mark.asyncio
+    async def test_decay_counts_days_on_the_commanders_clock(self, manager):
+        """Last seen on the 19th; it is 23:30 on the 20th in Chicago (already
+        the 21st in UTC). days_absent must be 1 (no decay), not 2."""
+        manager._states["alice"] = AffectionState(
+            score=100, last_interaction_date=date(2026, 5, 19),
+        )
+        with _patch_db(), \
+             patch("app.affection.now_local", return_value=datetime(2026, 5, 20, 23, 30, 0)), \
+             patch.object(manager, "_save_state", new=AsyncMock()) as save:
+            await manager._apply_absence_decay("alice")
         save.assert_not_awaited()
         assert manager._states["alice"].score == 100
 

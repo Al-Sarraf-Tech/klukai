@@ -12,7 +12,8 @@ one-shots on the ``deferred`` rail (action kind ``op_brief``):
 
 Slots already in the past are skipped. Acts of service, not nagging: one chain
 per event, and every slot goes through the proactive guard (mute, quiet hours,
-daily cap). A slot that lands mid-game is held and retried until a deadline.
+daily cap). A slot that lands mid-game, or while a goodbye hold is running, is
+held and retried until a deadline.
 
 Variants:
 
@@ -742,10 +743,10 @@ async def _game_active(router: Any) -> bool:
 
 
 async def deliver(user_id: str, action: dict[str, Any]) -> None:
-    """Fire one slot. Held while a game is running (until its deadline);
-    dropped when the proactive guard says no (muted, quiet hours, daily cap)
-    or when affection has fallen below the gate. The debrief closes the chain
-    whether it was sent or dropped."""
+    """Fire one slot. Held while a game is running or while he has just signed
+    off (until its deadline); dropped when the proactive guard says no (muted,
+    quiet hours, daily cap) or when affection has fallen below the gate. The
+    debrief closes the chain whether it was sent or dropped."""
     slot = str(action.get("slot") or "")
     event_id = str(action.get("event_id") or "")
     if slot not in SLOTS or not event_id or not action.get("due"):
@@ -762,12 +763,20 @@ async def deliver(user_id: str, action: dict[str, Any]) -> None:
     if level < cfg.min_affection:
         await _close(slot, event_id, user_id)
         return
+    # A game, or a goodbye ("gotta go" / goodnight), holds the slot rather than
+    # dropping it: the guard below would otherwise refuse the hold and close the
+    # slot as delivered, and the OPORD would be lost for good.
+    held = None
     if await _game_active(router):
+        held = "game"
+    elif proactive._goodbye_hold_active():
+        held = "goodbye hold"
+    if held:
         if now_local() < hold_deadline(action, commitment):
             await deferred.schedule(dict(action), user_id=user_id,
                                     delay_seconds=HOLD_STEP_SECONDS)
             return
-        logger.info("Operation brief %s dropped: game ran past the hold window", slot)
+        logger.info("Operation brief %s dropped: %s ran past the hold window", slot, held)
         await _close(slot, event_id, user_id)
         return
     if not proactive._can_send(ignore_unanswered=True):

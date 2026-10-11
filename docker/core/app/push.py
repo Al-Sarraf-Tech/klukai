@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -11,6 +12,10 @@ logger = logging.getLogger(__name__)
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_CLAIMS = {"sub": "mailto:companion@localhost"}
+
+# pywebpush's request to the push service is blocking `requests` I/O with no
+# timeout by default. One unreachable endpoint must not stall the fan-out.
+PUSH_TIMEOUT_SECONDS = 10
 
 # In-memory cache loaded from DB on startup
 _subscriptions: dict[str, list[dict]] = {}  # user_id → list of subscriptions
@@ -109,6 +114,17 @@ def remove_subscription(endpoint: str) -> None:
         pass
 
 
+def _subscription_gone(exc: Exception) -> bool:
+    """True when the push service says this subscription no longer exists.
+
+    404/410 are the only verdicts that mean the browser dropped the
+    subscription. Everything else — a timeout, a 5xx, a 429, a dead network —
+    is transient: the subscription is kept and tried again on the next push.
+    """
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None) in (404, 410)
+
+
 async def send_push(
     title: str,
     body: str,
@@ -132,7 +148,7 @@ async def send_push(
         return 0
 
     try:
-        from pywebpush import webpush
+        from pywebpush import WebPushException, webpush
     except ImportError:
         logger.warning("pywebpush not installed")
         return 0
@@ -144,22 +160,34 @@ async def send_push(
     })
 
     sent = 0
-    failed_endpoints = []
+    gone_endpoints = []
 
     for sub in targets:
+        endpoint = sub.get("endpoint", "?")
         try:
-            webpush(
+            # webpush() is synchronous `requests` I/O: run it off the event
+            # loop, bounded, so a slow push service never stalls chat delivery.
+            await asyncio.to_thread(
+                webpush,
                 subscription_info=sub,
                 data=payload,
                 vapid_private_key=VAPID_PRIVATE_KEY,
                 vapid_claims=VAPID_CLAIMS,
+                timeout=PUSH_TIMEOUT_SECONDS,
             )
             sent += 1
+        except WebPushException as e:
+            if _subscription_gone(e):
+                logger.info("Push subscription gone, retiring %s: %s", endpoint[:50], e)
+                gone_endpoints.append(endpoint)
+            else:
+                logger.warning("Push failed for %s (kept): %s", endpoint[:50], e)
         except Exception as e:
-            logger.warning("Push failed for %s: %s", sub.get("endpoint", "?")[:50], e)
-            failed_endpoints.append(sub.get("endpoint"))
+            logger.warning("Push failed for %s (kept): %s", endpoint[:50], e)
 
-    for ep in failed_endpoints:
+    # Only a definitive 404/410 retires a device — a transient failure must not
+    # silently unsubscribe his phone from memory and the DB.
+    for ep in gone_endpoints:
         remove_subscription(ep)
 
     return sent

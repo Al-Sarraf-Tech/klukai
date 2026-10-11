@@ -4,7 +4,8 @@ Existing tests cover get_vapid_public_key / add_subscription / remove_subscripti
 (memory side) / init_subscriptions. This file targets the remaining surface:
 
   * send_push (lines 119-165): VAPID gate, per-user vs broadcast targeting,
-    per-device webpush dispatch, failure → endpoint retirement, sent count.
+    per-device webpush dispatch off the event loop with a timeout, 404/410 →
+    endpoint retirement (anything else keeps the device), sent count.
   * remove_subscription DB paths (98-99, 104-107): the inner async _delete and
     both the running-loop (create_task) and no-loop (run_until_complete) branches.
 
@@ -15,11 +16,18 @@ State is reset around every test so the in-memory subscription cache can't leak.
 from __future__ import annotations
 
 import asyncio
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pywebpush import WebPushException
 
 from app import push
+
+
+def _gone(status: int) -> WebPushException:
+    """A push-service verdict carrying an HTTP status (requests-style response)."""
+    return WebPushException("Push failed", response=MagicMock(status_code=status))
 
 
 @pytest.fixture(autouse=True)
@@ -111,9 +119,31 @@ class TestSendPush:
         assert wp.call_args.kwargs["vapid_claims"] == push.VAPID_CLAIMS
 
     @pytest.mark.asyncio
-    async def test_failed_endpoint_is_retired(self):
-        """A device whose webpush raises is counted as failed and removed via
-        remove_subscription; the healthy device still counts as sent."""
+    async def test_webpush_runs_off_the_event_loop_with_a_timeout(self):
+        """pywebpush is blocking `requests` I/O: it must run in a worker thread
+        (never on the loop thread) and carry the bounded timeout."""
+        push._initialized = True
+        push._subscriptions["alice"] = [{"endpoint": "https://a/1"}]
+        seen: dict = {}
+
+        def _wp(**kw):
+            seen["thread"] = threading.get_ident()
+            seen["timeout"] = kw.get("timeout")
+
+        with patch.object(push, "VAPID_PRIVATE_KEY", "priv"), \
+             patch("pywebpush.webpush", side_effect=_wp):
+            sent = await push.send_push("T", "B", user_id="alice")
+
+        assert sent == 1
+        assert seen["thread"] != threading.get_ident(), "webpush ran on the event loop"
+        assert seen["timeout"] == push.PUSH_TIMEOUT_SECONDS == 10
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [404, 410])
+    async def test_gone_endpoint_is_retired(self, status):
+        """A 404/410 from the push service means the browser dropped the
+        subscription: that device is removed via remove_subscription, exactly
+        once; the healthy device still counts as sent."""
         push._initialized = True
         push._subscriptions["alice"] = [
             {"endpoint": "https://good/1"},
@@ -122,7 +152,7 @@ class TestSendPush:
 
         def _wp(subscription_info, **kw):
             if subscription_info["endpoint"] == "https://dead/1":
-                raise RuntimeError("410 Gone")
+                raise _gone(status)
 
         removed: list[str] = []
         with patch.object(push, "VAPID_PRIVATE_KEY", "priv"), \
@@ -132,6 +162,29 @@ class TestSendPush:
 
         assert sent == 1, "only the healthy device counts"
         assert removed == ["https://dead/1"], "dead endpoint retired exactly once"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", [
+        RuntimeError("connection reset"),              # network / timeout
+        _gone(500),                                    # push service down
+        _gone(429),                                    # rate limited
+        WebPushException("no response at all"),        # response=None
+    ])
+    async def test_transient_failure_keeps_the_subscription(self, failure):
+        """Anything that is not a definitive 404/410 is logged and the device
+        is KEPT — his phone must not be silently unsubscribed because the push
+        service hiccupped once."""
+        push._initialized = True
+        push._subscriptions["alice"] = [{"endpoint": "https://flaky/1"}]
+
+        with patch.object(push, "VAPID_PRIVATE_KEY", "priv"), \
+             patch("pywebpush.webpush", side_effect=failure), \
+             patch.object(push, "remove_subscription") as remove:
+            sent = await push.send_push("T", "B", user_id="alice")
+
+        assert sent == 0
+        remove.assert_not_called()
+        assert push._subscriptions["alice"] == [{"endpoint": "https://flaky/1"}]
 
     @pytest.mark.asyncio
     async def test_returns_zero_when_pywebpush_missing(self):

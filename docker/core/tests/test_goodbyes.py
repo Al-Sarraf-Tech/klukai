@@ -425,6 +425,17 @@ class TestAmbientEventsRespectTheHold:
         e._on_message_callback.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_dream_event_held(self):
+        """A dream at 0237 is still a ping. After goodnight, she lets him sleep."""
+        e = _held_engine()
+        with patch("app.proactive.events.now_local", return_value=_HELD), \
+             patch("app.proactive.events.random.random") as roll:
+            await e._dream_event()
+        roll.assert_not_called()  # refused before the 40% fire gate
+        e._on_message_callback.assert_not_awaited()
+        assert e._dream_delivered_today is False
+
+    @pytest.mark.asyncio
     async def test_romance_window_held_after_delay(self):
         e = _held_engine()
         e._user_messaged_today = True

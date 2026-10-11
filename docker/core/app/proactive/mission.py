@@ -258,6 +258,14 @@ class MissionTimer:
                 affection_level=self._affection_level,
             )
 
+            # The GPU host is routinely powered off, and there is no cloud
+            # fallback: the generator then hands back empty text. Skip the tick
+            # rather than write a canned "static" line into his history — the
+            # next update fires on schedule regardless.
+            if not text:
+                logger.info("Mission update #%d skipped: LLM unavailable", self.update_count)
+                return
+
             if self._callback:
                 await self._callback(text)
                 logger.info(

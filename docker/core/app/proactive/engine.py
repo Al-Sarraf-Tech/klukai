@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 # After "gotta go" she stays quiet this long; after "goodnight", until morning.
 LEAVE_HOLD = timedelta(minutes=90)
 
+# He has to have been silent this long before the idle check may nudge him.
+IDLE_AFTER = timedelta(minutes=90)
+
 # Tap-interaction lines for the 3D avatar. Sourced from
 # ``proactive_content.tap_lines`` in personality.yaml so they can be tuned
 # without a code change; the literal below is the fallback used verbatim when
@@ -244,10 +247,12 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             replace_existing=True,
         )
 
-        # Random lore events — every 30 min during normal hours
+        # Random lore events — every 30 min during normal hours. The last slot
+        # is 22:45: QUIET_HOUR_START is 2300, and _random_event does not go
+        # through _can_send(), so the schedule itself must stop short of it.
         self._scheduler.add_job(
             self._random_event,
-            _cron(hour="9-23", minute="15,45"),
+            _cron(hour="9-22", minute="15,45"),
             id="random_event",
             replace_existing=True,
         )
@@ -320,11 +325,13 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             replace_existing=True,
         )
 
-        # Daily anniversary check: 07:58 local — just before the 08:00 morning
-        # greeting sends
+        # Daily anniversary check: 08:00 local, the first minute outside quiet
+        # hours. It used to run at 07:58, "just before the morning greeting",
+        # but _anniversary_check now goes through _can_send(), which refuses
+        # anything before QUIET_HOUR_END — so it shares the greeting's minute.
         self._scheduler.add_job(
             self._anniversary_check,
-            _cron(hour=7, minute=58),
+            _cron(hour=QUIET_HOUR_END, minute=0),
             id="anniversary_check",
             replace_existing=True,
         )
@@ -554,14 +561,21 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
     async def _deliver(self, message: str) -> bool:
         """Deliver a proactive message. Returns True iff it was actually sent
         (callers that must record a side effect — e.g. promise follow-ups —
-        gate on this so they don't mark work done that _can_send() suppressed)."""
+        gate on this so they don't mark work done that _can_send() suppressed
+        or that nobody received)."""
         if not self._can_send():
             return False
         if self._on_message_callback:
             self._proactive_count_today += 1
             self._last_proactive_answered = False
-            await self._on_message_callback(message)
+            # The callback reports whether anyone received the line (a live
+            # socket, or persisted and pushed). An explicit False means it went
+            # nowhere; a legacy callback returning None still counts as sent.
+            ok = await self._on_message_callback(message)
             await publish_event("proactive", message)
+            if ok is False:
+                logger.info("Klukai proactive reached nobody: %s", message[:60])
+                return False
             logger.info("Klukai proactive: %s", message[:60])
             return True
         return False
@@ -654,6 +668,9 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         await self._deliver(self._pick_message(EVENING_MESSAGES))
 
     async def _idle_check(self) -> None:
+        """Nudge him only once he has actually gone quiet (IDLE_AFTER)."""
+        if self._last_message_time and now_local() - self._last_message_time < IDLE_AFTER:
+            return
         await self._deliver(self._pick_message(IDLE_MESSAGES))
 
     async def _reset_daily(self) -> None:

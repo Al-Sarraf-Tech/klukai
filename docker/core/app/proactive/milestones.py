@@ -238,7 +238,8 @@ class MilestonesMixin(_EngineBase):
         companion_firsts rows and check if today matches any anniversary
         (via character_behaviors.select_anniversary_from_firsts). If so,
         deliver a warm remark via ws.send_proactive (when connected) or
-        stash the anniversary as a flag for the morning briefing.
+        stash the anniversary as a flag for the morning briefing. Every
+        remark passes the engine's _can_send() gate first.
         """
         try:
             from ..db import get_pool
@@ -275,9 +276,23 @@ class MilestonesMixin(_EngineBase):
                     f"Commander — today marks {years} year{'s' if years != 1 else ''} "
                     f"since our {et}. I remember."
                 )
+                # Same send gate as every other proactive line: mute, a goodbye
+                # hold, quiet hours and the daily cap all apply — a dated
+                # occasion is no licence to ping him through any of them. The
+                # gate is read at fire time, so the catch-up replay (up to 14h
+                # late) is judged by the clock it actually runs at.
+                # ignore_unanswered: this line shares its minute with the 0800
+                # greeting, which may already be out and (naturally) unanswered.
+                if not self._can_send(ignore_unanswered=True):
+                    logger.info("Anniversary remark suppressed by send gate (user=%s)", user_id)
+                    continue
                 try:
                     from ..context import ws
                     if ws.is_connected(user_id):
+                        # Counts toward the daily cap like any proactive line,
+                        # but does not flip _last_proactive_answered: it is the
+                        # opener to the morning greeting, not a question.
+                        self._proactive_count_today += 1
                         await ws.send_proactive(user_id, msg)
                     logger.info("Anniversary surfaced: user=%s years=%s type=%s",
                                 user_id, years, et)

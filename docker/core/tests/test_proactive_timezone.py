@@ -105,9 +105,14 @@ class TestSchedulerTimezone:
             # Weekly reflection: Sunday 21:00 local — previously Monday 03:00 UTC.
             wf = _trigger_fields(jobs["weekly_reflection"])
             assert (wf["day_of_week"], wf["hour"]) == ("sun", "21")
-            # Anniversary check runs just before the 08:00 morning greeting.
+            # Anniversary check: 08:00 local, the first minute outside quiet
+            # hours — it is gated on _can_send(), which refuses 07:58.
             af = _trigger_fields(jobs["anniversary_check"])
-            assert (af["hour"], af["minute"]) == ("7", "58")
+            assert (af["hour"], af["minute"]) == ("8", "0")
+            # Random lore events stop at 22:45 — QUIET_HOUR_START is 2300 and
+            # _random_event bypasses _can_send(), so the cron must not reach 23.
+            rnd = _trigger_fields(jobs["random_event"])
+            assert (rnd["hour"], rnd["minute"]) == ("9-22", "15,45")
             # Daily reset at local midnight.
             assert _trigger_fields(jobs["daily_reset"])["hour"] == "0"
         finally:

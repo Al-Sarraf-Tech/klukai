@@ -87,6 +87,23 @@ class TestPromiseFollowup:
         mark.assert_awaited_once_with("p-1")
 
     @pytest.mark.asyncio
+    async def test_not_marked_when_nobody_received_it(self):
+        """The callback reports False when no socket took the line and the push
+        went nowhere: the promise stays due instead of being stamped as sent."""
+        e = _sendable_engine()
+        e._on_message_callback = AsyncMock(return_value=False)
+        promise = {"id": "p-1", "promise_text": "I'll sleep earlier",
+                   "commitment": {"action": "sleep earlier"}}
+        with patch("app.proactive.engine.now_local", return_value=_NOON), \
+             patch("app.proactive.engine.publish_event", new=AsyncMock()), \
+             patch("app.promises.due_promises", new=AsyncMock(return_value=[promise])), \
+             patch("app.promises.followup_message", return_value="Did you rest like you said?"), \
+             patch("app.promises.mark_followup_sent", new=AsyncMock()) as mark:
+            await e._promise_followup_check()
+        e._on_message_callback.assert_awaited_once()
+        mark.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_noop_when_none_due(self):
         e = _sendable_engine()
         with patch("app.proactive.engine.now_local", return_value=_NOON), \

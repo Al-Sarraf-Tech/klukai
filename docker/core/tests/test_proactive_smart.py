@@ -159,6 +159,25 @@ class TestDetectActivityPatterns:
         assert patterns == {}
 
     @pytest.mark.asyncio
+    async def test_query_buckets_days_on_the_commanders_clock(self):
+        """created_at is TIMESTAMPTZ on a UTC server: both the DOW and the
+        distinct-day count must be taken AT TIME ZONE America/Chicago, or his
+        Saturday evening is filed under Sunday and never matches
+        now_local().weekday() in the quiet-day check."""
+        from app.proactive.state import LOCAL_TZ
+
+        e = ProactiveEngine()
+        conn = _conn_returning([])
+        with patch("app.db.get_conn", return_value=_db_ctx(conn)):
+            await e.detect_activity_patterns("alice")
+        sql, params = conn.execute.await_args.args
+        assert "EXTRACT(DOW FROM created_at AT TIME ZONE %s)" in sql
+        assert "COUNT(DISTINCT (created_at AT TIME ZONE %s)::date)" in sql
+        assert "created_at::date" not in sql  # the UTC-day bucket is gone
+        assert params == (LOCAL_TZ.key, LOCAL_TZ.key, "alice", 30)
+        assert LOCAL_TZ.key == "America/Chicago"
+
+    @pytest.mark.asyncio
     async def test_db_error_returns_empty_and_logs(self):
         e = ProactiveEngine()
 
