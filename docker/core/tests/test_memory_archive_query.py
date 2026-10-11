@@ -368,17 +368,22 @@ class TestListMemories:
         assert "ORDER BY created_at DESC" in conn.sqls[0]
 
     @pytest.mark.asyncio
-    async def test_db_failure_returns_empty_list(self):
-        """Documented fail-open: the album renders empty rather than 500ing."""
-        with broken_conn():
-            assert await maq.list_memories() == []
+    async def test_db_failure_propagates(self):
+        """Fails closed, like get_timeline/get_categories.
+
+        This used to swallow the error and return [], so a Postgres outage
+        rendered as a wiped album (and the route's 503 branch was unreachable).
+        """
+        with broken_conn(), pytest.raises(RuntimeError, match="pool down"):
+            await maq.list_memories()
 
     @pytest.mark.asyncio
-    async def test_malformed_row_returns_empty_list(self):
-        """A short row raises inside the comprehension; it must be swallowed."""
+    async def test_malformed_row_propagates(self):
+        """A short row (schema drift) is an outage too: surface it rather than
+        show an empty album."""
         conn = FakeConn(results=[[("only-one-column",)]])
-        with patch_conn(conn):
-            assert await maq.list_memories() == []
+        with patch_conn(conn), pytest.raises(IndexError):
+            await maq.list_memories()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

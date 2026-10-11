@@ -41,23 +41,42 @@ def verify_stripe_signature(payload: bytes, sig_header: str, secret: str | None 
     """Verify Stripe-Signature header per
     https://stripe.com/docs/webhooks/signatures.
 
-    Header format: `t=<ts>,v1=<sig>`. Reject if timestamp older than tolerance
-    or HMAC mismatch.
+    Header format: `t=<ts>,v1=<sig>[,v1=<sig>...]`. Reject if timestamp older
+    than tolerance or no v1 matches.
+
+    During a signing-secret rotation Stripe sends one `v1` per active secret.
+    Parsing the header with dict() kept only the last v1, so every webhook in
+    the rotation window was rejected; keep them all and accept if any matches.
     """
     secret = secret or _STRIPE_WEBHOOK_SECRET
     if not secret:
         return False
+    ts: int | None = None
+    candidates: list[str] = []
     try:
-        items = dict(p.split("=", 1) for p in sig_header.split(","))
-        ts = int(items["t"])
-        expected = items.get("v1", "")
+        for part in sig_header.split(","):
+            key, sep, value = part.strip().partition("=")
+            if not sep:
+                continue
+            if key == "t":
+                ts = int(value)
+            elif key == "v1":
+                candidates.append(value)
     except Exception:
+        return False
+    if ts is None or not candidates:
         return False
     if abs(int(datetime.now(timezone.utc).timestamp()) - ts) > _STRIPE_TOLERANCE_SECONDS:
         return False
     signed_payload = f"{ts}.".encode() + payload
     mac = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(mac, expected)
+    # Check every candidate (no early exit) so timing does not reveal which
+    # position matched.
+    matched = False
+    for candidate in candidates:
+        if hmac.compare_digest(mac, candidate):
+            matched = True
+    return matched
 async def handle_stripe_event(event: dict[str, Any]) -> dict[str, Any]:
     """Process a verified Stripe event. Idempotent via event id PK."""
     event_id = event.get("id", "")

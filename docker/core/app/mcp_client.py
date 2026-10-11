@@ -52,29 +52,49 @@ class MCPClient:
         except httpx.HTTPError as e:
             logger.warning("MCP init failed (will retry on first tool call): %s", e)
 
+    def _session_headers(self) -> dict[str, str]:
+        headers = {}
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+        return headers
+
     async def invoke_tool(self, tool_name: str, params: dict) -> dict:
         """Invoke an MCP tool and return the result."""
         if not self._http:
             raise RuntimeError("MCPClient not initialized")
 
-        headers = {}
-        if self._session_id:
-            headers["Mcp-Session-Id"] = self._session_id
+        if self._session_id is None:
+            # Boot-time init fails whenever aichat-mcp is still starting; the
+            # warning above promised a retry here, but nothing ever made one,
+            # so every tool call went out sessionless for the life of the
+            # process.
+            await self._initialize_session()
 
         request_id = str(uuid.uuid4())
-        r = await self._http.post(
-            f"{MCP_URL}/mcp",
-            json={
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": "tools/call",
-                "params": {
-                    "name": tool_name,
-                    "arguments": params,
-                },
+        body = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": params,
             },
-            headers=headers,
+        }
+        had_session = self._session_id is not None
+        r = await self._http.post(
+            f"{MCP_URL}/mcp", json=body, headers=self._session_headers()
         )
+        if had_session and r.status_code in (400, 404):
+            # The gateway no longer knows our session (restart or expiry).
+            # Re-initialize once and retry the call once with the new id.
+            logger.warning(
+                "MCP rejected session (HTTP %s); re-initializing", r.status_code
+            )
+            self._session_id = None
+            await self._initialize_session()
+            r = await self._http.post(
+                f"{MCP_URL}/mcp", json=body, headers=self._session_headers()
+            )
         r.raise_for_status()
         data = r.json()
 
@@ -86,9 +106,7 @@ class MCPClient:
 
     async def list_tools(self) -> list[dict]:
         """List available MCP tools."""
-        headers = {}
-        if self._session_id:
-            headers["Mcp-Session-Id"] = self._session_id
+        headers = self._session_headers()
 
         r = await self._http.post(
             f"{MCP_URL}/mcp",

@@ -32,6 +32,24 @@ class TestExtractFacts:
         assert out == dict(_DEFAULT_RESULT)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("odd", [["a", "list"], "a string", 42, True])
+    async def test_non_dict_llm_result_returns_defaults(self, odd):
+        """Regression: parse_json can hand back a list/str; `.get` on it raised
+        AttributeError out of a function documented as never raising, which
+        skipped storing the exchange."""
+        from app.fact_extractor import extract_facts, _DEFAULT_RESULT
+
+        class _FakeGate:
+            async def __aenter__(self): return None
+            async def __aexit__(self, *a): return None
+
+        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
+             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=odd)):
+            out = await extract_facts("hi", "hello")
+
+        assert out == dict(_DEFAULT_RESULT)
+
+    @pytest.mark.asyncio
     async def test_invalid_mood_defaults_to_composed(self):
         from app.fact_extractor import extract_facts
 

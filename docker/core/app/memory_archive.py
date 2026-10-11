@@ -156,24 +156,26 @@ async def save_image(
     Returns:
         Memory ID (UUID string) or None on failure.
     """
+    memory_id = str(uuid.uuid4())
+    png_filename = f"{memory_id}.png"          # lossless original (archive)
+    filename = f"{memory_id}.webp"             # served full image (full-res WebP)
+    thumb_filename = f"{memory_id}_thumb.webp"
+    # Paths live outside the try so the failure path can clean up whatever
+    # was already written: the files land on the volume before the INSERT,
+    # and without a row nothing would ever reference or remove them.
+    png_path = IMAGES_DIR / png_filename
+    img_path = IMAGES_DIR / filename
+    thumb_path = IMAGES_DIR / thumb_filename
     try:
-        memory_id = str(uuid.uuid4())
-        png_filename = f"{memory_id}.png"          # lossless original (archive)
-        filename = f"{memory_id}.webp"             # served full image (full-res WebP)
-        thumb_filename = f"{memory_id}_thumb.webp"
-
         # Keep the lossless PNG as an archive, but serve a full-resolution WebP:
         # a ~1MB PNG opens slowly through the tunnel, while WebP q95 at the same
         # dimensions is visually identical and ~8x smaller, so it opens fast.
-        png_path = IMAGES_DIR / png_filename
         png_path.write_bytes(image_bytes)
-        img_path = IMAGES_DIR / filename
         from io import BytesIO
         with Image.open(BytesIO(image_bytes)) as _full:
             _full.convert("RGB").save(img_path, "WEBP", quality=95, method=6)
 
         # Generate thumbnail (320px wide)
-        thumb_path = IMAGES_DIR / thumb_filename
         _generate_thumbnail(img_path, thumb_path, width=320)
 
         # Extract curation data
@@ -206,9 +208,7 @@ async def save_image(
         if await _is_duplicate_annotation(annotation, user_id=user_id):
             logger.info("Skipping duplicate memory: %s", annotation[:60])
             # Clean up the already-written image files
-            png_path.unlink(missing_ok=True)
-            img_path.unlink(missing_ok=True)
-            thumb_path.unlink(missing_ok=True)
+            _discard_files(png_path, img_path, thumb_path)
             return None
 
         # Store metadata
@@ -233,7 +233,19 @@ async def save_image(
 
     except Exception as e:
         logger.error("Failed to save memory: %s", e)
+        # A failed INSERT (or encode) must not leave the PNG/WebP/thumbnail
+        # orphaned on the volume forever.
+        _discard_files(png_path, img_path, thumb_path)
         return None
+
+
+def _discard_files(*paths: Path) -> None:
+    """Remove image files that will never get an archive row. Never raises."""
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning("Could not remove orphaned image %s: %s", path, e)
 
 
 def _generate_thumbnail(src: Path, dst: Path, width: int = 320) -> None:

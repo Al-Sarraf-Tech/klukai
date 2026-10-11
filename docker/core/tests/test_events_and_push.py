@@ -25,7 +25,8 @@ class TestEventsPublish:
     async def test_publish_is_noop_when_redis_not_initialized(self):
         """publish() should return silently if init() was never called."""
         from app.events import publish
-        await publish("test.event")  # must not raise
+        # Zero subscribers: nothing was configured to hear it.
+        assert await publish("test.event") == 0  # must not raise
 
     @pytest.mark.asyncio
     async def test_publish_sends_json_to_channel(self):
@@ -34,8 +35,9 @@ class TestEventsPublish:
         fake.publish = AsyncMock(return_value=1)
         events._redis = fake
 
-        await events.publish("greeting", data="hello", user_id="alice")
+        received = await events.publish("greeting", data="hello", user_id="alice")
 
+        assert received == 1
         fake.publish.assert_awaited_once()
         channel, payload = fake.publish.call_args[0]
         assert channel == events.CHANNEL
@@ -46,8 +48,21 @@ class TestEventsPublish:
         assert parsed["user_id"] == "alice"
 
     @pytest.mark.asyncio
+    async def test_publish_reports_subscriber_count(self):
+        """Pub/sub has no queue: the count is the only proof a hand-off landed.
+        her_pov's enqueue uses it to fall back to an inline run on zero."""
+        from app import events
+        fake = AsyncMock()
+        fake.publish = AsyncMock(return_value=0)
+        events._redis = fake
+        assert await events.publish("job.enqueue", data="j1") == 0
+
+        fake.publish = AsyncMock(return_value=3)
+        assert await events.publish("job.enqueue", data="j1") == 3
+
+    @pytest.mark.asyncio
     async def test_publish_swallows_redis_errors(self):
-        """Publish failures must not propagate — just log."""
+        """Publish failures must not propagate — just log (and count as 0)."""
         from app import events
         fake = AsyncMock()
 
@@ -57,7 +72,7 @@ class TestEventsPublish:
         fake.publish = broken
         events._redis = fake
 
-        await events.publish("something")  # should not raise
+        assert await events.publish("something") == 0  # should not raise
 
     @pytest.mark.asyncio
     async def test_init_sets_global_redis(self):

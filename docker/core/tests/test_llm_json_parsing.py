@@ -141,3 +141,42 @@ class TestParseJson:
         result = parse_json(text)
         assert result is not None
         assert result["outer"]["inner"]["deep"] == "value"
+
+    # ── embedded-object scan (replaced the one-level regex) ───────────────
+
+    def test_leading_object_followed_by_prose(self):
+        """Regression: the regex path was skipped when the text started with
+        '{', so a sign-off after the object made the whole reply parse as
+        None and the extractor fell back to defaults."""
+        from app.llm_json import parse_json
+        text = '{"mood":"tender"}\n\nLet me know if you need anything else!'
+        assert parse_json(text) == {"mood": "tender"}
+
+    def test_depth_two_object_in_prose_returns_the_outer_object(self):
+        """Regression: the regex only matched one level of nesting, so for a
+        depth-2 object in prose it returned the INNER object."""
+        from app.llm_json import parse_json
+        text = 'Sure: {"outer": {"inner": {"deep": 1}}, "ok": true} hope that helps.'
+        assert parse_json(text) == {"outer": {"inner": {"deep": 1}}, "ok": True}
+
+    def test_brace_in_prose_before_the_object_is_skipped(self):
+        """A stray '{' earlier in the text must not hide the real object."""
+        from app.llm_json import parse_json
+        text = 'Use {braces} carefully. Result: {"ok": true} done.'
+        assert parse_json(text) == {"ok": True}
+
+    def test_first_complete_object_wins(self):
+        from app.llm_json import parse_json
+        text = 'A: {"first": 1} then B: {"second": 2}'
+        assert parse_json(text) == {"first": 1}
+
+    def test_trailing_comma_inside_prose_object_still_repaired(self):
+        """The repair pass used to run on the regex-extracted object; it
+        must still reach an object that sits inside prose."""
+        from app.llm_json import parse_json
+        text = 'Here: {"a": 1, "b": [1, 2,],} thanks'
+        assert parse_json(text) == {"a": 1, "b": [1, 2]}
+
+    def test_prose_with_array_only_does_not_fake_a_dict(self):
+        from app.llm_json import parse_json
+        assert parse_json("Items: [1, 2, 3] and nothing else") is None

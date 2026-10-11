@@ -16,6 +16,8 @@ from typing import TypeVar
 import httpx
 
 from app.gpu_lease import (
+    GPU_LEASE_ACQUIRE_READ_TIMEOUT_SECONDS,
+    GPU_LEASE_TTL_SECONDS,
     GPULease,
     GPULeaseError,
     gpu_lease,
@@ -113,10 +115,19 @@ _image_gen_lock = asyncio.Semaphore(
 )  # Only one image gen at a time — prevents GPU overload
 
 # The gateway lease is fixed at 600 seconds and its clock starts while the
-# gateway is still quiescing llama.cpp/native vLLM.  Cap Comfy work at eight
-# minutes, leaving two minutes for acquisition drain time, interrupt/model
-# cleanup, authenticated release, and scheduler jitter.
-_IMAGE_LEASE_WORK_SECONDS = 8 * 60
+# gateway is still quiescing llama.cpp/native vLLM — i.e. acquisition itself
+# can eat up to the full acquire read deadline (150s) before we see a token.
+# Budget the Comfy work honestly: TTL minus that worst-case acquire, minus
+# 30s for interrupt/model cleanup, the authenticated release and scheduler
+# jitter.  The old 8-minute cap assumed two minutes of headroom; a slow
+# acquire plus a long render had the post-render /free hit an expired lease,
+# so a finished image was thrown away.
+_IMAGE_LEASE_CLEANUP_SECONDS = 30
+_IMAGE_LEASE_WORK_SECONDS = int(
+    GPU_LEASE_TTL_SECONDS
+    - GPU_LEASE_ACQUIRE_READ_TIMEOUT_SECONDS
+    - _IMAGE_LEASE_CLEANUP_SECONDS
+)
 
 
 def _get_http() -> httpx.AsyncClient:

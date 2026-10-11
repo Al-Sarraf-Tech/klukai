@@ -62,7 +62,17 @@ CORE_INTERNAL_TOKEN = os.environ.get("CORE_INTERNAL_TOKEN", "")
 JOBS_EXCHANGE = os.environ.get("JOBS_EXCHANGE", "klukai.jobs")
 JOBS_QUEUE = os.environ.get("JOBS_QUEUE", "klukai.jobs.her_pov")
 JOBS_ROUTING_KEY = os.environ.get("JOBS_ROUTING_KEY", "her_pov")
-JOB_RUN_TIMEOUT = int(os.environ.get("JOB_RUN_TIMEOUT", "600"))
+# Worst case for one job, end to end, before core answers the run hook:
+#   LM gate wait (a chat turn in flight)          ~60s
+#   gateway GPU lease acquire (read deadline)      150s
+#   bounded ComfyUI render                         420s
+#   interrupt / VRAM free / lease release          ~60s
+# At 600s the bridge gave up on a job that was still legitimately finishing
+# and requeued it; core's claim then re-ran the whole pipeline (second LLM
+# call, second GPU render, second archive row). 900s covers the budget with
+# margin, and core's claim additionally refuses to take over a job whose
+# heartbeat is under 15 minutes old.
+JOB_RUN_TIMEOUT = int(os.environ.get("JOB_RUN_TIMEOUT", "900"))
 
 
 def defer_queue(bucket: int) -> str:

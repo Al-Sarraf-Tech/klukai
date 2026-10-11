@@ -91,7 +91,7 @@ class TestLlmJsonExtraction:
 
     def test_parse_json_extracts_from_text(self) -> None:
         from app.llm_json import parse_json
-        # The _JSON_OBJECT regex extracts the embedded object out of prose.
+        # The raw_decode scan extracts the embedded object out of prose.
         result = parse_json('Sure! Here is: {"key": "value"} as requested.')
         assert result == {"key": "value"}
 

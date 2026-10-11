@@ -31,6 +31,11 @@ GPU_LEASE_ACQUIRE_PATH = "/api/v1/gpu/lease/acquire"
 GPU_LEASE_RELEASE_PATH = "/api/v1/gpu/lease/release"
 GPU_LEASE_HEADER = "X-GPU-Lease-Token"
 GPU_LEASE_RELEASE_ATTEMPTS = 3
+# Pauses between release attempts.  The gateway coordinates workload cleanup
+# for up to ~10s before it can answer a release; retries 0.25s apart all
+# landed inside that window and saw the same 5xx, so the lease was left to
+# the expiry cleaner.  4s then 8s outlasts the coordination wait.
+GPU_LEASE_RELEASE_RETRY_BACKOFF_SECONDS = (4.0, 8.0)
 GPU_LEASE_CONNECT_TIMEOUT_SECONDS = 10.0
 # Gateway acquisition can include two workload cleanups, llama.cpp quiescence,
 # and the native-vLLM acknowledgement. Release likewise waits for positive
@@ -187,7 +192,8 @@ async def release_gpu_lease(
             if response.status_code < 500:
                 raise last_error
         if attempt + 1 < GPU_LEASE_RELEASE_ATTEMPTS:
-            await asyncio.sleep(0.25)
+            backoff = GPU_LEASE_RELEASE_RETRY_BACKOFF_SECONDS
+            await asyncio.sleep(backoff[min(attempt, len(backoff) - 1)])
     assert last_error is not None
     raise last_error
 

@@ -915,3 +915,358 @@ class TestComposePov:
                 await hp.compose_pov(self._exchange(), affection_level=8)
         assert "8/9" in captured["prompt"]
         assert "I waited for you at the hangar." in captured["prompt"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Durable rail: stale-job reclaim, enqueue hand-off, worker claim
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class _RailConn:
+    """Records every statement; answers fetchall/fetchone from a script."""
+
+    def __init__(self, results=None):
+        self.calls: list[tuple[str, tuple]] = []
+        self._results = list(results or [])
+
+    async def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+        rows = self._results.pop(0) if self._results else []
+        result = MagicMock()
+        result.fetchall = AsyncMock(return_value=rows)
+        result.fetchone = AsyncMock(return_value=rows[0] if rows else None)
+        return result
+
+
+def _patch_rail(conn):
+    @asynccontextmanager
+    async def _ctx():
+        yield conn
+
+    return (
+        patch("app.db.get_pool", MagicMock()),
+        patch("app.db.get_conn", _ctx),
+        patch("app.db.get_conn_autocommit", _ctx),
+    )
+
+
+class TestClaimActiveFromDb:
+    @pytest.mark.asyncio
+    async def test_retires_stale_rows_before_looking_for_an_active_one(self, clean_jobs):
+        """Regression: a lost hand-off left a 'queued' row forever, so every
+        later tap answered reused=True and the partial unique index refused a
+        fresh insert. Rows that stopped moving are failed first."""
+        conn = _RailConn(results=[[("11111111-1111-1111-1111-111111111111",)], []])
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2]:
+            out = await hp._claim_active_from_db("claude")
+
+        assert out is None
+        sweep_sql, sweep_params = conn.calls[0]
+        assert sweep_sql.lstrip().startswith("UPDATE companion_her_pov_jobs")
+        assert "status = 'failed'" in sweep_sql
+        assert "error = 'stale'" in sweep_sql
+        assert "finished_at = NOW()" in sweep_sql
+        assert "status NOT IN ('done', 'failed')" in sweep_sql
+        assert "updated_at < NOW() - %s * INTERVAL '1 minute'" in sweep_sql
+        assert sweep_params == ("claude", hp._STALE_JOB_MINUTES)
+        assert hp._STALE_JOB_MINUTES == 20
+        # ...and only then the active-row lookup.
+        select_sql, _ = conn.calls[1]
+        assert select_sql.lstrip().startswith("SELECT id, status")
+
+    @pytest.mark.asyncio
+    async def test_live_row_is_still_reused(self, clean_jobs):
+        conn = _RailConn(results=[[], [("22222222-2222-2222-2222-222222222222", "drawing")]])
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2]:
+            out = await hp._claim_active_from_db("claude")
+        assert out == {
+            "job_id": "22222222-2222-2222-2222-222222222222",
+            "status": "drawing",
+            "reused": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_stale_sweep_also_releases_the_in_process_claim(self, clean_jobs):
+        """In queue mode start_her_pov parks the claim in memory and nothing
+        clears it until the pipeline runs. Once the DB retires the row, the
+        memory mirror must follow or the user stays locked out until restart."""
+        stale_id = "33333333-3333-3333-3333-333333333333"
+        hp._ACTIVE_JOB_BY_USER["claude"] = stale_id
+        hp._JOBS[stale_id] = {"id": stale_id, "user_id": "claude", "status": "queued"}
+        conn = _RailConn(results=[[(stale_id,)], []])
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2]:
+            assert await hp._claim_active_from_db("claude") is None
+
+        assert "claude" not in hp._ACTIVE_JOB_BY_USER
+        assert hp._JOBS[stale_id]["status"] == "failed"
+        assert hp._JOBS[stale_id]["error"] == "stale"
+
+    @pytest.mark.asyncio
+    async def test_stale_sweep_leaves_another_users_claim_alone(self, clean_jobs):
+        hp._ACTIVE_JOB_BY_USER["claude"] = "live-job"
+        conn = _RailConn(results=[[("44444444-4444-4444-4444-444444444444",)], []])
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2]:
+            await hp._claim_active_from_db("claude")
+        assert hp._ACTIVE_JOB_BY_USER["claude"] == "live-job"
+
+    @pytest.mark.asyncio
+    async def test_no_pool_means_no_db_claim(self, clean_jobs):
+        with patch("app.db.get_pool", side_effect=RuntimeError("pool not initialized")):
+            assert await hp._claim_active_from_db("claude") is None
+
+    @pytest.mark.asyncio
+    async def test_db_error_is_swallowed(self, clean_jobs):
+        broken = MagicMock()
+        broken.execute = AsyncMock(side_effect=RuntimeError("db down"))
+        p = _patch_rail(broken)
+        with p[0], p[1], p[2]:
+            assert await hp._claim_active_from_db("claude") is None
+
+
+class TestEnqueueJob:
+    @pytest.mark.asyncio
+    async def test_true_when_a_subscriber_received_the_event(self):
+        with patch("app.events.publish", AsyncMock(return_value=1)) as pub:
+            assert await hp._enqueue_job("job-1") is True
+        kwargs = pub.await_args.kwargs
+        assert pub.await_args.args[0] == "job.enqueue"
+        assert kwargs["job_id"] == "job-1" and kwargs["kind"] == "her_pov"
+
+    @pytest.mark.asyncio
+    async def test_false_when_nobody_was_listening(self):
+        """Pub/sub does not queue: zero subscribers means the bridge never saw
+        the job id, so the caller must not leave it parked at 'queued'."""
+        with patch("app.events.publish", AsyncMock(return_value=0)):
+            assert await hp._enqueue_job("job-1") is False
+
+    @pytest.mark.asyncio
+    async def test_false_when_publish_raises(self):
+        with patch("app.events.publish", AsyncMock(side_effect=RuntimeError("redis"))):
+            assert await hp._enqueue_job("job-1") is False
+
+    @pytest.mark.asyncio
+    async def test_queue_mode_falls_back_to_inline_when_handoff_is_missed(
+        self, clean_jobs, monkeypatch
+    ):
+        """The fail-soft branch in start_her_pov was unreachable while
+        publish() swallowed everything and _enqueue_job always said True."""
+        monkeypatch.setenv("HER_POV_EXECUTION", "queue")
+        inline = AsyncMock(return_value={"job_id": "x", "status": "queued", "reused": False})
+        with patch("app.events.publish", AsyncMock(return_value=0)), \
+             patch.object(hp, "_start_inline", inline):
+            out = await hp.start_her_pov("claude")
+        inline.assert_awaited_once()
+        assert out["reused"] is False
+
+    @pytest.mark.asyncio
+    async def test_queue_mode_stays_queued_when_bridge_heard_it(
+        self, clean_jobs, monkeypatch
+    ):
+        monkeypatch.setenv("HER_POV_EXECUTION", "queue")
+        inline = AsyncMock()
+        with patch("app.events.publish", AsyncMock(return_value=1)), \
+             patch.object(hp, "_start_inline", inline):
+            out = await hp.start_her_pov("claude")
+        inline.assert_not_awaited()
+        assert out["status"] == "queued" and out["reused"] is False
+
+
+class TestRunJobFromQueue:
+    _JOB = "55555555-5555-5555-5555-555555555555"
+
+    @pytest.mark.asyncio
+    async def test_malformed_id_is_poison_not_redelivered(self, clean_jobs):
+        assert await hp.run_job_from_queue("not-a-uuid") is True
+
+    @pytest.mark.asyncio
+    async def test_claim_only_takes_queued_or_stale_in_progress_rows(self, clean_jobs):
+        """Regression: the claim took any non-terminal row, so a bridge-side
+        timeout that requeued a job still rendering bought a duplicate LLM
+        call, GPU render and archive row."""
+        conn = _RailConn(results=[[("claude",)]])
+        run = AsyncMock()
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2], patch.object(hp, "run_her_pov", run):
+            assert await hp.run_job_from_queue(self._JOB) is True
+
+        sql, params = conn.calls[0]
+        assert "status = 'queued' OR" in sql
+        assert "status IN ('searching', 'thinking', 'drawing')" in sql
+        assert "updated_at < NOW() - %s * INTERVAL '1 minute'" in sql
+        assert params == (self._JOB, hp._STALE_CLAIM_MINUTES)
+        assert hp._STALE_CLAIM_MINUTES == 15
+        run.assert_awaited_once_with("claude", self._JOB)
+        assert hp._JOBS[self._JOB]["user_id"] == "claude"
+
+    @pytest.mark.asyncio
+    async def test_live_claim_elsewhere_acks_without_running(self, clean_jobs):
+        """No row back means terminal, unknown, or still being worked by a
+        fresh claim: the bridge should ack, never redeliver a duplicate."""
+        conn = _RailConn(results=[[]])
+        run = AsyncMock()
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2], patch.object(hp, "run_her_pov", run):
+            assert await hp.run_job_from_queue(self._JOB) is True
+        run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_db_outage_falls_back_to_the_memory_board(self, clean_jobs):
+        hp._JOBS[self._JOB] = {"id": self._JOB, "user_id": "claude", "status": "queued"}
+        broken = MagicMock()
+        broken.execute = AsyncMock(side_effect=RuntimeError("db down"))
+        run = AsyncMock()
+        p = _patch_rail(broken)
+        with p[0], p[1], p[2], patch.object(hp, "run_her_pov", run):
+            assert await hp.run_job_from_queue(self._JOB) is True
+        run.assert_awaited_once_with("claude", self._JOB)
+
+    @pytest.mark.asyncio
+    async def test_db_outage_with_terminal_memory_job_acks(self, clean_jobs):
+        hp._JOBS[self._JOB] = {"id": self._JOB, "user_id": "claude", "status": "done"}
+        broken = MagicMock()
+        broken.execute = AsyncMock(side_effect=RuntimeError("db down"))
+        run = AsyncMock()
+        p = _patch_rail(broken)
+        with p[0], p[1], p[2], patch.object(hp, "run_her_pov", run):
+            assert await hp.run_job_from_queue(self._JOB) is True
+        run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_db_outage_with_unknown_job_acks(self, clean_jobs):
+        broken = MagicMock()
+        broken.execute = AsyncMock(side_effect=RuntimeError("db down"))
+        p = _patch_rail(broken)
+        with p[0], p[1], p[2], patch.object(hp, "run_her_pov", AsyncMock()) as run:
+            assert await hp.run_job_from_queue(self._JOB) is True
+        run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_claimed_row_without_a_user_acks(self, clean_jobs):
+        conn = _RailConn(results=[[("",)]])
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2], patch.object(hp, "run_her_pov", AsyncMock()) as run:
+            assert await hp.run_job_from_queue(self._JOB) is True
+        run.assert_not_awaited()
+
+
+class TestStartHerPovDurableRail:
+    @pytest.mark.asyncio
+    async def test_db_claimed_job_is_returned_before_any_new_work(self, clean_jobs):
+        """A live row in Postgres wins over the in-process board (worker restart)."""
+        existing = {"job_id": "db-job", "status": "drawing", "reused": True}
+        with patch.object(hp, "_claim_active_from_db", AsyncMock(return_value=existing)), \
+             patch.object(hp, "_start_inline", AsyncMock()) as inline:
+            out = await hp.start_her_pov("claude")
+        assert out == existing
+        inline.assert_not_awaited()
+        assert "claude" not in hp._ACTIVE_JOB_BY_USER
+
+    @pytest.mark.asyncio
+    async def test_failed_job_insert_releases_the_claim(self, clean_jobs):
+        with patch.object(hp, "_set_job", AsyncMock(side_effect=RuntimeError("db"))):
+            with pytest.raises(RuntimeError):
+                await hp.start_her_pov("claude")
+        assert "claude" not in hp._ACTIVE_JOB_BY_USER
+
+
+class TestJobPersistence:
+    """Postgres write-through / read-back for the durable job row."""
+
+    _JOB = "66666666-6666-6666-6666-666666666666"
+
+    @pytest.mark.asyncio
+    async def test_persist_upserts_with_terminal_flags(self, clean_jobs):
+        conn = _RailConn()
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2]:
+            await hp._persist_job(self._JOB, {
+                "user_id": "claude", "status": "done", "phase": "done",
+                "message": "Kept.", "memory_id": "mem-1", "has_image": True,
+                "exchange_preview": {"user": "u", "assistant": "a"},
+                "created_at": "2026-08-06T00:00:00+00:00",
+            })
+        sql, params = conn.calls[0]
+        assert "INSERT INTO companion_her_pov_jobs" in sql
+        assert "ON CONFLICT (id) DO UPDATE" in sql
+        assert params[0] == self._JOB and params[1] == "claude"
+        assert params[2] == "done" and params[10] is True
+        assert params[11] == '{"user": "u", "assistant": "a"}'
+        assert params[-2:] == (True, True)  # terminal → finished_at stamped
+
+    @pytest.mark.asyncio
+    async def test_persist_defaults_and_non_terminal(self, clean_jobs):
+        conn = _RailConn()
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2]:
+            await hp._persist_job(self._JOB, {})
+        _, params = conn.calls[0]
+        assert params[1] == "" and params[2] == "queued" and params[3] == "queued"
+        assert params[11] is None
+        assert params[-2:] == (False, False)
+
+    @pytest.mark.asyncio
+    async def test_persist_never_raises(self, clean_jobs):
+        broken = MagicMock()
+        broken.execute = AsyncMock(side_effect=RuntimeError("db down"))
+        p = _patch_rail(broken)
+        with p[0], p[1], p[2]:
+            await hp._persist_job(self._JOB, {"status": "queued"})  # no raise
+
+    @pytest.mark.asyncio
+    async def test_load_maps_the_row_and_parses_a_string_preview(self, clean_jobs):
+        when = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
+        row = (
+            self._JOB, "claude", "done", "done", "Kept.", None, "Hangar Wait",
+            "I kept this one.", "tender", "mem-1", True,
+            '{"user": "u", "assistant": "a"}', when, when,
+        )
+        conn = _RailConn(results=[[row]])
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2]:
+            job = await hp._load_job_from_db(self._JOB)
+        assert job["id"] == self._JOB and job["status"] == "done"
+        assert job["exchange_preview"] == {"user": "u", "assistant": "a"}
+        assert job["has_image"] is True
+        assert job["created_at"] == when.isoformat()
+
+    @pytest.mark.asyncio
+    async def test_load_keeps_an_unparseable_preview_verbatim(self, clean_jobs):
+        row = (self._JOB, "claude", "queued", "queued", None, None, None, None,
+               None, None, False, "not json", None, None)
+        conn = _RailConn(results=[[row]])
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2]:
+            job = await hp._load_job_from_db(self._JOB)
+        assert job["exchange_preview"] == "not json"
+        assert job["created_at"] is None
+
+    @pytest.mark.asyncio
+    async def test_load_unknown_row_is_none(self, clean_jobs):
+        conn = _RailConn(results=[[]])
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2]:
+            assert await hp._load_job_from_db(self._JOB) is None
+
+    @pytest.mark.asyncio
+    async def test_load_rejects_non_uuid_and_db_errors(self, clean_jobs):
+        assert await hp._load_job_from_db("nope") is None
+        broken = MagicMock()
+        broken.execute = AsyncMock(side_effect=RuntimeError("db down"))
+        p = _patch_rail(broken)
+        with p[0], p[1], p[2]:
+            assert await hp._load_job_from_db(self._JOB) is None
+
+    @pytest.mark.asyncio
+    async def test_get_job_falls_through_to_postgres(self, clean_jobs):
+        """After a worker restart the board is empty; the row is the truth."""
+        row = (self._JOB, "claude", "drawing", "drawing", None, None, None, None,
+               None, None, False, None, None, None)
+        conn = _RailConn(results=[[row]])
+        p = _patch_rail(conn)
+        with p[0], p[1], p[2]:
+            job = await hp.get_job(self._JOB)
+        assert job["status"] == "drawing"

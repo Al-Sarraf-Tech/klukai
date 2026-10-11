@@ -195,6 +195,47 @@ class TestStripeSignatureVerify:
     def test_malformed_header_rejects(self):
         assert verify_stripe_signature(b"x", "garbage", self._SEC) is False
         assert verify_stripe_signature(b"x", "", self._SEC) is False
+        assert verify_stripe_signature(b"x", "t=abc,v1=x", self._SEC) is False
+        # Timestamp but no signature at all.
+        assert verify_stripe_signature(b"x", f"t={int(time.time())}", self._SEC) is False
+
+    def _mac(self, payload: bytes, secret: str, ts: int) -> str:
+        return hmac.new(secret.encode(), f"{ts}.".encode() + payload, hashlib.sha256).hexdigest()
+
+    def test_rotation_header_accepts_when_new_secret_matches(self):
+        """Regression: during secret rotation Stripe sends `v1=<new>,v1=<old>`;
+        dict() kept only the last one, so the new secret's signature was
+        rejected for the whole rotation window."""
+        body = b'{"id":"evt_1"}'
+        ts = int(time.time())
+        new_sig = self._mac(body, self._SEC, ts)
+        old_sig = self._mac(body, self._SEC + "_old", ts)
+        header = f"t={ts},v1={new_sig},v1={old_sig}"
+        assert verify_stripe_signature(body, header, self._SEC) is True
+
+    def test_rotation_header_accepts_when_old_secret_matches(self):
+        body = b'{"id":"evt_1"}'
+        ts = int(time.time())
+        new_sig = self._mac(body, self._SEC + "_new", ts)
+        old_sig = self._mac(body, self._SEC, ts)
+        header = f"t={ts},v1={new_sig},v1={old_sig}"
+        assert verify_stripe_signature(body, header, self._SEC) is True
+
+    def test_rotation_header_rejects_when_neither_matches(self):
+        body = b'{"id":"evt_1"}'
+        ts = int(time.time())
+        header = (
+            f"t={ts},v1={self._mac(body, 'a', ts)},v1={self._mac(body, 'b', ts)}"
+        )
+        assert verify_stripe_signature(body, header, self._SEC) is False
+
+    def test_v0_and_whitespace_are_tolerated(self):
+        """Stripe's test-mode header carries a v0 scheme too; spaces after the
+        commas must not break parsing."""
+        body = b'{"id":"evt_1"}'
+        ts = int(time.time())
+        header = f"t={ts}, v0=ignored, v1={self._mac(body, self._SEC, ts)}"
+        assert verify_stripe_signature(body, header, self._SEC) is True
 
 
 def _mk_conn(fetchone=None, fetchall=None):

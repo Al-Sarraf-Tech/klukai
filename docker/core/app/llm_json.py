@@ -21,8 +21,29 @@ logger = logging.getLogger(__name__)
 _THINK_TAGS = re.compile(r'<\|?/?think\|?>', re.DOTALL)
 _THINK_BLOCKS = re.compile(r'<\|?think\|?>.*?<\|?/think\|?>', re.DOTALL)
 _MARKDOWN_JSON = re.compile(r'```(?:json)?\s*(.*?)```', re.DOTALL)
-_JSON_OBJECT = re.compile(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', re.DOTALL)
 _TRAILING_COMMA = re.compile(r',\s*([}\]])')
+_DECODER = json.JSONDecoder()
+
+
+def _first_object(text: str) -> dict | None:
+    """Return the first complete JSON object embedded anywhere in ``text``.
+
+    Replaces a one-level regex that could not see past depth-2 nesting (it
+    returned the inner object) and was skipped entirely when the text began
+    with ``{`` — so an object followed by a sign-off line parsed as nothing.
+    raw_decode handles arbitrary depth and ignores whatever follows.
+    """
+    pos = text.find("{")
+    while pos != -1:
+        try:
+            value, _end = _DECODER.raw_decode(text, pos)
+        except json.JSONDecodeError:
+            pass
+        else:
+            if isinstance(value, dict):
+                return value
+        pos = text.find("{", pos + 1)
+    return None
 
 
 def extract_text(response: dict) -> str:
@@ -75,13 +96,13 @@ def parse_json(text: str) -> dict | None:
         except json.JSONDecodeError:
             text = md_match.group(1).strip()
 
-    # Find JSON object in mixed text
-    if not text.startswith("{"):
-        json_match = _JSON_OBJECT.search(text)
-        if json_match:
-            text = json_match.group(0)
+    # Find a complete JSON object in mixed text (prose before or after it,
+    # any nesting depth).
+    found = _first_object(text)
+    if found is not None:
+        return found
 
-    # Repair common issues
+    # Repair common issues, then look again
     text = _TRAILING_COMMA.sub(r'\1', text)
 
     # Try again
@@ -89,6 +110,9 @@ def parse_json(text: str) -> dict | None:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
+    found = _first_object(text)
+    if found is not None:
+        return found
 
     # Last resort: fix truncated strings by closing them
     try:

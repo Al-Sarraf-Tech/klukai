@@ -582,31 +582,79 @@ def _execution_mode() -> str:
 
 
 async def _enqueue_job(job_id: str) -> bool:
-    """Ask the events-bridge to park this job on the durable work queue."""
+    """Ask the events-bridge to park this job on the durable work queue.
+
+    Redis pub/sub does not queue: if the bridge is not subscribed at this
+    instant the event is simply gone and the job row would sit at 'queued'
+    forever. publish() returns the subscriber count, so a zero here is a
+    missed hand-off and the caller runs the job inline instead.
+    """
     try:
         from . import events
-        await events.publish(
+        received = await events.publish(
             "job.enqueue",
             data=job_id,
             domain="job",
             kind="her_pov",
             job_id=job_id,
         )
-        return True
+        return bool(received)
     except Exception as e:
         logger.warning("her_pov enqueue failed for %s: %s", job_id, e)
         return False
 
 
+# A job that has not moved in this long is not running anywhere: every phase
+# bumps updated_at, and the longest phase (drawing) is bounded by the image
+# lock, the LM gate, the lease acquire deadline and the 7-minute render cap.
+_STALE_JOB_MINUTES = 20
+# Tighter bound for the worker: a bridge redelivery (JOB_RUN_TIMEOUT=900s)
+# may only take over an in-progress claim once its heartbeat is this old.
+_STALE_CLAIM_MINUTES = 15
+
+
 async def _claim_active_from_db(user_id: str) -> dict[str, Any] | None:
-    """Return an existing non-terminal DB job for this user, if any."""
+    """Return an existing non-terminal DB job for this user, if any.
+
+    Before looking, retire rows that stopped moving: a lost hand-off (bridge
+    not subscribed when the enqueue was published, core restarted between
+    insert and claim) leaves a non-terminal row that nothing will ever
+    finish. Without this sweep every later tap returned {"reused": true,
+    "status": "queued"} and idx_her_pov_one_active rejected a fresh insert.
+    """
     try:
         from .db import get_pool
         get_pool()
     except Exception:
         return None
     try:
-        from .db import get_conn
+        from .db import get_conn, get_conn_autocommit
+        async with get_conn_autocommit() as conn:
+            stale = await (await conn.execute(
+                "UPDATE companion_her_pov_jobs "
+                "SET status = 'failed', phase = 'failed', error = 'stale', "
+                "    finished_at = NOW(), updated_at = NOW() "
+                "WHERE user_id = %s AND status NOT IN ('done', 'failed') "
+                "  AND updated_at < NOW() - %s * INTERVAL '1 minute' "
+                "RETURNING id",
+                (user_id, _STALE_JOB_MINUTES),
+            )).fetchall()
+        if stale:
+            stale_ids = {str(r[0]) for r in stale}
+            logger.warning(
+                "her_pov retired %d stale job(s) for %s: %s",
+                len(stale_ids), user_id, sorted(stale_ids),
+            )
+            # The in-process claim mirrors the row. In queue mode nothing
+            # else clears it until the pipeline runs, so a lost hand-off
+            # would still answer "reused" from memory after the DB moved on.
+            async with _JOBS_LOCK:
+                if _ACTIVE_JOB_BY_USER.get(user_id) in stale_ids:
+                    _ACTIVE_JOB_BY_USER.pop(user_id, None)
+                for jid in stale_ids:
+                    job = _JOBS.get(jid)
+                    if job and job.get("status") not in ("done", "failed"):
+                        job.update(status="failed", phase="failed", error="stale")
         async with get_conn() as conn:
             row = await (await conn.execute(
                 "SELECT id, status FROM companion_her_pov_jobs "
@@ -712,18 +760,28 @@ async def run_job_from_queue(job_id: str) -> bool:
     try:
         from .db import get_conn_autocommit
         async with get_conn_autocommit() as conn:
+            # Take the row only if nobody is working it: 'queued', or an
+            # in-progress claim whose heartbeat (updated_at, bumped by every
+            # phase) is older than the whole pipeline could legitimately be.
+            # A bridge-side timeout requeues the message while the first run
+            # is still rendering; re-claiming it bought a second LLM call, a
+            # second GPU render and a second archive row.
             row = await (await conn.execute(
                 "UPDATE companion_her_pov_jobs "
                 "SET status = 'searching', phase = 'searching', "
                 "    claimed_at = NOW(), attempts = attempts + 1, "
                 "    updated_at = NOW() "
-                "WHERE id = %s AND status IN "
-                "  ('queued', 'searching', 'thinking', 'drawing') "
+                "WHERE id = %s AND ("
+                "  status = 'queued' OR ("
+                "    status IN ('searching', 'thinking', 'drawing') "
+                "    AND updated_at < NOW() - %s * INTERVAL '1 minute'))"
                 "RETURNING user_id",
-                (job_id,),
+                (job_id, _STALE_CLAIM_MINUTES),
             )).fetchone()
         if not row:
-            # Already terminal or unknown — bridge should ack.
+            # Terminal, unknown, or held by a live claim — bridge should ack.
+            # Redelivering a job another run is still finishing would only
+            # duplicate the render.
             return True
         user_id = row[0]
     except Exception as e:
