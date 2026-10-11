@@ -47,6 +47,7 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- **Voice path (push-to-talk)** — `docker/core/app/chat.py` imports `FAILURE_SENTINEL` (every voice turn had died with a `NameError` after transcription) and never voices the offline notice, which would take the GPU lease that evicts the LLM. `/api/stt` reports an upstream failure as 502 instead of a 200 with no text; `/api/tts` turns a voice-service 401/403 into 502 so the PWA does not log the user out on a backend token mismatch; both cap audio at 8 000 000 base64 chars. `docker/voice`: Whisper decoding now runs fully off the event loop (the lazy segment generator was iterated on the loop thread, freezing health/TTS/unload for the length of every clip). `audio_recorder.js` (and its `web-build/` copy): a stop() racing a pending start() no longer leaves the mic open forever, and takes are capped at 60 s with the clip kept for the button release. New unit tests across core, voice and `tools/companion/test/audio_recorder.test.mjs`.
 - `docker/core/app/ws_manager.py` — promoted lambda task-callback to a named inner function so mypy can infer the `bucket` capture type (strict mode).
 
 ### Documentation
