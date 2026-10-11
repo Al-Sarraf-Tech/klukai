@@ -37,11 +37,11 @@ async def _turn(content, *, her_now, request_outcome=None, aff_level=5, ws_send_
         with patch("app.chat_handlers.router", ns.router), \
              patch("app.her_day.her_now", her_now), \
              patch("app.wardrobe.handle_request", handle):
-            import app.chat_handlers as ch
+            import app.chat_prompt as cp  # the prompt phase calls assemble_system_prompt from here
 
             await _handle_message(content, _fresh_session())
             await _drain_tasks()
-            assemble_kwargs = ch.assemble_system_prompt.call_args.kwargs
+            assemble_kwargs = cp.assemble_system_prompt.call_args.kwargs
     return captured["sys"], assemble_kwargs, handle, ns
 
 
@@ -165,7 +165,7 @@ class TestReviewFixesInChat:
 
         her_now = AsyncMock(return_value=_now())
         with patch("app.wardrobe.ensure_today", new=slow), \
-             patch("app.chat_handlers._HER_DAY_WARM_BUDGET_S", 0.01):
+             patch("app.chat_prompt._HER_DAY_WARM_BUDGET_S", 0.01):  # budget read by the prompt phase
             sys_prompt, kwargs, _, _ = await _turn("hey", her_now=her_now)
         assert kwargs["current_outfit"] is None
         her_now.assert_not_awaited()

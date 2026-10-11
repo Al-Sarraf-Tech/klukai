@@ -7,7 +7,8 @@ turns persisted, branch chosen, background task scheduled) — no no-assert
 coverage padding.
 
 All external services (router/ws/memory/affection/proactive/db/background)
-are mocked at the module namespaces chat_handlers resolves them from.
+are mocked at the module namespaces chat_handlers (and chat_prompt, the
+system-prompt phase) resolve them from.
 Deterministic: datetime frozen where it matters, asyncio.sleep no-op'd,
 randomness avoided by driving short-message / nudge branches explicitly.
 """
@@ -195,8 +196,15 @@ def _patched_pipeline(
         patch("app.chat_handlers._wants_mission_start", return_value=False),
         patch("app.chat_handlers._wants_mission_cancel", return_value=False),
         patch("app.chat_handlers._parse_interval_minutes", return_value=30),
-        patch("app.chat_handlers.assemble_system_prompt", return_value="SYS"),
         patch("app.chat_handlers.needs_image", needs_image_fn),
+        # Phase 2 (system prompt) lives in app.chat_prompt and binds the same
+        # collaborators at import — patch the same mocks there too.
+        patch("app.chat_prompt.router", router),
+        patch("app.chat_prompt.ws", ws),
+        patch("app.chat_prompt.memory", memory),
+        patch("app.chat_prompt.proactive", proactive),
+        patch("app.chat_prompt.assemble_system_prompt", return_value="SYS"),
+        patch("app.chat_prompt.needs_image", needs_image_fn),
         patch("app.chat_handlers.background_extraction", background_extraction),
         patch("app.chat_handlers.background_compaction", background_compaction),
         patch("app.chat_handlers.background_image_gen", background_image_gen),
@@ -648,7 +656,7 @@ class TestPromptAssembly:
         first = datetime.now(timezone.utc) - timedelta(days=30)
         with _patched_pipeline(stream_tokens=["Ok."]) as ns:
             ns.aff_state.first_interaction = first
-            with patch("app.chat_handlers.assemble_system_prompt", side_effect=_capture_prompt):
+            with patch("app.chat_prompt.assemble_system_prompt", side_effect=_capture_prompt):
                 await _handle_message("A meaningful long enough message", _fresh_session())
                 await _drain_tasks()
 
@@ -670,7 +678,7 @@ class TestPromptAssembly:
         bad.tzinfo = None  # forces datetime.now() - MagicMock -> TypeError
         with _patched_pipeline(stream_tokens=["Ok."]) as ns:
             ns.aff_state.first_interaction = bad
-            with patch("app.chat_handlers.assemble_system_prompt", side_effect=_capture_prompt):
+            with patch("app.chat_prompt.assemble_system_prompt", side_effect=_capture_prompt):
                 await _handle_message("A meaningful long enough message", _fresh_session())
                 await _drain_tasks()
 
@@ -690,7 +698,7 @@ class TestPromptAssembly:
             ns.proactive.mission_active = True
             ns.proactive._mission_timer = MagicMock()
             ns.proactive._mission_timer.mission_description = "scout sector 7"
-            with patch("app.chat_handlers.assemble_system_prompt", side_effect=_capture_prompt):
+            with patch("app.chat_prompt.assemble_system_prompt", side_effect=_capture_prompt):
                 await _handle_message("A meaningful long enough message", _fresh_session())
                 await _drain_tasks()
 
