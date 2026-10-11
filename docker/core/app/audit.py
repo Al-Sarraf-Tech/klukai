@@ -131,7 +131,7 @@ async def recent(
             rows = await conn.execute(
                 "SELECT id, event_type, user_id, ip_address, request_id, "
                 "metadata, created_at "
-                f"FROM companion_audit_log {where} "  # nosec B608 — `where` is built from a fixed allow-list of columns; user input is bound via %s
+                f"FROM companion_audit_log {where} "  # nosec B608  # `where` is built from a fixed allow-list of columns; user input is bound via %s
                 "ORDER BY created_at DESC LIMIT %s",
                 tuple(params),
             )
