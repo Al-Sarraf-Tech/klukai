@@ -92,7 +92,8 @@ class TestLayout:
 
 class TestPrompts:
     def test_base_is_a_fixed_portrait_in_todays_outfit(self):
-        with patch("app.portrait.build_prompt", return_value="P") as bp:
+        # portrait_prompt moved to app/portrait_render.py: patch build_prompt where it is looked up.
+        with patch("app.portrait_render.build_prompt", return_value="P") as bp:
             assert pt.portrait_prompt("speed_star", 4, "base") == "P"
         scene = bp.call_args.args[0]
         for tag in ("upper body", "facing viewer", "centered", "(dark gradient background:1.2)"):
@@ -104,7 +105,7 @@ class TestPrompts:
 
     @pytest.mark.parametrize("frame", ["blink", "talk", "smile", "blush", "annoyed"])
     def test_expression_frames_swap_only_the_expression(self, frame):
-        with patch("app.portrait.build_prompt", return_value="P") as bp:
+        with patch("app.portrait_render.build_prompt", return_value="P") as bp:
             pt.portrait_prompt("speed_star", 4, frame)
         assert bp.call_args.args[0] == f"{pt.EXPRESSIONS[frame][0]}, {pt.COMPOSITION}"
 
