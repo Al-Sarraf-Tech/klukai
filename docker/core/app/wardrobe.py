@@ -221,6 +221,89 @@ def _weather_ok(daily: dict, temp: float, condition: str | None) -> bool:
     return condition not in (daily.get("avoid_conditions") or ())
 
 
+# A candidate "why today": (rank, reason). The loudest rank wins the line, so
+# a term may add fewer points than its reason carries (the temperature).
+_Reason = tuple[float, str]
+
+
+def _todays_weather(weather: dict | None, day: date) -> tuple[float, str | None]:
+    """(temperature °C, condition) — the live reading, else the month's
+    seasonal temperature (a missing ``temp_c`` counts as no reading)."""
+    live = (weather or {}).get("temp_c")
+    temp = float(live) if live is not None else float(_SEASONAL_TEMP_C[day.month - 1])
+    return temp, (weather or {}).get("condition")
+
+
+def _wearable_today(o: Outfit, level: int, hit: list[str], temp: float, condition: str | None) -> bool:
+    """The unlock gate first (the outfit's level or its daily ``min_level``),
+    then the weather gate — which an occasion hit skips, and which an outfit
+    with no ``daily`` block at all never passes."""
+    daily = o.daily
+    if level < max(o.unlock_level, int(daily.get("min_level", 0))):
+        return False
+    if not hit and (not daily or not _weather_ok(daily, temp, condition)):
+        return False
+    return True
+
+
+def _situation_score(o: Outfit, hit: list[str], temp: float, condition: str | None) -> tuple[float, list[_Reason]]:
+    """Open the score with the day itself: the outfit's weight, +20 for an
+    occasion, +2 for kit made for today's conditions, +1 for freezing or
+    sweltering kit (whose temperature reason still outranks the rest)."""
+    daily = o.daily
+    score = float(daily.get("weight", 1.0))
+    reasons: list[_Reason] = []
+    if hit:
+        score += 20.0
+        reasons.append((20.0, _OCCASION_REASONS.get(hit[0], "An occasion.")))
+    if daily.get("conditions"):
+        score += 2.0
+        reasons.append((2.0, _CONDITION_REASONS.get(str(condition), "The weather.")))
+    if daily.get("temp_max", 99) <= 5 or daily.get("temp_min", -99) >= 25:
+        score += 1.0
+        reasons.append((2.5, f"It's {round(temp)}°C."))
+    return score, reasons
+
+
+def _preference_score(
+    o: Outfit,
+    oid: str,
+    score: float,
+    reasons: list[_Reason],
+    *,
+    day: date,
+    mood: str | None,
+    favorite: str | None,
+    recent: tuple[str, ...] | list[str],
+) -> float:
+    """Continue ``score`` with her side and his: +1.5 on one of the outfit's
+    weekdays, +1 when it suits her mood, +1.5 for his favourite, minus the
+    novelty penalty. Appends its reasons to ``reasons``; returns the score.
+
+    Takes the running score rather than a sub-total so the additions happen in
+    the original order — weights like 1.6 are not exact in binary, and a
+    reordered sum could differ in the last bit and flip a close pick."""
+    daily = o.daily
+    if day.weekday() in (daily.get("weekdays") or ()):
+        score += 1.5
+        reasons.append((1.5, "A duty day." if o.category == "duty" else "Off-duty plans."))
+    if mood and mood in (daily.get("moods") or ()):
+        score += 1.0
+        reasons.append((1.0, f"She's feeling {mood.replace('_', ' ')}."))
+    if favorite == oid:
+        score += 1.5
+        reasons.append((1.5, "He likes this one — not that it was a factor."))
+    return score - _novelty_penalty(o, oid, recent)
+
+
+def _novelty_penalty(o: Outfit, oid: str, recent: tuple[str, ...] | list[str]) -> float:
+    """Off-duty kit worn lately loses 2 points if it was yesterday's, 1 if
+    earlier; duty kit is never penalised (she wears the uniform all week)."""
+    if o.category != "duty" and oid in recent:
+        return 2.0 if recent[0] == oid else 1.0
+    return 0.0
+
+
 def pick_daily_outfit(
     cat: dict[str, Outfit],
     day: date,
@@ -233,42 +316,24 @@ def pick_daily_outfit(
     occasions: frozenset[str] = frozenset(),
     seed: str = "",
 ) -> tuple[str, str]:
-    """Choose what she wears today → (outfit_id, reason). Same inputs, same answer."""
+    """Choose what she wears today → (outfit_id, reason). Same inputs, same answer.
+
+    Every wearable outfit is scored in id order, each drawing one jitter from
+    the seeded RNG — so the gates and the catalog order fix the random stream,
+    and the same day with the same inputs always lands on the same outfit.
+    """
     rng = _rng(seed, day)
-    live = (weather or {}).get("temp_c")
-    temp = float(live) if live is not None else float(_SEASONAL_TEMP_C[day.month - 1])
-    condition = (weather or {}).get("condition")
+    temp, condition = _todays_weather(weather, day)
     best: tuple[float, str, str] | None = None
     for oid in sorted(cat):
         o = cat[oid]
         hit = sorted(occasions & set(o.occasions))
-        daily = o.daily
-        if level < max(o.unlock_level, int(daily.get("min_level", 0))):
+        if not _wearable_today(o, level, hit, temp, condition):
             continue
-        if not hit and (not daily or not _weather_ok(daily, temp, condition)):
-            continue
-        score = float(daily.get("weight", 1.0))
-        reasons: list[tuple[float, str]] = []
-        if hit:
-            score += 20.0
-            reasons.append((20.0, _OCCASION_REASONS.get(hit[0], "An occasion.")))
-        if daily.get("conditions"):
-            score += 2.0
-            reasons.append((2.0, _CONDITION_REASONS.get(str(condition), "The weather.")))
-        if daily.get("temp_max", 99) <= 5 or daily.get("temp_min", -99) >= 25:
-            score += 1.0
-            reasons.append((2.5, f"It's {round(temp)}°C."))
-        if day.weekday() in (daily.get("weekdays") or ()):
-            score += 1.5
-            reasons.append((1.5, "A duty day." if o.category == "duty" else "Off-duty plans."))
-        if mood and mood in (daily.get("moods") or ()):
-            score += 1.0
-            reasons.append((1.0, f"She's feeling {mood.replace('_', ' ')}."))
-        if favorite == oid:
-            score += 1.5
-            reasons.append((1.5, "He likes this one — not that it was a factor."))
-        if o.category != "duty" and oid in recent:
-            score -= 2.0 if recent[0] == oid else 1.0
+        score, reasons = _situation_score(o, hit, temp, condition)
+        score = _preference_score(
+            o, oid, score, reasons, day=day, mood=mood, favorite=favorite, recent=recent,
+        )
         score += rng.random() * 1.5
         reason = max(reasons)[1] if reasons else "Her call."
         if best is None or score > best[0]:

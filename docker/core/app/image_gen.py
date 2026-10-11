@@ -917,6 +917,103 @@ async def generate_inpaint_set(
     return result or {}
 
 
+OnImage = Callable[[str, bytes], Awaitable[None]]
+
+
+async def _land_image(results: dict[str, bytes], on_image: OnImage | None, name: str, png: bytes) -> None:
+    """An image of the set is done: record it, then let the caller show it."""
+    results[name] = png
+    if on_image is not None:
+        await on_image(name, png)
+
+
+async def _inpaint_set_base(
+    lease: GPULease,
+    results: dict[str, bytes],
+    on_image: OnImage | None,
+    *,
+    base_png: bytes | None,
+    base_prompt: str,
+    width: int,
+    height: int,
+    sfw: bool,
+    seed: int,
+    negative_extra: str | None,
+    sampling: Sampling,
+) -> bytes | None:
+    """The set's base: ``base_png`` as given, else a fresh txt2img render that
+    lands as "base". None when that render failed."""
+    if base_png is not None:
+        return base_png
+    base = await _run_workflow(_txt2img_workflow(
+        base_prompt, width, height, sfw, seed, negative_extra, sampling,
+    ), lease)
+    if base is not None:
+        await _land_image(results, on_image, "base", base)
+    return base
+
+
+async def _upload_inpaint_inputs(
+    source: bytes, branches: list[InpaintBranch], lease: GPULease,
+) -> tuple[str, dict[str, str]] | None:
+    """Upload the shared source and one mask per branch, concurrently.
+    Returns (source LoadImage name, {branch name: mask name}); None if any
+    upload failed, since a graph with a missing input cannot run."""
+    uploads = await asyncio.gather(
+        _upload_image(source, lease), *(_upload_image(b.mask_png, lease) for b in branches)
+    )
+    source_name, mask_names = uploads[0], uploads[1:]
+    if source_name is None or any(m is None for m in mask_names):
+        return None
+    return source_name, {b.name: str(m) for b, m in zip(branches, mask_names, strict=True)}
+
+
+def _escalate_denoise(pending: list[InpaintBranch], attempt: int, step: float) -> list[InpaintBranch]:
+    """``pending`` for this attempt: each denoise raised by ``attempt`` steps, capped at 1.0."""
+    return [replace(b, denoise=min(1.0, b.denoise + attempt * step)) for b in pending]
+
+
+async def _triage_renders(
+    pending: list[InpaintBranch],
+    outputs: dict[str, bytes],
+    save_ids: dict[str, str],
+    *,
+    accept: Callable[[str, bytes], bool] | None,
+    candidates: dict[str, list[bytes]],
+    results: dict[str, bytes],
+    on_image: OnImage | None,
+) -> list[InpaintBranch]:
+    """Sort one attempt's renders: an accepted one lands; a rejected one is
+    kept as a candidate and returned for a re-run; a lost one is neither."""
+    rejected: list[InpaintBranch] = []
+    for branch in pending:
+        png = outputs.get(save_ids[branch.name])
+        if png is None:
+            continue  # lost, not rejected: no point re-running it
+        if accept is not None and not accept(branch.name, png):
+            rejected.append(branch)
+            candidates.setdefault(branch.name, []).append(png)
+            continue
+        await _land_image(results, on_image, branch.name, png)
+    return rejected
+
+
+async def _accept_fallbacks(
+    pending: list[InpaintBranch],
+    candidates: dict[str, list[bytes]],
+    fallback: Callable[[str, list[bytes]], bytes | None] | None,
+    results: dict[str, bytes],
+    on_image: OnImage | None,
+) -> None:
+    """Retries exhausted: the caller may still take its best rejected render."""
+    for branch in pending:
+        chosen = fallback(branch.name, candidates[branch.name]) if fallback else None
+        if chosen is None:
+            continue
+        logger.info("Accepting the best rejected render for %s", branch.name)
+        await _land_image(results, on_image, branch.name, chosen)
+
+
 async def _inpaint_set_inner(
     lease: GPULease,
     *,
@@ -930,71 +1027,51 @@ async def _inpaint_set_inner(
     negative_extra: str | None,
     base_sampling: Sampling,
     inpaint_sampling: Sampling,
-    on_image: Callable[[str, bytes], Awaitable[None]] | None,
+    on_image: OnImage | None,
     accept: Callable[[str, bytes], bool] | None,
     retries: int,
     retry_denoise_step: float = 0.0,
     fallback: Callable[[str, list[bytes]], bytes | None] | None = None,
 ) -> dict[str, bytes]:
+    """The leased body of generate_inpaint_set: base, plan, uploads, then the
+    attempt loop. Every early return hands back what has landed so far, and
+    the one VRAM free in ``finally`` is fail-closed (an unconfirmed free
+    raises GPULeaseError so the lease is never returned as if clean)."""
     results: dict[str, bytes] = {}
     try:
-        base = base_png
+        base = await _inpaint_set_base(
+            lease, results, on_image, base_png=base_png, base_prompt=base_prompt,
+            width=width, height=height, sfw=sfw, seed=seed, negative_extra=negative_extra,
+            sampling=base_sampling,
+        )
         if base is None:
-            base = await _run_workflow(_txt2img_workflow(
-                base_prompt, width, height, sfw, seed, negative_extra, base_sampling,
-            ), lease)
-            if base is None:
-                return results
-            results["base"] = base
-            if on_image is not None:
-                await on_image("base", base)
+            return results
         source, branches = await plan(base)
         if not branches:
             return results
-        uploads = await asyncio.gather(
-            _upload_image(source, lease), *(_upload_image(b.mask_png, lease) for b in branches)
-        )
-        source_name, mask_names = uploads[0], uploads[1:]
-        if source_name is None or any(m is None for m in mask_names):
+        uploaded = await _upload_inpaint_inputs(source, branches, lease)
+        if uploaded is None:
             return results
-        masks = {b.name: str(m) for b, m in zip(branches, mask_names, strict=True)}
+        source_name, masks = uploaded
         pending = list(branches)
         candidates: dict[str, list[bytes]] = {}
         for attempt in range(retries + 1):
-            escalated = [
-                replace(b, denoise=min(1.0, b.denoise + attempt * retry_denoise_step)) for b in pending
-            ]
             graph, save_ids = _inpaint_graph(
-                source_name, escalated, masks, seed + attempt, sfw, negative_extra, inpaint_sampling,
+                source_name, _escalate_denoise(pending, attempt, retry_denoise_step), masks,
+                seed + attempt, sfw, negative_extra, inpaint_sampling,
             )
             outputs = await _run_graph(graph, lease)
-            rejected: list[InpaintBranch] = []
-            for branch in pending:
-                png = outputs.get(save_ids[branch.name])
-                if png is None:
-                    continue  # lost, not rejected: no point re-running it
-                if accept is not None and not accept(branch.name, png):
-                    rejected.append(branch)
-                    candidates.setdefault(branch.name, []).append(png)
-                    continue
-                results[branch.name] = png
-                if on_image is not None:
-                    await on_image(branch.name, png)
+            rejected = await _triage_renders(
+                pending, outputs, save_ids,
+                accept=accept, candidates=candidates, results=results, on_image=on_image,
+            )
             if not rejected:
                 break
             pending = rejected
             if attempt < retries:
                 logger.info("Re-running rejected inpaint branches: %s", [b.name for b in rejected])
         else:
-            # Retries exhausted: the caller may still take its best rejected render.
-            for branch in pending:
-                chosen = fallback(branch.name, candidates[branch.name]) if fallback else None
-                if chosen is None:
-                    continue
-                logger.info("Accepting the best rejected render for %s", branch.name)
-                results[branch.name] = chosen
-                if on_image is not None:
-                    await on_image(branch.name, chosen)
+            await _accept_fallbacks(pending, candidates, fallback, results, on_image)
         return results
     finally:
         # The graph's history is already complete, so a short settle suffices.
