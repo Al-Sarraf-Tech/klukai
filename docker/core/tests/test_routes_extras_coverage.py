@@ -11,6 +11,7 @@ with _find_route, and patch the OWNING module (app.routes_extras.*).
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -596,30 +597,14 @@ class TestSTTProxy:
 
         resp = MagicMock()
         resp.status_code = 500
-        resp.json = MagicMock(return_value={"error": "whisper crashed"})
+        resp.json = MagicMock(side_effect=ValueError("not json"))
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.routes_extras.httpx.AsyncClient", self._client_returning(resp)):
             out = await handler(STTRequest(audio="abc"), _mk_request())
 
         assert out.status_code == 502
         assert _json.loads(out.body) == {"error": "Voice service unavailable"}
-
-    @pytest.mark.asyncio
-    async def test_error_body_is_502_transcription_failed(self):
-        import json as _json
-        app = _app_with_routes()
-        handler = _find_route(app, "/api/stt", "POST")
-        from app.routes import STTRequest
-
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json = MagicMock(return_value={"error": "no speech detected"})
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.httpx.AsyncClient", self._client_returning(resp)):
-            out = await handler(STTRequest(audio="abc"), _mk_request())
-
-        assert out.status_code == 502
-        assert _json.loads(out.body) == {"error": "Transcription failed"}
+        resp.json.assert_not_called()  # a failure is not a body to relay
 
     @pytest.mark.asyncio
     async def test_stt_url_honours_trailing_slash_in_voice_url(self):
@@ -640,6 +625,42 @@ class TestSTTProxy:
 
         assert result == {"text": "ok"}
         assert client.posted_url == "http://voice.local:8301/stt"
+
+    @pytest.mark.parametrize(
+        "upstream_json",
+        [
+            # The voice service reports its own failures as 200 + "error".
+            {"text": "", "error": "Whisper not loaded"},
+            # Not even an object: nothing the PWA could read "text" from.
+            ["unexpected"],
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_upstream_200_without_transcript_becomes_502(self, upstream_json):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/stt", "POST")
+        from app.routes import STTRequest
+
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.json = MagicMock(return_value=upstream_json)
+
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.httpx.AsyncClient", self._client_returning(ok_resp)):
+            resp = await handler(STTRequest(audio="abc"), _mk_request())
+
+        assert resp.status_code == 502
+        assert json.loads(resp.body) == {"error": "Transcription failed"}
+
+    def test_request_model_caps_audio_size(self):
+        from pydantic import ValidationError
+        from app.routes import STTRequest
+
+        assert len(STTRequest(audio="a" * 8_000_000).audio) == 8_000_000
+        with pytest.raises(ValidationError):
+            STTRequest(audio="a" * 8_000_001)
+        with pytest.raises(ValidationError):
+            STTRequest(audio="")
 
     @pytest.mark.asyncio
     async def test_returns_503_when_voice_unavailable(self):

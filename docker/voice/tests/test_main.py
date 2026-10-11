@@ -231,6 +231,52 @@ def test_tts_is_loaded_only_on_request(monkeypatch, tmp_path):
     assert voice._last_tts_use > 0
 
 
+def test_transcribe_sync_joins_segments_and_drains_generator():
+    consumed = []
+
+    def segments():
+        for text in (" Hello", "there,", "Commander. "):
+            consumed.append(text)
+            yield SimpleNamespace(text=text)
+        consumed.append("<exhausted>")
+
+    seen = {}
+    info = SimpleNamespace(language="en", duration=1.5)
+
+    def transcribe(path, beam_size):
+        seen["path"], seen["beam_size"] = path, beam_size
+        return segments(), info
+
+    text, got_info = voice._transcribe_sync(SimpleNamespace(transcribe=transcribe), "/tmp/clip.webm")
+
+    assert text == "Hello there, Commander."
+    assert got_info is info
+    assert seen == {"path": "/tmp/clip.webm", "beam_size": 5}
+    # The decode happens during iteration, so the worker must run it to the end.
+    assert consumed[-1] == "<exhausted>"
+
+
+@pytest.mark.parametrize(
+    "audio",
+    ["", "a" * (voice.MAX_STT_AUDIO_B64 + 1)],
+    ids=["empty", "oversized"],
+)
+def test_stt_rejects_bad_audio_size_without_loading_whisper(monkeypatch, audio):
+    loads = []
+    monkeypatch.setattr(voice, "_load_whisper", lambda: loads.append(True))
+    monkeypatch.setattr(voice, "VOICE_API_TOKEN", "test-voice-token")
+
+    with TestClient(voice.app) as client:
+        response = client.post(
+            "/stt",
+            json={"audio": audio},
+            headers={"Authorization": "Bearer test-voice-token"},
+        )
+
+    assert response.status_code == 422
+    assert loads == []
+
+
 def test_whisper_prefers_pinned_local_snapshot(monkeypatch, tmp_path):
     snapshot = tmp_path / "whisper-base-en"
     snapshot.mkdir()
@@ -458,19 +504,6 @@ def test_stt_decodes_in_the_worker_thread_and_cleans_its_temp_file(monkeypatch):
     assert len(model.paths) == 1
     assert not Path(model.paths[0]).exists()
     assert voice._last_whisper_use > 0
-
-
-def test_stt_rejects_oversized_audio_before_decoding(monkeypatch):
-    model = _FakeWhisper()
-    headers = _stt_ready(monkeypatch, model)
-
-    with TestClient(voice.app) as client:
-        response = client.post(
-            "/stt", json={"audio": "A" * 8_000_001}, headers=headers
-        )
-
-    assert response.status_code == 422
-    assert model.paths == []
 
 
 def test_stt_decode_failure_reports_error_and_removes_temp_file(monkeypatch):

@@ -200,7 +200,10 @@ def register_extras(app: FastAPI) -> None:
                 body = r.json()
         except Exception:
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
-        if isinstance(body, dict) and "error" in body:
+        if not isinstance(body, dict):
+            logger.warning("STT upstream returned a non-object body")
+            return JSONResponse({"error": "Transcription failed"}, status_code=502)
+        if "error" in body:
             logger.warning("STT upstream error: %s", str(body["error"])[:200])
             return JSONResponse({"error": "Transcription failed"}, status_code=502)
         return body
