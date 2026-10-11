@@ -131,6 +131,33 @@ Handoff: `docs/handoff/2026-10-11-standby-hardening.md`.
   milestone timestamps render in local time; the Her POV poller counts
   transport errors, never overlaps, and explains a 429; gauge tier ticks
   line up with the bar; back/close/Disconnect carry accessibility labels.
+- **fourth wave (utility scripts and the memory seeder)** —
+  `seed_memories.py` never honoured `last_seeded_at` (the JSONB value came
+  back already decoded and `json.loads` raised), so every nightly run
+  re-selected from the start of history; its dedup compared the image
+  prompt against exchange text the prompt never contains; an empty
+  annotation became a placeholder caption that still rendered; and the
+  unit's `TimeoutStartSec` only killed the compose client while the seeder
+  kept running inside the container. The watermark decodes both stored
+  forms, each seed memory carries `conversation_id = "seed:<exchange
+  created_at>"` and dedup is an exact fingerprint per user, an unusable
+  annotation fails closed (no render, watermark untouched), and
+  `SEED_DEADLINE_SECONDS=6000` plus `timeout -k 60 6600` bound the run
+  inside the container (ADR-0012). `reannotate_existing.py` overwrote
+  annotations in place and guessed the source exchange by position; it is
+  dry-run by default (`--rewrite` to write), exact-fingerprint only, scoped
+  by `--user`, and the UPDATE pushes the old text onto a new
+  `annotation_history` column (migration 200) in the same statement.
+  `scripts/canon_probe.py` used the Commander's own token (now a minted and
+  revoked session for `KLUKAI_PROBE_USER`, refusing `jalsarraf` without
+  `--i-know-what-im-doing`); `scripts/regen_images.py` wrote archive PNGs
+  where the app serves WebP + thumbnail and keyed "missing" on the wrong
+  file; `tools/load-test/probe.py` counted a 401 on `/api/health/subsystems`
+  as a success sample and dropped timeouts from the percentiles (any
+  `>= 400` is an error, a timeout samples at 10 s, `/api/health/live`
+  replaces the auth-gated path, and the 401 row is removed from
+  `docs/perf-baseline.json` so the gate compares `/health` until the
+  baseline is re-captured).
 
 ### Changed — file-size hygiene (2026-10-11)
 
@@ -152,6 +179,33 @@ Handoff: `docs/handoff/2026-10-11-standby-hardening.md`.
   `image_gen_prompts.py` (277) and the ComfyUI client to `image_gen_comfy.py`
   (486), all 52 definitions byte-identical; `memory_her_pov.py` 811→486 LOC
   with the job rail in `memory_her_pov_jobs.py` (376). Public re-exports kept.
+- The rest of the 500-line gate, same method (pure moves, byte-identical
+  definitions, re-exports where callers or tests look a name up, the only
+  test edits being patch strings that follow a moved lookup):
+  `wardrobe.py` 822→494 (`wardrobe_catalog.py` 355), `op_brief.py` 805→472
+  (`op_brief_plan.py` 380), `proactive/events.py` 779→387
+  (`proactive/events_rituals.py`, `RitualsMixin`, 422), `chat_handlers.py`
+  816→468 (`chat_prompt.py` 394), `routes_extras3.py` →471
+  (`routes_internal.py` 87), `memory.py` →392 (`memory_facts.py`,
+  `MemoryFactsMixin`, 156), `decisions.py` →424 (`decisions_parse.py` 114),
+  `background.py` 636→440 (`background_jobs.py` 228), `helpers.py` 601→246
+  (`helpers_intent.py` 396), `portrait.py` 671→383 (`portrait_render.py`
+  341), `proactive/mission.py` 542→377 (`proactive/mission_timer.py` 191),
+  `routes.py` 541→374 (`routes_health.py` 192; registered from
+  `register_routes` at the same spot, so route order and `main.py` are
+  unchanged). No file under `docker/core/app/` is over 500 lines; the
+  s-tier size gate passes.
+
+### Security — dependency advisories (2026-10-11)
+
+- `docker/core/requirements.txt`: anyio 4.13.0→4.14.2 (PYSEC-2026-4024/-4025),
+  multidict 6.7.1→6.9.1 (CVE-2026-104874), urllib3 2.7.0→2.8.0
+  (PYSEC-2026-4175/-4176/-4177); hashes regenerated from PyPI. `pip-audit`
+  is clean. The two remaining `bandit -ll` findings (`promises.py`, a module
+  constant clause interpolated into otherwise parameterised SQL) carry the
+  repo's `# nosec B608` annotation with the reason, as `audit.py` and
+  `memory_archive_query.py` already do. The s-tier audit scores 65/67 here;
+  the two left need the live hosts (secret rotation, DR drill evidence).
 
 ### Added — S+ Phase 2/3/4 uplift batch (2026-05-17)
 

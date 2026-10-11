@@ -45,6 +45,13 @@ she misbehaved quietly.
 | `f51fa54` | Her POV stuck jobs, `parse_json`, archive fail-closed, orphan files, MCP re-init, lease budget, Stripe rotation, voice-service STT off the event loop | core suite, `make test-voice` (30) |
 | `fd757ed` | Flutter PWA: 401 → login, images, frozen bubbles, resume, lock reason, voice timeouts | `flutter analyze`, `flutter test` (229 VM, 286 Chrome) |
 | `04218ed` | core chat path: in-band standby, nothing recorded or mined from a non-answer, voice path, goodbye false positives, recap on local day | core suite 4616, coverage 97.2%, ruff, mypy |
+| `70c653e` | proactive: auto-started missions stand down at 180 min, a mission older than 12 h is not restored on reconnect | core suite, `tests/test_mission_ceiling.py` |
+| `fa94b0c` | routes/plumbing: private voice letters, bounded health probe, rate-limit TTL re-arm and 409 refund, avatar gzip off-loop, non-ASCII signatures → 403 | core suite |
+| `0f8c82a` | Her Day: fee month and birthday scene shielded, "I like it when you wear" is not an order, "Plan B fell through" is not a decision, 05:00 day boundary, Feb-29 birthday | core suite |
+| `20c5045`, `ab08e06` | ops: DR pre-restore dump + `DR_COMPONENTS`, pg_dump trailer everywhere, offsite images preflight, `restore-from-backup.sh` TCP probe, `audit-memories.sh` arithmetic, `deploy-web.sh` single rsync | `make test-ops test-shell` (36), shellcheck |
+| `aee1dd7` | Flutter: `pretext_bridge.js` stray `};`, every screen returns to login on 401, archive pagination, local timestamps, Her POV poller, a11y labels | `flutter analyze`, `flutter test` (248 VM, 326 Chrome) |
+| `1d7fdb1` … `61db329` | decompositions and module splits for the 500-line gate (see Refactors below) | core suite 4718, coverage 97.97%, ruff, mypy, radon |
+| `6053af6` | utility scripts: seeder watermark/dedup/deadline, reannotate append-only, canon probe identity, regen served files, honest perf probe | core suite, `ops/amarillo/tests`, ruff |
 
 Full detail per change is in `CHANGELOG.md` under "Fixed — standby hardening".
 
@@ -75,13 +82,28 @@ bubble never ran in production; fixing it turns that path on for the first
 time, with the bubble now falling back to plain text on any bridge failure.
 Watch her replies after the next PWA deploy.
 
-Module splits for the repo's 500-line gate: `proactive/engine.py`
+A fourth wave read the utility scripts nobody tests in CI: the nightly
+memory seeder, `reannotate_existing.py`, the canon and perf probes and
+`regen_images.py`. The seeder is the one that matters for her memories: it
+never honoured its watermark, so every 04:00 run re-selected from the start
+of history, and its dedup could not match, so only the 20-per-run cap kept
+the journal from filling with repeats. Both are fixed; see the "fourth wave"
+bullet in the changelog and the deploy notes below (one migration, one
+systemd unit, one baseline to re-capture).
+
+Module splits for the repo's 500-line gate, all pure moves with
+byte-identical definitions and re-exports kept: `proactive/engine.py`
 (`schedule.py`), `image_gen.py` (`image_gen_prompts.py`,
-`image_gen_comfy.py`), `memory_her_pov.py` (`memory_her_pov_jobs.py`). All
-pure moves, byte-identical definitions, re-exports kept. Still over 500 and
-untouched: `op_brief.py`, `proactive/events.py`, `wardrobe.py`,
-`chat_handlers.py`, `helpers.py`, `background.py`, `routes.py`, `memory.py`,
-`routes_extras3.py`, `decisions.py`, `portrait.py`.
+`image_gen_comfy.py`), `memory_her_pov.py` (`memory_her_pov_jobs.py`),
+`wardrobe.py` (`wardrobe_catalog.py`), `op_brief.py` (`op_brief_plan.py`),
+`proactive/events.py` (`events_rituals.py`, `RitualsMixin`),
+`chat_handlers.py` (`chat_prompt.py`), `routes_extras3.py`
+(`routes_internal.py`), `memory.py` (`memory_facts.py`, `MemoryFactsMixin`),
+`decisions.py` (`decisions_parse.py`), `background.py` (`background_jobs.py`),
+`helpers.py` (`helpers_intent.py`), `portrait.py` (`portrait_render.py`),
+`proactive/mission.py` (`mission_timer.py`), `routes.py` (`routes_health.py`).
+No file under `docker/core/app/` is over 500 lines. `scripts/s-tier-audit.sh`
+scores 65/67 on this tree. The remaining failures need the live hosts, not the code: `secret rotated <90d` (process); `DR drill result <30d` (reliability). `bandit -ll` and `pip-audit` pass once those tools are installed (three dependency pins were bumped for the latter: anyio 4.14.2, multidict 6.9.1, urllib3 2.8.0, hashes regenerated from PyPI).
 
 ### Refactors (behaviour-preserving)
 
@@ -127,6 +149,18 @@ untouched: `op_brief.py`, `proactive/events.py`, `wardrobe.py`,
   `reflect_helpers._maybe_reflect_on_return` (22 → 10; load context,
   classify, compose, generate, save dream, deliver). `radon cc -n D app/`
   now prints nothing; the average is A (4.3).
+- Twelve more module splits closed the 500-line gate (sizes in the
+  changelog). The seam was chosen by the patch surface each time: the
+  layer nobody patches moves, the layer the tests and callers look names
+  up in stays, so a `patch("app.<module>.<name>")` keeps taking effect
+  where the code reads the name. Where a moved function looks a name up
+  in its new module, the test's patch string follows it (two in
+  `test_portrait.py`, three for the mission timer, seven plus three
+  source-text invariants for the health routes). `routes_health.py` is
+  registered from inside `register_routes` at the spot the block
+  occupied, so route order and `main.py` are unchanged. The mypy override
+  for the redis `ping()` stub quirk now names `app.routes_health`, where
+  that call lives.
 
 ## Decisions made here that you may want to revisit
 
@@ -162,13 +196,30 @@ untouched: `op_brief.py`, `proactive/events.py`, `wardrobe.py`,
    Amarillo's nginx stream proxies (`gateway/nginx.conf:50-67`). Auth lives in
    the aichat compose outside this repo; dropping the ZeroTier binds is a
    network-policy call. Flagged, not changed.
+7. **`reannotate_existing.py` is dry-run by default and keeps history.**
+   `--rewrite` is required to write; the old annotation is appended to
+   `annotation_history` in the same UPDATE, scoped to `--user`, and a
+   memory without a `seed:<created_at>` fingerprint (every row seeded
+   before this branch) is skipped rather than matched by position. If you
+   want those legacy rows re-annotated, that needs a deliberate mapping,
+   not a guess. The Dockerfile copies only `seed_memories.py` into the
+   image, so the documented `docker exec companion-core python3
+   /app/reannotate_existing.py` needs a `COPY` line or a `docker cp` first;
+   left as is.
+8. **`docs/perf-baseline.json` lost its `/api/health/subsystems` row.** It
+   was the latency of a 401, not a measurement. The CI and nightly perf
+   gates keep comparing `/health` against the June baseline; re-capture
+   with `make perf-baseline` on an idle host to baseline
+   `/api/health/live` too.
 
 ## Deploying
 
 - **companion-core (amarillo):** `docker compose build companion-core &&
   docker compose up -d companion-core`. The events bridge changed too
   (`JOB_RUN_TIMEOUT` 600→900): `docker compose up -d --build events-bridge`.
-  No migration. Do not restart core just because Dominus is off.
+  Migration `200_memory_annotation_history.sql` (`ADD COLUMN IF NOT
+  EXISTS`, no data touched) is applied by `main.py` on startup like the
+  others. Do not restart core just because Dominus is off.
 - **PWA:** `scripts/deploy-web.sh` (needs Flutter on amarillo). It rebuilds
   from `flutter_app/` and rewrites `web-build/`; the hand-mirrored
   `web-build/js/audio_recorder.js` is already updated in git and the build
@@ -186,6 +237,13 @@ untouched: `op_brief.py`, `proactive/events.py`, `wardrobe.py`,
   only, as before — do not restart Docker to prove it.
 - **Voice service (`companion-voice` on Dominus):** same promotion path. The
   change is STT-only (decode off the event loop, 8 MB cap, temp-file cleanup).
+- **Memory seeder unit (amarillo, user systemd):** install the updated
+  `ops/amarillo/systemd/klukai-memory-archive-seed.service` and run
+  `systemctl --user daemon-reload` and the `systemd-analyze --user verify`
+  line from `ops/amarillo/README.md`. The timer is unchanged. The next
+  04:00 run gets `SEED_DEADLINE_SECONDS=6000` and `timeout -k 60 6600`.
+- **Perf baseline:** `make perf-baseline` on an idle host when convenient
+  (decision 8). Nothing breaks until then.
 
 ## What to check after deploying
 
@@ -211,11 +269,20 @@ untouched: `op_brief.py`, `proactive/events.py`, `wardrobe.py`,
    after 22:45, no dream push after a "goodnight".
 7. `scripts/s-tier-audit.sh --json > docs/s-tier-audit-last.json` once on a
    known-good tree, then `--diff` on later runs.
+8. After the next 04:00 seeder run: the unit log shows
+   `Deadline: SEED_DEADLINE_SECONDS=6000`, `last_seeded_at` has advanced,
+   the new rows carry `conversation_id LIKE 'seed:%'`, and no new journal
+   entry reads "A moment between us." The run after that must select only
+   exchanges newer than the watermark (the log prints the range).
+9. `docker exec companion-core python3 /app/reannotate_existing.py --user
+   jalsarraf` (after decision 7's `COPY`/`docker cp`) prints what it would
+   change and writes nothing; `annotation_history` stays `[]` until
+   `--rewrite`.
 
 ## Test commands used here
 
 ```bash
-make test-local            # docker/core: 4616 passed, coverage 97.2%
+make test-local            # docker/core: 4718 passed, coverage 97.97%
 make lint-local type-check # ruff, mypy clean
 make test-tgbot test-ops test-voice test-js test-shell
 cd flutter_app && flutter analyze && flutter test
