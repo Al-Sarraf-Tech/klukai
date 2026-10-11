@@ -28,6 +28,7 @@ _SUNDAY_3PM = datetime(2026, 5, 17, 15, 0, 0)
 _NOW_LOCAL_TARGETS = (
     "app.proactive.engine.now_local",
     "app.proactive.events.now_local",
+    "app.proactive.events_rituals.now_local",  # quiet-day check was split out of events
     "app.proactive.patterns.now_local",
 )
 
@@ -276,8 +277,9 @@ class TestQuietDayIndependentOfSameDaySends:
     @pytest.mark.asyncio
     async def test_fires_despite_unanswered_earlier_proactive(self):
         e = self._engine()
+        # _quiet_day_check lives in events_rituals: patch the event bus where it looks it up.
         with self._patch_now(), \
-             patch("app.proactive.events.publish_event", new=AsyncMock()):
+             patch("app.proactive.events_rituals.publish_event", new=AsyncMock()):
             await e._quiet_day_check("alice")
         e._on_message_callback.assert_awaited_once()
         assert e._quiet_day_delivered_today is True

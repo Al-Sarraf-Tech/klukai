@@ -464,7 +464,8 @@ class TestAmbientEventsRespectTheHold:
     @pytest.mark.asyncio
     async def test_memory_recall_held(self):
         e = _held_engine()
-        with patch("app.proactive.events.now_local", return_value=_HELD), \
+        # Memory recall / spontaneous art live in events_rituals: patch the clock there.
+        with patch("app.proactive.events_rituals.now_local", return_value=_HELD), \
              patch("app.memory_archive.recall_memory", new=AsyncMock()) as recall:
             await e._memory_recall_event()
         recall.assert_not_awaited()
@@ -473,7 +474,7 @@ class TestAmbientEventsRespectTheHold:
     @pytest.mark.asyncio
     async def test_spontaneous_art_held(self):
         e = _held_engine()
-        with patch("app.proactive.events.now_local", return_value=_HELD), \
+        with patch("app.proactive.events_rituals.now_local", return_value=_HELD), \
              patch("app.image_gen.generate_image", new=AsyncMock()) as gen:
             await e._spontaneous_art_event()
         gen.assert_not_awaited()

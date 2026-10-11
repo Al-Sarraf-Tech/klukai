@@ -58,6 +58,7 @@ _NOON = datetime(2026, 5, 17, 14, 0, 0)
 _DATETIME_TARGETS = (
     "app.proactive.engine.now_local",
     "app.proactive.events.now_local",
+    "app.proactive.events_rituals.now_local",  # recall/art/recap/seasonal/quiet-day split out of events
     "app.proactive.mission.now_local",
     "app.proactive.milestones.now_local",
 )

@@ -69,6 +69,6 @@ class TestTimeOfDay:
         (17, "evening"), (20, "evening"), (21, "night"), (2, "night"),
     ])
     def test_buckets(self, hour, bucket):
-        from app.proactive.events import _time_of_day
+        from app.proactive.events_rituals import _time_of_day  # moved with spontaneous art
 
         assert _time_of_day(hour) == bucket

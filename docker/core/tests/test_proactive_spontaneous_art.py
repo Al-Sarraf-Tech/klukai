@@ -10,7 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.proactive import events as ev
+# Spontaneous art lives in events_rituals (split out of events); patches must land there.
+from app.proactive import events_rituals as ev
 from app.proactive.engine import ProactiveEngine
 
 

@@ -52,6 +52,7 @@ _AFTERNOON_SUNDAY = datetime(2026, 5, 17, 15, 0, 0)
 _DATETIME_TARGETS = (
     "app.proactive.engine.now_local",
     "app.proactive.events.now_local",
+    "app.proactive.events_rituals.now_local",  # recall/seasonal/quiet-day were split out of events
     "app.proactive.patterns.now_local",
 )
 
@@ -254,6 +255,7 @@ _SEASONAL_CFG = {
 
 
 class TestQuietDayAndSeasonalDispatchE2E:
+    # Both jobs live in events_rituals: the clock and event bus are patched there.
     @pytest.mark.asyncio
     async def test_quiet_day_pattern_delivers_checkin_through_callback(self):
         """A strong quiet-day pattern matching today's weekday flows all the way
@@ -262,7 +264,7 @@ class TestQuietDayAndSeasonalDispatchE2E:
         e = _ready_engine(affection=3)
         e._pattern_cache = _quiet_sunday_pattern_cache()
         with _patch_now(), \
-             patch("app.proactive.events.publish_event", new=AsyncMock()):
+             patch("app.proactive.events_rituals.publish_event", new=AsyncMock()):
             await e._quiet_day_check("jalsarraf")
 
         e._on_message_callback.assert_awaited_once()
@@ -291,7 +293,7 @@ class TestQuietDayAndSeasonalDispatchE2E:
 
         with _patch_now(), \
              patch("app.db.get_conn", return_value=db_ctx), \
-             patch("app.proactive.events.publish_event", new=AsyncMock()):
+             patch("app.proactive.events_rituals.publish_event", new=AsyncMock()):
             await e._quiet_day_check("jalsarraf")
 
         e._on_message_callback.assert_awaited_once()
@@ -303,9 +305,9 @@ class TestQuietDayAndSeasonalDispatchE2E:
         per-occurrence guard key is recorded."""
         e = _ready_engine(affection=5)
         christmas = datetime(2026, 12, 25, 9, 0, 0)
-        with patch("app.proactive.events.now_local") as mock_dt, \
+        with patch("app.proactive.events_rituals.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG), \
-             patch("app.proactive.events.publish_event", new=AsyncMock()):
+             patch("app.proactive.events_rituals.publish_event", new=AsyncMock()):
             mock_dt.return_value = christmas
             await e._seasonal_check()
 
@@ -317,7 +319,7 @@ class TestQuietDayAndSeasonalDispatchE2E:
     async def test_seasonal_no_dispatch_on_non_matching_date(self):
         """A non-holiday date must not dispatch anything."""
         e = _ready_engine(affection=5)
-        with patch("app.proactive.events.now_local") as mock_dt, \
+        with patch("app.proactive.events_rituals.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG):
             mock_dt.return_value = datetime(2026, 7, 4, 9, 0, 0)  # July 4
             await e._seasonal_check()

@@ -1,7 +1,7 @@
 """Shared typing surface for the ProactiveEngine mixins.
 
 The engine's behavior is split across cooperating mixins (mission, events,
-milestones, patterns, schedule) that all operate on the same instance state defined in
+rituals, milestones, patterns, schedule) that all operate on the same instance state defined in
 ``ProactiveEngine.__init__``. This module declares that shared state and the
 cross-mixin method signatures as *annotations only* so a static checker can
 resolve ``self.*`` references inside each mixin.

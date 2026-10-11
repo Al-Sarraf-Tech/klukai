@@ -22,6 +22,7 @@ _AFTERNOON = datetime(2026, 5, 17, 15, 0, 0)  # 2026-05-17 is a Sunday
 _DATETIME_TARGETS = (
     "app.proactive.engine.now_local",
     "app.proactive.events.now_local",
+    "app.proactive.events_rituals.now_local",  # quiet-day/seasonal were split out of events
     "app.proactive.patterns.now_local",
 )
 
@@ -239,8 +240,9 @@ class TestQuietDayCheck:
                 },
             })
         }
+        # _quiet_day_check lives in events_rituals: patch the event bus where it looks it up.
         with _patch_now(_AFTERNOON), \
-             patch("app.proactive.events.publish_event", new=AsyncMock()):
+             patch("app.proactive.events_rituals.publish_event", new=AsyncMock()):
             await e._quiet_day_check("alice")
         cb.assert_awaited_once()
         msg = cb.call_args.args[0]
@@ -366,15 +368,16 @@ _SEASONAL_CFG = {
 
 
 class TestSeasonalCheck:
+    # _seasonal_check lives in events_rituals: the clock and event bus are patched there.
     @pytest.mark.asyncio
     async def test_fires_on_matching_date(self):
         e = ProactiveEngine()
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 5
-        with patch("app.proactive.events.now_local") as mock_dt, \
+        with patch("app.proactive.events_rituals.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG), \
-             patch("app.proactive.events.publish_event", new=AsyncMock()):
+             patch("app.proactive.events_rituals.publish_event", new=AsyncMock()):
             mock_dt.return_value = datetime(2026, 12, 25, 9, 0, 0)
             await e._seasonal_check()
         cb.assert_awaited_once()
@@ -386,7 +389,7 @@ class TestSeasonalCheck:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 5
-        with patch("app.proactive.events.now_local") as mock_dt, \
+        with patch("app.proactive.events_rituals.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG):
             mock_dt.return_value = datetime(2026, 7, 4, 9, 0, 0)  # July 4
             await e._seasonal_check()
@@ -398,7 +401,7 @@ class TestSeasonalCheck:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 1  # below valentines min_affection=2
-        with patch("app.proactive.events.now_local") as mock_dt, \
+        with patch("app.proactive.events_rituals.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG):
             mock_dt.return_value = datetime(2026, 2, 14, 9, 0, 0)
             await e._seasonal_check()
@@ -410,9 +413,9 @@ class TestSeasonalCheck:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 5
-        with patch("app.proactive.events.now_local") as mock_dt, \
+        with patch("app.proactive.events_rituals.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG), \
-             patch("app.proactive.events.publish_event", new=AsyncMock()):
+             patch("app.proactive.events_rituals.publish_event", new=AsyncMock()):
             mock_dt.return_value = datetime(2026, 12, 25, 9, 0, 0)
             await e._seasonal_check()
             await e._seasonal_check()  # same day → guarded
@@ -427,7 +430,7 @@ class TestSeasonalCheck:
         e._on_message_callback = cb
         e._affection_level = 5
         e._muted_until = datetime(2099, 1, 1)
-        with patch("app.proactive.events.now_local") as mock_dt, \
+        with patch("app.proactive.events_rituals.now_local") as mock_dt, \
              patch("app.personality.load_personality", return_value=_SEASONAL_CFG):
             mock_dt.return_value = datetime(2026, 12, 25, 9, 0, 0)
             await e._seasonal_check()
@@ -439,7 +442,7 @@ class TestSeasonalCheck:
         cb = AsyncMock()
         e._on_message_callback = cb
         e._affection_level = 5
-        with patch("app.proactive.events.now_local") as mock_dt, \
+        with patch("app.proactive.events_rituals.now_local") as mock_dt, \
              patch("app.personality.load_personality", side_effect=RuntimeError("no cfg")):
             mock_dt.return_value = datetime(2026, 12, 25, 9, 0, 0)
             await e._seasonal_check()  # must not raise

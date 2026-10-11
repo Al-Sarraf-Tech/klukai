@@ -1,6 +1,7 @@
 """The ProactiveEngine — scheduler lifecycle and core delivery logic.
 
-Composes the mission, events, milestones, patterns and schedule mixins. Holds
+Composes the mission, events, rituals, milestones, patterns and schedule
+mixins. Holds
 the scheduler (the job table itself lives in ``schedule.py``), mute state,
 per-user counters, send guardrails, and the time-of-day check-ins.
 """
@@ -15,6 +16,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from ..events import publish as publish_event
 from .events import EventsMixin
+from .events_rituals import RitualsMixin
 from .milestones import MilestonesMixin
 from .mission import MissionMixin, MissionTimer
 from .patterns import PatternsMixin
@@ -83,7 +85,7 @@ def _tap_lines() -> dict[int, list[str]]:
 
 
 class ProactiveEngine(
-    MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin, ScheduleMixin
+    MissionMixin, EventsMixin, RitualsMixin, MilestonesMixin, PatternsMixin, ScheduleMixin
 ):
     """Manages scheduled and contextual proactive messages, themed to Klukai."""
 
