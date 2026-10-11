@@ -59,11 +59,29 @@ Full detail per change is in `CHANGELOG.md` under "Fixed — standby hardening".
   unchanged (the goodbye-hold check has a side effect and the game probe is
   the only await, so it stays last). Verified: full suite, coverage 97.2%,
   ruff, mypy, radon.
-- Not done, next on the list: `chat_handlers._handle_message` (radon F, 82)
-  and `background.background_extraction` (F, 70). Both now carry the standby
-  logic and would read better as a phase pipeline; the 97% coverage on those
-  files makes a pure decomposition safe. Keep every `patch("app.chat_handlers.X")`
-  target resolvable at the same path when you do it.
+- `chat_handlers._handle_message` radon F (82) → B (6). It now reads as the
+  phase pipeline it always was: `_handle_mission_commands` →
+  `_record_user_turn` → `_build_system_prompt` (which composes
+  `_recall_context`, `_her_day_for_turn`, `_presence_block`,
+  `_goodbye_block`, the dream/image hints, and appends the per-message
+  blocks in the original order) → `_build_messages` → `_agent_reply` or
+  `_stream_reply`/`_stream_tokens` → the no-answer check →
+  `_record_assistant_turn` → `_apply_memory_overrides` →
+  `_schedule_followups`. `_Reply` carries text/model/latency/stream_failed
+  between phases. Every `patch("app.chat_handlers.X")` target in the tests
+  still resolves at the same path, and the local imports that tests patch
+  through `app.helpers` stayed local.
+- `background.background_extraction` F (70) → B. Phases:
+  `_apply_memory_curation`, `_store_extracted_facts`,
+  `_store_gift_and_inside_joke`, `_store_promises`, `op_brief.on_turn`,
+  `_resolve_mood`, `_apply_mood` (captures `prev_mood` before
+  `set_last_mood`; `_maybe_auto_start_mission`), `_apply_affection`
+  (`_announce_level_change`), `_normalize_topics`, `_store_exchange`,
+  `_maybe_store_episode`. Order unchanged. `HIGH_INTENSITY_MOODS` is now a
+  module constant (a test greps the source for the gate line).
+- Remaining D-rated functions, if you want to keep going: `image_gen._inpaint_set_inner`
+  (26), `wardrobe.pick_daily_outfit` (27), `agent_loop.AgentLoop.run` (30),
+  `reflect_helpers._maybe_reflect_on_return` (22).
 
 ## Decisions made here that you may want to revisit
 

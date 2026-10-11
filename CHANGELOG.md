@@ -97,6 +97,10 @@ Handoff: `docs/handoff/2026-10-11-standby-hardening.md`.
   `proactive/schedule.py` (`ScheduleMixin`). `events._random_event` and
   `_dream_event` guard chains extracted to `_random_event_blocked` /
   `_dream_blocked` (radon D→C), order preserved. No behaviour change.
+- `chat_handlers._handle_message` (radon F 82 → B 6) and
+  `background.background_extraction` (F 70 → B) decomposed into named
+  phases in their original order; signatures, log lines, WS frames and the
+  tests' patch targets unchanged. No behaviour change.
 
 ### Added — S+ Phase 2/3/4 uplift batch (2026-05-17)
 
