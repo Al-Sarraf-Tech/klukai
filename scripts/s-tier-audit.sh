@@ -13,7 +13,8 @@
 #   scripts/s-tier-audit.sh                  # human report
 #   scripts/s-tier-audit.sh --json           # JSON report (CI-friendly)
 #   scripts/s-tier-audit.sh --only=testing   # one dimension only
-#   scripts/s-tier-audit.sh --diff           # diff vs last-known-green (docs/s-tier-audit-last.json)
+#   scripts/s-tier-audit.sh --diff           # also diff vs last-known-green (docs/s-tier-audit-last.json)
+#   scripts/s-tier-audit.sh --json > docs/s-tier-audit-last.json   # record a new last-known-green
 #
 # Dimensions audited (per TIER_RUBRIC.md):
 #   code, testing, security, reliability, observability, performance, documentation, process
@@ -210,7 +211,6 @@ TIER_OF_DIM() {
 
 DIMS=(code testing security reliability observability performance documentation process)
 FLOOR_TIER="S+"
-FLOOR_ORDER=("D" "C" "B" "A" "A+" "S" "S+")
 tier_rank() {
   case "$1" in
     D)  echo 0 ;; C)  echo 1 ;; B)  echo 2 ;; A)  echo 3 ;;
@@ -229,13 +229,13 @@ for d in "${DIMS[@]}"; do
   fi
 done
 
-if [[ "$MODE_JSON" -eq 1 ]]; then
+emit_json() {
   printf '{\n'
   printf '  "tier": "%s",\n' "$FLOOR_TIER"
   printf '  "pass": %d,\n' "$PASS_COUNT"
   printf '  "total": %d,\n' "$TOTAL"
   printf '  "dimensions": {\n'
-  i=0
+  local i=0 d sep k name_esc note_esc
   for d in "${DIMS[@]}"; do
     sep=","
     [[ $i -eq $((${#DIMS[@]} - 1)) ]] && sep=""
@@ -248,13 +248,58 @@ if [[ "$MODE_JSON" -eq 1 ]]; then
   for k in "${!RESULTS_NAME[@]}"; do
     sep=","
     [[ $k -eq $((${#RESULTS_NAME[@]} - 1)) ]] && sep=""
-    name_esc="${RESULTS_NAME[$k]//\"/\\\"}"
-    note_esc="${RESULTS_NOTE[$k]//\"/\\\"}"
-    note_esc="${note_esc//\\/\\\\}"
+    # Backslashes first, then quotes: the other order re-escapes the
+    # backslash that the quote escape just introduced.
+    name_esc="${RESULTS_NAME[$k]//\\/\\\\}"
+    name_esc="${name_esc//\"/\\\"}"
+    note_esc="${RESULTS_NOTE[$k]//\\/\\\\}"
+    note_esc="${note_esc//\"/\\\"}"
     printf '    {"dim": "%s", "name": "%s", "status": "%s", "note": "%s"}%s\n' \
       "${RESULTS_DIM[$k]}" "$name_esc" "${RESULTS_STATUS[$k]}" "$note_esc" "$sep"
   done
   printf '  ]\n}\n'
+}
+
+# --diff: compare this run with the recorded last-known-green report and
+# name every check and dimension that moved. A missing baseline is reported,
+# not treated as a regression.
+emit_diff() {
+  local baseline="docs/s-tier-audit-last.json" current
+  if [[ ! -r "$baseline" ]]; then
+    echo
+    echo "diff: no baseline at ${baseline} (record one with: $0 --json > ${baseline})"
+    return 0
+  fi
+  current="$(mktemp)"
+  emit_json > "$current"
+  "$PYTHON" - "$baseline" "$current" <<'PY'
+import json, sys
+base = json.load(open(sys.argv[1]))
+cur = json.load(open(sys.argv[2]))
+print()
+print(f"Diff vs last-known-green: tier {base.get('tier')} -> {cur.get('tier')}, "
+      f"score {base.get('pass')}/{base.get('total')} -> {cur.get('pass')}/{cur.get('total')}")
+for dim, now in cur.get("dimensions", {}).items():
+    then = base.get("dimensions", {}).get(dim, {})
+    if then.get("tier") != now.get("tier"):
+        print(f"  {dim:<15} {then.get('tier', '?'):>3} -> {now.get('tier'):>3}")
+status = lambda rep: {(c["dim"], c["name"]): c["status"] for c in rep.get("checks", [])}
+then, now = status(base), status(cur)
+regressed = sorted(k for k in now if now[k] != "✓" and then.get(k) == "✓")
+improved = sorted(k for k in now if now[k] == "✓" and k in then and then[k] != "✓")
+added = sorted(k for k in now if k not in then)
+removed = sorted(k for k in then if k not in now)
+for label, keys in (("REGRESSED", regressed), ("fixed", improved), ("new check", added), ("dropped check", removed)):
+    for dim, name in keys:
+        print(f"  {label:<13} [{dim}] {name}")
+if not (regressed or improved or added or removed):
+    print("  no check changed status")
+PY
+  rm -f "$current"
+}
+
+if [[ "$MODE_JSON" -eq 1 ]]; then
+  emit_json
 else
   echo
   echo "Klukai S+ Audit — $(date -Iseconds)"
@@ -277,5 +322,7 @@ else
   echo "Score: ${PASS_COUNT} / ${TOTAL}"
   echo "Floor tier: ${FLOOR_TIER}"
 fi
+
+[[ "$DIFF" -eq 1 ]] && emit_diff >&2
 
 [[ "$PASS_COUNT" -eq "$TOTAL" ]] || exit 1
