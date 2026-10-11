@@ -12,6 +12,92 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+### Fixed — standby hardening (2026-10-11)
+
+Dominus (the RTX 3090 host) being powered off is normal. This batch makes that
+a state she handles on every surface instead of a cascade of small failures.
+Handoff: `docs/handoff/2026-10-11-standby-hardening.md`.
+
+- **companion-core chat path** — a down gateway degrades in-band (sentinel +
+  `done`, model `offline`) instead of a traceback and "something glitched"
+  per turn; the unanswered user turn is taken back out of the live 16-turn
+  window (PostgreSQL keeps it); a sentinel or truncated partial is never
+  stored as her turn, replayed as context, or mined (extraction on it used
+  to reset her mood to `composed`, credit a streak and store the outage in
+  long-term memory). Gateway HTTP errors (503 game block, 400/500) no longer
+  mark the gateway down for 15 s. Compaction keeps a turn appended during
+  the LLM call. Auth rejection is `accept()` then `close(4001)` so the code
+  reaches the client. Each endpoint reads only its own socket.
+- **proactive rails** — mission ticks skip instead of pushing "...Static on
+  the line" every 15 min all night; the daily recap and mission debrief never
+  deliver the sentinel as her words; random lore events stop at 22:45 with a
+  quiet-hours guard, dreams honour the goodnight hold, the anniversary remark
+  goes through `_can_send()` at 08:00; `_idle_check` requires 90 min of
+  silence; affection day boundaries, quiet-day patterns and the recap use the
+  Commander's local day, not the container's UTC; `send_push` runs off the
+  event loop with a timeout and retires a subscription only on 404/410; an
+  Operation Brief slot landing in a goodbye hold is held, not dropped;
+  `_deliver` honours a callback that reached nobody.
+- **voice** — the sentinel never reaches XTTS (it spent a GPU lease to say it);
+  `/api/tts` never forwards the voice host's status (its 401 logged him out)
+  and bounds the leased call at 45 s; `/api/stt` returns 502 on upstream
+  failure instead of a 200 the PWA swallowed; STT failures send `error`
+  frames so clients clear "Listening..."; stage directions `(...)`/`*...*`
+  are not read aloud; TTS text clips at a sentence end; `VOICE_URL` with a
+  trailing slash no longer 404s STT. Voice service: faster-whisper decoding
+  ran on the event loop, freezing `/health` and `/tts` for the clip; STT
+  bodies capped at 8 MB; temp files unlinked on every path.
+- **memory / images** — a lost Her POV hand-off no longer locks the feature
+  (stale rows retired after 20 min; `events.publish` reports subscribers so
+  a missed hand-off runs inline; the worker refuses to re-claim a live job;
+  bridge timeout 600→900 s to match the real pipeline budget).
+  `llm_json.parse_json` handles an object followed by prose and depth-2
+  JSON; `extract_facts` tolerates a non-dict parse; `list_memories` fails
+  closed; `save_image` removes orphaned files on a failed INSERT; the MCP
+  client re-initializes a session that never came up; the image lease budget
+  is derived from TTL − acquire deadline − cleanup so finished renders are
+  not discarded; Stripe signature checks accept every `v1` during rotation.
+- **Flutter PWA** — 401 on history/affection returns to login (no more
+  LINK DOWN soft-lock); images render instead of the literal "[IMAGE]";
+  a mid-stream error or dropped link freezes the partial bubble and frees
+  the composer; `reconnectNow()` reports the link down so history refetches
+  after an iOS resume; resume redials only when the page was actually away
+  ≥25 s; empty `thinking` clears the spinner; `done.text` replaces the raw
+  stream; history timestamps render local; the first token owns the lock;
+  `inputLockReason` travels with the lock (no more `// STANDBY...` flicker);
+  STT/TTS calls time out and report in her register.
+- **companion stage** — her voice survives backgrounding with music off;
+  a double blink mid-word no longer stops blinking for the session; the
+  sentinel is shown, not spoken; voice-input replies are spoken once; the
+  3D renderer pauses behind the hidden portrait; a failed 3D init no longer
+  disables the button; `teardown()` no longer hits a TDZ error and leaks a
+  WebGL context; portrait refresh survives network errors, races and expired
+  signed frame URLs. Push-to-talk: `stop()` racing `start()` no longer leaves
+  the mic hot; 60 s safety cap; a recorder error settles the Dart await.
+- **dominus gateway** — the token-less tailnet bypass covers only `/v1/*` and
+  the catalog listings; model load/unload, the GPU lease and the ComfyUI
+  facade require the bearer from every source. `/v1/*` waits at most 120 s
+  for the coordination lock, then `503 inference_busy` with `Retry-After`;
+  `/health` reports `inference_busy`. Request bodies capped at 64 MiB with
+  `mem_limit`/`pids_limit` as the backstop; a non-ASCII bearer is a 401, not
+  a 500. The dockerd drop-in's `ExecStartPre` is `-`-prefixed so a missing
+  repair binary cannot stop `docker.service`.
+- **tgbot** — agent progress now reaches Telegram (stream-json text lives
+  under `message.content`); the final result is never throttled away;
+  `--verbose` for stream-json; stderr drained concurrently; one agent run at
+  a time; ops replies fall back to plain text when Telegram rejects the
+  Markdown; edited messages are ignored.
+- **tooling** — `scripts/s-tier-audit.sh --diff` implemented; Makefile
+  targets `test-tgbot`, `test-ops`, `test-voice`, `test-shell`, `test-all`.
+
+### Changed — file-size hygiene (2026-10-11)
+
+- `docker/core/app/proactive/engine.py` 679→472 LOC; the job table, the
+  scheduled-job adapters and the startup catch-up moved to
+  `proactive/schedule.py` (`ScheduleMixin`). `events._random_event` and
+  `_dream_event` guard chains extracted to `_random_event_blocked` /
+  `_dream_blocked` (radon D→C), order preserved. No behaviour change.
+
 ### Added — S+ Phase 2/3/4 uplift batch (2026-05-17)
 
 - **scripts/s-tier-audit.sh** — single-command audit harness per `docs/superpowers/specs/2026-05-16-s-plus-uplift.md` §5.8. Exit 0 = S+; exit 1 = floor. Walks all 8 tier dimensions. Score: 32→60 / 65. Floor: C → A+.
