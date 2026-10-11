@@ -101,6 +101,11 @@ Handoff: `docs/handoff/2026-10-11-standby-hardening.md`.
   `background.background_extraction` (F 70 → B) decomposed into named
   phases in their original order; signatures, log lines, WS frames and the
   tests' patch targets unchanged. No behaviour change.
+- `wardrobe.pick_daily_outfit` (D 27 → B 7), `image_gen._inpaint_set_inner`
+  (D 26 → B 10), `agent_loop.AgentLoop.run` (D 30 → B 9) and
+  `reflect_helpers._maybe_reflect_on_return` (D 22 → B 10) decomposed the
+  same way; outfit picks verified bit-identical on 40,000 randomized calls.
+  No function in `app/` is rated D or worse any more.
 
 ### Added — S+ Phase 2/3/4 uplift batch (2026-05-17)
 

@@ -79,9 +79,19 @@ Full detail per change is in `CHANGELOG.md` under "Fixed — standby hardening".
   (`_announce_level_change`), `_normalize_topics`, `_store_exchange`,
   `_maybe_store_episode`. Order unchanged. `HIGH_INTENSITY_MOODS` is now a
   module constant (a test greps the source for the gate line).
-- Remaining D-rated functions, if you want to keep going: `image_gen._inpaint_set_inner`
-  (26), `wardrobe.pick_daily_outfit` (27), `agent_loop.AgentLoop.run` (30),
-  `reflect_helpers._maybe_reflect_on_return` (22).
+- The last four D-rated functions are B: `wardrobe.pick_daily_outfit`
+  (27 → 7; weather lookup, wearability gates, situation score, preference
+  score — the running score is threaded so float additions keep their
+  order and every pick is bit-identical, checked on 40,000 randomized
+  calls), `image_gen._inpaint_set_inner` (26 → 10; base render, uploads,
+  denoise escalation, render triage, fallback acceptance, with the attempt
+  loop and the fail-closed `_free_comfyui_vram` finally kept in place),
+  `agent_loop.AgentLoop.run` (30 → 9; `_load_tools`, `_stream_fallback`,
+  `_message_parts`, `_run_tool_round`, `_execute_tool_call`,
+  `_dispatch_tool`, `_force_synthesis`), and
+  `reflect_helpers._maybe_reflect_on_return` (22 → 10; load context,
+  classify, compose, generate, save dream, deliver). `radon cc -n D app/`
+  now prints nothing; the average is A (4.3).
 
 ## Decisions made here that you may want to revisit
 
