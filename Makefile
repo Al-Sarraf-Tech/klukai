@@ -137,7 +137,7 @@ deploy: gateway
 	@echo "  2. Web change:     rsync web-build/ into the bind-mount (no rebuild)"
 	@echo "  3. GPU sidecar:    follow the guarded runbook; installation does not enable/start units without explicit GPU clearance"
 	@echo "     Canonical file: $(DOMINUS_AI_DIR)/compose.yaml"
-	@echo "     Published APIs: $(DOMINUS_TAILSCALE_IPV4):1234, :8301, :8390 (Tailnet only; ComfyUI uses :1234 facade; transcription disabled)"
+	@echo "     Published APIs: $(DOMINUS_TAILSCALE_IPV4):1234, :8301, :8390 (Tailnet only; ComfyUI uses :1234 facade; Whisper STT on :8301)"
 
 # ── Quality gates (mirror CI) ────────────────────────────────────────────────
 
