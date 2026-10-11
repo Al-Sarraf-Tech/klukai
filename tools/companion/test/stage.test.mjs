@@ -4,11 +4,13 @@ import { createPortrait, FALLBACK_PORTRAIT } from "../../../flutter_app/web/comp
 import { createAmbience, ambienceKind, particleCount } from "../../../flutter_app/web/companion/ambience.js";
 
 function fakeEl() {
-  const attrs = {}; const classes = new Set();
+  const attrs = {}; const classes = new Set(); const listeners = {};
   return {
     attrs, classes,
     getAttribute: (k) => attrs[k] ?? null, setAttribute: (k, v) => { attrs[k] = v; },
     classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)), contains: (c) => classes.has(c) },
+    addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); },
+    fire: (type) => { for (const fn of listeners[type] || []) fn({ type }); },
   };
 }
 function fakeRoot() {
@@ -92,6 +94,56 @@ test("double blinks close twice", () => {
   assert.ok(second);
   second.fn();
   assert.ok(els[".frame-blink"].classes.has("on"));
+  // The second half books the next blink.
+  assert.ok(c.timers.some((t) => t.ms >= 2400), "the next blink is scheduled");
+});
+
+test("a double blink that lands mid-word (or before the blink frame exists) still books the next blink", () => {
+  // Regression: the skip path returned without rescheduling when `double` was
+  // set, so one unlucky double blink while she spoke ended blinking for the session.
+  const { root, els } = fakeRoot();
+  const c = clock();
+  let i = 0; const seq = [0.1, 0.5]; // double=true, then the delay
+  const p = createPortrait(root, { ...c, rand: () => seq[i++ % 2] });
+  p.setFrames(FRAMES);
+  p.setActive(true);
+  p.setLevel(0.8); // she is mid-word
+  assert.equal(c.timers.length, 1);
+  c.runTimer(); // the double blink fires while she talks
+  assert.ok(!els[".frame-blink"].classes.has("on"), "no blink mid-word");
+  assert.ok(c.timers.some((t) => t.ms >= 2400), "a blink timer is still pending");
+  assert.equal(c.timers.some((t) => t.ms === 140), false, "no stray second half");
+
+  // Same when her blink frame hasn't been drawn yet.
+  const q = fakeRoot();
+  const c2 = clock();
+  let j = 0;
+  const p2 = createPortrait(q.root, { ...c2, rand: () => seq[j++ % 2] });
+  p2.setFrames({ base: "/f/base" });
+  p2.setActive(true);
+  c2.runTimer();
+  assert.ok(!q.els[".frame-blink"].classes.has("on"));
+  assert.ok(c2.timers.some((t) => t.ms >= 2400), "a blink timer is still pending");
+});
+
+test("a frame that fails to load (expired signed URL) is reported with its layer and url", () => {
+  const { root, els } = fakeRoot();
+  const errors = [];
+  const p = createPortrait(root, { ...clock(), onFrameError: (layer, url) => errors.push([layer, url]) });
+  p.setFrames(FRAMES);
+  p.setExpression("smile");
+  els[".frame-expr"].fire("error");
+  assert.deepEqual(errors, [["expr", "/f/smile"]]);
+  els[".frame-base"].fire("error");
+  els[".frame-talk"].fire("error");
+  assert.deepEqual(errors.slice(1), [["base", "/f/base"], ["talk", "/f/talk"]]);
+  // Fresh URLs from the app's refresh are picked up (src changes → the browser reloads).
+  p.setFrames({ ...FRAMES, smile: "/f/smile?sig=new" });
+  assert.equal(els[".frame-expr"].getAttribute("src"), "/f/smile?sig=new");
+  // Without the option nothing listens, and elements without addEventListener are fine.
+  const q = fakeRoot();
+  delete q.els[".frame-base"].addEventListener;
+  assert.doesNotThrow(() => createPortrait(q.root, clock()));
 });
 
 test("the mouth flaps with her voice and closes when she stops", () => {

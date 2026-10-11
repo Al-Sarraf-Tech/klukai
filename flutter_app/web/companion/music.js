@@ -179,8 +179,12 @@ export function createMusic({
     /** Page hidden (iOS background): suspend the context, resume on return. */
     async setHidden(hidden) {
       if (!ctx) return;
-      if (hidden) await ctx.suspend();
-      else if (playing) { await ctx.resume(); nextTime = ctx.currentTime + 0.1; }
+      if (hidden) { await ctx.suspend(); return; }
+      // The context is shared with her voice, so it must come back even when
+      // the score is off: a clip started on a suspended context never fires
+      // onended, her voice queue jams on it, and she is silent for the session.
+      await ctx.resume();
+      if (playing) nextTime = ctx.currentTime + 0.1; // re-anchor the scheduler
     },
     get context() { return ctx; },
   };

@@ -4,12 +4,17 @@
 // atlas whose pixels are smoothest inside the island: on the right atlas an
 // island covers one painted region; on a wrong one it straddles unrelated
 // islands and outlines, so the mean interior gradient is much higher.
-import sharp from 'sharp';
+//
+// `sharp` (a native module) is imported lazily inside gradientImage(): the pure
+// helpers below (uvIslands, rng) are unit-tested on checkouts that never ran
+// `npm ci` in tools/avatar, and a top-level import made the whole test file
+// fail to load there.
 
 const N = 1024;
 
 /** Gradient-magnitude image (max of |dx|,|dy| summed over RGB) at N×N. */
 export async function gradientImage(file) {
+  const { default: sharp } = await import('sharp');
   const { data } = await sharp(file).removeAlpha().resize(N, N, { fit: 'fill' }).raw().toBuffer({ resolveWithObject: true });
   const g = new Float32Array(N * N);
   for (let y = 1; y < N - 1; y++) {

@@ -63,5 +63,20 @@ test("ducking under her voice, and iOS background suspend/resume", async (t) => 
   m.stop();
   m.duck(true); // ignored when stopped
   assert.equal(master.gain.events.at(-1)[1], 0);
-  await m.setHidden(false); // stays suspended-safe when not playing
+  await m.setHidden(false); // safe when not playing
+});
+
+test("backgrounding with the music off still resumes the shared context on return", async (t) => {
+  // Her voice plays through the same AudioContext: if it stayed suspended, the
+  // next clip would never end and she'd be silent for the rest of the session.
+  const ctx = new FakeAudioContext();
+  const m = createMusic({ context: ctx });
+  t.after(() => m.stop());
+  await m.start();
+  m.stop();
+  assert.equal(m.playing, false);
+  await m.setHidden(true);
+  assert.equal(ctx.state, "suspended");
+  await m.setHidden(false);
+  assert.equal(ctx.state, "running");
 });

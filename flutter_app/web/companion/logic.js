@@ -117,12 +117,25 @@ export function mouthOpen(level, tMs) {
 // ── WebSocket frames → stage actions ────────────────────────────────────────
 
 /**
+ * The backend's reply when the GPU host is off (llm_router.FAILURE_SENTINEL).
+ * It is shown as text, never spoken: with the GPU down TTS is down too, and a
+ * synthesized "Communications disrupted" in her voice reads as her, not as the
+ * link.
+ */
+export function isFailureSentinel(text) {
+  return String(text || "").trimStart().startsWith("Communications disrupted");
+}
+
+/**
  * Reduce a server frame into the stage state. Returns {state, effects}; effects
  * are side-effect requests the app performs (speak, refetch, ...).
  */
 export function reduceFrame(state, frame) {
   const s = { ...state };
   const effects = [];
+  const say = (text) => {
+    if (text && text.trim() && !isFailureSentinel(text)) effects.push({ kind: "speak", text });
+  };
   switch (frame && frame.type) {
     case "token":
       if (!s.streaming) { s.streaming = true; s.line = ""; }
@@ -134,11 +147,13 @@ export function reduceFrame(state, frame) {
       s.streaming = false;
       s.thinking = false;
       s.line = text;
-      if (text && text.trim()) effects.push({ kind: "speak", text });
+      say(text);
       break;
     }
     case "thinking":
-      s.thinking = true;
+      // The server clears its thinking bubble with an empty frame
+      // ({"type":"thinking","content":""}); real status lines carry `text`.
+      s.thinking = ((frame.text ?? frame.content) ?? "") !== "";
       break;
     case "mood":
       if (frame.mood) s.mood = frame.mood;
@@ -147,13 +162,15 @@ export function reduceFrame(state, frame) {
       effects.push({ kind: "refresh-portrait" }, { kind: "refresh-day" });
       break;
     case "proactive":
+      s.thinking = false;
       if (frame.message) {
         s.line = frame.message;
-        effects.push({ kind: "speak", text: frame.message });
+        say(frame.message);
       }
       break;
     case "voice_audio":
-      if (frame.audio) effects.push({ kind: "play-audio", audio: frame.audio });
+      // The server's own TTS clip for PWA voice input. The stage already speaks
+      // every reply from its `done` text, so playing this too said it twice.
       break;
     case "error":
       s.thinking = false;

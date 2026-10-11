@@ -1,6 +1,7 @@
 // Her voice on the companion stage: fetches TTS for each line she says, plays
 // it through an analyser, and reports a live loudness level (mouth flaps,
 // the 3D talking layer, music ducking). Lines queue; nothing overlaps.
+// Each reply is spoken once, from its `done` text; see speak().
 
 import { speakable } from "./logic.js";
 
@@ -9,6 +10,25 @@ export function base64ToArrayBuffer(b64) {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes.buffer;
+}
+
+export const SPEAK_LIMIT = 500;
+const SENTENCE_ENDS = [". ", "! ", "? ", ".\n", "!\n", "?\n"];
+
+/**
+ * Keep a line under the TTS limit without cutting her off mid-word: clip at
+ * the last sentence boundary that fits, or hard-cut when the only boundary is
+ * so early (before limit/3) that it would drop most of what she said.
+ */
+export function clipForSpeech(text, limit = SPEAK_LIMIT) {
+  const s = String(text || "");
+  if (s.length <= limit) return s;
+  // limit + 1 so a sentence whose closing space sits exactly at `limit` counts.
+  const head = s.slice(0, limit + 1);
+  let cut = -1;
+  for (const end of SENTENCE_ENDS) cut = Math.max(cut, head.lastIndexOf(end));
+  if (cut >= limit / 3) return head.slice(0, cut + 1).trimEnd();
+  return s.slice(0, limit);
 }
 
 /** RMS loudness 0..1 from 8-bit time-domain samples (128 = silence). */
@@ -30,6 +50,7 @@ export function createVoice({
   let enabled = true;
   let busy = false;
   let current = null;
+  let release = null; // resolves the in-flight playBuffer() wait (stop() uses it)
   let tick = null;
   const analyser = context.createAnalyser();
   analyser.fftSize = 256;
@@ -56,12 +77,14 @@ export function createVoice({
       src.buffer = audio;
       src.connect(analyser);
       src.onended = resolve;
+      release = resolve;
       current = src;
       onSpeaking(true);
       meter(true);
       src.start();
     });
     current = null;
+    release = null;
   }
 
   async function drain() {
@@ -71,9 +94,7 @@ export function createVoice({
       while (queue.length && enabled) {
         const job = queue.shift();
         try {
-          const buf = job.audio
-            ? base64ToArrayBuffer(job.audio)
-            : base64ToArrayBuffer((await tts(job.text)).audio);
+          const buf = base64ToArrayBuffer((await tts(job.text)).audio);
           if (!enabled) break;
           await playBuffer(buf);
         } catch (e) {
@@ -93,24 +114,25 @@ export function createVoice({
       enabled = on;
       if (!on) this.stop();
     },
-    /** Queue a line of hers; stage directions are stripped first. */
+    /**
+     * Queue a line of hers; stage directions are stripped first. This is the
+     * stage's only voice channel: the server's `voice_audio` clips (its TTS
+     * for PWA voice input) are ignored here, or she would say every such
+     * reply twice.
+     */
     speak(text) {
       const line = speakable(text);
       if (!enabled || !line) return false;
-      queue.push({ text: line.slice(0, 500) });
-      drain();
-      return true;
-    },
-    /** A ready-made clip from the server (voice_audio frame). */
-    play(audioB64) {
-      if (!enabled || !audioB64) return false;
-      queue.push({ audio: audioB64 });
+      queue.push({ text: clipForSpeech(line) });
       drain();
       return true;
     },
     stop() {
       queue.length = 0;
       if (current) { try { current.stop(); } catch { /* already stopped */ } }
+      // A source started on a suspended context (page backgrounded) never
+      // fires onended; release the drain ourselves so `busy` can't stick.
+      if (release) { const r = release; release = null; r(); }
     },
     get pending() { return queue.length; },
   };

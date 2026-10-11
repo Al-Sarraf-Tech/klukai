@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createVoice, base64ToArrayBuffer, rmsLevel } from "../../../flutter_app/web/companion/voice.js";
+import { createVoice, base64ToArrayBuffer, rmsLevel, clipForSpeech, SPEAK_LIMIT } from "../../../flutter_app/web/companion/voice.js";
 import { FakeAudioContext } from "./fake-audio.mjs";
 
 test("base64 and loudness helpers", () => {
@@ -50,22 +50,72 @@ test("lines queue, play in order, meter loudness, and signal speaking", async ()
   assert.equal(h.voice.pending, 0);
 });
 
-test("server clips play directly; disabling stops and clears", async () => {
+test("her only voice channel is speak(); disabling stops and clears", async () => {
+  // The stage used to also play the server's `voice_audio` clips (its TTS for
+  // PWA voice input), so a reply to a spoken question was heard twice: once
+  // from speak() on `done` and once from the clip. Server clips are no longer
+  // a stage channel — there is no play() — and logic.js drops the frame.
   const h = harness();
-  assert.equal(h.voice.play(btoa("clip")), true);
-  assert.equal(h.voice.play(""), false);
-  await h.finish();
-  assert.equal(h.ctx.of("source").length, 1);
+  assert.equal(typeof h.voice.play, "undefined");
   h.voice.setEnabled(false);
   assert.equal(h.voice.enabled, false);
   assert.equal(h.voice.speak("Hello."), false);
-  assert.equal(h.voice.play(btoa("x")), false);
+  await h.finish();
+  assert.equal(h.ctx.of("source").length, 0);
   h.voice.setEnabled(true);
   h.voice.speak("One.");
   h.voice.speak("Two.");
   h.voice.stop();
   await h.finish();
   assert.ok(h.voice.pending === 0);
+});
+
+test("stop() releases a clip whose onended never fires (suspended context)", async () => {
+  // iOS: a source started while the AudioContext is suspended never ends, so
+  // the drain stayed `busy` forever and every later line was silently queued.
+  const h = harness();
+  h.voice.speak("First.");
+  for (let i = 0; i < 20 && !h.ctx.of("source").length; i++) await new Promise((r) => setTimeout(r, 0));
+  assert.equal(h.ctx.of("source").length, 1, "the first clip started");
+  h.voice.speak("Stuck behind the first.");
+  assert.equal(h.voice.pending, 1);
+  h.voice.stop(); // nobody fires onended on the first source
+  assert.equal(h.ctx.of("source")[0].stopped, true);
+  h.voice.speak("Second.");
+  await h.finish();
+  assert.equal(h.ctx.of("source").length, 2, "the queue moved on after stop()");
+  assert.equal(h.speaking.at(-1), false);
+  assert.equal(h.voice.pending, 0);
+});
+
+test("long lines clip at a sentence boundary, never mid-word", async () => {
+  const sentence = "She checks the perimeter again. "; // 32 chars
+  const long = sentence.repeat(20); // 640 chars
+  const clipped = clipForSpeech(long);
+  assert.ok(clipped.length <= SPEAK_LIMIT);
+  assert.ok(clipped.endsWith("again."), clipped.slice(-20));
+  assert.equal(clipped.length, 15 * sentence.length - 1, "15 whole sentences, trailing space trimmed");
+  // "? " and "! " and ".\n" count as boundaries too.
+  assert.ok(clipForSpeech(`${"x".repeat(300)}? ${"y".repeat(300)}`).endsWith("?"));
+  assert.ok(clipForSpeech(`${"x".repeat(300)}! ${"y".repeat(300)}`).endsWith("!"));
+  assert.ok(clipForSpeech(`${"x".repeat(300)}.\n${"y".repeat(300)}`).endsWith("."));
+  // A boundary whose space sits exactly at the limit still counts.
+  assert.equal(clipForSpeech(`${"a".repeat(499)}. ${"b".repeat(10)}`).length, 500);
+  // The only boundary is very early (< limit/3): hard cut keeps more of her words.
+  const early = `Yes. ${"w".repeat(700)}`;
+  assert.equal(clipForSpeech(early).length, SPEAK_LIMIT);
+  // No boundary at all: hard cut.
+  assert.equal(clipForSpeech("z".repeat(900)).length, SPEAK_LIMIT);
+  // Short lines pass through untouched.
+  assert.equal(clipForSpeech("Report."), "Report.");
+  assert.equal(clipForSpeech(null), "");
+  // speak() applies it: the TTS request carries the clipped text.
+  const seen = [];
+  const h = harness({ ttsImpl: async (t) => { seen.push(t); return { audio: btoa("a") }; } });
+  h.voice.speak(long);
+  await h.finish();
+  assert.equal(seen.length, 1);
+  assert.ok(seen[0].length <= SPEAK_LIMIT && seen[0].endsWith("again."));
 });
 
 test("a failed TTS call is reported and the queue moves on", async () => {
