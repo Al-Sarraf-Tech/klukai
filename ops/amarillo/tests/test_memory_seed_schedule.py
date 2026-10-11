@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import importlib.util
 from pathlib import Path
+import re
 import sys
 import unittest
 
@@ -40,11 +41,19 @@ class MemorySeedScheduleTests(unittest.TestCase):
             "ExecCondition=/home/jalsarraf/.local/bin/klukai-memory-seed-day-condition",
             service,
         )
+        # The soft deadline, the in-container hard timeout and the unit timeout
+        # must nest inside the 03:00-06:00 window of a 04:00 start, in that order.
         self.assertIn(
-            "ExecStart=/usr/bin/docker compose exec -T companion-core "
-            "python3 /app/seed_memories.py",
+            "ExecStart=/usr/bin/docker compose exec -T -e SEED_DEADLINE_SECONDS=6000 "
+            "companion-core timeout -k 60 6600 python3 /app/seed_memories.py",
             service,
         )
+        soft = int(re.search(r"SEED_DEADLINE_SECONDS=(\d+)", service).group(1))
+        kill_grace, hard = map(int, re.search(r"timeout -k (\d+) (\d+)", service).groups())
+        unit = int(re.search(r"^TimeoutStartSec=(\d+)", service, re.M).group(1))
+        self.assertLess(soft, hard)
+        self.assertLess(hard + kill_grace, unit)
+        self.assertLess(4 * 3600 + unit, 6 * 3600)
         self.assertIn("OnCalendar=*-*-* 04:00:00 America/Chicago", timer)
         self.assertIn("Persistent=false", timer)
         self.assertIn("RandomizedDelaySec=0", timer)

@@ -1,7 +1,7 @@
 # ADR-0012: Memory archive seeding cadence — every other local day, 03:00–06:00
 
 - **Date:** 2026-04 (formalized 2026-05-16)
-- **Updated:** 2026-08-01 (Amarillo timer reconstruction)
+- **Updated:** 2026-08-01 (Amarillo timer reconstruction); 2026-10-11 (in-container deadline)
 - **Status:** Accepted
 - **Authors:** jalsarraf
 
@@ -26,11 +26,17 @@ admits only even Unix-epoch local calendar days, yielding a deterministic
 every-other-day cadence, and rejects any execution outside 03:00–06:00.
 
 The timer has `Persistent=false`, so a machine that was down at 04:00 never
-catches up outside the approved window. The service has a 6,900-second timeout
-so a stuck 04:00 run ends before 06:00. It executes exactly:
+catches up outside the approved window. A 04:00 run is bounded inside the
+window three times over: the seeder stops itself after `SEED_DEADLINE_SECONDS`
+(6,000 s, 05:40) without advancing `last_seeded_at`; `timeout -k 60 6600`
+signals the seeder process inside the container at 05:50 (the unit's own
+`TimeoutStartSec` reaches only the `docker compose exec` client, so before this
+a stuck seeder survived it and kept the GPU past 06:00); and the service's
+6,900-second `TimeoutStartSec` remains the outer bound. It executes exactly:
 
 ```text
-docker compose exec -T companion-core python3 /app/seed_memories.py
+docker compose exec -T -e SEED_DEADLINE_SECONDS=6000 companion-core \
+  timeout -k 60 6600 python3 /app/seed_memories.py
 ```
 
 Model aliases remain application policy in `docker/core/seed_memories.py` and

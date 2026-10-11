@@ -27,7 +27,12 @@ instead of a vibe.
   budget is consumed in < 24h.
 - **Rolling window**: 30 days unless otherwise noted.
 - **Measurement source**: Prometheus scrape of `/api/metrics` (Phase 2
-  wires this in). Pre-Phase 2 the baseline comes from `tools/load-test/probe.py`.
+  wires this in). Pre-Phase 2 the baseline comes from `tools/load-test/probe.py`,
+  which is stricter than the availability definition above: it counts any
+  `>= 400` status as an error (an auth-gated path answering 401 is a probe
+  misconfiguration, not availability) and records a timed-out request at the
+  10 s timeout in its latency sample, and it probes only `/health` and
+  `/api/health/live`.
 
 ## Per-endpoint SLOs
 

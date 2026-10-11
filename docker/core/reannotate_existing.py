@@ -4,21 +4,30 @@
 Seed memories were originally annotated from image scene tags (e.g. "bed, couple,
 tender, night") rather than the actual exchange text. This script:
 
-  1. Loads all seed memories (conversation_id = 'seed') from companion_memories.
-  2. Loads conversation exchanges from companion_messages (user→assistant pairs).
-  3. For each seed memory, attempts to match it back to its original exchange using
-     the prompt field fingerprint that was stored during seeding.
+  1. Loads one user's seed memories (conversation_id LIKE 'seed%') from
+     companion_memories.
+  2. Loads that user's conversation exchanges from companion_messages
+     (user→assistant pairs).
+  3. Matches each memory to its exchange ONLY by the exact fingerprint
+     seed_memories.py stores in conversation_id ("seed:<exchange created_at>").
+     Legacy rows with the bare 'seed' id have no fingerprint and are skipped;
+     nothing is ever matched by text similarity.
   4. Re-annotates via dolphin-24b with the actual exchange text.
-  5. Only writes the new annotation if it scores higher than the existing one.
+  5. Proposes the new annotation only if it scores higher than the existing one.
 
-Idempotent — safe to run multiple times. Tracks progress via 'reannotated_at'
-timestamp in companion_relationship. Re-runs will skip already-improved memories
-unless you clear that marker.
+Default is a DRY RUN: it still spends the LLM calls, prints what would change,
+and writes nothing. Pass --rewrite to apply. A rewrite is NOT idempotent — it
+replaces the annotation — but it is never lossy: the previous text is appended to
+annotation_history ({"annotation": old, "replaced_at": iso}) in the same UPDATE.
+Progress ('reannotated_ids' in companion_relationship) is saved only with
+--rewrite, so a re-run skips memories already handled unless that marker is
+cleared.
 
 Run inside companion-core container:
-  docker exec companion-core python3 /app/reannotate_existing.py
+  docker exec companion-core python3 /app/reannotate_existing.py [--user U] [--rewrite]
 """
 
+import argparse
 import asyncio
 import json
 import logging
@@ -43,6 +52,8 @@ ANNOTATOR_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
 BATCH_SIZE = 10
 SLEEP_BETWEEN_CALLS = 3  # seconds
+
+SEED_FINGERPRINT_PREFIX = "seed:"
 
 # ── Annotation Prompt ────────────────────────────────────────────────────────
 
@@ -130,36 +141,18 @@ def annotation_quality_score(text: str) -> float:
 
 # ── Exchange Matching ────────────────────────────────────────────────────────
 
-def _match_exchange(prompt: str, exchanges: list[dict]) -> dict | None:
-    """Find the best-matching exchange for a seed memory's prompt field.
+def _match_exchange(conversation_id: str | None, exchanges: dict[str, dict]) -> dict | None:
+    """Return the exchange a seed memory was made from, by exact fingerprint only.
 
-    The seed script stored the full_prompt (ComfyUI image prompt) which is built
-    from scene tags. We can't recover the exact exchange from that, so we fall back
-    to fuzzy matching on keyword overlap between the prompt and exchange text.
+    ``exchanges`` is keyed by the same ``seed:<created_at>`` fingerprint that
+    seed_memories.py writes into conversation_id. A memory without that
+    fingerprint (legacy bare 'seed') never matches: there is no safe way to
+    recover its exchange, and guessing by text overlap wrote other exchanges'
+    words over her annotations in the past.
     """
-    if not prompt or not exchanges:
+    if not conversation_id or not conversation_id.startswith(SEED_FINGERPRINT_PREFIX):
         return None
-
-    prompt_lower = prompt.lower()
-    best_score = 0
-    best_match = None
-
-    for ex in exchanges:
-        combined = (ex["user"] + " " + ex["assistant"]).lower()
-        # Count how many words from the exchange appear in the image prompt
-        words = [w for w in combined.split() if len(w) > 4]
-        if not words:
-            continue
-        hits = sum(1 for w in words if w in prompt_lower)
-        score = hits / len(words)
-        if score > best_score:
-            best_score = score
-            best_match = ex
-
-    # Only use if there's at least some overlap (avoid completely wrong matches)
-    if best_score > 0.02:
-        return best_match
-    return None
+    return exchanges.get(conversation_id)
 
 
 # ── LLM Call ─────────────────────────────────────────────────────────────────
@@ -206,74 +199,141 @@ async def _get_reannotated_ids(conn) -> set[str]:
     return set()
 
 
-async def _save_reannotated_ids(conn, ids: set[str]) -> None:
-    """Persist the set of re-annotated memory IDs."""
+async def _save_reannotated_ids(conn, ids: set[str]) -> bool:
+    """Persist the set of re-annotated memory IDs. Returns False on failure.
+
+    A failed checkpoint is rolled back and reported, never raised: the
+    annotation UPDATEs already committed stay committed, and the worst case
+    is that a later run re-reads a few memories it has already handled.
+    """
     val = json.dumps(sorted(ids))
-    await conn.execute(
-        "INSERT INTO companion_relationship (key, value, updated_at) "
-        "VALUES ('reannotated_ids', %s, NOW()) "
-        "ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = NOW()",
-        (val, val),
-    )
-    await conn.execute(
-        "INSERT INTO companion_relationship (key, value, updated_at) "
-        "VALUES ('reannotated_at', %s, NOW()) "
-        "ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = NOW()",
-        (json.dumps(datetime.now(timezone.utc).isoformat()),
-         json.dumps(datetime.now(timezone.utc).isoformat())),
-    )
-    await conn.commit()
+    now_iso = json.dumps(datetime.now(timezone.utc).isoformat())
+    try:
+        await conn.execute(
+            "INSERT INTO companion_relationship (key, value, updated_at) "
+            "VALUES ('reannotated_ids', %s, NOW()) "
+            "ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = NOW()",
+            (val, val),
+        )
+        await conn.execute(
+            "INSERT INTO companion_relationship (key, value, updated_at) "
+            "VALUES ('reannotated_at', %s, NOW()) "
+            "ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = NOW()",
+            (now_iso, now_iso),
+        )
+        await conn.commit()
+        return True
+    except Exception as e:
+        logger.error("Progress checkpoint failed (%s); rolling back", type(e).__name__)
+        try:
+            await conn.rollback()
+        except Exception:
+            pass
+        return False
+
+
+# ── Write Path ───────────────────────────────────────────────────────────────
+
+async def _replace_annotation(
+    conn, mem_id: str, user_id: str, old_annotation: str, new_annotation: str
+) -> bool:
+    """Swap in the new annotation, keeping the old one in annotation_history.
+
+    One statement, one transaction: the history append and the replacement
+    either both land or neither does. Returns False (after rollback) on failure.
+    """
+    history_entry = json.dumps([{
+        "annotation": old_annotation,
+        "replaced_at": datetime.now(timezone.utc).isoformat(),
+    }])
+    try:
+        await conn.execute(
+            "UPDATE companion_memories "
+            "SET annotation = %s, annotation_history = annotation_history || %s::jsonb "
+            "WHERE id = %s AND user_id = %s",
+            (new_annotation, history_entry, mem_id, user_id),
+        )
+        await conn.commit()
+        return True
+    except Exception as e:
+        logger.error("    -> DB write failed (%s); rolling back", type(e).__name__)
+        try:
+            await conn.rollback()
+        except Exception:
+            pass
+        return False
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-async def main():
-    logger.info("=== Re-Annotation Script Starting ===")
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description="Re-annotate seed memories from their exchanges.")
+    ap.add_argument("--user", default="jalsarraf", help="user whose seed memories to process")
+    ap.add_argument(
+        "--rewrite",
+        action="store_true",
+        help="apply the improved annotations (default: dry run, print only)",
+    )
+    return ap.parse_args(argv)
+
+
+async def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    user_id = args.user
+    mode = "REWRITE" if args.rewrite else "DRY RUN"
+    logger.info("=== Re-Annotation Script Starting (user: %s, %s) ===", user_id, mode)
     logger.info("Model: %s", ANNOTATOR_MODEL)
+    if not args.rewrite:
+        logger.info("Dry run: nothing will be written. Pass --rewrite to apply.")
 
     if not DATABASE_URL:
         logger.error("DATABASE_URL not set — aborting")
-        sys.exit(1)
+        return 1
 
     conn = await psycopg.AsyncConnection.connect(DATABASE_URL)
 
-    # Load seed memories
+    # Load this user's seed memories. LIKE 'seed%' keeps legacy bare-'seed'
+    # rows in view so they can be counted as unmatchable, not silently dropped.
     rows = await (await conn.execute(
-        "SELECT id, prompt, annotation, category "
+        "SELECT id, annotation, category, conversation_id "
         "FROM companion_memories "
-        "WHERE conversation_id = 'seed' AND kept = true "
-        "ORDER BY created_at ASC"
+        "WHERE user_id = %s AND conversation_id LIKE 'seed%%' AND kept = true "
+        "ORDER BY created_at ASC",
+        (user_id,),
     )).fetchall()
 
     if not rows:
-        logger.info("No seed memories found — nothing to do")
+        logger.info("No seed memories found for %s — nothing to do", user_id)
         await conn.close()
-        return
+        return 0
 
     logger.info("Found %d seed memories", len(rows))
 
-    # Load all conversation exchanges (user→assistant pairs)
+    # Load this user's exchanges (user→assistant pairs), keyed by fingerprint.
     msg_rows = await (await conn.execute(
-        "SELECT role, content, created_at FROM companion_messages ORDER BY created_at ASC"
+        "SELECT role, content, created_at FROM companion_messages "
+        "WHERE user_id = %s ORDER BY created_at ASC",
+        (user_id,),
     )).fetchall()
 
-    exchanges: list[dict] = []
+    exchanges: dict[str, dict] = {}
     i = 0
     while i < len(msg_rows) - 1:
         if msg_rows[i][0] == "user" and msg_rows[i + 1][0] == "assistant":
             ts = msg_rows[i][2]
-            exchanges.append({
+            created_at = ts.isoformat() if ts else ""
+            exchanges[f"{SEED_FINGERPRINT_PREFIX}{created_at}"] = {
                 "user": msg_rows[i][1] or "",
                 "assistant": msg_rows[i + 1][1] or "",
-                "created_at": ts.isoformat() if ts else "",
-            })
+                "created_at": created_at,
+            }
             i += 2
         else:
             i += 1
 
     logger.info("Loaded %d conversation exchanges for matching", len(exchanges))
 
-    # Load already-processed IDs for idempotency
+    # Load already-processed IDs
     done_ids = await _get_reannotated_ids(conn)
     logger.info("Already re-annotated: %d memories (will skip)", len(done_ids))
 
@@ -284,11 +344,14 @@ async def main():
     if not pending:
         logger.info("All seed memories already re-annotated — nothing to do")
         await conn.close()
-        return
+        return 0
 
     updated = 0
+    would_update = 0
+    skipped_no_fingerprint = 0
     skipped_no_match = 0
     skipped_no_improvement = 0
+    write_failures = 0
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         # Process in batches of BATCH_SIZE
@@ -299,20 +362,27 @@ async def main():
 
             for mem_row in batch:
                 mem_id = str(mem_row[0])
-                prompt = mem_row[1] or ""
-                existing_annotation = mem_row[2] or ""
-                category = mem_row[3] or "Mission Records"
+                existing_annotation = mem_row[1] or ""
+                category = mem_row[2] or "Mission Records"
+                conversation_id = mem_row[3] or ""
 
                 existing_score = annotation_quality_score(existing_annotation)
                 logger.info("  Memory %s | score=%.2f | %s",
                             mem_id[:12], existing_score, existing_annotation[:60])
 
-                # Find matching exchange
-                exchange = _match_exchange(prompt, exchanges)
+                # Find the exchange by exact fingerprint only
+                if not conversation_id.startswith(SEED_FINGERPRINT_PREFIX):
+                    logger.info("    -> No exchange fingerprint (legacy %r) — skipping, "
+                                "cannot be matched safely", conversation_id)
+                    skipped_no_fingerprint += 1
+                    done_ids.add(mem_id)  # permanently unresolvable
+                    continue
+                exchange = _match_exchange(conversation_id, exchanges)
                 if not exchange:
-                    logger.info("    -> No exchange match found — skipping")
+                    logger.info("    -> No exchange with fingerprint %s for %s — skipping",
+                                conversation_id, user_id)
                     skipped_no_match += 1
-                    done_ids.add(mem_id)  # Mark so we don't retry this unresolvable one
+                    done_ids.add(mem_id)
                     continue
 
                 logger.info("    -> Matched exchange: %s", exchange["user"][:60])
@@ -344,33 +414,46 @@ async def main():
                     await asyncio.sleep(SLEEP_BETWEEN_CALLS)
                     continue
 
-                # Write the improved annotation
-                try:
-                    await conn.execute(
-                        "UPDATE companion_memories SET annotation = %s WHERE id = %s",
-                        (new_annotation, mem_id),
-                    )
-                    await conn.commit()
+                if not args.rewrite:
+                    would_update += 1
+                    logger.info("    -> DRY RUN would update %.2f -> %.2f\n"
+                                "       old: %s\n       new: %s",
+                                existing_score, new_score, existing_annotation, new_annotation)
+                    await asyncio.sleep(SLEEP_BETWEEN_CALLS)
+                    continue
+
+                # Write the improved annotation, preserving the old one
+                if await _replace_annotation(
+                    conn, mem_id, user_id, existing_annotation, new_annotation
+                ):
                     updated += 1
                     done_ids.add(mem_id)
                     logger.info("    -> UPDATED: %.2f -> %.2f", existing_score, new_score)
-                except Exception as e:
-                    logger.error("    -> DB write failed: %s", e)
+                else:
+                    write_failures += 1
 
                 await asyncio.sleep(SLEEP_BETWEEN_CALLS)
 
-            # Save progress after each batch (idempotency checkpoint)
-            await _save_reannotated_ids(conn, done_ids)
-            logger.info("Batch done. Progress saved (%d total marked done)", len(done_ids))
+            # Save progress after each batch (checkpoint) — only when writing
+            if args.rewrite:
+                if await _save_reannotated_ids(conn, done_ids):
+                    logger.info("Batch done. Progress saved (%d total marked done)", len(done_ids))
+                else:
+                    logger.warning("Batch done. Progress NOT saved (%d marked done in memory)",
+                                   len(done_ids))
 
     await conn.close()
 
-    logger.info("=== RE-ANNOTATION COMPLETE ===")
-    logger.info("  Updated:               %d", updated)
-    logger.info("  Skipped (no match):    %d", skipped_no_match)
-    logger.info("  Skipped (no improve):  %d", skipped_no_improvement)
-    logger.info("  Total processed:       %d", len(pending))
+    logger.info("=== RE-ANNOTATION COMPLETE (%s) ===", mode)
+    logger.info("  Updated:                 %d", updated)
+    logger.info("  Would update (dry run):  %d", would_update)
+    logger.info("  Skipped (no fingerprint):%d", skipped_no_fingerprint)
+    logger.info("  Skipped (no match):      %d", skipped_no_match)
+    logger.info("  Skipped (no improve):    %d", skipped_no_improvement)
+    logger.info("  Write failures:          %d", write_failures)
+    logger.info("  Total processed:         %d", len(pending))
+    return 1 if write_failures else 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

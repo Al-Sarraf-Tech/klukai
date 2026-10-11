@@ -7,6 +7,12 @@ Three-pass approach:
   Pass 3: ComfyUI generates Illustrious images for each memory
 
 Tracks last_seeded_at so only new exchanges are processed on each run.
+Each saved memory carries conversation_id "seed:<exchange created_at>", the
+fingerprint that dedups it and lets reannotate_existing.py find its exchange.
+
+SEED_DEADLINE_SECONDS (optional) is a soft wall-clock budget: once spent, the
+run stops before its next unit of work, records a "deadline" failure, and
+leaves last_seeded_at untouched so the range is retried on a later run.
 
 Run inside companion-core container:
   docker exec companion-core python3 /app/seed_memories.py
@@ -18,6 +24,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import datetime
 
 import httpx
@@ -158,8 +165,16 @@ async def _get_last_seeded_at(conn, user_id: str = "jalsarraf") -> datetime | No
             )
         ).fetchone()
     if row and row[0]:
+        val = row[0]
+        # value is JSONB, so psycopg hands back the bare ISO string already
+        # decoded. A legacy TEXT-encoded value still arrives as '"<iso>"' and
+        # needs one json.loads; a bare ISO string is not JSON and is kept as-is.
+        if isinstance(val, str):
+            try:
+                val = json.loads(val)
+            except ValueError:
+                pass
         try:
-            val = json.loads(row[0]) if isinstance(row[0], str) else row[0]
             return datetime.fromisoformat(val)
         except (ValueError, TypeError):
             pass
@@ -181,20 +196,50 @@ async def _set_last_seeded_at(conn, ts: datetime, user_id: str = "jalsarraf") ->
 # ── Deduplication ────────────────────────────────────────────────────────────
 
 
-async def _is_duplicate(conn, user_msg: str, assistant_msg: str) -> bool:
-    """Check if a substantially similar memory already exists.
+def _seed_conversation_id(created_at: str) -> str:
+    """Fingerprint a seed memory by the exchange it came from."""
+    return f"seed:{created_at}"
 
-    Compares against the original exchange text stored in the prompt field
-    and recent annotations to avoid near-identical entries.
+
+async def _is_duplicate(conn, user_id: str, conversation_id: str) -> bool:
+    """Check whether this exchange was already seeded for this user.
+
+    Every seed memory is keyed by its source exchange (``seed:<created_at>``),
+    so the check is an exact match on that fingerprint. The stored prompt is
+    the image prompt and never contains the exchange text, so it cannot be
+    used for this. Legacy rows with the bare ``'seed'`` id carry no
+    fingerprint and are left alone.
     """
     row = await (
         await conn.execute(
-            "SELECT COUNT(*) FROM companion_memories "
-            "WHERE conversation_id = 'seed' AND prompt LIKE %s",
-            (f"%{user_msg[:60].replace('%', '')}%",),
+            "SELECT 1 FROM companion_memories "
+            "WHERE user_id = %s AND conversation_id = %s LIMIT 1",
+            (user_id, conversation_id),
         )
     ).fetchone()
-    return row and row[0] > 0
+    return row is not None
+
+
+# ── Deadline ─────────────────────────────────────────────────────────────────
+
+
+def _deadline_from_env() -> float | None:
+    """Absolute monotonic deadline from SEED_DEADLINE_SECONDS, or None."""
+    raw = os.environ.get("SEED_DEADLINE_SECONDS", "").strip()
+    if not raw:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        logger.warning("Ignoring non-numeric SEED_DEADLINE_SECONDS=%r", raw)
+        return None
+    if seconds <= 0:
+        return None
+    return time.monotonic() + seconds
+
+
+def _past_deadline(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
 
 
 # ── LLM Calls ───────────────────────────────────────────────────────────────
@@ -279,6 +324,20 @@ async def main() -> int:
     logger.info("=== Memory Seeder Starting (user: %s) ===", target_user)
     logger.info("Selector: %s | Annotator: %s", SELECTOR_MODEL, ANNOTATOR_MODEL)
 
+    deadline = _deadline_from_env()
+    if deadline is not None:
+        logger.info("Deadline: SEED_DEADLINE_SECONDS=%s", os.environ["SEED_DEADLINE_SECONDS"])
+    pipeline_failures: list[str] = []
+
+    def _deadline_hit(stage: str) -> bool:
+        """True once the soft deadline has passed; records it exactly once."""
+        if not _past_deadline(deadline):
+            return False
+        if "deadline" not in pipeline_failures:
+            logger.error("Deadline reached during %s; stopping this run", stage)
+            pipeline_failures.append("deadline")
+        return True
+
     conn = await psycopg.AsyncConnection.connect(DATABASE_URL)
 
     # Get last seeded timestamp for incremental processing
@@ -350,6 +409,8 @@ async def main() -> int:
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         for batch_start in range(0, len(exchanges), BATCH_SIZE):
+            if _deadline_hit("selection"):
+                break
             batch = exchanges[batch_start : batch_start + BATCH_SIZE]
             logger.info(
                 "Selecting batch %d-%d of %d...",
@@ -376,6 +437,8 @@ async def main() -> int:
         logger.info("Retrying %d failed batches...", len(failed_batches))
         async with httpx.AsyncClient(timeout=180.0) as client:
             for batch_start, batch in failed_batches:
+                if _deadline_hit("selection retry"):
+                    break
                 try:
                     batch_selected = await _select_batch(client, batch, batch_start)
                     selected.extend(batch_selected)
@@ -394,10 +457,10 @@ async def main() -> int:
                     unresolved_selector_batches.append(batch_start)
                 await asyncio.sleep(3)
 
-    pipeline_failures = [
+    pipeline_failures.extend(
         f"selector batch {batch_start}"
         for batch_start in unresolved_selector_batches
-    ]
+    )
 
     logger.info(
         "Pass 1 complete: %d exchanges selected from %d", len(selected), len(exchanges)
@@ -421,12 +484,15 @@ async def main() -> int:
     logger.info("=== PASS 2: Annotation (%s) ===", ANNOTATOR_MODEL)
     async with httpx.AsyncClient(timeout=120.0) as client:
         for mem in selected:
+            if _deadline_hit("annotation"):
+                break
             ex = mem["exchange"]
             category = mem.get("category", "Precious Memories")
+            mem["conversation_id"] = _seed_conversation_id(ex["created_at"])
 
             # Deduplication check
             try:
-                if await _is_duplicate(conn, ex["user"], ex["assistant"]):
+                if await _is_duplicate(conn, target_user, mem["conversation_id"]):
                     logger.info("  Skipping duplicate: %s", ex["user"][:50])
                     mem["skip"] = True
                     continue
@@ -446,13 +512,21 @@ async def main() -> int:
                     f"annotation exchange {mem.get('global_index', '?')}"
                 )
                 continue
-            if annotation:
-                mem["annotation"] = annotation
-                logger.info("  Annotated: %s", annotation[:70])
-            else:
-                # Fallback to a minimal but honest caption
-                mem["annotation"] = f"A moment between us. —Klukai"
-                logger.warning("  Using fallback annotation")
+            if not annotation:
+                # Empty or rejected text is a pipeline failure, same as an
+                # exception: no placeholder caption, no GPU render for it, and
+                # the watermark stays put so the exchange is retried later.
+                logger.error(
+                    "  Annotation unusable for exchange %s; skipping render",
+                    mem.get("global_index", "?"),
+                )
+                mem["pipeline_failed"] = True
+                pipeline_failures.append(
+                    f"annotation exchange {mem.get('global_index', '?')}"
+                )
+                continue
+            mem["annotation"] = annotation
+            logger.info("  Annotated: %s", annotation[:70])
 
             await asyncio.sleep(3)
 
@@ -488,6 +562,8 @@ async def main() -> int:
     saved_count = 0
 
     for i, mem in enumerate(selected):
+        if _deadline_hit("image generation"):
+            break
         ex = mem["exchange"]
         logger.info(
             "Generating %d/%d: %s",
@@ -540,7 +616,7 @@ async def main() -> int:
                 memory_id = await save_image(
                     img_bytes,
                     full_prompt,
-                    "seed",
+                    mem["conversation_id"],
                     mood="tender",
                     affection_level=8,
                     curation=curation,
