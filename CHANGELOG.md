@@ -108,6 +108,29 @@ Handoff: `docs/handoff/2026-10-11-standby-hardening.md`.
   gate use Her Day's 05:00 day boundary; images during a mission show the
   mission kit; her mood reaches the daily outfit pick; a Feb-29 birthday is
   kept on Feb 28; his birthday outranks a holiday it falls inside.
+- **third wave (ops scripts, the other Flutter screens)** —
+  `disaster-recovery.sh --execute` dropped the live `companion_*` tables
+  blind, before Qdrant and images, with no component selector; it now takes
+  a pre-restore dump of the live tables (fatal if it cannot), honours
+  `DR_COMPONENTS`, tar-validates snapshots, requires Qdrant to answer and a
+  non-empty image payload, and restores `companion-audio` when the archive
+  carries it. A pg_dump truncated at a statement boundary is valid gzip and
+  passed every check in the chain; every consumer now requires the pg_dump
+  completion trailer and Qdrant snapshots must be readable tar.
+  `offsite-backup.sh` refuses to ship without a real, non-empty
+  `images-latest` on the source filesystem, and a failed retention report
+  no longer turns a final archive into a failure. `restore-from-backup.sh`
+  probes TCP (the image's socket-only init server passed as ready);
+  `audit-memories.sh` no longer exits on the first drop or floors 5.9% to 5;
+  `deploy-web.sh` stages every rewrite and makes one rsync the only live
+  change; the disk-space runbook's prune would have deleted the only images
+  backup. `pretext_bridge.js` had a stray `};` so the markdown bubble path
+  never ran (fixed; the bubble now falls back to plain text on any bridge
+  failure); the Thread, Her POV, Profile, Subscription and archive screens
+  now return to login on a 401; the archive paginates past 50; archive and
+  milestone timestamps render in local time; the Her POV poller counts
+  transport errors, never overlaps, and explains a 429; gauge tier ticks
+  line up with the bar; back/close/Disconnect carry accessibility labels.
 
 ### Changed — file-size hygiene (2026-10-11)
 
@@ -125,6 +148,10 @@ Handoff: `docs/handoff/2026-10-11-standby-hardening.md`.
   `reflect_helpers._maybe_reflect_on_return` (D 22 → B 10) decomposed the
   same way; outfit picks verified bit-identical on 40,000 randomized calls.
   No function in `app/` is rated D or worse any more.
+- `docker/core/app/image_gen.py` 1079→416 LOC: the pure prompt layer moved to
+  `image_gen_prompts.py` (277) and the ComfyUI client to `image_gen_comfy.py`
+  (486), all 52 definitions byte-identical; `memory_her_pov.py` 811→486 LOC
+  with the job rail in `memory_her_pov_jobs.py` (376). Public re-exports kept.
 
 ### Added — S+ Phase 2/3/4 uplift batch (2026-05-17)
 

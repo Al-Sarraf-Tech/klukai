@@ -59,6 +59,30 @@ validation, static cache policy, warmup never extending residency, Her Day
 caches keyed by user and day, `claim_period` idempotency, catch-up allowlist
 coverage, personality YAML types.
 
+A third wave read the backup/restore/DR shell scripts (logic, not lint) and
+every Flutter screen the first pass had not. The DR and backup findings are
+the ones to read before the next drill: `disaster-recovery.sh` now takes a
+pre-restore dump and honours `DR_COMPONENTS` (the Qdrant-down runbook uses
+`DR_COMPONENTS=qdrant`), every consumer of a pg_dump requires its completion
+trailer, and the disk-space runbook's prune no longer deletes the only
+images backup. Two things need the owner: the nightly producer
+(`backup-companions.sh`, cited by the ADRs) lives on amarillo outside this
+repository and should be committed; and voice letters (`companion-audio`)
+are not backed up until that producer deposits `klukai/audio-latest/` — the
+DR script restores it the moment the archive carries it. On the app side the
+important one is `pretext_bridge.js`: a stray `};` meant the canvas/markdown
+bubble never ran in production; fixing it turns that path on for the first
+time, with the bubble now falling back to plain text on any bridge failure.
+Watch her replies after the next PWA deploy.
+
+Module splits for the repo's 500-line gate: `proactive/engine.py`
+(`schedule.py`), `image_gen.py` (`image_gen_prompts.py`,
+`image_gen_comfy.py`), `memory_her_pov.py` (`memory_her_pov_jobs.py`). All
+pure moves, byte-identical definitions, re-exports kept. Still over 500 and
+untouched: `op_brief.py`, `proactive/events.py`, `wardrobe.py`,
+`chat_handlers.py`, `helpers.py`, `background.py`, `routes.py`, `memory.py`,
+`routes_extras3.py`, `decisions.py`, `portrait.py`.
+
 ### Refactors (behaviour-preserving)
 
 - `app/proactive/engine.py` 679 → 472 LOC. The APScheduler job table
