@@ -1,7 +1,7 @@
 """Shared typing surface for the ProactiveEngine mixins.
 
 The engine's behavior is split across cooperating mixins (mission, events,
-milestones) that all operate on the same instance state defined in
+milestones, patterns, schedule) that all operate on the same instance state defined in
 ``ProactiveEngine.__init__``. This module declares that shared state and the
 cross-mixin method signatures as *annotations only* so a static checker can
 resolve ``self.*`` references inside each mixin.
@@ -16,9 +16,11 @@ it introduces zero behavior change.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 if TYPE_CHECKING:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
     from .mission import MissionTimer
 
 
@@ -27,6 +29,9 @@ class _EngineBase:
 
     Mixins inherit from this purely so ``self.<shared attr/method>`` type-checks.
     """
+
+    # ── Scheduler (constructed in ProactiveEngine.__init__) ────────────────
+    _scheduler: AsyncIOScheduler
 
     # ── Callbacks / getters (assigned in ProactiveEngine.__init__) ─────────
     _on_message_callback: Any
@@ -65,6 +70,28 @@ class _EngineBase:
     _goodbye_hold_active: Callable[..., bool]
     # Activity profiling (concrete impl on PatternsMixin).
     detect_activity_patterns: Callable[..., Any]
+
+    # ── Scheduled jobs (registered by ScheduleMixin._register_jobs; concrete
+    #    impls live on ProactiveEngine and the other mixins) ────────────────
+    _morning_checkin: Callable[[], Awaitable[None]]
+    _daily_challenge: Callable[[], Awaitable[None]]
+    _promise_followup_check: Callable[[], Awaitable[None]]
+    _evening_checkin: Callable[[], Awaitable[None]]
+    _idle_check: Callable[[], Awaitable[None]]
+    _reset_daily: Callable[[], Awaitable[None]]
+    _unsent_message_check: Callable[[], Awaitable[None]]
+    _anniversary_check: Callable[[], Awaitable[None]]
+    _weekly_reflection: Callable[[], Awaitable[None]]
+    _mission_report: Callable[[], Awaitable[None]]
+    _mission_random_event: Callable[[], Awaitable[None]]
+    _random_event: Callable[[], Awaitable[None]]
+    _dream_event: Callable[[], Awaitable[None]]
+    _memory_recall_tick: Callable[[], Awaitable[None]]
+    _spontaneous_art_tick: Callable[[], Awaitable[None]]
+    _daily_recap: Callable[[], Awaitable[None]]
+    _romance_window: Callable[[], Awaitable[None]]
+    _seasonal_check: Callable[[], Awaitable[None]]
+    _quiet_day_check: Callable[..., Awaitable[None]]
 
     @property
     def mission_active(self) -> bool:  # pragma: no cover - real impl on MissionMixin

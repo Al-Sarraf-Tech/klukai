@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from ..events import publish as publish_event
 from .base import _EngineBase
@@ -190,40 +190,15 @@ class EventsMixin(_EngineBase):
 
         now = now_local()
 
-        # Guard: max 5 per day
-        if self._random_events_today >= 5:
-            return
-
-        # Guard: 45-min gap between events
-        if self._last_random_event and (now - self._last_random_event) < timedelta(minutes=45):
-            return
-
-        # Guard: don't interrupt active typing (3 min cooldown)
-        if self._last_message_time and (now - self._last_message_time) < timedelta(minutes=3):
-            return
-
         # Intimate/vulnerable moods BOOST events instead of blocking them
-        # — these are the moments Klukai would naturally say something
+        # — these are the moments Klukai would naturally say something.
+        # (A pure read of _last_mood, so it is safe to take ahead of the guards.)
         intimate_mood = self._last_mood in (
             "tender", "longing", "flustered", "affectionate", "shy",
             "yearning", "devoted", "vulnerable", "drowsy",
         )
 
-        # Guard: check mute
-        if self._muted_until and now < self._muted_until:
-            return
-
-        # Guard: he signed off — let him go
-        if self._goodbye_hold_active(now):
-            return
-
-        # Guard: quiet hours (local wall clock). The cron stops at 22:45, but a
-        # misfire replay or a DST shift must never land a lore line after 2300.
-        if QUIET_HOUR_START <= now.hour or now.hour < QUIET_HOUR_END:
-            return
-
-        # Guard: never ping the Commander mid-match
-        if self._game_active_probe is not None and await self._game_active_probe():
+        if await self._random_event_blocked(now):
             return
 
         # Roll probability: 35% base, 60% during intimate moods, 50% during missions
@@ -281,6 +256,44 @@ class EventsMixin(_EngineBase):
             self._last_proactive_answered = False
             await self._on_message_callback(message)
             logger.info("Random event fired: %s", message[:60])
+
+    async def _random_event_blocked(self, now: datetime) -> bool:
+        """The ``_random_event`` guard chain: True when a lore line must not fire.
+
+        Order is preserved from the inline chain it replaced, and it matters:
+        ``_goodbye_hold_active`` clears a lapsed hold as a side effect, and the
+        game probe is the only await, so it stays last.
+        """
+        # Guard: max 5 per day
+        if self._random_events_today >= 5:
+            return True
+
+        # Guard: 45-min gap between events
+        if self._last_random_event and (now - self._last_random_event) < timedelta(minutes=45):
+            return True
+
+        # Guard: don't interrupt active typing (3 min cooldown)
+        if self._last_message_time and (now - self._last_message_time) < timedelta(minutes=3):
+            return True
+
+        # Guard: check mute
+        if self._muted_until and now < self._muted_until:
+            return True
+
+        # Guard: he signed off — let him go
+        if self._goodbye_hold_active(now):
+            return True
+
+        # Guard: quiet hours (local wall clock). The cron stops at 22:45, but a
+        # misfire replay or a DST shift must never land a lore line after 2300.
+        if QUIET_HOUR_START <= now.hour or now.hour < QUIET_HOUR_END:
+            return True
+
+        # Guard: never ping the Commander mid-match
+        if self._game_active_probe is not None and await self._game_active_probe():
+            return True
+
+        return False
 
     async def _romance_window(self) -> None:
         """Evening romance message — fires at ~20:30 local with random delay.
@@ -378,19 +391,7 @@ class EventsMixin(_EngineBase):
         a normal memory/nightmare/tender dream. Fires once per night max.
         Balanced: most dreams reference real memories from the archive.
         """
-        if self._dream_delivered_today:
-            return
-        if self._affection_level < 5:
-            return
-        now = now_local()
-        if self._muted_until and now < self._muted_until:
-            return
-        # He said goodnight (or "gotta go"): a dream is still a ping. Let him go.
-        if self._goodbye_hold_active(now):
-            return
-        # The 0200 watch: on a night he's awake she isn't dreaming, she's up
-        # with him. Stand down if he messaged within DREAM_QUIET_AFTER_ACTIVITY.
-        if self._last_message_time and now - self._last_message_time < DREAM_QUIET_AFTER_ACTIVITY:
+        if self._dream_blocked():
             return
 
         # 40% chance to fire (not every night)
@@ -472,6 +473,29 @@ class EventsMixin(_EngineBase):
 
         except Exception as e:
             logger.warning("Dream event failed: %s", e)
+
+    def _dream_blocked(self) -> bool:
+        """The ``_dream_event`` guard chain: True when she must not dream tonight.
+
+        Order is preserved from the inline chain it replaced: the cheap flag
+        checks first, then the clock is read once for the mute, goodbye-hold
+        (which clears a lapsed hold as a side effect) and 0200-watch checks.
+        """
+        if self._dream_delivered_today:
+            return True
+        if self._affection_level < 5:
+            return True
+        now = now_local()
+        if self._muted_until and now < self._muted_until:
+            return True
+        # He said goodnight (or "gotta go"): a dream is still a ping. Let him go.
+        if self._goodbye_hold_active(now):
+            return True
+        # The 0200 watch: on a night he's awake she isn't dreaming, she's up
+        # with him. Stand down if he messaged within DREAM_QUIET_AFTER_ACTIVITY.
+        if self._last_message_time and now - self._last_message_time < DREAM_QUIET_AFTER_ACTIVITY:
+            return True
+        return False
 
     async def _spontaneous_art_tick(self) -> None:
         """Occasional gate for spontaneous art — ~18% roll per fire. She draws for
