@@ -253,7 +253,13 @@ async def _maybe_auto_start_mission(
             t.get("content", "")[:100] for t in session.turns[-4:]
             if t.get("role") == "user"
         ) or "Combat operation"
-        proactive.start_mission(recent_text, interval_minutes=30)
+        # Nobody asked for this mission, so it stands down on its own: without
+        # the ceiling it ran until the cancel phrase or a restart, ticking
+        # through the night.
+        from .proactive.mission import AUTO_MISSION_MAX_MINUTES
+        proactive.start_mission(
+            recent_text, interval_minutes=30, max_duration_minutes=AUTO_MISSION_MAX_MINUTES,
+        )
         session.mission_description = recent_text
         session.mission_interval = 30
         session.mission_started_at = datetime.now().isoformat()

@@ -34,6 +34,27 @@ logger = logging.getLogger(__name__)
 REFLECTION_MIN_HOURS_AWAY = 8
 REFLECTION_MAX_HOURS_AWAY = 72  # Over 3 days = too stale, skip
 
+# A mission still in the session on reconnect is restored only if it started
+# within this window. Field reports resuming half a day after "keep me posted
+# every 30 min" are about an operation that is long over.
+MISSION_RESTORE_MAX_HOURS = 12
+
+
+def _mission_is_stale(started_at: str | None) -> bool:
+    """True when the session's mission start (an isoformat stamp from the
+    container clock) is older than MISSION_RESTORE_MAX_HOURS. A missing or
+    unparseable stamp is not stale: older sessions never recorded one."""
+    if not started_at:
+        return False
+    try:
+        from datetime import datetime, timedelta
+        started = datetime.fromisoformat(started_at)
+        if started.tzinfo is not None:
+            started = started.replace(tzinfo=None)
+        return datetime.now() - started > timedelta(hours=MISSION_RESTORE_MAX_HOURS)
+    except (TypeError, ValueError):
+        return False
+
 
 
 
@@ -208,13 +229,26 @@ def register_websocket(app: FastAPI) -> None:
 
         # Restore mission timer from session if it was active before disconnect
         if session.mission_description and session.mission_interval and not proactive.mission_active:
-            aff_state = await affection.get_state(user_id)
-            proactive.set_affection_level(aff_state.level)
-            proactive.start_mission(session.mission_description, session.mission_interval)
-            logger.info(
-                "Mission timer restored from session: every %d min",
-                session.mission_interval,
-            )
+            if _mission_is_stale(session.mission_started_at):
+                # A mission from half a day ago is not one he still wants
+                # field reports on — restoring it would resume updates on a
+                # reconnect long after the operation it described was over.
+                logger.info(
+                    "Mission from %s not restored (older than %dh); clearing it",
+                    session.mission_started_at, MISSION_RESTORE_MAX_HOURS,
+                )
+                session.mission_description = None
+                session.mission_interval = None
+                session.mission_started_at = None
+                await memory.save_session(session_id(user_id), session)
+            else:
+                aff_state = await affection.get_state(user_id)
+                proactive.set_affection_level(aff_state.level)
+                proactive.start_mission(session.mission_description, session.mission_interval)
+                logger.info(
+                    "Mission timer restored from session: every %d min",
+                    session.mission_interval,
+                )
 
         # Reflection-on-return: if user was away >8h, greet them referencing
         # the last topic. Runs in background so it never blocks the connect.

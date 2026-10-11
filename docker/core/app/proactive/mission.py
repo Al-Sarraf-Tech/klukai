@@ -139,6 +139,14 @@ def _mission_event_templates() -> list[str | None]:
     return _MISSION_EVENT_TEMPLATES_FALLBACK
 
 
+# A mission she starts on her own (a battle_ready mood, see
+# background._maybe_auto_start_mission) ends by itself after this long. Nobody
+# asked for it, so nobody will say "stand down": without a ceiling it ticked
+# every ~30 minutes, through the night, until the cancel phrase or a restart.
+# A mission he asked for ("keep me posted every 30 min") has no ceiling.
+AUTO_MISSION_MAX_MINUTES = 180
+
+
 class MissionTimer:
     """Tracks an active mission with periodic field radio updates.
 
@@ -155,8 +163,10 @@ class MissionTimer:
         self.update_count: int = 0
         self.active_events: list[str] = []
         self.active: bool = False
+        self.max_duration_minutes: int | None = None
         self._task: asyncio.Task | None = None
         self._callback = None
+        self._on_expire = None
         self._affection_level: int = 0
 
     def start(
@@ -165,8 +175,15 @@ class MissionTimer:
         interval_minutes: int = 30,
         callback=None,
         affection_level: int = 0,
+        max_duration_minutes: int | None = None,
+        on_expire=None,
     ) -> None:
-        """Begin the mission timer as an asyncio.Task."""
+        """Begin the mission timer as an asyncio.Task.
+
+        ``max_duration_minutes`` sets a ceiling: the first tick at or past it
+        stands the mission down instead of firing, and ``on_expire`` (sync) is
+        called so the engine can close it out like a cancelled mission.
+        """
         self.mission_description = description
         self.base_interval_minutes = max(5, interval_minutes)  # Floor at 5 min
         self.started_at = time.monotonic()
@@ -174,7 +191,9 @@ class MissionTimer:
         self.update_count = 0
         self.active_events = []
         self.active = True
+        self.max_duration_minutes = max_duration_minutes
         self._callback = callback
+        self._on_expire = on_expire
         self._affection_level = affection_level
         self._task = asyncio.create_task(self._tick_loop())
         state._active_mission_timer = self
@@ -212,6 +231,16 @@ class MissionTimer:
                 if not self.active:
                     break
 
+                if self._past_ceiling():
+                    logger.info(
+                        "Mission '%s' reached its %d-minute ceiling after %d updates — standing down",
+                        self.mission_description[:60], self.max_duration_minutes, self.update_count,
+                    )
+                    self.active = False
+                    if self._on_expire:
+                        self._on_expire()
+                    break
+
                 self.update_count += 1
                 self.last_update = time.monotonic()
                 elapsed_minutes = int((self.last_update - self.started_at) / 60)
@@ -243,6 +272,12 @@ class MissionTimer:
         except Exception as e:
             logger.error("Mission timer tick failed: %s", e)
             self.active = False
+
+    def _past_ceiling(self) -> bool:
+        """True once a ceilinged mission has run for its full allowance."""
+        if self.max_duration_minutes is None:
+            return False
+        return (time.monotonic() - self.started_at) >= self.max_duration_minutes * 60
 
     async def _fire_update(self, elapsed_minutes: int, major_event: str | None) -> None:
         """Generate an LLM update and deliver it via callback."""
@@ -282,8 +317,14 @@ class MissionMixin(_EngineBase):
     # ── Mission timer management ──────────────────────────────────────────
 
     def start_mission(self, description: str, interval_minutes: int = 30,
-                       user_id: str = "jalsarraf") -> None:
-        """Start a per-user mission timer with periodic LLM-generated field reports."""
+                       user_id: str = "jalsarraf",
+                       max_duration_minutes: int | None = None) -> None:
+        """Start a per-user mission timer with periodic LLM-generated field reports.
+
+        With ``max_duration_minutes`` the mission stands down by itself at the
+        ceiling and is closed out exactly like one he cancelled (aftermath
+        image, decompression line, physical state).
+        """
         # Stop existing mission for this user if any
         existing = self._mission_timers.get(user_id)
         if existing and existing.active:
@@ -294,6 +335,10 @@ class MissionMixin(_EngineBase):
             interval_minutes=interval_minutes,
             callback=self._on_message_callback,
             affection_level=self._affection_levels.get(user_id, 0),
+            max_duration_minutes=max_duration_minutes,
+            on_expire=(
+                (lambda: self.stop_mission(user_id)) if max_duration_minutes else None
+            ),
         )
         self._mission_timers[user_id] = timer
         self._mission_timer = timer  # Legacy compat
