@@ -414,15 +414,18 @@ class TestTTSProxy:
         assert sent.endswith("Sentence one is here.")  # not a mid-word hard cut
 
     @pytest.mark.asyncio
-    async def test_503_when_voice_unreachable(self):
+    async def test_503_when_voice_unreachable(self, caplog):
+        """The failure is logged in core: before, the only trace was on the GPU host."""
         from app.routes import TTSRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/tts", "POST")
         ctx = _fake_async_client(post_exc=RuntimeError("connection refused"))
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.httpx.AsyncClient", return_value=ctx):
+             patch("app.routes.httpx.AsyncClient", return_value=ctx), \
+             caplog.at_level("ERROR", logger="app.routes"):
             resp = await handler(TTSRequest(text="speak"), _mk_request())
         assert resp.status_code == 503
+        assert any("TTS failed: RuntimeError: connection refused" in r.getMessage() for r in caplog.records)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -366,7 +366,10 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         except TimeoutError:
             logger.warning("TTS timed out waiting on the voice GPU lease")
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
-        except Exception:
+        except Exception as e:
+            # A refused lease, an unreachable gateway or a bad token all end up
+            # here; without this line the only trace was on the GPU host.
+            logger.error("TTS failed: %s: %s", type(e).__name__, e)
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
 
     # ── Image generation ───────────────────────────────────────────────────
