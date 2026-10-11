@@ -15,6 +15,12 @@ class AffectionGauge extends StatefulWidget {
     this.lastDelta,
   });
 
+  /// Tier thresholds (30, 80, 150, 250, 380, 530, 680, 830, 950) over 1000 —
+  /// where a divider is drawn across the bar.
+  static const List<double> tierDividerFractions = [
+    0.03, 0.08, 0.15, 0.25, 0.38, 0.53, 0.68, 0.83, 0.95,
+  ];
+
   @override
   State<AffectionGauge> createState() => _AffectionGaugeState();
 }
@@ -158,33 +164,38 @@ class _AffectionGaugeState extends State<AffectionGauge>
           height: 4,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(1),
-            child: Stack(
-              children: [
-                // Background with segment dividers
-                Container(color: GFL2Colors.border.withValues(alpha: 0.2)),
-                // Level dividers at tier thresholds (30, 80, 150, 250, 380, 530, 680, 830, 950) / 1000
-                for (final pct in [0.03, 0.08, 0.15, 0.25, 0.38, 0.53, 0.68, 0.83, 0.95])
-                  Positioned(
-                    left: pct * MediaQuery.of(context).size.width * 0.85,
-                    child: Container(
-                      width: 1,
-                      height: 4,
-                      color: GFL2Colors.border.withValues(alpha: 0.4),
+            // The dividers must sit where the fill actually crosses each tier,
+            // so they are placed against the bar's own laid-out width — not
+            // a guess from the screen width.
+            child: LayoutBuilder(
+              builder: (context, constraints) => Stack(
+                children: [
+                  // Background with segment dividers
+                  Container(color: GFL2Colors.border.withValues(alpha: 0.2)),
+                  // Level dividers at tier thresholds (30, 80, 150, 250, 380, 530, 680, 830, 950) / 1000
+                  for (final pct in AffectionGauge.tierDividerFractions)
+                    Positioned(
+                      left: pct * constraints.maxWidth,
+                      child: Container(
+                        width: 1,
+                        height: 4,
+                        color: GFL2Colors.border.withValues(alpha: 0.4),
+                      ),
+                    ),
+                  // Fill
+                  FractionallySizedBox(
+                    alignment: Alignment.centerLeft,
+                    widthFactor: _fillFraction,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 500),
+                      decoration: BoxDecoration(
+                        color: _barColor,
+                        borderRadius: BorderRadius.circular(1),
+                      ),
                     ),
                   ),
-                // Fill
-                FractionallySizedBox(
-                  alignment: Alignment.centerLeft,
-                  widthFactor: _fillFraction,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 500),
-                    decoration: BoxDecoration(
-                      color: _barColor,
-                      borderRadius: BorderRadius.circular(1),
-                    ),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

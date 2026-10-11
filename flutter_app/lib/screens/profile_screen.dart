@@ -23,6 +23,10 @@ class ProfileScreen extends StatefulWidget {
   /// Client for the milestones / stats fetches. Injectable for tests.
   final http.Client? client;
 
+  /// What to do on a 401. Defaults to the shared login bounce; tests inject
+  /// a recorder.
+  final VoidCallback? onAuthExpired;
+
   const ProfileScreen({
     super.key,
     required this.serverUrl,
@@ -31,6 +35,7 @@ class ProfileScreen extends StatefulWidget {
     required this.affectionLevelName,
     this.wardrobeService,
     this.client,
+    this.onAuthExpired,
   });
 
   @override
@@ -64,11 +69,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _loadWardrobe();
   }
 
+  /// The dossier fires five fetches at once; a dead token fails all of them.
+  /// Bounce to login exactly once.
+  bool _authBounced = false;
+
+  void _authExpired() {
+    if (_authBounced || !mounted) return;
+    _authBounced = true;
+    (widget.onAuthExpired ?? handleAuthExpired)();
+  }
+
   Future<void> _loadData() async {
     try {
       final milestonesR = await _client.get(Uri.parse('${widget.serverUrl}/api/milestones'), headers: _authHeaders);
+      if (!mounted) return;
+      if (milestonesR.statusCode == 401) {
+        _authExpired();
+        return;
+      }
       final statsR = await _client.get(Uri.parse('${widget.serverUrl}/api/user/stats'), headers: _authHeaders);
       if (!mounted) return;
+      if (statsR.statusCode == 401) {
+        _authExpired();
+        return;
+      }
       if (milestonesR.statusCode == 200) {
         final data = jsonDecode(milestonesR.body)['milestones'] as Map<String, dynamic>? ?? {};
         setState(() => _milestones = data.map((k, v) => MapEntry(k, v.toString())));
@@ -101,6 +125,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _guard(Future<void> Function() load) async {
     try {
       await load();
+    } on WardrobeServiceException catch (e) {
+      // Fail soft on anything but a dead token: that one gets the bounce.
+      if (e.isAuthExpired) _authExpired();
     } catch (_) {}
   }
 
@@ -150,6 +177,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       appBar: AppBar(
         backgroundColor: GFL2Colors.surface,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(Icons.arrow_back, color: GFL2Colors.textPrimary),
           onPressed: () => Navigator.pop(context),
         ),

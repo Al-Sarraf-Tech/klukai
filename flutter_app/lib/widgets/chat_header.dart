@@ -261,12 +261,18 @@ class ChatHeader extends StatelessWidget {
       tooltip: 'Subscription',
       onPressed: onSubscription,
     );
-    final exit = GestureDetector(
-      key: const Key('chat-header-exit'),
-      onTap: onLogout,
-      child: Tooltip(
-        message: 'Disconnect',
-        child: ExitIcon(size: 18, color: GFL2Colors.danger.withValues(alpha: 0.85)),
+    // A bare GestureDetector has no button semantics: screen readers skipped
+    // the one control that ends the session. Announce it as a button.
+    final exit = Semantics(
+      button: true,
+      label: 'Disconnect',
+      child: GestureDetector(
+        key: const Key('chat-header-exit'),
+        onTap: onLogout,
+        child: Tooltip(
+          message: 'Disconnect',
+          child: ExitIcon(size: 18, color: GFL2Colors.danger.withValues(alpha: 0.85)),
+        ),
       ),
     );
     if (!compact) return [mute, companion, herPov, archive, subscription, exit];

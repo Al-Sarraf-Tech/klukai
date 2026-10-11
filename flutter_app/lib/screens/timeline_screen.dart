@@ -16,6 +16,7 @@ class TimelineScreen extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: GFL2Colors.surface,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(Icons.arrow_back, color: GFL2Colors.textPrimary),
           onPressed: () => Navigator.pop(context),
         ),
@@ -53,7 +54,7 @@ class TimelineScreen extends StatelessWidget {
 
   Widget _buildTimelineEntry(String key, String dateStr, bool isFirst, bool isLast) {
     final label = _formatMilestoneKey(key);
-    final date = _formatDate(dateStr);
+    final date = formatMilestoneDate(dateStr);
 
     return IntrinsicHeight(
       child: Row(
@@ -118,13 +119,33 @@ class TimelineScreen extends StatelessWidget {
     };
   }
 
-  String _formatDate(String dateStr) {
+  /// Milestone stamps are stored as ISO strings by the server. New rows are
+  /// offset-qualified (`…+00:00`); legacy rows were written as a naive
+  /// `datetime.now()` inside the UTC container, so a stamp with no Z/offset
+  /// is UTC too — never the Commander's wall clock. Either way, show local.
+  @visibleForTesting
+  static String formatMilestoneDate(String dateStr) {
     try {
-      final dt = DateTime.parse(dateStr);
+      final parsed = DateTime.parse(dateStr);
+      final dt = (_hasZoneDesignator(dateStr)
+              ? parsed
+              : DateTime.utc(parsed.year, parsed.month, parsed.day, parsed.hour,
+                  parsed.minute, parsed.second, parsed.millisecond, parsed.microsecond))
+          .toLocal();
       return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
           '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     } catch (_) {
       return dateStr;
     }
+  }
+
+  /// True when the ISO string carries its own zone: a trailing `Z`/`z` or a
+  /// `±HH[:MM]` offset after the time part (the date's own dashes don't count).
+  static bool _hasZoneDesignator(String iso) {
+    final s = iso.trim();
+    if (s.endsWith('Z') || s.endsWith('z')) return true;
+    final t = s.indexOf('T');
+    if (t < 0) return false;
+    return RegExp(r'[+-]\d{2}(:?\d{2})?$').hasMatch(s.substring(t + 1));
   }
 }

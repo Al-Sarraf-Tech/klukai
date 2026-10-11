@@ -28,8 +28,10 @@ class Memory {
       affectionLevel: json['affection_level'],
       keptBy: json['kept_by'] ?? 'klukai',
       category: json['category'] ?? 'Mission Records',
+      // The server sends an offset-qualified ISO string; render it in the
+      // Commander's local time, as ThreadEntry.fromJson already does.
       createdAt: json['created_at'] != null
-          ? DateTime.parse(json['created_at'])
+          ? DateTime.parse(json['created_at']).toLocal()
           : DateTime.now(),
     );
   }

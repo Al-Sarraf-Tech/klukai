@@ -138,7 +138,6 @@
       handles.clear();
       nextHandle = 1;
     },
-  };
 
     // ── Markdown rendering ──────────────────────────────────────────
 

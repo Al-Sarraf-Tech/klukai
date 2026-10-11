@@ -111,6 +111,21 @@ void main() {
     expect(find.byTooltip('Companion'), findsOneWidget);
   });
 
+  testWidgets('the exit control is announced as a Disconnect button', (tester) async {
+    // A bare GestureDetector had no button semantics, so assistive tech
+    // skipped the one control that ends the session.
+    final handle = tester.ensureSemantics();
+    final taps = await _pump(tester, 390);
+    expect(
+      tester.getSemantics(find.byKey(const Key('chat-header-exit'))),
+      isSemantics(label: 'Disconnect', isButton: true, hasTapAction: true),
+    );
+    // Still the same tappable control under the same key.
+    await tester.tap(find.byKey(const Key('chat-header-exit')));
+    expect(taps.calls, ['logout']);
+    handle.dispose();
+  });
+
   testWidgets('link state text and no Her Day line without a day', (tester) async {
     await _pump(tester, 390, connected: false, withDay: false);
     expect(find.text('LINK DOWN'), findsOneWidget);

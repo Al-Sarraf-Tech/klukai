@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 import redis.asyncio as redis
@@ -428,7 +428,7 @@ class MemoryManager:
         existing = await self.recall_fact(f"milestone:{milestone}", user_id=user_id)
         if existing:
             return False
-        await self.store_fact(f"milestone:{milestone}", datetime.now().isoformat(), user_id=user_id)
+        await self.store_fact(f"milestone:{milestone}", datetime.now(timezone.utc).isoformat(), user_id=user_id)
         logger.info("New milestone recorded: %s for %s", milestone, user_id)
         return True
 

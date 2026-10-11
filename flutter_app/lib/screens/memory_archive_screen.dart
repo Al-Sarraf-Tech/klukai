@@ -6,6 +6,7 @@ import 'package:web/web.dart' as web;
 import '../main.dart';
 import '../models/memory.dart';
 import '../services/memory_service.dart';
+import '../services/session_auth.dart';
 import '../widgets/memory_timeline_entry.dart';
 import 'thread_screen.dart';
 
@@ -18,12 +19,17 @@ class MemoryArchiveScreen extends StatefulWidget {
   /// tests may inject a fake so the screen can be pumped without a backend.
   final MemoryService? memoryService;
 
+  /// What to do on a 401. Defaults to the shared login bounce; tests inject
+  /// a recorder so the browser is never actually navigated.
+  final VoidCallback? onAuthExpired;
+
   const MemoryArchiveScreen({
     super.key,
     required this.serverUrl,
     this.affectionLevel = 0,
     this.affectionLevelName = 'Cold Assessment',
     this.memoryService,
+    this.onAuthExpired,
   });
 
   @override
@@ -43,6 +49,16 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
   bool _loadingMemories = true;
   bool _memoriesError = false;
 
+  /// Paging. The header count comes from /api/memories/categories, so the
+  /// list must be able to reach every one of those rows — not stop at the
+  /// first page while the sidebar says "120 KEPT". A full page arms a
+  /// sentinel row at the end of the list that fetches the next page
+  /// (`before` = oldest loaded createdAt) when it scrolls into view.
+  static const int _pageSize = 50;
+  bool _hasMore = false;
+  bool _loadingMore = false;
+  bool _loadMoreFailed = false;
+
   /// Request-generation counter: each _loadMemories call bumps it, and
   /// responses for any generation other than the latest are discarded — so a
   /// slow response for an old filter can never clobber a quick filter switch.
@@ -61,14 +77,9 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
     _loadMemories();
   }
 
-  /// Mirrors ChatScreen's _handleAuthExpired: the token is dead, so clear it
-  /// and return to login instead of rendering a fake-empty archive.
-  void _handleAuthExpired() {
-    try {
-      web.window.localStorage.removeItem('klukai_token');
-    } catch (_) {}
-    web.window.location.href = '/';
-  }
+  /// The token is dead: clear it and return to login (the shared bounce in
+  /// session_auth) instead of rendering a fake-empty archive.
+  void _handleAuthExpired() => (widget.onAuthExpired ?? handleAuthExpired)();
 
   Future<void> _loadCategories() async {
     try {
@@ -104,18 +115,24 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
     setState(() {
       _loadingMemories = true;
       _memoriesError = false;
+      // A new first page disarms any paging state from the previous filter;
+      // an in-flight load-more for it is dropped by the generation check.
+      _hasMore = false;
+      _loadingMore = false;
+      _loadMoreFailed = false;
     });
     try {
       final mems = await _service.fetchMemories(
         category: category == 'All' ? null : category,
         month: month,
-        limit: 50,
+        limit: _pageSize,
       );
       // Stale response (the filter changed since this request left) — drop it.
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _memories = mems;
         _loadingMemories = false;
+        _hasMore = mems.length == _pageSize;
       });
     } on MemoryServiceException catch (e) {
       if (e.isAuthExpired) {
@@ -133,6 +150,53 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
       setState(() {
         _loadingMemories = false;
         _memoriesError = true;
+      });
+    }
+  }
+
+  /// Fetch the page older than the oldest loaded entry. Idempotent while a
+  /// page is in flight; a filter switch mid-flight bumps the generation and
+  /// the late page is dropped.
+  Future<void> _loadMore() async {
+    if (_loadingMore || !_hasMore || _loadingMemories || _memories.isEmpty) {
+      return;
+    }
+    final generation = _loadGeneration;
+    // The list is newest-first, so the last row is the oldest one we hold.
+    final before = _memories.last.createdAt.toUtc().toIso8601String();
+    setState(() {
+      _loadingMore = true;
+      _loadMoreFailed = false;
+    });
+    try {
+      final page = await _service.fetchMemories(
+        category: _selectedCategory == 'All' ? null : _selectedCategory,
+        month: _selectedMonth,
+        before: before,
+        limit: _pageSize,
+      );
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        final known = _memories.map((m) => m.id).toSet();
+        _memories.addAll(page.where((m) => !known.contains(m.id)));
+        _hasMore = page.length == _pageSize;
+        _loadingMore = false;
+      });
+    } on MemoryServiceException catch (e) {
+      if (e.isAuthExpired) {
+        _handleAuthExpired();
+        return;
+      }
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _loadingMore = false;
+        _loadMoreFailed = true;
+      });
+    } catch (_) {
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _loadingMore = false;
+        _loadMoreFailed = true;
       });
     }
   }
@@ -211,6 +275,7 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
       backgroundColor: GFL2Colors.surface,
       elevation: 0,
       leading: IconButton(
+        tooltip: 'Back',
         icon: const Icon(Icons.arrow_back, color: GFL2Colors.primary, size: 20),
         onPressed: () => Navigator.of(context).pop(),
       ),
@@ -698,21 +763,86 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
                     parent: AlwaysScrollableScrollPhysics(),
                   ),
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                  itemCount: _memories.length,
-                  itemBuilder: (_, i) => MemoryTimelineEntry(
-                    // Keyed by memory id so a filter switch never reuses
-                    // a recycled State (and its stale thumbnail) for a
-                    // different memory.
-                    key: ValueKey(_memories[i].id),
-                    memory: _memories[i],
-                    serverUrl: widget.serverUrl,
-                    authToken: _authToken,
-                    isCompact: isCompact,
-                    onTap: () => _openMemoryDetail(_memories[i]),
-                  ),
+                  // One extra row — the load-more sentinel — while the
+                  // server may still hold older pages.
+                  itemCount: _memories.length + (_hasMore ? 1 : 0),
+                  itemBuilder: (_, i) {
+                    if (i == _memories.length) return _buildLoadMoreRow();
+                    return MemoryTimelineEntry(
+                      // Keyed by memory id so a filter switch never reuses
+                      // a recycled State (and its stale thumbnail) for a
+                      // different memory.
+                      key: ValueKey(_memories[i].id),
+                      memory: _memories[i],
+                      serverUrl: widget.serverUrl,
+                      authToken: _authToken,
+                      isCompact: isCompact,
+                      onTap: () => _openMemoryDetail(_memories[i]),
+                    );
+                  },
                 ),
         ),
       ],
+    );
+  }
+
+  /// The sentinel at the foot of the list. Being built means it scrolled
+  /// into (cache) range, so it asks for the next page; after a failure it
+  /// waits for a tap instead of hammering a dead link.
+  Widget _buildLoadMoreRow() {
+    if (_loadMoreFailed) {
+      return Padding(
+        key: const Key('archive-load-more'),
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        child: Center(
+          child: TextButton(
+            onPressed: _loadMore,
+            child: Text(
+              'SIGNAL DROPPED // TAP TO RETRIEVE OLDER',
+              style: TextStyle(
+                color: GFL2Colors.danger.withValues(alpha: 0.7),
+                fontSize: 10,
+                fontFamily: 'monospace',
+                letterSpacing: 1.2,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    // Not during build: the fetch flips state on this same widget.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadMore();
+    });
+    return Padding(
+      key: const Key('archive-load-more'),
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                color: GFL2Colors.primary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'RETRIEVING OLDER MEMORIES...',
+              style: TextStyle(
+                color: GFL2Colors.textDim.withValues(alpha: 0.6),
+                fontSize: 9,
+                fontFamily: 'monospace',
+                letterSpacing: 1.2,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1069,6 +1199,7 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
                           ),
                           IconButton(
                             onPressed: () => Navigator.of(context).pop(),
+                            tooltip: 'Close',
                             icon: const Icon(
                               Icons.close,
                               color: GFL2Colors.textDim,

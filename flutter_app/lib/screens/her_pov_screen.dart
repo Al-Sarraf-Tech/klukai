@@ -5,11 +5,11 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:web/web.dart' as web;
 
 import '../main.dart' show GFL2Colors;
 import '../models/memory.dart';
 import '../services/memory_service.dart';
+import '../services/session_auth.dart';
 import 'memory_archive_screen.dart';
 
 /// Her POV — she picks any real moment and draws it from her side.
@@ -19,12 +19,35 @@ class HerPovScreen extends StatefulWidget {
   final int affectionLevel;
   final String affectionLevelName;
 
+  /// Client for the start/poll calls. Injectable for tests.
+  final http.Client? client;
+
+  /// Gallery transport. Injectable for tests; defaults to a real service.
+  final MemoryService? memoryService;
+
+  /// What to do on a 401. Defaults to the shared login bounce; tests inject
+  /// a recorder so the browser is never actually navigated.
+  final VoidCallback? onAuthExpired;
+
   const HerPovScreen({
     super.key,
     required this.serverUrl,
     required this.affectionLevel,
     required this.affectionLevelName,
+    this.client,
+    this.memoryService,
+    this.onAuthExpired,
   });
+
+  /// What she says when the server throttles a request (429 on the POST —
+  /// it charges the image_gen bucket). The link is fine, and so is she, so
+  /// this must never read as "could not reach her".
+  static String rateLimitedLine(int? retryAfterSeconds) {
+    final s = retryAfterSeconds ?? 0;
+    if (s <= 0) return '…One at a time, Commander. Give me a moment.';
+    if (s <= 90) return '…One at a time, Commander. Give me a minute.';
+    return '…One at a time, Commander. Ask me again in ${(s / 60).ceil()} minutes.';
+  }
 
   @override
   State<HerPovScreen> createState() => _HerPovScreenState();
@@ -35,6 +58,7 @@ enum _Phase { idle, searching, thinking, drawing, done, failed }
 class _HerPovScreenState extends State<HerPovScreen>
     with TickerProviderStateMixin {
   late final MemoryService _memories;
+  late final http.Client _client;
   late final AnimationController _pulse;
   late final AnimationController _spin;
 
@@ -47,13 +71,18 @@ class _HerPovScreenState extends State<HerPovScreen>
   List<Memory> _gallery = [];
   bool _galleryLoading = true;
   Timer? _poll;
+
+  /// A poll is in flight. Timer.periodic keeps firing on a slow link; without
+  /// this the ticks stack up and land out of order.
+  bool _ticking = false;
   int _pollFailures = 0;
   static const int _maxPollFailures = 5;
 
   @override
   void initState() {
     super.initState();
-    _memories = MemoryService(serverUrl: widget.serverUrl);
+    _memories = widget.memoryService ?? MemoryService(serverUrl: widget.serverUrl);
+    _client = widget.client ?? http.Client();
     _pulse = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 1700))
       ..repeat(reverse: true);
@@ -71,20 +100,27 @@ class _HerPovScreenState extends State<HerPovScreen>
     super.dispose();
   }
 
-  Map<String, String> get _headers {
-    var token = '';
-    try {
-      token = web.window.localStorage.getItem('klukai_token') ?? '';
-    } catch (_) {}
-    return {
-      'Authorization': 'Bearer $token',
-      'Content-Type': 'application/json',
-    };
+  Map<String, String> get _headers => {
+        'Authorization': 'Bearer ${readAuthToken()}',
+        'Content-Type': 'application/json',
+      };
+
+  void _authExpired() {
+    _poll?.cancel();
+    if (!mounted) return;
+    (widget.onAuthExpired ?? handleAuthExpired)();
   }
 
   Future<void> _loadGallery() async {
     setState(() => _galleryLoading = true);
     try {
+      // NOTE(paging): this is "newest 40, then filter on the client", so an
+      // old Her POV portrait can fall off the end once newer memories pile
+      // up. It cannot be pushed server-side yet: /api/memories filters by
+      // category/month/before only, and a her_pov memory's category depends
+      // on the affection level at the time (Precious Memories / The
+      // Commander / Quiet Hours) — the stable marker is the `her_pov` scene
+      // tag, which the server has no query for.
       final all = await _memories.fetchMemories(limit: 40);
       final hers = all.where((m) {
         final tags = m.sceneTags.map((t) => t.toLowerCase());
@@ -95,6 +131,16 @@ class _HerPovScreenState extends State<HerPovScreen>
       if (!mounted) return;
       setState(() {
         _gallery = hers.isNotEmpty ? hers : all.take(12).toList();
+        _galleryLoading = false;
+      });
+    } on MemoryServiceException catch (e) {
+      if (!mounted) return;
+      if (e.isAuthExpired) {
+        _authExpired();
+        return;
+      }
+      setState(() {
+        _gallery = [];
         _galleryLoading = false;
       });
     } catch (_) {
@@ -123,16 +169,31 @@ class _HerPovScreenState extends State<HerPovScreen>
       _memoryId = null;
     });
     try {
-      final resp = await http.post(
+      final resp = await _client.post(
         Uri.parse('${widget.serverUrl}/api/memories/her-pov'),
         headers: _headers,
       );
+      if (!mounted) return;
+      if (resp.statusCode == 401) {
+        _authExpired();
+        return;
+      }
+      if (resp.statusCode == 429) {
+        // Throttled, not unreachable. Stand down (so the button re-arms)
+        // and tell him when to ask again.
+        setState(() {
+          _phase = _Phase.idle;
+          _status = HerPovScreen.rateLimitedLine(_retryAfter(resp));
+        });
+        return;
+      }
       if (resp.statusCode != 202 && resp.statusCode != 200) {
         throw Exception('HTTP ${resp.statusCode}');
       }
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
       _jobId = data['job_id'] as String?;
       _pollFailures = 0;
+      _ticking = false;
       _poll?.cancel();
       _poll = Timer.periodic(const Duration(seconds: 2), (_) => _tick());
       await _tick();
@@ -145,30 +206,61 @@ class _HerPovScreenState extends State<HerPovScreen>
     }
   }
 
+  /// Seconds until the bucket refills: the Retry-After header, else the
+  /// `retry_after` the structured error body carries. Null when neither.
+  static int? _retryAfter(http.Response resp) {
+    final header = int.tryParse(resp.headers['retry-after']?.trim() ?? '');
+    if (header != null) return header;
+    try {
+      final body = jsonDecode(resp.body);
+      final v = body is Map ? body['retry_after'] : null;
+      if (v is int) return v;
+      if (v is num) return v.ceil();
+      if (v is String) return int.tryParse(v);
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> _tick() async {
     final id = _jobId;
-    if (id == null) return;
+    // Don't stack a second poll on a slow one: Timer.periodic fires on the
+    // clock, not on completion.
+    if (id == null || _ticking) return;
+    _ticking = true;
     try {
-      final resp = await http.get(
-        Uri.parse('${widget.serverUrl}/api/memories/her-pov/$id'),
-        headers: _headers,
-      );
+      final http.Response resp;
+      try {
+        resp = await _client.get(
+          Uri.parse('${widget.serverUrl}/api/memories/her-pov/$id'),
+          headers: _headers,
+        );
+      } catch (_) {
+        // A transport failure counts toward the give-up like a bad status —
+        // a dead link used to poll for the life of the tab with the button
+        // stuck disabled.
+        _pollFailed('Lost the signal. Ask me again.');
+        return;
+      }
+      if (!mounted) return;
+      if (resp.statusCode == 401) {
+        _authExpired();
+        return;
+      }
       if (resp.statusCode != 200) {
         // The job board is in-process, so a core restart makes a live job
         // 404 forever. Give up instead of polling for the life of the tab
         // with the button stuck disabled.
-        if (++_pollFailures >= _maxPollFailures) {
-          _poll?.cancel();
-          if (!mounted) return;
-          setState(() {
-            _phase = _Phase.failed;
-            _status = 'Lost track of that one. Ask me again.';
-          });
-        }
+        _pollFailed('Lost track of that one. Ask me again.');
+        return;
+      }
+      final Map<String, dynamic> data;
+      try {
+        data = jsonDecode(resp.body) as Map<String, dynamic>;
+      } catch (_) {
+        _pollFailed('Lost track of that one. Ask me again.');
         return;
       }
       _pollFailures = 0;
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
       final phase = (data['phase'] as String?) ?? 'searching';
       final mapped = switch (phase) {
         'thinking' => _Phase.thinking,
@@ -177,7 +269,6 @@ class _HerPovScreenState extends State<HerPovScreen>
         'failed' => _Phase.failed,
         _ => _Phase.searching,
       };
-      if (!mounted) return;
       setState(() {
         _phase = mapped;
         _status = (data['message'] as String?) ?? _status;
@@ -192,7 +283,20 @@ class _HerPovScreenState extends State<HerPovScreen>
           await _loadGallery();
         }
       }
-    } catch (_) {}
+    } finally {
+      _ticking = false;
+    }
+  }
+
+  /// One more strike against the poll. On the fifth, stop and say so.
+  void _pollFailed(String line) {
+    if (++_pollFailures < _maxPollFailures) return;
+    _poll?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _phase = _Phase.failed;
+      _status = line;
+    });
   }
 
   @override

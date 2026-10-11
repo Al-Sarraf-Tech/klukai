@@ -8,16 +8,33 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../services/session_auth.dart';
+
 class SubscriptionScreen extends StatefulWidget {
   final String serverUrl;
   final String? authToken;
-  const SubscriptionScreen({super.key, required this.serverUrl, this.authToken});
+
+  /// Injectable for tests; defaults to a real HTTP client.
+  final http.Client? client;
+
+  /// What to do on a 401. Defaults to the shared login bounce; tests inject
+  /// a recorder.
+  final VoidCallback? onAuthExpired;
+
+  const SubscriptionScreen({
+    super.key,
+    required this.serverUrl,
+    this.authToken,
+    this.client,
+    this.onAuthExpired,
+  });
 
   @override
   State<SubscriptionScreen> createState() => _SubscriptionScreenState();
 }
 
 class _SubscriptionScreenState extends State<SubscriptionScreen> {
+  late final http.Client _client;
   Map<String, dynamic>? _tiersInfo;
   Map<String, dynamic>? _currentSub;
   Map<String, dynamic>? _usage;
@@ -26,26 +43,35 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   @override
   void initState() {
     super.initState();
+    _client = widget.client ?? http.Client();
     _load();
   }
 
   Future<void> _load() async {
     try {
-      final tiersResp = await http.get(Uri.parse('${widget.serverUrl}/api/billing/tiers'));
+      final tiersResp = await _client.get(Uri.parse('${widget.serverUrl}/api/billing/tiers'));
       Map<String, dynamic>? sub;
       Map<String, dynamic>? usage;
       if (widget.authToken != null) {
-        final subResp = await http.get(
+        final subResp = await _client.get(
           Uri.parse('${widget.serverUrl}/api/billing/subscription'),
           headers: {'Authorization': 'Bearer ${widget.authToken}'},
         );
+        if (subResp.statusCode == 401) {
+          _authExpired();
+          return;
+        }
         if (subResp.statusCode == 200) {
           sub = jsonDecode(subResp.body);
         }
-        final usageResp = await http.get(
+        final usageResp = await _client.get(
           Uri.parse('${widget.serverUrl}/api/billing/usage'),
           headers: {'Authorization': 'Bearer ${widget.authToken}'},
         );
+        if (usageResp.statusCode == 401) {
+          _authExpired();
+          return;
+        }
         if (usageResp.statusCode == 200) {
           usage = jsonDecode(usageResp.body);
         }
@@ -61,6 +87,13 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       if (!mounted) return;
       setState(() => _loading = false);
     }
+  }
+
+  /// A 401 on the authenticated calls means the token is dead — render
+  /// nothing fake, go back to login.
+  void _authExpired() {
+    if (!mounted) return;
+    (widget.onAuthExpired ?? handleAuthExpired)();
   }
 
   @override
