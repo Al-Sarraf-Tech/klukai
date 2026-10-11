@@ -236,11 +236,151 @@ def test_docker_proxy_gateway_source_bypasses_bearer_token(tmp_path: Path) -> No
     # The actual behavior observed in production: docker-proxy relays the
     # published port from the dominus-ai-publish network's gateway address,
     # not loopback. See the comment on _from_tailnet in gateway/main.py.
-    app, _ = make_app(tmp_path, default_handler, gateway_token="correct-token")
+    #
+    # The bypass is scoped (see _bypass_allowed): the inference/catalog
+    # surface aichat needs stays token-less, while every GPU-control endpoint
+    # keeps requiring the bearer even from a tailnet-looking source.
+    app, _ = make_app(
+        tmp_path, StatefulRouter(loaded=False), gateway_token="correct-token"
+    )
+    auth = {"Authorization": "Bearer correct-token"}
     with TestClient(app, client=("172.19.0.1", 51820)) as client:
-        no_token = client.get("/api/v0/models")
+        listing_v0 = client.get("/api/v0/models")
+        detail_v0 = client.get("/api/v0/models/legacy-chat")
+        listing_v1 = client.get("/api/v1/models")
+        listing_openai = client.get("/v1/models")
+        inference = client.post(
+            "/v1/chat/completions", json={"model": "chat-model", "messages": []}
+        )
+        load_v0 = client.post("/api/v0/models/load", json={"model": "chat-model"})
+        unload_v0 = client.post("/api/v0/models/unload", json={"model": "chat-model"})
+        load_v1 = client.post("/api/v1/models/load", json={"model": "chat-model"})
+        unload_v1 = client.post(
+            "/api/v1/models/unload", json={"instance_id": "chat-model"}
+        )
+        lease = client.post(
+            "/api/v1/gpu/lease/acquire",
+            json={"owner": "klukai-core", "workload": "comfyui", "ttl_seconds": 600},
+        )
+        comfy = client.post(
+            "/api/v1/comfy/prompt",
+            headers={"X-GPU-Lease-Token": "anything"},
+            json={"prompt": {}},
+        )
+        load_with_token = client.post(
+            "/api/v1/models/load", headers=auth, json={"model": "chat-model"}
+        )
+        lease_with_token = client.post(
+            "/api/v1/gpu/lease/acquire",
+            headers=auth,
+            json={"owner": "klukai-core", "workload": "comfyui", "ttl_seconds": 600},
+        )
+        client.post(
+            "/api/v1/gpu/lease/release",
+            headers=auth,
+            json={"lease_token": lease_with_token.json()["lease_token"]},
+        )
 
-    assert no_token.status_code == 200
+    # Allowed half: the surface a token-less aichat client uses.
+    assert listing_v0.status_code == 200
+    assert detail_v0.status_code == 200
+    assert listing_v1.status_code == 200
+    assert listing_openai.status_code == 200
+    assert inference.status_code == 200
+    # Denied half: anything that changes GPU state needs the real bearer.
+    for denied in (load_v0, unload_v0, load_v1, unload_v1, lease, comfy):
+        assert denied.status_code == 401
+        assert denied.headers["www-authenticate"] == "Bearer"
+        assert denied.json()["error"]["type"] == "authentication_error"
+    assert load_with_token.status_code == 200
+    assert lease_with_token.status_code == 201
+    # The only lease ever written was the authenticated one, and it was released.
+    assert not (tmp_path / "non-llm-lease.json").exists()
+
+
+@pytest.mark.parametrize(
+    "source_ip", ["127.0.0.1", "172.19.0.1", "100.111.198.19"]
+)
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("POST", "/api/v0/models/load"),
+        ("POST", "/api/v0/models/unload"),
+        ("POST", "/api/v1/models/load"),
+        ("POST", "/api/v1/models/unload"),
+        ("POST", "/api/v1/gpu/lease/acquire"),
+        ("POST", "/api/v1/gpu/lease/release"),
+        ("POST", "/api/v1/comfy/prompt"),
+        ("GET", "/api/v1/comfy/history/job-1"),
+        # Trailing-slash and nested variants must not slip past the deny list
+        # before FastAPI's redirect/route matching sees them.
+        ("POST", "/api/v1/models/load/"),
+        ("POST", "/api/v1/gpu/lease/acquire/extra"),
+    ],
+)
+def test_tailnet_bypass_never_covers_gpu_control_endpoints(
+    tmp_path: Path, source_ip: str, method: str, path: str
+) -> None:
+    upstream_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal upstream_calls
+        if request.url.path != "/health":
+            upstream_calls += 1
+        return default_handler(request)
+
+    app, _ = make_app(tmp_path, handler, gateway_token="correct-token")
+    with TestClient(app, client=(source_ip, 51820)) as client:
+        response = client.request(
+            method,
+            path,
+            headers={"X-GPU-Lease-Token": "anything"},
+            json={"model": "chat-model", "lease_token": "x"},
+        )
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert upstream_calls == 0
+    assert not (tmp_path / "non-llm-lease.json").exists()
+
+
+@pytest.mark.parametrize(
+    "supplied",
+    [
+        # Starlette decodes header bytes as latin-1; both encodings of the
+        # same visible string reach _authorized as non-ASCII text.
+        "Bearer caf\xe9".encode("latin-1"),
+        "Bearer café".encode("utf-8"),
+    ],
+)
+def test_non_ascii_bearer_is_rejected_with_401_not_500(
+    tmp_path: Path, supplied: bytes
+) -> None:
+    app, _ = make_app(tmp_path, default_handler, gateway_token="correct-token")
+    with TestClient(app) as client:
+        response = client.get("/api/v0/models", headers={"Authorization": supplied})
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert response.json()["error"]["type"] == "authentication_error"
+
+
+def test_utf8_bearer_token_still_matches_after_byte_comparison(tmp_path: Path) -> None:
+    # The byte comparison must not break a configured token that is itself
+    # non-ASCII: the client's raw UTF-8 bytes equal the token's UTF-8 bytes.
+    app, _ = make_app(tmp_path, default_handler, gateway_token="s3cret-café")
+    with TestClient(app) as client:
+        matched = client.get(
+            "/api/v0/models",
+            headers={"Authorization": "Bearer s3cret-café".encode("utf-8")},
+        )
+        mismatched = client.get(
+            "/api/v0/models",
+            headers={"Authorization": "Bearer s3cret-cafe".encode("utf-8")},
+        )
+
+    assert matched.status_code == 200
+    assert mismatched.status_code == 401
 
 
 def test_sibling_container_source_ip_still_requires_bearer_token(
@@ -1403,3 +1543,202 @@ def test_gpu_lease_acquire_has_bounded_wait_for_inflight_stream(
 
     assert not stream_thread.is_alive()
     assert stream_result == [200]
+
+
+def test_inference_wait_behind_stalled_stream_is_bounded_and_health_reports_busy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    finish = threading.Event()
+    router = StatefulRouter(loaded=False)
+    upstream_inference_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal upstream_inference_calls
+        if request.url.path == "/v1/chat/completions":
+            upstream_inference_calls += 1
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=BlockingStream(started, finish),
+            )
+        return router(request)
+
+    monkeypatch.setattr(gateway_main, "INFERENCE_COORDINATION_WAIT_SECONDS", 0.02)
+    app, _ = make_app(tmp_path, handler)
+    stream_result: list[int] = []
+
+    with TestClient(app) as client:
+        idle_health = client.get("/health")
+
+        def consume_stream() -> None:
+            with client.stream(
+                "POST",
+                "/v1/chat/completions",
+                json={"model": "chat-model", "messages": [], "stream": True},
+            ) as response:
+                b"".join(response.iter_bytes())
+                stream_result.append(response.status_code)
+
+        stream_thread = threading.Thread(target=consume_stream)
+        stream_thread.start()
+        assert started.wait(timeout=2)
+        # The first request holds the coordination lock until its relay ends.
+        busy_health = client.get("/health")
+        busy = client.post(
+            "/v1/chat/completions",
+            json={"model": "chat-model", "messages": []},
+        )
+        finish.set()
+        stream_thread.join(timeout=2)
+        after_health = client.get("/health")
+        after = client.post(
+            "/v1/chat/completions",
+            json={"model": "chat-model", "messages": []},
+        )
+
+    assert not stream_thread.is_alive()
+    assert stream_result == [200]
+    assert idle_health.json()["inference_busy"] is False
+    # /health stays green on its own; inference_busy is the signal that tells
+    # the two states apart.
+    assert busy_health.status_code == 200
+    assert busy_health.json()["status"] == "ok"
+    assert busy_health.json()["inference_busy"] is True
+    assert busy.status_code == 503
+    assert busy.json() == {
+        "error": {
+            "code": "inference_busy",
+            "message": "Another inference request is still in flight",
+            "type": "unavailable_error",
+        }
+    }
+    assert busy.headers["retry-after"] == "5"
+    assert after_health.json()["inference_busy"] is False
+    assert after.status_code == 200
+    # The busy request never reached llama.cpp; only the stream and the
+    # post-release request did.
+    assert upstream_inference_calls == 2
+
+
+def test_health_reports_inference_idle_by_default(tmp_path: Path) -> None:
+    app, _ = make_app(tmp_path, default_handler)
+    with TestClient(app) as client:
+        health = client.get("/health")
+
+    assert health.status_code == 200
+    assert health.json()["inference_busy"] is False
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/v1/chat/completions", "/api/v1/models/load", "/api/v1/comfy/prompt"],
+)
+def test_oversized_declared_content_length_is_rejected_before_upstream(
+    tmp_path: Path, path: str
+) -> None:
+    upstream_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path not in {"/health", "/models"}:
+            upstream_calls.append(request.url.path)
+        return default_handler(request)
+
+    def comfy_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/system_stats":
+            upstream_calls.append(request.url.path)
+        return httpx.Response(200, json={"status": "ok"})
+
+    app, _ = make_app(tmp_path, handler, comfy_handler=comfy_handler)
+    oversized = str(gateway_main.MAX_REQUEST_BODY_BYTES + 1)
+    with TestClient(app) as client:
+        response = client.post(
+            path,
+            headers={
+                "Content-Length": oversized,
+                "Content-Type": "application/json",
+                "X-GPU-Lease-Token": "anything",
+            },
+            content=b'{"model":"chat-model","prompt":{}}',
+        )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "payload_too_large"
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert upstream_calls == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/v1/chat/completions", "/api/v1/models/load", "/api/v1/comfy/prompt"],
+)
+def test_oversized_streamed_body_without_content_length_is_rejected(
+    tmp_path: Path, path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gateway_main, "MAX_REQUEST_BODY_BYTES", 1024)
+    upstream_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path not in {"/health", "/models"}:
+            upstream_calls.append(request.url.path)
+        return default_handler(request)
+
+    def comfy_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/system_stats":
+            upstream_calls.append(request.url.path)
+        return httpx.Response(200, json={"status": "ok"})
+
+    def chunked() -> Any:
+        yield b'{"model":"chat-model","padding":"'
+        yield b"x" * 2048
+        yield b'"}'
+
+    app, _ = make_app(tmp_path, handler, comfy_handler=comfy_handler)
+    with TestClient(app) as client:
+        response = client.post(
+            path,
+            headers={
+                "Content-Type": "application/json",
+                "X-GPU-Lease-Token": "anything",
+            },
+            content=chunked(),
+        )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "payload_too_large"
+    assert upstream_calls == []
+
+
+def test_body_within_limit_is_forwarded_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gateway_main, "MAX_REQUEST_BODY_BYTES", 1024)
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            seen["payload"] = json.loads(request.content)
+        return default_handler(request)
+
+    def chunked() -> Any:
+        yield b'{"model":"chat-model","messages":[],"padding":"'
+        yield b"x" * 200
+        yield b'"}'
+
+    app, _ = make_app(tmp_path, handler)
+    with TestClient(app) as client:
+        with_length = client.post(
+            "/v1/chat/completions",
+            json={"model": "chat-model", "messages": [], "padding": "y" * 200},
+        )
+        streamed = client.post(
+            "/v1/chat/completions",
+            headers={"Content-Type": "application/json"},
+            content=chunked(),
+        )
+
+    assert with_length.status_code == 200
+    assert streamed.status_code == 200
+    assert seen["payload"]["model"] == "chat-router-preset"
+    assert seen["payload"]["padding"] == "x" * 200

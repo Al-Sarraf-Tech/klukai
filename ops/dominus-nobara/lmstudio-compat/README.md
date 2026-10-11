@@ -48,6 +48,26 @@ also accepted. Secret-file values take precedence. The gateway never forwards
 the client credential to llama.cpp, does not include secrets in responses, and
 runs Uvicorn without access logs.
 
+Requests that arrive through the Tailscale-bound publish are seen from
+docker-proxy's address (`172.19.0.1`, with `127.0.0.1` and `100.64.0.0/10`
+accepted for topology changes). Those sources may omit the bearer only for the
+surface a token-less `aichat` client uses: `/v1/*`, `GET /api/v0/models` and
+its per-model detail, and `GET /api/v1/models` (`_bypass_allowed` in
+`gateway/main.py`). Model load/unload, `/api/v1/gpu/lease/*`, and the
+`/api/v1/comfy/*` facade require the bearer from every source. A non-ASCII
+bearer is a `401`, not a `500`.
+
+Request bodies are read through a 64 MiB bound (`MAX_REQUEST_BODY_BYTES`): a
+larger declared `Content-Length`, or a chunked body that crosses the limit, is
+refused with `413 payload_too_large` before anything reaches an upstream. The
+Compose `mem_limit`/`pids_limit` on this service are the backstop behind it.
+
+`/v1/*` waits at most 120 seconds (`INFERENCE_COORDINATION_WAIT_SECONDS`) for
+the coordination lock held by an in-flight request, then returns
+`503 inference_busy` with `Retry-After: 5`. `/health` reports `inference_busy`
+so a client that stopped reading its stream is distinguishable from a down
+router (`upstream` stays `ok` in that case).
+
 While the marker exists, `/v1/*` inference and both load endpoints return 503.
 Catalogs and health remain available, and unload remains enabled so the guard
 can always free GPU memory.
