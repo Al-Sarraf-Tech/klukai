@@ -90,7 +90,9 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
             session = await memory.get_session(session_id(user_id))
             if session and session.turns:
                 last_turn = session.turns[-1]
-                if last_turn["role"] == "assistant":
+                # Never voice the offline notice: it would take a GPU lease (and
+                # evict the LLM) exactly when the LLM is what just failed.
+                if last_turn["role"] == "assistant" and not last_turn["content"].startswith(FAILURE_SENTINEL):
                     try:
                         from .voice_client import post_leased_tts
 

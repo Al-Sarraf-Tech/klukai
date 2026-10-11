@@ -134,7 +134,11 @@ export function reduceFrame(state, frame) {
       s.streaming = false;
       s.thinking = false;
       s.line = text;
-      if (text && text.trim()) effects.push({ kind: "speak", text });
+      // The offline notice is not something she says: voicing it would take a
+      // GPU lease right when the model is what failed.
+      if (text && text.trim() && !text.startsWith("Communications disrupted")) {
+        effects.push({ kind: "speak", text });
+      }
       break;
     }
     case "thinking":

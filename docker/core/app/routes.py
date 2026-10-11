@@ -45,7 +45,8 @@ class TTSRequest(BaseModel):
 
 
 class STTRequest(BaseModel):
-    audio: str = Field(min_length=1)
+    # ~6 MB decoded: several minutes of Opus, far beyond any push-to-talk clip.
+    audio: str = Field(min_length=1, max_length=8_000_000)
 
 
 class ImageGenRequest(BaseModel):
@@ -349,7 +350,11 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                     import base64
 
                     return {"audio": base64.b64encode(r.content).decode()}
-                return JSONResponse({"error": "TTS failed"}, status_code=r.status_code)
+                # Never relay the voice service's own status: its 401/403 means a
+                # backend token mismatch, and the PWA treats any 401 as an expired
+                # session and logs the user out.
+                logger.warning("TTS upstream returned HTTP %s", r.status_code)
+                return JSONResponse({"error": "TTS failed"}, status_code=502)
         except Exception:
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
 

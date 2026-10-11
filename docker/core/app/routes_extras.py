@@ -187,12 +187,18 @@ def register_extras(app: FastAPI) -> None:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        voice_url = os.environ.get("VOICE_URL", "http://100.107.121.5:8301")
         try:
             from .helpers import voice_auth_headers
+            from .voice_client import voice_url
             async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(f"{voice_url}/stt", json={"audio": req.audio}, headers=voice_auth_headers())
-                return r.json()
+                r = await client.post(f"{voice_url()}/stt", json={"audio": req.audio}, headers=voice_auth_headers())
+                data = r.json() if r.status_code == 200 else None
+                # An upstream failure used to be relayed as HTTP 200 with no
+                # "text", which the PWA swallowed: hold the button, speak, and
+                # nothing happened. Report it as a failure instead.
+                if not isinstance(data, dict) or data.get("error"):
+                    return JSONResponse({"error": "Transcription failed"}, status_code=502)
+                return data
         except Exception:
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
 

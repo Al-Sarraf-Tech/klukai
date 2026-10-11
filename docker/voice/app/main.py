@@ -19,7 +19,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logging.basicConfig(
     level=logging.INFO,
@@ -469,8 +469,24 @@ async def text_to_speech(
                     pass
 
 
+# ~6 MB decoded is several minutes of Opus: far past any push-to-talk clip,
+# and small enough that one request cannot pin the host decoding it.
+MAX_STT_AUDIO_B64 = 8_000_000
+
+
+def _transcribe_sync(model, path: str):
+    """Run the whole transcription off the event loop.
+
+    faster-whisper's ``transcribe`` returns a lazy generator; the decoding
+    happens while it is iterated. Iterating it on the loop thread froze the
+    service (health checks, TTS, unload) for the length of every clip.
+    """
+    segments, info = model.transcribe(path, beam_size=5)
+    return " ".join(s.text for s in segments).strip(), info
+
+
 class STTRequest(BaseModel):
-    audio: str
+    audio: str = Field(min_length=1, max_length=MAX_STT_AUDIO_B64)
 
 
 @app.post("/stt", dependencies=[Depends(require_token)])
@@ -488,10 +504,7 @@ async def speech_to_text(req: STTRequest):
                 tmp.write(audio_bytes)
                 tmp_path = tmp.name
             try:
-                segments, info = await asyncio.to_thread(
-                    model.transcribe, tmp_path, beam_size=5
-                )
-                text = " ".join(s.text for s in segments).strip()
+                text, info = await asyncio.to_thread(_transcribe_sync, model, tmp_path)
                 return {
                     "text": text,
                     "language": info.language,
@@ -516,18 +529,17 @@ async def stt_upload(audio: UploadFile = File(...)):
             return {"text": "", "error": "Whisper not loaded"}
 
         try:
+            # Read the body first: a disconnect or full tmpfs mid-read used to
+            # leave an already-created temp file behind.
+            content = await audio.read()
             with tempfile.NamedTemporaryFile(
                 suffix=f".{audio.filename.split('.')[-1] if audio.filename else 'webm'}",
                 delete=False,
             ) as tmp:
-                content = await audio.read()
                 tmp.write(content)
                 tmp_path = tmp.name
             try:
-                segments, info = await asyncio.to_thread(
-                    model.transcribe, tmp_path, beam_size=5
-                )
-                text = " ".join(s.text for s in segments).strip()
+                text, info = await asyncio.to_thread(_transcribe_sync, model, tmp_path)
                 return {
                     "text": text,
                     "language": info.language,
