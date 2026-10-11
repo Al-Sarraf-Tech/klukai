@@ -200,9 +200,9 @@ export const OUTLINE = Object.freeze({
 });
 
 /**
- * Wave 2, OFF by default so a plain build still produces the wave-1 model.
- * Turn a feature on for one build with AVATAR_FEATURES=openJacket,hairChains
- * (or set `enabled: true` here to make it the default).
+ * Optional build features. `enabled: true` makes one the default; turn one on
+ * for a single build with AVATAR_FEATURES=openJacket,hairChains. openJacket and
+ * hairCopies ship (2026-10-11); hairChains needs the viewer's spring physics.
  */
 export const FEATURES = Object.freeze(['openJacket', 'hairCopies', 'hairChains']);
 
@@ -212,7 +212,7 @@ export const FEATURES = Object.freeze(['openJacket', 'hairCopies', 'hairChains']
  * it z-fights with the hair and doubles the blink-morph head mesh. Drop the
  * copies (islands with a near-twin in `twinsOf`).
  */
-export const HAIR_COPIES = Object.freeze({ enabled: false, group: 'Klukai_Face', twinsOf: 'Klukai_Hair' });
+export const HAIR_COPIES = Object.freeze({ enabled: true, group: 'Klukai_Face', twinsOf: 'Klukai_Hair' });
 
 /**
  * Open jacket: the dropped `Klukai_Cloth_1_(Astral_Luminous)` group is the same
@@ -224,7 +224,7 @@ export const HAIR_COPIES = Object.freeze({ enabled: false, group: 'Klukai_Face',
  * are prepended to the target group's own.
  */
 export const OPEN_JACKET = Object.freeze({
-  enabled: false,
+  enabled: true,
   into: 'Klukai_Cloth_1',
   from: Object.freeze(['Klukai_Cloth_1_(Astral_Luminous)']),
   atlasOverrides: Object.freeze([

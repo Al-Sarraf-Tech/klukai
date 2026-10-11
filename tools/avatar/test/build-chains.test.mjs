@@ -103,12 +103,15 @@ test('dropTwinIslands keeps only islands without a near-copy (same UVs, same fac
   assert.deepEqual(dropTwinIslands({ obj, baseFaces: [0, 1], extraFaces: [2, 3], posTol: 1e-5 }).kept, [2, 3], 'tolerance respected');
 });
 
-// ── features (wave 2 stays off unless asked) ───────────────────────────────
+// ── features ────────────────────────────────────────────────────────────────
 
-test('wave-2 features are off by default, on per build or per config', () => {
+test('open jacket + hair-copy drop ship by default; hair chains wait for the viewer springs', () => {
   assert.deepEqual([...FEATURES].sort(), ['hairChains', 'hairCopies', 'openJacket']);
+  assert.equal(featureOn(CONFIG, 'openJacket'), true);
+  assert.equal(featureOn(CONFIG, 'hairCopies'), true);
+  // Unsimulated chains swing the ponytail out like a stick: on only with springs.
+  assert.equal(featureOn(CONFIG, 'hairChains'), false);
   for (const f of FEATURES) {
-    assert.equal(featureOn(CONFIG, f), false, `${f} off by default: a plain build is the wave-1 model`);
     assert.equal(featureOn(CONFIG, f, [f]), true);
     assert.equal(featureOn({ ...CONFIG, [f]: { ...CONFIG[f], enabled: true } }, f), true);
   }
