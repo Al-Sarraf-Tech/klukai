@@ -90,7 +90,7 @@ async def due_promises(user_id: str, now: datetime) -> list[dict]:
     try:
         async with get_conn() as conn:
             rows = await (await conn.execute(
-                "SELECT id, promise_text, commitment, made_at, scheduled_followup "  # nosec B608 — the only interpolation is the module constant _NOT_EVENT_SQL; user values are bound parameters
+                "SELECT id, promise_text, commitment, made_at, scheduled_followup "  # nosec B608  # the only interpolation is the module constant _NOT_EVENT_SQL; user values are bound parameters
                 "FROM companion_promises "
                 "WHERE user_id = %s AND scheduled_followup <= %s "
                 "AND resolved_at IS NULL AND followup_sent_at IS NULL "
@@ -131,7 +131,7 @@ async def open_promises(user_id: str, limit: int = 50) -> list[dict]:
     try:
         async with get_conn() as conn:
             rows = await (await conn.execute(
-                "SELECT id, promise_text, commitment, made_at, scheduled_followup, "  # nosec B608 — the only interpolation is the module constant _NOT_EVENT_SQL; user values are bound parameters
+                "SELECT id, promise_text, commitment, made_at, scheduled_followup, "  # nosec B608  # the only interpolation is the module constant _NOT_EVENT_SQL; user values are bound parameters
                 "followup_sent_at FROM companion_promises "
                 "WHERE user_id = %s AND resolved_at IS NULL "
                 f"{_NOT_EVENT_SQL}"
