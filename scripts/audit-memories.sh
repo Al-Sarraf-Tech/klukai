@@ -111,19 +111,24 @@ check_drop() {
   local name="$1" current="$2" baseline="$3"
   if (( baseline == 0 )); then return; fi  # No baseline data, no comparison
 
+  # Compare without dividing: integer division floors a 5.9% drop to 5,
+  # which is not > 5. drop_pct is only for the message.
   local drop_pct=$(( (baseline - current) * 100 / baseline ))
-  if (( drop_pct > THRESHOLD_PCT )); then
+  if (( (baseline - current) * 100 > THRESHOLD_PCT * baseline )); then
     log "ALERT: $name dropped ${drop_pct}% (baseline=$baseline, current=$current)"
     return 1
   fi
   return 0
 }
 
+# Not ((DROPS++)): the post-increment from 0 evaluates to 0, which is exit
+# status 1 as the last command of the list, so set -e killed the script on
+# the first drop and the summary never printed.
 DROPS=0
-check_drop "PG messages"   "$PG_MESSAGES"   "$BASE_MESSAGES"   || ((DROPS++))
-check_drop "PG memories"   "$PG_MEMORIES"   "$BASE_MEMORIES"   || ((DROPS++))
-check_drop "Qdrant episodes" "$QDRANT_EPISODES" "$BASE_EPISODES" || ((DROPS++))
-check_drop "Qdrant exchanges" "$QDRANT_EXCHANGES" "$BASE_EXCHANGES" || ((DROPS++))
+check_drop "PG messages"   "$PG_MESSAGES"   "$BASE_MESSAGES"   || DROPS=$((DROPS + 1))
+check_drop "PG memories"   "$PG_MEMORIES"   "$BASE_MEMORIES"   || DROPS=$((DROPS + 1))
+check_drop "Qdrant episodes" "$QDRANT_EPISODES" "$BASE_EPISODES" || DROPS=$((DROPS + 1))
+check_drop "Qdrant exchanges" "$QDRANT_EXCHANGES" "$BASE_EXCHANGES" || DROPS=$((DROPS + 1))
 
 # Update baseline with the higher value per field (counts should monotonically grow)
 NEW_BASELINE_MESSAGES=$(( PG_MESSAGES > BASE_MESSAGES ? PG_MESSAGES : BASE_MESSAGES ))

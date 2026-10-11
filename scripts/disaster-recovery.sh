@@ -6,6 +6,15 @@
 #   scripts/disaster-recovery.sh [--dry-run] [--backup-date YYYY-MM-DD]
 #   DR_CONFIRM_RESTORE=restore-klukai-from-verified-backup \
 #   DR_CONFIRM_SHARED_AICHAT=yes scripts/disaster-recovery.sh --execute
+#
+# --backup-date matches the UTC date in the archive name
+# (backups-YYYYMMDD-HHMMSS.tar.gz); the selected archive's local time is logged.
+# DR_COMPONENTS=postgres,qdrant,images (default: all three) limits --execute to
+# the listed components; the images component also restores klukai/audio-latest
+# into the companion-audio volume when the archive carries it. Before any
+# destructive step the live companion_* objects are dumped to
+# <work dir>/pre-restore-klukai-db-<stamp>.sql.gz; that dump failing aborts
+# the run with nothing changed.
 
 set -Eeuo pipefail
 
@@ -24,7 +33,7 @@ while (( $# > 0 )); do
       BACKUP_DATE=$2
       shift 2
       ;;
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "disaster-recovery: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -52,12 +61,18 @@ SSH_CONNECT_TIMEOUT_SECONDS="${SSH_CONNECT_TIMEOUT_SECONDS:-15}"
 QDRANT_RESTORE_URL="${QDRANT_RESTORE_URL:-http://127.0.0.1:6333}"
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-infra-postgres}"
 IMAGES_VOLUME="${IMAGES_VOLUME:-companion_companion-images}"
+AUDIO_VOLUME="${AUDIO_VOLUME:-companion_companion-audio}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8300/health}"
+# Comma-separated subset of postgres,qdrant,images. Payload verification always
+# covers the whole archive; only the restore blocks are gated.
+DR_COMPONENTS="${DR_COMPONENTS:-postgres,qdrant,images}"
 
 early_fatal() {
   echo "disaster-recovery: ERROR: $*" >&2
   exit 1
 }
+
+has() { [[ ",${DR_COMPONENTS}," == *",$1,"* ]]; }
 
 for command_name in awk basename curl date docker find findmnt grep gzip install jq mountpoint mv realpath sed sha256sum sleep sort ssh tail tailscale tar tee; do
   command -v "${command_name}" >/dev/null || early_fatal "missing required command: ${command_name}"
@@ -66,6 +81,8 @@ if ! [[ "${SSH_CONNECT_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || \
    (( SSH_CONNECT_TIMEOUT_SECONDS < 5 || SSH_CONNECT_TIMEOUT_SECONDS > 120 )); then
   early_fatal "SSH_CONNECT_TIMEOUT_SECONDS must be between 5 and 120"
 fi
+[[ "${DR_COMPONENTS}" =~ ^(postgres|qdrant|images)(,(postgres|qdrant|images))*$ ]] || \
+  early_fatal "DR_COMPONENTS must be a comma-separated subset of postgres,qdrant,images"
 
 LOCAL_MOUNT=$(realpath -m -- "${LOCAL_MOUNT}")
 RESTORE_ROOT=$(realpath -m -- "${RESTORE_ROOT}")
@@ -162,22 +179,30 @@ REMOTE
 ) || fatal "remote Tailnet/RAID/backup preflight failed"
 
 [[ -n "${LATEST_RECORD}" ]] || fatal "no backup matches ${BACKUP_PATTERN} at ${DEST_HOST}:${DEST_PATH}"
+LATEST_MTIME=${LATEST_RECORD%%$'\t'*}
+LATEST_MTIME=${LATEST_MTIME%%.*}
 LATEST_TAR=${LATEST_RECORD#*$'\t'}
 TAR_BASENAME=$(basename -- "${LATEST_TAR}")
 [[ "${TAR_BASENAME}" =~ ^backups-[0-9]{8}-[0-9]{6}\.tar\.gz$ ]] || fatal "unsafe archive name"
 [[ "${LATEST_TAR}" == "${DEST_PATH}/${TAR_BASENAME}" ]] || fatal "archive path escaped destination"
+[[ "${LATEST_MTIME}" =~ ^[0-9]+$ ]] || fatal "remote inventory returned a non-numeric archive mtime"
+# The archive name carries a UTC stamp; report when it was written in local time.
 step "selected verified-format candidate ${DEST_HOST}:${LATEST_TAR}"
+step "archive written $(date -d "@${LATEST_MTIME}" '+%Y-%m-%d %H:%M:%S %Z') local time (name stamp is UTC)"
 
 if [[ "${MODE}" == dry-run ]]; then
   echo "[DR] DRY RUN: no archive copied and no service or data modified"
   echo "[DR] would verify ${TAR_BASENAME} plus its SHA-256 sidecar"
   echo "[DR] would require PostgreSQL, Qdrant, and companion image payloads before stopping companion-core"
   echo "[DR] would stop/start only the amarillo companion-core Compose service"
+  echo "[DR] would dump the live companion_* objects to the work directory before any destructive step"
+  echo "[DR] would restore only these components: ${DR_COMPONENTS}"
   echo "[DR] execute requires both DR_CONFIRM_RESTORE and DR_CONFIRM_SHARED_AICHAT gates"
   jq -n \
     --arg drill_date "${STAMP}" \
     --arg backup_tar "${TAR_BASENAME}" \
-    '{drill_date:$drill_date,mode:"dry-run",backup_tar:$backup_tar,
+    --arg components "${DR_COMPONENTS}" \
+    '{drill_date:$drill_date,mode:"dry-run",backup_tar:$backup_tar,components:$components,
       duration_seconds:0,rto_achieved:null,outcome:"validated-plan-only"}' \
     >"${DRILL_JSON}"
   exit 0
@@ -259,10 +284,22 @@ tar --no-same-owner --no-same-permissions -xzf "${TAR_LOCAL}" -C "${EXTRACT_DIR}
 PG_DUMP=$(find "${EXTRACT_DIR}" -type f -name 'klukai-db-*.sql.gz' -print | LC_ALL=C sort | tail -n 1)
 [[ -n "${PG_DUMP}" ]] || fatal "no klukai-db-*.sql.gz in archive"
 gzip -t -- "${PG_DUMP}" || fatal "PostgreSQL dump failed gzip validation"
+# A dump truncated at a statement boundary is still valid gzip; pg_dump always
+# ends a complete plain dump with this trailer.
+gzip -cd -- "${PG_DUMP}" | tail -n 5 | grep -q 'PostgreSQL database dump complete' || \
+  fatal "PostgreSQL dump lacks the pg_dump completion trailer (truncated?)"
 QDRANT_SNAP_DIR="${EXTRACT_DIR}/qdrant"
 compgen -G "${QDRANT_SNAP_DIR}/*.snapshot" >/dev/null || fatal "archive lacks required Qdrant snapshots"
+for SNAPSHOT in "${QDRANT_SNAP_DIR}"/*.snapshot; do
+  tar -tf "${SNAPSHOT}" >/dev/null || fatal "Qdrant snapshot failed tar validation: ${SNAPSHOT}"
+done
 IMAGES_SOURCE="${EXTRACT_DIR}/klukai/images-latest"
 [[ -d "${IMAGES_SOURCE}" ]] || fatal "archive lacks required companion images"
+[[ -n "$(find "${IMAGES_SOURCE}" -type f -print -quit)" ]] || \
+  fatal "companion image payload is empty; refusing to treat an empty directory as the images backup"
+# Voice letters live in the companion-audio volume. The payload is optional
+# until the producer deposits it (ADR-0014); when present it is restored with images.
+AUDIO_SOURCE="${EXTRACT_DIR}/klukai/audio-latest"
 
 # Parse only SQL statements outside COPY data. The accepted grammar matches the
 # scoped plain pg_dump produced for Klukai: settings, companion_* tables and
@@ -316,6 +353,13 @@ fi
 
 docker ps --format '{{.Names}}' | grep -Fxq -- "${POSTGRES_CONTAINER}" || fatal "shared PostgreSQL container is not running"
 docker volume inspect "${IMAGES_VOLUME}" >/dev/null || fatal "companion images volume is absent"
+if has images && [[ -d "${AUDIO_SOURCE}" ]]; then
+  docker volume inspect "${AUDIO_VOLUME}" >/dev/null || fatal "companion audio volume is absent"
+fi
+if has qdrant; then
+  curl --fail --silent --show-error --max-time 10 "${QDRANT_RESTORE_URL}/collections" >/dev/null || \
+    fatal "Qdrant is not answering at ${QDRANT_RESTORE_URL}; fix that before stopping companion-core"
+fi
 docker compose config --services | grep -Fxq companion-core || fatal "repository Compose does not define companion-core"
 docker compose ps --status running --services | grep -Fxq companion-core || fatal "companion-core is not currently running"
 
@@ -361,30 +405,68 @@ step "stop only companion-core; shared data services remain under their existing
 CORE_STOPPED=true
 docker compose stop --timeout 30 companion-core
 
-step "atomically replace companion_* PostgreSQL objects with ON_ERROR_STOP"
-{
-  printf '%s\n%s\n' "${DROP_TABLES_SQL}" "${DROP_SEQUENCES_SQL}"
-  gzip -cd -- "${PG_DUMP}"
-} \
-  | docker exec -i "${POSTGRES_CONTAINER}" psql --single-transaction -U aichat -d aichat -v ON_ERROR_STOP=1 \
-  || fatal "PostgreSQL restore failed"
+# Safety net: a plain dump of the live companion_* objects, taken after core
+# is quiesced and before anything is dropped or overwritten. It stays in the
+# work directory. If it cannot be taken and proven complete, nothing proceeds.
+SAFETY_DUMP="${WORK_DIR}/pre-restore-klukai-db-${STAMP}.sql.gz"
+if [[ "${DROP_TABLES_SQL}" == '-- no existing companion tables' ]]; then
+  step "no live companion_* tables exist; nothing to preserve in a pre-restore dump"
+else
+  step "pre-restore safety dump of live companion_* objects to ${SAFETY_DUMP}"
+  docker exec "${POSTGRES_CONTAINER}" pg_dump -U aichat -d aichat --no-owner --no-privileges \
+      -t 'public.companion_*' \
+    | gzip -c >"${SAFETY_DUMP}.partial" \
+    || fatal "pre-restore safety dump failed; nothing was changed"
+  gzip -cd -- "${SAFETY_DUMP}.partial" | tail -n 5 | grep -q 'PostgreSQL database dump complete' || \
+    fatal "pre-restore safety dump is incomplete; nothing was changed"
+  mv -- "${SAFETY_DUMP}.partial" "${SAFETY_DUMP}"
+fi
 
-step "restore required Qdrant collection snapshots"
-for SNAPSHOT in "${QDRANT_SNAP_DIR}"/*.snapshot; do
-  [[ -f "${SNAPSHOT}" ]] || continue
-  COLLECTION=$(basename -- "${SNAPSHOT}" .snapshot)
-  [[ "${COLLECTION}" =~ ^companion_[A-Za-z0-9_]+$ ]] || fatal "unsafe Qdrant collection name: ${COLLECTION}"
-  curl --fail --silent --show-error \
-    -X POST "${QDRANT_RESTORE_URL}/collections/${COLLECTION}/snapshots/upload" \
-    -H 'Content-Type: multipart/form-data' \
-    -F "snapshot=@${SNAPSHOT}" >/dev/null || fatal "Qdrant restore failed for ${COLLECTION}"
-done
+if has postgres; then
+  step "atomically replace companion_* PostgreSQL objects with ON_ERROR_STOP"
+  {
+    printf '%s\n%s\n' "${DROP_TABLES_SQL}" "${DROP_SEQUENCES_SQL}"
+    gzip -cd -- "${PG_DUMP}"
+  } \
+    | docker exec -i "${POSTGRES_CONTAINER}" psql --single-transaction -U aichat -d aichat -v ON_ERROR_STOP=1 \
+    || fatal "PostgreSQL restore failed"
+else
+  step "skipping PostgreSQL restore (postgres not in DR_COMPONENTS=${DR_COMPONENTS})"
+fi
 
-step "restore companion images from read-only staged source"
-docker run --rm \
-  -v "${IMAGES_VOLUME}:/dst" \
-  -v "${IMAGES_SOURCE}:/src:ro" \
-  alpine sh -c 'cp -a /src/. /dst/' || fatal "companion image restore failed"
+if has qdrant; then
+  step "restore required Qdrant collection snapshots"
+  for SNAPSHOT in "${QDRANT_SNAP_DIR}"/*.snapshot; do
+    [[ -f "${SNAPSHOT}" ]] || continue
+    COLLECTION=$(basename -- "${SNAPSHOT}" .snapshot)
+    [[ "${COLLECTION}" =~ ^companion_[A-Za-z0-9_]+$ ]] || fatal "unsafe Qdrant collection name: ${COLLECTION}"
+    curl --fail --silent --show-error \
+      -X POST "${QDRANT_RESTORE_URL}/collections/${COLLECTION}/snapshots/upload" \
+      -H 'Content-Type: multipart/form-data' \
+      -F "snapshot=@${SNAPSHOT}" >/dev/null || fatal "Qdrant restore failed for ${COLLECTION}"
+  done
+else
+  step "skipping Qdrant restore (qdrant not in DR_COMPONENTS=${DR_COMPONENTS})"
+fi
+
+if has images; then
+  step "restore companion images from read-only staged source"
+  docker run --rm \
+    -v "${IMAGES_VOLUME}:/dst" \
+    -v "${IMAGES_SOURCE}:/src:ro" \
+    alpine sh -c 'cp -a /src/. /dst/' || fatal "companion image restore failed"
+  if [[ -d "${AUDIO_SOURCE}" ]]; then
+    step "restore companion audio (voice letters) from read-only staged source"
+    docker run --rm \
+      -v "${AUDIO_VOLUME}:/dst" \
+      -v "${AUDIO_SOURCE}:/src:ro" \
+      alpine sh -c 'cp -a /src/. /dst/' || fatal "companion audio restore failed"
+  else
+    step "archive has no klukai/audio-latest; voice letters were not restored (see ADR-0014)"
+  fi
+else
+  step "skipping companion image/audio restore (images not in DR_COMPONENTS=${DR_COMPONENTS})"
+fi
 
 step "start companion-core and run smoke test"
 docker compose up -d --no-build companion-core
@@ -409,10 +491,11 @@ RTO_OK=false
 jq -n \
   --arg drill_date "${STAMP}" \
   --arg backup_tar "${TAR_BASENAME}" \
+  --arg components "${DR_COMPONENTS}" \
   --argjson duration_seconds "${DURATION}" \
   --argjson rto_target_seconds "${RTO_TARGET}" \
   --argjson rto_achieved "${RTO_OK}" \
-  '{drill_date:$drill_date,mode:"live",backup_tar:$backup_tar,
+  '{drill_date:$drill_date,mode:"live",backup_tar:$backup_tar,components:$components,
     duration_seconds:$duration_seconds,rto_target_seconds:$rto_target_seconds,
     rto_achieved:$rto_achieved,outcome:(if $rto_achieved then "passed" else "missed-rto" end)}' \
   >"${DRILL_JSON}"

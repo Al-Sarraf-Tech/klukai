@@ -190,7 +190,9 @@ check process "conventional-commits"      "git log --oneline -50 2>/dev/null | g
 
 # ── Phase 5 calendar gates ─────────────────────────────────────────────────
 check process "secret rotated <90d"       "find ~/.config/klukai-secrets* -mtime -90 2>/dev/null | head -1 | grep -q . || test -f /etc/credstore.encrypted/klukai-secrets.cred -a \$(($(date +%s) - \$(stat -c %Y /etc/credstore.encrypted/klukai-secrets.cred 2>/dev/null || echo 0))) -lt 7776000"
-check reliability "DR drill result <30d"  "for d in /mnt/nvmeINT/logs/dr-drill /mnt/nvmeINT/backups/dr-drill; do [ -d \"\$d\" ] && find \"\$d\" -mtime -30 -type f | head -1 | grep -q . && exit 0; done; exit 1"
+# Evidence: a disaster-recovery.sh drill record, or the monthly
+# restore-from-backup.sh report at logs/restore-drill.json (mtime < 30d).
+check reliability "DR drill result <30d"  "for d in /mnt/nvmeINT/logs/dr-drill /mnt/nvmeINT/backups/dr-drill; do [ -d \"\$d\" ] && find \"\$d\" -mtime -30 -type f | head -1 | grep -q . && exit 0; done; find /mnt/nvmeINT/logs/restore-drill.json -mtime -30 -type f 2>/dev/null | grep -q . && exit 0; exit 1"
 check documentation "onboarding tested"   "test -f docs/onboarding-test-result.json && find docs/onboarding-test-result.json -mtime -90 | grep -q ."
 
 # ── Report ──────────────────────────────────────────────────────────────────

@@ -22,10 +22,11 @@ both hosts.
 ## Decision
 
 The Amarillo backup producer deposits Klukai and Kairi database dumps, Qdrant
-snapshots, and companion images below `/mnt/nvmeINT/backups`. The repository's
-`scripts/offsite-backup.sh` archives only the recovery roots `klukai`, `kairi`,
-and `qdrant` (not unrelated application backups) into an immutable dated
-archive at:
+snapshots, and companion images below `/mnt/nvmeINT/backups`. It lives on
+amarillo outside this repository and still needs to be committed here. The
+repository's `scripts/offsite-backup.sh` archives only the recovery roots
+`klukai`, `kairi`, and `qdrant` (not unrelated application backups) into an
+immutable dated archive at:
 
 ```text
 /mnt/nvmer0/services/ai-stack/backups/amarillo/klukai/
@@ -45,7 +46,10 @@ The following are mandatory invariants:
    `100.111.198.19` → `100.107.121.5`; LAN routing is not a fallback.
 4. The destination is a dedicated, mode-0700 directory with an ownership
    marker. A non-empty unmarked directory is never adopted automatically.
-5. At least one recent, gzip-valid database dump must exist before transfer.
+5. At least one recent database dump must exist before transfer, gzip-valid
+   and ending with the pg_dump completion trailer. `klukai/images-latest/`
+   must be a real directory on the source filesystem with at least one recent
+   file; it is the only backup of the `companion-images` volume.
 6. Each archive is streamed to a unique partial name and validated remotely.
    Its SHA-256 sidecar is installed first; the validated archive is then
    atomically renamed into visibility. A completed archive is never
@@ -58,6 +62,15 @@ The following are mandatory invariants:
 The nominal objective remains 30 daily recovery points, but capacity policy
 must never silently outrank preservation of chat history and memories.
 
+Voice letters are a known gap. `companion-core` writes them as
+`/audio/{uuid}.wav` into the `companion-audio` volume while their
+`companion_voice_notes` rows are in PostgreSQL, so a restore of the dump alone
+leaves rows that point at missing files. The producer must deposit that volume
+as `klukai/audio-latest/` next to `klukai/images-latest/`;
+`scripts/disaster-recovery.sh` restores it into `companion-audio` whenever the
+archive carries it. Until the producer does so, voice letters are not covered
+by the offsite copy.
+
 ## Recovery and verification
 
 `scripts/restore-from-backup.sh` is the routine drill. It validates the same
@@ -68,10 +81,16 @@ production PostgreSQL.
 
 `scripts/disaster-recovery.sh` defaults to a read-only plan. Live recovery
 requires `--execute` plus two explicit confirmation values acknowledging the
-shared `aichat` database. It verifies the archive, checksum, PostgreSQL dump,
-Qdrant snapshots, and image payload before stopping only the Amarillo
-`companion-core` service. It never manipulates the canonical GPU Compose stack
-on `dominus-nobara`.
+shared `aichat` database. It verifies the archive, checksum, PostgreSQL dump
+(including its completion trailer), Qdrant snapshots (tar-valid, and Qdrant
+answering), and a non-empty image payload before stopping only the Amarillo
+`companion-core` service. Once core is stopped and before any destructive
+step it dumps the live `companion_*` objects to
+`pre-restore-klukai-db-<stamp>.sql.gz` in its work directory; if that dump
+cannot be taken, nothing is changed. `DR_COMPONENTS` (default
+`postgres,qdrant,images`) restricts the run to the named components, e.g.
+`DR_COMPONENTS=qdrant` for the Qdrant-down runbook. It never manipulates the
+canonical GPU Compose stack on `dominus-nobara`.
 
 The Nobara model releases, service images, and unique GPU-side assets follow
 the separate backup/rollback gates in `ops/dominus-nobara/RUNBOOK.md`. A copy

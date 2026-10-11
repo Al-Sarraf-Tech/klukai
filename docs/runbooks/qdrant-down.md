@@ -51,8 +51,22 @@
 
 Per global CLAUDE.md `feedback_never_delete_chat.md`: **vector points are
 SACRED**. Recovery actions must NEVER include `qdrant collections delete`.
-If Qdrant data is corrupt, restore from offsite tar
-(`scripts/restore-from-backup.sh`) — do NOT rebuild from scratch.
+If Qdrant data is corrupt, restore the collection snapshots from the offsite
+tar with the DR script scoped to Qdrant only — do NOT rebuild from scratch:
+
+```bash
+# plan only (read-only), then the real thing
+DR_COMPONENTS=qdrant scripts/disaster-recovery.sh --dry-run
+DR_COMPONENTS=qdrant \
+DR_CONFIRM_RESTORE=restore-klukai-from-verified-backup \
+DR_CONFIRM_SHARED_AICHAT=yes scripts/disaster-recovery.sh --execute
+```
+
+`DR_COMPONENTS=qdrant` leaves PostgreSQL and the image/audio volumes alone;
+the script still stops and restarts only companion-core and takes a
+pre-restore dump of the live `companion_*` tables first. Note that
+`scripts/restore-from-backup.sh` is a PostgreSQL-only scratch drill: it never
+touches Qdrant and is not a recovery path for this incident.
 
 ## Post-incident
 

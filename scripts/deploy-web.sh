@@ -96,21 +96,17 @@ if [[ $BUILD_ONLY -eq 1 ]]; then
   echo ""; echo "=== Build only: $OUT (web-build/ untouched) ==="; exit 0
 fi
 
+# web-build/ is bind-mounted and served live, so every rewrite happens in the
+# staging dir $OUT first; the only mutation of web-build/ is one rsync at the end.
 echo ""
-echo "=== Step 4: Save login.html ==="
-cp "$WEB_BUILD/login.html" /tmp/login_backup.html
+echo "=== Step 4: Stage login.html into the build ==="
+# login.html is served from web-build/ but is not a Flutter output; carry it
+# into the staging dir so the final --delete rsync keeps it.
+cp "$WEB_BUILD/login.html" "$OUT/login.html"
 
 echo ""
-echo "=== Step 5: Rsync Flutter build to web-build ==="
-rsync -a --delete "$OUT/" "$WEB_BUILD/"
-
-echo ""
-echo "=== Step 6: Restore login.html ==="
-cp /tmp/login_backup.html "$WEB_BUILD/login.html"
-
-echo ""
-echo "=== Step 7: Content-hash JS files ==="
-cd "$WEB_BUILD"
+echo "=== Step 5: Content-hash JS files (in $OUT) ==="
+cd "$OUT"
 
 # Remove any previously hashed files
 rm -f main.dart.*.js flutter_bootstrap.*.js
@@ -135,11 +131,16 @@ echo "  flutter_bootstrap.js → $BOOT_HASHED"
 
 # Update reference in index.html
 sed -i "s|flutter_bootstrap.js|$BOOT_HASHED|g" index.html
+grep -q "$BOOT_HASHED" index.html || { echo "  ERROR: index.html does not reference $BOOT_HASHED"; exit 1; }
 
 echo ""
-echo "=== Step 8: Verify local deploy ==="
+echo "=== Step 6: Rsync staged build to web-build (the only live change) ==="
+rsync -a --delete "$OUT/" "$WEB_BUILD/"
+
+echo ""
+echo "=== Step 7: Verify local deploy ==="
 # amarillo's companion-core bind-mounts ./web-build as /app/static (docker-compose.yml),
-# so the local file rewrite in Steps 5-7 IS the deploy. No remote rsync needed.
+# so the rsync in Step 6 IS the deploy. No remote rsync needed.
 echo "  Login page:"
 curl -s http://localhost:8300/ | head -1
 echo "  Flutter app:"

@@ -64,5 +64,7 @@ volume names, and Redis key prefixes were preserved as
 - `feedback_klukai_kairi_separate.md` (global CLAUDE.md, ABSOLUTE)
 - `feedback_rename_preserves_identity.md`
 - Commit `35a6c65 refactor: rename companion -> klukai path references`
-- `scripts/backup-companions.sh` (separates klukai + kairi dumps)
+- The nightly backup producer (separates klukai + kairi dumps under
+  `/mnt/nvmeINT/backups/{klukai,kairi}/`). It lives on amarillo outside this
+  repository and still needs to be committed here.
 - `scripts/audit-memories.sh` (klukai-scoped)
