@@ -218,6 +218,13 @@ class TestRenderCostume:
         with patch("app.wardrobe.lookup", return_value=w.FALLBACK):
             assert await hd.render_costume("claude", 5) is None
 
+    async def test_mission_kit_while_deployed(self, stubbed):
+        """An image during a mission shows the kit the prompt says she is in,
+        not the outfit he had her put on that morning."""
+        stubbed.row = _row(requested="immaculate_service", day=MONDAY)
+        with patch("app.her_day.active_mission", return_value="extraction at Slovakia"):
+            assert await hd.render_costume("claude", 5) == "blazing_star"
+
 
 class TestTeaTime:
     def _now(self, block_id="tea_counter", override=None):

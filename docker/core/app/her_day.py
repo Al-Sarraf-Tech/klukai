@@ -224,10 +224,11 @@ async def render_costume(user_id: str, level: int) -> str | None:
     """The outfit id an image of her should show right now (None = keyword fallback).
 
     Replaces the old per-caller ``recall_fact("costume")`` + unlock check: what
-    she is actually wearing — today's pick, his granted request, or block kit.
+    she is actually wearing — today's pick, his granted request, or block kit —
+    or the mission kit while she is deployed, as the prompt says.
     """
     try:
-        now = await her_now(user_id, level)
+        now = await her_now(user_id, level, mission=active_mission())
     except Exception:
         return None
     return now.outfit.id if now.outfit.image_tags else None

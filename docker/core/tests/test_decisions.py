@@ -246,9 +246,19 @@ class TestParseAnswer:
         "I'll take a break first", "first, tell me about your day",
         "titanium or loud, I can't decide", "not a", "3",
         "a loud titanium monster", "the third one", "option 3",
+        "Plan B fell through at work today", "I got a B on the exam", "Room B is free",
     ])
     def test_ambiguous_or_none(self, msg):
         assert dc.parse_decision_answer(msg, EXHAUST) is None
+
+    @pytest.mark.parametrize("msg", [
+        "Plan B fell through at work today", "I got a B on the exam",
+        "Vitamin C and sleep", "Room B is free",
+    ])
+    def test_a_stray_capital_mid_sentence_is_not_an_answer(self, msg):
+        """B and C are both live keys here; only a capital that opens or closes
+        a clause ("B.", "ok, B", "Definitely B") names one."""
+        assert dc.parse_decision_answer(msg, SQUAD) is None
 
     def test_keywords_only_count_in_short_messages(self):
         story = "Long day. " * 20
@@ -648,6 +658,19 @@ class TestResolve:
         pending = dict(PENDING, asked_at=(late - timedelta(hours=1)).isoformat())
         mem = _memory(pending=pending)
         with patch("app.decisions._utcnow", return_value=late), \
+             patch("app.deferred.schedule", new=AsyncMock()):
+            await dc.resolve_prompt_block("jalsarraf", "B", mem)
+        call = next(c for c in mem.store_fact.await_args_list if c.args[0] == "outfit:tomorrow")
+        assert json.loads(call.args[1])["date"] == "2026-10-06"
+
+    @pytest.mark.asyncio
+    async def test_outfit_tomorrow_follows_her_day_not_midnight(self):
+        # 00:30 local on the 6th is still her 5th (Her Day turns over at 0500):
+        # "tomorrow" is the 6th — the morning he is about to wake up to — not the 7th.
+        small_hours = datetime(2026, 10, 6, 5, 30, tzinfo=timezone.utc)
+        pending = dict(PENDING, asked_at=(small_hours - timedelta(hours=1)).isoformat())
+        mem = _memory(pending=pending)
+        with patch("app.decisions._utcnow", return_value=small_hours), \
              patch("app.deferred.schedule", new=AsyncMock()):
             await dc.resolve_prompt_block("jalsarraf", "B", mem)
         call = next(c for c in mem.store_fact.await_args_list if c.args[0] == "outfit:tomorrow")

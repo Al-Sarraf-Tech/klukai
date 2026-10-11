@@ -262,9 +262,9 @@ def register_websocket(app: FastAPI) -> None:
         from . import rituals
         ws.track_task(user_id, _asyncio.create_task(rituals.on_connect(user_id)))
         # Her Day: pick today's outfit (DB + weather) now, while he types —
-        # the chat turn only ever reads the cached row.
+        # the chat turn only ever reads the cached row, so it gets the same mood.
         from . import wardrobe
-        ws.track_task(user_id, _asyncio.create_task(wardrobe.warm_today(user_id)))
+        ws.track_task(user_id, _asyncio.create_task(wardrobe.warm_today(user_id, mood=session.mood)))
 
         try:
             while True:

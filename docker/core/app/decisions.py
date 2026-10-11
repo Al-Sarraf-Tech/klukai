@@ -18,7 +18,8 @@ Facts written (all via ``memory.store_fact``, all fail-soft):
   (choice null) and again at resolution. Drives the weekly cap and the
   30-day reuse rule.
 - ``outfit:tomorrow``: JSON ``{"date": "YYYY-MM-DD", "outfit_id": id}``.
-  ``date`` is tomorrow's Commander-local date at resolution; TTL 172800s.
+  ``date`` is the day after her current day at resolution (Her Day turns over
+  at 0500 local, so a 00:30 answer still dresses the coming morning); TTL 172800s.
 - ``her:<slug>``: free text, no TTL.
 """
 
@@ -35,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 from . import context
 from .personality import load_personality
 from .proactive.state import LOCAL_TZ
+from .wardrobe import her_date
 
 if TYPE_CHECKING:
     from .proactive.engine import ProactiveEngine
@@ -166,7 +168,12 @@ _VERB_LETTER = re.compile(
     r"(?=\s*(?:$|[.!,;)]|\s+(?:please|then|for\s+sure|definitely|obviously|i\s+think)))"
 )
 _LEAD_LETTER = re.compile(r"^\s*([abc])\s*(?:[.!,:;)\-]|$)")
-_UPPER_LETTER = re.compile(r"(?<![A-Za-z'])([BC])(?![A-Za-z'\-])")
+# A bare capital B/C only where it opens or closes a clause ("B.", "ok, B",
+# "Definitely B") — not "Plan B fell through", "a B on the exam", "Vitamin C".
+_UPPER_LETTER = re.compile(
+    r"(?:^|[.,;:!?(]\s*)([BC])(?![A-Za-z'\-])"
+    r"|(?<![A-Za-z'])([BC])(?=\s*(?:$|[.!,;:)]))"
+)
 _ORDINAL_PHRASE = re.compile(r"\b(first|second|third|last)\s+(?:one|option|choice)\b"
                              r"|\bthe\s+(former|latter)\b")
 _DIGIT_CUE = re.compile(r"(?:\b(?:option|choice|number)|#)\s*([123])\b")
@@ -196,7 +203,7 @@ def _explicit_keys(text: str, original: str, keys: list[str]) -> set[str]:
                 found.append((k, 0))
     for rx in (_CUE_LETTER, _VERB_LETTER, _LEAD_LETTER):
         found += [(m.group(1).upper(), m.start()) for m in rx.finditer(text)]
-    found += [(m.group(1), m.start()) for m in _UPPER_LETTER.finditer(original)]
+    found += [(m.group(1) or m.group(2), m.start()) for m in _UPPER_LETTER.finditer(original)]
     for m in _ORDINAL_PHRASE.finditer(text):
         k = by_index(_ORDINALS[m.group(1) or m.group(2)])
         if k:
@@ -389,7 +396,8 @@ async def apply_effect(memory: Any, user_id: str, effect: Any, now: datetime) ->
     outfit = effect.get("outfit")
     fact = effect.get("fact")
     if isinstance(outfit, str) and outfit.strip():
-        tomorrow = _local_today(now) + timedelta(days=1)
+        # Her Day's tomorrow, not the calendar's: her day turns over at 0500.
+        tomorrow = her_date(now.astimezone(LOCAL_TZ).replace(tzinfo=None)) + timedelta(days=1)
         await _store(memory, OUTFIT_TOMORROW_FACT,
                      json.dumps({"date": tomorrow.isoformat(), "outfit_id": outfit.strip()}),
                      user_id, ttl=OUTFIT_TOMORROW_TTL)
