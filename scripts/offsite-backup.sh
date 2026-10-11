@@ -207,8 +207,11 @@ images_path="${SRC}/klukai/images-latest"
   die "required companion images backup is absent or a symlink: ${images_path}"
 [[ "$(stat -c '%d' -- "${images_path}")" == "$(stat -c '%d' -- "${SRC}")" ]] || \
   die "companion images backup is on a different filesystem than ${SRC}; tar --one-file-system would ship it empty: ${images_path}"
-[[ -n "$(find "${images_path}" -type f -mmin "-${recent_minutes}" -print -quit)" ]] || {
-  log "WARN: no companion image file newer than ${MAX_SOURCE_AGE_HOURS}h in ${images_path}; refusing to ship an incomplete snapshot"
+# Non-empty, not "recent": the producer syncs with preserved mtimes, so a
+# night on which she drew nothing new has no fresh file here and must still
+# ship. The dump and snapshot checks above already prove the producer ran.
+[[ -n "$(find "${images_path}" -type f -print -quit)" ]] || {
+  log "WARN: companion images backup is empty: ${images_path}; refusing to ship an incomplete snapshot"
   exit 2
 }
 
