@@ -4,9 +4,15 @@ Builds `assets/build/klukai.glb` and ships the three.js viewer module
 `flutter_app/web/companion/avatar3d.js`. The GLB has:
 
 - one skinned body mesh, plus a head mesh carrying the `blink` morph, sharing
-  one skin;
+  one skin (52 joints: the Mixamo rig plus `mixamorigHead`, which the build
+  makes a real joint);
 - 15 named clips;
-- webp textures and meshopt compression, about 1.4 MB in total.
+- a baked `_OUTLINE` vertex attribute for the viewer's outline, and ORM maps
+  on the cloth;
+- webp textures and meshopt compression, about 2.1 MB in total.
+
+The mesh is her default outfit, "Blazing Star" (SSR01 atlases). The dorm outfit
+has a texture in `assets/textures` but no mesh.
 
 ## Licensing / handling (read first)
 
@@ -31,8 +37,11 @@ screenshots: the Python `playwright` package with its bundled Chromium.
 ```sh
 cd tools/avatar
 npm ci                     # exact versions from package-lock.json
-node build.mjs             # → assets/build/klukai.glb (~1.4 MB, budget 15 MB; written via temp + rename)
-node build.mjs --debug     # + assets/build/klukai.debug.glb: every OBJ group, PNG, no compression
+node build.mjs             # → assets/build/klukai.glb (~2.1 MB, budget 15 MB; written via temp + rename)
+                           #   ⚠ assets/build is bind-mounted into companion-core: this IS a live deploy
+AVATAR_OUT=../../assets/build/dev/klukai.glb node build.mjs   # development build (not served)
+AVATAR_CONFIG=my-variant.mjs …                                # build from a config variant (exports CONFIG)
+node build.mjs --debug     # every OBJ group, PNG, no compression (+ island JSONs, ambiguous-island log)
 npm test                   # node --test (pure parts; needs no assets)
 python3 shot.py            # screenshots → assets/build/shots/
 python3 perf.py            # load time / FPS / draw calls / texture MB (SwiftShader, --throttle 4)
@@ -59,11 +68,21 @@ All tuning lives in `avatar.config.mjs`.
    the atlas that is *smoothest inside it*. On the right atlas an island
    covers one painted region; on the wrong one it straddles outlines. Islands
    join only across edges that share both positions and UVs, because Blender's
-   OBJ export de-duplicates UV values. A few visually checked
-   `atlasOverrides` (the cap crown, the iris discs, a shadow shell) handle the
-   cases the heuristic gets wrong.
+   OBJ export de-duplicates UV values. The heuristic rewards smoothness, so it
+   gets detailed islands (zippers, logos, stitching) wrong; visually checked
+   `atlasOverrides` correct them (cap crown, hem band, hood, zipper, buckle
+   box, collar goggle unit, shoes, knee pad, bag, cat pouch, iris discs, a
+   shadow shell). An override matches islands by bind-pose `box` (island
+   centroid, metres) and/or `uvBox`, and can also set `role`, `doubleSided`,
+   `name`, `flip` (inside-out triangles) and a flat colour
+   (`atlas: { color }`). The shorts and the high-neck collar sit inside the hair
+   group and are inside-out; an override turns them into the flat black
+   `bodysuit` cloth material. `--debug` logs islands whose score ratio is
+   under 1.5× and that no override covers.
 4. **Dropped groups:**
-   - other-outfit layers (Astral Luminous, Speed Star) and the outline shells;
+   - other-outfit layers (Astral Luminous, Speed Star) and the `Outline` group,
+     which is an 80-face eyelid strip, not an outline shell (outlines are
+     generated from `_OUTLINE` instead);
    - `Klukai_Cloth_2`, a near-duplicate layer of `Cloth_1` that z-fights;
    - the leg skin under the stockings, which pokes through them.
 
@@ -85,6 +104,13 @@ All tuning lives in `avatar.config.mjs`.
    Result: two open green irises on real eye geometry, plus a real blink.
 6. **UVs:** V is flipped to the glTF convention, because textures are attached
    later from the original PNGs rather than through `GLTFExporter`.
+6a. **Head joint** (`HEAD_SKIN` in the config): Mixamo gave `mixamorigHead` no
+   weights, so the face, cap and bangs rode on the Neck and every head
+   rotation in the clips (8–55°) was invisible. The build adds Head as a
+   joint (inverse bind consistent with the Neck's bind pose) and moves Neck
+   weight onto it over y 1.27–1.31 m. Hair behind the ear plane also moves a
+   share of its spine weights to Head, fading over y 1.0–1.42, so the
+   ponytail bends like a rope instead of tearing in strong turns.
 7. **Clips:** 15 clips with their lowercase names: `idle talking happy bashful thinking thankful
    salute excited calling defeated dismiss nervous kneel sleep stand`.
    - Only quaternion tracks plus the hips position are kept.
@@ -94,12 +120,23 @@ All tuning lives in `avatar.config.mjs`.
    - Each clip's loop flag is in `extras.loop`.
 8. **Export and optimise:** `GLTFExporter` handles geometry, skin, morph and
    clips. Then glTF-Transform:
-   - **Textures:** attached as webp, at most 1024 px (face 1024, eyes 512,
-     body skin 512).
+   - **Textures:** attached as webp, at most 1024 px by default (hair 2048,
+     face 1024, eyes 512, body skin 512).
+   - **ORM:** the cloth atlases' `_rmo` maps (R roughness, G metal, B baked
+     AO) are repacked to glTF ORM (R occlusion, G roughness, B metal), 512 px
+     lossless webp, and attached as both `occlusionTexture` and
+     `metallicRoughnessTexture`. The viewer reads the AO into its toon
+     threshold and the metal mask for a glint. No normal maps ship.
    - **Materials:** each gets `extras.role` (skin, hair, face, cloth or
      overlay).
-   - **Draw calls:** parts sharing a texture, role and sidedness are merged
-     into one material (7 draw calls).
+   - **Draw calls:** parts sharing a texture (or flat colour), role and
+     sidedness are merged into one material (8 primitives).
+   - **`_OUTLINE`** (normalized int8 vec4 on every primitive; three names it
+     `_outline`): xyz is the angle-weighted normal averaged across both meshes
+     by position (the source normals have hard splits that would crack an
+     inverted hull), w the outline width: 0 on the eyes, brows, mouth and eye
+     overlays, 0.6 on hands, 1 elsewhere. Added before meshopt quantises
+     positions.
    - **Head mesh:** primitives whose `blink` target moves go to a separate
      `KlukaiHead` mesh, so the ~30k body vertices skip morph work. Both meshes
      share one skin, thanks to a `scene` quantization volume.
@@ -124,14 +161,34 @@ import { createAvatar3D, moodToState } from './avatar3d.js';
 const av = await createAvatar3D(el, { loadModel, onReady, onError, framing: 'upper' /* | 'full' */ });
 av.setMood(mood);           // any of her 50 moods → a state (moodToState is pure, exported)
 av.setState('greet');       // idle talking thinking happy bashful sad greet sleep excited flustered
-av.setSpeaking(level);      // 0..1: layers the talking clip + subtle head motion
+av.setSpeaking(level);      // 0..1: layers the talking clip + speech-driven nods
+av.setTint(0x8fd8ff);       // mood rim colour (number, '#rrggbb', or 'base'|'smile'|'blush'|'annoyed'), eased ~1.2 s
+av.setInsets({ top, bottom }); // CSS px of the canvas covered by the stage's top bar / dock
 av.setFraming('full'); av.resize(); av.dispose();
 ```
 
-- **Look:** `MeshToonMaterial` with stepped ramps (a softer ramp on the face),
-  a fresnel rim light, additive eye highlights, and a transparent canvas so
-  the page backdrop shows through. There is one toon program per sidedness,
-  and two lights (a hemisphere fill and one key).
+- **Look** (anime toon, after GFL2; research in the 2026-10-11 handoff):
+  - Two-band toon on `MeshToonMaterial` via `onBeforeCompile`: half-Lambert
+    with a `smoothstep`/`fwidth` terminator and a tinted shadow colour per
+    role (warm skin, high-key face, cool silver hair, purple-cool cloth).
+    Lights are calibrated so the lit side is about 1× albedo under
+    `NoToneMapping` (never ACES/AgX: they shift her purple and skin).
+  - Baked AO from the cloth ORM deepens the toon creases; the metal mask gives
+    buckles and zips a hard glint.
+  - Face normals are blended toward a sphere around the head (no blotchy nose
+    or cheek shading). Shader maths on `position` uses the GLB's quantised
+    units, derived from the skin's bind matrices, never hard-coded metres.
+  - A stepped key-side rim tinted by albedo, plus a back rim in the mood
+    colour (`setTint`); a hair "angel ring" band; a small vertex-shader hair
+    sway until the hair has bones.
+  - **Outline:** an inverted hull. A second `SkinnedMesh` per part shares
+    geometry, skeleton and morph influences (blinks follow), draws back faces
+    pushed out along `_outline` at a constant pixel width with a view-space z
+    push (not `polygonOffset`), coloured by texture × a per-role tint. Older
+    GLBs without `_outline` get smoothed normals computed at load. Eyes,
+    overlays and flat near-black parts get none.
+  - Additive eye highlights and a transparent canvas, so the stage backdrop
+    shows through.
 - **No `polygonOffset`.** It used to pull double-sided cloth forward to beat
   skin z-fighting. Depth bias is slope-scaled and depends on the GPU, and
   Safari/Metal applies far more of it. The jacket's inner and back layers then
@@ -144,24 +201,47 @@ av.setFraming('full'); av.resize(); av.dispose();
     init when the saved mode is 3D.
   - Shaders compile through `renderer.compileAsync` before the first frame.
   - `av.stats` reports load timings, draw calls and fps.
-- **Adaptive resolution:** the pixel ratio steps by 0.25, between 1 and the
-  device cap, depending on frame time. Pass `adaptiveResolution: false` to
-  disable it (the test pages do).
-- **Motion:** 0.45 s crossfades, with idle as the base loop. One-shot states
-  (`greet` = salute) settle back to idle. There's a procedural blink (with the
-  occasional double blink) and eyes stay shut in `sleep`.
-- **Camera:** framing with headroom for the cap, an upper-body or full-body
-  option, and a side view for `sleep`. OrbitControls are limited to about
-  ±25° azimuth with a small polar range, no pan or zoom.
+- **Adaptive quality:** every ~2 s the pixel ratio steps by 0.25 between 1
+  and the device cap, depending on frame time; at ratio 1 and still slow the
+  outlines are dropped, and they come back first when there is headroom.
+  Pass `adaptiveResolution: false` to disable it (the test pages do).
+- **Motion** (all after `mixer.update`, in world space, so bone axes don't
+  matter):
+  - 0.45 s crossfades with idle as the base loop; one-shot states (`greet` =
+    salute) settle back to idle. Idle starts at a random point, and after a
+    full idle cycle a short fidget sub-clip sometimes plays (never the same
+    twice in a row).
+  - Mood changes hold for 4 s unless the new mood is strong, so a chatty
+    backend doesn't make her flap. `setState()` is always immediate, and a
+    state set that way (thinking, greet) is left at once by `setMood()`.
+  - Look-at: she faces the camera (and the mouse on desktop), damped and
+    clamped, weighted per state, with micro-saccades; split 40/60 between
+    Neck and Head. A guard keeps clips that pitch the face down from hiding
+    her eyes under the cap brim.
+  - Breathing, relaxed arms in idle-like states, nods driven by her speech
+    level, blinks on large gaze shifts and phrase ends (slow blinks in tender
+    moods, a slight droop when sad), eyes shut in `sleep`.
+  - `prefers-reduced-motion` turns off drift, sway, fidgets and push-in, and
+    keeps blinks and look-at.
+- **Camera:** upper-body or full-body framing, a side view for `sleep`, eased
+  over ~0.8 s instead of snapping. 22° FOV for upper framing on phones (26°
+  otherwise, same crop), a 3% push-in while she talks, a slow drift and a
+  slow follow of her hips. `setInsets()` frames her in the band the stage's
+  top bar and dock leave clear. OrbitControls are limited to about ±25°
+  azimuth with a small polar range, no pan or zoom, and spring back to the
+  front 2 s after release. A soft contact-shadow blob grounds her in full
+  framing and `sleep` (no shadow maps).
 - **iOS and robustness:**
-  - DPR is capped at 2 (1.5 on small screens) and antialias is off on iOS.
+  - MSAA is on everywhere, iOS included (Apple GPUs resolve it on-tile; thin
+    outlines crawl without it), with `powerPreference: 'low-power'`. DPR is
+    capped at 2 (1.75 on small screens).
   - The loop pauses while `document.hidden`.
   - `webglcontextlost` pauses rendering and `webglcontextrestored` resumes it.
   - `dispose()` frees geometries, materials, textures and the context.
   - Without WebGL, or on any load error, it calls `onError` and returns a
-    no-op stub.
+    no-op stub (which has every API method, including `setTint`/`setInsets`).
 - three.js is **vendored as one tree-shaken bundle**,
-  `vendor/three-avatar.min.js`: 679 KB (171 KB gzip), down from 980 KB
+  `vendor/three-avatar.min.js`: 681 KB (172 KB gzip), down from 980 KB
   (245 KB gzip) across six files. Its exports are generated from the
   viewer's `THREE.*` uses, and a test checks them. There's no CDN and no
   import map.
@@ -183,25 +263,45 @@ representative of an iPhone GPU.
 | texture memory (est.) | 28.3 MB | 24.3 MB |
 | skins | 1 | 1 |
 
+The table above is the first optimisation pass (2026-10-05). The 3D-look pass
+(2026-10-11: head joint, atlas fixes, ORM, 2048 hair, toon rework, outlines,
+life layers) changed it like this, same harness:
+
+| | before | after |
+|---|---|---|
+| GLB | 1.41 MB | 2.10 MB |
+| primitives / draw calls | 7 / 7 | 8 / 13 with outlines (+1 contact shadow in full framing and sleep) |
+| shader programs | 4 | 9 |
+| texture memory (est.) | 24.3 MB | 43 MB (hair 2048 is 21 MB of it) |
+| fps, DPR 1, no outlines | 18.0 | 16.5–17.5 |
+| fps, DPR 1, outlines | — | 12.3–13.3 |
+| time to ready (throttled) | 0.64–0.73 s | 0.95–1.14 s |
+
+The outlines cost the most here because SwiftShader skins every hull vertex
+again on the CPU; a phone GPU pays far less. Adaptive quality drops them when a
+device can't keep up. Not yet measured on a real iPhone: check `av.stats`
+(`fps`, `drawCalls`, `outlines`) on device.
+
 KTX2/Basis was evaluated and **not adopted**:
 
-- Texture memory is already about 24 MB.
+- Texture memory was about 24 MB (43 MB with the 2048 hair; still fine for
+  current iPhones).
 - The Basis transcoder would add about 576 KB (JS + WASM) plus WASM compile
   time on every cold load, which is the opposite of "draw faster".
 - No KTX encoder is in the toolchain.
 
-On the server side, two things are worth doing (outside this tool):
+On the server side (outside this tool):
 
 - **Compression:** the GLB gzips to about 0.95 MB, but `/api/avatar/model`
   sends it uncompressed. gzip or brotli on that route and on `/app/companion/`
   JS would save another ~30%.
-- **Cache:** `Cache-Control: private, max-age=86400` means a rebuilt GLB
-  reaches a browser only after its cached copy expires (up to a day). Bump a
-  version query or ETag-revalidate (`no-cache`) to roll out immediately.
+- **Cache:** done. `/api/avatar/model` sends `Cache-Control: private, no-cache`
+  plus an ETag, and `net.js` fetches with `no-store`, so a rebuilt GLB reaches
+  devices on their next open.
 
 ## Other outfits (research only, nothing downloaded)
 
-The dorm-kit mesh is the only one in `assets/source-models/`.
+The default "Blazing Star" mesh is the only one in `assets/source-models/`.
 
 - **Official route.** MICA/Sunborn publish **official MMD (PMX) models**, Klukai
   included in several outfits, on their 模之屋/aplaybox account
@@ -229,10 +329,13 @@ The dorm-kit mesh is the only one in `assets/source-models/`.
 
 - There are no mouth or viseme morphs in the source, so speech is the talking
   clip plus head motion, not lip-sync.
-- The cap brim shades her eyes when a clip looks down (`talking`).
+- The cap goggles, the blue cross hairclips and the open-jacket bodysuit bust
+  are not in the source mesh (their textures are).
 - `calling`, `kneel` and `stand` ship in the GLB but no state uses them yet.
   `calling` is a crouching gesture.
-- No hair or cloth physics. In `sleep` the hair hangs as if standing, and an
-  ankle strap stretches between the feet.
+- No hair or cloth physics yet (only a shader sway). In `sleep` the hair
+  hangs as if standing, and an ankle strap stretches between the feet. In
+  the strongest head turns the edge of an inner hair layer behind the ear
+  shows.
 - Screenshots come from SwiftShader; real GPUs render with MSAA and look
   smoother.
