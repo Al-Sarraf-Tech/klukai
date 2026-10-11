@@ -11,6 +11,7 @@ import logging
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 from .context import (
     affection,
@@ -234,6 +235,14 @@ def register_websocket(app: FastAPI) -> None:
 
         try:
             while True:
+                # He closed the app mid-reply: a send to this socket failed
+                # during the turn and Starlette marked it disconnected. Its
+                # next receive would raise RuntimeError, not
+                # WebSocketDisconnect — a disconnect, not a crash to log.
+                if WebSocketState.DISCONNECTED in (
+                    websocket.application_state, websocket.client_state,
+                ):
+                    break
                 # Read THIS device's socket only. Fanning in across every
                 # socket of the user let device A's frames — and its
                 # disconnect — be consumed by device B's loop and tear B down.

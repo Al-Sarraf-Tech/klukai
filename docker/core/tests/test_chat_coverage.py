@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -44,6 +45,8 @@ class _FakeWebSocket:
 
     def __init__(self, token="tok", frames=()):
         self.query_params = {"token": token} if token is not None else {}
+        self.application_state = WebSocketState.CONNECTED
+        self.client_state = WebSocketState.CONNECTED
         self.calls: list[str] = []
         self.accept = AsyncMock(side_effect=lambda: self.calls.append("accept"))
         self.close = AsyncMock(side_effect=lambda **kw: self.calls.append("close"))
@@ -698,6 +701,45 @@ class TestWebSocketEndpoint:
             # Must not propagate the disconnect.
             await endpoint(sock)
 
+        ws.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_send_failed_mid_turn_ends_loop_without_a_crash(self):
+        """He closed the app mid-reply: a send during the turn failed and
+        Starlette marked the socket disconnected. receive_text() would then
+        raise RuntimeError ("Need to call accept first"), which escaped the
+        endpoint as an ASGI traceback. The loop must treat it as a disconnect."""
+        endpoint, _ = _capture_endpoint()
+        sock = _FakeWebSocket(token="good", frames=[{"type": "message", "content": "hi"}])
+        ws = _fake_ws_manager()
+
+        async def handle_message(content, session, user_id):
+            sock.application_state = WebSocketState.DISCONNECTED  # the failed send
+
+        async def receive_after_disconnect():
+            if sock.application_state != WebSocketState.CONNECTED:
+                raise RuntimeError('WebSocket is not connected. Need to call "accept" first.')
+            return await sock._receive_text()
+
+        sock.receive_text = AsyncMock(side_effect=receive_after_disconnect)
+        memory = MagicMock()
+        memory.get_session = AsyncMock(
+            return_value=SessionState(conversation_id="c1", mood="composed")
+        )
+        memory.save_session = AsyncMock()
+        proactive = MagicMock()
+        proactive.mission_active = False
+
+        with patch("app.chat.ws", ws), patch("app.chat.memory", memory), patch(
+            "app.chat.proactive", proactive
+        ), patch("app.auth.get_user_from_token", AsyncMock(return_value="u1")), patch(
+            "app.chat.get_conn", return_value=_FakeConn(("composed",))
+        ), patch(
+            "app.chat._maybe_reflect_on_return", AsyncMock()
+        ), patch("app.chat._handle_message", AsyncMock(side_effect=handle_message)):
+            await endpoint(sock)  # must not raise
+
+        assert sock.receive_text.await_count == 1
         ws.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
