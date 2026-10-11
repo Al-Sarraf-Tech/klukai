@@ -23,7 +23,8 @@ class TestMissionTimerCeiling:
         callback = AsyncMock()
         on_expire = MagicMock()
         timer = MissionTimer()
-        with patch("app.proactive.mission.asyncio.sleep", AsyncMock()):
+        # The timer's tick loop lives in mission_timer.py (split from mission.py).
+        with patch("app.proactive.mission_timer.asyncio.sleep", AsyncMock()):
             timer.start(
                 "night op", interval_minutes=5, callback=callback,
                 max_duration_minutes=0, on_expire=on_expire,
@@ -43,7 +44,8 @@ class TestMissionTimerCeiling:
     def test_ceiling_is_measured_from_start(self):
         timer = MissionTimer()
         timer.max_duration_minutes = 180
-        with patch("app.proactive.mission.time.monotonic", return_value=1000.0):
+        # _past_ceiling reads the clock in mission_timer.py (split from mission.py).
+        with patch("app.proactive.mission_timer.time.monotonic", return_value=1000.0):
             timer.started_at = 1000.0 - 179 * 60
             assert timer._past_ceiling() is False
             timer.started_at = 1000.0 - 180 * 60

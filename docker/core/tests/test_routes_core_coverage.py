@@ -186,11 +186,13 @@ class TestHealthProbes:
 
 
 class TestSubsystemHealth:
+    # The health endpoints were split into routes_health.py, so the Bearer
+    # extractor these handlers call is app.routes_health._get_user_id.
     @pytest.mark.asyncio
     async def test_requires_auth(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/health/subsystems", "GET")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
+        with patch("app.routes_health._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401
 
@@ -208,7 +210,7 @@ class TestSubsystemHealth:
         redis_mock.ping = AsyncMock()
         redis_mock.aclose = AsyncMock()
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+        with patch("app.routes_health._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
              patch("redis.asyncio.from_url", return_value=redis_mock), \
              patch("httpx.AsyncClient", return_value=_fake_async_client(get_resp=good)):
@@ -237,7 +239,7 @@ class TestSubsystemHealth:
         redis_mock.ping = AsyncMock()
         redis_mock.aclose = AsyncMock()
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+        with patch("app.routes_health._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.db.check_health", new=AsyncMock(side_effect=RuntimeError("pg gone"))), \
              patch("redis.asyncio.from_url", return_value=redis_mock), \
              patch("httpx.AsyncClient", return_value=_fake_async_client(get_resp=good)):
@@ -257,7 +259,7 @@ class TestSubsystemHealth:
         redis_mock.ping = AsyncMock(side_effect=RuntimeError("redis gone"))
         redis_mock.aclose = AsyncMock()
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+        with patch("app.routes_health._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
              patch("redis.asyncio.from_url", return_value=redis_mock), \
              patch("httpx.AsyncClient",
@@ -282,7 +284,7 @@ class TestSubsystemHealth:
         redis_mock.ping = AsyncMock()
         redis_mock.aclose = AsyncMock()
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+        with patch("app.routes_health._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
              patch("redis.asyncio.from_url", return_value=redis_mock), \
              patch("httpx.AsyncClient", return_value=_fake_async_client(get_resp=degraded)):
@@ -310,7 +312,7 @@ class TestSubsystemHealth:
         redis_mock.aclose = AsyncMock()
         ctx = _fake_async_client(get_resp=good)
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+        with patch("app.routes_health._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
              patch("redis.asyncio.from_url", return_value=redis_mock), \
              patch("httpx.AsyncClient", return_value=ctx), \

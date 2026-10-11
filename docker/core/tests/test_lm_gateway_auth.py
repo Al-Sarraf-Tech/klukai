@@ -259,7 +259,8 @@ async def test_subsystem_health_authenticates_model_probe(monkeypatch):
         if getattr(route, "path", None) == "/api/health/subsystems"
     )
 
-    with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), patch(
+    # /api/health/subsystems lives in routes_health.py (split from routes.py).
+    with patch("app.routes_health._get_user_id", new=AsyncMock(return_value="alice")), patch(
         "app.db.check_health", new=AsyncMock(return_value={"status": "ok"})
     ), patch("redis.asyncio.from_url", return_value=redis_client), patch(
         "httpx.AsyncClient", return_value=http_context

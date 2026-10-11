@@ -304,17 +304,20 @@ class TestEpisodeDualWrite:
 class TestSubsystemHealth:
     """Verify subsystem health endpoint exists and checks all services."""
 
+    # The health endpoints were split from routes.py into routes_health.py,
+    # where subsystem_health is the last definition (so the function runs to EOF).
+
     def test_subsystem_health_endpoint_exists(self):
-        source = Path(__file__).resolve().parent.parent / "app" / "routes.py"
+        source = Path(__file__).resolve().parent.parent / "app" / "routes_health.py"
         text = source.read_text()
         assert "/api/health/subsystems" in text
 
     def test_checks_all_seven_subsystems(self):
-        source = Path(__file__).resolve().parent.parent / "app" / "routes.py"
+        source = Path(__file__).resolve().parent.parent / "app" / "routes_health.py"
         text = source.read_text()
         # Find the subsystem_health function
         func_start = text.index("subsystem_health")
-        func_end = text.index("# ── Push subscription", func_start)
+        func_end = len(text)
         func_text = text[func_start:func_end]
         for subsystem in [
             "database",
@@ -328,10 +331,10 @@ class TestSubsystemHealth:
             assert subsystem in func_text, f"Must check {subsystem} subsystem"
 
     def test_subsystem_health_requires_auth(self):
-        source = Path(__file__).resolve().parent.parent / "app" / "routes.py"
+        source = Path(__file__).resolve().parent.parent / "app" / "routes_health.py"
         text = source.read_text()
         func_start = text.index("subsystem_health")
-        func_end = text.index("# ── Push subscription", func_start)
+        func_end = len(text)
         func_text = text[func_start:func_end]
         assert "_get_user_id" in func_text, (
             "Subsystem health must require authentication"

@@ -304,8 +304,9 @@ class TestFireUpdate:
         t.update_count = 3
         cb = AsyncMock()
         t._callback = cb
+        # MissionTimer (and the logger _fire_update writes to) lives in mission_timer.py.
         with patch("app.fact_extractor.generate_mission_update", AsyncMock(return_value="")), \
-             patch("app.proactive.mission.logger") as log:
+             patch("app.proactive.mission_timer.logger") as log:
             await t._fire_update(elapsed_minutes=90, major_event=None)
         cb.assert_not_awaited()
         assert log.info.call_args.args[0] == "Mission update #%d skipped: LLM unavailable"
