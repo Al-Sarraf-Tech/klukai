@@ -343,7 +343,7 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
             from .helpers import client_ip
             identity = client_ip(request)
 
-        from .rate_limit import check_and_consume, RateLimitExceeded
+        from .rate_limit import check_and_consume, refund, RateLimitExceeded
         try:
             remaining, retry_after = await check_and_consume(identity, bucket)
         except RateLimitExceeded as exc:
@@ -355,6 +355,13 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         response: StarletteResponse = await call_next(request)
+        if response.status_code == 409:
+            # The handler turned the request away (GPU busy, already in
+            # progress) without doing the work the limit guards. Give the
+            # token back — otherwise one 409 on /api/portrait/refresh locks
+            # him out for the whole 10-minute window with nothing rendered.
+            await refund(identity, bucket)
+            remaining += 1
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         response.headers["X-RateLimit-Bucket"] = bucket
         return response

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import gzip
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -97,6 +100,14 @@ class TestFrames:
         assert client.get("/api/portrait/frame/claude/speed_star/wink.webp?sig=x").status_code == 404
         assert client.get("/api/portrait/frame/claude/bad..id/base.webp?sig=x").status_code == 404
 
+    def test_non_ascii_signature_is_forbidden_not_an_error(self, client):
+        """compare_digest on str raises TypeError for non-ASCII input; a
+        `?sig=1.ü` must be refused like any bad signature, never a 500."""
+        _frames()
+        for sig in ("9999999999.%C3%BC", "9999999999.1.%C3%BC", "%C3%BC.x"):
+            r = client.get(f"/api/portrait/frame/claude/speed_star/base.webp?sig={sig}")
+            assert r.status_code == 403, sig
+
     def test_signed_but_missing_file_is_not_found(self, client):
         url = pt.frame_url("claude", "speed_star", "smile", 1)
         assert client.get(url).status_code == 404
@@ -128,6 +139,22 @@ class TestRefresh:
         limit = rate_limit.LIMITS["portrait_refresh"]
         assert (limit.requests, limit.window_seconds) == (1, 600)
         assert main._bucket_for_path("/api/portrait") is None
+
+    def test_a_409_gives_the_ten_minute_token_back(self, client):
+        """Through the real app (middleware + handler): the limiter charges
+        before the handler runs, so a GPU-busy 409 must refund — otherwise
+        nothing rendered and he is still 429'd once the game ends."""
+        from fastapi.testclient import TestClient
+        from app import main
+
+        client.router.is_game_active = AsyncMock(return_value=True)
+        with patch("app.rate_limit.check_and_consume", new=AsyncMock(return_value=(0, 600))) as cac, \
+             patch("app.rate_limit.refund", new=AsyncMock()) as refund:
+            r = TestClient(main.app).post("/api/portrait/refresh", headers=AUTH)
+        assert r.status_code == 409 and r.json()["code"] == "GPU_BUSY"
+        cac.assert_awaited_once_with("claude", "portrait_refresh")
+        refund.assert_awaited_once_with("claude", "portrait_refresh")
+        assert r.headers["x-ratelimit-remaining"] == "1"
 
 
 class TestAvatarModel:
@@ -172,6 +199,37 @@ class TestAvatarModel:
         cached = routes_portrait._MODEL_GZ[gz.headers["etag"]]
         client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": "gzip"})
         assert routes_portrait._MODEL_GZ[gz.headers["etag"]] is cached
+
+    def test_gzip_runs_off_the_event_loop_and_is_byte_exact(self, client, tmp_path):
+        """The first gzip of a tens-of-MB model must not stall the loop (and
+        the chat WebSocket on it): read + deflate run in a worker thread,
+        once per version, and the cached bytes are exactly the file deflated."""
+        from app import routes_portrait
+
+        routes_portrait._MODEL_GZ.clear()
+        raw = b"glTF" + bytes(range(256)) * 64
+        model = tmp_path / "klukai.glb"
+        model.write_bytes(raw)
+        real = routes_portrait._gzip_file
+        calls: list[tuple[Path, bool]] = []
+
+        def spy(path):
+            try:
+                asyncio.get_running_loop()
+                on_loop = True
+            except RuntimeError:
+                on_loop = False
+            calls.append((path, on_loop))
+            return real(path)
+
+        with patch.object(routes_portrait, "_gzip_file", spy):
+            first = client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": "gzip"})
+            second = client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": "gzip"})
+        assert calls == [(model, False)]  # once, and not on a thread running a loop
+        assert first.headers["content-encoding"] == "gzip"
+        assert first.headers["etag"] == second.headers["etag"]
+        assert first.content == raw == second.content  # the client inflates it
+        assert gzip.decompress(routes_portrait._MODEL_GZ[first.headers["etag"]]) == raw
 
     def test_default_path(self, client, monkeypatch):
         monkeypatch.delenv("AVATAR_MODEL_PATH")

@@ -522,6 +522,10 @@ class TestServiceWorkerAndRoot:
             result = await handler()
         assert result is sentinel
         fr.assert_called_once()
+        assert fr.call_args.kwargs["media_type"] == "text/html"
+        # Revalidate every load: without a policy Safari keeps a stale
+        # login.html for days after a redeploy (same rule as /app entry points).
+        assert fr.call_args.kwargs["headers"] == {"Cache-Control": "no-cache"}
 
     @pytest.mark.asyncio
     async def test_root_fallback_when_login_missing(self):
@@ -583,3 +587,168 @@ class TestPromisesEndpoints:
         assert result == {"resolved": True}
         # Owner-scoped: the authenticated user_id is threaded into the resolve.
         rp.assert_awaited_once_with("p1", "confirmed", "did it", user_id="alice")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Her POV — start (rate-limited: LLM + GPU render) and status poll (not)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestHerPov:
+    @pytest.mark.asyncio
+    async def test_start_requires_auth(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/memories/her-pov", "POST")
+        with patch("app.routes_extras3._get_user_id", new=AsyncMock(return_value=None)), \
+             patch("app.rate_limit.check_and_consume", new=AsyncMock()) as cac:
+            resp = await handler(_mk_request(token=None))
+        assert resp.status_code == 401
+        cac.assert_not_awaited()  # nothing charged to an anonymous caller
+
+    @pytest.mark.asyncio
+    async def test_start_charges_image_gen_then_starts_the_job(self):
+        import json
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/memories/her-pov", "POST")
+        started = {"job_id": "j1", "status": "queued", "reused": False}
+        with patch("app.routes_extras3._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.rate_limit.check_and_consume",
+                   new=AsyncMock(return_value=(19, 3600))) as cac, \
+             patch("app.memory_her_pov.start_her_pov",
+                   new=AsyncMock(return_value=started)) as start:
+            resp = await handler(_mk_request())
+        assert resp.status_code == 202
+        assert json.loads(resp.body) == started
+        # The expensive path shares the image_gen bucket (20 / hour).
+        cac.assert_awaited_once_with("alice", "image_gen")
+        start.assert_awaited_once_with("alice")
+
+    @pytest.mark.asyncio
+    async def test_start_over_limit_is_a_standard_429_and_renders_nothing(self):
+        import json
+        from app.rate_limit import RateLimitExceeded
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/memories/her-pov", "POST")
+        with patch("app.routes_extras3._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.rate_limit.check_and_consume",
+                   new=AsyncMock(side_effect=RateLimitExceeded("image_gen", 1200))), \
+             patch("app.memory_her_pov.start_her_pov", new=AsyncMock()) as start:
+            resp = await handler(_mk_request())
+        assert resp.status_code == 429
+        assert json.loads(resp.body) == {
+            "error": "Too many requests", "code": "RATE_LIMITED", "retry_after": 1200,
+        }
+        assert resp.headers["Retry-After"] == "1200"
+        start.assert_not_awaited()  # no LLM call, no GPU job
+
+    @pytest.mark.asyncio
+    async def test_status_poll_is_not_charged(self):
+        """The GET poll shares the path prefix with the POST; it must not be
+        throttled — neither by the (method-blind) middleware table nor in the
+        handler — or the client loses sight of a job it already paid for."""
+        from app.main import _bucket_for_path
+        assert _bucket_for_path("/api/memories/her-pov") is None
+        assert _bucket_for_path("/api/memories/her-pov/j1") is None
+
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/memories/her-pov/{job_id}", "GET")
+        job = {"id": "j1", "user_id": "alice", "status": "queued", "phase": "queued",
+               "image_b64": "x" * 100}
+        with patch("app.routes_extras3._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.rate_limit.check_and_consume", new=AsyncMock()) as cac, \
+             patch("app.memory_her_pov.get_job", new=AsyncMock(return_value=job)):
+            result = await handler("j1", _mk_request())
+        cac.assert_not_awaited()
+        assert result == {"id": "j1", "status": "queued", "phase": "queued"}  # bulk stripped
+
+    @pytest.mark.asyncio
+    async def test_status_poll_hides_another_users_job(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/memories/her-pov/{job_id}", "GET")
+        with patch("app.routes_extras3._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.memory_her_pov.get_job",
+                   new=AsyncMock(return_value={"id": "j1", "user_id": "bob"})):
+            resp = await handler("j1", _mk_request())
+        assert resp.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# /internal/* hooks — shared-secret gate (_internal_token_ok)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _internal_req(token: str | None) -> MagicMock:
+    req = MagicMock()
+    req.headers = {"X-Internal-Token": token} if token is not None else {}
+    req.json = AsyncMock(return_value={"task_id": "t1", "job_id": "j1"})
+    return req
+
+
+class TestInternalTokenGate:
+    def test_unset_secret_fails_closed(self, monkeypatch):
+        from app.routes_extras3 import _internal_token_ok
+        monkeypatch.delenv("CORE_INTERNAL_TOKEN", raising=False)
+        assert _internal_token_ok(_internal_req("anything")) is False
+        assert _internal_token_ok(_internal_req("")) is False
+
+    def test_matching_token_passes_anything_else_does_not(self, monkeypatch):
+        from app.routes_extras3 import _internal_token_ok
+        monkeypatch.setenv("CORE_INTERNAL_TOKEN", "s3cret")
+        assert _internal_token_ok(_internal_req("s3cret")) is True
+        assert _internal_token_ok(_internal_req("s3cret ")) is False
+        assert _internal_token_ok(_internal_req("S3CRET")) is False
+        assert _internal_token_ok(_internal_req(None)) is False
+
+    def test_non_ascii_header_is_refused_not_an_error(self, monkeypatch):
+        """Starlette hands a header byte ≥0x80 through as latin-1 text;
+        compare_digest on str would raise TypeError and the hook would 500
+        (and so leak that something is there). It must simply be False."""
+        from app.routes_extras3 import _internal_token_ok
+        monkeypatch.setenv("CORE_INTERNAL_TOKEN", "s3cret")
+        assert _internal_token_ok(_internal_req("s3crét")) is False
+        assert _internal_token_ok(_internal_req(b"s3cret\x80".decode("latin-1"))) is False
+        # A non-ASCII secret on the expected side compares fine too.
+        monkeypatch.setenv("CORE_INTERNAL_TOKEN", "süper")
+        assert _internal_token_ok(_internal_req("süper")) is True
+        assert _internal_token_ok(_internal_req("super")) is False
+
+    @pytest.mark.asyncio
+    async def test_deferred_fire_forbids_non_ascii_token(self, monkeypatch):
+        monkeypatch.setenv("CORE_INTERNAL_TOKEN", "s3cret")
+        app = _app_with_routes()
+        handler = _find_route(app, "/internal/deferred/fire", "POST")
+        with patch("app.deferred.fire", new=AsyncMock()) as fire:
+            resp = await handler(_internal_req("s3crét"))
+        assert resp.status_code == 403
+        fire.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_deferred_fire_runs_with_the_right_token(self, monkeypatch):
+        monkeypatch.setenv("CORE_INTERNAL_TOKEN", "s3cret")
+        app = _app_with_routes()
+        handler = _find_route(app, "/internal/deferred/fire", "POST")
+        with patch("app.deferred.fire", new=AsyncMock(return_value=True)) as fire:
+            result = await handler(_internal_req("s3cret"))
+        assert result == {"task_id": "t1", "fired": True}
+        fire.assert_awaited_once_with("t1")
+
+    @pytest.mark.asyncio
+    async def test_her_pov_run_forbids_non_ascii_token(self, monkeypatch):
+        monkeypatch.setenv("CORE_INTERNAL_TOKEN", "s3cret")
+        app = _app_with_routes()
+        handler = _find_route(app, "/internal/jobs/her-pov/run", "POST")
+        with patch("app.memory_her_pov.run_job_from_queue", new=AsyncMock()) as run:
+            resp = await handler(_internal_req(b"s3cret\x80".decode("latin-1")))
+        assert resp.status_code == 403
+        run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_her_pov_run_with_the_right_token(self, monkeypatch):
+        monkeypatch.setenv("CORE_INTERNAL_TOKEN", "s3cret")
+        app = _app_with_routes()
+        handler = _find_route(app, "/internal/jobs/her-pov/run", "POST")
+        with patch("app.memory_her_pov.run_job_from_queue",
+                   new=AsyncMock(return_value=True)) as run:
+            result = await handler(_internal_req("s3cret"))
+        assert result == {"job_id": "j1", "ok": True}
+        run.assert_awaited_once_with("j1")

@@ -677,3 +677,107 @@ class TestMemorySearch:
              patch("app.routes_extras2.get_pool", side_effect=RuntimeError("db down")):
             resp = await handler(_mk_request(), q="smile")
         assert resp.status_code == 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Voice letters — latest / audio / played
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+WAV = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 24
+
+
+class TestVoiceNotes:
+    @pytest.mark.asyncio
+    async def test_latest_requires_auth(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/voice-notes/latest", "GET")
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value=None)):
+            resp = await handler(_mk_request(token=None))
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_latest_returns_metadata_scoped_to_user(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/voice-notes/latest", "GET")
+        note = {"id": "n1", "played_at": None}
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.voice_archive.latest_voice_note", new=AsyncMock(return_value=note)) as lvn:
+            result = await handler(_mk_request())
+        assert result == {"voice_note": note}
+        lvn.assert_awaited_once_with("alice")
+
+    @pytest.mark.asyncio
+    async def test_audio_requires_auth(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/voice-notes/{note_id}/audio", "GET")
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value=None)):
+            resp = await handler("n1", _mk_request(token=None))
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_audio_not_owner_or_missing_is_404(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/voice-notes/{note_id}/audio", "GET")
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.voice_archive.get_voice_note", new=AsyncMock(return_value=None)) as gvn:
+            resp = await handler("n1", _mk_request())
+        assert resp.status_code == 404
+        # Fetched with the caller's user_id: a non-owner can never see the bytes.
+        gvn.assert_awaited_once_with("n1", "alice")
+
+    @pytest.mark.asyncio
+    async def test_audio_is_wav_cached_privately_and_immutably(self):
+        """Bearer-gated, user-scoped bytes: `private` so no shared cache on the
+        cloudflared path may store the letter and serve it to whoever holds the
+        UUID; immutable for a year because a note's audio never changes."""
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/voice-notes/{note_id}/audio", "GET")
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.voice_archive.get_voice_note",
+                   new=AsyncMock(return_value=(WAV, "letter.wav"))):
+            resp = await handler("n1", _mk_request())
+        assert resp.status_code == 200
+        assert resp.media_type == "audio/wav"
+        assert resp.body == WAV
+        assert resp.headers["Cache-Control"] == "private, max-age=31536000, immutable"
+        assert "public" not in resp.headers["Cache-Control"]
+
+    @pytest.mark.asyncio
+    async def test_played_requires_auth(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/voice-notes/{note_id}/played", "POST")
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value=None)):
+            resp = await handler("n1", _mk_request(token=None))
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_played_first_time_stamps(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/voice-notes/{note_id}/played", "POST")
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.voice_archive.mark_played", new=AsyncMock(return_value=True)) as mp:
+            result = await handler("n1", _mk_request())
+        assert result == {"ok": True, "already_played": False}
+        mp.assert_awaited_once_with("n1", "alice")
+
+    @pytest.mark.asyncio
+    async def test_played_again_is_idempotent_200(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/voice-notes/{note_id}/played", "POST")
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.voice_archive.mark_played", new=AsyncMock(return_value=False)), \
+             patch("app.voice_archive.get_voice_note",
+                   new=AsyncMock(return_value=(WAV, "letter.wav"))):
+            result = await handler("n1", _mk_request())
+        assert result == {"ok": True, "already_played": True}
+
+    @pytest.mark.asyncio
+    async def test_played_missing_or_foreign_is_404(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/voice-notes/{note_id}/played", "POST")
+        with patch("app.routes_extras2._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.voice_archive.mark_played", new=AsyncMock(return_value=False)), \
+             patch("app.voice_archive.get_voice_note", new=AsyncMock(return_value=None)):
+            resp = await handler("n1", _mk_request())
+        assert resp.status_code == 404
