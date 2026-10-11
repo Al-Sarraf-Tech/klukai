@@ -97,6 +97,22 @@ void main() {
     expect(svc.send({'type': 'typing'}), isTrue);
   });
 
+  test('reconnectNow reports the link down until the new socket speaks', () async {
+    // The chat screen refetches history on the false→true edge and only offers
+    // the composer while connected. A redial that stayed silent about the gap
+    // left proactive lines sent during a freeze unseen, and the composer live
+    // on a channel that wasn't open yet.
+    final states = <bool>[];
+    svc.connectionState.listen(states.add);
+    svc.connect(server.url);
+    await _until(() => svc.isConnected);
+
+    svc.reconnectNow();
+    expect(svc.isConnected, isFalse); // nothing has spoken on the new channel
+    await _until(() => server.sockets.length == 2 && svc.isConnected);
+    expect(states, [true, false, true]);
+  });
+
   test('a dropped link redials with backoff and reports state changes', () async {
     final states = <bool>[];
     svc.connectionState.listen(states.add);

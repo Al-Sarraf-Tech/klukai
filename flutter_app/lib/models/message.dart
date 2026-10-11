@@ -57,8 +57,11 @@ class ChatMessage {
       content: json['content'] ?? '',
       mood: json['mood'] ?? 'neutral',
       model: json['model'],
+      // The server stamps history in UTC ("...Z"). Convert at the edge so the
+      // bubble clock, the date dividers and dorm mode all read wall-clock time
+      // (ThreadEntry.fromJson does the same).
       createdAt: json['created_at'] != null
-          ? DateTime.parse(json['created_at'])
+          ? DateTime.parse(json['created_at']).toLocal()
           : DateTime.now(),
       status: json['status'] as String? ?? 'read',
     );

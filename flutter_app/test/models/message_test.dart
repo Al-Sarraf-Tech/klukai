@@ -65,6 +65,31 @@ void main() {
       );
     });
 
+    test('created_at is converted to local time (history arrives in UTC)', () {
+      // The bubble clock, the date dividers and dorm mode read .hour/.day
+      // straight off createdAt; a UTC instant there showed server time.
+      final m = ChatMessage.fromJson({
+        'id': 'x',
+        'content': 'hi',
+        'created_at': '2026-05-01T12:30:45.000Z',
+      });
+      expect(m.createdAt.isUtc, isFalse);
+      final expected = DateTime.utc(2026, 5, 1, 12, 30, 45).toLocal();
+      expect(m.createdAt, expected);
+      expect(m.createdAt.hour, expected.hour);
+      expect(m.createdAt.day, expected.day);
+    });
+
+    test('an offset timestamp lands on the same local instant', () {
+      final m = ChatMessage.fromJson({
+        'id': 'x',
+        'content': 'hi',
+        'created_at': '2026-05-01T14:30:45+02:00',
+      });
+      expect(m.createdAt.isUtc, isFalse);
+      expect(m.createdAt.toUtc(), DateTime.utc(2026, 5, 1, 12, 30, 45));
+    });
+
     test('preserves a user role distinctly', () {
       final m = ChatMessage.fromJson({
         'id': '1',

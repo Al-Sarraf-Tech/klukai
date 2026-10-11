@@ -15,7 +15,16 @@ class MessageBubble extends StatefulWidget {
   /// Voice playback seam; defaults to the real browser.
   final BrowserPlatform? browser;
 
-  const MessageBubble({super.key, required this.message, this.browser});
+  /// HTTP seam for the TTS request; defaults to a real client. Tests inject
+  /// a MockClient.
+  final http.Client? client;
+
+  const MessageBubble({
+    super.key,
+    required this.message,
+    this.browser,
+    this.client,
+  });
 
   @override
   State<MessageBubble> createState() => _MessageBubbleState();
@@ -25,31 +34,41 @@ class _MessageBubbleState extends State<MessageBubble> {
   bool _isPlaying = false;
   bool _isLoading = false;
 
+  /// How long to wait on /api/tts. XTTS on a cold GPU can take a while; a
+  /// powered-off GPU host hangs the proxy, and the spinner must not.
+  static const _ttsTimeout = Duration(seconds: 45);
+
   Future<void> _playVoice() async {
     if (_isLoading || _isPlaying) return;
     if (widget.message.content.isEmpty) return;
 
     setState(() => _isLoading = true);
 
+    var spoke = false;
+    // An injected client is the caller's to close; one we open here is ours.
+    final client = widget.client ?? http.Client();
     try {
       // Get server URL from the page origin
       final serverUrl = Uri.base.origin.contains('localhost')
           ? 'http://localhost:8300'
           : Uri.base.origin;
 
-      final response = await http.post(
-        Uri.parse('$serverUrl/api/tts'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${readAuthToken()}',
-        },
-        body: jsonEncode(ttsRequestBody(widget.message.content)),
-      );
+      final response = await client
+          .post(
+            Uri.parse('$serverUrl/api/tts'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ${readAuthToken()}',
+            },
+            body: jsonEncode(ttsRequestBody(widget.message.content)),
+          )
+          .timeout(_ttsTimeout);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final audioB64 = data['audio'] as String?;
         if (audioB64 != null) {
+          spoke = true;
           if (mounted) {
             setState(() {
               _isLoading = false;
@@ -63,12 +82,44 @@ class _MessageBubbleState extends State<MessageBubble> {
           await (widget.browser ?? defaultBrowserPlatform())
               .playVoice('data:audio/wav;base64,$audioB64');
         }
+      } else {
+        debugPrint('Voice synth failed: HTTP ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('Voice playback failed: $e');
+    } finally {
+      if (widget.client == null) client.close();
     }
 
+    // Any failure (502 from a powered-off GPU host, timeout, transport error)
+    // must drop the spinner and say so — the text still stands on its own.
     if (mounted) setState(() { _isLoading = false; _isPlaying = false; });
+    if (!spoke) _showVoiceUnavailable();
+  }
+
+  void _showVoiceUnavailable() {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text(
+          '// VOICE SYNTH OFFLINE — her words stand.',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            letterSpacing: 1.0,
+            fontSize: 12,
+          ),
+        ),
+        backgroundColor: GFL2Colors.surface,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+          side: BorderSide(color: GFL2Colors.danger.withValues(alpha: 0.4)),
+        ),
+      ),
+    );
   }
 
   void _downloadImage(String base64Data) {

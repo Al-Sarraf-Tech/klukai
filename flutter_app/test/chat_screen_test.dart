@@ -19,6 +19,8 @@ library;
 // is false, so finalized assistant messages render through MessageBubble (a
 // SelectableText), which is what we assert against.
 import 'dart:async';
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -27,13 +29,45 @@ import 'package:web/web.dart' as web;
 
 import 'package:companion_app/models/her_day.dart';
 import 'package:companion_app/screens/chat_screen.dart';
+import 'package:companion_app/services/resume_policy.dart';
 import 'package:companion_app/services/wardrobe_service.dart';
 import 'package:companion_app/services/websocket_service.dart';
+import 'package:companion_app/widgets/canvas_message_bubble.dart';
 import 'package:companion_app/widgets/message_bubble.dart';
 import 'package:companion_app/widgets/heartbeat_sensor.dart';
+import 'package:companion_app/widgets/tool_status_indicator.dart';
 
 import 'support/fake_browser.dart';
 import 'support/her_day_fixtures.dart';
+
+// 1x1 transparent PNG — what an `image` frame carries, in miniature.
+const _pngB64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+/// Pretend the pretext JS bridge is loaded — `isReady` only; nothing in the
+/// tests that use it may draw through it — so routing that depends on it can
+/// be exercised. Pair with [_removePretextStub] in a tearDown.
+void _installPretextStub() {
+  final bridge = JSObject();
+  bridge['isReady'] = (() => true.toJS).toJS;
+  globalContext['pretextBridge'] = bridge;
+}
+
+void _removePretextStub() {
+  globalContext.delete('pretextBridge'.toJS);
+}
+
+/// Records what the screen asks on resume and never redials, so a test can
+/// read the duration the screen measured.
+class _RecordingPolicy extends ResumePolicy {
+  final List<Duration> awayFor = [];
+
+  @override
+  bool shouldReconnect({required bool connected, required Duration sinceLastFrame}) {
+    awayFor.add(sinceLastFrame);
+    return false;
+  }
+}
 
 /// In-memory stand-in for [WebSocketService]. Overrides every transport method
 /// to a no-op and routes inbound frames through `emit()`. The connection state
@@ -507,6 +541,293 @@ void main() {
       fake.emit({'type': 'voice_audio', 'audio': 'UklGRg=='});
       await tester.pump();
       expect(browser.voices, ['data:audio/wav;base64,UklGRg==']);
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — resume measures time away, not silence', () {
+    // The web engine reports visibility through the lifecycle channel: hidden
+    // when the tab/app leaves the screen, resumed when it is back.
+    Future<void> setLifecycle(WidgetTester tester, AppLifecycleState state) =>
+        tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          SystemChannels.lifecycle.name,
+          const StringCodec().encodeMessage(state.toString()),
+          (_) {},
+        );
+
+    Future<(FakeWebSocketService, FakeBrowserPlatform)> pumpWithPolicy(
+      WidgetTester tester,
+      ResumePolicy policy,
+    ) async {
+      web.window.localStorage.setItem('klukai_token', 'test-token');
+      final fake = FakeWebSocketService();
+      final browser = FakeBrowserPlatform();
+      await tester.pumpWidget(MaterialApp(
+        home: ChatScreen(
+          serverUrl: 'http://localhost:0',
+          webSocketService: fake,
+          wardrobeService: FakeWardrobeService(),
+          browser: browser,
+          resumePolicy: policy,
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+      return (fake, browser);
+    }
+
+    testWidgets('a blink of a hide after a quiet stretch reports the blink, not the quiet',
+        (tester) async {
+      final policy = _RecordingPolicy();
+      final (fake, browser) = await pumpWithPolicy(tester, policy);
+
+      // Chat goes quiet for a while (real time: this is wall-clock)...
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 500)));
+      // ...then a one-blink tab switch and back.
+      await setLifecycle(tester, AppLifecycleState.hidden);
+      await setLifecycle(tester, AppLifecycleState.resumed);
+      browser.resume.add(null);
+      await tester.pump();
+
+      expect(policy.awayFor, hasLength(1));
+      // Measured from the hide, not from the last frame half a second ago.
+      expect(policy.awayFor.single, lessThan(const Duration(milliseconds: 500)));
+      expect(fake.reconnectNowCalls, 0);
+      fake.dispose();
+    });
+
+    testWidgets('a resume that follows no hide reports no time away', (tester) async {
+      final policy = _RecordingPolicy();
+      final (fake, browser) = await pumpWithPolicy(tester, policy);
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+
+      browser.resume.add(null); // e.g. the network coming back
+      await tester.pump();
+
+      expect(policy.awayFor, [Duration.zero]);
+      expect(fake.reconnectNowCalls, 0);
+      fake.dispose();
+    });
+
+    testWidgets('a long hide redials even though the socket still looks open', (tester) async {
+      // iOS freezes a backgrounded PWA and drops the socket without a close
+      // event; `connected` stays true. Time away is what gives it up.
+      final (fake, browser) =
+          await pumpWithPolicy(tester, const ResumePolicy(staleAfter: Duration(milliseconds: 50)));
+      expect(fake.isConnected, isTrue);
+
+      await setLifecycle(tester, AppLifecycleState.hidden);
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 120)));
+      await setLifecycle(tester, AppLifecycleState.resumed);
+      browser.resume.add(null);
+      await tester.pump();
+
+      expect(fake.reconnectNowCalls, 1);
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — image frames', () {
+    Future<void> drainImageTimers(WidgetTester tester) async {
+      // The image frame's 2s input lock and the scroll retries (3 x 150ms).
+      for (var i = 0; i < 3; i++) {
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+      await tester.pump(const Duration(seconds: 2));
+    }
+
+    testWidgets('an image frame renders the picture, never the literal [IMAGE]', (tester) async {
+      final fake = await _pumpChat(tester);
+      fake.emit({'type': 'image', 'data': _pngB64});
+      await tester.pump();
+
+      expect(
+        find.descendant(of: find.byType(MessageBubble), matching: find.byType(Image)),
+        findsOneWidget,
+      );
+      expect(find.byIcon(Icons.download), findsOneWidget);
+      expect(find.text('[IMAGE]'), findsNothing);
+      await drainImageTimers(tester);
+      expect(tester.takeException(), isNull);
+      fake.dispose();
+    });
+
+    testWidgets('with the canvas renderer ready, an image still goes through MessageBubble',
+        (tester) async {
+      // Finalized assistant text is drawn by CanvasMessageBubble once the
+      // pretext bridge is up — but that bubble only draws text (it showed the
+      // literal "[IMAGE]") and has no speaker. Routing must send images
+      // around it.
+      _installPretextStub();
+      addTearDown(_removePretextStub);
+      final fake = await _pumpChat(tester);
+      fake.emit({'type': 'image', 'data': _pngB64});
+      await tester.pump();
+
+      expect(find.byType(CanvasMessageBubble), findsNothing);
+      expect(find.byType(MessageBubble), findsOneWidget);
+      expect(find.byIcon(Icons.download), findsOneWidget);
+      expect(find.text('[IMAGE]'), findsNothing);
+      await drainImageTimers(tester);
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — a reply cut off mid-stream', () {
+    MessageBubble bubbleWith(WidgetTester tester, String content) =>
+        tester.widget<MessageBubble>(find.byWidgetPredicate(
+          (w) => w is MessageBubble && w.message.content == content,
+        ));
+
+    bool anyStreaming(WidgetTester tester) => tester
+        .widgetList<MessageBubble>(find.byType(MessageBubble))
+        .any((b) => b.message.isStreaming);
+
+    testWidgets('an error frame freezes the partial bubble and frees the composer', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+      TextField tf() => tester.widget<TextField>(find.byType(TextField));
+
+      fake.emit({'type': 'token', 'text': 'Orders rec'});
+      await tester.pump();
+      expect(tf().readOnly, isTrue);
+      expect(bubbleWith(tester, 'Orders rec').message.isStreaming, isTrue);
+
+      const disrupted = 'Communications disrupted, Commander. Standby for reconnection.';
+      fake.emit({'type': 'error', 'message': disrupted});
+      await tester.pump();
+
+      // What arrived stays, frozen; her line follows as a bubble of its own.
+      expect(bubbleWith(tester, 'Orders rec').message.isStreaming, isFalse);
+      expect(find.text(disrupted), findsOneWidget);
+      expect(anyStreaming(tester), isFalse);
+      expect(tf().readOnly, isFalse);
+
+      // The next reply gets a new bubble rather than extending the dead one.
+      fake.emit({'type': 'token', 'text': 'Back online.'});
+      await tester.pump();
+      expect(find.text('Orders rec'), findsOneWidget);
+      expect(find.text('Back online.'), findsOneWidget);
+      fake.emit({'type': 'done'});
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      fake.dispose();
+    });
+
+    testWidgets('a dropped link mid-reply freezes the bubble, clears the indicators, unlocks', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+      TextField tf() => tester.widget<TextField>(find.byType(TextField));
+
+      fake.emit({'type': 'tool_use', 'tool': 'web_search', 'status': 'calling'});
+      await tester.pump();
+      fake.emit({'type': 'token', 'text': 'Standing by'});
+      await tester.pump();
+      expect(find.byType(ToolStatusIndicator), findsOneWidget);
+      expect(tf().readOnly, isTrue);
+
+      fake.setConnected(false);
+      await tester.pump();
+
+      expect(find.text('LINK DOWN'), findsOneWidget);
+      expect(bubbleWith(tester, 'Standing by').message.isStreaming, isFalse);
+      expect(find.byType(ToolStatusIndicator), findsNothing);
+      expect(tf().readOnly, isFalse); // not locked for the 60s safety timeout
+
+      // Link back: the next reply is its own bubble, not appended to the dead one.
+      fake.setConnected(true);
+      await tester.pump();
+      fake.emit({'type': 'token', 'text': 'Link restored.'});
+      await tester.pump();
+      expect(find.text('Standing by'), findsOneWidget);
+      expect(find.text('Link restored.'), findsOneWidget);
+      fake.emit({'type': 'done'});
+      await tester.pump();
+      // Let the (failing) history refetch settle.
+      await tester.pump(const Duration(seconds: 1));
+      expect(tester.takeException(), isNull);
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — status (thinking) frames', () {
+    testWidgets('an empty thinking frame clears the status instead of spinning forever', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+
+      // Current frames carry `content`...
+      fake.emit({'type': 'thinking', 'content': 'checking the hangar'});
+      await tester.pump();
+      expect(find.text('CHECKING THE HANGAR'), findsOneWidget);
+
+      // ...and the backend clears its status with an empty one.
+      fake.emit({'type': 'thinking', 'content': ''});
+      await tester.pump();
+      expect(find.text('CHECKING THE HANGAR'), findsNothing);
+      expect(find.text('PROCESSING'), findsNothing);
+
+      // Older frames carry `text`.
+      fake.emit({'type': 'thinking', 'text': 'loading the model'});
+      await tester.pump();
+      expect(find.text('LOADING THE MODEL'), findsOneWidget);
+      fake.emit({'type': 'thinking'});
+      await tester.pump();
+      expect(find.text('LOADING THE MODEL'), findsNothing);
+      expect(find.text('PROCESSING'), findsNothing);
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — done.text is her final line', () {
+    testWidgets('done.text replaces the raw stream; an empty one keeps it', (tester) async {
+      final fake = await _pumpChat(tester);
+
+      fake.emit({'type': 'token', 'text': '<think>weighing it</think>'});
+      await tester.pump();
+      fake.emit({'type': 'token', 'text': 'Understood.'});
+      await tester.pump();
+      fake.emit({'type': 'done', 'model': 'venice', 'text': 'Understood, Commander.'});
+      await tester.pump();
+      expect(find.text('Understood, Commander.'), findsOneWidget);
+      expect(find.textContaining('<think>'), findsNothing);
+
+      fake.emit({'type': 'token', 'text': 'Second line.'});
+      await tester.pump();
+      fake.emit({'type': 'done', 'text': ''});
+      await tester.pump();
+      expect(find.text('Second line.'), findsOneWidget);
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — the first token owns the lock', () {
+    testWidgets('a reply arriving under a shorter lock is locked for the whole reply', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+      TextField tf() => tester.widget<TextField>(find.byType(TextField));
+
+      // A proactive line locks for 1.5s...
+      fake.emit({'type': 'proactive', 'message': 'Commander.'});
+      await tester.pump();
+      expect(find.textContaining('INCOMING TRANSMISSION'), findsOneWidget);
+
+      // ...and her reply starts inside that window.
+      fake.emit({'type': 'token', 'text': 'Status: '});
+      await tester.pump();
+      expect(find.textContaining('RECEIVING TRANSMISSION'), findsOneWidget);
+
+      // Past the proactive lock's 1.5s the composer is still hers.
+      await tester.pump(const Duration(milliseconds: 1600));
+      expect(tf().readOnly, isTrue);
+      expect(find.textContaining('RECEIVING TRANSMISSION'), findsOneWidget);
+
+      fake.emit({'type': 'done'});
+      await tester.pump();
+      expect(tf().readOnly, isFalse);
       fake.dispose();
     });
   });

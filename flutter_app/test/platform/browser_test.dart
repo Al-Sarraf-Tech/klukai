@@ -24,6 +24,8 @@ void main() {
     });
   });
 
+  // Under `--platform chrome` defaultBrowserPlatform() is the real web seam,
+  // whose playVoice() on an empty clip never settles; this asserts the stub.
   test('the VM stub is inert', () async {
     final b = defaultBrowserPlatform();
     expect(identical(b, defaultBrowserPlatform()), isTrue); // one instance
@@ -33,5 +35,5 @@ void main() {
     expect(await b.playVoice('data:audio/wav;base64,'), isFalse);
     expect(await b.onResume.isEmpty, isTrue);
     b.openUrl('companion.html', newWindow: true); // no throw
-  });
+  }, testOn: 'vm');
 }
