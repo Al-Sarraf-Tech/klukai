@@ -92,6 +92,22 @@ Handoff: `docs/handoff/2026-10-11-standby-hardening.md`.
   Markdown; edited messages are ignored.
 - **tooling** — `scripts/s-tier-audit.sh --diff` implemented; Makefile
   targets `test-tgbot`, `test-ops`, `test-voice`, `test-shell`, `test-all`.
+- **second wave (routes, Her Day, rituals, decisions)** — voice-letter audio
+  was `Cache-Control: public` on a bearer-gated response (now `private`);
+  `/health`'s DB probe had no timeout and could trip autoheal mid-chat;
+  a rate-limit key that lost its EXPIRE locked the bucket forever (re-armed),
+  and a 409 from `/api/portrait/refresh` refunds its 10-minute token; the
+  avatar GLB was gzipped on the event loop; non-ASCII signatures/internal
+  tokens were a 500 instead of 403; the login page had no `Cache-Control`;
+  `POST /api/memories/her-pov` joins the `image_gen` bucket. The
+  fee-settlement month was claimed before the 20 s wait and the scene, so a
+  socket drop lost it for the month (wait first, then claim and deliver
+  shielded; birthday scene shielded too); "I like it when you wear the
+  hoodie" no longer counts as an outfit order; "Plan B fell through" no
+  longer resolves a pending decision as B; `outfit:tomorrow` and the oath
+  gate use Her Day's 05:00 day boundary; images during a mission show the
+  mission kit; her mood reaches the daily outfit pick; a Feb-29 birthday is
+  kept on Feb 28; his birthday outranks a holiday it falls inside.
 
 ### Changed — file-size hygiene (2026-10-11)
 

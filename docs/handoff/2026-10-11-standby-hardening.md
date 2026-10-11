@@ -48,6 +48,17 @@ she misbehaved quietly.
 
 Full detail per change is in `CHANGELOG.md` under "Fixed — standby hardening".
 
+A second audit wave covered the modules the first seven did not
+(routes_extras2/3, routes_portrait, routes_thread, routes_wardrobe,
+static_cache, signed_urls, rate_limit, warmup, health_cache, her_day,
+wardrobe, rituals, tributes, decisions, weather, durability, personality,
+observability). Seventeen more findings fixed in `fa94b0c` and the commit
+after it; see the "second wave" bullet in the changelog. Checked and found
+correct there: user scoping on every route, signed-URL verification and id
+validation, static cache policy, warmup never extending residency, Her Day
+caches keyed by user and day, `claim_period` idempotency, catch-up allowlist
+coverage, personality YAML types.
+
 ### Refactors (behaviour-preserving)
 
 - `app/proactive/engine.py` 679 → 472 LOC. The APScheduler job table
