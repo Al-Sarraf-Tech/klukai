@@ -48,6 +48,7 @@ from .helpers import (
     store_message as _store_message,
 )
 from .image_gen import needs_image
+from .llm_router import FAILURE_SENTINEL, LLMStreamFailed
 from .models import SessionState, new_id
 from .personality import (
     assemble_system_prompt,
@@ -76,6 +77,38 @@ REFLECTION_MAX_HOURS_AWAY = 72
 # The Commander's message for this turn is already persisted by the time the
 # system prompt is built, so ignore the last minute when measuring the gap.
 _PRESENCE_IGNORE_SECONDS = 60
+
+# A reply opening like this is not an answer she gave. The router's
+# FAILURE_SENTINEL and the agent loop's own failure line ("Communications
+# disrupted, Commander. I'll respond with what I have.") share these words,
+# so match the prefix rather than the full sentinel.
+_FAILURE_PREFIX = FAILURE_SENTINEL.split(",", 1)[0]
+
+
+async def _drop_unanswered_turn(sid: str, session: SessionState) -> None:
+    """Take the Commander's just-added turn back out of the LIVE session.
+
+    Called when her core produced no answer: dominus-nobara is powered off
+    (normal), its gateway port is not bound yet after a boot, or the stream
+    died. The message itself is already in PostgreSQL — chat history is
+    SACRED and nothing is deleted there. This only concerns the 16-turn
+    window replayed to the model.
+
+    Design choice: the turn is dropped rather than kept as "context of what
+    he said while she was offline". Keeping it would leave consecutive user
+    turns with no assistant turn between them — the Mistral-family chat
+    template rejects that outright and other models answer the pile as one
+    lumped message — and a few "hello?" retries during a power cycle would
+    evict real history from the window. Dropping it means that when the GPU
+    comes back she picks up exactly where the last real exchange ended, and
+    the message he re-sends (the sentinel told him to stand by) is answered
+    with clean context. What he said while she was down stays in PostgreSQL
+    for the history view and the return greeting.
+    """
+    if session.turns and session.turns[-1].get("role") == "user":
+        session.turns.pop()
+        session.turn_count = max(0, session.turn_count - 1)
+        await memory.save_session(sid, session)
 
 
 async def _hours_since_last_exchange(user_id: str) -> float | None:
@@ -115,10 +148,15 @@ async def _hours_since_last_exchange(user_id: str) -> float | None:
         return None
 
 
-async def _handle_message(content: str, session: SessionState, user_id: str = "default") -> None:
-    """Process a text message: memory recall, LLM, response, extraction."""
+async def _handle_message(content: str, session: SessionState, user_id: str = "default") -> str | None:
+    """Process a text message: memory recall, LLM, response, extraction.
+
+    Returns her reply text, or None when she had no answer this turn (empty
+    input, or the local LLM produced nothing) so callers such as the voice
+    path know there is nothing of hers to speak.
+    """
     if not content.strip():
-        return
+        return None
 
     # Preserve relationship activity tracking. This timestamp cannot extend
     # LLM residency; the compatibility keepalive method is a hard no-op.
@@ -469,7 +507,6 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Check if this needs the agentic tool-use loop
     use_agent = await router.needs_agent(content)
     msg_id = new_id()
-    from .llm_router import LLMStreamFailed
     stream_failed = False
 
     if use_agent:
@@ -498,7 +535,19 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     else:
         # Direct path: stream from LLM
         await ws.send_thinking(user_id, "Composing response...")
-        config = await router.route(content, session)
+        try:
+            config = await router.route(content, session)
+        except RuntimeError as e:
+            # No local backend: dominus-nobara is off or its gateway port is
+            # not bound yet. That is normal, not a crash — degrade in-band
+            # exactly like a pre-token stream failure (the sentinel is the
+            # whole reply) instead of letting the WS loop log a traceback and
+            # tell him "something glitched" on every turn of the outage.
+            logger.warning("Local LLM unavailable this turn: %s", e)
+            await ws.send_token(user_id, FAILURE_SENTINEL)
+            await ws.send_done(user_id, msg_id, "offline")
+            await _drop_unanswered_turn(sid, session)
+            return None
         logger.info("Routing to %s/%s", config.provider, config.model)
 
         # Fire a delayed "warming up" message if model is slow to respond
@@ -537,6 +586,9 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
                 "message": "...Connection to my core dropped mid-sentence, "
                            "Commander. Say that again?",
             })
+            # The unflushed tail is not sent after the error: a token frame
+            # following an error opens a stray second bubble in the client.
+            buffer = ""
         if warmup_timer and not warmup_timer.done():
             warmup_timer.cancel()
         if buffer:
@@ -551,6 +603,19 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         # Send corrected final text if narration fix changed anything
         final_text = response_text if response_text != raw_text else None
         await ws.send_done(user_id, msg_id, model_name, final_text=final_text)
+
+    # Nothing came back from her core: the sentinel (gateway down before any
+    # token), a mid-stream drop, or the agent loop's own failure line. The
+    # Commander's message is already in PostgreSQL. A non-answer is not
+    # recorded as hers, not replayed to the model as context, and not mined
+    # for facts, mood or affection — extraction on the sentinel used to reset
+    # her mood to "composed", credit a streak and store the outage notice in
+    # long-term memory as something she said.
+    llm_failed = stream_failed or response_text.startswith(_FAILURE_PREFIX)
+    if llm_failed:
+        logger.info("No answer from the LLM this turn — skipping persistence and follow-ups")
+        await _drop_unanswered_turn(sid, session)
+        return None
 
     # Add assistant turn to session
     session = await memory.add_turn(sid, "assistant", response_text, session)
@@ -588,28 +653,26 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Track whether image gen was triggered (for extraction curation pass)
     image_triggered = False
 
-    # Background tasks — only if main LLM succeeded (not a fallback error
-    # and not a truncated mid-stream failure)
-    if not stream_failed and not response_text.startswith("Communications disrupted"):
-        # Recall detection takes priority over new image generation
-        if _wants_recall(content):
-            logger.info("Memory recall triggered for: %s", content[:80])
-            ws.track_task(user_id, asyncio.create_task(background_recall(content, session, user_id)))
-        elif needs_image(content):
-            logger.info("Image generation triggered for: %s", content[:80])
-            # Build chat context from last few turns for scene-aware prompting
-            recent_turns = session.turns[-6:]  # Last 3 exchanges
-            chat_ctx = "\n".join(
-                f"{t['role']}: {t['content'][:200]}" for t in recent_turns
-            )
-            image_triggered = True
-            # Detect squad members mentioned for multi-character scenes
-            from .image_gen import detect_squad_members
-            mentioned_squad = detect_squad_members(f"{content} {chat_ctx}")
-            ws.track_task(user_id, asyncio.create_task(background_image_gen(
-                content, chat_context=chat_ctx, squad_members=mentioned_squad,
-                user_id=user_id,
-            )))
+    # Background tasks — the LLM answered (an llm_failed turn returned above).
+    # Recall detection takes priority over new image generation.
+    if _wants_recall(content):
+        logger.info("Memory recall triggered for: %s", content[:80])
+        ws.track_task(user_id, asyncio.create_task(background_recall(content, session, user_id)))
+    elif needs_image(content):
+        logger.info("Image generation triggered for: %s", content[:80])
+        # Build chat context from last few turns for scene-aware prompting
+        recent_turns = session.turns[-6:]  # Last 3 exchanges
+        chat_ctx = "\n".join(
+            f"{t['role']}: {t['content'][:200]}" for t in recent_turns
+        )
+        image_triggered = True
+        # Detect squad members mentioned for multi-character scenes
+        from .image_gen import detect_squad_members
+        mentioned_squad = detect_squad_members(f"{content} {chat_ctx}")
+        ws.track_task(user_id, asyncio.create_task(background_image_gen(
+            content, chat_context=chat_ctx, squad_members=mentioned_squad,
+            user_id=user_id,
+        )))
 
     # Background: extract facts and create episodes
     # Skip extraction for trivial messages (no facts to extract, saves a full LLM round-trip)
@@ -617,11 +680,6 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     is_trivial = content_stripped in TRIVIAL_PATTERNS or (
         len(content_stripped) <= 5 and not image_triggered
     )
-
-    if stream_failed:
-        # Truncated reply — never extract facts/episodes from a partial answer.
-        logger.info("Stream failed mid-response, skipping extraction/compaction")
-        return
 
     if not is_trivial:
         async def _safe_extraction():
@@ -640,3 +698,5 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Background: compact session if turns exceed threshold
     if len(session.turns) >= COMPACT_THRESHOLD:
         ws.track_task(user_id, asyncio.create_task(background_compaction(session, user_id)))
+
+    return response_text

@@ -163,6 +163,11 @@ async def background_extraction(
         except Exception as e:
             logger.debug("Mood contagion skipped: %s", e)
 
+        # The mood she was in BEFORE this turn — read it before set_last_mood
+        # overwrites it, or the vigilant-after-battle_ready check below only
+        # ever sees the new mood and can never fire.
+        prev_mood = proactive._last_mood
+
         session.mood = mood
         await memory.save_session(session_id(user_id), session)
         await ws.send_mood(user_id, mood)
@@ -182,7 +187,7 @@ async def background_extraction(
         # Auto-start mission when mood hits battle_ready or vigilant (if was battle_ready)
         mission_moods = {"battle_ready"}
         # Vigilant triggers mission only if previous mood was battle_ready (mid-combat awareness)
-        if mood == "vigilant" and proactive._last_mood == "battle_ready":
+        if mood == "vigilant" and prev_mood == "battle_ready":
             mission_moods.add("vigilant")
         if mood in mission_moods and not proactive.mission_active:
             recent_text = " ".join(
@@ -365,9 +370,12 @@ async def background_compaction(session: SessionState, user_id: str = "jalsarraf
         if len(turns) < context.COMPACT_THRESHOLD:
             return
 
-        # Split: compact the old turns, keep the recent ones raw
-        old_turns = turns[:-context.COMPACT_KEEP_RAW]
-        recent_turns = turns[-context.COMPACT_KEEP_RAW:]
+        # Split: compact the old turns, keep the recent ones raw. `prefix` is
+        # a snapshot of exactly what gets compacted, compared against the live
+        # list after the LLM call below.
+        n_old = len(turns) - context.COMPACT_KEEP_RAW
+        prefix = turns[:n_old]
+        old_turns = list(prefix)
 
         # Build text to compact (include existing summary if any)
         if session.context_summary:
@@ -378,14 +386,22 @@ async def background_compaction(session: SessionState, user_id: str = "jalsarraf
             logger.warning("Compaction returned empty summary, keeping raw turns")
             return
 
-        # Replace session turns with summary + recent raw turns
+        # The chat kept going while the LLM summarised: replacing the list
+        # with the stale "recent" slice would drop any turn appended since.
+        # Delete the compacted prefix in place instead — and only if it is
+        # still the same turns (another compaction or a session restore may
+        # have changed the list underneath us; then this summary is stale).
+        live = session.turns
+        if live[:n_old] != prefix:
+            logger.warning("Compaction aborted: session turns changed during summarisation")
+            return
         session.context_summary = summary
-        session.turns = recent_turns
+        del live[:n_old]
         await memory.save_session(session_id(user_id), session)
 
         logger.info(
             "Session compacted: %d turns -> summary (%d chars) + %d raw turns",
-            len(old_turns), len(summary), len(recent_turns),
+            len(old_turns), len(summary), len(live),
         )
     except Exception as e:
         logger.error("Background compaction failed: %s", e)

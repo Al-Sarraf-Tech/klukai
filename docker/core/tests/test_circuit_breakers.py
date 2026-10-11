@@ -4,6 +4,7 @@ Per S+ Phase 4 (docs/superpowers/specs/2026-05-16-s-plus-uplift.md §5.4)."""
 
 from __future__ import annotations
 
+import asyncio
 
 import pytest
 
@@ -116,6 +117,65 @@ def test_force_open_close() -> None:
     assert cb.state == State.OPEN
     cb.force_close()
     assert cb.state == State.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_force_open_rejects_the_very_next_call() -> None:
+    """force_open anchors the probe clock like _trip does; without that the
+    next call was promoted straight to half-open and probed the dep the
+    chaos drill had just cut off."""
+    cb = CircuitBreaker(cfg=BreakerConfig(name="drill", probe_interval_seconds=30))
+    calls = 0
+
+    async def ok() -> int:
+        nonlocal calls
+        calls += 1
+        return 1
+
+    cb.force_open()
+    with pytest.raises(CircuitOpen):
+        await cb.call(ok)
+    assert calls == 0
+    assert cb.state == State.OPEN
+
+
+@pytest.mark.asyncio
+async def test_half_open_waiter_is_rejected_once_the_probe_settles() -> None:
+    """Exactly one probe: a call queued behind the half-open lock finds the
+    breaker already closed (or re-tripped) when it gets the lock and is
+    rejected instead of running as a second probe."""
+    cb = CircuitBreaker(
+        cfg=BreakerConfig(name="probe-race", error_threshold=1, window_seconds=10, probe_interval_seconds=0)
+    )
+
+    async def boom() -> int:
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        await cb.call(boom)
+    assert cb.state == State.OPEN
+
+    release = asyncio.Event()
+    probe_calls = 0
+
+    async def slow_ok() -> str:
+        nonlocal probe_calls
+        probe_calls += 1
+        await release.wait()
+        return "ok"
+
+    probe = asyncio.create_task(cb.call(slow_ok))
+    await asyncio.sleep(0)  # the probe takes the lock and parks in slow_ok
+    assert cb.state == State.HALF_OPEN
+    waiter = asyncio.create_task(cb.call(slow_ok))
+    await asyncio.sleep(0)  # the waiter parks on the lock
+    release.set()
+
+    assert await probe == "ok"
+    assert cb.state == State.CLOSED
+    with pytest.raises(CircuitOpen):
+        await waiter
+    assert probe_calls == 1  # the waiter never ran as a second probe
 
 
 def test_all_breakers_returns_registry() -> None:

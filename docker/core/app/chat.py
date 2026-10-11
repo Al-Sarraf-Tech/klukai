@@ -6,8 +6,8 @@ and all supporting handlers (message, voice, tap-interact).
 
 from __future__ import annotations
 
+import json
 import logging
-import os
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -51,9 +51,12 @@ async def _handle_tap_interact(user_id: str) -> None:
 async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "default") -> None:
     """Process voice: STT -> text -> LLM -> TTS -> audio.
 
-    Failure modes surface a UX signal — the user never gets ghosted.
+    Failure modes surface a UX signal — the user never gets ghosted. STT
+    problems go out as ``error`` frames (never persisted) because that is what
+    clears the client's "Listening..." indicator; a proactive toast leaves it
+    spinning.
     """
-    voice_url = os.environ.get("VOICE_URL", "http://100.107.121.5:8301")
+    from .voice_client import voice_url
 
     try:
         async with httpx.AsyncClient(
@@ -62,62 +65,64 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
             await ws.send_thinking(user_id, "Listening...")
             try:
                 from .helpers import voice_auth_headers
-                r = await client.post(f"{voice_url}/stt", json={"audio": audio_b64}, headers=voice_auth_headers())
+                r = await client.post(f"{voice_url()}/stt", json={"audio": audio_b64}, headers=voice_auth_headers())
                 r.raise_for_status()
                 transcript = r.json().get("text", "")
             except Exception as stt_err:
                 logger.error("STT failed: %s", stt_err)
-                await ws.send_proactive(
-                    user_id,
-                    "...Voice link garbled, Commander — I couldn't make out the transmission. "
-                    "Try again or switch to text.",
-                    persist=False,
-                )
+                await ws.send(user_id, {
+                    "type": "error",
+                    "message": "...Voice link garbled, Commander — I couldn't make out "
+                               "the transmission. Try again or switch to text.",
+                })
                 return
 
             if not transcript.strip():
-                await ws.send_proactive(
-                    user_id,
-                    "...I heard nothing on the channel, Commander. Try again, closer to the mic.",
-                    persist=False,
-                )
+                await ws.send(user_id, {
+                    "type": "error",
+                    "message": "...I heard nothing on the channel, Commander. "
+                               "Try again, closer to the mic.",
+                })
                 return
 
-            # Process as text message (which streams the text response)
-            await _handle_message(transcript, session, user_id)
+            # Process as text message (which streams the text response). None
+            # means she had no answer this turn — her core is down — so there
+            # is nothing of hers to voice. The sentinel must never reach XTTS:
+            # that spends a GPU lease reading an outage notice in her voice.
+            reply = await _handle_message(transcript, session, user_id)
+            if reply is None:
+                return
 
-            # Get the last assistant response for TTS
-            session = await memory.get_session(session_id(user_id))
-            if session and session.turns:
-                last_turn = session.turns[-1]
-                if last_turn["role"] == "assistant":
-                    try:
-                        from .voice_client import post_leased_tts
+            # Stage directions — "(she smiles)", "*nods*" — are not read aloud,
+            # and XTTS gets at most one clip's worth, cut at a sentence end.
+            from .helpers import strip_actions_for_tts, tts_clip
+            speech = tts_clip(strip_actions_for_tts(reply))
+            if not speech:
+                return
 
-                        r = await post_leased_tts(
-                            client,
-                            {"text": last_turn["content"]},
-                            timeout=30.0,
-                        )
-                        if r.status_code == 200:
-                            import base64
-                            audio_out = base64.b64encode(r.content).decode()
-                            await ws.send_voice(user_id, audio_out, final=True)
-                        else:
-                            logger.error("TTS HTTP %s: %s", r.status_code, r.text[:200])
-                            await ws.send_proactive(
-                                user_id,
-                                "...The voice synth is offline, Commander — "
-                                "I'm reading you in text instead.",
-                                persist=False,
-                            )
-                    except Exception as tts_err:
-                        logger.error("TTS failed: %s", tts_err)
-                        await ws.send_proactive(
-                            user_id,
-                            "...Voice synth dropped, Commander — text reply only.",
-                            persist=False,
-                        )
+            try:
+                from .voice_client import post_leased_tts
+
+                r = await post_leased_tts(client, {"text": speech}, timeout=30.0)
+                if r.status_code == 200:
+                    import base64
+                    audio_out = base64.b64encode(r.content).decode()
+                    await ws.send_voice(user_id, audio_out, final=True)
+                else:
+                    logger.error("TTS HTTP %s: %s", r.status_code, r.text[:200])
+                    await ws.send_proactive(
+                        user_id,
+                        "...The voice synth is offline, Commander — "
+                        "I'm reading you in text instead.",
+                        persist=False,
+                    )
+            except Exception as tts_err:
+                logger.error("TTS failed: %s", tts_err)
+                await ws.send_proactive(
+                    user_id,
+                    "...Voice synth dropped, Commander — text reply only.",
+                    persist=False,
+                )
     except Exception as e:
         logger.error("Voice processing failed: %s", e, exc_info=True)
         try:
@@ -135,16 +140,21 @@ def register_websocket(app: FastAPI) -> None:
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
-        # Authenticate via token query param
+        # Authenticate via token query param. A rejection is accept() THEN
+        # close(4001): closing before the handshake completes is an HTTP 403
+        # under uvicorn, the close code never reaches the client, and the
+        # Flutter app reconnects forever instead of returning to login.
         token = websocket.query_params.get("token", "")
         if token:
             from .auth import get_user_from_token
             user_id = await get_user_from_token(token)
             if not user_id:
+                await websocket.accept()
                 await websocket.close(code=4001, reason="Invalid or expired token")
                 return
         else:
             # Legacy fallback — reject unauthenticated connections
+            await websocket.accept()
             await websocket.close(code=4001, reason="Authentication required")
             return
 
@@ -224,9 +234,19 @@ def register_websocket(app: FastAPI) -> None:
 
         try:
             while True:
-                data = await ws.receive(user_id)
-                if data is None:
+                # Read THIS device's socket only. Fanning in across every
+                # socket of the user let device A's frames — and its
+                # disconnect — be consumed by device B's loop and tear B down.
+                try:
+                    raw = await websocket.receive_text()
+                except WebSocketDisconnect:
                     break
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue  # malformed frame — skip it, keep the connection
+                if not isinstance(data, dict):
+                    continue
 
                 msg_type = data.get("type")
 

@@ -17,21 +17,29 @@ from __future__ import annotations
 import json
 
 import pytest
+from starlette.websockets import WebSocketDisconnect
 
 
 pytestmark = pytest.mark.integration
 
 
 class TestWebSocketAuth:
+    """A rejection is accept() then close(4001): the handshake completes and
+    the close code reaches the client, so the Flutter app returns to login
+    instead of treating an HTTP 403 as a transient failure and reconnecting
+    forever."""
+
     def test_reject_no_token(self, client):
-        with pytest.raises(Exception):
-            with client.websocket_connect("/ws") as ws:
-                ws.send_text("hi")
+        with client.websocket_connect("/ws") as ws:
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_text()
+        assert exc.value.code == 4001
 
     def test_reject_bad_token(self, client):
-        with pytest.raises(Exception):
-            with client.websocket_connect("/ws?token=invalid_xxxxx") as ws:
-                ws.send_text("hi")
+        with client.websocket_connect("/ws?token=invalid_xxxxx") as ws:
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_text()
+        assert exc.value.code == 4001
 
 
 class TestWebSocketLifecycle:

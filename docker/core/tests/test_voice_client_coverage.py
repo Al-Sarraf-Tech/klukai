@@ -1,13 +1,8 @@
-"""Behavioral coverage for the voice / TTS-to-dominus shim.
+"""Behavioral coverage for the voice round-trip in ``app.chat._handle_voice``.
 
-IMPORTANT — scope note for the reviewer:
-The task brief referenced ``app/voice_client.py``. That module does NOT exist
-in this repo (nor anywhere in git history across all branches); the only entry
-for it is a stale ``omit =`` line in ``.coveragerc``. The actual voice shim —
-STT then TTS round-trip to the dominus voice service at ``$VOICE_URL`` (default
-http://100.107.121.5:8301 over Tailscale) — lives in ``app.chat._handle_voice``. Per the
-task rules I must not create ``app/`` code to invent the module, so this file
-tests the REAL shim that ships.
+The STT-then-TTS shim talks to the dominus voice service at ``$VOICE_URL``
+(default http://100.107.121.5:8301 over Tailscale), the TTS leg through
+``app.voice_client.post_leased_tts``.
 
 These tests deliberately do NOT duplicate the cases already in
 ``test_chat_coverage.py`` (happy path / STT failure / empty transcript /
@@ -15,11 +10,12 @@ TTS HTTP 500). They cover the remaining voice behaviors with real assertions:
 
   * the audio bytes returned by the dominus /tts endpoint are base64-encoded
     correctly before being pushed over the WebSocket (the TTS encode contract);
-  * when the last turn is NOT an assistant message, no /tts call is made;
+  * ``VOICE_URL`` is honoured, with or without a trailing slash;
+  * when ``_handle_message`` had nothing of hers to return, no /tts call is made;
   * a catastrophic failure (e.g. httpx client construction blows up) surfaces
     the "voice channel broke" text fallback rather than ghosting the user.
 
-All network + WS + memory are mocked. No real dominus, no sockets.
+All network + WS are mocked. No real dominus, no sockets.
 """
 
 from __future__ import annotations
@@ -80,16 +76,9 @@ class TestVoiceTTSEncoding:
         client = _routing_client("read this aloud", tts_status=200, tts_bytes=raw)
         ws = _ws()
 
-        memory = MagicMock()
-        memory.get_session = AsyncMock(return_value=SessionState(
-            conversation_id="c1",
-            turns=[{"role": "assistant", "content": "Acknowledged, Commander."}],
-        ))
-
         with patch("httpx.AsyncClient", return_value=client), \
              patch("app.chat.ws", ws), \
-             patch("app.chat.memory", memory), \
-             patch("app.chat._handle_message", new=AsyncMock()):
+             patch("app.chat._handle_message", new=AsyncMock(return_value="Acknowledged, Commander.")):
             await _handle_voice("inbound-audio", SessionState(conversation_id="c1"), "u1")
 
         ws.send_voice.assert_awaited_once()
@@ -102,62 +91,50 @@ class TestVoiceTTSEncoding:
 
     @pytest.mark.asyncio
     async def test_voice_url_env_override_is_used(self):
-        """VOICE_URL env var redirects both /stt and /tts to the configured host."""
+        """VOICE_URL redirects both /stt and /tts to the configured host, and a
+        trailing slash in the env value does not produce a `//stt` (404)."""
         client = _routing_client("hello", tts_status=200, tts_bytes=b"x")
         ws = _ws()
-        memory = MagicMock()
-        memory.get_session = AsyncMock(return_value=SessionState(
-            conversation_id="c1",
-            turns=[{"role": "assistant", "content": "Hi."}],
-        ))
 
         import os
         with patch("httpx.AsyncClient", return_value=client), \
              patch("app.chat.ws", ws), \
-             patch("app.chat.memory", memory), \
-             patch("app.chat._handle_message", new=AsyncMock()), \
-             patch.dict(os.environ, {"VOICE_URL": "http://dominus.local:8301"}, clear=False):
+             patch("app.chat._handle_message", new=AsyncMock(return_value="Hi.")), \
+             patch.dict(os.environ, {"VOICE_URL": "http://dominus.local:8301/"}, clear=False):
             await _handle_voice("a", SessionState(conversation_id="c1"), "u1")
 
-        assert all(u.startswith("http://dominus.local:8301") for u in client.posted_urls)
+        assert client.posted_urls == [
+            "http://dominus.local:8301/stt",
+            "http://dominus.local:8301/tts",
+        ]
 
 
-class TestVoiceNoTTSWhenNoAssistantTurn:
+class TestVoiceNoTTSWithoutAReply:
     @pytest.mark.asyncio
-    async def test_skips_tts_when_last_turn_not_assistant(self):
-        """If the refreshed session's last turn is the user's (no assistant
-        reply yet), no /tts request is made and no audio is sent."""
+    async def test_skips_tts_when_she_had_no_answer(self):
+        """_handle_message returns None when her core produced nothing (the
+        sentinel turn, never persisted as hers): no /tts request is made and
+        no audio is sent — the outage notice is not read aloud in her voice."""
         client = _routing_client("a question", tts_status=200, tts_bytes=b"x")
         ws = _ws()
-        memory = MagicMock()
-        memory.get_session = AsyncMock(return_value=SessionState(
-            conversation_id="c1",
-            turns=[{"role": "user", "content": "a question"}],  # no assistant turn
-        ))
 
         with patch("httpx.AsyncClient", return_value=client), \
              patch("app.chat.ws", ws), \
-             patch("app.chat.memory", memory), \
-             patch("app.chat._handle_message", new=AsyncMock()):
+             patch("app.chat._handle_message", new=AsyncMock(return_value=None)):
             await _handle_voice("a", SessionState(conversation_id="c1"), "u1")
 
         assert not any(u.endswith("/tts") for u in client.posted_urls)
         ws.send_voice.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_skips_tts_when_refreshed_session_empty(self):
-        """A refreshed session with no turns must not attempt TTS."""
+    async def test_skips_tts_when_reply_is_empty(self):
+        """An empty reply (the model streamed nothing) must not attempt TTS."""
         client = _routing_client("hi", tts_status=200, tts_bytes=b"x")
         ws = _ws()
-        memory = MagicMock()
-        memory.get_session = AsyncMock(return_value=SessionState(
-            conversation_id="c1", turns=[],
-        ))
 
         with patch("httpx.AsyncClient", return_value=client), \
              patch("app.chat.ws", ws), \
-             patch("app.chat.memory", memory), \
-             patch("app.chat._handle_message", new=AsyncMock()):
+             patch("app.chat._handle_message", new=AsyncMock(return_value="")):
             await _handle_voice("a", SessionState(conversation_id="c1"), "u1")
 
         assert not any(u.endswith("/tts") for u in client.posted_urls)

@@ -98,6 +98,21 @@ class TestPlainResponse:
         assert router.complete_local.await_count == 1
         ws.send_thinking.assert_awaited()  # "Analyzing request..."
 
+    @pytest.mark.asyncio
+    async def test_result_model_is_the_model_that_answered(self):
+        """The loop runs LOCAL_CASUAL; the result must say so rather than keep
+        the dataclass default (LOCAL_AGENT), which is what gets persisted with
+        the message and shown in the UI's done frame."""
+        loop, router, mcp, ws = _make_loop(
+            complete_side_effect=[_msg_response(content="Hello Commander.")]
+        )
+        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[])), patch.object(
+            al, "get_builtin_tools", return_value=[]
+        ):
+            res = await loop.run("sys", [{"role": "user", "content": "hi"}])
+        assert res.model == al.LOCAL_CASUAL
+        assert res.model == router.complete_local.await_args.args[2].model
+
 
 # ── MCP recovery when no tools load (lines 105-113) ─────────────────────────
 

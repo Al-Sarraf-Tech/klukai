@@ -416,33 +416,102 @@ class TestGenerateDailyRecap:
             out = await main.generate_daily_recap(affection_level=5)
         assert out is None
 
+    async def test_sentinel_recap_is_not_her_log(self):
+        """GPU host down: the stream is the failure sentinel. That is not her
+        evening log and must not be pushed as her words — no recap tonight."""
+        from app.llm_router import FAILURE_SENTINEL
+
+        rows = [("user", f"m {i}") for i in range(8)]
+        pool = _recap_pool(rows)
+
+        async def fake_stream(*a, **k):
+            yield FAILURE_SENTINEL
+
+        with patch.object(main, "get_pool", return_value=pool), \
+             patch("app.context.router.route", new=AsyncMock(return_value={})), \
+             patch("app.context.router.stream", new=fake_stream):
+            out = await main.generate_daily_recap(affection_level=5)
+        assert out is None
+
+    async def test_recap_window_is_the_commanders_local_day(self):
+        """`today` is the Commander's date and the SQL buckets created_at in
+        his zone. With the container's UTC date and a UTC `created_at::date`
+        the 21:00 Chicago run saw only messages after 19:00 local — rarely
+        the four it needs — so the recap silently never fired."""
+        from datetime import date, datetime
+
+        rows = [("user", f"m {i}") for i in range(8)]
+        pool = _recap_pool(rows)
+        conn = pool.connection.return_value.__aenter__.return_value
+        # 21:00 Chicago on the 11th is already 02:00Z on the 12th.
+        local_evening = datetime(2026, 10, 11, 21, 0)
+
+        async def fake_stream(*a, **k):
+            yield "Today we talked."
+
+        with patch.object(main, "get_pool", return_value=pool), \
+             patch("app.proactive.state.now_local", return_value=local_evening), \
+             patch("app.context.router.route", new=AsyncMock(return_value={})), \
+             patch("app.context.router.stream", new=fake_stream):
+            out = await main.generate_daily_recap(affection_level=5)
+
+        assert out == "Today we talked."
+        sql, params = conn.execute.await_args.args
+        assert "AT TIME ZONE" in sql
+        assert "created_at::date" not in sql
+        assert params == ("jalsarraf", "America/Chicago", date(2026, 10, 11))
+        # Her own check-ins are still excluded from the recap source.
+        assert "<> 'proactive'" in sql
+
 
 # ── proactive_callback ───────────────────────────────────────────────────────
 
 
 class TestProactiveCallback:
-    async def test_delivers_to_connected_sockets(self):
+    """Scheduled proactivity is single-user: the line is persisted for the
+    Commander first (send_proactive writes the row even with no device
+    connected), then delivered live or by push. The return value tells the
+    engine whether anyone actually received it."""
+
+    async def test_persists_then_delivers_live_when_connected(self):
+        from app.decisions import PRIMARY_USER
+
         ws = MagicMock()
-        ws._connections = {"u1": object(), "u2": object()}
         ws.is_connected = MagicMock(return_value=True)
         ws.send_proactive = AsyncMock()
         with patch.object(main, "ws", ws), \
-             patch.object(main, "send_push", new=AsyncMock()) as push:
-            await main.proactive_callback("Mission update.")
-        assert ws.send_proactive.await_count == 2
+             patch.object(main, "send_push", new=AsyncMock(return_value=0)) as push:
+            delivered = await main.proactive_callback("Mission update.")
+        assert delivered is True
+        ws.send_proactive.assert_awaited_once_with(PRIMARY_USER, "Mission update.")
         push.assert_not_awaited()  # delivered over WS, no push fallback
 
-    async def test_falls_back_to_push_when_no_one_connected(self):
+    async def test_offline_still_persists_and_pushes(self):
+        from app.decisions import PRIMARY_USER
+
         ws = MagicMock()
-        ws._connections = {}
         ws.is_connected = MagicMock(return_value=False)
         ws.send_proactive = AsyncMock()
         with patch.object(main, "ws", ws), \
-             patch.object(main, "send_push", new=AsyncMock()) as push:
-            await main.proactive_callback("Ping.")
-        ws.send_proactive.assert_not_awaited()
+             patch.object(main, "send_push", new=AsyncMock(return_value=1)) as push:
+            delivered = await main.proactive_callback("Ping.")
+        assert delivered is True
+        # History gets the line even though no device was listening.
+        ws.send_proactive.assert_awaited_once_with(PRIMARY_USER, "Ping.")
         push.assert_awaited_once()
         assert push.await_args.kwargs["body"] == "Ping."
+
+    async def test_offline_with_no_push_recipient_is_not_delivered(self):
+        """Nobody connected and the push reached no subscriber: the engine
+        must not mark a promise follow-up as sent, so this is False."""
+        ws = MagicMock()
+        ws.is_connected = MagicMock(return_value=False)
+        ws.send_proactive = AsyncMock()
+        with patch.object(main, "ws", ws), \
+             patch.object(main, "send_push", new=AsyncMock(return_value=0)):
+            delivered = await main.proactive_callback("Ping.")
+        assert delivered is False
+        ws.send_proactive.assert_awaited_once()  # still in history
 
 
 # ── lifespan ─────────────────────────────────────────────────────────────────

@@ -123,6 +123,10 @@ class AgentLoop:
             max_tokens=2048,
             temperature=0.7,
         )
+        # Record the model that actually answers — the dataclass default is
+        # LOCAL_AGENT, which is not what runs here, and the name is persisted
+        # with the message and shown in the UI's done frame.
+        result.model = config.model
 
         work_messages = list(messages)
         await self._ws.send_thinking(user_id, "Analyzing request...")

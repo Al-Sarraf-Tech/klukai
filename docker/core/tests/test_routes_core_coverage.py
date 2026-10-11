@@ -296,6 +296,32 @@ class TestSubsystemHealth:
         assert result["subsystems"]["comfyui"]["status"] == "down"
         assert result["status"] == "degraded"
 
+    @pytest.mark.asyncio
+    async def test_voice_probe_honours_trailing_slash_in_voice_url(self):
+        """A trailing slash in VOICE_URL must not become `//health` (a 404
+        that reports the voice service down while it is fine)."""
+        import os
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/health/subsystems", "GET")
+
+        good = _Resp(200, {"data": [], "comfyui_status": "ok"})
+        redis_mock = MagicMock()
+        redis_mock.ping = AsyncMock()
+        redis_mock.aclose = AsyncMock()
+        ctx = _fake_async_client(get_resp=good)
+
+        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
+             patch("redis.asyncio.from_url", return_value=redis_mock), \
+             patch("httpx.AsyncClient", return_value=ctx), \
+             patch.dict(os.environ, {"VOICE_URL": "http://voice.local:8301/"}):
+            result = await handler(_mk_request())
+
+        assert result["subsystems"]["voice"]["status"] == "ok"
+        urls = [c.args[0] for c in ctx._client.get.call_args_list]
+        assert "http://voice.local:8301/health" in urls
+        assert not any("//health" in u for u in urls)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TTS proxy (lines 289-300)
@@ -343,15 +369,49 @@ class TestTTSProxy:
         assert body["language"] == "ja"
 
     @pytest.mark.asyncio
-    async def test_passes_upstream_error_status(self):
+    @pytest.mark.parametrize("upstream", [401, 403, 422, 500])
+    async def test_upstream_error_is_502_never_forwarded(self, upstream):
+        """The voice host's status is NOT passed through: a VOICE_API_TOKEN
+        mismatch is a 401 from upstream, and the companion stage's net.js
+        reads any 401 as HIS session expiring and logs him out."""
+        import json as _json
         from app.routes import TTSRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/tts", "POST")
-        ctx = _fake_async_client(post_resp=_Resp(422, content=b""))
+        ctx = _fake_async_client(post_resp=_Resp(upstream, content=b""))
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.routes.httpx.AsyncClient", return_value=ctx):
             resp = await handler(TTSRequest(text="speak"), _mk_request())
-        assert resp.status_code == 422
+        assert resp.status_code == 502
+        assert _json.loads(resp.body) == {"error": "TTS failed"}
+
+    @pytest.mark.asyncio
+    async def test_timeout_waiting_on_the_lease_is_503(self):
+        """The whole leased call (gate wait + GPU lease + synth) is bounded;
+        running out of that budget is a 503, not a hung request."""
+        from app.routes import TTSRequest
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/tts", "POST")
+        ctx = _fake_async_client(post_resp=_Resp(200, content=b"never"))
+        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes.httpx.AsyncClient", return_value=ctx), \
+             patch("app.voice_client.post_leased_tts", new=AsyncMock(side_effect=TimeoutError())):
+            resp = await handler(TTSRequest(text="speak"), _mk_request())
+        assert resp.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_long_text_is_clipped_at_a_sentence_end(self):
+        from app.routes import TTSRequest
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/tts", "POST")
+        ctx = _fake_async_client(post_resp=_Resp(200, content=b"wav"))
+        text = "Sentence one is here. " * 40  # 880 chars
+        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes.httpx.AsyncClient", return_value=ctx):
+            await handler(TTSRequest(text=text), _mk_request())
+        sent = ctx._client.post.call_args.kwargs["json"]["text"]
+        assert len(sent) <= 500
+        assert sent.endswith("Sentence one is here.")  # not a mid-word hard cut
 
     @pytest.mark.asyncio
     async def test_503_when_voice_unreachable(self):
@@ -693,3 +753,32 @@ class TestRunMission:
 
         report = ws_mock.send_proactive.call_args.args[1]
         assert "a signal relay component" in report
+
+    @pytest.mark.asyncio
+    async def test_sentinel_debrief_uses_canned_report(self):
+        """GPU host down: the stream is the failure sentinel, which is truthy
+        but is not her debrief — the canned line is delivered instead of an
+        outage notice in her voice."""
+        from app.llm_router import FAILURE_SENTINEL
+        from app.routes import _run_mission
+
+        async def _stream(prompt, messages, config):
+            yield FAILURE_SENTINEL
+
+        ws_mock = MagicMock()
+        ws_mock.is_connected = MagicMock(return_value=True)
+        ws_mock.send_proactive = AsyncMock()
+
+        with patch("app.routes.asyncio.sleep", new=AsyncMock()), \
+             patch("random.choice", return_value="a comm device"), \
+             patch("app.routes.router.route", new=AsyncMock(return_value=MagicMock())), \
+             patch("app.routes.router.stream", new=_stream), \
+             patch("app.routes.ws", ws_mock), \
+             patch("app.routes.affection.get_state", new=AsyncMock(return_value=_mk_aff_state())), \
+             patch("app.routes.affection._save_state", new=AsyncMock()):
+            await _run_mission("frank", affection_level=5)
+
+        report = ws_mock.send_proactive.call_args.args[1]
+        assert "Communications disrupted" not in report
+        assert "Sortie complete" in report
+        assert "a comm device" in report
