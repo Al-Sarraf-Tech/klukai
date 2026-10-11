@@ -9,9 +9,11 @@ All I/O is mocked: the DB pool, Redis, Qdrant, the LLM router, and
 loops are driven exactly one iteration; the sleep patch makes time
 deterministic with zero wall-clock cost.
 
-background.py imports its collaborators (``affection``, ``memory``, ``ws``,
+background.py (extraction) and background_jobs.py (compaction, image gen,
+recall, keep) import their collaborators (``affection``, ``memory``, ``ws``,
 ``proactive``, ``context``, ``memory_archive``, ``extract_facts`` …) as
-module-level names, so we patch them at ``app.background.<name>``.
+module-level names, so we patch them at ``app.background.<name>`` and
+``app.background_jobs.<name>``.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app.background as bg
+import app.background_jobs as bgj  # compaction / image gen / recall / keep live here
 from app.models import SessionState
 
 
@@ -129,15 +132,19 @@ def bg_mocks(monkeypatch):
 
     extract_facts = AsyncMock(return_value=_base_extract_result())
 
-    monkeypatch.setattr(bg, "affection", affection)
-    monkeypatch.setattr(bg, "memory", memory)
-    monkeypatch.setattr(bg, "ws", ws)
-    monkeypatch.setattr(bg, "proactive", proactive)
-    monkeypatch.setattr(bg, "context", context_mod)
-    monkeypatch.setattr(bg, "memory_archive", memory_archive)
+    # Each task reads these as module-level names of ITS OWN module —
+    # extraction in app.background, the jobs in app.background_jobs — so
+    # patch both or the mocks never reach compaction / image gen / recall.
+    for mod in (bg, bgj):
+        monkeypatch.setattr(mod, "affection", affection)
+        monkeypatch.setattr(mod, "memory", memory)
+        monkeypatch.setattr(mod, "ws", ws)
+        monkeypatch.setattr(mod, "proactive", proactive)
+        monkeypatch.setattr(mod, "context", context_mod)
+        monkeypatch.setattr(mod, "memory_archive", memory_archive)
+        # session_id is imported as a name; keep it deterministic
+        monkeypatch.setattr(mod, "session_id", lambda uid: f"session:{uid}")
     monkeypatch.setattr(bg, "extract_facts", extract_facts)
-    # session_id is imported as a name; keep it deterministic
-    monkeypatch.setattr(bg, "session_id", lambda uid: f"session:{uid}")
     # load_personality returns affection config used in level-transition branch
     monkeypatch.setattr(bg, "load_personality", MagicMock(return_value={"affection": {}}))
 
@@ -586,13 +593,15 @@ class TestCompaction:
 
 
 class TestImageGen:
+    # background_image_gen's image_gen collaborators are bound in
+    # app.background_jobs, so patch.object targets bgj rather than bg.
     async def test_sleeps_then_checks_comfyui_and_sends_thinking(self, bg_mocks):
         with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="full prompt"), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)):
+             patch.object(bgj, "is_couple_scene", return_value=False), \
+             patch.object(bgj, "is_landscape", return_value=False), \
+             patch.object(bgj, "_enhance_image_prompt", return_value="tags"), \
+             patch.object(bgj, "build_prompt", return_value="full prompt"), \
+             patch.object(bgj, "generate_image", new=AsyncMock(return_value=None)):
             await bg.background_image_gen("draw a sunset", user_id="u1")
         assert bg_mocks.sleep.await_args_list[0].args == (1,)
         bg_mocks.ws.send_thinking.assert_awaited()
@@ -600,32 +609,32 @@ class TestImageGen:
     async def test_portrait_dimensions_for_non_landscape(self, bg_mocks):
         gen = AsyncMock(return_value=None)
         with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="p"), \
-             patch.object(bg, "generate_image", new=gen):
+             patch.object(bgj, "is_couple_scene", return_value=False), \
+             patch.object(bgj, "is_landscape", return_value=False), \
+             patch.object(bgj, "_enhance_image_prompt", return_value="tags"), \
+             patch.object(bgj, "build_prompt", return_value="p"), \
+             patch.object(bgj, "generate_image", new=gen):
             await bg.background_image_gen("portrait of klukai", user_id="u1")
         assert gen.await_args.kwargs["width"] == 832 and gen.await_args.kwargs["height"] == 1216
 
     async def test_landscape_dimensions_swapped(self, bg_mocks):
         gen = AsyncMock(return_value=None)
         with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=True), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="p"), \
-             patch.object(bg, "generate_image", new=gen):
+             patch.object(bgj, "is_couple_scene", return_value=False), \
+             patch.object(bgj, "is_landscape", return_value=True), \
+             patch.object(bgj, "_enhance_image_prompt", return_value="tags"), \
+             patch.object(bgj, "build_prompt", return_value="p"), \
+             patch.object(bgj, "generate_image", new=gen):
             await bg.background_image_gen("wide vista", user_id="u1")
         assert gen.await_args.kwargs["width"] == 1216 and gen.await_args.kwargs["height"] == 832
 
     async def test_successful_image_archived_and_sent(self, bg_mocks):
         with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="full prompt"), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=b"PNGDATA")):
+             patch.object(bgj, "is_couple_scene", return_value=False), \
+             patch.object(bgj, "is_landscape", return_value=False), \
+             patch.object(bgj, "_enhance_image_prompt", return_value="tags"), \
+             patch.object(bgj, "build_prompt", return_value="full prompt"), \
+             patch.object(bgj, "generate_image", new=AsyncMock(return_value=b"PNGDATA")):
             await bg.background_image_gen("draw klukai", user_id="u1")
         bg_mocks.memory_archive.save_image.assert_awaited_once()
         bg_mocks.context.set_last_memory_id.assert_called_once_with("u1", "mem-123")
@@ -637,11 +646,11 @@ class TestImageGen:
 
     async def test_failed_generation_sends_graceful_message(self, bg_mocks):
         with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="p"), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)):
+             patch.object(bgj, "is_couple_scene", return_value=False), \
+             patch.object(bgj, "is_landscape", return_value=False), \
+             patch.object(bgj, "_enhance_image_prompt", return_value="tags"), \
+             patch.object(bgj, "build_prompt", return_value="p"), \
+             patch.object(bgj, "generate_image", new=AsyncMock(return_value=None)):
             await bg.background_image_gen("draw", user_id="u1")
         # User is never ghosted: a proactive failure message + a thinking-clear.
         bg_mocks.ws.send_proactive.assert_awaited()
@@ -651,11 +660,11 @@ class TestImageGen:
 
     async def test_comfyui_warmup_message_when_not_ready(self, bg_mocks):
         with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=False)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="p"), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)):
+             patch.object(bgj, "is_couple_scene", return_value=False), \
+             patch.object(bgj, "is_landscape", return_value=False), \
+             patch.object(bgj, "_enhance_image_prompt", return_value="tags"), \
+             patch.object(bgj, "build_prompt", return_value="p"), \
+             patch.object(bgj, "generate_image", new=AsyncMock(return_value=None)):
             await bg.background_image_gen("draw", user_id="u1")
         warmups = [c for c in bg_mocks.ws.send_thinking.await_args_list
                    if "Warming up" in c.args[1]]
@@ -664,11 +673,11 @@ class TestImageGen:
     async def test_exception_path_clears_thinking_bubble(self, bg_mocks):
         """If generate_image raises, the except block still surfaces a message."""
         with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="p"), \
-             patch.object(bg, "generate_image",
+             patch.object(bgj, "is_couple_scene", return_value=False), \
+             patch.object(bgj, "is_landscape", return_value=False), \
+             patch.object(bgj, "_enhance_image_prompt", return_value="tags"), \
+             patch.object(bgj, "build_prompt", return_value="p"), \
+             patch.object(bgj, "generate_image",
                           new=AsyncMock(side_effect=RuntimeError("GPU OOM"))):
             await bg.background_image_gen("draw", user_id="u1")  # must not raise
         clear_frames = [c for c in bg_mocks.ws.send.await_args_list
@@ -679,11 +688,11 @@ class TestImageGen:
         bg_mocks.affection.get_state.return_value = _aff_state(8)
         build = MagicMock(return_value="prompt")
         with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=True), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", new=build), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)):
+             patch.object(bgj, "is_couple_scene", return_value=True), \
+             patch.object(bgj, "is_landscape", return_value=False), \
+             patch.object(bgj, "_enhance_image_prompt", return_value="tags"), \
+             patch.object(bgj, "build_prompt", new=build), \
+             patch.object(bgj, "generate_image", new=AsyncMock(return_value=None)):
             await bg.background_image_gen("us together", user_id="u1")
         assert build.call_args.kwargs["affection_level"] == 8
         assert build.call_args.kwargs["couple"] is True
@@ -694,11 +703,11 @@ class TestImageGen:
         build = MagicMock(return_value="prompt")
         with patch("app.her_day.render_costume", new=render), \
              patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", new=build), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)) as gen:
+             patch.object(bgj, "is_couple_scene", return_value=False), \
+             patch.object(bgj, "is_landscape", return_value=False), \
+             patch.object(bgj, "_enhance_image_prompt", return_value="tags"), \
+             patch.object(bgj, "build_prompt", new=build), \
+             patch.object(bgj, "generate_image", new=AsyncMock(return_value=None)) as gen:
             await bg.background_image_gen("draw yourself", user_id="u1")
         assert build.call_args.kwargs["costume"] == "astral_luminous"
         render.assert_awaited_once_with("u1", 8)
@@ -710,11 +719,11 @@ class TestImageGen:
         build = MagicMock(return_value="prompt")
         with patch("app.her_day.render_costume", new=AsyncMock(return_value=None)), \
              patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", new=build), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)) as gen:
+             patch.object(bgj, "is_couple_scene", return_value=False), \
+             patch.object(bgj, "is_landscape", return_value=False), \
+             patch.object(bgj, "_enhance_image_prompt", return_value="tags"), \
+             patch.object(bgj, "build_prompt", new=build), \
+             patch.object(bgj, "generate_image", new=AsyncMock(return_value=None)) as gen:
             await bg.background_image_gen("draw yourself", user_id="u1")
         assert build.call_args.kwargs["costume"] is None
         assert gen.await_args.kwargs["sfw"] is True  # level 2: backstop on
