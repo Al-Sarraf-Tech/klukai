@@ -11,6 +11,7 @@ with _find_route, and patch the OWNING module (app.routes_extras.*).
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -524,6 +525,27 @@ class TestCostumeUnlockGate:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _stt_fake_client(resp, seen: dict | None = None):
+    """httpx.AsyncClient stand-in whose post() returns *resp* and records the URL."""
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        async def post(self, url, json, headers=None):
+            if seen is not None:
+                seen["url"] = url
+            return resp
+
+    return FakeClient
+
+
 class TestSTTProxy:
     @pytest.mark.asyncio
     async def test_requires_auth(self):
@@ -541,6 +563,7 @@ class TestSTTProxy:
         from app.routes import STTRequest
 
         fake_resp = MagicMock()
+        fake_resp.status_code = 200
         fake_resp.json = MagicMock(return_value={"text": "hello commander"})
 
         class FakeClient:
@@ -565,6 +588,83 @@ class TestSTTProxy:
             result = await handler(STTRequest(audio="abc"), _mk_request())
 
         assert result == {"text": "hello commander"}
+
+    @pytest.mark.asyncio
+    async def test_upstream_error_status_becomes_502(self):
+        """A non-200 from the voice service is a failure, not a body to relay --
+        its JSON (if any) is never even parsed."""
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/stt", "POST")
+        from app.routes import STTRequest
+
+        resp_500 = MagicMock()
+        resp_500.status_code = 500
+        resp_500.json = MagicMock(side_effect=ValueError("not json"))
+
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.httpx.AsyncClient", _stt_fake_client(resp_500)):
+            resp = await handler(STTRequest(audio="abc"), _mk_request())
+
+        assert resp.status_code == 502
+        assert json.loads(resp.body) == {"error": "Transcription failed"}
+        resp_500.json.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "upstream_json",
+        [
+            # The voice service reports its own failures as 200 + "error".
+            {"text": "", "error": "Whisper not loaded"},
+            # Not even an object: nothing the PWA could read "text" from.
+            ["unexpected"],
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_upstream_200_without_transcript_becomes_502(self, upstream_json):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/stt", "POST")
+        from app.routes import STTRequest
+
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.json = MagicMock(return_value=upstream_json)
+
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.httpx.AsyncClient", _stt_fake_client(ok_resp)):
+            resp = await handler(STTRequest(audio="abc"), _mk_request())
+
+        assert resp.status_code == 502
+        assert json.loads(resp.body) == {"error": "Transcription failed"}
+
+    @pytest.mark.asyncio
+    async def test_targets_configured_voice_url(self, monkeypatch):
+        """The upstream host comes from voice_client.voice_url() (VOICE_URL env,
+        trailing slash stripped), not a host baked into the handler."""
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/stt", "POST")
+        from app.routes import STTRequest
+
+        monkeypatch.setenv("VOICE_URL", "http://voice.test:9999/")
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.json = MagicMock(return_value={"text": "hi"})
+        seen = {}
+
+        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.routes_extras.httpx.AsyncClient", _stt_fake_client(ok_resp, seen)):
+            result = await handler(STTRequest(audio="abc"), _mk_request())
+
+        assert result == {"text": "hi"}
+        assert seen["url"] == "http://voice.test:9999/stt"
+
+    def test_request_model_caps_audio_size(self):
+        from pydantic import ValidationError
+        from app.routes import STTRequest
+
+        assert len(STTRequest(audio="a" * 8_000_000).audio) == 8_000_000
+        with pytest.raises(ValidationError):
+            STTRequest(audio="a" * 8_000_001)
+        with pytest.raises(ValidationError):
+            STTRequest(audio="")
 
     @pytest.mark.asyncio
     async def test_returns_503_when_voice_unavailable(self):

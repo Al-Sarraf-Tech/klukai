@@ -342,16 +342,20 @@ class TestTTSProxy:
         assert body["text"] == "Hello there."
         assert body["language"] == "ja"
 
+    @pytest.mark.parametrize("upstream_status", [401, 403, 500])
     @pytest.mark.asyncio
-    async def test_passes_upstream_error_status(self):
+    async def test_upstream_error_becomes_502_never_relayed(self, upstream_status):
+        """A voice-service 401/403 is a backend token mismatch, and the PWA logs
+        the user out on any 401 -- so the upstream status must not leak through."""
         from app.routes import TTSRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/tts", "POST")
-        ctx = _fake_async_client(post_resp=_Resp(422, content=b""))
+        ctx = _fake_async_client(post_resp=_Resp(upstream_status, content=b""))
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.routes.httpx.AsyncClient", return_value=ctx):
             resp = await handler(TTSRequest(text="speak"), _mk_request())
-        assert resp.status_code == 422
+        assert resp.status_code == 502
+        assert resp.status_code != upstream_status
 
     @pytest.mark.asyncio
     async def test_503_when_voice_unreachable(self):

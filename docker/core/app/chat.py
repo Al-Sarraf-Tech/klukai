@@ -23,6 +23,7 @@ from .db import get_conn
 from .helpers import (
     create_conversation as _create_conversation,
 )
+from .llm_router import FAILURE_SENTINEL
 from .models import SessionState, new_id
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,10 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
                 last_turn = session.turns[-1]
                 # Never voice the offline notice: it would take a GPU lease (and
                 # evict the LLM) exactly when the LLM is what just failed.
-                if last_turn["role"] == "assistant" and not last_turn["content"].startswith(FAILURE_SENTINEL):
+                if (
+                    last_turn["role"] == "assistant"
+                    and not last_turn["content"].startswith(FAILURE_SENTINEL)
+                ):
                     try:
                         from .voice_client import post_leased_tts
 

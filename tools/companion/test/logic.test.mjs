@@ -102,6 +102,11 @@ test("frames reduce into the stage and request side effects", () => {
   // An empty reply doesn't speak.
   ({ effects } = reduceFrame({ line: "" }, { type: "done", text: "  " }));
   assert.deepEqual(effects, []);
+  // The offline notice shows on the stage but is never voiced.
+  const offline = "Communications disrupted, Commander. Standby for reconnection.";
+  ({ state, effects } = reduceFrame({ line: "" }, { type: "done", text: offline }));
+  assert.equal(state.line, offline);
+  assert.deepEqual(effects, []);
   ({ state } = reduceFrame(state, { type: "mood", mood: "flustered" }));
   assert.equal(state.mood, "flustered");
   ({ state } = reduceFrame(state, { type: "mood" }));

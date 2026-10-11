@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import sys
@@ -226,6 +227,108 @@ def test_tts_is_loaded_only_on_request(monkeypatch, tmp_path):
     assert response.content == b"RIFF-synthesized"
     assert load_count == 1
     assert voice._last_tts_use > 0
+
+
+def test_transcribe_sync_joins_segments_and_drains_generator():
+    consumed = []
+
+    def segments():
+        for text in (" Hello", "there,", "Commander. "):
+            consumed.append(text)
+            yield SimpleNamespace(text=text)
+        consumed.append("<exhausted>")
+
+    seen = {}
+    info = SimpleNamespace(language="en", duration=1.5)
+
+    def transcribe(path, beam_size):
+        seen["path"], seen["beam_size"] = path, beam_size
+        return segments(), info
+
+    text, got_info = voice._transcribe_sync(SimpleNamespace(transcribe=transcribe), "/tmp/clip.webm")
+
+    assert text == "Hello there, Commander."
+    assert got_info is info
+    assert seen == {"path": "/tmp/clip.webm", "beam_size": 5}
+    # The decode happens during iteration, so the worker must run it to the end.
+    assert consumed[-1] == "<exhausted>"
+
+
+def test_stt_decodes_off_the_event_loop(monkeypatch):
+    iterated = {}
+
+    class FakeWhisper:
+        def transcribe(self, path, beam_size):
+            def segments():
+                iterated["thread"] = threading.current_thread()
+                try:
+                    asyncio.get_running_loop()
+                    iterated["on_loop"] = True
+                except RuntimeError:
+                    iterated["on_loop"] = False
+                yield SimpleNamespace(text=" hello")
+                yield SimpleNamespace(text="commander")
+
+            return segments(), SimpleNamespace(language="en", duration=0.8)
+
+    monkeypatch.setattr(voice, "_load_whisper", lambda: FakeWhisper())
+    monkeypatch.setattr(voice, "_last_whisper_use", 0.0)
+    monkeypatch.setattr(voice, "VOICE_API_TOKEN", "test-voice-token")
+
+    with TestClient(voice.app) as client:
+        response = client.post(
+            "/stt",
+            json={"audio": base64.b64encode(b"OggS-opus").decode()},
+            headers={"Authorization": "Bearer test-voice-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"text": "hello commander", "language": "en", "duration": 0.8}
+    # TestClient runs the app loop on its own thread, so "not main" alone would
+    # not prove anything: the generator must also see no running loop.
+    assert iterated["thread"] is not threading.main_thread()
+    assert iterated["on_loop"] is False
+    assert voice._last_whisper_use > 0
+
+
+@pytest.mark.parametrize(
+    "audio",
+    ["", "a" * (voice.MAX_STT_AUDIO_B64 + 1)],
+    ids=["empty", "oversized"],
+)
+def test_stt_rejects_bad_audio_size_without_loading_whisper(monkeypatch, audio):
+    loads = []
+    monkeypatch.setattr(voice, "_load_whisper", lambda: loads.append(True))
+    monkeypatch.setattr(voice, "VOICE_API_TOKEN", "test-voice-token")
+
+    with TestClient(voice.app) as client:
+        response = client.post(
+            "/stt",
+            json={"audio": audio},
+            headers={"Authorization": "Bearer test-voice-token"},
+        )
+
+    assert response.status_code == 422
+    assert loads == []
+
+
+def test_stt_upload_creates_no_temp_file_when_body_read_fails(monkeypatch):
+    created = []
+    monkeypatch.setattr(voice, "_load_whisper", lambda: object())
+    monkeypatch.setattr(
+        voice.tempfile, "NamedTemporaryFile", lambda *a, **kw: created.append(kw)
+    )
+
+    class BrokenUpload:
+        filename = "clip.webm"
+
+        async def read(self):
+            raise RuntimeError("client went away")
+
+    result = asyncio.run(voice.stt_upload(audio=BrokenUpload()))
+
+    assert result == {"text": "", "error": "client went away"}
+    assert created == []
 
 
 def test_whisper_prefers_pinned_local_snapshot(monkeypatch, tmp_path):

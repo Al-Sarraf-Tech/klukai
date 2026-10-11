@@ -269,6 +269,42 @@ class TestHandleVoice:
         assert "offline" in ws.send_proactive.await_args.args[1].lower()
 
     @pytest.mark.asyncio
+    async def test_offline_notice_is_never_voiced(self):
+        """A FAILURE_SENTINEL reply means the LLM just failed; synthesizing it
+        would take the GPU lease that evicts the LLM. No TTS call at all."""
+        from app.chat import _handle_voice
+        from app.llm_router import FAILURE_SENTINEL
+
+        session = SessionState(conversation_id="c1")
+        client = _voice_client(stt_text="say hi", tts_status=200)
+
+        ws = MagicMock()
+        ws.send_thinking = AsyncMock()
+        ws.send_voice = AsyncMock()
+        ws.send_proactive = AsyncMock()
+
+        memory = MagicMock()
+        memory.get_session = AsyncMock(
+            return_value=SessionState(
+                conversation_id="c1",
+                turns=[{"role": "assistant", "content": FAILURE_SENTINEL}],
+            )
+        )
+
+        with patch("httpx.AsyncClient", return_value=client), patch(
+            "app.chat.ws", ws
+        ), patch("app.chat.memory", memory), patch(
+            "app.chat._handle_message", AsyncMock()
+        ):
+            await _handle_voice("aud", session, "u1")
+
+        # Only the STT call went out; the text reply already reached the client.
+        client.post.assert_awaited_once()
+        assert client.post.await_args.args[0].endswith("/stt")
+        ws.send_voice.assert_not_called()
+        ws.send_proactive.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_tts_exception_falls_back_to_text(self):
         from app.chat import _handle_voice
 
