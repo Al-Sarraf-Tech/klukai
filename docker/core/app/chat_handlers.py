@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -148,12 +149,37 @@ async def _hours_since_last_exchange(user_id: str) -> float | None:
         return None
 
 
+@dataclass
+class _HerDayTurn:
+    """What she has on and where she is, as far as this turn could find out."""
+
+    outfit_line: str | None = None
+    location_line: str | None = None
+    her_where: str | None = None
+    request_block: str = ""
+
+
+@dataclass
+class _Reply:
+    """What came back from her core this turn, already sent to the UI."""
+
+    text: str
+    model: str
+    latency_ms: int
+    stream_failed: bool = False
+
+
 async def _handle_message(content: str, session: SessionState, user_id: str = "default") -> str | None:
     """Process a text message: memory recall, LLM, response, extraction.
 
     Returns her reply text, or None when she had no answer this turn (empty
     input, or the local LLM produced nothing) so callers such as the voice
     path know there is nothing of hers to speak.
+
+    The phases run in a fixed order and the order carries invariants: the
+    Commander's message is in PostgreSQL before anything streams; a no-answer
+    turn returns right after `done` and before anything is recorded as hers;
+    follow-ups only run for a real answer.
     """
     if not content.strip():
         return None
@@ -167,7 +193,50 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     start = time.monotonic()
     proactive.mark_responded()
 
-    # ── Mission timer detection ───────────────────────────────────────────
+    await _handle_mission_commands(content, session, user_id)
+
+    sid = session_id(user_id)
+    session = await _record_user_turn(content, session, sid, user_id)
+
+    # Affection is needed both for prompt modulation and for memory re-ranking
+    # (importance bias only fires when affection_level is passed through).
+    aff_state = await affection.get_state(user_id)
+    system_prompt = await _build_system_prompt(content, session, user_id, aff_state)
+    messages = _build_messages(session)
+
+    msg_id = new_id()
+    if await router.needs_agent(content):
+        reply = await _agent_reply(system_prompt, messages, user_id, msg_id, start)
+    else:
+        reply = await _stream_reply(content, session, system_prompt, messages, user_id, msg_id, start)
+        if reply is None:
+            # No local backend this turn; the sentinel and `done` are already out.
+            await _drop_unanswered_turn(sid, session)
+            return None
+
+    # Nothing came back from her core: the sentinel (gateway down before any
+    # token), a mid-stream drop, or the agent loop's own failure line. The
+    # Commander's message is already in PostgreSQL. A non-answer is not
+    # recorded as hers, not replayed to the model as context, and not mined
+    # for facts, mood or affection — extraction on the sentinel used to reset
+    # her mood to "composed", credit a streak and store the outage notice in
+    # long-term memory as something she said.
+    if reply.stream_failed or reply.text.startswith(_FAILURE_PREFIX):
+        logger.info("No answer from the LLM this turn — skipping persistence and follow-ups")
+        await _drop_unanswered_turn(sid, session)
+        return None
+
+    session = await _record_assistant_turn(sid, session, user_id, reply)
+    _apply_memory_overrides(content, user_id)
+    _schedule_followups(content, session, user_id, reply.text)
+    return reply.text
+
+
+# ── Phase 1: the Commander's side of the turn ────────────────────────────────
+
+
+async def _handle_mission_commands(content: str, session: SessionState, user_id: str) -> None:
+    """Mission timer detection: a cancel or a "keep me posted every N min"."""
     if _wants_mission_cancel(content):
         if proactive.mission_active:
             proactive.stop_mission(user_id=user_id)
@@ -187,7 +256,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         if not mission_desc:
             mission_desc = content
 
-        aff_state = await affection.get_state(user_id)
+        await affection.get_state(user_id)
         proactive.start_mission(mission_desc, interval)
 
         # Persist mission state in session so it survives Redis restores
@@ -199,13 +268,15 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         await proactive.record_first(user_id, "first_mission")
         logger.info("Mission timer started: every %d min, desc='%s'", interval, mission_desc[:60])
 
-    # Add user turn to session
-    sid = session_id(user_id)
+
+async def _record_user_turn(content: str, session: SessionState, sid: str, user_id: str) -> SessionState:
+    """Add the user turn to the live session and persist it BEFORE streaming.
+
+    A mid-stream crash can never lose the Commander's message (SACRED). If
+    the store fails, warn the Commander instead of silently swallowing the loss.
+    """
     session = await memory.add_turn(sid, "user", content, session)
 
-    # Persist the user message BEFORE streaming — a mid-stream crash can
-    # never lose the Commander's message (SACRED). If the store fails, warn
-    # the Commander instead of silently swallowing the loss.
     user_stored = await _store_message(
         session.conversation_id, "user", content, user_id=user_id
     )
@@ -218,100 +289,68 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             })
         except Exception as e:
             logger.warning("Could not deliver store-failure warning: %s", e)
+    return session
 
-    # Affection is needed both for prompt modulation and for memory re-ranking
-    # (importance bias only fires when affection_level is passed through).
-    aff_state = await affection.get_state(user_id)
 
-    # Skip expensive memory recall for very short messages (hi, ok, yes, etc)
-    is_short = len(content.strip()) <= 20
+# ── Phase 2: the system prompt ───────────────────────────────────────────────
+
+
+async def _recall_context(
+    content: str, user_id: str, affection_level: int, is_short: bool,
+) -> tuple[list[Any], dict[Any, Any], list[Any]]:
+    """Episodes, relationship facts and past exchanges relevant to this message.
+
+    Skipped for very short messages (hi, ok, yes, etc) — expensive and useless.
+    """
     if is_short:
-        episode_memories: list[Any] = []
-        rel_facts: dict[Any, Any] = {}
-        recalled_exchanges: list[Any] = []
-    else:
-        try:
-            episode_memories, rel_facts, recalled_exchanges = await memory.recall_for_prompt(
-                content, user_id=user_id, affection_level=aff_state.level,
-            )
-        except Exception as e:
-            # Defense in depth: recall_for_prompt already fails open, but never let
-            # a memory-layer surprise tear down the chat/WS — degrade to no recalled
-            # context and keep replying.
-            logger.warning("recall_for_prompt failed, continuing with empty context: %s", e)
-            episode_memories, rel_facts, recalled_exchanges = [], {}, []
-
-    # Assemble system prompt
-    # Calculate days together
-    days = 0
-    if aff_state.first_interaction:
-        try:
-            fi = aff_state.first_interaction
-            now = datetime.now(fi.tzinfo) if fi.tzinfo else datetime.now()
-            days = max(0, (now - fi).days)
-        except Exception as e:
-            logger.debug("Days-together calculation failed: %s", e)
-            days = 0
-
-    # Get active mission description for context injection
-    mission_desc = None
-    if proactive.mission_active and hasattr(proactive, '_mission_timer') and proactive._mission_timer:
-        mission_desc = proactive._mission_timer.mission_description
-
-    # Detect if Commander is addressing a squad member
-    from .helpers import detect_squad_address, detect_jealousy_trigger
-    addressed_member = detect_squad_address(content)
-
-    # Jealousy detection — Commander complimenting another T-Doll
-    jealousy_target = detect_jealousy_trigger(content)
-
-    # Physical state awareness
-    from .context import physical
-    phys_state, phys_detail = await physical.get_state(user_id)
-
-    # Anniversary awareness
-    anniversaries = await proactive.check_anniversaries(user_id)
-
-    # Comfort objects for prompt context
-    comfort_objects = await proactive.get_comfort_objects(user_id)
-
-    # Inside jokes / running references (feature: inside jokes). Surfaced as a
-    # per-message block below — NOT folded into assemble_system_prompt — so the
-    # golden system-prompt snapshots stay stable. Skipped for very short msgs.
-    inside_jokes = [] if is_short else await memory.get_inside_jokes(user_id)
-
-    # Crown jewel tribute — the Commander's most treasured words to Klukai.
-    # Only surfaces in the prompt at affection level 4+ (per build_crown_jewel_block).
-    from . import tributes
-    crown_jewel = await tributes.get_crown_jewel(user_id)
-
-    # Dream inquiry — if Commander asks about dreams, add context
-    from .helpers import wants_dream_inquiry
-    dream_hint = ""
-    if wants_dream_inquiry(content):
-        dream_hint = (
-            "\n\nDREAM INQUIRY: The Commander is asking about your dreams. "
-            "You DON'T remember your dreams (officially). Deny it with slight "
-            "embarrassment: 'Dreams? I don't... dream. I'm a T-Doll.' "
-            "But add a subtle tell — a pause, a look away, a faint blush. "
-            "The truth is you DID dream about him. You just won't admit it."
+        return [], {}, []
+    try:
+        return await memory.recall_for_prompt(
+            content, user_id=user_id, affection_level=affection_level,
         )
+    except Exception as e:
+        # Defense in depth: recall_for_prompt already fails open, but never let
+        # a memory-layer surprise tear down the chat/WS — degrade to no recalled
+        # context and keep replying.
+        logger.warning("recall_for_prompt failed, continuing with empty context: %s", e)
+        return [], {}, []
 
-    # Her Day — what she has on and where she is right now. His outfit
-    # request, if any, is decided deterministically HERE, before the prompt:
-    # this reply already knows the outcome, and an image requested in the same
-    # message renders the change. Bounded and fail-soft: the row is normally
-    # warm from connect; if not, the hour-based defaults stand this turn while
-    # the (shielded) pick finishes in the background for the next one.
-    outfit_line: str | None = None
-    location_line: str | None = None
-    her_where: str | None = None
-    outfit_request_block = ""
-    from .helpers import detect_goodbye as _detect_goodbye
-    leaving = bool(_detect_goodbye(content))
+
+def _days_together(aff_state: Any) -> int:
+    """Calendar days since the first interaction, 0 when unknown."""
+    if not aff_state.first_interaction:
+        return 0
+    try:
+        fi = aff_state.first_interaction
+        now = datetime.now(fi.tzinfo) if fi.tzinfo else datetime.now()
+        return max(0, (now - fi).days)
+    except Exception as e:
+        logger.debug("Days-together calculation failed: %s", e)
+        return 0
+
+
+def _active_mission_description() -> str | None:
+    """Get active mission description for context injection."""
+    if proactive.mission_active and hasattr(proactive, '_mission_timer') and proactive._mission_timer:
+        return proactive._mission_timer.mission_description
+    return None
+
+
+async def _her_day_for_turn(
+    content: str, session: SessionState, user_id: str, aff_state: Any,
+    mission_desc: str | None, leaving: bool,
+) -> _HerDayTurn:
+    """Her Day — what she has on and where she is right now.
+
+    His outfit request, if any, is decided deterministically HERE, before the
+    prompt: this reply already knows the outcome, and an image requested in
+    the same message renders the change. Bounded and fail-soft: the row is
+    normally warm from connect; if not, the hour-based defaults stand this
+    turn while the (shielded) pick finishes in the background for the next one.
+    """
+    turn = _HerDayTurn()
 
     async def _her_day_turn() -> None:
-        nonlocal outfit_line, location_line, her_where, outfit_request_block
         warm = asyncio.ensure_future(wardrobe.ensure_today(user_id, aff_state.level, mood=session.mood))
         await asyncio.wait_for(asyncio.shield(warm), _HER_DAY_WARM_BUDGET_S)
         game_active = await router.is_game_active()
@@ -327,7 +366,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
                 current_id=her_now.outfit.id, mood=session.mood,
                 deployed=bool(mission_desc),
             )
-            outfit_request_block = wardrobe.request_block(outcome)
+            turn.request_block = wardrobe.request_block(outcome)
             if outcome.decision == "comply":
                 her_now = await her_day.her_now(
                     user_id, aff_state.level, mood=session.mood,
@@ -337,42 +376,23 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
                     her_now.outfit, reason=her_now.outfit_reason,
                     source=her_now.outfit_source, level=aff_state.level,
                 ))
-        outfit_line = her_now.outfit_line(aff_state.level)
-        location_line = her_now.location_line()
+        turn.outfit_line = her_now.outfit_line(aff_state.level)
+        turn.location_line = her_now.location_line()
         if her_now.activity:
-            her_where = f"at the {her_now.location}, {her_now.activity}"
+            turn.her_where = f"at the {her_now.location}, {her_now.activity}"
         tea_block = "" if leaving else her_day.tea_time_block(her_now, content, aff_state.level)
         if tea_block:
-            outfit_request_block = "\n\n".join(b for b in (outfit_request_block, tea_block) if b)
+            turn.request_block = "\n\n".join(b for b in (turn.request_block, tea_block) if b)
 
     try:
         await asyncio.wait_for(_her_day_turn(), _HER_DAY_TURN_BUDGET_S)
     except Exception as e:  # incl. TimeoutError — she is never kept waiting on her wardrobe
         logger.warning("Her Day unavailable this turn: %s", e)
+    return turn
 
-    system_prompt = assemble_system_prompt(
-        mood=session.mood,
-        memories=episode_memories,
-        relationship_facts=rel_facts,
-        recalled_exchanges=recalled_exchanges,
-        tools_available=True,
-        affection_score=aff_state.score,
-        affection_level=aff_state.level,
-        days_together=days,
-        last_msg_length=len(content),
-        mission_description=mission_desc,
-        addressed_member=addressed_member,
-        jealousy_target=jealousy_target,
-        physical_state=phys_state,
-        physical_detail=phys_detail,
-        anniversaries=anniversaries,
-        comfort_objects=comfort_objects,
-        crown_jewel=crown_jewel,
-        current_outfit=outfit_line,
-        current_location=location_line,
-    )
 
-    # Presence / absence coloring (return gap + streak) — fail-soft.
+async def _presence_block(aff_state: Any, user_id: str) -> str:
+    """Presence / absence coloring (return gap + streak) — fail-soft, "" when none."""
     try:
         from datetime import date as _date, datetime as _dt
 
@@ -394,106 +414,177 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
                 lid_naive = lid.replace(tzinfo=None) if getattr(lid, "tzinfo", None) else lid
                 now_naive = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
                 hours_away = max(0.0, (now_naive - lid_naive).total_seconds() / 3600.0)
-        presence = build_presence_block(
+        return build_presence_block(
             hours_away=hours_away,
             affection_level=aff_state.level,
             consecutive_days=getattr(aff_state, "consecutive_days", 0) or 0,
-        )
-        if presence:
-            system_prompt = system_prompt + "\n\n" + presence
+        ) or ""
     except Exception as e:
         logger.debug("Presence block skipped: %s", e)
+        return ""
 
 
-    # Memory nudge — proactive past reference based on affection level
-    nudge = await memory.get_memory_nudge(session.turn_count, aff_state.level, user_id=user_id)
-    if nudge:
-        system_prompt += f"\n\n{nudge}"
+def _dream_inquiry_hint(content: str) -> str:
+    """Dream inquiry — if Commander asks about dreams, add context."""
+    from .helpers import wants_dream_inquiry
+    if not wants_dream_inquiry(content):
+        return ""
+    return (
+        "DREAM INQUIRY: The Commander is asking about your dreams. "
+        "You DON'T remember your dreams (officially). Deny it with slight "
+        "embarrassment: 'Dreams? I don't... dream. I'm a T-Doll.' "
+        "But add a subtle tell — a pause, a look away, a faint blush. "
+        "The truth is you DID dream about him. You just won't admit it."
+    )
 
-    # Inside jokes + growth arc — appended here (NOT in assemble_system_prompt)
-    # so the persistent prompt's golden snapshots stay stable. Both degrade to
-    # empty strings when not applicable (affection too low, no data, off-cadence).
-    _p = load_personality()
-    _jk_cfg = _p.get("inside_jokes", {})
-    if _jk_cfg.get("enabled", True):
-        jokes_block = build_inside_jokes_block(
-            inside_jokes, aff_state.level,
-            max_surfaced=_jk_cfg.get("max_surfaced", 2),
-            min_affection_level=_jk_cfg.get("min_affection_level", 3),
-        )
-        if jokes_block:
-            system_prompt += f"\n\n{jokes_block}"
-    growth_block = build_growth_arc_block(_p, aff_state.level, session.turn_count)
-    if growth_block:
-        system_prompt += f"\n\n{growth_block}"
 
-    if _wants_thread_inquiry(content):
-        thread_block = build_thread_block(_p, aff_state.level, session.turn_count)
-        if thread_block:
-            system_prompt += f"\n\n{thread_block}"
+def _image_hint(content: str) -> str:
+    """Image generation hint — keep text response minimal when an image is coming."""
+    if not needs_image(content):
+        return ""
+    return (
+        "IMAGE GENERATION ACTIVE: An image is being generated for this request. "
+        "Keep your text response to 1 SHORT sentence — just acknowledge the request. "
+        "Do NOT narrate the process of taking a photo, using a data pad, or activating a camera. "
+        "The image will appear separately. Example: '...Already done, Commander.' or "
+        "'(I smirk) Patience.' Do NOT write more than 1-2 sentences."
+    )
 
-    gaming_block = build_gaming_block(_p, aff_state.level, await router.is_game_active())
-    if gaming_block:
-        system_prompt += f"\n\n{gaming_block}"
 
-    # Clean goodbyes: he is signing off, so she lets him go (one-shot block),
-    # and proactive pings hold until morning ("night") or for 90 min ("leave").
-    # mark_responded() above already lifted any earlier hold.
+def _goodbye_block(content: str, personality: dict, affection_level: int) -> str:
+    """Clean goodbyes: he is signing off, so she lets him go (one-shot block),
+    and proactive pings hold until morning ("night") or for 90 min ("leave").
+    mark_responded() at the top of the turn already lifted any earlier hold."""
     from .goodbyes import build_departure_block
     from .helpers import detect_goodbye
     goodbye = detect_goodbye(content)
-    if goodbye:
-        if goodbye == "night":
-            proactive.mark_goodnight()
-        else:
-            proactive.mark_leaving()
-        system_prompt += f"\n\n{build_departure_block(_p, goodbye, aff_state.level)}"
+    if not goodbye:
+        return ""
+    if goodbye == "night":
+        proactive.mark_goodnight()
+    else:
+        proactive.mark_leaving()
+    return build_departure_block(personality, goodbye, affection_level)
+
+
+async def _build_system_prompt(
+    content: str, session: SessionState, user_id: str, aff_state: Any,
+) -> str:
+    """Assemble the persistent prompt, then the per-message blocks.
+
+    The per-message blocks (inside jokes, growth arc, presence, ...) are
+    appended here — NOT folded into assemble_system_prompt — so the golden
+    system-prompt snapshots stay stable. Each block degrades to "" when not
+    applicable, and they are appended in a fixed order.
+    """
+    # Skip expensive memory recall for very short messages (hi, ok, yes, etc)
+    is_short = len(content.strip()) <= 20
+    episode_memories, rel_facts, recalled_exchanges = await _recall_context(
+        content, user_id, aff_state.level, is_short,
+    )
+    days = _days_together(aff_state)
+    mission_desc = _active_mission_description()
+
+    # Detect if Commander is addressing a squad member; jealousy detection —
+    # Commander complimenting another T-Doll
+    from .helpers import detect_squad_address, detect_jealousy_trigger
+    addressed_member = detect_squad_address(content)
+    jealousy_target = detect_jealousy_trigger(content)
+
+    # Physical state awareness
+    from .context import physical
+    phys_state, phys_detail = await physical.get_state(user_id)
+
+    anniversaries = await proactive.check_anniversaries(user_id)
+    comfort_objects = await proactive.get_comfort_objects(user_id)
+
+    # Inside jokes / running references (feature: inside jokes). Skipped for
+    # very short msgs; surfaced as a per-message block below.
+    inside_jokes = [] if is_short else await memory.get_inside_jokes(user_id)
+
+    # Crown jewel tribute — the Commander's most treasured words to Klukai.
+    # Only surfaces in the prompt at affection level 4+ (per build_crown_jewel_block).
+    from . import tributes
+    crown_jewel = await tributes.get_crown_jewel(user_id)
+
+    from .helpers import detect_goodbye as _detect_goodbye
+    leaving = bool(_detect_goodbye(content))
+    her = await _her_day_for_turn(content, session, user_id, aff_state, mission_desc, leaving)
+
+    system_prompt = assemble_system_prompt(
+        mood=session.mood,
+        memories=episode_memories,
+        relationship_facts=rel_facts,
+        recalled_exchanges=recalled_exchanges,
+        tools_available=True,
+        affection_score=aff_state.score,
+        affection_level=aff_state.level,
+        days_together=days,
+        last_msg_length=len(content),
+        mission_description=mission_desc,
+        addressed_member=addressed_member,
+        jealousy_target=jealousy_target,
+        physical_state=phys_state,
+        physical_detail=phys_detail,
+        anniversaries=anniversaries,
+        comfort_objects=comfort_objects,
+        crown_jewel=crown_jewel,
+        current_outfit=her.outfit_line,
+        current_location=her.location_line,
+    )
+
+    _p = load_personality()
+    blocks: list[str] = [await _presence_block(aff_state, user_id)]
+
+    # Memory nudge — proactive past reference based on affection level
+    blocks.append(await memory.get_memory_nudge(session.turn_count, aff_state.level, user_id=user_id) or "")
+
+    # Inside jokes + growth arc. Both degrade to empty strings when not
+    # applicable (affection too low, no data, off-cadence).
+    _jk_cfg = _p.get("inside_jokes", {})
+    if _jk_cfg.get("enabled", True):
+        blocks.append(build_inside_jokes_block(
+            inside_jokes, aff_state.level,
+            max_surfaced=_jk_cfg.get("max_surfaced", 2),
+            min_affection_level=_jk_cfg.get("min_affection_level", 3),
+        ) or "")
+    blocks.append(build_growth_arc_block(_p, aff_state.level, session.turn_count) or "")
+
+    if _wants_thread_inquiry(content):
+        blocks.append(build_thread_block(_p, aff_state.level, session.turn_count) or "")
+
+    blocks.append(build_gaming_block(_p, aff_state.level, await router.is_game_active()) or "")
+
+    blocks.append(_goodbye_block(content, _p, aff_state.level))
 
     # The 0200 watch: 00:30-04:29 local she is already up, quieter and
     # protective, and after a run of late nights she sends him to bed.
     from .night_watch import night_watch_prompt_block
-    watch_block = await night_watch_prompt_block(
-        user_id, _p, aff_state.level, memory, activity=her_where,
-    )
-    if watch_block:
-        system_prompt += f"\n\n{watch_block}"
+    blocks.append(await night_watch_prompt_block(
+        user_id, _p, aff_state.level, memory, activity=her.her_where,
+    ) or "")
 
     # Command decisions: if this answers the call she asked him to make, a
     # one-shot block (effects + the later consequence are applied here); and
     # at 3+, the details of her world his past calls shaped.
     from . import decisions
-    decision_block = await decisions.resolve_prompt_block(user_id, content, memory)
-    if decision_block:
-        system_prompt += f"\n\n{decision_block}"
-    world_block = await decisions.her_world_prompt_block(user_id, aff_state.level, memory)
-    if world_block:
-        system_prompt += f"\n\n{world_block}"
+    blocks.append(await decisions.resolve_prompt_block(user_id, content, memory) or "")
+    blocks.append(await decisions.her_world_prompt_block(user_id, aff_state.level, memory) or "")
 
-    birthday_block = await rituals.birthday_prompt_block(
+    blocks.append(await rituals.birthday_prompt_block(
         user_id, _p, aff_state.first_interaction, content,
-    )
-    if birthday_block:
-        system_prompt += f"\n\n{birthday_block}"
+    ) or "")
 
-    if outfit_request_block:
-        system_prompt += f"\n\n{outfit_request_block}"
+    blocks.append(her.request_block)
+    blocks.append(_dream_inquiry_hint(content))
+    blocks.append(_image_hint(content))
 
-    # Dream inquiry hint
-    if dream_hint:
-        system_prompt += dream_hint
+    return system_prompt + "".join(f"\n\n{block}" for block in blocks if block)
 
-    # Image generation hint — keep text response minimal when an image is coming
-    if needs_image(content):
-        system_prompt += (
-            "\n\nIMAGE GENERATION ACTIVE: An image is being generated for this request. "
-            "Keep your text response to 1 SHORT sentence — just acknowledge the request. "
-            "Do NOT narrate the process of taking a photo, using a data pad, or activating a camera. "
-            "The image will appear separately. Example: '...Already done, Commander.' or "
-            "'(I smirk) Patience.' Do NOT write more than 1-2 sentences."
-        )
 
-    # Build messages for LLM — use summary + recent turns for compact context
-    messages = []
+def _build_messages(session: SessionState) -> list[dict]:
+    """Build messages for LLM — use summary + recent turns for compact context."""
+    messages: list[dict] = []
     if session.context_summary:
         messages.append({
             "role": "system",
@@ -503,122 +594,141 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         {"role": t["role"], "content": t["content"]}
         for t in session.turns[-16:]
     )
+    return messages
 
-    # Check if this needs the agentic tool-use loop
-    use_agent = await router.needs_agent(content)
-    msg_id = new_id()
-    stream_failed = False
 
-    if use_agent:
-        # Agentic path: think, use tools, then respond (agent loop sends its own thinking events)
-        logger.info("Routing to agent loop (tools needed)")
-        agent = AgentLoop(router, mcp, ws)
-        agent_result = await agent.run(system_prompt, messages, user_id=user_id)
+# ── Phase 3: her answer ──────────────────────────────────────────────────────
 
-        response_text = _fix_narration(agent_result.response)
-        model_name = agent_result.model
 
-        # Stream the final response token by token for the UI
-        for token in _chunk_text(response_text, 8):
-            await ws.send_token(user_id, token)
-            await asyncio.sleep(0.02)
+async def _agent_reply(
+    system_prompt: str, messages: list[dict], user_id: str, msg_id: str, start: float,
+) -> _Reply:
+    """Agentic path: think, use tools, then respond (the agent loop sends its
+    own thinking events); the final response is streamed token by token."""
+    logger.info("Routing to agent loop (tools needed)")
+    agent = AgentLoop(router, mcp, ws)
+    agent_result = await agent.run(system_prompt, messages, user_id=user_id)
 
-        latency_ms = int((time.monotonic() - start) * 1000)
-        await ws.send_done(user_id, msg_id, model_name)
+    response_text = _fix_narration(agent_result.response)
+    model_name = agent_result.model
 
-        logger.info(
-            "Agent loop: %d iterations, %d tools used (%s)",
-            agent_result.iterations,
-            len(agent_result.tools_used),
-            ", ".join(agent_result.tools_used) or "none",
-        )
-    else:
-        # Direct path: stream from LLM
-        await ws.send_thinking(user_id, "Composing response...")
-        try:
-            config = await router.route(content, session)
-        except RuntimeError as e:
-            # No local backend: dominus-nobara is off or its gateway port is
-            # not bound yet. That is normal, not a crash — degrade in-band
-            # exactly like a pre-token stream failure (the sentinel is the
-            # whole reply) instead of letting the WS loop log a traceback and
-            # tell him "something glitched" on every turn of the outage.
-            logger.warning("Local LLM unavailable this turn: %s", e)
-            await ws.send_token(user_id, FAILURE_SENTINEL)
-            await ws.send_done(user_id, msg_id, "offline")
-            await _drop_unanswered_turn(sid, session)
-            return None
-        logger.info("Routing to %s/%s", config.provider, config.model)
+    # Stream the final response token by token for the UI
+    for token in _chunk_text(response_text, 8):
+        await ws.send_token(user_id, token)
+        await asyncio.sleep(0.02)
 
-        # Fire a delayed "warming up" message if model is slow to respond
-        warmup_timer: asyncio.Task | None = None
-        if config.provider == "lmstudio":
-            async def _warmup_notify():
-                await asyncio.sleep(8.0)
-                await ws.send_thinking(user_id, "Loading neural pathways, Commander. Stand by...")
-            warmup_timer = asyncio.create_task(_warmup_notify())
+    latency_ms = int((time.monotonic() - start) * 1000)
+    await ws.send_done(user_id, msg_id, model_name)
 
-        full_response = []
-        buffer = ""
-        first_flush = True
-        try:
-            async for token in router.stream(system_prompt, messages, config):
-                # Cancel warmup message once first token arrives
-                if warmup_timer and not warmup_timer.done():
-                    warmup_timer.cancel()
-                    warmup_timer = None
-                full_response.append(token)
-                buffer += token
-                # First flush after 20 chars for fast perceived response, then sentence boundaries
-                flush_threshold = 20 if first_flush else 80
-                if any(c in buffer for c in '.!?\n)') or len(buffer) > flush_threshold:
-                    await ws.send_token(user_id, buffer)
-                    buffer = ""
-                    first_flush = False
-        except LLMStreamFailed as e:
-            # Mid-stream death: don't propagate (it would kill the WS). The
-            # user message is already persisted; surface an explicit error,
-            # finalize the truncated reply for the UI, and skip follow-ups.
-            stream_failed = True
-            logger.error("LLM stream failed mid-response: %s", e)
-            await ws.send(user_id, {
-                "type": "error",
-                "message": "...Connection to my core dropped mid-sentence, "
-                           "Commander. Say that again?",
-            })
-            # The unflushed tail is not sent after the error: a token frame
-            # following an error opens a stray second bubble in the client.
-            buffer = ""
-        if warmup_timer and not warmup_timer.done():
-            warmup_timer.cancel()
-        if buffer:
-            await ws.send_token(user_id, buffer)
+    logger.info(
+        "Agent loop: %d iterations, %d tools used (%s)",
+        agent_result.iterations,
+        len(agent_result.tools_used),
+        ", ".join(agent_result.tools_used) or "none",
+    )
+    return _Reply(response_text, model_name, latency_ms)
 
-        # Apply narration fix only to the complete text (avoids split-pattern bugs)
-        raw_text = "".join(full_response)
-        response_text = _fix_narration(raw_text)
-        model_name = config.model
-        latency_ms = int((time.monotonic() - start) * 1000)
 
-        # Send corrected final text if narration fix changed anything
-        final_text = response_text if response_text != raw_text else None
-        await ws.send_done(user_id, msg_id, model_name, final_text=final_text)
+async def _stream_reply(
+    content: str, session: SessionState, system_prompt: str, messages: list[dict],
+    user_id: str, msg_id: str, start: float,
+) -> _Reply | None:
+    """Direct path: stream from the local LLM.
 
-    # Nothing came back from her core: the sentinel (gateway down before any
-    # token), a mid-stream drop, or the agent loop's own failure line. The
-    # Commander's message is already in PostgreSQL. A non-answer is not
-    # recorded as hers, not replayed to the model as context, and not mined
-    # for facts, mood or affection — extraction on the sentinel used to reset
-    # her mood to "composed", credit a streak and store the outage notice in
-    # long-term memory as something she said.
-    llm_failed = stream_failed or response_text.startswith(_FAILURE_PREFIX)
-    if llm_failed:
-        logger.info("No answer from the LLM this turn — skipping persistence and follow-ups")
-        await _drop_unanswered_turn(sid, session)
+    Returns None when there is no local backend this turn — the sentinel and
+    `done` have then already been sent, and the caller drops the unanswered
+    turn.
+    """
+    await ws.send_thinking(user_id, "Composing response...")
+    try:
+        config = await router.route(content, session)
+    except RuntimeError as e:
+        # No local backend: dominus-nobara is off or its gateway port is
+        # not bound yet. That is normal, not a crash — degrade in-band
+        # exactly like a pre-token stream failure (the sentinel is the
+        # whole reply) instead of letting the WS loop log a traceback and
+        # tell him "something glitched" on every turn of the outage.
+        logger.warning("Local LLM unavailable this turn: %s", e)
+        await ws.send_token(user_id, FAILURE_SENTINEL)
+        await ws.send_done(user_id, msg_id, "offline")
         return None
+    logger.info("Routing to %s/%s", config.provider, config.model)
 
-    # Add assistant turn to session
-    session = await memory.add_turn(sid, "assistant", response_text, session)
+    raw_text, stream_failed = await _stream_tokens(system_prompt, messages, config, user_id)
+
+    # Apply narration fix only to the complete text (avoids split-pattern bugs)
+    response_text = _fix_narration(raw_text)
+    latency_ms = int((time.monotonic() - start) * 1000)
+
+    # Send corrected final text if narration fix changed anything
+    final_text = response_text if response_text != raw_text else None
+    await ws.send_done(user_id, msg_id, config.model, final_text=final_text)
+    return _Reply(response_text, config.model, latency_ms, stream_failed)
+
+
+async def _stream_tokens(
+    system_prompt: str, messages: list[dict], config: Any, user_id: str,
+) -> tuple[str, bool]:
+    """Relay the token stream to the UI in readable chunks.
+
+    Returns (raw_text, stream_failed). A mid-stream death is reported to the
+    UI as an `error` frame and never propagated (it would kill the WS).
+    """
+    # Fire a delayed "warming up" message if model is slow to respond
+    warmup_timer: asyncio.Task | None = None
+    if config.provider == "lmstudio":
+        async def _warmup_notify():
+            await asyncio.sleep(8.0)
+            await ws.send_thinking(user_id, "Loading neural pathways, Commander. Stand by...")
+        warmup_timer = asyncio.create_task(_warmup_notify())
+
+    full_response = []
+    buffer = ""
+    first_flush = True
+    stream_failed = False
+    try:
+        async for token in router.stream(system_prompt, messages, config):
+            # Cancel warmup message once first token arrives
+            if warmup_timer and not warmup_timer.done():
+                warmup_timer.cancel()
+                warmup_timer = None
+            full_response.append(token)
+            buffer += token
+            # First flush after 20 chars for fast perceived response, then sentence boundaries
+            flush_threshold = 20 if first_flush else 80
+            if any(c in buffer for c in '.!?\n)') or len(buffer) > flush_threshold:
+                await ws.send_token(user_id, buffer)
+                buffer = ""
+                first_flush = False
+    except LLMStreamFailed as e:
+        # Mid-stream death: don't propagate (it would kill the WS). The
+        # user message is already persisted; surface an explicit error,
+        # finalize the truncated reply for the UI, and skip follow-ups.
+        stream_failed = True
+        logger.error("LLM stream failed mid-response: %s", e)
+        await ws.send(user_id, {
+            "type": "error",
+            "message": "...Connection to my core dropped mid-sentence, "
+                       "Commander. Say that again?",
+        })
+        # The unflushed tail is not sent after the error: a token frame
+        # following an error opens a stray second bubble in the client.
+        buffer = ""
+    if warmup_timer and not warmup_timer.done():
+        warmup_timer.cancel()
+    if buffer:
+        await ws.send_token(user_id, buffer)
+    return "".join(full_response), stream_failed
+
+
+# ── Phase 4: record her answer and schedule the follow-ups ──────────────────
+
+
+async def _record_assistant_turn(
+    sid: str, session: SessionState, user_id: str, reply: _Reply,
+) -> SessionState:
+    """Add her turn to the live session, mark his messages read, persist hers."""
+    session = await memory.add_turn(sid, "assistant", reply.text, session)
 
     # Mark user messages as read (the user message itself was already
     # persisted before streaming — never stored twice).
@@ -635,11 +745,14 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     await ws.send(user_id, {"type": "read_receipt", "read_at": datetime.now().isoformat()})
 
     await _store_message(
-        session.conversation_id, "assistant", response_text, model_name,
-        latency_ms=latency_ms, user_id=user_id,
+        session.conversation_id, "assistant", reply.text, reply.model,
+        latency_ms=reply.latency_ms, user_id=user_id,
     )
+    return session
 
-    # Commander save/discard overrides — operate on the most recent memory
+
+def _apply_memory_overrides(content: str, user_id: str) -> None:
+    """Commander save/discard overrides — operate on the most recent memory."""
     content_lower = content.lower()
     user_last_mem = context.get_last_memory_id(user_id)
     # Track all post-response background tasks so a full user disconnect cancels
@@ -650,10 +763,13 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     elif any(kw in content_lower for kw in DISCARD_KEYWORDS) and user_last_mem:
         ws.track_task(user_id, asyncio.create_task(do_memory_keep(user_last_mem, kept=False)))
 
+
+def _schedule_followups(content: str, session: SessionState, user_id: str, response_text: str) -> None:
+    """Background work for a turn the LLM answered: recall or image generation,
+    fact extraction, compaction. Every task is tracked for cancellation."""
     # Track whether image gen was triggered (for extraction curation pass)
     image_triggered = False
 
-    # Background tasks — the LLM answered (an llm_failed turn returned above).
     # Recall detection takes priority over new image generation.
     if _wants_recall(content):
         logger.info("Memory recall triggered for: %s", content[:80])
@@ -698,5 +814,3 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     # Background: compact session if turns exceed threshold
     if len(session.turns) >= COMPACT_THRESHOLD:
         ws.track_task(user_id, asyncio.create_task(background_compaction(session, user_id)))
-
-    return response_text
