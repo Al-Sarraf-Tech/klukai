@@ -76,6 +76,7 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 appuser && \
 COPY --chown=appuser:appuser app/ ./app/
 COPY --chown=appuser:appuser migrations/ ./migrations/
 COPY --chown=appuser:appuser seed_memories.py .
+COPY --chown=appuser:appuser reannotate_existing.py .
 
 USER appuser
 

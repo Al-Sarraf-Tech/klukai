@@ -202,10 +202,9 @@ scores 65/67 on this tree. The remaining failures need the live hosts, not the c
    memory without a `seed:<created_at>` fingerprint (every row seeded
    before this branch) is skipped rather than matched by position. If you
    want those legacy rows re-annotated, that needs a deliberate mapping,
-   not a guess. The Dockerfile copies only `seed_memories.py` into the
-   image, so the documented `docker exec companion-core python3
-   /app/reannotate_existing.py` needs a `COPY` line or a `docker cp` first;
-   left as is.
+   not a guess. The Dockerfile now copies `reannotate_existing.py` into
+   the image next to `seed_memories.py`, so the documented `docker exec`
+   command works after the next core build.
 8. **`docs/perf-baseline.json` lost its `/api/health/subsystems` row.** It
    was the latency of a 401, not a measurement. The CI and nightly perf
    gates keep comparing `/health` against the June baseline; re-capture
@@ -275,9 +274,8 @@ scores 65/67 on this tree. The remaining failures need the live hosts, not the c
    entry reads "A moment between us." The run after that must select only
    exchanges newer than the watermark (the log prints the range).
 9. `docker exec companion-core python3 /app/reannotate_existing.py --user
-   jalsarraf` (after decision 7's `COPY`/`docker cp`) prints what it would
-   change and writes nothing; `annotation_history` stays `[]` until
-   `--rewrite`.
+   jalsarraf` prints what it would change and writes nothing;
+   `annotation_history` stays `[]` until `--rewrite`.
 
 ## Test commands used here
 
