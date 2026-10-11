@@ -71,26 +71,26 @@ class TestDetectSquadMembers:
 
 class TestSelectOutfit:
     def test_returns_default_when_no_match(self):
-        from app.image_gen import _select_outfit
+        from app.image_gen_prompts import _select_outfit
         outfit_map = {"sleep": "pajamas", "combat": "tactical gear"}
         result = _select_outfit("just hanging out", outfit_map, "casual clothes")
         assert result == "casual clothes"
 
     def test_matches_keyword_case_insensitive(self):
-        from app.image_gen import _select_outfit
+        from app.image_gen_prompts import _select_outfit
         outfit_map = {"sleep": "pajamas"}
         result = _select_outfit("She's ready to Sleep for the night", outfit_map, "x")
         assert result == "pajamas"
 
     def test_first_match_wins(self):
         """Dict iteration order preserved in Py 3.7+; earlier key wins on multi-match."""
-        from app.image_gen import _select_outfit
+        from app.image_gen_prompts import _select_outfit
         outfit_map = {"combat": "tactical gear", "sleep": "pajamas"}
         result = _select_outfit("combat at bedtime sleep scenario", outfit_map, "x")
         assert result == "tactical gear"
 
     def test_empty_map_returns_default(self):
-        from app.image_gen import _select_outfit
+        from app.image_gen_prompts import _select_outfit
         assert _select_outfit("any text", {}, "default") == "default"
 
 

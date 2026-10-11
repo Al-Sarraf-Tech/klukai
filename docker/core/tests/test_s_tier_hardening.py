@@ -359,10 +359,13 @@ class TestComfyUIFacade:
         assert "100.107.121.5:8388" not in text
 
     def test_image_gen_default_uses_gateway_facade(self):
-        source = Path(__file__).resolve().parent.parent / "app" / "image_gen.py"
-        text = source.read_text()
+        app_dir = Path(__file__).resolve().parent.parent / "app"
+        # COMFYUI_URL lives with the Comfy client in image_gen_comfy.py.
+        text = (app_dir / "image_gen_comfy.py").read_text()
         assert "http://100.107.121.5:1234/api/v1/comfy" in text
-        assert "GPU_LEASE_HEADER" not in text  # use the central header helper
+        for name in ("image_gen.py", "image_gen_comfy.py"):
+            # use the central header helper
+            assert "GPU_LEASE_HEADER" not in (app_dir / name).read_text()
 
     def test_seed_memories_reuses_protected_image_path(self):
         source = Path(__file__).resolve().parent.parent / "seed_memories.py"

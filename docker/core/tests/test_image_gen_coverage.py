@@ -8,7 +8,7 @@ the readiness/interrupt/free-VRAM HTTP calls, the poll loop's status handling
 timeout, exception swallow), and the retry-on-stale-job path.
 
 All network is mocked at the httpx boundary by swapping the module-level
-``_http`` singleton for a fake AsyncClient. ``asyncio.sleep`` is patched to a
+``_http`` singleton (app.image_gen_comfy) for a fake AsyncClient. ``asyncio.sleep`` is patched to a
 no-op so the 300-iteration poll loop runs instantly and deterministically;
 ``uuid.uuid4`` is frozen so the seed is reproducible.
 """
@@ -25,6 +25,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app.image_gen as ig
+import app.image_gen_comfy as igc  # the leased Comfy client: _http and the moved helpers are patched where they are looked up
 from app.gpu_lease import (
     GPU_LEASE_ACQUIRE_READ_TIMEOUT_SECONDS,
     GPU_LEASE_HEADER,
@@ -97,21 +98,21 @@ def _mock_gpu_handoff():
 
 class TestGetHttp:
     def test_creates_client_when_none(self):
-        with patch.object(ig, "_http", None):
-            client = ig._get_http()
+        with patch.object(igc, "_http", None):
+            client = igc._get_http()
             assert client is not None
-            assert isinstance(client, ig.httpx.AsyncClient)
+            assert isinstance(client, igc.httpx.AsyncClient)
 
     def test_reuses_open_client(self):
         existing = _fake_client()
-        with patch.object(ig, "_http", existing):
-            assert ig._get_http() is existing
+        with patch.object(igc, "_http", existing):
+            assert igc._get_http() is existing
 
     def test_recreates_when_closed(self):
         closed = _fake_client()
         closed.is_closed = True
-        with patch.object(ig, "_http", closed):
-            client = ig._get_http()
+        with patch.object(igc, "_http", closed):
+            client = igc._get_http()
             assert client is not closed
             assert client.is_closed is False
 
@@ -163,7 +164,7 @@ class TestCheckComfyuiReady:
         get = AsyncMock(
             return_value=_Resp(200, {"queue_running": [], "queue_pending": []})
         )
-        with patch.object(ig, "_http", _fake_client(get=get)):
+        with patch.object(igc, "_http", _fake_client(get=get)):
             assert await ig.check_comfyui_ready() is True
 
     @pytest.mark.asyncio
@@ -171,7 +172,7 @@ class TestCheckComfyuiReady:
         get = AsyncMock(
             return_value=_Resp(200, {"queue_running": [["job"]], "queue_pending": []})
         )
-        with patch.object(ig, "_http", _fake_client(get=get)):
+        with patch.object(igc, "_http", _fake_client(get=get)):
             assert await ig.check_comfyui_ready() is False
 
     @pytest.mark.asyncio
@@ -179,19 +180,19 @@ class TestCheckComfyuiReady:
         get = AsyncMock(
             return_value=_Resp(200, {"queue_running": [], "queue_pending": [["q"]]})
         )
-        with patch.object(ig, "_http", _fake_client(get=get)):
+        with patch.object(igc, "_http", _fake_client(get=get)):
             assert await ig.check_comfyui_ready() is False
 
     @pytest.mark.asyncio
     async def test_not_ready_on_non_200(self):
         get = AsyncMock(return_value=_Resp(503, {}))
-        with patch.object(ig, "_http", _fake_client(get=get)):
+        with patch.object(igc, "_http", _fake_client(get=get)):
             assert await ig.check_comfyui_ready() is False
 
     @pytest.mark.asyncio
     async def test_returns_false_on_exception(self):
         get = AsyncMock(side_effect=ig.httpx.ConnectError("no route"))
-        with patch.object(ig, "_http", _fake_client(get=get)):
+        with patch.object(igc, "_http", _fake_client(get=get)):
             assert await ig.check_comfyui_ready() is False
 
     @pytest.mark.asyncio
@@ -199,7 +200,7 @@ class TestCheckComfyuiReady:
         get = AsyncMock(
             return_value=_Resp(200, {"queue_running": [], "queue_pending": []})
         )
-        with patch.object(ig, "_http", _fake_client(get=get)):
+        with patch.object(igc, "_http", _fake_client(get=get)):
             await ig.check_comfyui_ready()
         url = get.call_args.args[0]
         assert url.endswith("/queue")
@@ -217,7 +218,7 @@ class TestInterruptComfyui:
     async def test_posts_to_interrupt(self):
         post = AsyncMock(return_value=_Resp(200))
         with (
-            patch.object(ig, "_http", _fake_client(post=post)),
+            patch.object(igc, "_http", _fake_client(post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
         ):
             assert await ig._interrupt_comfyui(_TEST_LEASE) is True
@@ -229,7 +230,7 @@ class TestInterruptComfyui:
     async def test_swallows_exception(self):
         post = AsyncMock(side_effect=ig.httpx.ConnectError("down"))
         with (
-            patch.object(ig, "_http", _fake_client(post=post)),
+            patch.object(igc, "_http", _fake_client(post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
         ):
             # Must not raise — the except logs a warning and returns.
@@ -246,7 +247,7 @@ class TestFreeComfyuiVram:
     async def test_posts_free_with_unload_flags(self):
         post = AsyncMock(return_value=_Resp(200))
         with (
-            patch.object(ig, "_http", _fake_client(post=post)),
+            patch.object(igc, "_http", _fake_client(post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
         ):
             assert await ig._free_comfyui_vram(_TEST_LEASE) is True
@@ -260,7 +261,7 @@ class TestFreeComfyuiVram:
     async def test_swallows_exception(self):
         post = AsyncMock(side_effect=RuntimeError("boom"))
         with (
-            patch.object(ig, "_http", _fake_client(post=post)),
+            patch.object(igc, "_http", _fake_client(post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
         ):
             assert await ig._free_comfyui_vram(_TEST_LEASE) is False  # no raise
@@ -270,7 +271,7 @@ class TestFreeComfyuiVram:
     async def test_retries_non_200_then_confirms_release(self):
         post = AsyncMock(side_effect=[_Resp(500), _Resp(503), _Resp(200)])
         with (
-            patch.object(ig, "_http", _fake_client(post=post)),
+            patch.object(igc, "_http", _fake_client(post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
         ):
             assert await ig._free_comfyui_vram(_TEST_LEASE) is True
@@ -316,9 +317,9 @@ class TestTryGenerateWorkflow:
         get = AsyncMock(side_effect=[hist, view])
 
         with (
-            patch.object(ig, "_http", _fake_client(get=get, post=post)),
+            patch.object(igc, "_http", _fake_client(get=get, post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
-            patch("app.image_gen.uuid.uuid4", return_value=_FROZEN_UUID),
+            patch("app.image_gen_comfy.uuid.uuid4", return_value=_FROZEN_UUID),
         ):
             result = await ig._try_generate("a klukai portrait", 832, 1216, _TEST_LEASE)
 
@@ -356,9 +357,9 @@ class TestTryGenerateWorkflow:
         view = _Resp(200, content=b"X")
         get = AsyncMock(side_effect=[hist, view])
         with (
-            patch.object(ig, "_http", _fake_client(get=get, post=post)),
+            patch.object(igc, "_http", _fake_client(get=get, post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
-            patch("app.image_gen.uuid.uuid4", return_value=_FROZEN_UUID),
+            patch("app.image_gen_comfy.uuid.uuid4", return_value=_FROZEN_UUID),
         ):
             await ig._try_generate("p", 512, 768, _TEST_LEASE)
         assert ig.WORKFLOW_TEMPLATE["5"]["inputs"]["width"] == original_w
@@ -388,9 +389,9 @@ class TestTryGenerateWorkflow:
         view = _Resp(200, content=b"DATA")
         get = AsyncMock(side_effect=[hist, view])
         with (
-            patch.object(ig, "_http", _fake_client(get=get, post=post)),
+            patch.object(igc, "_http", _fake_client(get=get, post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
-            patch("app.image_gen.uuid.uuid4", return_value=_FROZEN_UUID),
+            patch("app.image_gen_comfy.uuid.uuid4", return_value=_FROZEN_UUID),
         ):
             await ig._try_generate("p", 832, 1216, _TEST_LEASE)
         view_params = get.call_args.kwargs["params"]
@@ -404,9 +405,9 @@ class TestTryGenerateWorkflow:
     async def test_returns_none_on_queue_non_200(self):
         post = AsyncMock(return_value=_Resp(500, text="queue exploded"))
         with (
-            patch.object(ig, "_http", _fake_client(post=post)),
+            patch.object(igc, "_http", _fake_client(post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
-            patch("app.image_gen.uuid.uuid4", return_value=_FROZEN_UUID),
+            patch("app.image_gen_comfy.uuid.uuid4", return_value=_FROZEN_UUID),
         ):
             assert await ig._try_generate("p", 832, 1216, _TEST_LEASE) is None
 
@@ -414,9 +415,9 @@ class TestTryGenerateWorkflow:
     async def test_returns_none_when_no_prompt_id(self):
         post = AsyncMock(return_value=_Resp(200, {}))  # no prompt_id key
         with (
-            patch.object(ig, "_http", _fake_client(post=post)),
+            patch.object(igc, "_http", _fake_client(post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
-            patch("app.image_gen.uuid.uuid4", return_value=_FROZEN_UUID),
+            patch("app.image_gen_comfy.uuid.uuid4", return_value=_FROZEN_UUID),
         ):
             assert await ig._try_generate("p", 832, 1216, _TEST_LEASE) is None
 
@@ -427,9 +428,9 @@ class TestTryGenerateWorkflow:
         hist = _Resp(200, {"p": {"outputs": {"o": {"images": []}}}})
         get = AsyncMock(return_value=hist)
         with (
-            patch.object(ig, "_http", _fake_client(get=get, post=post)),
+            patch.object(igc, "_http", _fake_client(get=get, post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
-            patch("app.image_gen.uuid.uuid4", return_value=_FROZEN_UUID),
+            patch("app.image_gen_comfy.uuid.uuid4", return_value=_FROZEN_UUID),
         ):
             assert await ig._try_generate("p", 832, 1216, _TEST_LEASE) is None
 
@@ -444,9 +445,9 @@ class TestTryGenerateWorkflow:
         view = _Resp(404, content=b"")
         get = AsyncMock(side_effect=[hist, view])
         with (
-            patch.object(ig, "_http", _fake_client(get=get, post=post)),
+            patch.object(igc, "_http", _fake_client(get=get, post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
-            patch("app.image_gen.uuid.uuid4", return_value=_FROZEN_UUID),
+            patch("app.image_gen_comfy.uuid.uuid4", return_value=_FROZEN_UUID),
         ):
             assert await ig._try_generate("p", 832, 1216, _TEST_LEASE) is None
 
@@ -462,9 +463,9 @@ class TestTryGenerateWorkflow:
         view = _Resp(200, content=b"LATE")
         get = AsyncMock(side_effect=[not_ready, ready, view])
         with (
-            patch.object(ig, "_http", _fake_client(get=get, post=post)),
+            patch.object(igc, "_http", _fake_client(get=get, post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
-            patch("app.image_gen.uuid.uuid4", return_value=_FROZEN_UUID),
+            patch("app.image_gen_comfy.uuid.uuid4", return_value=_FROZEN_UUID),
         ):
             result = await ig._try_generate("p", 832, 1216, _TEST_LEASE)
         assert result == b"LATE"
@@ -477,10 +478,10 @@ class TestTryGenerateWorkflow:
         post = AsyncMock(return_value=_Resp(200, {"prompt_id": "p"}))
         get = AsyncMock(return_value=_Resp(503, {}))
         with (
-            patch.object(ig, "_http", _fake_client(get=get, post=post)),
+            patch.object(igc, "_http", _fake_client(get=get, post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
-            patch("app.image_gen.uuid.uuid4", return_value=_FROZEN_UUID),
-            patch("app.image_gen.range", return_value=range(3)),
+            patch("app.image_gen_comfy.uuid.uuid4", return_value=_FROZEN_UUID),
+            patch("app.image_gen_comfy.range", return_value=range(3)),
         ):
             assert await ig._try_generate("p", 832, 1216, _TEST_LEASE) is None
         assert get.await_count == 3  # polled the (shrunk) loop, never found image
@@ -489,9 +490,9 @@ class TestTryGenerateWorkflow:
     async def test_returns_none_on_post_exception(self):
         post = AsyncMock(side_effect=ig.httpx.ConnectError("comfy down"))
         with (
-            patch.object(ig, "_http", _fake_client(post=post)),
+            patch.object(igc, "_http", _fake_client(post=post)),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
-            patch("app.image_gen.uuid.uuid4", return_value=_FROZEN_UUID),
+            patch("app.image_gen_comfy.uuid.uuid4", return_value=_FROZEN_UUID),
         ):
             assert await ig._try_generate("p", 832, 1216, _TEST_LEASE) is None
 
@@ -739,10 +740,10 @@ class TestGenerateImageEndToEnd:
 
         with (
             patch.object(
-                ig, "_http", _fake_client(get=get, post=AsyncMock(side_effect=_post))
+                igc, "_http", _fake_client(get=get, post=AsyncMock(side_effect=_post))
             ),
             patch("app.image_gen.asyncio.sleep", new=AsyncMock()),
-            patch("app.image_gen.uuid.uuid4", return_value=_FROZEN_UUID),
+            patch("app.image_gen_comfy.uuid.uuid4", return_value=_FROZEN_UUID),
         ):
             result = await ig.generate_image("klukai", retry=False)
 

@@ -117,6 +117,7 @@ class TestSfwBackstop:
         from unittest.mock import MagicMock
 
         import app.image_gen as ig
+        import app.image_gen_comfy as igc  # _run_workflow resolves _get_http here
 
         captured = {}
 
@@ -132,8 +133,8 @@ class TestSfwBackstop:
 
         client = MagicMock()
         client.post = post
-        with patch.object(ig, "_get_http", return_value=client), \
-             patch.object(ig, "_lease_headers", return_value={}, create=True):
+        with patch.object(igc, "_get_http", return_value=client), \
+             patch.object(igc, "_lease_headers", return_value={}, create=True):
             try:
                 await ig._try_generate("p", 832, 1216, MagicMock(), sfw=True)
             except Exception:

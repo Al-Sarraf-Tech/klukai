@@ -15,6 +15,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 import app.image_gen as ig
+import app.image_gen_comfy as igc  # the leased Comfy client: _http and the moved helpers are patched where they are looked up
 from app import portrait as pt
 from app.gpu_lease import GPULeaseError
 from app.image_gen_constants import WORKFLOW_TEMPLATE
@@ -71,7 +72,7 @@ def _branch(name, denoise=0.7, negative=""):
 class TestInpaintGraph:
     def test_one_model_load_one_encode_one_branch_per_frame(self):
         branches = [_branch("blink", 0.85, "open eyes"), _branch("talk", 1.7)]
-        graph, saves = ig._inpaint_graph(
+        graph, saves = igc._inpaint_graph(
             "src.png", branches, {"blink": "m1.png", "talk": "m2.png"}, 2**32 + 3, True, "pal",
             ig.Sampling(steps=12),
         )
@@ -105,28 +106,28 @@ class TestRunGraph:
         }}})
         post = AsyncMock(return_value=_Resp(200, {"prompt_id": "pid"}))
         get = AsyncMock(side_effect=[hist, _Resp(200, content=b"A"), _Resp(200, content=b"B"), _Resp(404)])
-        with patch.object(ig, "_http", _fake_client(get=get, post=post)), \
+        with patch.object(igc, "_http", _fake_client(get=get, post=post)), \
              patch("app.image_gen.asyncio.sleep", new=AsyncMock()) as sleep:
-            assert await ig._run_graph({"x": 1}, _TEST_LEASE) == {"105": b"A", "115": b"B"}
-        assert sleep.await_args_list[0].args == (ig._POLL_FAST_S,)  # fast polling first
+            assert await igc._run_graph({"x": 1}, _TEST_LEASE) == {"105": b"A", "115": b"B"}
+        assert sleep.await_args_list[0].args == (igc._POLL_FAST_S,)  # fast polling first
 
     @pytest.mark.asyncio
     async def test_failures_are_empty(self):
-        with patch.object(ig, "_http", _fake_client(post=AsyncMock(side_effect=OSError("x")))):
-            assert await ig._run_graph({}, _TEST_LEASE) == {}
-        with patch.object(ig, "_http", _fake_client(post=AsyncMock(return_value=_Resp(500)))):
-            assert await ig._run_graph({}, _TEST_LEASE) == {}
+        with patch.object(igc, "_http", _fake_client(post=AsyncMock(side_effect=OSError("x")))):
+            assert await igc._run_graph({}, _TEST_LEASE) == {}
+        with patch.object(igc, "_http", _fake_client(post=AsyncMock(return_value=_Resp(500)))):
+            assert await igc._run_graph({}, _TEST_LEASE) == {}
 
     @pytest.mark.asyncio
     async def test_polling_slows_down_after_the_fast_window(self):
         get = AsyncMock(return_value=_Resp(200, {}))
         post = AsyncMock(return_value=_Resp(200, {"prompt_id": "pid"}))
-        with patch.object(ig, "_http", _fake_client(get=get, post=post)), \
+        with patch.object(igc, "_http", _fake_client(get=get, post=post)), \
              patch("app.image_gen.asyncio.sleep", new=AsyncMock()) as sleep, \
-             patch("app.image_gen.range", return_value=range(ig._POLL_FAST_COUNT + 2)):
-            assert await ig._queue_and_wait({}, _TEST_LEASE) is None
+             patch("app.image_gen_comfy.range", return_value=range(igc._POLL_FAST_COUNT + 2)):
+            assert await igc._queue_and_wait({}, _TEST_LEASE) is None
         delays = [c.args[0] for c in sleep.await_args_list]
-        assert delays[0] == ig._POLL_FAST_S and delays[-1] == 1
+        assert delays[0] == igc._POLL_FAST_S and delays[-1] == 1
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -151,10 +152,10 @@ class _Env:
 
     def __enter__(self):
         self._ps = [
-            patch("app.image_gen._run_workflow", new=self.run_workflow),
-            patch("app.image_gen._run_graph", new=self._run_graph),
-            patch("app.image_gen._upload_image", new=self.upload),
-            patch("app.image_gen._free_comfyui_vram", new=self.free),
+            patch("app.image_gen_comfy._run_workflow", new=self.run_workflow),
+            patch("app.image_gen_comfy._run_graph", new=self._run_graph),
+            patch("app.image_gen_comfy._upload_image", new=self.upload),
+            patch("app.image_gen_comfy._free_comfyui_vram", new=self.free),
         ]
         for p in self._ps:
             p.start()
@@ -195,7 +196,7 @@ class TestInpaintSet:
                 env.graphs.append(graph)
                 return {sid: name.encode() for name, sid in _saves(graph).items()}
 
-            with patch("app.image_gen._run_graph", new=run_graph):
+            with patch("app.image_gen_comfy._run_graph", new=run_graph):
                 out = await ig.generate_inpaint_set(
                     base_prompt="base", base_png=None, plan=plan, seed=9, sfw=True,
                     negative_extra="pal", base_sampling=ig.Sampling(steps=20),
@@ -208,7 +209,7 @@ class TestInpaintSet:
         assert wf["3"]["inputs"]["steps"] == 20 and wf["3"]["inputs"]["seed"] == 9
         assert len(env.graphs) == 1
         assert env.upload.await_count == 3  # source once + one mask per branch
-        env.free.assert_awaited_once_with(_TEST_LEASE, settle_s=ig._SET_SETTLE_S)
+        env.free.assert_awaited_once_with(_TEST_LEASE, settle_s=igc._SET_SETTLE_S)
 
     @pytest.mark.asyncio
     async def test_existing_base_is_reused(self):
@@ -251,7 +252,7 @@ class TestInpaintSet:
             return {sid: f"{name}{len(attempts)}".encode() for name, sid in saves.items()}
 
         accept = MagicMock(side_effect=lambda name, png: name != "blink" or png == b"blink3")
-        with env, patch("app.image_gen._run_graph", new=run_graph):
+        with env, patch("app.image_gen_comfy._run_graph", new=run_graph):
             out = await ig.generate_inpaint_set(
                 base_prompt="", base_png=b"B", seed=5, accept=accept, retry_denoise_step=0.06,
                 plan=_plan([_branch("blink", 0.85), _branch("talk", 0.7)]),
@@ -270,7 +271,7 @@ class TestInpaintSet:
             saves = _saves(graph)
             return {saves["blink"]: b"open"} if "blink" in saves else {}
 
-        with env, patch("app.image_gen._run_graph", new=run_graph):
+        with env, patch("app.image_gen_comfy._run_graph", new=run_graph):
             out = await ig.generate_inpaint_set(
                 base_prompt="", base_png=b"B", seed=1, retries=1, accept=lambda n, p: False,
                 plan=_plan([_branch("blink"), _branch("talk")]),
@@ -296,7 +297,7 @@ class TestInpaintSet:
         async def on_image(name, png):
             landed.append(name)
 
-        with env, patch("app.image_gen._run_graph", new=run_graph):
+        with env, patch("app.image_gen_comfy._run_graph", new=run_graph):
             out = await ig.generate_inpaint_set(
                 base_prompt="", base_png=b"B", seed=1, retries=1, on_image=on_image,
                 accept=lambda n, p: n != "blink", fallback=fallback,
@@ -313,7 +314,7 @@ class TestInpaintSet:
         async def run_graph(graph, lease):
             return {v: b"x" for v in _saves(graph).values()}
 
-        with env, patch("app.image_gen._run_graph", new=run_graph):
+        with env, patch("app.image_gen_comfy._run_graph", new=run_graph):
             out = await ig.generate_inpaint_set(
                 base_prompt="", base_png=b"B", seed=1, retries=0,
                 accept=lambda n, p: False, fallback=lambda n, c: None,
@@ -339,7 +340,7 @@ class TestFreeSettle:
     @pytest.mark.asyncio
     async def test_settle_is_configurable(self):
         post = AsyncMock(return_value=_Resp(200))
-        with patch.object(ig, "_http", _fake_client(post=post)), \
+        with patch.object(igc, "_http", _fake_client(post=post)), \
              patch("app.image_gen.asyncio.sleep", new=AsyncMock()) as sleep:
             assert await ig._free_comfyui_vram(_TEST_LEASE, settle_s=0.25) is True
         assert sleep.await_args_list[0].args == (0.25,)

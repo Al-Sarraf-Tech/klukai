@@ -9,8 +9,8 @@ from app.image_gen import (
     is_couple_scene,
     is_landscape,
     needs_image,
-    _select_outfit,
 )
+from app.image_gen_prompts import _select_outfit
 
 
 class TestDetectSquadMembers:

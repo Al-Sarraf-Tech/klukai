@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import app.image_gen as ig
+import app.image_gen_comfy as igc  # the leased Comfy client: _http and the moved helpers are patched where they are looked up
 from app.gpu_lease import GPU_LEASE_HEADER, GPULeaseError
 from app.image_gen_constants import IMG2IMG_TEMPLATE, WORKFLOW_TEMPLATE
 from tests.test_image_gen_coverage import (  # noqa: F401 — the autouse lease fixture
@@ -38,7 +39,7 @@ class TestPinnedSeed:
     async def test_seed_reaches_the_sampler(self):
         post = AsyncMock(return_value=_Resp(200, {"prompt_id": "pid"}))
         get = AsyncMock(side_effect=[_HIST, _Resp(200, content=b"PNG")])
-        with patch.object(ig, "_http", _fake_client(get=get, post=post)), \
+        with patch.object(igc, "_http", _fake_client(get=get, post=post)), \
              patch("app.image_gen.asyncio.sleep", new=AsyncMock()):
             assert await ig._try_generate("p", 832, 1216, _TEST_LEASE, seed=2**32 + 7) == b"PNG"
         assert post.call_args.kwargs["json"]["prompt"]["3"]["inputs"]["seed"] == 7
@@ -54,7 +55,7 @@ class TestUpload:
     @pytest.mark.asyncio
     async def test_multipart_upload_through_the_facade(self):
         post = AsyncMock(return_value=_Resp(200, {"name": "src.png", "subfolder": "", "type": "input"}))
-        with patch.object(ig, "_http", _fake_client(post=post)):
+        with patch.object(igc, "_http", _fake_client(post=post)):
             assert await ig._upload_image(b"PNGDATA", _TEST_LEASE) == "src.png"
         url = post.call_args.args[0]
         assert url == f"{ig.COMFYUI_URL}/upload/image"
@@ -67,18 +68,18 @@ class TestUpload:
     @pytest.mark.asyncio
     async def test_subfolder_is_kept(self):
         post = AsyncMock(return_value=_Resp(200, {"name": "a.png", "subfolder": "sub"}))
-        with patch.object(ig, "_http", _fake_client(post=post)):
+        with patch.object(igc, "_http", _fake_client(post=post)):
             assert await ig._upload_image(b"x", _TEST_LEASE) == "sub/a.png"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("resp", [_Resp(500), _Resp(200, {"name": ""})])
     async def test_rejected_or_empty_upload(self, resp):
-        with patch.object(ig, "_http", _fake_client(post=AsyncMock(return_value=resp))):
+        with patch.object(igc, "_http", _fake_client(post=AsyncMock(return_value=resp))):
             assert await ig._upload_image(b"x", _TEST_LEASE) is None
 
     @pytest.mark.asyncio
     async def test_transport_error(self):
-        with patch.object(ig, "_http", _fake_client(post=AsyncMock(side_effect=OSError("down")))):
+        with patch.object(igc, "_http", _fake_client(post=AsyncMock(side_effect=OSError("down")))):
             assert await ig._upload_image(b"x", _TEST_LEASE) is None
 
 
@@ -91,7 +92,7 @@ class TestImg2Img:
             _Resp(200),                               # /free
         ])
         get = AsyncMock(side_effect=[_HIST, _Resp(200, content=b"FRAME")])
-        with patch.object(ig, "_http", _fake_client(get=get, post=post)), \
+        with patch.object(igc, "_http", _fake_client(get=get, post=post)), \
              patch("app.image_gen.asyncio.sleep", new=AsyncMock()):
             out = await ig.generate_img2img(b"SRC", "closed eyes", denoise=0.4, seed=11, sfw=True)
         assert out == b"FRAME"
@@ -175,7 +176,7 @@ class TestMaskedInpaint:
     @pytest.mark.asyncio
     async def test_upload_names_are_content_addressed(self):
         post = AsyncMock(return_value=_Resp(200, {"name": "x.png"}))
-        with patch.object(ig, "_http", _fake_client(post=post)):
+        with patch.object(igc, "_http", _fake_client(post=post)):
             await ig._upload_image(b"same", _TEST_LEASE)
             await ig._upload_image(b"same", _TEST_LEASE)
             await ig._upload_image(b"other", _TEST_LEASE)
@@ -202,7 +203,7 @@ class TestNegativeExtra:
     async def test_reaches_txt2img_and_img2img(self):
         post = AsyncMock(return_value=_Resp(200, {"prompt_id": "pid"}))
         get = AsyncMock(side_effect=[_HIST, _Resp(200, content=b"PNG")])
-        with patch.object(ig, "_http", _fake_client(get=get, post=post)), \
+        with patch.object(igc, "_http", _fake_client(get=get, post=post)), \
              patch("app.image_gen.asyncio.sleep", new=AsyncMock()):
             await ig._try_generate("p", 832, 1216, _TEST_LEASE, negative_extra="cyan hair")
         assert post.call_args.kwargs["json"]["prompt"]["7"]["inputs"]["text"].endswith("cyan hair")

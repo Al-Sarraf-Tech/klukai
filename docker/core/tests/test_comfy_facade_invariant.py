@@ -11,14 +11,17 @@ FACADE = "http://100.107.121.5:1234/api/v1/comfy"
 
 
 def test_runtime_default_has_no_raw_comfyui_tailnet_route() -> None:
+    # COMFYUI_URL lives with the Comfy client (image_gen_comfy.py); image_gen.py
+    # keeps the lease policy and the public API on top of it.
     image_gen = (CORE / "app" / "image_gen.py").read_text()
+    comfy = (CORE / "app" / "image_gen_comfy.py").read_text()
     compose = (REPO / "docker-compose.yml").read_text()
     env_example = (REPO / ".env.example").read_text()
 
-    assert FACADE in image_gen
+    assert FACADE in comfy
     assert FACADE in compose
     assert FACADE in env_example
-    for source in (image_gen, compose, env_example):
+    for source in (image_gen, comfy, compose, env_example):
         assert "100.107.121.5:8388" not in source
 
 
@@ -36,13 +39,13 @@ def test_offline_loaders_reuse_the_protected_production_path() -> None:
 
 
 def test_only_protected_module_contains_comfy_job_endpoints() -> None:
-    """A new core loader must not silently grow outside the leased module."""
-    allowed = CORE / "app" / "image_gen.py"
+    """A new core loader must not silently grow outside the leased modules."""
+    allowed = {CORE / "app" / "image_gen.py", CORE / "app" / "image_gen_comfy.py"}
     endpoints = ("/prompt", "/history", "/view", "/free", "/interrupt", "/upload/image")
 
     offenders: list[str] = []
     for source_path in sorted((CORE / "app").rglob("*.py")):
-        if source_path == allowed:
+        if source_path in allowed:
             continue
         source = source_path.read_text()
         if any(endpoint in source for endpoint in endpoints):
@@ -52,9 +55,12 @@ def test_only_protected_module_contains_comfy_job_endpoints() -> None:
 
 
 def test_every_protected_comfy_call_uses_lease_header_helper() -> None:
-    source = (CORE / "app" / "image_gen.py").read_text()
+    image_gen = (CORE / "app" / "image_gen.py").read_text()
+    comfy = (CORE / "app" / "image_gen_comfy.py").read_text()
 
     # queue, interrupt, free, prompt, history, view, and the img2img source
     # upload each attach both the gateway bearer credential and the active
-    # lease token through one helper.
-    assert source.count("headers=gpu_lease_auth_headers(lease)") == 7
+    # lease token through one helper.  The queue probe (check_comfyui_ready)
+    # stays with the lease policy; the other six are the Comfy client's.
+    assert image_gen.count("headers=gpu_lease_auth_headers(lease)") == 1
+    assert comfy.count("headers=gpu_lease_auth_headers(lease)") == 6
