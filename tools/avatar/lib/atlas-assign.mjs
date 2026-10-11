@@ -95,13 +95,56 @@ function inBox(p, box) {
 }
 
 /**
- * @returns Map(faceIndex → atlas file) for the given faces.
- * overrides: [{ box:[x0,y0,z0,x1,y1,z1], atlas }] applied by island centroid.
+ * First override that claims an island: its centroid inside `box` (OBJ bind
+ * metres), its UV bounding box inside `uvBox` (OBJ v-up) and at least
+ * `minUvSpan` wide. Omitted criteria match anything. Order matters.
+ */
+export function matchOverride(overrides, { centroid, uvBox }) {
+  return overrides.find((o) => (o.box ? inBox(centroid, o.box) : true) && (o.uvBox ? uvInside(uvBox, o.uvBox) : true)
+    && (o.minUvSpan ? uvBox[2] - uvBox[0] >= o.minUvSpan : true)) || null;
+}
+
+/**
+ * What a slice of a material group ships as. An override may carry its own
+ * `role`, `doubleSided` and `name`, and its `atlas` may be a flat colour
+ * (`{ color: '#rrggbb' }`) instead of an image. Everything else inherits the
+ * group config. `key` identifies one shipped material: (image|colour, role, sidedness).
+ * @returns null when the slice is dropped (override atlas: null)
+ */
+export function partSpec(cfg, atlas, override = null) {
+  if (atlas === null) return null;
+  const role = override?.role ?? cfg.role;
+  const doubleSided = !!(override?.doubleSided ?? cfg.doubleSided);
+  const color = typeof atlas === 'object' ? atlas.color.toLowerCase() : null;
+  const texture = color ? null : atlas;
+  const label = override?.name || (color ? `color-${color.slice(1)}` : texture.replace(/\.png$/i, ''));
+  return { texture, color, role, doubleSided, label, key: `${texture ?? color}|${role}|${doubleSided ? 'ds' : 'ss'}` };
+}
+
+/** max/min of the per-atlas scores; Infinity when one scores 0 (a perfectly flat region). */
+export function scoreRatio(scores) {
+  if (scores.length < 2) return Infinity;
+  const s = [...scores].sort((a, b) => a - b);
+  return s[0] > 0 ? s[s.length - 1] / s[0] : Infinity;
+}
+
+/**
+ * Islands are "ambiguous" when the best atlas is not clearly smoother than the
+ * runner-up: on GFL2 atlases the correct region is often the detailed one
+ * (zipper teeth, logos), so these need a visual check / an override.
+ */
+export const AMBIGUOUS_RATIO = 1.5;
+
+/**
+ * @returns { assignment: Map(faceIndex → atlas file | { color } | null), overrideOf: Map(faceIndex → override), stats }
+ * overrides: [{ box:[x0,y0,z0,x1,y1,z1], uvBox, minUvSpan, atlas, role?, doubleSided?, name? }] applied per island.
  */
 export async function assignAtlases({ obj, faces, atlases, texPath, overrides = [], seed = 416, report = null, defaultAtlas = null }) {
-  const grads = await Promise.all(atlases.map((a) => gradientImage(texPath(a))));
+  // One atlas: nothing to score, only overrides can change an island.
+  const grads = atlases.length > 1 ? await Promise.all(atlases.map((a) => gradientImage(texPath(a)))) : [];
   const rand = rng(seed);
   const result = new Map();
+  const overrideOf = new Map();
   const stats = {};
   for (const island of uvIslands(obj, faces)) {
     const scores = new Array(atlases.length).fill(0);
@@ -129,12 +172,45 @@ export async function assignAtlases({ obj, faces, atlases, texPath, overrides = 
     let best = 0;
     for (let i = 1; i < atlases.length; i++) if (scores[i] < scores[best]) best = i;
     const uvb = islandUvBox(obj, island);
-    const ov = overrides.find((o) => (o.box ? inBox(centroid, o.box) : true) && (o.uvBox ? uvInside(uvb, o.uvBox) : true)
-      && (o.minUvSpan ? uvb[2] - uvb[0] >= o.minUvSpan : true));
+    const ov = matchOverride(overrides, { centroid, uvBox: uvb });
     const atlas = ov ? ov.atlas : (defaultAtlas || atlases[best]);
-    if (report) report.push({ faces: island.length, centroid: centroid.map((c) => +c.toFixed(3)), scores: scores.map((x) => +(x / samples).toFixed(1)), atlas, override: !!ov, uv: islandUvBox(obj, island) });
-    stats[atlas ?? 'dropped'] = (stats[atlas ?? 'dropped'] || 0) + island.length;
-    for (const f of island) result.set(f, atlas);
+    const mean = scores.map((x) => +(x / Math.max(1, samples)).toFixed(1));
+    const ratio = scoreRatio(mean);
+    if (report) {
+      report.push({
+        id: report.length, faces: island.length, centroid: centroid.map((c) => +c.toFixed(3)), scores: mean, atlas, override: ov ? (ov.why || true) : false,
+        uv: uvb, ratio: Number.isFinite(ratio) ? +ratio.toFixed(2) : null, ambiguous: atlases.length > 1 && ratio < AMBIGUOUS_RATIO,
+      });
+    }
+    const statKey = atlas === null ? 'dropped' : (typeof atlas === 'object' ? `color${atlas.color}` : atlas);
+    stats[statKey] = (stats[statKey] || 0) + island.length;
+    for (const f of island) { result.set(f, atlas); if (ov) overrideOf.set(f, ov); }
   }
-  return { assignment: result, stats };
+  return { assignment: result, overrideOf, stats };
+}
+
+function islandCentroid(obj, island) {
+  const c = [0, 0, 0];
+  for (const f of island) for (let k = 0; k < 3; k++) for (let i = 0; i < 3; i++) c[i] += obj.positions[obj.faceV[f * 3 + k] * 3 + i] / (island.length * 3);
+  return c;
+}
+
+/**
+ * Merging another OBJ group into this one (e.g. the Astral Luminous jacket's
+ * own bodysuit pieces into Cloth_1): the groups share most islands as near-
+ * copies (same UV bounds, same face count, offset by < `posTol`), which would
+ * z-fight. Keeps only the extra group's islands without such a twin.
+ * @returns { kept: face indices of `extraFaces` to add, twins: dropped island count, added: island count }
+ */
+export function dropTwinIslands({ obj, baseFaces, extraFaces, uvTol = 0.004, posTol = 0.003 }) {
+  const base = uvIslands(obj, baseFaces).map((isl) => ({ n: isl.length, uv: islandUvBox(obj, isl), c: islandCentroid(obj, isl) }));
+  const kept = [];
+  let twins = 0; let added = 0;
+  for (const isl of uvIslands(obj, extraFaces)) {
+    const uv = islandUvBox(obj, isl); const c = islandCentroid(obj, isl);
+    const twin = base.some((b) => b.n === isl.length && Math.hypot(b.c[0] - c[0], b.c[1] - c[1], b.c[2] - c[2]) <= posTol
+      && b.uv.every((x, i) => Math.abs(x - uv[i]) <= uvTol));
+    if (twin) twins++; else { added++; kept.push(...isl); }
+  }
+  return { kept: kept.sort((a, b) => a - b), twins, added };
 }
