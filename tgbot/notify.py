@@ -68,20 +68,40 @@ class NotificationManager:
         self._http: httpx.AsyncClient | None = None
         self._redis: aioredis.Redis | None = None
         self._queued: list[str] = []
+        # Keep references: the event loop only holds weak refs to tasks, so
+        # an unreferenced background loop can be garbage-collected mid-flight.
+        self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
         """Start background tasks."""
         self._http = httpx.AsyncClient(timeout=10.0)
-        asyncio.create_task(self._health_loop())
-        asyncio.create_task(self._redis_loop())
-        asyncio.create_task(self._queue_flush_loop())
+        self._tasks = [
+            asyncio.create_task(self._health_loop(), name="tgbot-health"),
+            asyncio.create_task(self._redis_loop(), name="tgbot-redis"),
+            asyncio.create_task(self._queue_flush_loop(), name="tgbot-queue-flush"),
+        ]
         logger.info("Notification manager started")
 
     async def stop(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._tasks = []
         if self._http:
             await self._http.aclose()
-        if self._redis:
-            await self._redis.aclose()
+        await self._close_redis()
+
+    async def _close_redis(self) -> None:
+        redis, self._redis = self._redis, None
+        if redis is not None:
+            try:
+                await redis.aclose()
+            except Exception:
+                pass
 
     async def _notify(self, message: str, bypass_quiet: bool = False) -> None:
         """Send a notification, respecting quiet hours."""
@@ -134,8 +154,14 @@ class NotificationManager:
                     except (json.JSONDecodeError, KeyError) as e:
                         logger.warning("Bad Redis event: %s", e)
 
+            except asyncio.CancelledError:
+                await self._close_redis()
+                raise
             except Exception as e:
                 logger.warning("Redis error: %s — reconnecting in 10s", e)
+                # Drop the broken client before building a new one, or every
+                # reconnect leaks a connection pool.
+                await self._close_redis()
                 await asyncio.sleep(10)
 
     async def _handle_event(self, event: dict) -> None:

@@ -58,10 +58,11 @@ def auth_wrapper(handler):
     """Wrap a handler with auth checking. Unauthorized users are silently ignored."""
     async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not _is_authorized(update):
+            user = update.effective_user
             logger.warning(
                 "Unauthorized: user=%s id=%s",
-                update.effective_user.username,
-                update.effective_user.id,
+                getattr(user, "username", None),
+                getattr(user, "id", None),
             )
             return
         await handler(update, context)
@@ -71,7 +72,10 @@ def auth_wrapper(handler):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/start — show welcome + user ID for pairing."""
     user = update.effective_user
-    await update.message.reply_text(
+    message = update.effective_message
+    if user is None or message is None:
+        return
+    await message.reply_text(
         f"Klukai Project Bot\n"
         f"Your Telegram ID: {user.id}\n\n"
         f"Commands:\n"
@@ -124,9 +128,10 @@ def main() -> None:
     ]:
         app.add_handler(CommandHandler(name, auth_wrapper(handler)))
 
-    # Free text -> agent (auth required)
+    # Free text -> agent (auth required). New messages only: an edit of an
+    # already-sent prompt must not launch a second agent run.
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
+        filters.TEXT & ~filters.COMMAND & filters.UpdateType.MESSAGE,
         auth_wrapper(handle_agent_message),
     ))
 

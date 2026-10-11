@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from telegram import Update
+from telegram import Message, Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from .config import (
@@ -37,6 +38,24 @@ def validate_service(name: str) -> str:
     return name if name in VALID_SERVICES else "core"
 
 
+async def reply_mono(message: Message, text: str, prefix: str = "") -> None:
+    """Reply with ``text`` in a code block, degrading to plain text.
+
+    Container logs and shell output routinely contain backticks, which make
+    Telegram reject the whole Markdown message ("can't parse entities"). The
+    user then saw nothing at all. On that rejection the same text is resent
+    unformatted rather than dropped.
+    """
+    body = truncate(text)
+    formatted = f"{prefix}\n{format_mono(body)}" if prefix else format_mono(body)
+    try:
+        await message.reply_text(formatted, parse_mode="Markdown")
+    except BadRequest as e:
+        logger.info("Markdown reply rejected (%s); resending as plain text", e)
+        plain = f"{prefix}\n{body}" if prefix else body
+        await message.reply_text(plain)
+
+
 async def run_shell(cmd: str, timeout: int = 30) -> tuple[str, int]:
     """Run a shell command and return (output, return_code)."""
     proc = await asyncio.create_subprocess_shell(
@@ -47,19 +66,20 @@ async def run_shell(cmd: str, timeout: int = 30) -> tuple[str, int]:
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        output = stdout.decode() if stdout else ""
+        output = stdout.decode(errors="replace") if stdout else ""
         if proc.returncode != 0 and stderr:
-            output += f"\nSTDERR:\n{stderr.decode()}"
+            output += f"\nSTDERR:\n{stderr.decode(errors='replace')}"
         return output.strip(), proc.returncode
     except asyncio.TimeoutError:
         proc.kill()
+        await proc.wait()  # reap; a killed child left unwaited is a zombie
         return "Command timed out", -1
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show Docker container status."""
     out, _ = await run_shell("docker compose ps --format 'table {{.Name}}\t{{.Status}}'")
-    await update.message.reply_text(format_mono(truncate(out)), parse_mode="Markdown")
+    await reply_mono(update.effective_message, out)
 
 
 async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -69,15 +89,16 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         out, rc = await run_shell(f"curl -sf {url}/health", timeout=10)
         status = out if rc == 0 else "UNREACHABLE"
         results.append(f"{name}: {status}")
-    await update.message.reply_text(format_mono("\n".join(results)), parse_mode="Markdown")
+    await reply_mono(update.effective_message, "\n".join(results))
 
 
 async def cmd_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Build and restart the companion stack."""
-    await update.message.reply_text("Deploying... (build + restart)")
+    message = update.effective_message
+    await message.reply_text("Deploying... (build + restart)")
     out, rc = await run_shell("make build && make run", timeout=300)
     status = "Deploy complete" if rc == 0 else "Deploy FAILED"
-    await update.message.reply_text(f"{status}\n{format_mono(truncate(out))}", parse_mode="Markdown")
+    await reply_mono(message, out, prefix=status)
 
 
 async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -87,25 +108,26 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines = min(int(args[1]), 200) if len(args) > 1 and args[1].isdigit() else 50
     container = f"companion-{service}"
     out, _ = await run_shell(f"docker logs --tail={lines} {container}", timeout=15)
-    await update.message.reply_text(format_mono(truncate(out)), parse_mode="Markdown")
+    await reply_mono(update.effective_message, out)
 
 
 async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Restart a service. Usage: /restart [service]"""
+    message = update.effective_message
     args = context.args or []
     service = validate_service(args[0]) if args else "core"
     container = f"companion-{service}"
-    await update.message.reply_text(f"Restarting {container}...")
+    await message.reply_text(f"Restarting {container}...")
     out, rc = await run_shell(f"docker compose restart {container}", timeout=60)
     status = "Restarted" if rc == 0 else "FAILED"
-    await update.message.reply_text(f"{status}\n{format_mono(truncate(out))}", parse_mode="Markdown")
+    await reply_mono(message, out, prefix=status)
 
 
 async def cmd_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Voice service status."""
     out, rc = await run_shell(f"curl -sf {COMPANION_VOICE_URL}/health", timeout=10)
     status = out if rc == 0 else "UNREACHABLE"
-    await update.message.reply_text(format_mono(f"voice: {status}"), parse_mode="Markdown")
+    await reply_mono(update.effective_message, f"voice: {status}")
 
 
 async def cmd_gateway(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -116,7 +138,7 @@ async def cmd_gateway(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         timeout=15,
     )
     status = out if rc == 0 else "UNREACHABLE or no gateway container"
-    await update.message.reply_text(format_mono(truncate(status)), parse_mode="Markdown")
+    await reply_mono(update.effective_message, status)
 
 
 async def cmd_db(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -138,4 +160,4 @@ async def cmd_db(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     if rc != 0:
         out = "Failed to query DB"
-    await update.message.reply_text(format_mono(truncate(out)), parse_mode="Markdown")
+    await reply_mono(update.effective_message, out)

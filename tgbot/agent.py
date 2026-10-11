@@ -14,6 +14,10 @@ from .config import CLAUDE_CLI, COMPANION_DIR, MAX_TELEGRAM_LENGTH, SESSION_IDLE
 
 logger = logging.getLogger(__name__)
 
+# Minimum gap between progress messages so a chatty agent does not trip
+# Telegram's per-chat rate limit. The final result is never throttled.
+PROGRESS_INTERVAL = 2.0
+
 
 class AgentSession:
     """Tracks a persistent Claude Code session."""
@@ -42,18 +46,28 @@ class AgentSession:
 # Module-level singleton
 _session = AgentSession()
 
+# One agent run at a time: two overlapping runs would share (and clobber) the
+# session above, and the second would race the first for --resume.
+_run_lock = asyncio.Lock()
+
 
 def get_session() -> AgentSession:
     return _session
 
 
 def _build_command(prompt: str) -> list[str]:
-    """Build the Claude CLI command."""
+    """Build the Claude CLI command.
+
+    ``--verbose`` is required: in print mode the CLI refuses
+    ``--output-format stream-json`` without it and exits non-zero before
+    producing any events.
+    """
     cmd = [
         CLAUDE_CLI,
         "-p", prompt,
         "--dangerously-skip-permissions",
         "--output-format", "stream-json",
+        "--verbose",
     ]
     if _session.is_active and _session.session_id:
         cmd.extend(["--resume", _session.session_id])
@@ -62,46 +76,63 @@ def _build_command(prompt: str) -> list[str]:
 
 def _extract_session_id(event: dict) -> str | None:
     """Extract session ID from a stream-json event."""
-    if "session_id" in event:
-        return event["session_id"]
-    return None
+    sid = event.get("session_id")
+    return sid if isinstance(sid, str) and sid else None
 
 
 def _should_forward(event: dict) -> tuple[bool, str]:
     """Decide whether a stream-json event should be forwarded to Telegram.
 
     Returns (should_forward, formatted_text).
+
+    Assistant turns carry their content blocks under ``event["message"]``
+    (the Anthropic message object); a bare top-level ``content`` is accepted
+    too for older emitters. All text blocks of one turn are joined so a
+    multi-block answer is not cut to its first paragraph.
     """
     etype = event.get("type", "")
 
-    # Assistant text messages — always forward
-    if etype == "assistant" and "content" in event:
-        for block in event["content"]:
-            if block.get("type") == "text":
-                return True, block["text"]
+    if etype == "assistant":
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else event.get("content")
+        if isinstance(content, list):
+            texts = [
+                block["text"]
+                for block in content
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ]
+            text = "\n\n".join(t for t in texts if t.strip())
+            if text:
+                return True, text
+        return False, ""
 
-    # Result messages
     if etype == "result":
         text = event.get("result", "")
-        if text:
+        if isinstance(text, str) and text:
             return True, text
 
     return False, ""
 
 
-async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle a free-text message by routing it to Claude Code."""
-    prompt = update.message.text
-    if not prompt:
-        return
+async def _send_chunk(message, text: str) -> None:
+    """Send one piece of agent output, never failing the run over a send."""
+    snippet = text[:MAX_TELEGRAM_LENGTH]
+    try:
+        await message.reply_text(snippet)
+    except Exception as e:
+        logger.warning("Failed to send progress: %s", e)
 
+
+async def _run_agent(message, prompt: str) -> None:
     # Check for idle recycling
     if not _session.is_active and _session.session_id:
         logger.info("Session %s expired, recycling", _session.session_id)
         _session.recycle()
 
     # Immediate ack
-    ack = await update.message.reply_text("Working on it...")
+    ack = await message.reply_text("Working on it...")
 
     cmd = _build_command(prompt)
     start_time = time.time()
@@ -116,9 +147,12 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
         _session.process = proc
         _session.touch()
 
-        # Read stream-json output line by line
+        # Drain stderr concurrently. Reading it only after stdout hits EOF
+        # deadlocks once the child fills the stderr pipe and blocks on write.
+        stderr_task = asyncio.create_task(proc.stderr.read())
+
         last_update_time = 0.0
-        last_text = ""
+        pending_text = ""  # most recent text that was throttled, not yet sent
         while True:
             line = await proc.stdout.readline()
             if not line:
@@ -128,38 +162,42 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 event = json.loads(line.decode())
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
+            if not isinstance(event, dict):
+                continue
 
-            # Capture session ID
             sid = _extract_session_id(event)
             if sid:
                 _session.session_id = sid
                 _session.touch()
 
-            # Forward meaningful events
             should_fwd, text = _should_forward(event)
-            if should_fwd and text.strip():
-                last_text = text
-                # Throttle updates to avoid Telegram rate limits (max every 2s)
-                now = time.time()
-                if now - last_update_time >= 2.0:
-                    last_update_time = now
-                    snippet = text[:MAX_TELEGRAM_LENGTH]
-                    try:
-                        await update.message.reply_text(snippet)
-                    except Exception as e:
-                        logger.warning("Failed to send progress: %s", e)
+            if not (should_fwd and text.strip()):
+                continue
+
+            # Throttle progress to one message per PROGRESS_INTERVAL; the
+            # final result always goes out, replacing any held progress.
+            now = time.time()
+            is_result = event.get("type") == "result"
+            if is_result or now - last_update_time >= PROGRESS_INTERVAL:
+                last_update_time = now
+                pending_text = ""
+                await _send_chunk(message, text)
+            else:
+                pending_text = text
 
         await proc.wait()
+        stderr_bytes = await stderr_task
         elapsed = time.time() - start_time
 
-        # Final summary
+        # Flush the last throttled progress line so the user sees how it ended.
+        if pending_text.strip():
+            await _send_chunk(message, pending_text)
+
         status = "Done" if proc.returncode == 0 else f"Exited with code {proc.returncode}"
         summary = f"{status} ({elapsed:.0f}s)"
 
-        # Include last meaningful output if we haven't sent it
-        stderr_bytes = await proc.stderr.read()
         if proc.returncode != 0 and stderr_bytes:
-            err_text = stderr_bytes.decode()[:1000]
+            err_text = stderr_bytes.decode(errors="replace")[:1000]
             summary += f"\n```\n{err_text}\n```"
 
         try:
@@ -180,11 +218,28 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
         _session.touch()
 
 
+async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle a free-text message by routing it to Claude Code."""
+    message = update.effective_message
+    if message is None or not message.text:
+        return
+
+    if _run_lock.locked():
+        await message.reply_text("Agent is busy with the previous request. Try again when it finishes.")
+        return
+
+    async with _run_lock:
+        await _run_agent(message, message.text)
+
+
 async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show current agent session info."""
+    message = update.effective_message
+    if message is None:
+        return
     s = _session
     if not s.session_id:
-        await update.message.reply_text("No active session.")
+        await message.reply_text("No active session.")
         return
 
     age = time.time() - s.last_activity
@@ -197,4 +252,4 @@ async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"Running: {running}",
         f"Idle: {age:.0f}s / {s.idle_timeout}s",
     ]
-    await update.message.reply_text("```\n" + "\n".join(lines) + "\n```", parse_mode="Markdown")
+    await message.reply_text("```\n" + "\n".join(lines) + "\n```", parse_mode="Markdown")
