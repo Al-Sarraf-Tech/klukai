@@ -101,19 +101,7 @@ class AgentLoop:
         result = AgentResult(response="")
         start_time = time.monotonic()
 
-        tools = await get_tool_schemas(self._mcp)
-        if not tools:
-            logger.warning("No MCP tools available — trying recovery")
-            try:
-                await self._mcp._initialize_session()
-                tools = await get_tool_schemas(self._mcp)
-                if tools:
-                    logger.info("MCP session recovered, %d tools available", len(tools))
-            except Exception as e:
-                logger.warning("MCP session recovery failed: %s", e)
-
-        # Always include builtin tools (memory recall, time)
-        tools = (tools or []) + get_builtin_tools()
+        tools = await self._load_tools()
 
         # Try agent model first, fall back to chat model if not available
         config = LLMConfig(
@@ -146,18 +134,10 @@ class AgentLoop:
                 )
             except Exception as e:
                 logger.error("Agent loop LLM call failed: %s", e)
-                # Try streaming fallback
-                try:
-                    logger.info("Trying streaming fallback for agent response")
-                    await self._ws.send_thinking(user_id, "Switching to direct response...")
-                    parts = []
-                    async for token in self._router.stream(system_prompt, work_messages, config):
-                        parts.append(token)
-                    if parts:
-                        result.response = "".join(parts)
-                        return result
-                except Exception as e2:
-                    logger.error("Streaming fallback also failed: %s", e2)
+                if await self._stream_fallback(
+                    system_prompt, work_messages, config, user_id, result,
+                ):
+                    return result
 
                 result.response = (
                     "Communications disrupted, Commander. "
@@ -165,109 +145,22 @@ class AgentLoop:
                 )
                 break
 
-            choice = response.get("choices", [{}])[0]
-            message = choice.get("message", {})
-            content = message.get("content", "") or ""
-            tool_calls = message.get("tool_calls", []) or []
+            content, tool_calls = self._message_parts(response)
 
             if not tool_calls:
                 result.response = content
                 result.steps.append(AgentStep(type="response", content=content))
                 break
 
-            assistant_msg: dict = {"role": "assistant"}
-            if content:
-                assistant_msg["content"] = content
-            assistant_msg["tool_calls"] = tool_calls
-            work_messages.append(assistant_msg)
-
-            for tc in tool_calls:
-                tc_id = tc.get("id", "")
-                func = tc.get("function", {})
-                tool_name = func.get("name", "unknown")
-                tool_args_str = func.get("arguments", "{}")
-
-                try:
-                    tool_args = json.loads(tool_args_str) if isinstance(tool_args_str, str) else tool_args_str
-                except json.JSONDecodeError:
-                    tool_args = {}
-
-                result.tools_used.append(tool_name)
-                result.steps.append(AgentStep(
-                    type="tool_call",
-                    content=f"Invoking {tool_name}",
-                    tool_name=tool_name,
-                    tool_args=tool_args,
-                ))
-
-                # Send descriptive status message
-                status_msg = TOOL_STATUS.get(tool_name, f"Using {tool_name}...")
-                await self._ws.send_tool_use(user_id, tool_name, "calling")
-                await self._ws.send_thinking(user_id, status_msg)
-
-                # Handle builtin tools locally, others via MCP
-                if tool_name == "recall_memory":
-                    tool_result = await self._builtin_recall_memory(tool_args, user_id)
-                elif tool_name == "get_current_time":
-                    tool_result = await self._builtin_get_time()
-                else:
-                    try:
-                        tool_result = await asyncio.wait_for(
-                            self._mcp.invoke_tool(tool_name, tool_args),
-                            timeout=TOOL_TIMEOUT,
-                        )
-                    except asyncio.TimeoutError:
-                        tool_result = {"error": f"Tool {tool_name} timed out after {TOOL_TIMEOUT}s"}
-                        logger.warning("Tool %s timed out", tool_name)
-                        try:
-                            await self._mcp._initialize_session()
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        tool_result = {"error": str(e)}
-                        logger.error("Tool %s failed: %s", tool_name, e)
-
-                result_text = _extract_tool_text(tool_result)
-
-                result.steps.append(AgentStep(
-                    type="tool_result",
-                    content=result_text[:500],
-                    tool_name=tool_name,
-                    tool_result=tool_result,
-                ))
-
-                await self._ws.send_tool_use(user_id, tool_name, "done")
-
-                work_messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "content": result_text[:MAX_TOOL_RESULT_CHARS],
-                })
-
-            logger.info(
-                "Agent iteration %d: %d tools called (%s)",
-                iteration + 1,
-                len(tool_calls),
-                ", ".join(tc.get("function", {}).get("name", "?") for tc in tool_calls),
+            await self._run_tool_round(
+                iteration, content, tool_calls, user_id, result, work_messages,
             )
 
         # Force synthesis if no response after all iterations
         if not result.response:
-            try:
-                await self._ws.send_thinking(user_id, "Compiling briefing...")
-                final = await self._router.complete_local(
-                    system_prompt, work_messages, config, tools=None,
-                )
-                final_content = (
-                    final.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", "")
-                    or ""
-                )
-                if final_content.strip():
-                    result.response = final_content
-            except Exception as e:
-                logger.warning("Forced synthesis failed: %s", e)
+            await self._force_synthesis(
+                system_prompt, work_messages, config, user_id, result,
+            )
 
         if not result.response:
             result.response = (
@@ -276,6 +169,191 @@ class AgentLoop:
             )
 
         return result
+
+    async def _load_tools(self) -> list[dict]:
+        """Fetch MCP tool schemas (recovering the session once if none load),
+        then append the builtin tools."""
+        tools = await get_tool_schemas(self._mcp)
+        if not tools:
+            logger.warning("No MCP tools available — trying recovery")
+            try:
+                await self._mcp._initialize_session()
+                tools = await get_tool_schemas(self._mcp)
+                if tools:
+                    logger.info("MCP session recovered, %d tools available", len(tools))
+            except Exception as e:
+                logger.warning("MCP session recovery failed: %s", e)
+
+        # Always include builtin tools (memory recall, time)
+        return (tools or []) + get_builtin_tools()
+
+    async def _stream_fallback(
+        self,
+        system_prompt: str,
+        work_messages: list[dict],
+        config: LLMConfig,
+        user_id: str,
+        result: AgentResult,
+    ) -> bool:
+        """Stream a direct answer after a failed completion call.
+
+        Returns True when any tokens arrived (``result.response`` is then set);
+        False when the stream was empty or raised, so the caller can fall
+        back to the disrupted-communications message.
+        """
+        # Try streaming fallback
+        try:
+            logger.info("Trying streaming fallback for agent response")
+            await self._ws.send_thinking(user_id, "Switching to direct response...")
+            parts = []
+            async for token in self._router.stream(system_prompt, work_messages, config):
+                parts.append(token)
+            if parts:
+                result.response = "".join(parts)
+                return True
+        except Exception as e2:
+            logger.error("Streaming fallback also failed: %s", e2)
+        return False
+
+    @staticmethod
+    def _message_parts(response: dict) -> tuple[str, list[dict]]:
+        """Pull ``(content, tool_calls)`` out of a chat-completion response."""
+        choice = response.get("choices", [{}])[0]
+        message = choice.get("message", {})
+        content = message.get("content", "") or ""
+        tool_calls = message.get("tool_calls", []) or []
+        return content, tool_calls
+
+    async def _run_tool_round(
+        self,
+        iteration: int,
+        content: str,
+        tool_calls: list[dict],
+        user_id: str,
+        result: AgentResult,
+        work_messages: list[dict],
+    ) -> None:
+        """Thread the assistant turn, execute each requested tool call in
+        order, then log the round."""
+        assistant_msg: dict = {"role": "assistant"}
+        if content:
+            assistant_msg["content"] = content
+        assistant_msg["tool_calls"] = tool_calls
+        work_messages.append(assistant_msg)
+
+        for tc in tool_calls:
+            await self._execute_tool_call(tc, user_id, result, work_messages)
+
+        logger.info(
+            "Agent iteration %d: %d tools called (%s)",
+            iteration + 1,
+            len(tool_calls),
+            ", ".join(tc.get("function", {}).get("name", "?") for tc in tool_calls),
+        )
+
+    async def _execute_tool_call(
+        self,
+        tc: dict,
+        user_id: str,
+        result: AgentResult,
+        work_messages: list[dict],
+    ) -> None:
+        """Run one tool call: record the step, surface status over WS, dispatch
+        it, record the result and thread it back into ``work_messages``."""
+        tc_id = tc.get("id", "")
+        func = tc.get("function", {})
+        tool_name = func.get("name", "unknown")
+        tool_args_str = func.get("arguments", "{}")
+
+        try:
+            tool_args = json.loads(tool_args_str) if isinstance(tool_args_str, str) else tool_args_str
+        except json.JSONDecodeError:
+            tool_args = {}
+
+        result.tools_used.append(tool_name)
+        result.steps.append(AgentStep(
+            type="tool_call",
+            content=f"Invoking {tool_name}",
+            tool_name=tool_name,
+            tool_args=tool_args,
+        ))
+
+        # Send descriptive status message
+        status_msg = TOOL_STATUS.get(tool_name, f"Using {tool_name}...")
+        await self._ws.send_tool_use(user_id, tool_name, "calling")
+        await self._ws.send_thinking(user_id, status_msg)
+
+        tool_result = await self._dispatch_tool(tool_name, tool_args, user_id)
+
+        result_text = _extract_tool_text(tool_result)
+
+        result.steps.append(AgentStep(
+            type="tool_result",
+            content=result_text[:500],
+            tool_name=tool_name,
+            tool_result=tool_result,
+        ))
+
+        await self._ws.send_tool_use(user_id, tool_name, "done")
+
+        work_messages.append({
+            "role": "tool",
+            "tool_call_id": tc_id,
+            "content": result_text[:MAX_TOOL_RESULT_CHARS],
+        })
+
+    async def _dispatch_tool(self, tool_name: str, tool_args: dict, user_id: str) -> dict:
+        """Handle builtin tools locally, others via MCP (bounded by
+        TOOL_TIMEOUT, with a best-effort session re-init after a timeout)."""
+        # Handle builtin tools locally, others via MCP
+        if tool_name == "recall_memory":
+            return await self._builtin_recall_memory(tool_args, user_id)
+        if tool_name == "get_current_time":
+            return await self._builtin_get_time()
+        try:
+            return await asyncio.wait_for(
+                self._mcp.invoke_tool(tool_name, tool_args),
+                timeout=TOOL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            tool_result = {"error": f"Tool {tool_name} timed out after {TOOL_TIMEOUT}s"}
+            logger.warning("Tool %s timed out", tool_name)
+            try:
+                await self._mcp._initialize_session()
+            except Exception:
+                pass
+            return tool_result
+        except Exception as e:
+            tool_result = {"error": str(e)}
+            logger.error("Tool %s failed: %s", tool_name, e)
+            return tool_result
+
+    async def _force_synthesis(
+        self,
+        system_prompt: str,
+        work_messages: list[dict],
+        config: LLMConfig,
+        user_id: str,
+        result: AgentResult,
+    ) -> None:
+        """One last tools-free completion so a tool-heavy run still ends in
+        prose. Fail-soft: leaves ``result.response`` empty on error or blank
+        output so the caller can apply the default message."""
+        try:
+            await self._ws.send_thinking(user_id, "Compiling briefing...")
+            final = await self._router.complete_local(
+                system_prompt, work_messages, config, tools=None,
+            )
+            final_content = (
+                final.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                or ""
+            )
+            if final_content.strip():
+                result.response = final_content
+        except Exception as e:
+            logger.warning("Forced synthesis failed: %s", e)
 
 
 def _extract_tool_text(result: dict) -> str:
