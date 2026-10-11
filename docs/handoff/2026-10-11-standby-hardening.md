@@ -116,13 +116,13 @@ Full detail per change is in `CHANGELOG.md` under "Fixed — standby hardening".
    from every source. companion-core already sends it everywhere. If some
    other token-less client on the tailnet loads/unloads models, it now gets a
    401 — give it the token rather than widening the bypass.
-5. **Mission auto-start has no expiry.** A mission started from a
-   `battle_ready` mood ends only on the explicit cancel phrase or engine
-   shutdown, and its ticks bypass `_can_send()`. With the GPU off the ticks
-   now skip silently instead of spamming, which removes the acute symptom,
-   but a ceiling (or routing `_fire_update` through `_can_send()`) is still
-   worth deciding. Not done here because it changes behaviour for explicitly
-   started missions too.
+5. **Auto-started missions now stand down after 180 minutes**
+   (`AUTO_MISSION_MAX_MINUTES`), closed out like a cancelled mission; a
+   mission he asked for has no ceiling. On reconnect a mission older than
+   12 hours (`chat.MISSION_RESTORE_MAX_HOURS`) is cleared rather than
+   restored. Still open: `MissionTimer._fire_update` bypasses `_can_send()`,
+   so an explicitly requested mission reports through quiet hours — he asked
+   for it, so this is left as is.
 6. **Redis and Qdrant are published unauthenticated** on both overlays by
    Amarillo's nginx stream proxies (`gateway/nginx.conf:50-67`). Auth lives in
    the aichat compose outside this repo; dropping the ZeroTier binds is a

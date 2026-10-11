@@ -37,7 +37,10 @@ Handoff: `docs/handoff/2026-10-11-standby-hardening.md`.
   Commander's local day, not the container's UTC; `send_push` runs off the
   event loop with a timeout and retires a subscription only on 404/410; an
   Operation Brief slot landing in a goodbye hold is held, not dropped;
-  `_deliver` honours a callback that reached nobody.
+  `_deliver` honours a callback that reached nobody. A mission auto-started
+  from a `battle_ready` mood stands down after 180 min (it used to run until
+  the cancel phrase or a restart); a mission older than 12 h is cleared on
+  reconnect instead of restored.
 - **voice** — the sentinel never reaches XTTS (it spent a GPU lease to say it);
   `/api/tts` never forwards the voice host's status (its 401 logged him out)
   and bounds the leased call at 45 s; `/api/stt` returns 502 on upstream
