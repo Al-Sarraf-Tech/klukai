@@ -1,35 +1,91 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Klukai 3D inspect</title>
-<style>html,body{margin:0;height:100%}#stage{position:fixed;inset:0}</style></head>
+<style>
+  html,body{margin:0;height:100%}#stage{position:fixed;inset:0}
+  /* bg=stage: the live companion stage backdrop (companion.css .stage) */
+  body.stage-bg{background:radial-gradient(120% 70% at 50% 35%, rgba(79,195,247,0.10), transparent 70%), linear-gradient(180deg, #0e1220 0%, #12151e 55%, #0b0d14 100%)}
+</style></head>
 <body><div id="stage"></div>
 <script type="module">
-  // Multi-angle inspection of the real viewer. Query: bg, yaw, pitch, dist, ty, tx, tz, state, t, glb
+  // Multi-angle inspection of the real viewer.
+  // Query: bg (colour or 'stage'), yaw, pitch, dist, ty, tx, tz, state, mood, t (clip time, s), glb,
+  //        life=1 (procedural layers on; off by default for comparable sheets), outlines=0,
+  //        tint (setTint), speaking, set=<k:v,…> (live tuning, see tune() below).
   import { createAvatar3D } from '/flutter_app/web/companion/avatar3d.js';
   const q = new URLSearchParams(location.search);
-  document.body.style.background = q.get('bg') || '#00c853';
+  if (q.get('bg') === 'stage') document.body.classList.add('stage-bg');
+  else document.body.style.background = q.get('bg') || '#00c853';
   window.__events = [];
   const av = await createAvatar3D(document.getElementById('stage'), {
     loadModel: async () => (await fetch(q.get('glb') || '/assets/build/klukai.glb', { cache: 'no-store' })).arrayBuffer(),
     framing: 'full', debug: true, orbit: false, adaptiveResolution: false,
+    life: q.get('life') === '1', outlines: q.get('outlines') !== '0',
     onError: (e) => window.__events.push('error:' + e.message),
   });
+  window.av = av;
+  if (!av.ready) { window.__events.push('error:not ready'); throw new Error('not ready'); }
   if (q.get('state')) av.setState(q.get('state'));
+  if (q.get('mood')) av.setMood(q.get('mood'));
+  if (q.get('tint')) av.setTint(q.get('tint'));
+  if (q.get('speaking')) av.setSpeaking(+q.get('speaking'));
   if (q.has('poff')) { // emulate a GPU that applies polygon offset much more strongly (e.g. Metal depth bias)
     av.debug.root.traverse((o) => { if (!o.isMesh) return; for (const m of [].concat(o.material)) if (m.polygonOffset) { m.polygonOffsetFactor = +q.get('poff'); m.polygonOffsetUnits = +q.get('poff') * 4; } });
   }
   if (q.has('nopoff')) av.debug.root.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) m.polygonOffset = false; });
   const { camera, THREE } = av.debug;
+
+  // set=key:value,… — shared uniforms (uRimStrength:0.7, uRimColor:#ff9fbf), lights (key:2.6, hemi:0.9,
+  // keyPos:-1;2.3;2, sky:#e6eaff, ground:#3b3550, keyColor:#fff2e8), per-role toon uniforms
+  // (skin.uTh:0.5, cloth.uShadowTint:0.36;0.33;0.48), outline params (outline.hair.uPx:1.3),
+  // outline colour per role (outlineTint.skin:#6e5452).
+  function tune(k, v) {
+    const d = av.debug; const num = (s) => s.split(';').map(Number);
+    const col = (s) => new THREE.Color(s.startsWith('#') ? s : '#' + s.replace(/^0x/, ''));
+    const setU = (u, val) => {
+      if (!u) return false;
+      if (u.value?.isColor) u.value.copy(col(val));
+      else if (u.value?.isVector3 || u.value?.isVector2 || u.value?.isVector4) u.value.fromArray(num(val));
+      else u.value = +val;
+      return true;
+    };
+    if (setU(d.shared[k], v) || setU(d.outlineU[k], v)) return;
+    if (k === 'key') d.key.intensity = +v;
+    else if (k === 'hemi') d.hemi.intensity = +v;
+    else if (k === 'keyPos') d.key.position.fromArray(num(v));
+    else if (k === 'keyColor') d.key.color.copy(col(v));
+    else if (k === 'sky') d.hemi.color.copy(col(v));
+    else if (k === 'ground') d.hemi.groundColor.copy(col(v));
+    else if (k.startsWith('outlineTint.')) { // outlineTint.skin:#6e5452 (textured parts: tint × texture)
+      const role = k.split('.')[1];
+      for (const o of d.outlines) if (o.userData.role === role) o.material.color.copy(col(v));
+    } else if (k.startsWith('outline.')) {
+      const [, role, name] = k.split('.');
+      for (const o of d.outlines) if (o.userData.role === role) setU(o.material.userData.klUniforms?.[name], v);
+    } else if (k.includes('.')) {
+      const [role, name] = k.split('.');
+      for (const m of d.materials()) if (m.userData.klRole === role) setU(m.userData.klUniforms?.[name], v);
+    }
+  }
+  for (const kv of (q.get('set') || '').split(',').filter(Boolean)) { const i = kv.indexOf(':'); tune(kv.slice(0, i), kv.slice(i + 1)); }
+  window.__tune = tune;
+
   const deg = Math.PI / 180;
   const yaw = +(q.get('yaw') || 0) * deg, pitch = +(q.get('pitch') || 0) * deg, dist = +(q.get('dist') || 3.4);
   const t = new THREE.Vector3(+(q.get('tx') || 0), +(q.get('ty') || 0.8), +(q.get('tz') || 0));
   const place = () => {
     camera.position.set(t.x + Math.sin(yaw) * Math.cos(pitch) * dist, t.y + Math.sin(pitch) * dist, t.z + Math.cos(yaw) * Math.cos(pitch) * dist);
     camera.lookAt(t);
+    camera.updateMatrixWorld();
   };
   // keep our camera every frame (frame() may run on resize)
   const orig = av.debug.renderer.render.bind(av.debug.renderer);
   av.debug.renderer.render = (s, c) => { place(); orig(s, c); };
-  window.__info = () => ({ calls: av.debug.renderer.info.render.calls, tris: av.debug.renderer.info.render.triangles, mem: av.debug.renderer.info.memory });
+  if (q.has('t')) { // freeze the base clip at a time (s) for comparable poses
+    av.setPaused(true);
+    av.debug.seek(+q.get('t'));
+    av.debug.renderer.render(av.debug.scene, camera);
+  }
+  window.__info = () => ({ calls: av.debug.renderer.info.render.calls, tris: av.debug.renderer.info.render.triangles, mem: av.debug.renderer.info.memory, programs: av.debug.renderer.info.programs?.length, stats: av.stats });
   window.__events.push('ready');
 </script></body></html>

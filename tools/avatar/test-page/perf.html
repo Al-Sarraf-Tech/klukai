@@ -5,9 +5,11 @@
 <body><div id="stage"></div>
 <script type="module">
   // Load + frame-rate probe for avatar3d.js. Results land in window.__perf.
+  // Query: glb, framing, state, secs, adaptive=0 (fixed pixel ratio), viewer (alternate module path,
+  // e.g. the frozen main-branch copy, for before/after), speaking, outlines=0, life=0.
   const q = new URLSearchParams(location.search);
   const t0 = performance.now();
-  const { createAvatar3D } = await import('/flutter_app/web/companion/avatar3d.js');
+  const { createAvatar3D } = await import(q.get('viewer') || '/flutter_app/web/companion/avatar3d.js');
   const tImport = performance.now();
   let tFetched = 0;
   const loadModel = async () => {
@@ -17,17 +19,26 @@
   let tReady = 0;
   const av = await createAvatar3D(document.getElementById('stage'), {
     loadModel, framing: q.get('framing') || 'upper', debug: true, onReady: () => { tReady = performance.now(); },
+    adaptiveResolution: q.get('adaptive') !== '0', outlines: q.get('outlines') !== '0', life: q.get('life') !== '0',
     onError: (e) => { window.__perf = { error: e.message }; },
   });
   // first painted frame after ready
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   const tFirst = performance.now();
   if (q.get('state')) av.setState(q.get('state'));
+  if (q.get('speaking')) av.setSpeaking(+q.get('speaking'));
   // FPS window
   const secs = +(q.get('secs') || 5);
   let frames = 0; const start = performance.now(); let worst = 0; let last = start;
+  const trace = []; let lastSig = ''; // quality changes and long frames (ms since the window started)
   await new Promise((resolve) => {
-    const tick = (now) => { frames++; worst = Math.max(worst, now - last); last = now; if (now - start < secs * 1000) requestAnimationFrame(tick); else resolve(); };
+    const tick = (now) => {
+      frames++; const ft = now - last; worst = Math.max(worst, ft); last = now;
+      const st = av.stats || {}; const sig = `${st.pixelRatio}/${st.outlines}`;
+      if (sig !== lastSig) { trace.push([Math.round(now - start), 'q', sig]); lastSig = sig; }
+      if (ft > 150) trace.push([Math.round(now - start), 'long', Math.round(ft)]);
+      if (now - start < secs * 1000) requestAnimationFrame(tick); else resolve();
+    };
     requestAnimationFrame(tick);
   });
   const d = av.debug; const info = d.renderer.info;
@@ -37,8 +48,8 @@
     if (o.isSkinnedMesh) skinnedMeshes++;
     if (o.morphTargetInfluences?.length) morphMeshes++;
     verts += o.geometry.attributes.position.count;
-    for (const m of [].concat(o.material)) for (const k of ['map', 'gradientMap']) {
-      const t = m[k]; if (!t || seen.has(t)) continue; seen.add(t);
+    for (const m of [].concat(o.material)) for (const t of [m.map, m.gradientMap, ...Object.values(m.userData?.klUniforms || {}).map((u) => u.value)]) {
+      if (!t?.isTexture || seen.has(t)) continue; seen.add(t);
       const img = t.image; const w = img?.width || 0, h = img?.height || 0;
       texBytes += w * h * 4 * (t.generateMipmaps === false ? 1 : 4 / 3);
     }
@@ -48,6 +59,6 @@
     fps: +(frames / ((performance.now() - start) / 1000)).toFixed(1), worstFrameMs: Math.round(worst),
     drawCalls: info.render.calls, triangles: info.render.triangles, programs: info.programs?.length,
     textures: seen.size, textureMB: +(texBytes / 1048576).toFixed(1), skinnedMeshes, morphMeshes, vertices: verts,
-    pixelRatio: d.renderer.getPixelRatio(), stats: av.stats || null,
+    pixelRatio: d.renderer.getPixelRatio(), outlines: av.stats?.outlines ?? null, stats: av.stats || null, trace,
   };
 </script></body></html>

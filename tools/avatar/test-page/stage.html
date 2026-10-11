@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Klukai stage layout test</title>
+<link rel="stylesheet" href="/flutter_app/web/companion/companion.css">
+<style id="newcss" media="not all">
+  /* ?newcss=1 previews the planned stage layout: the model spans the whole stage under the
+     topbar and dock, and its canvas fades out instead of ending at a hard edge. */
+  .model { top: 0 !important; bottom: 0 !important; }
+  .model canvas {
+    -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 9%, #000 70%, transparent 88%);
+            mask-image: linear-gradient(180deg, transparent 0, #000 9%, #000 70%, transparent 88%);
+  }
+  @media (min-width: 900px) {
+    .model canvas {
+      -webkit-mask-image: radial-gradient(60% 75% at 50% 42%, #000 62%, transparent 100%);
+              mask-image: radial-gradient(60% 75% at 50% 42%, #000 62%, transparent 100%);
+    }
+  }
+</style>
+</head>
+<body>
+<main id="stage" class="stage" data-mode="model">
+  <section id="model" class="model" aria-label="Klukai 3D"></section>
+  <header class="topbar"><a class="btn icon">‹</a><div class="status"><span class="status-line">The Elmo</span></div>
+    <div class="controls"><button class="btn icon">2D</button><button class="btn icon">♪</button><button class="btn icon">🔊</button></div></header>
+  <footer class="dock"><p class="subtitle">Commander. You're late again — sit down, I saved you a seat.</p>
+    <form class="composer"><input placeholder="Talk to her…"><button class="btn send" type="button">➤</button></form></footer>
+</main>
+<script type="module">
+  // Query: newcss=1, framing, state, mood, speaking, tint, life=0, glb, noinsets=1
+  import { createAvatar3D } from '/flutter_app/web/companion/avatar3d.js';
+  const q = new URLSearchParams(location.search);
+  if (q.get('newcss') === '1') document.getElementById('newcss').media = 'all';
+  window.__events = [];
+  const model = document.getElementById('model');
+  // What app.js does: the part of the canvas under the topbar / dock, in CSS px.
+  const insets = () => {
+    const m = model.getBoundingClientRect();
+    const t = document.querySelector('.topbar').getBoundingClientRect();
+    const d = document.querySelector('.dock').getBoundingClientRect();
+    return { top: Math.max(0, t.bottom - m.top), bottom: Math.max(0, m.bottom - d.top) };
+  };
+  const av = await createAvatar3D(model, {
+    loadModel: async () => (await fetch(q.get('glb') || '/assets/build/klukai.glb', { cache: 'no-store' })).arrayBuffer(),
+    framing: q.get('framing') || 'upper', adaptiveResolution: false, debug: true, life: q.get('life') !== '0',
+    onReady: () => window.__events.push('ready'),
+    onError: (e) => window.__events.push('error:' + e.message),
+  });
+  window.av = av;
+  if (!q.has('noinsets')) { av.setInsets(insets()); addEventListener('resize', () => av.setInsets(insets())); }
+  if (q.get('state')) av.setState(q.get('state'));
+  if (q.get('mood')) av.setMood(q.get('mood'));
+  if (q.get('tint')) av.setTint(q.get('tint'));
+  if (q.get('speaking')) av.setSpeaking(+q.get('speaking'));
+  window.__insets = insets();
+</script>
+</body>
+</html>

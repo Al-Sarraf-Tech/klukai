@@ -3,7 +3,9 @@
 built GLB, at phone and desktop sizes, through Playwright's bundled Chromium
 (SwiftShader WebGL; `--no-sandbox` for this sandbox).
 
-    python3 tools/avatar/shot.py [--out DIR]
+    python3 tools/avatar/shot.py [--out DIR] [--glb /assets/build/dev/klukai.glb] [--bg stage|test]
+                                 [--only idle-upper,talking] [--viewports 390x844] [--page index|stage]
+                                 [--query 'tint=smile&newcss=1']
 
 Serves the repo root on 127.0.0.1 (random port) only for the duration of the
 run; the GLB is personal-use and is never served anywhere else.
@@ -38,28 +40,41 @@ Quiet.extensions_map.update({'.js': 'text/javascript', '.mjs': 'text/javascript'
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default=os.path.join(REPO, 'assets', 'build', 'shots'))
+    ap.add_argument('--glb', default='/assets/build/klukai.glb', help='URL path under the repo root')
+    ap.add_argument('--bg', default='stage', choices=['stage', 'test'], help='stage = the live dark navy stage')
+    ap.add_argument('--only', default='', help='comma-separated shot names')
+    ap.add_argument('--viewports', default='', help='comma-separated names, e.g. 390x844')
+    ap.add_argument('--page', default='index', choices=['index', 'stage'], help='stage = real companion.css layout + setInsets')
+    ap.add_argument('--query', default='', help='extra test-page query, e.g. tint=smile&insets=95,164')
     args = ap.parse_args()
-    glb = os.path.join(REPO, 'assets', 'build', 'klukai.glb')
+    glb = os.path.join(REPO, args.glb.lstrip('/'))
     if not os.path.exists(glb):
-        sys.exit('assets/build/klukai.glb missing — run `node tools/avatar/build.mjs` first')
+        sys.exit(f'{args.glb} missing — build it first (dev builds: AVATAR_OUT=assets/build/dev/klukai.glb)')
     os.makedirs(args.out, exist_ok=True)
 
     srv = socketserver.ThreadingTCPServer(('127.0.0.1', 0), functools.partial(Quiet, directory=REPO))
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    base = f'http://127.0.0.1:{srv.server_address[1]}/tools/avatar/test-page/index.html'
+    base = f'http://127.0.0.1:{srv.server_address[1]}/tools/avatar/test-page/{args.page}.html'
 
     results = []
     with sync_playwright() as p:
         browser = p.chromium.launch(args=['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'])
+        only = set(filter(None, args.only.split(',')))
+        vps = set(filter(None, args.viewports.split(',')))
+        extra = f'&glb={args.glb}' + ('&bg=stage' if args.bg == 'stage' else '') + (f'&{args.query}' if args.query else '')
         for vname, w, h, dpr in VIEWPORTS:
+            if vps and vname not in vps:
+                continue
             for name, query, settle in SHOTS:
+                if only and name not in only:
+                    continue
                 page = browser.new_page(viewport={'width': w, 'height': h}, device_scale_factor=dpr)
                 logs = []
                 page.on('console', lambda m: logs.append(f'{m.type}: {m.text}'))
                 page.on('pageerror', lambda e: logs.append(f'pageerror: {e}'))
                 t0 = time.time()
-                page.goto(f'{base}?{query}')
+                page.goto(f'{base}?{query}{extra}')
                 page.wait_for_function('window.__events && window.__events.length > 0', timeout=180000)
                 events = page.evaluate('window.__events')
                 page.wait_for_timeout(int(settle * 1000))

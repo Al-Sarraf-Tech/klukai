@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Render the live viewer (avatar3d.js) from many angles on a contrasting
-backdrop: python3 tools/avatar/debug/views.py OUT_PREFIX [glb_path]"""
+backdrop: python3 tools/avatar/debug/views.py OUT_PREFIX [glb_path] [extra_query]
+
+extra_query is appended to every view (inspect3d.html params), e.g.
+'bg=stage', 'life=1', 'outlines=0', 'set=key:2.6,uRimStrength:0.7'. The idle clip is
+frozen at t=1.5 s unless the extra query sets its own t."""
 import sys, os, threading, functools, http.server, socketserver
 from playwright.sync_api import sync_playwright
 from PIL import Image, ImageDraw
@@ -15,7 +19,9 @@ VIEWS = [
 class Q(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a): pass
 Q.extensions_map.update({'.js': 'text/javascript'})
-out = sys.argv[1]; glb = sys.argv[2] if len(sys.argv) > 2 else '/assets/build/klukai.glb'
+out = sys.argv[1]; glb = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else '/assets/build/klukai.glb'
+extra = sys.argv[3] if len(sys.argv) > 3 else ''
+if not any(x.startswith('t=') for x in extra.split('&')): extra = (extra + '&t=1.5').lstrip('&')
 srv = socketserver.ThreadingTCPServer(('127.0.0.1', 0), functools.partial(Q, directory=REPO)); srv.daemon_threads = True
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 tiles = []
@@ -23,9 +29,11 @@ with sync_playwright() as p:
     b = p.chromium.launch(args=['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'])
     for name, q in VIEWS:
         pg = b.new_page(viewport={'width': 420, 'height': 560})
-        errs = []; pg.on('pageerror', lambda e: errs.append(str(e)))
-        pg.goto(f'http://127.0.0.1:{srv.server_address[1]}/tools/avatar/test-page/inspect3d.html?{q}&glb={glb}')
+        errs = []; pg.on('pageerror', lambda e: errs.append(str(e))); pg.on('console', lambda m: errs.append(m.text[:300]) if m.type == 'error' else None)
+        pg.goto(f'http://127.0.0.1:{srv.server_address[1]}/tools/avatar/test-page/inspect3d.html?{q}&glb={glb}&{extra}')
         pg.wait_for_function('window.__events.length>0', timeout=120000); pg.wait_for_timeout(1500)
+        ev = pg.evaluate('window.__events')
+        if any(str(e).startswith('error') for e in ev): print(name, ev)
         path = f'{out}-{name}.png'; pg.screenshot(path=path); tiles.append((name, path))
         if errs: print(name, errs)
         pg.close()

@@ -32,6 +32,7 @@
   const av = await createAvatar3D(document.getElementById('stage'), {
     loadModel,
     framing: q.get('framing') || 'upper', adaptiveResolution: false, // stable screenshots under SwiftShader
+    life: q.get('life') !== '0',
     onReady: () => { window.__events.push('ready'); },
     onError: (e) => { window.__events.push('error:' + e.message); hud.textContent = 'error: ' + e.message; },
   });
@@ -39,6 +40,8 @@
   if (q.get('state')) av.setState(q.get('state'));
   if (q.get('mood')) av.setMood(q.get('mood'));
   if (q.get('speaking')) av.setSpeaking(+q.get('speaking'));
+  if (q.get('tint')) av.setTint(q.get('tint'));
+  if (q.get('insets')) { const [top, bottom] = q.get('insets').split(',').map(Number); av.setInsets({ top, bottom }); }
   hud.textContent = `state=${av.state}`;
   window.__ready = av.ready;
 </script>
