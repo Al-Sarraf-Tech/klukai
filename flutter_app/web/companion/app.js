@@ -3,7 +3,7 @@
 // (messages sent here appear there too: the server fans out to every device).
 
 import { readToken, clearToken, createApi, AuthExpired, wsUrl, createSocket } from "./net.js";
-import { moodToExpression, sceneFor, reduceFrame } from "./logic.js";
+import { moodToExpression, sceneFor, reduceFrame, abandonTurn, avatarCue } from "./logic.js";
 import { createPortrait } from "./portrait.js";
 import { createAmbience, ambienceKind } from "./ambience.js";
 import { createMusic } from "./music.js";
@@ -70,8 +70,32 @@ function boot() {
     const expr = moodToExpression(state.mood);
     portrait.setExpression(expr);
     stage.style.setProperty("--tint", TINTS[expr] || TINTS.base);
-    avatar?.setMood(state.mood);
+    avatar?.setTint?.(expr); // the viewer's own rim colour for this expression
+    // While she thinks the pose stays; settle() hands her the mood when it ends.
+    if (!state.thinking) avatar?.setMood(state.mood);
     applyScene();
+  }
+
+  // The 3D canvas runs under the top bar and the dock (companion.css fades
+  // its edges); tell the viewer how much of it they cover so it frames her
+  // in the visible band. Not re-run when the subtitle grows: she'd jump.
+  function syncInsets() {
+    const box = $("model").getBoundingClientRect();
+    if (!avatar?.setInsets || !box.height) return;
+    const top = Math.max(0, document.querySelector(".topbar").getBoundingClientRect().bottom - box.top);
+    const bottom = Math.max(0, box.bottom - document.querySelector(".dock").getBoundingClientRect().top);
+    avatar.setInsets({ top: Math.round(top), bottom: Math.round(bottom) });
+  }
+
+  // State changed (a frame, or the link dropped): repaint and keep the 3D
+  // pose in step. The thinking pose is left explicitly — a mood frame isn't
+  // guaranteed to follow, and it usually carries the same mood.
+  function settle(prev) {
+    renderLine();
+    if (state.mood !== prev.mood) applyMood();
+    const cue = avatarCue(prev, state);
+    if (cue === "think") avatar?.setState("thinking");
+    else if (cue === "release") avatar?.setMood(state.mood);
   }
 
   function applyScene() {
@@ -146,12 +170,13 @@ function boot() {
   }
 
   function onFrame(frame) {
-    const prevMood = state.mood;
+    const prev = state;
     const { state: next, effects } = reduceFrame(state, frame);
     state = next;
-    renderLine();
-    if (state.mood !== prevMood) applyMood();
-    if (state.thinking) avatar?.setState("thinking");
+    settle(prev);
+    if (frame?.type === "error" && !(typeof frame.message === "string" && frame.message.trim())) {
+      notice("Something went wrong — try again.", 4000);
+    }
     for (const fx of effects) {
       // One voice channel: her reply is spoken from its `done` text. The
       // server's `voice_audio` clips are dropped in logic.js (see reduceFrame).
@@ -166,8 +191,15 @@ function boot() {
     onFrame,
     onAuthFailed: toLogin,
     onState: (s) => {
-      if (s === "down") notice("Link down — reconnecting…", 0);
-      else if (s === "open") notice("");
+      if (s === "down") {
+        notice("Link down — reconnecting…", 0);
+        // The server never replays a turn lost with the link: stop waiting on it.
+        if (state.thinking || state.streaming) {
+          const prev = state;
+          state = abandonTurn(state);
+          settle(prev);
+        }
+      } else if (s === "open") notice("");
     },
   });
 
@@ -235,7 +267,9 @@ function boot() {
           // an inert stub (ready: false). Storing that made the 3D button dead
           // for the session; with null the next tap tries again.
           avatar = av && av.ready ? av : null;
+          avatar?.setTint?.(moodToExpression(state.mood));
           avatar?.setMood(state.mood);
+          if (state.thinking) avatar?.setState("thinking");
         } catch {
           notice("3D isn't available on this device.", 6000);
           avatar = null;
@@ -243,6 +277,9 @@ function boot() {
           return;
         }
       }
+      // Measured now that #model is shown: a resize while it was hidden
+      // (rotated in portrait mode) couldn't measure it.
+      syncInsets();
     } else {
       model.hidden = true;
       portrait.setActive(awake);
@@ -311,7 +348,7 @@ function boot() {
     }
   });
   window.addEventListener("pageshow", () => socket.resume());
-  window.addEventListener("resize", () => { ambience.resize(); avatar?.resize(); }, { passive: true });
+  window.addEventListener("resize", () => { ambience.resize(); avatar?.resize(); syncInsets(); }, { passive: true });
 
   portrait.setFrames({});
   ambience.start();

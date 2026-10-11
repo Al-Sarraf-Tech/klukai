@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   MOODS, moodToExpression, moodBrightness, SCENES, chordNotes, midiToHz,
-  sceneFor, nextBlink, mouthOpen, reduceFrame, speakable, isFailureSentinel,
+  sceneFor, nextBlink, mouthOpen, reduceFrame, speakable, isFailureSentinel, abandonTurn, avatarCue,
 } from "../../../flutter_app/web/companion/logic.js";
 
 test("the mood list matches the backend's VALID_MOODS exactly", () => {
@@ -148,6 +148,43 @@ test("thinking follows the server's status text and clears on its empty frame, p
   ({ state } = reduceFrame({ thinking: true, streaming: true }, { type: "error", message: "STT failed" }));
   assert.equal(state.thinking, false);
   assert.equal(state.streaming, false);
+  // The image a status line announced arrived: the pulse stops.
+  ({ state } = reduceFrame({ thinking: true }, { type: "image", url: "/x.webp" }));
+  assert.equal(state.thinking, false);
+});
+
+test("an error frame's message replaces the blank dock and is never spoken", () => {
+  const msg = "Something glitched on my end, Commander. Your message is safe — try again.";
+  let { state, effects } = reduceFrame({ line: "", thinking: true }, { type: "error", message: msg });
+  assert.equal(state.line, msg);
+  assert.deepEqual(effects, []);
+  // No message (or a blank one): the last line stays as it was.
+  ({ state, effects } = reduceFrame({ line: "Earlier.", thinking: true }, { type: "error" }));
+  assert.equal(state.line, "Earlier.");
+  assert.deepEqual(effects, []);
+  ({ state } = reduceFrame({ line: "Earlier." }, { type: "error", message: "   " }));
+  assert.equal(state.line, "Earlier.");
+});
+
+test("a dropped link abandons the turn: no pulse, and the next reply starts a fresh line", () => {
+  let { state } = reduceFrame({ line: "", thinking: true }, { type: "token", text: "I was say" });
+  state = abandonTurn({ ...state, thinking: true });
+  assert.equal(state.thinking, false);
+  assert.equal(state.streaming, false);
+  assert.equal(state.line, "I was say", "the partial line stays readable");
+  ({ state } = reduceFrame(state, { type: "token", text: "Understood." }));
+  assert.equal(state.line, "Understood.");
+});
+
+test("the 3D avatar holds the thinking pose only while she thinks", () => {
+  assert.equal(avatarCue({ thinking: false }, { thinking: true }), "think");
+  assert.equal(avatarCue({ thinking: true }, { thinking: true }), "think");
+  // Her reply started (or the turn ended): leave the pose even if no mood frame follows.
+  assert.equal(avatarCue({ thinking: true }, { thinking: false }), "release");
+  assert.equal(avatarCue({ thinking: false }, { thinking: false }), null);
+  const prev = { thinking: true, mood: "composed" };
+  const { state } = reduceFrame(prev, { type: "token", text: "Commander." });
+  assert.equal(avatarCue(prev, state), "release");
 });
 
 test("the failure sentinel is shown but never spoken", () => {

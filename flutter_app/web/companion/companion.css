@@ -77,8 +77,15 @@ html, body {
 @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
 
 /* ── 3D model window ───────────────────────────────────────────────────── */
-.model { position: absolute; inset: 0; top: calc(var(--safe-top) + 44px); bottom: calc(var(--safe-bottom) + 118px); }
-.model canvas { display: block; width: 100% !important; height: 100% !important; }
+/* Full stage height: the top bar and the dock draw over her, and the canvas
+   fades out under them instead of ending in a hard line across her body.
+   app.js tells the viewer the covered insets so it frames her in the clear band. */
+.model { position: absolute; inset: 0; }
+.model canvas {
+  display: block; width: 100% !important; height: 100% !important;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 9%, #000 70%, transparent 88%);
+          mask-image: linear-gradient(180deg, transparent 0, #000 9%, #000 70%, transparent 88%);
+}
 .stage[data-mode="model"] .portrait { visibility: hidden; }
 
 /* ── Top bar ───────────────────────────────────────────────────────────── */
@@ -152,6 +159,11 @@ html, body {
 /* ── Desktop: a framed window, not a stretched phone ───────────────────── */
 @media (min-width: 900px) {
   .portrait, .model { left: 50%; right: auto; width: min(70vh, 640px); translate: -50% 0; }
+  /* a window, not a strip: fade every edge of the column */
+  .model canvas {
+    -webkit-mask-image: radial-gradient(60% 75% at 50% 42%, #000 62%, transparent 100%);
+            mask-image: radial-gradient(60% 75% at 50% 42%, #000 62%, transparent 100%);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

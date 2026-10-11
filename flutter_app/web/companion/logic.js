@@ -168,6 +168,10 @@ export function reduceFrame(state, frame) {
         say(frame.message);
       }
       break;
+    case "image":
+      // The image a status line announced has arrived: nothing left to wait on.
+      s.thinking = false;
+      break;
     case "voice_audio":
       // The server's own TTS clip for PWA voice input. The stage already speaks
       // every reply from its `done` text, so playing this too said it twice.
@@ -175,11 +179,33 @@ export function reduceFrame(state, frame) {
     case "error":
       s.thinking = false;
       s.streaming = false;
+      // Show the server's apology instead of a blank dock. Not spoken: it isn't
+      // her line, and voicing it would take a GPU lease for an error.
+      if (typeof frame.message === "string" && frame.message.trim()) s.line = frame.message;
       break;
     default:
       break;
   }
   return { state: s, effects };
+}
+
+/**
+ * The link dropped mid-turn: no `done` or `error` will come for it. Stop the
+ * "…" pulse and end the stream (the next reply starts a fresh line instead of
+ * being appended to the cut-off one); the partial line stays readable.
+ */
+export function abandonTurn(state) {
+  return { ...state, thinking: false, streaming: false };
+}
+
+/**
+ * What the 3D avatar should do after a state change: "think" holds the
+ * thinking pose, "release" leaves it for her mood's pose (a mood frame isn't
+ * guaranteed to follow, and it usually carries the same mood), null = nothing.
+ */
+export function avatarCue(prev, next) {
+  if (next.thinking) return "think";
+  return prev.thinking ? "release" : null;
 }
 
 /** Strip her stage directions "(I look away)" for subtitles-as-speech checks. */
