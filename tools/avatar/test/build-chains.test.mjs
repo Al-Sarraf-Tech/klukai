@@ -125,7 +125,10 @@ test('wave-2 config: chains per contract, open jacket overrides, validation', ()
   assert.ok(HAIR_CHAINS.colliders.some((c) => c.name === 'head') && HAIR_CHAINS.colliders.some((c) => c.to));
   assert.equal(OPEN_JACKET.into, 'Klukai_Cloth_1');
   assert.ok(OPEN_JACKET.atlasOverrides.some((o) => /bust/.test(o.why) && o.atlas === CONFIG.materials.Klukai_Cloth_1.atlases[0]));
-  assert.ok(OPEN_JACKET.atlasOverrides.filter((o) => o.atlas === null).length >= 2, 'the poking-through bodysuit hips are dropped');
+  const lowerTorso = OPEN_JACKET.atlasOverrides.filter((o) => /bodysuit lower (front|back)/.test(o.why));
+  assert.equal(lowerTorso.length, 2, 'front and back lower-torso islands are identified');
+  assert.ok(lowerTorso.every((o) => o.atlas?.color === '#1b1b20'), 'lower torso remains black bodysuit geometry');
+  assert.ok(lowerTorso.every((o) => o.inset > 0 && o.inset < 0.02), 'lower torso is recessed under the jacket instead of dropped');
   assert.equal(HAIR_COPIES.twinsOf, 'Klukai_Hair');
   const bad = (patch) => validateConfig({ ...CONFIG, ...patch });
   assert.ok(bad({ hairChains: { ...HAIR_CHAINS, chains: [{ name: 'a', bones: 1, seed: {} }] } }).some((e) => e.includes('bones')));
