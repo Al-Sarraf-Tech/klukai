@@ -328,31 +328,24 @@ On the server side (outside this tool):
   plus an ETag, and `net.js` fetches with `no-store`, so a rebuilt GLB reaches
   devices on their next open.
 
-## Other outfits (research only, nothing downloaded)
+## Personal appearances
 
-The default "Blazing Star" mesh is the only one in `assets/source-models/`.
+The companion's **Look** selector supports separate private GLBs while keeping the approved default pinned at `avatar-v2026.10.12`. See [the research and implementation record](../../docs/research/2026-10-12-3d-outfit-integration.md) for permissions, sources, validation and remaining download requirements.
 
-- **Official route.** MICA/Sunborn publish **official MMD (PMX) models**, Klukai
-  included in several outfits, on their 模之屋/aplaybox account
-  (aplaybox.com/u/636064186) and the global art page
-  (gf2exilium.sunborngame.com/main/art, since 2025-05-22).
-  - **Stated terms:** non-commercial, no redistribution.
-  - **Unconfirmed:** secondary sources also report "no modification / video
-    production only". Read the readme in the archive before converting.
-  - **Why it's the best route:** MMD models carry face morphs (blink and
-    a/i/u/e/o visemes), which would give real lip-sync.
-- **Effort:** a PMX→GLB path (three's MMDLoader in Node, with Japanese MMD
-  bone names), plus retargeting the 15 Mixamo clips onto the MMD skeleton
-  locally (SkeletonUtils), plus morph export. About 1–2 days for the first
-  outfit, then hours per extra outfit. Uploading to Mixamo for auto-rigging
-  would send the model to a third party; local retargeting avoids that.
-- **Alternatives (game rips, same personal-use footing as today):**
-  - an Open3DLab .blend with all skins (needs Goo Engine);
-  - a Garry's Mod 7-outfit pack on the Steam Workshop (re-rigged and
-    decimated);
-  - DeviantArt MMD conversions;
-  - self-extraction from the owner's own install, where the SSR0101/0102/0103
-    meshes sit in the same Unity bundles as the textures we already have.
+Five Garf appearances cover Blazing Star, Dorm, Speed Star, Astral Luminous and Cerulean Breaker. Player Legend's HK416 supplies the Retro 64 rendition. VRoid HK416 remains unavailable pending Pixiv sign-in/download. The stage displays “For personal, noncommercial use only.” Original creator licenses remain applicable; this is not a claim of publisher approval. Official Global MMD downloads are excluded because their terms prohibit software use.
+
+The offline converters require explicit source/output paths and refuse to overwrite `klukai.glb`:
+
+```sh
+# Use checksum-verified Blender 4.1.1 with source scripts disabled.
+blender -b --factory-startup --disable-autoexec --threads 2 \
+  --python tools/avatar/import-garf.py -- SOURCE.blend speed_star RAW.glb
+node tools/avatar/retarget-variant.mjs assets/build/klukai.glb RAW.glb VARIANT.glb
+blender -b --factory-startup --disable-autoexec --threads 2 \
+  --python tools/avatar/import-gfl64.py -- SOURCE_RIG.blend VARIANT.glb
+```
+
+Run builds/renders under `.claude/look-work/render.lock`; validate dev outputs before atomically installing the fixed registry filename under `assets/build/variants/`. Assets remain gitignored and authenticated, never copied into `web-build`. Garf variants retain 15 retargeted clips and blink; Retro 64 retains its creator's idle clip. Converters preserve each source's own coverage instead of transplanting the default body core. Registry IDs and attribution live in `docker/core/app/avatar_models.py`.
 
 ## Known limitations
 

@@ -139,3 +139,15 @@ test("close stops reconnects", () => {
   assert.equal(timers.length, 0);
   sock.close(); // idempotent with no socket
 });
+
+test('appearance catalog and selected model remain authenticated, with cancellation', async () => {
+  const buf = new ArrayBuffer(4), controller = new AbortController();
+  const f = fakeFetch([{status:200, body:{models:[]}}, {status:200,buf}]);
+  const api=createApi({token:'test',fetchImpl:f.impl});
+  assert.deepEqual(await api.models(),{models:[]});
+  assert.equal(await api.model('hk416_gfl64',{signal:controller.signal}),buf);
+  assert.equal(f.calls[0].url,'/api/avatar/models');
+  assert.equal(f.calls[1].url,'/api/avatar/model?model=hk416_gfl64');
+  assert.equal(f.calls[1].init.headers.Authorization,'Bearer test');
+  assert.equal(f.calls[1].init.signal,controller.signal);
+});

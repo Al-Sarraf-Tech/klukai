@@ -81,6 +81,15 @@ html, body {
    fades out under them instead of ending in a hard line across her body.
    app.js tells the viewer the covered insets so it frames her in the clear band. */
 .model { position: absolute; inset: 0; }
+.model-view { position: absolute; inset: 0; }
+.usage-note { color: #a8b4c4; font-size: 11px; margin: 6px 0 0; }
+.dock > .usage-note { text-align: center; }
+.appearance-dialog { width: min(90vw, 420px); max-height: 75dvh; overflow: auto; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }
+.appearance-dialog::backdrop { background: #0009; }
+.appearance-dialog form { float: right; }
+.appearance-dialog h2 { font-size: 20px; margin-top: 0; }
+.appearance-dialog select { display: block; width: 100%; margin-top: 6px; padding: 12px; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+.appearance-dialog a { color: var(--primary); }
 .model canvas {
   display: block; width: 100% !important; height: 100% !important;
   -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 9%, #000 70%, transparent 88%);

@@ -8,6 +8,7 @@ import { createPortrait } from "./portrait.js";
 import { createAmbience, ambienceKind } from "./ambience.js";
 import { createMusic } from "./music.js";
 import { createVoice } from "./voice.js";
+import { createAppearanceSwitcher } from "./appearance.js";
 
 const $ = (id) => document.getElementById(id);
 const PREFS_KEY = "klukai_companion_prefs";
@@ -21,8 +22,8 @@ const TINTS = {
 };
 
 function loadPrefs() {
-  try { return { mode: "portrait", music: true, voice: true, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") }; }
-  catch { return { mode: "portrait", music: true, voice: true }; }
+  try { return { mode: "portrait", appearance: "default", music: true, voice: true, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") }; }
+  catch { return { mode: "portrait", appearance: "default", music: true, voice: true }; }
 }
 function savePrefs(p) {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch { /* private mode */ }
@@ -243,7 +244,83 @@ function boot() {
   }
 
   // ── Portrait ⇄ 3D window ─────────────────────────────────────────────────
-  async function setMode(mode) {
+  let models = [];
+  let requestedAppearance = prefs.appearance || "default";
+  const appearances = createAppearanceSwitcher({
+    async build(id, signal) {
+      const { createAvatar3D } = await import("./avatar3d.js");
+      const host = document.createElement("div");
+      host.className = "model-view";
+      host.style.visibility = "hidden";
+      $("model").appendChild(host);
+      signal.addEventListener("abort", () => host.remove(), { once: true });
+      let error;
+      try {
+        const av = await createAvatar3D(host, {
+          modelKey: id, signal, loadModel: () => api.model(id, { signal }),
+          onError: (e) => { error = e; },
+        });
+        const dispose = av.dispose.bind(av);
+        av.dispose = () => { dispose(); host.remove(); };
+        if (!av.ready) { av.dispose(); throw error || new Error("3D unavailable"); }
+        av.reveal = () => { host.style.visibility = ""; };
+        return av;
+      } catch (e) { host.remove(); throw e; }
+    },
+    commit(av, id) {
+      av.reveal();
+      avatar = av;
+      prefs.appearance = id;
+      savePrefs(prefs);
+      $("appearance-select").value = id;
+      renderAppearanceCredit(id);
+      avatar.setTint?.(moodToExpression(state.mood));
+      avatar.setMood(state.mood);
+      if (state.thinking) avatar.setState("thinking");
+      avatar.setPaused(prefs.mode !== "model" || document.hidden);
+      syncInsets();
+      notice("");
+    },
+  });
+
+  function renderAppearanceCredit(id) {
+    const entry = models.find((m) => m.id === id);
+    $("appearance-credit").textContent = entry ? `${entry.creator} · ${entry.license}` : "";
+    $("appearance-description").textContent = entry?.description || "";
+    const link = $("appearance-source");
+    const url = entry?.source || "";
+    link.hidden = !url.startsWith("https://");
+    if (!link.hidden) link.href = url;
+    else link.removeAttribute("href");
+  }
+
+  async function refreshAppearances() {
+    try {
+      const result = await api.models();
+      models = result.models;
+      const select = $("appearance-select");
+      select.replaceChildren(...models.map((m) => {
+        const option = document.createElement("option");
+        option.value = m.id;
+        option.textContent = m.name + (m.available ? "" : " · Not installed");
+        option.disabled = !m.available;
+        return option;
+      }));
+      select.disabled = false;
+      if (!models.some((m) => m.id === prefs.appearance && m.available)) {
+        const changed = prefs.appearance !== "default";
+        prefs.appearance = "default";
+        requestedAppearance = "default";
+        savePrefs(prefs);
+        if (changed && awake && prefs.mode === "model") await setMode("model");
+      }
+      select.value = prefs.appearance;
+      renderAppearanceCredit(prefs.appearance);
+    } catch { /* keep the pinned default usable if the catalog is temporarily unavailable */ }
+  }
+
+  async function setMode(mode, appearance = requestedAppearance) {
+    requestedAppearance = appearance;
     prefs.mode = mode;
     savePrefs(prefs);
     stage.dataset.mode = mode;
@@ -251,45 +328,42 @@ function boot() {
     if (mode === "model") {
       portrait.setActive(false);
       model.hidden = false;
-      if (!avatar) {
-        notice("Loading her 3D model…", 0);
-        try {
-          const { createAvatar3D } = await import("./avatar3d.js");
-          const av = await createAvatar3D(model, {
-            loadModel: api.model,
-            onReady: () => notice(""),
-            onError: (e) => {
-              notice(e && e.status === 404 ? "Her 3D model isn't installed on the server yet." : "3D isn't available on this device.", 6000);
-              setMode("portrait");
-            },
-          });
-          // On failure createAvatar3D reports through onError and then returns
-          // an inert stub (ready: false). Storing that made the 3D button dead
-          // for the session; with null the next tap tries again.
-          avatar = av && av.ready ? av : null;
-          avatar?.setTint?.(moodToExpression(state.mood));
-          avatar?.setMood(state.mood);
-          if (state.thinking) avatar?.setState("thinking");
-        } catch {
-          notice("3D isn't available on this device.", 6000);
-          avatar = null;
-          setMode("portrait");
-          return;
+      if (appearances.key !== appearance) notice("Loading her 3D model…", 0);
+      try {
+        const applied = await appearances.select(appearance);
+        if (!applied) return;
+        notice("");
+      } catch (e) {
+        requestedAppearance = appearances.key || prefs.appearance;
+        $("appearance-select").value = appearances.key || prefs.appearance;
+        notice(e?.status === 404 ? "That appearance isn't installed yet." : "Couldn't load that appearance. Try again.", 6000);
+        if (!avatar) {
+          prefs.mode = "portrait";
+          savePrefs(prefs);
+          stage.dataset.mode = "portrait";
+          model.hidden = true;
+          portrait.setActive(awake);
         }
       }
-      // Measured now that #model is shown: a resize while it was hidden
-      // (rotated in portrait mode) couldn't measure it.
       syncInsets();
     } else {
       model.hidden = true;
       portrait.setActive(awake);
     }
-    // Hiding the 3D section alone left its renderer ticking at 60 fps behind
-    // the portrait; park it. prefs.mode, not `mode`: he may have switched back
-    // while the model was still loading.
-    avatar?.setPaused(prefs.mode !== "model");
+    avatar?.setPaused(prefs.mode !== "model" || document.hidden);
     syncButtons();
   }
+
+  $("btn-appearance").addEventListener("click", () => {
+    $("appearance-dialog").showModal();
+    refreshAppearances();
+  });
+  $("appearance-select").addEventListener("change", (event) => {
+    const id = event.target.value;
+    if (!models.some((m) => m.id === id && m.available)) return;
+    $("appearance-dialog").close();
+    setMode("model", id);
+  });
 
   // ── Controls ─────────────────────────────────────────────────────────────
   $("wake").addEventListener("click", wake, { once: true });
@@ -336,6 +410,7 @@ function boot() {
   document.addEventListener("visibilitychange", () => {
     const hidden = document.hidden;
     music?.setHidden(hidden);
+    avatar?.setPaused(hidden || prefs.mode !== "model");
     if (hidden) {
       portrait.setActive(false);
       ambience.stop();
@@ -355,9 +430,11 @@ function boot() {
   // 3D was his last view: start fetching three.js + the model now, in
   // parallel with the socket and the tap-to-begin, so it's ready on wake.
   if (prefs.mode === "model") {
-    import("./avatar3d.js").then((m) => m.warmAvatar3D?.({ loadModel: api.model })).catch(() => {});
+    const modelKey = prefs.appearance || "default";
+    import("./avatar3d.js").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
   }
   socket.start();
+  refreshAppearances();
   refreshDay();
   refreshPortrait();
   setInterval(refreshDay, DAY_REFRESH_MS);

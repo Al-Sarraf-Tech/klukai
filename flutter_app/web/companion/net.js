@@ -21,12 +21,12 @@ export class AuthExpired extends Error {}
 /** Thin API client. `onAuthExpired` runs once on the first 401. */
 export function createApi({ token, fetchImpl = globalThis.fetch, base = "", onAuthExpired = () => {} }) {
   let expired = false;
-  async function call(path, { method = "GET", body, raw = false } = {}) {
+  async function call(path, { method = "GET", body, raw = false, signal } = {}) {
     const headers = { Authorization: `Bearer ${token}` };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     const res = await fetchImpl(`${base}${path}`, {
       method, headers, body: body === undefined ? undefined : JSON.stringify(body),
-      cache: "no-store", credentials: "omit",
+      cache: "no-store", credentials: "omit", signal,
     });
     if (res.status === 401) {
       if (!expired) { expired = true; onAuthExpired(); }
@@ -44,7 +44,8 @@ export function createApi({ token, fetchImpl = globalThis.fetch, base = "", onAu
     portrait: () => call("/api/portrait"),
     affection: () => call("/api/affection"),
     tts: (text) => call("/api/tts", { method: "POST", body: { text, language: "en" } }),
-    model: async () => (await call("/api/avatar/model", { raw: true })).arrayBuffer(),
+    models: () => call("/api/avatar/models"),
+    model: async (id = "default", { signal } = {}) => (await call(`/api/avatar/model${id === "default" ? "" : `?model=${encodeURIComponent(id)}`}`, { raw: true, signal })).arrayBuffer(),
   };
 }
 

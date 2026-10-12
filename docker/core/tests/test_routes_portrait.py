@@ -131,6 +131,46 @@ class TestRefresh:
 
 
 class TestAvatarModel:
+    def test_catalog_is_private_and_reports_actual_availability(self, client, tmp_path):
+        assert client.get("/api/avatar/models").status_code == 401
+        (tmp_path / "klukai.glb").write_bytes(b"default")
+        r = client.get("/api/avatar/models", headers=AUTH)
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "private, no-cache"
+        data = r.json()
+        assert data["notice"] == "For personal, noncommercial use only."
+        entries = {m["id"]: m for m in data["models"]}
+        assert entries["default"]["available"] is True
+        assert entries["hk416_gfl64"]["available"] is False
+        assert entries["hk416_gfl64"]["license"] == "CC BY-SA 4.0"
+        assert entries["hk416_vroid"]["available"] is False
+        assert entries["klukai_garf"]["available"] is False
+        for model in ("garf_dorm", "garf_speed_star", "garf_astral_luminous", "garf_cerulean_breaker"):
+            assert entries[model]["available"] is False
+        assert str(tmp_path) not in r.text
+
+    @pytest.mark.parametrize("model", ["../klukai", "/etc/passwd", "unknown", ""])
+    def test_unlisted_model_never_falls_back(self, client, tmp_path, model):
+        (tmp_path / "klukai.glb").write_bytes(b"default")
+        assert client.get("/api/avatar/model", params={"model": model}, headers=AUTH).status_code == 404
+
+    def test_models_have_distinct_etags_even_with_same_size_and_time(self, client, tmp_path):
+        import os
+        default = tmp_path / "klukai.glb"
+        default.write_bytes(b"one")
+        variant = tmp_path / "variants" / "hk416_gfl64.glb"
+        variant.parent.mkdir()
+        variant.write_bytes(b"two")
+        os.utime(variant, ns=(default.stat().st_atime_ns, default.stat().st_mtime_ns))
+        first = client.get("/api/avatar/model", headers=AUTH)
+        second = client.get("/api/avatar/model?model=hk416_gfl64", headers={**AUTH, "If-None-Match": first.headers["etag"]})
+        assert second.status_code == 200 and second.content == b"two"
+        assert second.headers["etag"] != first.headers["etag"]
+
+    def test_missing_variant_does_not_serve_default(self, client, tmp_path):
+        (tmp_path / "klukai.glb").write_bytes(b"default")
+        assert client.get("/api/avatar/model?model=hk416_vroid", headers=AUTH).status_code == 404
+
     def test_missing_model_is_json_404(self, client):
         r = client.get("/api/avatar/model", headers=AUTH)
         assert r.status_code == 404 and r.json() == {"error": "Avatar model not found"}

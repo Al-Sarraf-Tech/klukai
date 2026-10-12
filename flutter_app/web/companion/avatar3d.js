@@ -25,6 +25,7 @@
 // three.js is loaded lazily.
 
 import { MOODS, nextBlink } from './logic.js';
+import { createModelPrefetch, awaitWithAbort } from './appearance.js';
 
 /** Viewer states. */
 export const STATES = Object.freeze([
@@ -557,19 +558,16 @@ function importLibs(withOrbit = true) {
   return libsPromise;
 }
 
-let warmModel = null;
+const modelPrefetch = createModelPrefetch();
 /**
  * Optional: call as soon as the 3D window is the selected mode (e.g. at page
  * init when the saved preference is 3D) to start the three.js imports and the
  * model download while the rest of the page boots. The next createAvatar3D()
  * reuses both. Safe to call repeatedly; never throws.
  */
-export function warmAvatar3D({ loadModel } = {}) {
+export function warmAvatar3D({ loadModel, modelKey = 'default' } = {}) {
   importLibs().catch(() => {});
-  if (typeof loadModel === 'function' && !warmModel) {
-    warmModel = Promise.resolve().then(loadModel);
-    warmModel.catch(() => { warmModel = null; });
-  }
+  if (typeof loadModel === 'function') modelPrefetch.warm(modelKey, loadModel);
 }
 
 // Idle fidgets: a short one-shot after a full idle cycle (35 %), never the
@@ -767,14 +765,12 @@ export async function createAvatar3D(container, opts = {}) {
     get ready() { return false; }, get state() { return 'idle'; },
   };
   if (typeof loadModel !== 'function') { fail(new Error('createAvatar3D: loadModel() is required')); return stub; }
-  if (!hasWebGL()) { fail(new Error('WebGL is not available')); return stub; }
 
   const stats = { t0: performance.now() };
   const mark = (k) => { stats[k] = Math.round(performance.now() - stats.t0); };
   // Model download and library imports run in parallel (and may already be
   // in flight from warmAvatar3D()).
-  const modelPromise = warmModel || Promise.resolve().then(loadModel);
-  warmModel = null;
+  const modelPromise = modelPrefetch.take(opts.modelKey || 'default', loadModel);
   modelPromise.then(() => mark('fetchMs'), () => {});
   let THREE; let GLTFLoader; let MeshoptDecoder; let OrbitControls;
   try {
@@ -782,6 +778,13 @@ export async function createAvatar3D(container, opts = {}) {
     if (opts.orbit === false) OrbitControls = null;
     mark('importMs');
   } catch (e) { modelPromise.catch(() => {}); fail(e); return stub; }
+
+  // A superseded or stalled download must not retain a WebGL context.
+  let modelBuffer;
+  try { modelBuffer = await awaitWithAbort(modelPromise, opts.signal); }
+  catch (e) { fail(e); return stub; }
+  if (opts.signal?.aborted) return stub;
+  if (!hasWebGL()) { fail(new Error('WebGL is not available')); return stub; }
 
   const isIOS = detectIOS();
   const size = () => ({ w: Math.max(1, container.clientWidth || 1), h: Math.max(1, container.clientHeight || 1) });
@@ -1086,8 +1089,10 @@ export async function createAvatar3D(container, opts = {}) {
   }
 
   // ── load ─────────────────────────────────────────────────────────────────
+  const onAbort = () => teardown();
+  opts.signal?.addEventListener('abort', onAbort, { once: true });
   try {
-    const buf = await modelPromise;
+    const buf = modelBuffer;
     if (disposed) return stub;
     if (!(buf instanceof ArrayBuffer) && !ArrayBuffer.isView(buf)) throw new Error('loadModel() must resolve to an ArrayBuffer');
     const data = ArrayBuffer.isView(buf) ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf;
@@ -1096,6 +1101,7 @@ export async function createAvatar3D(container, opts = {}) {
     mark('parseMs');
     if (disposed) { disposeObject(gltf.scene); return stub; }
     root = gltf.scene;
+    if (!opts.framing && root.userData?.preferredFraming === 'full') framing = 'full';
     root.traverse((o) => { if (o.isSkinnedMesh) skinned.push(o); });
     const chainData = Array.isArray(root.userData?.springChains) ? root.userData.springChains : [];
     hasChains = chainData.some(chainUsable); // same rule buildSprings applies: never sway off with no springs
@@ -1173,6 +1179,8 @@ export async function createAvatar3D(container, opts = {}) {
       .filter(Boolean).map((bone) => ({ bone, q: bone.quaternion.clone() }));
     root.updateMatrixWorld(true);
     if (head) headRestY = head.getWorldPosition(new THREE.Vector3()).y;
+    const framingHeadY = root.userData?.framingHeadY;
+    if (Number.isFinite(framingHeadY) && framingHeadY >= 0.5 && framingHeadY <= 3) headRestY = framingHeadY;
     forwardOf(faceBone, restFwd);
     forwardOf(bones.Hips, hipsFwd);
     forwardOf(faceBone, restUp, AX.y);
@@ -1933,7 +1941,9 @@ export async function createAvatar3D(container, opts = {}) {
     });
   }
   function teardown() {
+    if (disposed) return;
     disposed = true;
+    opts.signal?.removeEventListener('abort', onAbort);
     stop();
     if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);
     if (onLost) canvas.removeEventListener('webglcontextlost', onLost);
@@ -2150,6 +2160,8 @@ export async function createAvatar3D(container, opts = {}) {
 function hasWebGL() {
   try {
     const c = document.createElement('canvas');
-    return !!(c.getContext('webgl2') || c.getContext('webgl'));
+    const gl = c.getContext('webgl2') || c.getContext('webgl');
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    return !!gl;
   } catch { return false; }
 }

@@ -40,6 +40,7 @@
         <span class="outfit-chip" id="outfit-chip" hidden></span>
       </div>
       <div class="controls">
+        <button class="btn icon" id="btn-appearance" aria-label="Choose 3D appearance" title="3D appearance">Look</button>
         <button class="btn icon" id="btn-mode" aria-label="Switch to 3D" title="Portrait / 3D">3D</button>
         <button class="btn icon" id="btn-music" aria-label="Music" aria-pressed="false" title="Music">♪</button>
         <button class="btn icon" id="btn-voice" aria-label="Voice" aria-pressed="false" title="Her voice">🔈</button>
@@ -48,6 +49,19 @@
 
     <div class="notice" id="notice" hidden></div>
 
+    <dialog id="appearance-dialog" class="appearance-dialog" aria-labelledby="appearance-title">
+      <form method="dialog"><button class="btn" aria-label="Close appearances">Close</button></form>
+      <h2 id="appearance-title">3D appearance</h2>
+      <p>Choose how she looks in the 3D view.</p>
+      <label for="appearance-select">Model</label>
+      <select id="appearance-select" disabled><option value="default">Klukai · Blazing Star</option></select>
+      <p id="appearance-credit"></p>
+      <p id="appearance-description"></p>
+      <a id="appearance-source" target="_blank" rel="noopener noreferrer" hidden>Creator and terms</a>
+      <p class="usage-note">For personal, noncommercial use only.</p>
+      <p class="usage-note">Creator licenses remain in effect. Fan models do not imply publisher approval.</p>
+    </dialog>
+
     <footer class="dock">
       <p class="subtitle" id="subtitle" aria-live="polite"></p>
       <form class="composer" id="composer" autocomplete="off">
@@ -55,6 +69,7 @@
                placeholder="Talk to her…" aria-label="Message Klukai">
         <button class="btn send" type="submit" aria-label="Send">➤</button>
       </form>
+      <p class="usage-note">For personal, noncommercial use only.</p>
     </footer>
 
     <button class="wake" id="wake" type="button">

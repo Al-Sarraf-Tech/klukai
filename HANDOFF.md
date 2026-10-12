@@ -8,6 +8,13 @@ Release tag: `avatar-v2026.10.12`. See
 This completes the model-finish objective recorded in the older bus snapshot below;
 preserve the approved appearance as the baseline for future work.
 
+## Personal appearances
+
+Six additional looks are deployed through the companion’s **Look** button, with
+an explicit personal/noncommercial notice. The approved default above remains
+unchanged. VRoid is still pending its Pixiv sign-in/download; it is disabled in
+the picker. See [sources, conversion, verification and recovery](docs/handoff/2026-10-12-personal-avatar-appearances.md).
+
 <!-- bus-handoff:start -->
 Project: amarillo/klukai
 Checkout: /home/jalsarraf/git/klukai

@@ -17,7 +17,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from . import context, portrait
+from . import avatar_models, context, portrait
 from . import error_codes as ec
 
 logger = logging.getLogger(__name__)
@@ -90,21 +90,29 @@ def register_portrait_routes(app: FastAPI) -> None:
             return JSONResponse({"error": "Not found"}, status_code=404)
         return FileResponse(path, media_type="image/webp", headers={"Cache-Control": FRAME_CACHE})
 
+    @app.get("/api/avatar/models")
+    async def api_avatar_models(request: Request):
+        if not await _get_user_id(request):
+            return ec.auth_required()
+        default = Path(os.environ.get("AVATAR_MODEL_PATH", DEFAULT_AVATAR_MODEL_PATH))
+        return JSONResponse(avatar_models.catalog(default), headers={"Cache-Control": MODEL_CACHE})
+
     @app.get("/api/avatar/model")
-    async def api_avatar_model(request: Request):
+    async def api_avatar_model(request: Request, model: str = "default"):
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
-        path = Path(os.environ.get("AVATAR_MODEL_PATH", DEFAULT_AVATAR_MODEL_PATH))
-        if not path.is_file():
+        default = Path(os.environ.get("AVATAR_MODEL_PATH", DEFAULT_AVATAR_MODEL_PATH))
+        path = avatar_models.model_path(model, default)
+        if path is None or not path.is_file():
             return JSONResponse({"error": "Avatar model not found"}, status_code=404)
-        etag = _etag(path)
+        etag = f'"{model}-{_etag(path)[1:-1]}"'
         headers = {"Cache-Control": MODEL_CACHE, "ETag": etag, "Vary": "Accept-Encoding"}
         if _etag_matches(request.headers.get("if-none-match", ""), etag):
             return Response(status_code=304, headers=headers)
         if "gzip" in request.headers.get("accept-encoding", "").lower():
             # Binary glTF isn't compressed by Cloudflare or StaticFiles; gzip
-            # saves ~30% on a phone connection. Compressed once per version.
+            # saves ~30% on a phone connection. Cache the most recently used version.
             body = _MODEL_GZ.get(etag)
             if body is None:
                 body = gzip.compress(path.read_bytes(), compresslevel=6)
