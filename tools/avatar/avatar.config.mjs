@@ -48,6 +48,22 @@ const C2 = OUTFIT_ATLASES[1];
 /** Glossy black bodysuit (shorts, high neck): a flat colour, no texture shipped. */
 const BODYSUIT = Object.freeze({ color: '#1b1b20' });
 
+// The rip omits the neck below the jaw and the torso beneath the jacket.
+// Closed inner high-neck bodysuit, fitted inside the existing outfit and
+// overlapping its bust/shorts. [y, half width, front z, back z], bind metres.
+export const BODY_CORE = Object.freeze({
+  rings: [
+    [0.82, 0.092, 0.050, -0.071], [0.88, 0.092, 0.060, -0.074],
+    [0.94, 0.082, 0.062, -0.067], [1.00, 0.073, 0.057, -0.062],
+    [1.06, 0.077, 0.058, -0.061], [1.11, 0.083, 0.063, -0.062],
+    [1.17, 0.085, 0.064, -0.062], [1.21, 0.080, 0.058, -0.060],
+    [1.24, 0.065, 0.049, -0.055], [1.26, 0.039, 0.030, -0.051],
+    [1.28, 0.030, 0.017, -0.049], [1.30, 0.029, 0.017, -0.042],
+    [1.32, 0.030, 0.019, -0.035], [1.34, 0.031, 0.019, -0.034],
+  ],
+  joints: ['mixamorigHips', 'mixamorigSpine', 'mixamorigSpine1', 'mixamorigSpine2', 'mixamorigNeck', 'mixamorigHead'],
+});
+
 // Atlas overrides: `box` = island centroid (OBJ bind metres), `uvBox` = the
 // island's UV bounds must lie inside (OBJ v-up). An override may also carry its
 // own `role`, `doubleSided` and `name`, and `atlas` may be a flat colour
@@ -298,6 +314,7 @@ export const CONFIG = Object.freeze({
   materials: MATERIALS,
   eyes: EYES,
   headSkin: HEAD_SKIN,
+  bodyCore: BODY_CORE,
   orm: ORM,
   outline: OUTLINE,
   openJacket: OPEN_JACKET,

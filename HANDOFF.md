@@ -1,5 +1,13 @@
 # Project handoff
 
+## Approved avatar checkpoint
+
+The 3D neck and stomach repair is deployed and owner-approved as of 2026-10-12.
+Release tag: `avatar-v2026.10.12`. See
+[the repair, verification, and restore notes](docs/handoff/2026-10-12-approved-avatar-release.md).
+This completes the model-finish objective recorded in the older bus snapshot below;
+preserve the approved appearance as the baseline for future work.
+
 <!-- bus-handoff:start -->
 Project: amarillo/klukai
 Checkout: /home/jalsarraf/git/klukai

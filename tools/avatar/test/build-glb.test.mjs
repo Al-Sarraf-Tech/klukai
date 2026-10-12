@@ -41,6 +41,33 @@ async function loadThree() {
   } finally { THREE.TextureLoader.prototype.load = orig; console.warn = warn; }
 }
 
+// Bind-pose metres, deliberately in the two source-model gaps. Excluding
+// the jacket and hair prevents either from hiding a missing body again.
+for (const [name, y, z] of [['neck', 1.28, -0.016], ['stomach', 1.0, -0.008]]) {
+  test(`dev GLB: ${name} has a body surface underneath hair and jacket, from every side`, { skip }, async () => {
+    const { THREE } = await import('../lib/node-three.mjs');
+    const gltf = await loadThree();
+    gltf.scene.updateMatrixWorld(true);
+    const body = [];
+    gltf.scene.traverse((m) => {
+      if (m.isSkinnedMesh && m.material.name === 'bodysuit') {
+        m.skeleton.update();
+        body.push(m);
+      }
+    });
+    assert.ok(body.length, 'opaque inner bodysuit exists');
+    for (let degrees = 0; degrees < 360; degrees += 30) {
+      const angle = degrees * Math.PI / 180;
+      const radial = new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle));
+      const origin = new THREE.Vector3(0, y, z).addScaledVector(radial, 0.5);
+      const ray = new THREE.Raycaster(origin, radial.clone().negate(), 0, 0.5);
+      const hits = ray.intersectObjects(body, false);
+      assert.ok(hits.length, `${name} missing at ${degrees} degrees`);
+      assert.ok(hits[0].distance > 0.35 && hits[0].distance < 0.49, `${name} surface fits inside the outfit`);
+    }
+  });
+}
+
 test('dev GLB: size, draw calls, clips, one shared skin', { skip }, async () => {
   assert.ok(fs.statSync(glbPath).size <= CONFIG.budgetBytes, 'under the 15 MB budget');
   const r = (await readDoc()).getRoot();

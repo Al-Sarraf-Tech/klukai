@@ -19,6 +19,7 @@ import { reweightToChild, childBindInverse, jointWeightTotals, headShareFn } fro
 import { smoothOutlineNormals, outlineWidths, jointShare, packOutline } from './lib/outline.mjs';
 import { ormImage, textureGpuBytes } from './lib/orm.mjs';
 import { flipTriangle } from './lib/flip.mjs';
+import { createBodyCore } from './lib/body-core.mjs';
 import { CONFIG as BASE_CONFIG, validateConfig, FEATURES, featureOn } from './avatar.config.mjs';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
@@ -387,8 +388,22 @@ if (!DEBUG) { // one draw call per (texture or colour, role, sidedness)
   parts.push(...merged.values());
 }
 const attrNames = ['position', 'normal', 'uv', 'skinIndex', 'skinWeight'];
+if (CONFIG.bodyCore) {
+  const part = parts.find((p) => p.label === 'bodysuit' && p.color && !p.doubleSided);
+  if (!part) fail('bodyCore requires the opaque bodysuit material');
+  root.updateMatrixWorld(true);
+  const joints = CONFIG.bodyCore.joints.map((name) => {
+    const index = mesh.skeleton.bones.findIndex((b) => b.name === name);
+    if (index < 0) fail(`bodyCore: missing skin joint ${name}`);
+    // Inverse binds, not animation frames, define the geometry's coordinate space.
+    const bind = mesh.skeleton.boneInverses[index].clone().invert();
+    return { index, y: new THREE.Vector3().setFromMatrixPosition(bind).y };
+  });
+  part.generated = createBodyCore({ ...CONFIG.bodyCore, joints });
+  log(`inner body: ${part.generated.position.length / 9} triangles, neck through abdomen, shared bodysuit material`);
+}
 const out = new THREE.BufferGeometry();
-const totalTris = parts.reduce((n, p) => n + p.faces.length, 0);
+const totalTris = parts.reduce((n, p) => n + p.faces.length + (p.generated?.position.length || 0) / 9, 0);
 const morphOut = new Float32Array(totalTris * 9);
 for (const name of attrNames) {
   const a = geo.attributes[name];
@@ -409,6 +424,11 @@ parts.forEach((p, pi) => {
       flipTriangle([...attrNames.map((n) => out.attributes[n]), { array: morphOut, itemSize: 3 }], out.attributes.normal, cursor);
     }
     cursor++;
+  }
+  if (p.generated) {
+    for (const name of attrNames) out.attributes[name].array.set(p.generated[name], cursor * 3 * out.attributes[name].itemSize);
+    // The generated body does not blink; its morph deltas stay zero.
+    cursor += p.generated.position.length / 9;
   }
   out.addGroup(start * 3, (cursor - start) * 3, pi);
 });

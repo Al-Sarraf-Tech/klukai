@@ -80,6 +80,14 @@ All tuning lives in `avatar.config.mjs`.
    group and are inside-out; an override turns them into the flat black
    `bodysuit` cloth material. `--debug` logs islands whose score ratio is
    under 1.5× and that no override covers.
+
+   The source also omits the neck below the jaw and the central torso under
+   the jacket. `bodyCore` adds a closed inner high-neck bodysuit, fitted in
+   bind-pose metres and blended along the hips, spine, neck and head joints.
+   It shares the existing black bodysuit material, adds 896 triangles and no
+   extra draw call or texture. The GLB tests raycast the neck and stomach
+   from all sides with hair and jacket excluded; the geometry unit test
+   checks closure, outward winding and skin weights.
 4. **Dropped groups:**
    - other-outfit layers (Astral Luminous, Speed Star) and the `Outline` group,
      which is an 80-face eyelid strip, not an outline shell (outlines are
@@ -350,8 +358,9 @@ The default "Blazing Star" mesh is the only one in `assets/source-models/`.
 
 - There are no mouth or viseme morphs in the source, so speech is the talking
   clip plus head motion, not lip-sync.
-- The cap goggles, the blue cross hairclips and the open-jacket bodysuit bust
-  are not in the source mesh (their textures are).
+- The cap goggles and blue cross hairclips are not in the source mesh (their
+  textures are). The open-jacket bust is recovered from the alternate cloth
+  group; the absent neck and abdomen are reconstructed by `bodyCore`.
 - `calling`, `kneel` and `stand` ship in the GLB but no state uses them yet.
   `calling` is a crouching gesture.
 - No cloth physics. Hair has spring physics (below); in the deep `calling`
