@@ -1,6 +1,15 @@
 # Project handoff
 
-## Approved avatar checkpoint
+## Current approved release
+
+The owner approved the eye-corrected appearances on 2026-10-12 as the new release.
+Pinned tag: `avatar-eyes-v2026.10.12`, application commit `9b4ee8793c78e1603e1e83c58a9ffeb845685503`.
+This is the current recovery baseline: the original Blazing Star plus five Garf
+appearances with green eyes and working blinking, with Retro 64 removed.
+See [the verification, checksums, and private restore bundle](docs/handoff/2026-10-12-avatar-eye-fix.md).
+Preserve this release when making future appearance changes.
+
+## Earlier approved avatar checkpoint
 
 The 3D neck and stomach repair is deployed and owner-approved as of 2026-10-12.
 Release tag: `avatar-v2026.10.12`. See

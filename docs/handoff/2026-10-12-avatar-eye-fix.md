@@ -1,5 +1,7 @@
 # Avatar eye correction and Retro 64 removal
 
+**Owner-approved current release, 2026-10-12.** The owner reviewed the result, called it perfect, and requested that it be pinned and pushed. The immutable release tag is `avatar-eyes-v2026.10.12`, pointing to application commit `9b4ee8793c78e1603e1e83c58a9ffeb845685503`. Preserve its verified assets and behavior as the new baseline.
+
 The owner requested removal of Retro 64 and corrected eyes on the five added Garf appearances, excluding the first approved Blazing Star. The five corrected models are deployed. The original default GLB and shared 3D viewer are byte-identical to the preceding approved release.
 
 ## Root cause and correction
