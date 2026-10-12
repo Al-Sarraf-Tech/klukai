@@ -293,8 +293,8 @@ The prototype is `research/proto/companion/avatar3d.js`, with flags
 
 Resumed with "finish up the work". Two implementers (I1 build, I2 viewer) worked from the
 research above on disjoint files; the lead integrated, reviewed, deployed and committed.
-Branch `feat/3d-look`, fast-forwarded into `main` and synced to the amarillo git server.
-**Not pushed to GitHub** (`origin`/`personal`): do that on request.
+Branch `feat/3d-look`, fast-forwarded into `main`, synced to the amarillo git server and pushed to
+`origin` (owner request). `personal` was not pushed.
 
 ### Live now (amarillo)
 
@@ -356,7 +356,9 @@ All files are in `assets/build/rollback/` (gitignored).
 - **Missing source geometry:** the cap goggles and the blue hairclips.
 - **`calling` crouch** (no state plays it): the back chain's first tail can sit inside the neck
   capsule. Shrinking that collider's radius to ~0.075 would help.
-- **VP-10** needs a `companion-core` rebuild to go live (no restart was done).
+- **VP-10** is live: `companion-core` rebuilt and recreated on owner request (rollback image
+  `companion-companion-core:rollback-pre-tts-log-20261011`); core suite 4619 passed, 97.2% coverage;
+  e2e 11/11; no tracebacks.
 - **Working notes:** `.claude/look-work/` (reports `i1/REPORT.md`, `i2/REPORT.md`, renders,
   lead harness `lead/shoot.py`).
 

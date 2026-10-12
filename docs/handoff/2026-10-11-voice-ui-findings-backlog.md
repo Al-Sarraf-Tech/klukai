@@ -44,7 +44,7 @@ checked in the merged code. Any item not listed here is still open and still unv
   - SJ-11/UI-05: a link drop abandons the turn: no endless "…", no glued reply (`ecda6af`).
   - UI-01: the error frame's `message` is shown, never spoken (`ecda6af`).
   - SJ-03 (rest): an `image` frame clears the thinking pulse (`ecda6af`).
-  - VP-10: `/api/tts` logs the failure (`206ca6c`); live after the next `companion-core` rebuild.
+  - VP-10: `/api/tts` logs the failure (`206ca6c`); live (core rebuilt the same evening).
   - VP-18: the Makefile deploy notice (`727343f`).
 
 - 182 findings: 8 high, 67 medium, 107 low.
