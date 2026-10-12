@@ -332,9 +332,9 @@ On the server side (outside this tool):
 
 The companion's **Look** selector supports separate private GLBs while keeping the approved default pinned at `avatar-v2026.10.12`. See [the research and implementation record](../../docs/research/2026-10-12-3d-outfit-integration.md) for permissions, sources, validation and remaining download requirements.
 
-Five Garf appearances cover Blazing Star, Dorm, Speed Star, Astral Luminous and Cerulean Breaker. Player Legend's HK416 supplies the Retro 64 rendition. VRoid HK416 remains unavailable pending Pixiv sign-in/download. The stage displays “For personal, noncommercial use only.” Original creator licenses remain applicable; this is not a claim of publisher approval. Official Global MMD downloads are excluded because their terms prohibit software use.
+Five Garf appearances cover Blazing Star, Dorm, Speed Star, Astral Luminous and Cerulean Breaker. Retro 64 was removed at the owner's request. VRoid HK416 remains unavailable pending Pixiv sign-in/download. The stage displays “For personal, noncommercial use only.” Original creator licenses remain applicable; this is not a claim of publisher approval. Official Global MMD downloads are excluded because their terms prohibit software use.
 
-The offline converters require explicit source/output paths and refuse to overwrite `klukai.glb`:
+The offline converters require explicit source/output paths and refuse to overwrite `klukai.glb`. The GFL64 converter is retained only for the historical release; its output is no longer an allowed model:
 
 ```sh
 # Use checksum-verified Blender 4.1.1 with source scripts disabled.
@@ -345,7 +345,7 @@ blender -b --factory-startup --disable-autoexec --threads 2 \
   --python tools/avatar/import-gfl64.py -- SOURCE_RIG.blend VARIANT.glb
 ```
 
-Run builds/renders under `.claude/look-work/render.lock`; validate dev outputs before atomically installing the fixed registry filename under `assets/build/variants/`. Assets remain gitignored and authenticated, never copied into `web-build`. Garf variants retain 15 retargeted clips and blink; Retro 64 retains its creator's idle clip. Converters preserve each source's own coverage instead of transplanting the default body core. Registry IDs and attribution live in `docker/core/app/avatar_models.py`.
+Run builds/renders under `.claude/look-work/render.lock`; validate dev outputs before atomically installing the fixed registry filename under `assets/build/variants/`. Assets remain gitignored and authenticated, never copied into `web-build`. Garf variants retain 15 retargeted clips and blink. Their green irises use face shading, catchlights use the same additive overlay contract as the approved default, and the source’s fully transparent Eye Shadow helper faces are omitted. Converters preserve each source's own coverage instead of transplanting the default body core. Registry IDs and attribution live in `docker/core/app/avatar_models.py`.
 
 ## Known limitations
 

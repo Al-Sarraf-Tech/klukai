@@ -10,10 +10,18 @@ preserve the approved appearance as the baseline for future work.
 
 ## Personal appearances
 
-Six additional looks are deployed through the companion’s **Look** button, with
+Five additional looks are deployed through the companion’s **Look** button, with
 an explicit personal/noncommercial notice. The approved default above remains
 unchanged. VRoid is still pending its Pixiv sign-in/download; it is disabled in
 the picker. See [sources, conversion, verification and recovery](docs/handoff/2026-10-12-personal-avatar-appearances.md).
+
+## Eye correction and Retro 64 removal
+
+The five Garf appearances now preserve their green irises and catchlights.
+The opaque conversion of two transparent eye layers was corrected; the original
+approved Blazing Star and its viewer remain byte-identical. Retro 64 is removed,
+and saved Retro preferences migrate to the original default in 3D mode.
+See [the eye-fix verification and release notes](docs/handoff/2026-10-12-avatar-eye-fix.md).
 
 <!-- bus-handoff:start -->
 Project: amarillo/klukai

@@ -22,7 +22,16 @@ const TINTS = {
 };
 
 function loadPrefs() {
-  try { return { mode: "portrait", appearance: "default", music: true, voice: true, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") }; }
+  try {
+    const prefs = { mode: "portrait", appearance: "default", music: true, voice: true, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") };
+    // Migrate before prefetch/wake: a retired model's 404 must not turn a
+    // saved 3D preference into portrait mode while the catalog is loading.
+    if (prefs.appearance === "hk416_gfl64") {
+      prefs.appearance = "default";
+      savePrefs(prefs);
+    }
+    return prefs;
+  }
   catch { return { mode: "portrait", appearance: "default", music: true, voice: true }; }
 }
 function savePrefs(p) {

@@ -1,5 +1,7 @@
 # Personal appearance release
 
+Historical release record. Superseded by [the eye correction and Retro 64 removal](2026-10-12-avatar-eye-fix.md); retain this release as a recovery checkpoint.
+
 This release adds six private appearances through the companion’s **Look** button. The stage and selector display **“For personal, noncommercial use only.”** Original third-party terms remain applicable. This release does not assert publisher approval.
 
 ## Available appearances

@@ -141,8 +141,7 @@ class TestAvatarModel:
         assert data["notice"] == "For personal, noncommercial use only."
         entries = {m["id"]: m for m in data["models"]}
         assert entries["default"]["available"] is True
-        assert entries["hk416_gfl64"]["available"] is False
-        assert entries["hk416_gfl64"]["license"] == "CC BY-SA 4.0"
+        assert "hk416_gfl64" not in entries
         assert entries["hk416_vroid"]["available"] is False
         assert entries["klukai_garf"]["available"] is False
         for model in ("garf_dorm", "garf_speed_star", "garf_astral_luminous", "garf_cerulean_breaker"):
@@ -154,16 +153,22 @@ class TestAvatarModel:
         (tmp_path / "klukai.glb").write_bytes(b"default")
         assert client.get("/api/avatar/model", params={"model": model}, headers=AUTH).status_code == 404
 
+    def test_retired_retro_model_is_inaccessible_even_if_file_remains(self, client, tmp_path):
+        variant = tmp_path / "variants" / "hk416_gfl64.glb"
+        variant.parent.mkdir()
+        variant.write_bytes(b"retired model")
+        assert client.get("/api/avatar/model?model=hk416_gfl64", headers=AUTH).status_code == 404
+
     def test_models_have_distinct_etags_even_with_same_size_and_time(self, client, tmp_path):
         import os
         default = tmp_path / "klukai.glb"
         default.write_bytes(b"one")
-        variant = tmp_path / "variants" / "hk416_gfl64.glb"
+        variant = tmp_path / "variants" / "garf_dorm.glb"
         variant.parent.mkdir()
         variant.write_bytes(b"two")
         os.utime(variant, ns=(default.stat().st_atime_ns, default.stat().st_mtime_ns))
         first = client.get("/api/avatar/model", headers=AUTH)
-        second = client.get("/api/avatar/model?model=hk416_gfl64", headers={**AUTH, "If-None-Match": first.headers["etag"]})
+        second = client.get("/api/avatar/model?model=garf_dorm", headers={**AUTH, "If-None-Match": first.headers["etag"]})
         assert second.status_code == 200 and second.content == b"two"
         assert second.headers["etag"] != first.headers["etag"]
 

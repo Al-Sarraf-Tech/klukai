@@ -15,6 +15,7 @@ Follow with retarget-variant.mjs to add the pinned avatar's animations.
 import sys
 import re
 import bpy
+import bmesh
 from pathlib import Path
 from mathutils import Matrix
 
@@ -108,6 +109,19 @@ for o in objects:
     o.hide_set(False)
     o.hide_viewport = False
     o.hide_render = False
+    # This source material is a fully transparent shader helper, not eyelid
+    # geometry. Exporting it as Principled creates a white bar over each iris.
+    hidden_slots = {i for i, m in enumerate(o.data.materials) if m and m.name == "Eye Shadow"}
+    if hidden_slots:
+        mesh = bmesh.new()
+        mesh.from_mesh(o.data)
+        bmesh.ops.delete(
+            mesh,
+            geom=[f for f in mesh.faces if f.material_index in hidden_slots],
+            context="FACES_ONLY",
+        )
+        mesh.to_mesh(o.data)
+        mesh.free()
     for mod in list(o.modifiers):
         o.modifiers.remove(mod)
     if o.animation_data:
@@ -180,12 +194,12 @@ for mat in materials:
     )
     image = next((i for i in images if re.search(r"_(?:d|da)\.tga", i.name)), None)
     role = (
-        "hair"
+        "overlay"
+        if mat.name == "Klukai Eyeblend"
+        else "hair"
         if "Hair" in mat.name and "Acc" not in mat.name
         else "face"
-        if mat.name == "Klukai Face"
-        else "eyes"
-        if mat.name == "Klukai Eyes"
+        if mat.name in {"Klukai Face", "Klukai Eyes"}
         else "cloth"
     )
     if mat.name == "Klukai Eyeblend":

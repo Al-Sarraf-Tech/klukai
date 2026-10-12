@@ -17,14 +17,6 @@ MODELS = (
         "description": "Your pinned, approved appearance.",
     },
     {
-        "id": "hk416_gfl64",
-        "name": "HK416 · Retro 64",
-        "creator": "Player Legend",
-        "license": "CC BY-SA 4.0",
-        "source": "https://github.com/PlayerLegend/char-select-girls-frontline",
-        "description": "Low-poly fan rendition. Model adapted for this companion; character rights belong to MICA Team / Sunborn.",
-    },
-    {
         "id": "hk416_vroid",
         "name": "HK416 · VRoid",
         "creator": "こな麦茶",
