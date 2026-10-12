@@ -1,0 +1,34 @@
+name: Avatar Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/avatar/**'
+      - '.github/workflows/avatar.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/avatar/**'
+      - '.github/workflows/avatar.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Avatar unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/avatar
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tools/avatar/package-lock.json
+      - run: npm ci
+      - run: npm test
