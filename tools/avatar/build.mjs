@@ -19,6 +19,7 @@ import { reweightToChild, childBindInverse, jointWeightTotals, headShareFn } fro
 import { smoothOutlineNormals, outlineWidths, jointShare, packOutline } from './lib/outline.mjs';
 import { ormImage, textureGpuBytes } from './lib/orm.mjs';
 import { flipTriangle } from './lib/flip.mjs';
+import { insetFaces } from './lib/inset-faces.mjs';
 import { CONFIG as BASE_CONFIG, validateConfig, FEATURES, featureOn } from './avatar.config.mjs';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
@@ -351,6 +352,27 @@ for (const m of obj.materials) {
     const { assignment, overrideOf, stats } = await assignAtlases({
       obj, faces, atlases, texPath: tex, overrides: cfg.atlasOverrides || [], report: islandReport, defaultAtlas: cfg.atlasDefault || (cfg.atlases ? null : cfg.texture),
     });
+
+    // Keep selected hidden shells closed while moving them slightly beneath an
+    // outer layer. Group by override so every selected face is moved once.
+    const insetGroups = new Map();
+    for (const f of faces) {
+      const ov = overrideOf.get(f);
+      if (!ov?.inset) continue;
+      if (!insetGroups.has(ov)) insetGroups.set(ov, []);
+      insetGroups.get(ov).push(f);
+    }
+    for (const [ov, insetGroupFaces] of insetGroups) {
+      const moved = insetFaces({
+        positions: geo.attributes.position.array,
+        normals: geo.attributes.normal.array,
+        faceV: obj.faceV,
+        faces: insetGroupFaces,
+        amount: ov.inset,
+      });
+      log(`inset ${m}: ${moved} vertices by ${(ov.inset * 1000).toFixed(1)} mm (${ov.why || 'override'})`);
+    }
+
     if (islandReport) {
       const isl = islandReport.splice(0);
       fs.writeFileSync(path.join(outDir, `islands-${m.replace(/[^A-Za-z0-9_]+/g, '_')}.json`), JSON.stringify(isl, null, 0));
