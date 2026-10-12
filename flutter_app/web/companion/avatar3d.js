@@ -412,6 +412,131 @@ export function blinkCurve(t, slow = false) {
   return -1;
 }
 
+// ── spring-bone hair (three-vrm VRMSpringBoneJoint on plain bones) ─────────
+// Vectors are [x, y, z] arrays in centre space (the character root), metres.
+
+/** Pure: closest point to `p` on segment a–b, written into `out`. */
+export function closestOnSegment(out, p, a, b) {
+  const ab0 = b[0] - a[0]; const ab1 = b[1] - a[1]; const ab2 = b[2] - a[2];
+  const l2 = ab0 * ab0 + ab1 * ab1 + ab2 * ab2;
+  let t = l2 > 1e-12 ? ((p[0] - a[0]) * ab0 + (p[1] - a[1]) * ab1 + (p[2] - a[2]) * ab2) / l2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  out[0] = a[0] + ab0 * t; out[1] = a[1] + ab1 * t; out[2] = a[2] + ab2 * t;
+  return out;
+}
+
+const _cp = [0, 0, 0];
+/** Pure: push point `p` (in place) out of a sphere { c, r }, capsule { a, b, r } or
+ *  floor { floorY }, plus `hit` (the hair's own thickness). Returns true when it moved. */
+export function collidePoint(p, col, hit = 0) {
+  if (col.floorY !== undefined) {
+    if (p[1] >= col.floorY + hit) return false;
+    p[1] = col.floorY + hit;
+    return true;
+  }
+  const c = col.b ? closestOnSegment(_cp, p, col.a, col.b) : (col.c || col.a);
+  const d0 = p[0] - c[0]; const d1 = p[1] - c[1]; const d2 = p[2] - c[2];
+  const r = col.r + hit;
+  const dist = Math.hypot(d0, d1, d2);
+  if (dist >= r || dist < 1e-9) return false;
+  const k = r / dist;
+  p[0] = c[0] + d0 * k; p[1] = c[1] + d1 * k; p[2] = c[2] + d2 * k;
+  return true;
+}
+
+/** Pure: keep a tail within `maxAngle` (rad) of the rest direction, on the bone
+ *  length (in place). Long hair can't fold back or twist over on a fast turn. */
+export function coneClamp(p, head, len, restDir, maxAngle) {
+  if (!(maxAngle > 0) || maxAngle >= Math.PI) return false;
+  let d0 = p[0] - head[0]; let d1 = p[1] - head[1]; let d2 = p[2] - head[2];
+  const l = Math.hypot(d0, d1, d2);
+  if (l < 1e-9) return false;
+  d0 /= l; d1 /= l; d2 /= l;
+  const c = d0 * restDir[0] + d1 * restDir[1] + d2 * restDir[2];
+  const cMax = Math.cos(maxAngle);
+  if (c >= cMax) return false;
+  // component of d orthogonal to rest, normalised; then rest·cos + ortho·sin
+  let o0 = d0 - restDir[0] * c; let o1 = d1 - restDir[1] * c; let o2 = d2 - restDir[2] * c;
+  let ol = Math.hypot(o0, o1, o2);
+  if (ol < 1e-9) { // straight back: any side, as long as it is orthogonal to rest
+    const ax = Math.abs(restDir[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    o0 = restDir[1] * ax[2] - restDir[2] * ax[1]; o1 = restDir[2] * ax[0] - restDir[0] * ax[2]; o2 = restDir[0] * ax[1] - restDir[1] * ax[0];
+    ol = Math.hypot(o0, o1, o2);
+  }
+  const sMax = Math.sin(maxAngle);
+  p[0] = head[0] + (restDir[0] * cMax + (o0 / ol) * sMax) * len;
+  p[1] = head[1] + (restDir[1] * cMax + (o1 / ol) * sMax) * len;
+  p[2] = head[2] + (restDir[2] * cMax + (o2 / ol) * sMax) * len;
+  return true;
+}
+
+function keepLength(p, head, len) {
+  const d0 = p[0] - head[0]; const d1 = p[1] - head[1]; const d2 = p[2] - head[2];
+  const l = Math.hypot(d0, d1, d2);
+  if (l < 1e-9) return;
+  const k = len / l;
+  p[0] = head[0] + d0 * k; p[1] = head[1] + d1 * k; p[2] = head[2] + d2 * k;
+}
+
+/**
+ * Pure: one fixed step of a spring bone's tail (three-vrm VRMSpringBoneJoint):
+ * inertia (cur − prev)·(1 − drag) + stiffness·dt toward the rest direction +
+ * gravity·dt, then the bone length is restored, the tail is kept within
+ * `maxAngle` of the rest direction (0 = no limit) and pushed out of every
+ * collider (length restored again). Writes and returns `out`.
+ */
+export function springStep(out, { cur, prev, head, len, restDir, stiffness, drag, gravity, gravityDir = [0, -1, 0], dt, colliders = [], hitRadius = 0, maxAngle = 0 }) {
+  const keep = 1 - drag;
+  for (let k = 0; k < 3; k++) {
+    out[k] = cur[k] + (cur[k] - prev[k]) * keep + restDir[k] * stiffness * dt + gravityDir[k] * gravity * dt;
+  }
+  keepLength(out, head, len);
+  coneClamp(out, head, len, restDir, maxAngle);
+  for (const c of colliders) if (collidePoint(out, c, hitRadius)) keepLength(out, head, len);
+  return out;
+}
+
+/** Pure: where the tail settles with no motion (the step's fixed point):
+ *  along stiffness·restDir + gravity·down, out of the colliders. For resets and
+ *  the no-physics fallback (reduced motion), so chains hang instead of sticking out. */
+export function springHang(out, { head, len, restDir, stiffness, gravity, gravityDir = [0, -1, 0], colliders = [], hitRadius = 0, maxAngle = 0 }) {
+  for (let k = 0; k < 3; k++) out[k] = head[k] + (restDir[k] * stiffness + gravityDir[k] * gravity);
+  keepLength(out, head, len);
+  if (Math.hypot(out[0] - head[0], out[1] - head[1], out[2] - head[2]) < 1e-9) for (let k = 0; k < 3; k++) out[k] = head[k] + restDir[k] * len;
+  coneClamp(out, head, len, restDir, maxAngle); // same limit as springStep: no pop when the sim takes over
+  for (const c of colliders) if (collidePoint(out, c, hitRadius)) keepLength(out, head, len);
+  return out;
+}
+
+/** Pure: fixed 1/60 s sub-steps for a frame. dt is clamped to 0.1 s and at most
+ *  `max` steps run; the remainder carries over in `acc`. */
+export function springSubsteps(acc, dt, h = 1 / 60, max = 6) {
+  let a = acc + Math.min(Math.max(Number(dt) || 0, 0), 0.1);
+  let n = Math.floor(a / h + 1e-9);
+  a -= n * h;
+  if (n > max) { n = max; a = 0; }
+  return { n, acc: a };
+}
+
+/** Pure: did the head jump (teleport, resumed tab, state snap) so far in one frame
+ *  that the springs must be reset rather than simulated? The limits are per 60 Hz
+ *  frame and scale with longer frames, so a slow phone's fast turn still simulates. */
+export function poseJumped({ moved = 0, turned = 0, dt = 1 / 60 } = {}) {
+  const f = Math.max(1, (Number(dt) || 0) * 60);
+  return moved > 0.25 * f || turned > 1.0 * f;
+}
+
+const SPRING_H = 1 / 60; // fixed spring sub-step (s)
+
+/** Per-chain settings (stiffness root → tip; maxAngle in degrees from the rest
+ *  direction). Ponytail and back hair overlap, so they share one set. The cone is per
+ *  joint, so a 5-bone ponytail can still curl 5×; softer, less damped or wider (0.9→0.35
+ *  stiffness, 0.42 drag, 35° tried) fans the whole back mass out on nervous' 560°/s turns. */
+export const SPRING = Object.freeze({
+  long: { stiffness: [3.0, 1.5], gravity: 0.5, drag: 0.5, hitRadius: 0.03, maxAngle: 15 }, // ponytail, back
+  lock: { stiffness: [2.0, 1.2], gravity: 0.3, drag: 0.5, hitRadius: 0.015, maxAngle: 25 }, // side locks
+});
+
 /** Pure: next idle fidget, never the same one twice in a row. */
 export function pickFidget(names, prev, rand = Math.random) {
   const pool = names.length > 1 ? names.filter((n) => n !== prev) : names.slice();
@@ -739,6 +864,8 @@ export async function createAvatar3D(container, opts = {}) {
   let stateName = 'idle'; // mirrors sm.state (createStateMachine below)
   let insetsPx = { top: 0, bottom: 0 };
   let shadowMesh = null;
+  let springs = null; // hair spring chains (buildSprings), null without chains
+  let simClock = performance.now() / 1000; // debug.run()'s synthetic clock (s)
   const timer = new THREE.Timer();
   timer.connect?.(document);
   const ownedTextures = new Set();
@@ -782,6 +909,7 @@ export async function createAvatar3D(container, opts = {}) {
   const rimDirWorld = new THREE.Vector3(...LIGHT.rimDir).normalize();
   let unitsPerMetre = 1; // GLB positions are quantized: shader maths on `position` uses these units
   let hasHeadCenter = false;
+  let hasChains = false; // the GLB carries hair bone chains (spring physics) → no vertex sway
 
   function toonFrom(src, role) {
     if (role === 'overlay') {
@@ -807,7 +935,7 @@ export async function createAvatar3D(container, opts = {}) {
     const defs = {};
     const sameUv = (t) => t && src.map && (t.channel ?? 0) === (src.map.channel ?? 0);
     if (role === 'face' && hasHeadCenter && !/eye/i.test(src.name)) defs.KL_FACE = ''; // not the iris discs
-    if (role === 'hair') { if (hasHeadCenter) defs.KL_RING = ''; defs.KL_SWAY = ''; }
+    if (role === 'hair') { if (hasHeadCenter) defs.KL_RING = ''; if (!hasChains) defs.KL_SWAY = ''; } // chains: real bones
     if (sameUv(src.aoMap)) { defs.KL_AO = ''; u.uAoMap = { value: src.aoMap }; ownedTextures.add(src.aoMap); }
     if (role === 'cloth' && sameUv(src.metalnessMap)) {
       defs.KL_METAL = ''; u.uMetalMap = { value: src.metalnessMap }; ownedTextures.add(src.metalnessMap);
@@ -906,7 +1034,7 @@ export async function createAvatar3D(container, opts = {}) {
     // discard only where needed: it costs early-z, so cloth and hair hulls stay without it
     if (role === 'skin' || role === 'face') mat.defines = { ...(mat.defines || {}), KL_FACING: '' };
     // the hair hull must sway with the hair it outlines, or its lines float beside the tips
-    if (role === 'hair') mat.defines = { ...(mat.defines || {}), KL_SWAY: '' };
+    if (role === 'hair' && !hasChains) mat.defines = { ...(mat.defines || {}), KL_SWAY: '' };
     const u = { uPx: { value: p.px }, uZ: { value: p.z } };
     mat.userData.klUniforms = u;
     mat.onBeforeCompile = (shader) => {
@@ -969,6 +1097,8 @@ export async function createAvatar3D(container, opts = {}) {
     if (disposed) { disposeObject(gltf.scene); return stub; }
     root = gltf.scene;
     root.traverse((o) => { if (o.isSkinnedMesh) skinned.push(o); });
+    const chainData = Array.isArray(root.userData?.springChains) ? root.userData.springChains : [];
+    hasChains = chainData.some(chainUsable); // same rule buildSprings applies: never sway off with no springs
     const skin = skinned[0]?.skeleton;
     const hc = skin ? headCenterFromSkin(skin) : null;
     if (hc) { shared.uHeadCenter.value.copy(hc.center).applyMatrix4(skinned[0].bindMatrixInverse); unitsPerMetre = hc.upm; hasHeadCenter = true; }
@@ -1000,6 +1130,7 @@ export async function createAvatar3D(container, opts = {}) {
     }
     addOutlines();
     captureRest();
+    springs = hasChains ? buildSprings(root.userData) : null;
     mixer = new THREE.AnimationMixer(root);
     for (const clip of gltf.animations) {
       const a = mixer.clipAction(clip);
@@ -1234,7 +1365,7 @@ export async function createAvatar3D(container, opts = {}) {
       if (prev === 'talking' && name !== 'talking') talkWeight = 1; // fade the layer out, no pop
       stateName = name;
       play(name);
-      if ((prev === 'sleep') !== (name === 'sleep')) frame();
+      if ((prev === 'sleep') !== (name === 'sleep')) { frame(); resetSprings(700); } // lying down / getting up: hang through the crossfade
     },
   });
 
@@ -1315,7 +1446,10 @@ export async function createAvatar3D(container, opts = {}) {
     // the clip's own head angle (vs the body) lowers the weight: big gestures win
     let clipAngle = 0;
     if (bones.Hips) { bones.Hips.getWorldQuaternion(_q2); clipAngle = fwd.angleTo(_v1.copy(hipsFwd).applyQuaternion(_q2)); }
-    const wGoal = life ? (LOOK_WEIGHT[stateName] ?? 0.6) * (1 - smoothstep(30 * DEG, 90 * DEG, clipAngle)) : 0;
+    // a target behind her (orbit, inspection cameras) would clamp to ±max and flip sides as she
+    // turns, snapping the head: let go of it instead
+    const behind = 1 - smoothstep(90 * DEG, 130 * DEG, Math.abs(dy));
+    const wGoal = life ? (LOOK_WEIGHT[stateName] ?? 0.6) * (1 - smoothstep(30 * DEG, 90 * DEG, clipAngle)) * behind : 0;
     look.w += (wGoal - look.w) * (1 - Math.exp(-dt * 2.5));
     const lim = lookSplit({ yaw: dy, pitch: dp, headJoint }); // clamp first …
     const cy = (lim.neck.yaw + lim.head.yaw) * look.w;
@@ -1449,12 +1583,159 @@ export async function createAvatar3D(container, opts = {}) {
     for (const m of skinned) if (m.morphTargetInfluences) m.morphTargetInfluences[blinkIdx] = v;
   }
 
+  // Hair springs (when the GLB has chains): three-vrm's VRMSpringBoneJoint on plain
+  // bones. Tails live in centre space (the character root), so root or camera moves
+  // don't throw the hair; fixed 1/60 s sub-steps; roots before children; after the
+  // mixer, look-at and eye guard. "Hang" mode (the step's fixed point, no inertia)
+  // covers resets, sleep transitions, big pose jumps and prefers-reduced-motion.
+  const _rootInv = new THREE.Matrix4();
+  const _rootQ = new THREE.Quaternion();
+  const _sv = new THREE.Vector3(); const _sh = new THREE.Vector3();
+  const _sq = new THREE.Quaternion(); const _sqa = new THREE.Quaternion(); const _sScale = new THREE.Vector3();
+  const _tmp = [0, 0, 0];
+  // A chain the springs can run: every bone present, every segment (and the tail) non-zero.
+  function chainUsable(ch) {
+    const list = (Array.isArray(ch?.bones) ? ch.bones : []).map((n) => root.getObjectByName(n));
+    if (!list.length || list.some((b) => !b)) return false;
+    const tail = Array.isArray(ch.tail) ? ch.tail : [0, -0.1, 0];
+    return list.every((b, i) => (i < list.length - 1 ? list[i + 1].position.length() : Math.hypot(...tail)) > 1e-4);
+  }
+  function buildSprings(ud) {
+    const chains = [];
+    for (const ch of ud.springChains || []) {
+      if (!chainUsable(ch)) continue;
+      const list = ch.bones.map((n) => root.getObjectByName(n));
+      const set = /side|lock|front/i.test(ch.name || '') ? SPRING.lock : SPRING.long;
+      const joints = list.map((bone, i) => {
+        const tail = i < list.length - 1 ? list[i + 1].position.clone() : new THREE.Vector3().fromArray(ch.tail || [0, -0.1, 0]);
+        const f = list.length > 1 ? i / (list.length - 1) : 0;
+        const j = {
+          bone, initQ: bone.quaternion.clone(), axis: tail.clone().normalize(), len: tail.length(),
+          stiffness: set.stiffness[0] + (set.stiffness[1] - set.stiffness[0]) * f, drag: set.drag, gravity: set.gravity, hit: set.hitRadius,
+          maxAngle: (set.maxAngle || 0) * DEG, cur: [0, 0, 0], prev: [0, 0, 0], head: [0, 0, 0], rest: [0, 0, 0],
+        };
+        // one params object per joint, reused every step (no per-frame allocation)
+        j.p = { cur: j.cur, prev: j.prev, head: j.head, len: j.len, restDir: j.rest, stiffness: 0, drag: 0, gravity: 0, gravityDir: [0, -1, 0], dt: SPRING_H, colliders: null, hitRadius: 0, maxAngle: 0 };
+        return j;
+      });
+      if (joints.every((j) => j.len > 1e-4)) chains.push({ name: ch.name, joints, lock: set === SPRING.lock });
+    }
+    if (!chains.length) return null;
+    const colliders = [];
+    for (const c of ud.springColliders || []) {
+      const bone = root.getObjectByName(c?.bone);
+      const to = c?.to ? root.getObjectByName(c.to.bone) : null;
+      if (!bone || !(c.radius > 0) || (c.to && !to)) continue;
+      colliders.push({
+        bone, off: new THREE.Vector3().fromArray(c.offset || [0, 0, 0]), to, toOff: to ? new THREE.Vector3().fromArray(c.to.offset || [0, 0, 0]) : null,
+        shape: to ? { a: [0, 0, 0], b: [0, 0, 0], r: c.radius } : { c: [0, 0, 0], r: c.radius },
+      });
+    }
+    // + the floor (she lies down in `sleep`; crouches): hair rests on it instead of sinking
+    const shapes = [...colliders.map((c) => c.shape), { floorY: 0 }];
+    // side locks hang in front: only head, neck, chest and shoulders can reach them
+    const near = shapes.filter((sh, i) => i >= colliders.length || /Head|Neck|Spine2|Arm$/.test(colliders[i].bone.name));
+    for (const ch of chains) for (const j of ch.joints) j.p.colliders = ch.lock ? near : shapes;
+    // bones whose world matrices the springs read, parents first (not the whole scene graph)
+    const need = new Set();
+    const addUp = (b) => { for (let x = b; x && x !== root; x = x.parent) need.add(x); };
+    if (head) addUp(head);
+    for (const c of colliders) { addUp(c.bone); if (c.to) addUp(c.to); }
+    for (const ch of chains) addUp(ch.joints[0].bone.parent);
+    const order = [];
+    root.traverse((o) => { if (need.has(o)) order.push(o); }); // traverse = parents before children
+    return { chains, colliders, shapes, order, acc: 0, hold: 0, primed: false, lastPos: new THREE.Vector3(), lastQ: new THREE.Quaternion(), ms: 0, mode: 'hang' };
+  }
+  function toCentre(v, out) { v.applyMatrix4(_rootInv); out[0] = v.x; out[1] = v.y; out[2] = v.z; }
+  // one joint: rest direction from the (already updated) parent, then sim / hang / aim, then rotate the bone at its tail
+  function solveJoint(j, mode) {
+    const parent = j.bone.parent;
+    _sq.setFromRotationMatrix(parent.matrixWorld).multiply(j.initQ); // bone's rest frame, world
+    _sh.copy(j.bone.position).applyMatrix4(parent.matrixWorld); // joint origin, world
+    toCentre(_sv.copy(_sh), j.head);
+    _sv.copy(j.axis).applyQuaternion(_sq).applyQuaternion(_rootQ); // rest direction, centre space
+    j.rest[0] = _sv.x; j.rest[1] = _sv.y; j.rest[2] = _sv.z;
+    const p = j.p;
+    p.stiffness = j.stiffness; p.drag = j.drag; p.gravity = j.gravity; p.hitRadius = j.hit; p.maxAngle = j.maxAngle;
+    if (mode === 'sim') {
+      springStep(_tmp, p);
+      j.prev[0] = j.cur[0]; j.prev[1] = j.cur[1]; j.prev[2] = j.cur[2];
+      j.cur[0] = _tmp[0]; j.cur[1] = _tmp[1]; j.cur[2] = _tmp[2];
+    } else if (mode === 'hang') {
+      springHang(j.cur, p);
+      j.prev[0] = j.cur[0]; j.prev[1] = j.cur[1]; j.prev[2] = j.cur[2];
+    }
+    // aim: tail direction in the bone's rest frame → rotation from the bind axis
+    _sv.set(j.cur[0], j.cur[1], j.cur[2]).applyMatrix4(root.matrixWorld).sub(_sh).applyQuaternion(_sq.invert());
+    if (_sv.lengthSq() < 1e-12) return;
+    _sqa.setFromUnitVectors(j.axis, _sv.normalize());
+    j.bone.quaternion.copy(j.initQ).multiply(_sqa);
+    j.bone.updateMatrix();
+    j.bone.matrixWorld.multiplyMatrices(parent.matrixWorld, j.bone.matrix);
+  }
+  function updateSprings(dt, now) {
+    const S = springs;
+    if (!S) return;
+    const t0 = performance.now();
+    // the procedural layers moved bones: refresh just the matrices the springs read
+    root.updateWorldMatrix(true, false);
+    for (const b of S.order) { b.updateMatrix(); b.matrixWorld.multiplyMatrices(b.parent.matrixWorld, b.matrix); }
+    _rootInv.copy(root.matrixWorld).invert();
+    _rootQ.setFromRotationMatrix(_rootInv);
+    for (const c of S.colliders) {
+      if (c.to) {
+        toCentre(_sv.copy(c.off).applyMatrix4(c.bone.matrixWorld), c.shape.a);
+        toCentre(_sv.copy(c.toOff).applyMatrix4(c.to.matrixWorld), c.shape.b);
+      } else toCentre(_sv.copy(c.off).applyMatrix4(c.bone.matrixWorld), c.shape.c);
+    }
+    let jumped = !S.primed;
+    if (head) {
+      head.matrixWorld.decompose(_sv, _sq, _sScale); // refreshed above (head is in S.order)
+      if (S.primed) jumped = poseJumped({ moved: _sv.distanceTo(S.lastPos), turned: S.lastQ.angleTo(_sq), dt });
+      S.lastPos.copy(_sv); S.lastQ.copy(_sq);
+    }
+    S.primed = true;
+    S.hold = Math.max(0, S.hold - Math.max(0, dt)); // seconds left to hang (clock-free: works for debug.run too)
+    const hang = jumped || !life || reducedMotion || S.hold > 0;
+    if (hang) {
+      S.acc = 0; S.mode = 'hang';
+      for (const ch of S.chains) for (const j of ch.joints) solveJoint(j, 'hang');
+    } else {
+      const st = springSubsteps(S.acc, dt, SPRING_H);
+      S.acc = st.acc; S.mode = 'sim';
+      if (!st.n) for (const ch of S.chains) for (const j of ch.joints) solveJoint(j, 'aim'); // keep tails world-steady
+      for (let i = 0; i < st.n; i++) for (const ch of S.chains) for (const j of ch.joints) solveJoint(j, 'sim');
+    }
+    S.ms = S.ms ? S.ms * 0.95 + (performance.now() - t0) * 0.05 : performance.now() - t0;
+  }
+  // smallest gap between any spring tail and any collider surface (debug; < 0 = inside)
+  function springClearance() {
+    if (!springs) return null;
+    let min = Infinity; let at = '';
+    const nameOf = new Map(springs.colliders.map((c) => [c.shape, c.bone.name]));
+    for (const ch of springs.chains) for (const j of ch.joints) for (const c of j.p.colliders) {
+      let g;
+      if (c.floorY !== undefined) g = j.cur[1] - c.floorY;
+      else {
+        const q = c.b ? closestOnSegment([0, 0, 0], j.cur, c.a, c.b) : c.c;
+        g = Math.hypot(j.cur[0] - q[0], j.cur[1] - q[1], j.cur[2] - q[2]) - c.r;
+      }
+      if (g < min) { min = g; at = `${ch.name}→${nameOf.get(c) || 'floor'}`; }
+    }
+    return { min, at };
+  }
+  const resetSprings = (holdMs = 0) => {
+    if (!springs) return;
+    springs.primed = false;
+    springs.hold = Math.max(springs.hold, (Number(holdMs) || 0) / 1000);
+  };
+
   // Hair: a damped spring on the torso's motion drives a vertex-shader sway
-  // (interim until the build adds hair bones), plus a faint breeze.
+  // (interim, and the fallback for GLBs without hair chains), plus a faint breeze.
   const sway = { x: 0, vx: 0, z: 0, vz: 0, prev: new THREE.Vector3(), prevYaw: 0, fresh: true };
   function updateSway(dt, t) {
     shared.uTime.value = t;
-    const on = life && !reducedMotion;
+    const on = life && !reducedMotion && !hasChains;
     shared.uSwayAmp.value = on ? 0.004 * unitsPerMetre : 0;
     const sp = bones.Spine2;
     if (!on || !sp || dt <= 0) { sway.fresh = true; shared.uSway.value.set(0, 0); return; }
@@ -1598,6 +1879,7 @@ export async function createAvatar3D(container, opts = {}) {
     applyTalk(dt, now);
     applyEyeGuard(dt);
     applyBlink(dt, now);
+    updateSprings(dt, now);
     updateSway(dt, t);
     updateShadow(dt);
 
@@ -1608,7 +1890,7 @@ export async function createAvatar3D(container, opts = {}) {
     placeCamera(dt, now);
     updateTint(dt);
   }
-  function start() { if (!rafId && !disposed && !paused) { timer.reset(); sway.fresh = true; rafId = requestAnimationFrame(tick); } }
+  function start() { if (!rafId && !disposed && !paused) { timer.reset(); sway.fresh = true; resetSprings(); rafId = requestAnimationFrame(tick); } }
   function stop() { if (rafId) cancelAnimationFrame(rafId); rafId = 0; lastNow = 0; frameAcc = 0; frameN = 0; }
 
   // ── lifecycle ────────────────────────────────────────────────────────────
@@ -1620,7 +1902,7 @@ export async function createAvatar3D(container, opts = {}) {
   }
   onVisibility = syncPaused;
   onLost = (e) => { e.preventDefault(); contextLost = true; syncPaused(); };
-  onRestored = () => { contextLost = false; frame({ snap: true }); syncPaused(); };
+  onRestored = () => { contextLost = false; resetSprings(); frame({ snap: true }); syncPaused(); };
   onPointer = (e) => {
     if (e.pointerType !== 'mouse') return; // touch: she looks at the camera
     const r = canvas.getBoundingClientRect();
@@ -1690,6 +1972,7 @@ export async function createAvatar3D(container, opts = {}) {
       return {
         ...stats, t0: undefined, pixelRatio: renderer.getPixelRatio(), drawCalls: i.render.calls, triangles: i.render.triangles,
         programs: i.programs?.length ?? 0, textures: i.memory.textures, fps: Math.round(fpsAvg), outlines: outlinesOn, headJoint,
+        springMs: springs ? +springs.ms.toFixed(3) : null,
       };
     },
     /** Set a state directly (thinking, talking, greet, …): always immediate. */
@@ -1762,6 +2045,8 @@ export async function createAvatar3D(container, opts = {}) {
           fov: camera.fov, cam: camera.position.toArray(), target: camCur.target.toArray(), reducedMotion, outlines: outlinesOn, headJoint,
           orbit: { ...orbit }, follow,
           eyeElevDeg: guard.e0 / DEG, eyeElevAfterDeg: guard.e1 / DEG, guardLiftDeg: guard.lift / DEG, guardW: guard.w,
+          springs: springs ? { mode: springs.mode, ms: springs.ms, chains: springs.chains.map((c) => c.name), clearance: springClearance(),
+            tips: springs.chains.map((c) => c.joints[c.joints.length - 1].cur.slice()) } : null,
           rim: shared.uRimColor.value.getHexString(),
         };
       },
@@ -1777,6 +2062,7 @@ export async function createAvatar3D(container, opts = {}) {
         a.reset(); a.setLoop(THREE.LoopRepeat, Infinity); a.setEffectiveWeight(1); a.play(); a.time = Number(t) || 0;
         current = { state, action: a, once: false };
         speakingTarget = 0; speaking = 0; talkWeight = state === 'talking' ? 1 : 0;
+        resetSprings();
         GUARD.on = g !== false;
         const t0 = performance.now();
         for (let i = 0; i < frames; i++) { blinkT = -1; nextBlinkAt = Infinity; step(1 / 30, t0 + i * 33.3, 0); }
@@ -1799,6 +2085,51 @@ export async function createAvatar3D(container, opts = {}) {
         for (const a of actions.values()) if (a !== current.action) a.setEffectiveWeight(0);
         current.action.enabled = true; current.action.setEffectiveWeight(1); current.action.time = Number(t) || 0;
         mixer.update(0);
+        resetSprings(); updateSprings(0, performance.now()); // hang the hair for the still
+      },
+      /** Advance clips and every procedural layer by `seconds` at a fixed `dt` without
+       *  real time (deterministic motion tests), then render once. `speaking` is a level
+       *  or (t) => level. The render loop is parked while it runs. */
+      run(seconds, { dt = 1 / 30, speaking = null } = {}) {
+        userPaused = true; syncPaused();
+        simClock = Math.max(simClock, performance.now() / 1000); // blinks/fidgets/saccades are scheduled on real time
+        const n = Math.max(1, Math.round((Number(seconds) || 0) / dt));
+        for (let i = 0; i < n; i++) {
+          simClock += dt;
+          if (speaking !== null) speakingTarget = typeof speaking === 'function' ? clamp(Number(speaking(simClock)) || 0, 0, 1) : clamp(Number(speaking) || 0, 0, 1);
+          sm.tick();
+          step(dt, simClock * 1000, dt);
+        }
+        camera.updateMatrixWorld();
+        renderer.render(scene, camera);
+        return api.debug.probe();
+      },
+      resetSprings,
+      /** Live spring tuning: { long|lock: { stiffness:[root, tip], gravity, drag, hitRadius } }. */
+      tuneSprings(set = {}) {
+        if (!springs) return false;
+        for (const ch of springs.chains) {
+          const kind = /side|lock|front/i.test(ch.name || '') ? 'lock' : 'long';
+          const p = { ...SPRING[kind], ...(set[kind] || {}) };
+          ch.joints.forEach((j, i) => {
+            const f = ch.joints.length > 1 ? i / (ch.joints.length - 1) : 0;
+            j.stiffness = p.stiffness[0] + (p.stiffness[1] - p.stiffness[0]) * f; j.gravity = p.gravity; j.drag = p.drag; j.hit = p.hitRadius;
+            j.maxAngle = (p.maxAngle || 0) * DEG;
+          });
+        }
+        resetSprings();
+        return true;
+      },
+      /** Start clip `name` at `t` s as state `state` (no settle; follow with run()). */
+      playClip(name, t = 0, { state = 'idle' } = {}) {
+        const a = actions.get(name);
+        if (!a) return false;
+        userPaused = true; syncPaused();
+        if (STATES.includes(state)) { stateName = state; sm.settle(state); }
+        for (const x of [...actions.values(), ...fidgetActions.values()]) { if (x !== a) { x.stop(); x.setEffectiveWeight(0); } }
+        a.reset(); a.setLoop(THREE.LoopRepeat, Infinity); a.setEffectiveWeight(1); a.play(); a.time = Number(t) || 0;
+        current = { state, action: a, once: false };
+        return true;
       },
     };
   }

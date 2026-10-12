@@ -365,6 +365,121 @@ test('eye guard soft limit: passes below start, eases toward max, never exceeds 
   assert.ok(EYE_GUARD.max <= 2 && EYE_GUARD.start < EYE_GUARD.max && EYE_GUARD.side > 0);
 });
 
+// ── spring-bone hair (pure step) ──────────────────────────────────────────────
+const near = (a, b, eps = 1e-9) => a.every((v, i) => Math.abs(v - b[i]) < eps);
+const len3 = (a, b = [0, 0, 0]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const base = (o = {}) => ({ head: [0, 0, 0], len: 1, restDir: [0, -1, 0], stiffness: 0, drag: 0, gravity: 0, dt: 1 / 60, ...o });
+
+test('spring step: at rest with no forces the tail stays put (and on the bone length)', () => {
+  const out = springStep([0, 0, 0], base({ cur: [0, -1, 0], prev: [0, -1, 0] }));
+  assert.ok(near(out, [0, -1, 0]));
+  const o2 = springStep([0, 0, 0], base({ cur: [0, -2, 0], prev: [0, -2, 0] })); // off-length → put back on it
+  assert.ok(Math.abs(len3(o2) - 1) < 1e-12);
+});
+
+test('spring step: inertia carries the tail on, drag eats velocity', () => {
+  const free = springStep([0, 0, 0], base({ cur: [0.1, -1, 0], prev: [0, -1, 0] }));
+  assert.ok(free[0] > 0.1, 'keeps moving in +x');
+  const damped = springStep([0, 0, 0], base({ cur: [0.1, -1, 0], prev: [0, -1, 0], drag: 0.5 }));
+  assert.ok(damped[0] > 0.1 && damped[0] < free[0], 'half the velocity');
+  const stopped = springStep([0, 0, 0], base({ cur: [0.1, -1, 0], prev: [0, -1, 0], drag: 1 }));
+  assert.ok(Math.abs(stopped[0] - 0.1 / Math.hypot(0.1, 1)) < 1e-9, 'drag 1: no inertia, only re-lengthened');
+  for (const o of [free, damped, stopped]) assert.ok(Math.abs(len3(o) - 1) < 1e-12);
+});
+
+test('spring step: stiffness pulls toward the rest direction, gravity pulls down', () => {
+  const pulled = springStep([0, 0, 0], base({ cur: [0, -1, 0], prev: [0, -1, 0], restDir: [1, 0, 0], stiffness: 3 }));
+  assert.ok(pulled[0] > 0 && pulled[1] < 0, 'swings toward +x');
+  let p = [1, 0, 0]; let q = [1, 0, 0]; // horizontal, released: falls under gravity
+  for (let i = 0; i < 240; i++) { const n = springStep([0, 0, 0], base({ cur: p, prev: q, restDir: [1, 0, 0], gravity: 4, drag: 0.3 })); q = p; p = n; }
+  assert.ok(p[1] < -0.5, `hangs down (${p[1].toFixed(2)})`);
+  // fixed point: along stiffness·rest + gravity·down
+  const s = 1; const g = 1; let a = [0, -1, 0]; let b = [0, -1, 0];
+  for (let i = 0; i < 2000; i++) { const n = springStep([0, 0, 0], base({ cur: a, prev: b, restDir: [1, 0, 0], stiffness: s, gravity: g, drag: 0.4 })); b = a; a = n; }
+  const want = springHang([0, 0, 0], base({ restDir: [1, 0, 0], stiffness: s, gravity: g }));
+  assert.ok(near(a, want, 1e-4), `settles at the hang direction ${a.map((v) => v.toFixed(3))} vs ${want.map((v) => v.toFixed(3))}`);
+  assert.ok(near(want, [Math.SQRT1_2, -Math.SQRT1_2, 0], 1e-12));
+});
+
+test('spring step: the cone keeps the tail within maxAngle of the rest direction', () => {
+  const out = springStep([0, 0, 0], base({ cur: [1, 0, 0], prev: [1, 0, 0], restDir: [0, -1, 0], maxAngle: Math.PI / 6 }));
+  const ang = Math.acos(-out[1] / len3(out));
+  assert.ok(Math.abs(ang - Math.PI / 6) < 1e-9, `${(ang * 180 / Math.PI).toFixed(2)}°`);
+  assert.ok(Math.abs(len3(out) - 1) < 1e-12);
+  const inside = [0.1, -1, 0]; const before = inside.slice();
+  assert.equal(coneClamp(inside, [0, 0, 0], 1, [0, -1, 0], Math.PI / 4), false);
+  assert.ok(near(inside, before));
+  const back = [0, 1, 0]; // straight against the rest direction: any side, still on the cone
+  assert.equal(coneClamp(back, [0, 0, 0], 1, [0, -1, 0], Math.PI / 6), true);
+  assert.ok(Math.abs(Math.acos(-back[1]) - Math.PI / 6) < 1e-9);
+  // the same for any rest direction (lying down in sleep: rest is horizontal)
+  for (const rest of [[1, 0, 0], [0, 0, 1], [0, 1, 0], [Math.SQRT1_2, 0, -Math.SQRT1_2]]) {
+    const p = rest.map((v) => -v * 0.7); // exactly opposite, off-length
+    assert.equal(coneClamp(p, [0, 0, 0], 0.7, rest, Math.PI / 6), true);
+    assert.ok(Math.abs(len3(p) - 0.7) < 1e-12, `on the bone length for rest ${rest}`);
+    const c = (p[0] * rest[0] + p[1] * rest[1] + p[2] * rest[2]) / 0.7;
+    assert.ok(Math.abs(Math.acos(Math.min(1, c)) - Math.PI / 6) < 1e-9, `on the cone for rest ${rest}`);
+  }
+});
+
+test('spring colliders: sphere, capsule and floor push the tail out (plus the hair radius), length kept', () => {
+  const sph = { c: [0, -1, 0], r: 0.3 };
+  const args = { cur: [0.05, -0.95, 0], prev: [0.05, -0.95, 0], hitRadius: 0.02 };
+  const out = springStep([0, 0, 0], base({ ...args, colliders: [sph] }));
+  const free = springStep([0, 0, 0], base({ ...args, colliders: [] }));
+  // One push per step then the bone length is restored, so a sphere sitting on the
+  // tail's own circle can't be cleared in one step; the push must still do most of it.
+  const gap = (o) => len3(o, sph.c) - 0.32;
+  assert.ok(gap(free) < -0.25, `without the collider the tail is deep inside (${gap(free).toFixed(3)})`);
+  assert.ok(gap(out) > -0.05, `the collider pushes it (nearly) out (${gap(out).toFixed(3)})`);
+  assert.ok(Math.abs(len3(out) - 1) < 1e-12);
+  // a sphere off to the side is cleared completely
+  const side = { c: [0.3, -0.85, 0], r: 0.2 };
+  const o3 = springStep([0, 0, 0], base({ cur: [0.12, -0.99, 0], prev: [0.12, -0.99, 0], colliders: [side] }));
+  assert.ok(len3(o3, side.c) >= 0.2 - 1e-9 || Math.abs(len3(o3) - 1) > 1e-9, 'out of the side sphere');
+  const p = [0.05, -0.5, 0];
+  assert.equal(collidePoint(p, { a: [0, 0, 0], b: [0, -1, 0], r: 0.1 }, 0.02), true);
+  assert.ok(Math.abs(Math.hypot(p[0], p[2]) - 0.12) < 1e-12 && Math.abs(p[1] + 0.5) < 1e-12, 'radially out of the capsule');
+  const end = [0, -1.05, 0]; // past the capsule's end cap: pushed along the axis
+  collidePoint(end, { a: [0, 0, 0], b: [0, -1, 0], r: 0.1 });
+  assert.ok(Math.abs(end[1] + 1.1) < 1e-12);
+  const floor = [0.3, -0.2, 0.1];
+  assert.equal(collidePoint(floor, { floorY: 0 }, 0.01), true);
+  assert.ok(near(floor, [0.3, 0.01, 0.1]));
+  assert.equal(collidePoint([0, 0.5, 0], { floorY: 0 }), false);
+  assert.equal(collidePoint([0, -1, 0], { c: [0, -1, 0], r: 0.3 }), false, 'dead centre: no direction, left alone');
+  assert.ok(near(closestOnSegment([0, 0, 0], [5, 5, 0], [0, 0, 0], [0, 1, 0]), [0, 1, 0]));
+  assert.ok(near(closestOnSegment([0, 0, 0], [5, 0.5, 0], [0, 0, 0], [0, 1, 0]), [0, 0.5, 0]));
+});
+
+test('spring reset: a hang start has no velocity, so the first step barely moves; sub-steps are fixed', () => {
+  const h = springHang([0, 0, 0], base({ restDir: [1, 0, 0], stiffness: 3, gravity: 0.5 }));
+  const cur = h.slice(); const prev = h.slice(); // what a reset writes: cur = prev = hang
+  const out = springStep([0, 0, 0], base({ cur, prev, restDir: [1, 0, 0], stiffness: 3, gravity: 0.5, drag: 0.5 }));
+  assert.ok(len3(out, h) < 1e-9, 'equilibrium: no jump after a reset');
+  const hang2 = springHang([0, 0, 0], base({ restDir: [1, 0, 0], stiffness: 0, gravity: 0 }));
+  assert.ok(near(hang2, [1, 0, 0]), 'no forces: hang = rest direction');
+  // the hang respects the cone the step enforces: no pop when the sim takes over
+  const coned = { restDir: [1, 0, 0], stiffness: 1.5, gravity: 0.5, maxAngle: 15 * Math.PI / 180 };
+  const h3 = springHang([0, 0, 0], base(coned)); // unclamped it would sit 18.4° below rest
+  assert.ok(Math.abs(Math.acos(h3[0]) - coned.maxAngle) < 1e-9, 'hang clamped to the cone');
+  const s3 = springStep([0, 0, 0], base({ ...coned, cur: h3.slice(), prev: h3.slice(), drag: 0.5 }));
+  assert.ok(len3(s3, h3) < 1e-9, 'first simulated step after a coned hang: no jump');
+  assert.deepEqual(springSubsteps(0, 1 / 60), { n: 1, acc: 0 });
+  let r = springSubsteps(0, 1 / 120); assert.equal(r.n, 0); r = springSubsteps(r.acc, 1 / 120); assert.equal(r.n, 1, '120 Hz: a step every other frame');
+  assert.equal(springSubsteps(0, 5).n, 6, 'dt clamped to 0.1 s → at most 6 steps');
+  assert.equal(springSubsteps(0, -1).n, 0);
+  assert.equal(springSubsteps(0, NaN).n, 0);
+  assert.equal(poseJumped({ moved: 0.01, turned: 0.1 }), false);
+  assert.equal(poseJumped({ moved: 0.5 }), true, 'teleport');
+  assert.equal(poseJumped({ turned: 1.5 }), true, 'snap turn');
+  // limits scale with long frames: a 10 fps phone's fast turn (0.98 rad in one frame) still simulates
+  assert.equal(poseJumped({ turned: 1.2, dt: 0.1 }), false);
+  assert.equal(poseJumped({ moved: 0.4, dt: 0.1 }), false);
+  assert.equal(poseJumped({ turned: 7, dt: 0.1 }), true, 'a real snap is still caught');
+  assert.ok(SPRING.long.maxAngle > 0 && SPRING.long.maxAngle <= 20 && SPRING.lock.maxAngle > 0, 'cones on (no fanning)');
+});
+
 test('pickFidget never repeats the previous fidget', () => {
   const names = ['a', 'b', 'c'];
   for (let i = 0; i < 50; i++) {
@@ -425,6 +540,7 @@ test('rng is deterministic (reproducible builds)', () => {
 import {
   nextPixelRatio, warmAvatar3D, nextQuality, lookSplit, LOOK_WEIGHT, parseTint, RIM_TINTS, moodGate, STRONG_MOODS, MOOD_HOLD_MS,
   createStateMachine, stepEnvelope, nodCurve, blinkCurve, pickFidget, createAvatar3D, softLimit, EYE_GUARD,
+  springStep, springHang, springSubsteps, poseJumped, collidePoint, closestOnSegment, coneClamp, SPRING,
 } from '../../../flutter_app/web/companion/avatar3d.js';
 import { coreNamesUsed, ADDONS, BUNDLE } from '../vendor.mjs';
 
