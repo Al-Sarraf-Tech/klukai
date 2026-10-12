@@ -39,11 +39,13 @@ checked in the merged code. Any item not listed here is still open and still unv
     `trust_env`.
   - VP-01: the WS voice path now strips stage directions, clips at 500 and never voices the
     sentinel, but it is still unreachable from the PWA.
-- **Still open (confirmed in the merged code):**
-  - SJ-04: the 3D thinking pose.
-  - SJ-11/UI-05: on the stage, `thinking` survives a dropped link.
-  - UI-01: the stage drops the error frame's `message`.
-  - VP-10: `/api/tts` swallows the exception with no log line.
+- **Fixed later on 2026-10-11** (branch `feat/3d-look`, merged to `main`; stage fixes deployed):
+  - SJ-04: leaving `thinking` now hands the 3D avatar her mood's pose (`ecda6af`).
+  - SJ-11/UI-05: a link drop abandons the turn: no endless "…", no glued reply (`ecda6af`).
+  - UI-01: the error frame's `message` is shown, never spoken (`ecda6af`).
+  - SJ-03 (rest): an `image` frame clears the thinking pulse (`ecda6af`).
+  - VP-10: `/api/tts` logs the failure (`206ca6c`); live after the next `companion-core` rebuild.
+  - VP-18: the Makefile deploy notice (`727343f`).
 
 - 182 findings: 8 high, 67 medium, 107 low.
 - By area: Flutter chat 50, Flutter other screens 52, stage/login/shell polish 29, voice path 19,

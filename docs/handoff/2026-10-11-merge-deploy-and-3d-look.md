@@ -82,16 +82,14 @@ A new tool that needs load/unload or a lease must send the bearer.
 - **CI result on the push is unchecked.** `gh` is not logged in on amarillo; check the Actions tab.
 - **Voice/UI backlog.** `docs/handoff/2026-10-11-voice-ui-findings-backlog.md` has a
   "Status after merge" section.
-  - Still open: SJ-04 (3D thinking pose), SJ-11/UI-05 (thinking survives a dropped link on the
-    stage), UI-01 (the stage drops the error frame's message), VP-10 (`/api/tts` logs nothing on an
-    exception).
+  - SJ-04, SJ-11/UI-05, UI-01, VP-10 and VP-18 were fixed later the same day (see §3).
   - The other ~170 items are unverified.
 - **tgbot suite not run.** It needs `python-telegram-bot`, which is not installed on amarillo.
   Neither branch touched tgbot.
 - **Deploy notice wording.** `Makefile` line ~140 still says "transcription disabled". That is VP-18:
   Whisper STT on :8301 is live.
 
-## 2. Goal: make the 3D model look perfect (paused)
+## 2. Goal: make the 3D model look perfect (research; shipped later the same day, see §3)
 
 The owner asked for 3 research agents (with deep research) and 2 implementation agents, run fully
 autonomous. State file: `.claude/goal-3d-model-look-perfect.md` (gitignored).
@@ -290,3 +288,75 @@ The prototype is `research/proto/companion/avatar3d.js`, with flags
    - Run the live build (`node build.mjs`) and `scripts/deploy-web.sh`.
    - Run `npm test` in `tools/avatar`, `make test-js`, and `python3 scripts/e2e_live.py`.
    - Commit, sync to amarillo, push.
+
+## 3. Update, 2026-10-11 evening: the 3D look shipped
+
+Resumed with "finish up the work". Two implementers (I1 build, I2 viewer) worked from the
+research above on disjoint files; the lead integrated, reviewed, deployed and committed.
+Branch `feat/3d-look`, fast-forwarded into `main` and synced to the amarillo git server.
+**Not pushed to GitHub** (`origin`/`personal`): do that on request.
+
+### Live now (amarillo)
+
+- **GLB** `assets/build/klukai.glb` sha256 `cee5863e…` (1.97 MB, 8 primitives, 67 joints):
+  - Head is a real joint, so every clip's head motion shows.
+  - Atlas fixes: hem band (no bare lower back), hood, zipper, buckle box, collar goggle unit,
+    shoes, knee pad, thigh strap, bag, cat pouch, and a flat black bodysuit for the inside-out
+    shorts and collar.
+  - Open jacket over the black top, and the duplicate hair copy (red streaks) removed.
+  - ORM maps on the cloth, hair at 2048, `_OUTLINE` normals, hair bone chains with spring extras.
+- **Viewer** (`deploy-web.sh`; served files match the repo):
+  - Two-band toon with per-role tints, AO creases and a metal glint.
+  - Face sphere normals, stepped rims plus a mood rim, angel ring.
+  - Inverted-hull outlines (13 draw calls, +1 contact shadow); MSAA on iOS 17+.
+  - Look-at with saccades and an eye guard (the cap never hides her eyes in the stage's states).
+  - Breathing, arm relax, speech nods, blinks, fidgets, mood hysteresis, eased camera.
+  - Spring-bone hair physics.
+- **Stage:**
+  - Full-height canvas fading under the top bar and dock, with insets passed to the viewer.
+  - Mood rim tint.
+  - SJ-04, SJ-11/UI-05, UI-01 and SJ-03.
+- **Verification:**
+  - `make test-js`: 54 stage + 83 avatar tests.
+  - Live e2e 11/11 after each of the three deploys.
+  - Two code reviews (viewer/stage, then springs); their findings were fixed before deploy.
+  - Real-stage renders at phone and desktop size.
+
+### Commits
+
+- `206ca6c` core TTS log
+- `727343f` Makefile
+- `8b30662` viewer
+- `ecda6af` stage
+- `8baba09` build
+- `6b7fae0` README
+- `04e3cd8` open jacket + hair copies on
+- `dcc27d8` springs
+- `11ae8b6` chains on
+
+### Rollback
+
+All files are in `assets/build/rollback/` (gitignored).
+
+- **GLB:** copy one of these to `assets/build/klukai.glb` with a temp file and `mv`, so the
+  served file is always complete:
+  - `klukai-pre-3dlook-20261011.glb` (before this work);
+  - `klukai-wave1-20261011.glb`;
+  - `klukai-w2a-20261011.glb` (no chains).
+- **Web:** check out the older `flutter_app/web/companion/*` and run `scripts/deploy-web.sh`.
+  Copies of the pre-3D-look `avatar3d.js` and vendor bundle are kept for reference.
+- A GLB with chains needs the spring viewer. An older viewer swings the ponytail like a stick, so
+  roll back both together.
+
+### Open / not verified
+
+- **Real devices:** nothing was checked on a real iPhone or in Brave. All renders are SwiftShader.
+  Watch `av.stats` (`fps`, `drawCalls`, `outlines`, `springMs`). Adaptive quality drops the
+  outlines when a device can't keep up.
+- **Missing source geometry:** the cap goggles and the blue hairclips.
+- **`calling` crouch** (no state plays it): the back chain's first tail can sit inside the neck
+  capsule. Shrinking that collider's radius to ~0.075 would help.
+- **VP-10** needs a `companion-core` rebuild to go live (no restart was done).
+- **Working notes:** `.claude/look-work/` (reports `i1/REPORT.md`, `i2/REPORT.md`, renders,
+  lead harness `lead/shoot.py`).
+
