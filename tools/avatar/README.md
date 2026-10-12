@@ -4,12 +4,12 @@ Builds `assets/build/klukai.glb` and ships the three.js viewer module
 `flutter_app/web/companion/avatar3d.js`. The GLB has:
 
 - one skinned body mesh, plus a head mesh carrying the `blink` morph, sharing
-  one skin (52 joints: the Mixamo rig plus `mixamorigHead`, which the build
-  makes a real joint);
+  one skin (67 joints: the Mixamo rig, `mixamorigHead`, which the build
+  makes a real joint, and 15 hair bones for the viewer's spring physics);
 - 15 named clips;
 - a baked `_OUTLINE` vertex attribute for the viewer's outline, and ORM maps
   on the cloth;
-- webp textures and meshopt compression, about 2.1 MB in total.
+- webp textures and meshopt compression, about 2.0 MB in total.
 
 The mesh is her default outfit, "Blazing Star" (SSR01 atlases). The dorm outfit
 has a texture in `assets/textures` but no mesh.
@@ -41,6 +41,7 @@ node build.mjs             # → assets/build/klukai.glb (~2.1 MB, budget 15 MB;
                            #   ⚠ assets/build is bind-mounted into companion-core: this IS a live deploy
 AVATAR_OUT=../../assets/build/dev/klukai.glb node build.mjs   # development build (not served)
 AVATAR_CONFIG=my-variant.mjs …                                # build from a config variant (exports CONFIG)
+AVATAR_FEATURES=openJacket,hairChains …                       # force optional features on for one build
 node build.mjs --debug     # every OBJ group, PNG, no compression (+ island JSONs, ambiguous-island log)
 npm test                   # node --test (pure parts; needs no assets)
 python3 shot.py            # screenshots → assets/build/shots/
@@ -131,6 +132,19 @@ All tuning lives in `avatar.config.mjs`.
      overlay).
    - **Draw calls:** parts sharing a texture (or flat colour), role and
      sidedness are merged into one material (8 primitives).
+   - **Optional features** (`FEATURES` in the config, all on by default since
+     2026-10-11):
+     - `openJacket`: merges the Astral Luminous group's own bodysuit bust and
+       neckline into `Klukai_Cloth_1` (its 294 shifted twin islands are
+       skipped), so the jacket opens over her glossy black top as in her art.
+     - `hairCopies`: drops a second copy of the hair inside `Klukai_Face` that
+       z-fought the real hair (red streaks along strand edges).
+     - `hairChains`: `hair_<chain>_<i>` bones (ponytail 5, back 4, side locks
+       3 + 3) fitted through the hair and parented to Head; hair reweighted onto
+       them (arm, thigh and spine influences stripped); scene extras
+       `springChains` (`{ name, bones, tail }`) and `springColliders`
+       (spheres/capsules on body bones) for the viewer. Unsimulated, the chains
+       swing the ponytail like a stick: ship it only with the spring viewer.
    - **`_OUTLINE`** (normalized int8 vec4 on every primitive; three names it
      `_outline`): xyz is the angle-weighted normal averaged across both meshes
      by position (the source normals have hard splits that would crack an
@@ -179,8 +193,7 @@ av.setFraming('full'); av.resize(); av.dispose();
     or cheek shading). Shader maths on `position` uses the GLB's quantised
     units, derived from the skin's bind matrices, never hard-coded metres.
   - A stepped key-side rim tinted by albedo, plus a back rim in the mood
-    colour (`setTint`); a hair "angel ring" band; a small vertex-shader hair
-    sway until the hair has bones.
+    colour (`setTint`); a hair "angel ring" band.
   - **Outline:** an inverted hull. A second `SkinnedMesh` per part shares
     geometry, skeleton and morph influences (blinks follow), draws back faces
     pushed out along `_outline` at a constant pixel width with a view-space z
@@ -221,6 +234,14 @@ av.setFraming('full'); av.resize(); av.dispose();
   - Breathing, relaxed arms in idle-like states, nods driven by her speech
     level, blinks on large gaze shifts and phrase ends (slow blinks in tender
     moods, a slight droop when sad), eyes shut in `sleep`.
+  - **Hair springs:** three-vrm's spring-bone joint on the GLB's hair chains
+    (inertia, stiffness toward the animated rest direction, gravity, length
+    constraint, a per-joint cone, sphere/capsule colliders from
+    `springColliders` plus the floor), fixed 1/60 s steps with a 0.1 s clamp,
+    in the character root's space. A static "hang" pose stands in on load,
+    around sleep, on returning to the tab, after big pose jumps and under
+    reduced motion. GLBs without chains fall back to a vertex-shader sway.
+    About 0.03 ms per step on a desktop CPU.
   - `prefers-reduced-motion` turns off drift, sway, fidgets and push-in, and
     keeps blinks and look-at.
 - **Camera:** upper-body or full-body framing, a side view for `sleep`, eased
@@ -269,7 +290,7 @@ life layers) changed it like this, same harness:
 
 | | before | after |
 |---|---|---|
-| GLB | 1.41 MB | 2.10 MB |
+| GLB | 1.41 MB | 2.10 MB (1.97 MB with the open jacket, hair-copy drop and chains) |
 | primitives / draw calls | 7 / 7 | 8 / 13 with outlines (+1 contact shadow in full framing and sleep) |
 | shader programs | 4 | 9 |
 | texture memory (est.) | 24.3 MB | 43 MB (hair 2048 is 21 MB of it) |
@@ -333,9 +354,8 @@ The default "Blazing Star" mesh is the only one in `assets/source-models/`.
   are not in the source mesh (their textures are).
 - `calling`, `kneel` and `stand` ship in the GLB but no state uses them yet.
   `calling` is a crouching gesture.
-- No hair or cloth physics yet (only a shader sway). In `sleep` the hair
-  hangs as if standing, and an ankle strap stretches between the feet. In
-  the strongest head turns the edge of an inner hair layer behind the ear
-  shows.
+- No cloth physics. Hair has spring physics (below); in the deep `calling`
+  crouch (no state plays it) the back chain's first tail can sit inside the
+  neck collider. In `sleep` an ankle strap stretches between the feet.
 - Screenshots come from SwiftShader; real GPUs render with MSAA and look
   smoother.

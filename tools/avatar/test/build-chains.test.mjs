@@ -105,12 +105,12 @@ test('dropTwinIslands keeps only islands without a near-copy (same UVs, same fac
 
 // ── features ────────────────────────────────────────────────────────────────
 
-test('open jacket + hair-copy drop ship by default; hair chains wait for the viewer springs', () => {
+test('open jacket, hair-copy drop and hair chains ship by default', () => {
   assert.deepEqual([...FEATURES].sort(), ['hairChains', 'hairCopies', 'openJacket']);
   assert.equal(featureOn(CONFIG, 'openJacket'), true);
   assert.equal(featureOn(CONFIG, 'hairCopies'), true);
-  // Unsimulated chains swing the ponytail out like a stick: on only with springs.
-  assert.equal(featureOn(CONFIG, 'hairChains'), false);
+  // Ships with the viewer's spring physics (unsimulated chains swing the ponytail like a stick).
+  assert.equal(featureOn(CONFIG, 'hairChains'), true);
   for (const f of FEATURES) {
     assert.equal(featureOn(CONFIG, f, [f]), true);
     assert.equal(featureOn({ ...CONFIG, [f]: { ...CONFIG[f], enabled: true } }, f), true);

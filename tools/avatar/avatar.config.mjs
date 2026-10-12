@@ -201,8 +201,9 @@ export const OUTLINE = Object.freeze({
 
 /**
  * Optional build features. `enabled: true` makes one the default; turn one on
- * for a single build with AVATAR_FEATURES=openJacket,hairChains. openJacket and
- * hairCopies ship (2026-10-11); hairChains needs the viewer's spring physics.
+ * for a single build with AVATAR_FEATURES=openJacket,hairChains. All three ship
+ * (2026-10-11); hairChains needs the viewer's spring physics (avatar3d.js
+ * springs, same deploy), unsimulated chains swing the ponytail like a stick.
  */
 export const FEATURES = Object.freeze(['openJacket', 'hairCopies', 'hairChains']);
 
@@ -246,7 +247,7 @@ export const OPEN_JACKET = Object.freeze({
  * would not follow the chains): the build turns it on with this.
  */
 export const HAIR_CHAINS = Object.freeze({
-  enabled: false,
+  enabled: true,
   parent: 'mixamorigHead',
   groups: Object.freeze(['Klukai_Hair']),
   // fully on the head within radius[0] of the head centre, free beyond radius[1]
