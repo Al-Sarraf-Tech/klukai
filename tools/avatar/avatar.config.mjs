@@ -231,9 +231,11 @@ export const OPEN_JACKET = Object.freeze({
   atlasOverrides: Object.freeze([
     // Their own UVs land on cloth1's dark bodysuit cups (the smoothness score picked cloth2's grey).
     { box: [-0.1, 1.10, 0.04, 0.1, 1.25, 0.12], uvBox: [0.0, 0.43, 0.12, 0.62], atlas: C1, why: 'open jacket: black bodysuit bust and neckline' },
-    // The bodysuit's lower torso pokes through the jacket front and back: drop it.
-    { box: [-0.05, 0.8, -0.1, 0.05, 0.93, -0.02], uvBox: [0.35, 0.6, 0.67, 0.77], atlas: null, why: 'open jacket: bodysuit lower back (pokes through the jacket)' },
-    { box: [-0.05, 0.8, 0.02, 0.05, 0.93, 0.1], uvBox: [0.74, 0.8, 0.98, 1.0], atlas: null, why: 'open jacket: bodysuit lower front (pokes through the jacket)' },
+    // Keep the lower torso closed, but recess it under the jacket so animation
+    // does not poke it through. Dropping these islands made the waist hollow
+    // from oblique and side camera angles.
+    { box: [-0.05, 0.8, -0.1, 0.05, 0.93, -0.02], uvBox: [0.35, 0.6, 0.67, 0.77], atlas: BODYSUIT, role: 'cloth', doubleSided: false, name: 'bodysuit', inset: 0.006, why: 'open jacket: bodysuit lower back (recessed under the jacket)' },
+    { box: [-0.05, 0.8, 0.02, 0.05, 0.93, 0.1], uvBox: [0.74, 0.8, 0.98, 1.0], atlas: BODYSUIT, role: 'cloth', doubleSided: false, name: 'bodysuit', inset: 0.006, why: 'open jacket: bodysuit lower front (recessed under the jacket)' },
   ]),
 });
 
