@@ -6,9 +6,11 @@ Scope: `docker/core/tests/golden/test_system_prompt_snapshots.py` and a focused 
 
 Contract: only exact `UPDATE_SNAPSHOTS=1` permits writing. Ordinary runs do not create directories or files. Missing, malformed, wrong-shape snapshots and assembly exceptions fail visibly. Compare all metadata as well as SHA; keep the cold-at-high-closeness invariant even while updating.
 
-- [ ] Write regression cases for missing evidence, non-1 update values, malformed/invalid evidence, assembly errors, metadata drift and intentional creation.
-- [ ] Observe failures with existing harness; implement the smallest strict change.
-- [ ] Run harness tests independently of ongoing character rotation, then the 45 settled snapshots with the character task.
+- [x] Write regression cases for missing evidence, non-1 update values, malformed/invalid evidence, assembly errors, metadata drift and intentional creation.
+- [x] Observe failures with existing harness; implement the smallest strict change.
+- [x] Run harness tests independently of ongoing character rotation, then the 45 settled snapshots with the character task.
 - [ ] Independently review with the quality-gate changes; document exact count and coverage limits.
 
 Decision: root executes this narrow test-only task while product agents own separate files. No services, model calls, dependencies or deployment.
+
+Evidence: old harness produced 9 failures, 3 passes and 1 skipped assembly-failure regression. New harness produced 13 passes; Ruff clean. Character agent subsequently reported all 58 golden tests passing (45 snapshots plus these 13). Raw red log: private codex-tasks/klukai-golden-contract-red.log. Commit 9fc1dc8; final review remains with quality-gate/whole-branch review.
