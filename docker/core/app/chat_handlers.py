@@ -682,10 +682,12 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     )
 
     if not is_trivial:
+        extraction_snapshot = session.model_copy(deep=True)
+
         async def _safe_extraction():
             try:
                 await background_extraction(
-                    content, response_text, session, user_id,
+                    content, response_text, extraction_snapshot, user_id,
                     image_generated=image_triggered,
                 )
             except Exception as e:
@@ -697,6 +699,6 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
 
     # Background: compact session if turns exceed threshold
     if len(session.turns) >= COMPACT_THRESHOLD:
-        ws.track_task(user_id, asyncio.create_task(background_compaction(session, user_id)))
+        ws.track_task(user_id, asyncio.create_task(background_compaction(session.model_copy(deep=True), user_id)))
 
     return response_text

@@ -157,6 +157,7 @@ class LLMConfig(BaseModel):
 
 class SessionState(BaseModel):
     conversation_id: str
+    revision: int = 0  # Admission epoch; never rolled back with an unanswered turn
     turns: list[dict[str, str]] = Field(default_factory=list)
     context_summary: str | None = None  # Rolling summary of compacted earlier turns
     mood: str = "composed"

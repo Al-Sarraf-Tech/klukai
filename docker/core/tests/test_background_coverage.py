@@ -81,6 +81,8 @@ def bg_mocks(monkeypatch):
     Returns a namespace of the mocks so each test asserts the calls it cares
     about. asyncio.sleep is neutralized so the real 1s/2s/3s delays vanish.
     """
+    monkeypatch.setattr("app.fact_extractor.extract_promises", AsyncMock(return_value={}))
+    monkeypatch.setattr("app.op_brief.on_turn", AsyncMock())
     sleep = AsyncMock()
     monkeypatch.setattr(bg.asyncio, "sleep", sleep)
 
@@ -213,7 +215,7 @@ class TestExtractionMood:
         bg_mocks.extract_facts.return_value = _base_extract_result(mood="affectionate")
         session = _session(1)
         await bg.background_extraction("m", "r", session, user_id="u1")
-        assert session.mood == "affectionate"
+        assert bg_mocks.memory.get_session.return_value.mood == "affectionate"
         bg_mocks.ws.send_mood.assert_awaited_once_with("u1", "affectionate")
         bg_mocks.proactive.set_last_mood.assert_called_once_with("affectionate")
 
@@ -229,7 +231,7 @@ class TestExtractionMood:
                    return_value="warm") as nudge:
             await bg.background_extraction("m", "r", session, user_id="u1")
         nudge.assert_called_once_with("composed", "positive")
-        assert session.mood == "warm"
+        assert bg_mocks.memory.get_session.return_value.mood == "warm"
 
     async def test_persists_mood_to_postgres(self, bg_mocks):
         """Mood is upserted into companion_persistent_state via autocommit conn."""
@@ -268,8 +270,8 @@ class TestExtractionMilestones:
                            turn_count=3)
         await bg.background_extraction("m", "r", session, user_id="u1")
         bg_mocks.proactive.start_mission.assert_called_once()
-        assert session.mission_interval == 30
-        assert session.mission_description
+        assert bg_mocks.memory.get_session.return_value.mission_interval == 30
+        assert bg_mocks.memory.get_session.return_value.mission_description
 
     @staticmethod
     def _real_set_last_mood(proactive) -> None:
@@ -505,12 +507,14 @@ class TestCompaction:
 
     async def test_at_threshold_compacts_and_keeps_recent_raw(self, bg_mocks):
         session = _session(turn_count=10)
+        bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
         with patch("app.fact_extractor.compact_turns",
                    new=AsyncMock(return_value="Condensed summary.")):
             await bg.background_compaction(session, user_id="u1")
         # Keeps exactly COMPACT_KEEP_RAW recent turns + the new summary.
-        assert session.context_summary == "Condensed summary."
-        assert len(session.turns) == bg_mocks.context.COMPACT_KEEP_RAW
+        stored = bg_mocks.memory.get_session.return_value
+        assert stored.context_summary == "Condensed summary."
+        assert len(stored.turns) == bg_mocks.context.COMPACT_KEEP_RAW
         bg_mocks.memory.save_session.assert_awaited_once()
 
     async def test_existing_summary_prepended_to_compaction_input(self, bg_mocks):
@@ -524,6 +528,7 @@ class TestCompaction:
 
     async def test_empty_summary_keeps_raw_turns_unchanged(self, bg_mocks):
         session = _session(turn_count=10)
+        bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
         original = list(session.turns)
         with patch("app.fact_extractor.compact_turns", new=AsyncMock(return_value="")):
             await bg.background_compaction(session, user_id="u1")
@@ -533,6 +538,7 @@ class TestCompaction:
 
     async def test_compaction_exception_swallowed(self, bg_mocks):
         session = _session(turn_count=10)
+        bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
         original_turns = list(session.turns)
         ct = AsyncMock(side_effect=RuntimeError("boom"))
         with patch("app.fact_extractor.compact_turns", new=ct):
@@ -548,20 +554,22 @@ class TestCompaction:
         with the stale "recent" slice dropped whatever was appended meanwhile;
         deleting the compacted prefix in place keeps it."""
         session = _session(turn_count=10)
+        bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
         appended = {"role": "user", "content": "sent while compacting"}
 
         async def _slow_compact(old_turns):
-            session.turns.append(appended)  # a new turn lands mid-flight
+            bg_mocks.memory.get_session.return_value.turns.append(appended)  # a new turn lands mid-flight
             return "Condensed summary."
 
         with patch("app.fact_extractor.compact_turns", new=_slow_compact):
             await bg.background_compaction(session, user_id="u1")
 
-        assert session.context_summary == "Condensed summary."
-        assert session.turns[-1] == appended
+        stored = bg_mocks.memory.get_session.return_value
+        assert stored.context_summary == "Condensed summary."
+        assert stored.turns[-1] == appended
         # COMPACT_KEEP_RAW raw turns kept (Turn 6..9) plus the one that arrived.
-        assert len(session.turns) == bg_mocks.context.COMPACT_KEEP_RAW + 1
-        assert session.turns[0] == {"role": "user", "content": "Turn 6"}
+        assert len(stored.turns) == bg_mocks.context.COMPACT_KEEP_RAW + 1
+        assert stored.turns[0] == {"role": "user", "content": "Turn 6"}
         bg_mocks.memory.save_session.assert_awaited_once()
 
     async def test_compaction_aborts_when_prefix_changed_underneath(self, bg_mocks):
@@ -569,17 +577,18 @@ class TestCompaction:
         list (another compaction, a session restore), the summary is stale:
         leave the session alone rather than apply it."""
         session = _session(turn_count=10)
+        bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
         fresh = [{"role": "user", "content": f"fresh {i}"} for i in range(4)]
 
         async def _racing_compact(old_turns):
-            session.turns[:] = fresh
+            bg_mocks.memory.get_session.return_value.turns[:] = fresh
             return "Stale summary."
 
         with patch("app.fact_extractor.compact_turns", new=_racing_compact):
             await bg.background_compaction(session, user_id="u1")
 
         assert session.context_summary is None
-        assert session.turns == fresh
+        assert bg_mocks.memory.get_session.return_value.turns == fresh
         bg_mocks.memory.save_session.assert_not_awaited()
 
 
@@ -1031,3 +1040,39 @@ class TestOperationBriefWiring:
              patch("app.op_brief.on_turn", AsyncMock(return_value=0)) as on_turn:
             await bg.background_extraction("m", "r", _session(1), user_id="u1")
         assert on_turn.await_args.args[1] == []
+
+
+async def test_delayed_extraction_cannot_restore_mood_after_new_turn(bg_mocks, monkeypatch):
+    """Run the actual extractor orchestration across a newer admission epoch."""
+    import asyncio
+    from app.memory import MemoryManager
+    from app.context import session_id
+    from tests.test_session_authority import StoredRedis
+
+    manager = MemoryManager()
+    manager._redis = StoredRedis()
+    manager.store_exchange = AsyncMock()
+    snapshot = _session(2)
+    await manager.save_session(session_id('u1'), snapshot)
+    monkeypatch.setattr(bg, 'memory', manager)
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def extract(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return _base_extract_result(mood='battle_ready')
+    monkeypatch.setattr(bg, 'extract_facts', extract)
+    task = asyncio.create_task(bg.background_extraction('mission', 'reply', snapshot, 'u1'))
+    await entered.wait()
+    async with manager.session_owner(session_id('u1')):
+        latest = await manager.get_session(session_id('u1'))
+        latest.revision += 1
+        latest.mood = 'happy'
+        latest.mission_description = None
+        await manager.save_session(session_id('u1'), latest)
+    release.set()
+    await task
+    current = await manager.get_session(session_id('u1'))
+    assert current.mood == 'happy'
+    assert current.mission_description is None
+    bg_mocks.ws.send_mood.assert_not_awaited()
+    bg_mocks.proactive.start_mission.assert_not_called()

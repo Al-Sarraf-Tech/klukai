@@ -90,11 +90,12 @@ class TestGetSession:
         assert len(result.turns) == 1
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_corrupt_json(self):
+    async def test_rejects_corrupt_session_without_replacing_it(self):
         m = _mk_manager()
         m._redis.get = AsyncMock(return_value="not-json-at-all")
-        result = await m.get_session("conv-1")
-        assert result is None
+        from app.memory import SessionUnavailable
+        with pytest.raises(SessionUnavailable, match="invalid"):
+            await m.get_session("conv-1")
 
 
 class TestSaveSession:
@@ -276,6 +277,7 @@ class TestMilestones:
     @pytest.mark.asyncio
     async def test_record_milestone_calls_store_fact(self):
         m = _mk_manager()
+        m.recall_fact = AsyncMock(return_value=None)
 
         captured = {}
 

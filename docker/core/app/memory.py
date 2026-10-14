@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 
 import httpx
 import redis.asyncio as redis
@@ -34,10 +37,15 @@ class EmbeddingFailed(RuntimeError):
     rather than indexing a zero vector that silently corrupts recall."""
 
 
+class SessionUnavailable(RuntimeError):
+    """Session persistence is unavailable; the client may retry."""
+
+
 class MemoryManager:
     """Manages all three tiers of companion memory."""
 
     def __init__(self) -> None:
+        self._session_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._redis: redis.Redis | None = None
         self._http: httpx.AsyncClient | None = None
         self._collection_ready = False
@@ -80,7 +88,7 @@ class MemoryManager:
         """Bound from memory_exchange.py."""
         raise NotImplementedError
 
-    async def _redis_op(self, op, *args, **kwargs):
+    async def _redis_op(self, op, *args, strict=False, **kwargs):
         """Execute a Redis operation with auto-reconnect on failure."""
         try:
             return await op(*args, **kwargs)
@@ -97,30 +105,53 @@ class MemoryManager:
                 return await new_op(*args, **kwargs)
             except Exception as e2:
                 logger.error("Redis reconnect failed: %s", e2)
+                if strict:
+                    raise SessionUnavailable(str(e2)) from e2
                 return None
 
     # ── Tier 1: Session (Redis) ──────────────────────────────────────────
 
+    @asynccontextmanager
+    async def session_owner(self, session_id: str) -> AsyncIterator[None]:
+        """Serialize this session in the deployed single-worker process.
+
+        Count holders AND waiters before yielding, so cancellation and idle
+        reclamation cannot create two locks for the same session.
+        """
+        lock, users = self._session_locks.get(session_id, (asyncio.Lock(), 0))
+        self._session_locks[session_id] = (lock, users + 1)
+        try:
+            async with lock:
+                yield
+        finally:
+            _, users = self._session_locks[session_id]
+            if users == 1:
+                del self._session_locks[session_id]
+            else:
+                self._session_locks[session_id] = (lock, users - 1)
+
     async def get_session(self, session_id: str) -> SessionState | None:
-        raw = await self._redis_op(self._redis.get, f"companion:session:{session_id}")
+        raw = await self._redis_op(self._redis.get, f"companion:session:{session_id}", strict=True)
         if raw is None:
             return None
         try:
             return SessionState.model_validate_json(raw)
         except Exception as e:
-            logger.warning("Failed to parse session: %s", e)
-            return None
+            raise SessionUnavailable("Stored session is invalid") from e
 
     async def save_session(self, session_id: str, state: SessionState) -> None:
         if len(state.turns) > MAX_SESSION_TURNS:
             state.turns = state.turns[-MAX_SESSION_TURNS:]
         state.last_activity = datetime.now()
-        await self._redis_op(
+        saved = await self._redis_op(
             self._redis.set,
             f"companion:session:{session_id}",
             state.model_dump_json(),
             ex=SESSION_TTL,
+            strict=True,
         )
+        if saved is None or saved is False:
+            raise SessionUnavailable("Session write was not acknowledged")
 
     async def add_turn(
         self, session_id: str, role: str, content: str, state: SessionState

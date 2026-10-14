@@ -25,6 +25,7 @@ from .helpers import (
     create_conversation as _create_conversation,
 )
 from .models import SessionState, new_id
+from .memory import SessionUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,8 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
                     "...Voice synth dropped, Commander — text reply only.",
                     persist=False,
                 )
+    except SessionUnavailable:
+        raise
     except Exception as e:
         logger.error("Voice processing failed: %s", e, exc_info=True)
         try:
@@ -134,6 +137,55 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
             )
         except Exception:
             pass
+
+
+async def _initialize_session(user_id: str) -> SessionState:
+    """Restore once under ownership; reconnects never replace live mood."""
+    key = session_id(user_id)
+    async with memory.session_owner(key):
+        session = await memory.get_session(key)
+        if session is None:
+            restored_mood = "composed"
+            try:
+                async with get_conn() as conn:
+                    row = await (await conn.execute(
+                        "SELECT mood FROM companion_persistent_state WHERE user_id = %s",
+                        (user_id,),
+                    )).fetchone()
+                    if row and row[0]:
+                        restored_mood = row[0]
+            except Exception as e:
+                logger.warning("Failed to restore persistent mood: %s", e)
+            session = SessionState(conversation_id=new_id(), mood=restored_mood)
+            # Create the history parent before publishing the live session.
+            try:
+                await _create_conversation(session.conversation_id, user_id=user_id, strict=True)
+            except Exception as e:
+                raise SessionUnavailable(str(e)) from e
+            await memory.save_session(key, session)
+        if session.mood != "composed":
+            await ws.send_mood(user_id, session.mood)
+        if session.mission_description and session.mission_interval and not proactive.mission_active:
+            aff_state = await affection.get_state(user_id)
+            proactive.set_affection_level(aff_state.level)
+            proactive.start_mission(session.mission_description, session.mission_interval)
+        return session
+
+
+async def _admit_turn(kind: str, content: str, user_id: str) -> None:
+    """Read authoritative state after admission and own the full text/voice turn."""
+    key = session_id(user_id)
+    async with memory.session_owner(key):
+        session = await memory.get_session(key)
+        if session is None:
+            raise SessionUnavailable("Session expired; reconnect and retry")
+        # Invalidate older background work even if this turn aborts or rolls back.
+        session.revision += 1
+        await memory.save_session(key, session)
+        if kind == "voice_end":
+            await _handle_voice(content, session, user_id)
+        else:
+            await _handle_message(content, session, user_id)
 
 
 def register_websocket(app: FastAPI) -> None:
@@ -159,142 +211,114 @@ def register_websocket(app: FastAPI) -> None:
             await websocket.close(code=4001, reason="Authentication required")
             return
 
-        await ws.connect(websocket, user_id)
-
-        # He just opened the app. Start loading the model now so it is resident
-        # by the time he has finished typing, instead of making him watch a
-        # loading bar after he hits send. Fire-and-forget: this must never delay
-        # the connect, and a failure only costs the slow first reply he would
-        # have had anyway.
         try:
-            from .warmup import warm_in_background
-            warm_task = warm_in_background()
-            if warm_task is not None:
-                ws.track_task(user_id, warm_task)
-        except Exception as e:
-            logger.debug("Warm-up on connect skipped: %s", e)
+            await ws.connect(websocket, user_id)
 
-        # Ensure session exists — always restore mood from PostgreSQL (source of truth)
-        session_key = session_id(user_id)
-        session = await memory.get_session(session_key)
+            # He just opened the app. Start loading the model now so it is resident
+            # by the time he has finished typing, instead of making him watch a
+            # loading bar after he hits send. Fire-and-forget: this must never delay
+            # the connect, and a failure only costs the slow first reply he would
+            # have had anyway.
+            try:
+                from .warmup import warm_in_background
+                warm_task = warm_in_background()
+                if warm_task is not None:
+                    ws.track_task(user_id, warm_task)
+            except Exception as e:
+                logger.debug("Warm-up on connect skipped: %s", e)
 
-        # Always restore mood from persistent state (PostgreSQL is source of truth)
-        restored_mood = "composed"
-        try:
-            async with get_conn() as conn:
-                row = await (await conn.execute(
-                    "SELECT mood FROM companion_persistent_state WHERE user_id = %s",
-                    (user_id,),
-                )).fetchone()
-                if row and row[0]:
-                    restored_mood = row[0]
-        except Exception as e:
-            logger.warning("Failed to restore persistent mood: %s", e)
+            await _initialize_session(user_id)
 
-        if session is None:
-            conv_id = new_id()
-            session = SessionState(conversation_id=conv_id, mood=restored_mood)
-            await memory.save_session(session_key, session)
-            await _create_conversation(conv_id, user_id=user_id)
-            logger.info("New session created with restored mood '%s' for user %s", restored_mood, user_id)
-        elif session.mood != restored_mood and restored_mood != "composed":
-            # Existing session but mood drifted — restore from DB
-            session.mood = restored_mood
-            await memory.save_session(session_key, session)
-            logger.info("Session mood corrected to '%s' from persistent state", restored_mood)
+            # Reflection-on-return: if user was away >8h, greet them referencing
+            # the last topic. Runs in background so it never blocks the connect.
+            import asyncio as _asyncio
+            ws.track_task(user_id, _asyncio.create_task(_maybe_reflect_on_return(user_id)))
+            # Level-9 Oath capstone for an already-maxed Commander who reached lv9
+            # before this feature existed — fires once ever, self-guarded.
+            ws.track_task(user_id, _asyncio.create_task(_maybe_oath_on_connect(user_id)))
+            # Recurring rituals: his birthday greeting (once a year) or her monthly
+            # fee settlement (once a month) — self-guarded per period.
+            from . import rituals
+            ws.track_task(user_id, _asyncio.create_task(rituals.on_connect(user_id)))
+            # Her Day: pick today's outfit (DB + weather) now, while he types —
+            # the chat turn only ever reads the cached row.
+            from . import wardrobe
+            ws.track_task(user_id, _asyncio.create_task(wardrobe.warm_today(user_id)))
 
-        # Send restored mood to frontend immediately on connect
-        if restored_mood != "composed":
-            await ws.send_mood(user_id, restored_mood)
-
-        # Restore mission timer from session if it was active before disconnect
-        if session.mission_description and session.mission_interval and not proactive.mission_active:
-            aff_state = await affection.get_state(user_id)
-            proactive.set_affection_level(aff_state.level)
-            proactive.start_mission(session.mission_description, session.mission_interval)
-            logger.info(
-                "Mission timer restored from session: every %d min",
-                session.mission_interval,
-            )
-
-        # Reflection-on-return: if user was away >8h, greet them referencing
-        # the last topic. Runs in background so it never blocks the connect.
-        import asyncio as _asyncio
-        ws.track_task(user_id, _asyncio.create_task(_maybe_reflect_on_return(user_id)))
-        # Level-9 Oath capstone for an already-maxed Commander who reached lv9
-        # before this feature existed — fires once ever, self-guarded.
-        ws.track_task(user_id, _asyncio.create_task(_maybe_oath_on_connect(user_id)))
-        # Recurring rituals: his birthday greeting (once a year) or her monthly
-        # fee settlement (once a month) — self-guarded per period.
-        from . import rituals
-        ws.track_task(user_id, _asyncio.create_task(rituals.on_connect(user_id)))
-        # Her Day: pick today's outfit (DB + weather) now, while he types —
-        # the chat turn only ever reads the cached row.
-        from . import wardrobe
-        ws.track_task(user_id, _asyncio.create_task(wardrobe.warm_today(user_id)))
-
-        try:
-            while True:
-                # He closed the app mid-reply: a send to this socket failed
-                # during the turn and Starlette marked it disconnected. Its
-                # next receive would raise RuntimeError, not
-                # WebSocketDisconnect — a disconnect, not a crash to log.
-                if WebSocketState.DISCONNECTED in (
-                    websocket.application_state, websocket.client_state,
-                ):
-                    break
-                # Read THIS device's socket only. Fanning in across every
-                # socket of the user let device A's frames — and its
-                # disconnect — be consumed by device B's loop and tear B down.
-                try:
-                    raw = await websocket.receive_text()
-                except WebSocketDisconnect:
-                    break
-                try:
-                    data = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue  # malformed frame — skip it, keep the connection
-                if not isinstance(data, dict):
-                    continue
-
-                msg_type = data.get("type")
-
-                try:
-                    if msg_type == "message":
-                        content = data.get("content", "")
-                        if isinstance(content, str):
-                            content = content[:4000]  # Input length limit
-                        await _handle_message(content, session, user_id)
-                    elif msg_type == "typing":
-                        pass
-                    elif msg_type == "voice_end":
-                        audio = data.get("audio")
-                        if audio:
-                            await _handle_voice(audio, session, user_id)
-                    elif msg_type == "tap_interact":
-                        await _handle_tap_interact(user_id)
-                except WebSocketDisconnect:
-                    # A real disconnect during handling exits via the normal
-                    # disconnect path — it is not an application error.
-                    raise
-                except Exception as e:
-                    # A handler crash must not tear down the socket: the user
-                    # message was already persisted before streaming, so tell
-                    # the client and keep receiving.
-                    logger.error(
-                        "Message handler crashed (type=%s): %s", msg_type, e,
-                        exc_info=True,
-                    )
+            try:
+                while True:
+                    # He closed the app mid-reply: a send to this socket failed
+                    # during the turn and Starlette marked it disconnected. Its
+                    # next receive would raise RuntimeError, not
+                    # WebSocketDisconnect — a disconnect, not a crash to log.
+                    if WebSocketState.DISCONNECTED in (
+                        websocket.application_state, websocket.client_state,
+                    ):
+                        break
+                    # Read THIS device's socket only. Fanning in across every
+                    # socket of the user let device A's frames — and its
+                    # disconnect — be consumed by device B's loop and tear B down.
                     try:
+                        raw = await websocket.receive_text()
+                    except WebSocketDisconnect:
+                        break
+                    try:
+                        data = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue  # malformed frame — skip it, keep the connection
+                    if not isinstance(data, dict):
+                        continue
+
+                    msg_type = data.get("type")
+
+                    try:
+                        if msg_type == "message":
+                            content = data.get("content", "")
+                            if isinstance(content, str):
+                                content = content[:4000]  # Input length limit
+                            await _admit_turn("message", content, user_id)
+                        elif msg_type == "typing":
+                            pass
+                        elif msg_type == "voice_end":
+                            audio = data.get("audio")
+                            if audio:
+                                await _admit_turn("voice_end", audio, user_id)
+                        elif msg_type == "tap_interact":
+                            await _handle_tap_interact(user_id)
+                    except SessionUnavailable:
                         await ws.send(user_id, {
                             "type": "error",
-                            "message": "...Something glitched on my end, Commander. "
-                                       "Your message is safe — try again.",
+                            "message": "Session storage is temporarily unavailable. Please reconnect and retry.",
                         })
-                    except Exception:
-                        logger.warning("Could not deliver error event; closing loop")
-                        break
-        except WebSocketDisconnect:
+                    except WebSocketDisconnect:
+                        # A real disconnect during handling exits via the normal
+                        # disconnect path — it is not an application error.
+                        raise
+                    except Exception as e:
+                        # A handler crash must not tear down the socket: the user
+                        # message was already persisted before streaming, so tell
+                        # the client and keep receiving.
+                        logger.error(
+                            "Message handler crashed (type=%s): %s", msg_type, e,
+                            exc_info=True,
+                        )
+                        try:
+                            await ws.send(user_id, {
+                                "type": "error",
+                                "message": "...Something glitched on my end, Commander. "
+                                           "Your message is safe — try again.",
+                            })
+                        except Exception:
+                            logger.warning("Could not deliver error event; closing loop")
+                            break
+            except WebSocketDisconnect:
+                pass
+        except SessionUnavailable:
+            await ws.send(user_id, {
+                "type": "error",
+                "message": "Session storage is temporarily unavailable. Please reconnect and retry.",
+            })
+        except ConnectionError:
             pass
         finally:
             await ws.disconnect(user_id, websocket)

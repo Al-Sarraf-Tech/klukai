@@ -549,7 +549,9 @@ def detect_goodbye(message: str) -> GoodbyeKind | None:
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
 
-async def create_conversation(conv_id: str, user_id: str = "jalsarraf") -> None:
+async def create_conversation(
+    conv_id: str, user_id: str = "jalsarraf", *, strict: bool = False
+) -> None:
     """Create a new conversation record scoped to a user."""
     import logging
     from .db import get_conn_autocommit
@@ -563,6 +565,8 @@ async def create_conversation(conv_id: str, user_id: str = "jalsarraf") -> None:
             )
     except Exception as e:
         logger.error("Failed to create conversation: %s", e)
+        if strict:
+            raise
 
 
 async def store_message(

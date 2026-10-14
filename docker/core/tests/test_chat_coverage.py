@@ -487,8 +487,8 @@ class TestWebSocketEndpoint:
         ws.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_existing_session_mood_corrected_from_db(self):
-        """Existing session with drifted mood gets corrected from persistent DB."""
+    async def test_existing_session_mood_not_overwritten_by_db(self):
+        """A second device must retain the current live mood."""
         endpoint, _ = _capture_endpoint()
         sock = _FakeWebSocket(token="good")
         ws = _fake_ws_manager()
@@ -510,9 +510,9 @@ class TestWebSocketEndpoint:
         ):
             await endpoint(sock)
 
-        assert existing.mood == "longing"  # corrected in place
-        memory.save_session.assert_awaited()
-        ws.send_mood.assert_awaited_once_with("u1", "longing")
+        assert existing.mood == "composed"
+        memory.save_session.assert_not_awaited()
+        ws.send_mood.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_mission_timer_restored_from_session(self):

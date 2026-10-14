@@ -47,6 +47,59 @@ async def maybe_deliver_oath(user_id: str) -> bool:
     return True
 
 
+async def _apply_extracted_state(snapshot: SessionState, mood: str, user_id: str) -> bool:
+    """Atomically guard mood, mission and their persistent/timer/WS effects."""
+    key = session_id(user_id)
+    async with memory.session_owner(key):
+        session = await memory.get_session(key)
+        if (session is None or session.conversation_id != snapshot.conversation_id
+                or session.revision != snapshot.revision):
+            return False
+        # The mood she was in BEFORE this turn — read it before set_last_mood
+        # overwrites it, or the vigilant-after-battle_ready check below only
+        # ever sees the new mood and can never fire.
+        prev_mood = proactive._last_mood
+
+        session.mood = mood
+
+        start_mission = False
+        # Auto-start mission when mood hits battle_ready or vigilant (if was battle_ready)
+        mission_moods = {"battle_ready"}
+        # Vigilant triggers mission only if previous mood was battle_ready (mid-combat awareness)
+        if mood == "vigilant" and prev_mood == "battle_ready":
+            mission_moods.add("vigilant")
+        if mood in mission_moods and not proactive.mission_active:
+            recent_text = " ".join(
+                t.get("content", "")[:100] for t in session.turns[-4:]
+                if t.get("role") == "user"
+            ) or "Combat operation"
+            start_mission = True
+            session.mission_description = recent_text
+            session.mission_interval = 30
+            session.mission_started_at = datetime.now().isoformat()
+            logger.info("Mission auto-started from battle_ready mood: %s", recent_text[:60])
+
+        await memory.save_session(key, session)
+        proactive.set_last_mood(mood)
+        if start_mission:
+            proactive.start_mission(session.mission_description, interval_minutes=30)
+        await ws.send_mood(user_id, mood)
+
+        # Persist mood so it survives session expiry
+        try:
+            async with get_conn_autocommit() as conn:
+                await conn.execute(
+                    "INSERT INTO companion_persistent_state (user_id, mood, last_conversation_id, updated_at) "
+                    "VALUES (%s, %s, %s, NOW()) "
+                    "ON CONFLICT (user_id) DO UPDATE SET mood = %s, last_conversation_id = %s, updated_at = NOW()",
+                    (user_id, mood, session.conversation_id, mood, session.conversation_id),
+                )
+        except Exception as e:
+            logger.warning("Failed to persist mood: %s", e)
+
+        return True
+
+
 async def background_extraction(
     user_msg: str,
     assistant_msg: str,
@@ -60,6 +113,7 @@ async def background_extraction(
     Delayed 3s so LLM calls don't compete with the main response stream.
     All calls are serialized (not parallel) to avoid queuing in LM Studio.
     """
+    session = session.model_copy(deep=True)
     await asyncio.sleep(3)  # Let main response finish streaming first
     try:
         aff_state_bg = await affection.get_state(user_id)
@@ -163,15 +217,7 @@ async def background_extraction(
         except Exception as e:
             logger.debug("Mood contagion skipped: %s", e)
 
-        # The mood she was in BEFORE this turn — read it before set_last_mood
-        # overwrites it, or the vigilant-after-battle_ready check below only
-        # ever sees the new mood and can never fire.
-        prev_mood = proactive._last_mood
-
-        session.mood = mood
-        await memory.save_session(session_id(user_id), session)
-        await ws.send_mood(user_id, mood)
-        proactive.set_last_mood(mood)
+        await _apply_extracted_state(session, mood, user_id)
 
         # Record "firsts" for anniversary tracking (scoped to user)
         if session.turn_count == 1:
@@ -183,35 +229,6 @@ async def background_extraction(
         if session.turn_count > 0 and session.turn_count % 10 == 0:
             from .context import physical
             await physical.on_long_conversation(user_id)
-
-        # Auto-start mission when mood hits battle_ready or vigilant (if was battle_ready)
-        mission_moods = {"battle_ready"}
-        # Vigilant triggers mission only if previous mood was battle_ready (mid-combat awareness)
-        if mood == "vigilant" and prev_mood == "battle_ready":
-            mission_moods.add("vigilant")
-        if mood in mission_moods and not proactive.mission_active:
-            recent_text = " ".join(
-                t.get("content", "")[:100] for t in session.turns[-4:]
-                if t.get("role") == "user"
-            ) or "Combat operation"
-            proactive.start_mission(recent_text, interval_minutes=30)
-            session.mission_description = recent_text
-            session.mission_interval = 30
-            session.mission_started_at = datetime.now().isoformat()
-            await memory.save_session(session_id(user_id), session)
-            logger.info("Mission auto-started from battle_ready mood: %s", recent_text[:60])
-
-        # Persist mood so it survives session expiry
-        try:
-            async with get_conn_autocommit() as conn:
-                await conn.execute(
-                    "INSERT INTO companion_persistent_state (user_id, mood, last_conversation_id, updated_at) "
-                    "VALUES (%s, %s, %s, NOW()) "
-                    "ON CONFLICT (user_id) DO UPDATE SET mood = %s, last_conversation_id = %s, updated_at = NOW()",
-                    (user_id, mood, session.conversation_id, mood, session.conversation_id),
-                )
-        except Exception as e:
-            logger.warning("Failed to persist mood: %s", e)
 
         # Adjust affection using the merged interaction classification (no separate LLM call)
         try:
@@ -365,6 +382,7 @@ async def background_compaction(session: SessionState, user_id: str = "jalsarraf
     """
     from .fact_extractor import compact_turns
 
+    session = session.model_copy(deep=True)
     try:
         turns = session.turns
         if len(turns) < context.COMPACT_THRESHOLD:
@@ -386,23 +404,18 @@ async def background_compaction(session: SessionState, user_id: str = "jalsarraf
             logger.warning("Compaction returned empty summary, keeping raw turns")
             return
 
-        # The chat kept going while the LLM summarised: replacing the list
-        # with the stale "recent" slice would drop any turn appended since.
-        # Delete the compacted prefix in place instead — and only if it is
-        # still the same turns (another compaction or a session restore may
-        # have changed the list underneath us; then this summary is stale).
-        live = session.turns
-        if live[:n_old] != prefix:
-            logger.warning("Compaction aborted: session turns changed during summarisation")
-            return
-        session.context_summary = summary
-        del live[:n_old]
-        await memory.save_session(session_id(user_id), session)
-
-        logger.info(
-            "Session compacted: %d turns -> summary (%d chars) + %d raw turns",
-            len(old_turns), len(summary), len(live),
-        )
+        key = session_id(user_id)
+        async with memory.session_owner(key):
+            live = await memory.get_session(key)
+            if (live is None or live.conversation_id != session.conversation_id
+                    or live.context_summary != session.context_summary
+                    or live.turns[:n_old] != prefix):
+                logger.info("Compaction skipped: stored prefix, summary or conversation changed")
+                return
+            live.context_summary = summary
+            del live.turns[:n_old]
+            await memory.save_session(key, live)
+            logger.info("Session compacted: %d old turns, %d raw turns remain", n_old, len(live.turns))
     except Exception as e:
         logger.error("Background compaction failed: %s", e)
 

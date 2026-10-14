@@ -127,3 +127,28 @@ SACRED: never delete chat/memory/affection vectors for cleanup convenience.
 - ADR-0006 Image gen / GPU lease
 - ADR-0007 Voice on GPU host
 - ADR-0009 Public edge / gateway
+
+
+### Live session ownership
+
+The core runs a single uvicorn worker. `MemoryManager.session_owner` provides
+process-local ownership per session key for connection initialization, complete
+text/voice exchanges, and conditional background state patches. It is not a
+distributed lock: multiple workers or replicas must not share this write path
+without a replacement coordinator. Idle lock entries are reclaimed after both
+holders and waiters leave.
+
+Each admitted turn reads Redis inside ownership and persists a new `revision`
+before handling input. An unanswered-turn rollback retains that revision, so an
+older extraction cannot restore stale mood or mission state. Extraction captures
+a deep snapshot and checks conversation identity and revision before applying
+Redis mood/mission changes, PostgreSQL mood, timers, or mood broadcasts. Compaction
+checks the conversation, original summary, and exact compacted prefix against the
+latest stored session, preserving newer turns and unrelated state. Session reads
+and writes fail visibly on persistence failure; they do not use socket-local
+fallback state. PostgreSQL conversation/message history remains append-only.
+
+WebSocket fan-out snapshots device membership and bounds each send to ten seconds.
+Last-device cleanup detaches the old task bucket before awaiting cancellation,
+retrieves task failures, and excludes its own sending task. Reconnecting devices
+and their newly tracked tasks belong to a new bucket and survive old cleanup.

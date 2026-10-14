@@ -118,9 +118,10 @@ class TestSend:
     async def test_dead_connections_pruned(self):
         m = WSManager()
         ws_good = _mk_ws()
-        ws_bad = _mk_ws(send_raises=True)
+        ws_bad = _mk_ws()
         await m.connect(ws_good, user_id="alice")
         await m.connect(ws_bad, user_id="alice")
+        ws_bad.send_text.side_effect = RuntimeError("connection closed")
         await m.send("alice", {"type": "x"})
         # Bad ws pruned
         assert ws_bad not in m._connections["alice"]
@@ -129,8 +130,9 @@ class TestSend:
     @pytest.mark.asyncio
     async def test_user_dropped_when_all_dead(self):
         m = WSManager()
-        ws_bad = _mk_ws(send_raises=True)
+        ws_bad = _mk_ws()
         await m.connect(ws_bad, user_id="alice")
+        ws_bad.send_text.side_effect = RuntimeError("connection closed")
         await m.send("alice", {"type": "x"})
         # User key removed when no live connections remain
         assert "alice" not in m._connections

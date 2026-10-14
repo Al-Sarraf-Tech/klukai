@@ -10,6 +10,8 @@ from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
 
+SEND_TIMEOUT_SECONDS = 10.0
+
 
 class WSManager:
     """Manages WebSocket connections per user. Supports multiple devices.
@@ -36,6 +38,10 @@ class WSManager:
 
         def _discard(t: asyncio.Task, _b: set[asyncio.Task] = bucket) -> None:
             _b.discard(t)
+            if not t.cancelled():
+                error = t.exception()
+                if error is not None:
+                    logger.error("Background task failed for %s: %s", user_id, error)
 
         task.add_done_callback(_discard)
 
@@ -53,30 +59,35 @@ class WSManager:
         self._connections[user_id].add(ws)
         count = len(self._connections[user_id])
         logger.info("WebSocket connected: user=%s (devices=%d)", user_id, count)
-        await self._send_one(ws, {"type": "connected", "status": "ok"})
+        if not await self._send_one(ws, {"type": "connected", "status": "ok"}):
+            await self.disconnect(user_id, ws)
+            raise ConnectionError("Initial WebSocket send failed")
 
     async def disconnect(self, user_id: str = "default", ws: WebSocket | None = None) -> None:
         conns = self._connections.get(user_id)
-        if conns is None:
-            return
-        if ws is not None:
-            conns.discard(ws)
-        if not conns:
+        if conns is not None:
+            if ws is None:
+                conns.clear()
+            else:
+                conns.discard(ws)
+            if conns:
+                return
             self._connections.pop(user_id, None)
-            # Last device gone → cancel orphan background tasks for this user
-            tasks = self._user_tasks.pop(user_id, set())
-            if tasks:
-                logger.info("Cancelling %d background tasks for %s on disconnect",
-                            len(tasks), user_id)
-                for t in tasks:
-                    if not t.done():
-                        t.cancel()
-        logger.info("WebSocket disconnected: user=%s (remaining=%d)", user_id, len(conns) if conns else 0)
+        # Detach this generation before awaiting cancellation. A reconnect can
+        # create a new bucket while old tasks unwind; never touch that bucket.
+        tasks = self._user_tasks.pop(user_id, set())
+        current = asyncio.current_task()
+        pending = [task for task in tasks if task is not current]
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def _send_one(self, ws: WebSocket, data: dict) -> bool:
         """Send to a single WebSocket. Returns False if failed."""
         try:
-            await ws.send_text(json.dumps(data))
+            await asyncio.wait_for(ws.send_text(json.dumps(data)), SEND_TIMEOUT_SECONDS)
             return True
         except Exception:
             return False
@@ -86,14 +97,9 @@ class WSManager:
         conns = self._connections.get(user_id)
         if not conns:
             return
-        dead = []
-        for ws in conns:
-            if not await self._send_one(ws, data):
-                dead.append(ws)
-        for ws in dead:
-            conns.discard(ws)
-        if not conns:
-            self._connections.pop(user_id, None)
+        for socket in tuple(conns):
+            if not await self._send_one(socket, data):
+                await self.disconnect(user_id, socket)
 
     async def send_token(self, user_id: str, text: str) -> None:
         await self.send(user_id, {"type": "token", "text": text})
