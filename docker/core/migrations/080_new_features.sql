@@ -35,5 +35,8 @@ ALTER TABLE companion_persistent_state
 
 -- Seed Klukadile plush as canonical comfort object for jalsarraf
 INSERT INTO companion_gifts (user_id, item, description, sentiment, given_date)
-VALUES ('jalsarraf', 'Klukadile plush', 'A crocodile plush. I would deny owning it. ...It stays on my bed.', 'sentimental', '2026-04-06')
-ON CONFLICT DO NOTHING;
+SELECT 'jalsarraf', 'Klukadile plush', 'A crocodile plush. I would deny owning it. ...It stays on my bed.', 'sentimental', DATE '2026-04-06'
+WHERE NOT EXISTS (
+    SELECT 1 FROM companion_gifts
+    WHERE user_id = 'jalsarraf' AND item = 'Klukadile plush'
+);

@@ -7,7 +7,7 @@ concrete behavior:
   * each middleware dispatch sets the headers / status it promises;
   * the rate-limit middleware skips unprotected paths, consumes a token on
     protected ones, and returns 429 on overflow;
-  * run_migration applies every .sql file and survives a failing one;
+  * run_migration propagates migration failures to startup;
   * generate_daily_recap honors the affection-tone branches and the
     too-short-conversation guard;
   * proactive_callback fans out to connected sockets, else falls back to push.
@@ -283,49 +283,21 @@ class TestGlobalExceptionHandler:
 
 
 class TestRunMigration:
-    async def test_applies_every_sql_file(self, tmp_path):
-        # Two fake migration files.
-        (tmp_path / "001_init.sql").write_text("CREATE TABLE a();")
-        (tmp_path / "002_more.sql").write_text("CREATE TABLE b();")
-
-        conn = AsyncMock()
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=conn)
-        cm.__aexit__ = AsyncMock(return_value=False)
-        pool = MagicMock()
-        pool.connection = MagicMock(return_value=cm)
-
-        # Point Path(__file__).parent.parent / "migrations" at tmp_path by
-        # patching Path inside main to return our dir for the glob.
-        fake_path = MagicMock()
-        fake_path.parent.parent.__truediv__ = MagicMock(return_value=tmp_path)
-        with patch.object(main, "Path", return_value=fake_path), \
-             patch.object(main, "get_pool", return_value=pool):
-            await main.run_migration()
-
-        # One execute + commit per migration file (sorted order).
-        assert conn.execute.await_count == 2
-        assert conn.commit.await_count == 2
-
-    async def test_failing_migration_is_swallowed(self, tmp_path):
+    async def test_failing_migration_prevents_startup(self, tmp_path):
         (tmp_path / "001.sql").write_text("BAD SQL;")
-        conn = AsyncMock()
-        conn.execute = AsyncMock(side_effect=RuntimeError("already applied"))
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=conn)
-        cm.__aexit__ = AsyncMock(return_value=False)
+        conn = MagicMock()
+        conn.execute = AsyncMock(side_effect=RuntimeError("database failure"))
+        conn.transaction.return_value.__aenter__ = AsyncMock()
+        conn.transaction.return_value.__aexit__ = AsyncMock(return_value=False)
         pool = MagicMock()
-        pool.connection = MagicMock(return_value=cm)
-
+        pool.connection.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.connection.return_value.__aexit__ = AsyncMock(return_value=False)
         fake_path = MagicMock()
         fake_path.parent.parent.__truediv__ = MagicMock(return_value=tmp_path)
         with patch.object(main, "Path", return_value=fake_path), \
-             patch.object(main, "get_pool", return_value=pool):
-            await main.run_migration()  # must not raise
-        # The failing migration was attempted (proving the except path ran) and
-        # the broken SQL was never committed.
-        conn.execute.assert_awaited_once()
-        conn.commit.assert_not_awaited()
+             patch.object(main, "get_pool", return_value=pool), \
+             pytest.raises(RuntimeError, match="database failure"):
+            await main.run_migration()
 
 
 # ── generate_daily_recap ─────────────────────────────────────────────────────

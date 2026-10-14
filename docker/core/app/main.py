@@ -30,6 +30,7 @@ from .db import init_pool, close_pool, get_pool
 from .events import init as events_init, close as events_close
 from .helpers import fix_narration as _fix_narration
 from .llm_router import FAILURE_SENTINEL
+from .migrations import apply_migrations
 from .models import SessionState
 from .personality import load_personality
 from .push import send_push
@@ -65,20 +66,8 @@ logging.getLogger("uvicorn.access").addFilter(_RedactTokenLogFilter())
 
 
 async def run_migration() -> None:
-    """Run all companion SQL migrations on startup."""
-    migration_dir = Path(__file__).parent.parent / "migrations"
-    migration_files = sorted(migration_dir.glob("*.sql"))
-
-    pool = get_pool()
-    for migration_path in migration_files:
-        sql = migration_path.read_text()
-        try:
-            async with pool.connection() as conn:
-                await conn.execute(sql)
-                await conn.commit()
-            logger.info("Migration %s applied", migration_path.name)
-        except Exception as e:
-            logger.warning("Migration %s may already be applied: %s", migration_path.name, e)
+    """Verify and apply companion migrations, failing startup on any error."""
+    await apply_migrations(get_pool(), Path(__file__).parent.parent / "migrations")
 
 
 async def generate_daily_recap(affection_level: int, user_id: str = "jalsarraf") -> str | None:
