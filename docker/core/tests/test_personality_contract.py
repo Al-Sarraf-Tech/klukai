@@ -118,3 +118,21 @@ def test_identity_confidence_does_not_require_unverified_claims():
     prompt = assemble_system_prompt(personality_path=str(CONFIG), affection_level=9)
     assert "Never deny knowledge of things" not in prompt
     assert "Distinguish private information from unverified information" in prompt
+
+
+@pytest.mark.parametrize("level", [0, 9])
+@pytest.mark.parametrize("replacement", ["Stand steady, Commander.", None])
+def test_catchphrase_edit_has_no_competing_absolute_literal(tmp_path, level, replacement):
+    config = yaml.safe_load(CONFIG.read_text())
+    if replacement is None:
+        config["identity"].pop("catchphrase")
+    else:
+        config["identity"]["catchphrase"] = replacement
+    edited = tmp_path / "personality.yaml"
+    edited.write_text(yaml.safe_dump(config))
+    prompt = assemble_system_prompt(personality_path=str(edited), affection_level=level)
+    assert 'Your catchphrase is "I am all you need."' not in prompt
+    if replacement is not None:
+        assert f"Catchphrase: {replacement}" in prompt
+    else:
+        assert "- Catchphrase:" not in prompt

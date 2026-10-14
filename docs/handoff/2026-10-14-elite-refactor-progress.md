@@ -25,7 +25,7 @@ This map preserves the full objective. A passing unit suite or a single repaired
 | Workstream | Acceptance | Evidence/status |
 |---|---|---|
 | Character research | Reconcile primary profile/quote material with existing dossier; attribute uncertainty and companion inventions; no unsupported claims promoted to canon | Audit complete; character contract implementation in progress, bus 5180f89bb516 |
-| Character behavior | Coherent identity, mature warmth, agency, pacing, addressing and context priorities across affection/mood states; no contradictory instructions | Focused 169 and strict golden 58 passed; final task report/review and generated-answer evaluation pending |
+| Character behavior | Coherent identity, mature warmth, agency, pacing, addressing and context priorities across affection/mood states; no contradictory instructions | 330b45e; extended441 passed. Review157446d3cc31 caught duplicated catchphrase directive; root fixed with four RED→GREEN mutation cases, refreshed45 snapshots and234 focused passes. Generated-answer evaluation pending |
 | Conversation state | Concurrent devices retain turns, broadcasts tolerate connection changes, and task lifetimes match session versus durable work | Reproductions complete; implementation bus 29a8e6517909, conversation-authority spec/plan |
 | Database lifecycle | Migrations execute once with transactional bookkeeping, preserve legacy scores/gifts, serialize startup, and fail visibly on real errors | dcc9045, 58 focused including real PG passed; independent review 7b6ceef06577 no actionable findings. Pre-deploy backup/aggregate checks pending |
 | Durable scenes/jobs | Once-ever oath survives disconnect without being consumed prematurely; long jobs do not starve broker heartbeats or event delivery | Static findings pending implementation and behavioral verification |
@@ -57,7 +57,7 @@ Audit evidence is retained under `~/.local/state/codex-tasks/klukai-{character,a
 - Character C1-C7: config wiring, coherent precedence, quirk fidelity, provenance, preserve relationship/voice design, generated-response evaluation B03-B14. First implementation running; live evaluation still pending.
 - Architecture P1-A: once-only migrations implemented/reviewed; rollout checks pending.
 - P1-B/P2-D: authoritative per-user turns, delayed state patches, WS generation cleanup — running.
-- P1-C: nonblocking AMQP job execution, publisher confirmation and queued-job reconciliation — pending.
+- P1-C: nonblocking AMQP job execution, publisher confirmation and queued-job reconciliation — implementation bus9db2c47d8579 running, migration200 reserved.
 - P2-E: durable account-image IDs, immutable request payload, archive recovery without rerender, correct generated/archived outcomes — pending.
 - P2-F: atomic complete once-ever oath persistence before paced live delivery, with no inferred replay of old events — pending.
 - P2-G: component-separated CI, current runtime/coverage docs, truthful evaluation claims — pending.
@@ -70,4 +70,10 @@ Audit evidence is retained under `~/.local/state/codex-tasks/klukai-{character,a
 - Final evidence: complete isolated core/ops/voice/bot/JS/Flutter checks, browser/render and 200% text/keyboard/motion acceptance, fresh whole-branch review, state-safe deployment and essential runtime flows — pending.
 
 The process-local conversation coordinator is deliberately bounded to the deployed single uvicorn worker. A future multi-worker deployment requires distributed turn ownership; do not imply this refactor supplies it.
+
+## Fresh component checks
+
+After the first character/migration commits, unaffected components passed separately: ops197 plus4 subtests; voice33; shellcheck clean. Bot initially could not collect under system Python (missing telegram); using the already-installed `tgbot/.venv/bin/python` passed36. No packages installed. Logs: private codex-tasks/klukai-elite-{ops,voice,shell,tgbot-venv}.log. These results cover those unchanged components at this point, not the pending core/UI changes.
+
+Character review disposition: the supported catchphrase field really did conflict with a literal absolute rule, so the rule now governs only use of the configured value. Four new assembly regressions failed first at levels0/9 with changed/omitted catchphrase, then passed. One legacy unit expectation was changed to the new single-source contract. All45 golden changes are exactly the expected one-character length increase and changed SHA for this single policy-line replacement; other metadata is unchanged. Focused personality/canon/golden234 pass, scoped Ruff clean. Generated evaluation and whole-core checks remain open.
 

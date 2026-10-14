@@ -36,8 +36,9 @@ class TestCharacterRules:
 
     def test_catchphrase_rule_present(self):
         out = build_character_rules()
-        # The actual phrase "all you need" is part of the rules text
-        assert "all you need" in out
+        # The identity supplies the phrase; rules govern its use only.
+        assert "If your identity specifies a catchphrase" in out
+        assert "sparingly and meaningfully" in out
 
     def test_no_holograms_rule(self):
         out = build_character_rules()
