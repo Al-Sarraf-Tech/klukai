@@ -17,6 +17,7 @@ module-level names, so we patch them at ``app.background.<name>``.
 from __future__ import annotations
 
 import sys
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -586,6 +587,29 @@ class TestCompaction:
 
 
 class TestImageGen:
+    async def test_cloud_image_avoids_gpu_readiness_and_prompt_logging(self, bg_mocks, monkeypatch, caplog):
+        caplog.set_level(logging.INFO, logger="app.background")
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "openai")
+        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(side_effect=AssertionError("Dominus readiness"))), \
+             patch("app.image_provider.cloud_images_ready", return_value=True), \
+             patch.object(bg, "_enhance_image_prompt", return_value="private-scene-description"), \
+             patch.object(bg, "generate_image", new=AsyncMock(return_value=b"PNG")):
+            await bg.background_image_gen("private-scene-description", user_id="u1")
+        frames = [call.args[1] for call in bg_mocks.ws.send.await_args_list]
+        assert any(frame.get("type") == "image" for frame in frames)
+        assert "private-scene-description" not in caplog.text
+
+    async def test_unconfigured_cloud_image_stops_before_composition(self, bg_mocks, monkeypatch):
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "openai")
+        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(side_effect=AssertionError("Dominus readiness"))), \
+             patch("app.image_provider.cloud_images_ready", return_value=False), \
+             patch.object(bg, "_enhance_image_prompt", side_effect=AssertionError("unready composition")):
+            await bg.background_image_gen("draw", user_id="u1")
+        frames = [call.args[1] for call in bg_mocks.ws.send.await_args_list]
+        assert {"type": "thinking", "content": ""} in frames
+        assert not any(frame.get("type") == "image" for frame in frames)
+        bg_mocks.ws.send_proactive.assert_awaited_once()
+
     async def test_sleeps_then_checks_comfyui_and_sends_thinking(self, bg_mocks):
         with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
              patch.object(bg, "is_couple_scene", return_value=False), \

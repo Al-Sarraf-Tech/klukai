@@ -415,15 +415,26 @@ async def background_image_gen(
 ) -> None:
     """Generate an anime image based on the user's request and recent chat context."""
     from .image_gen import check_comfyui_ready
+    from .image_provider import cloud_images_ready, selected_provider
 
-    # Wait for chat response to finish and VRAM to settle
-    logger.info("Image gen: waiting 1s for VRAM...")
-    await asyncio.sleep(1)
     try:
-        logger.info("Image gen: starting for '%s'", user_request[:60])
-
-        # Check if ComfyUI is ready
-        ready = await check_comfyui_ready()
+        provider = selected_provider()
+        if provider == "openai":
+            if not await asyncio.to_thread(cloud_images_ready):
+                await ws.send_proactive(user_id, "...Visualization is unavailable right now, Commander.", persist=False)
+                await ws.send(user_id, {"type": "thinking", "content": ""})
+                return
+            ready = True
+        elif provider == "comfyui":
+            # Only local rendering waits for VRAM and probes the GPU gateway.
+            logger.info("Image gen: waiting 1s for VRAM...")
+            await asyncio.sleep(1)
+            ready = await check_comfyui_ready()
+        else:
+            await ws.send_proactive(user_id, "...Visualization is unavailable right now, Commander.", persist=False)
+            await ws.send(user_id, {"type": "thinking", "content": ""})
+            return
+        logger.info("Image gen: starting")
         if not ready:
             await ws.send_thinking(user_id, "Warming up image systems, Commander. Stand by...")
         else:
@@ -447,7 +458,7 @@ async def background_image_gen(
             context=full_context, squad_members=squad_members, costume=costume,
             request=user_request,
         )
-        logger.info("Image prompt (aff=%d): %s", aff_level, full_prompt[:300])
+        logger.info("Image composition prepared (aff=%d)", aff_level)
 
         # Determine orientation
         if is_landscape(full_context):
@@ -487,7 +498,7 @@ async def background_image_gen(
             await ws.send_proactive(user_id, "...Visualization failed. Interference in the rendering pipeline. I'll try again later.", persist=False)
             await ws.send(user_id, {"type": "thinking", "content": ""})  # clear thinking bubble
     except Exception as e:
-        logger.error("Background image gen failed: %s", e, exc_info=True)
+        logger.error("Background image gen failed (%s)", type(e).__name__)
         try:
             # Mirror the empty-bytes fallback so the user never gets ghosted —
             # always clear the thinking bubble and surface a graceful message.

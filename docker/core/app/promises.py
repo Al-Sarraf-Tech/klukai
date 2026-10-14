@@ -31,7 +31,6 @@ DEFAULT_FOLLOWUP_HOURS = 20
 # table too, as commitment.kind = "event" with scheduled_followup NULL. They are
 # not his promises: the follow-up and listing paths exclude them in SQL, and
 # again in Python so a mis-tagged row can never be nagged about.
-_NOT_EVENT_SQL = "AND COALESCE(commitment->>'kind', '') <> 'event' "
 
 
 def _is_event(commitment: object) -> bool:
@@ -94,7 +93,7 @@ async def due_promises(user_id: str, now: datetime) -> list[dict]:
                 "FROM companion_promises "
                 "WHERE user_id = %s AND scheduled_followup <= %s "
                 "AND resolved_at IS NULL AND followup_sent_at IS NULL "
-                f"{_NOT_EVENT_SQL}"
+                "AND COALESCE(commitment->>'kind', '') <> 'event' "
                 "ORDER BY scheduled_followup ASC",
                 (user_id, now),
             )).fetchall()
@@ -134,7 +133,7 @@ async def open_promises(user_id: str, limit: int = 50) -> list[dict]:
                 "SELECT id, promise_text, commitment, made_at, scheduled_followup, "
                 "followup_sent_at FROM companion_promises "
                 "WHERE user_id = %s AND resolved_at IS NULL "
-                f"{_NOT_EVENT_SQL}"
+                "AND COALESCE(commitment->>'kind', '') <> 'event' "
                 "ORDER BY made_at DESC LIMIT %s",
                 (user_id, limit),
             )).fetchall()

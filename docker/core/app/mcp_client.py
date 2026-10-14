@@ -8,6 +8,7 @@ import uuid
 
 import httpx
 
+from . import __version__
 logger = logging.getLogger(__name__)
 
 MCP_URL = os.environ.get("MCP_URL", "http://aichat-mcp:8096")
@@ -42,7 +43,7 @@ class MCPClient:
                         "capabilities": {},
                         "clientInfo": {
                             "name": "companion-core",
-                            "version": "0.1.0",
+                            "version": __version__,
                         },
                     },
                 },

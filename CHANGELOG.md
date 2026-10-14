@@ -12,6 +12,48 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-10-14
+
+### Added
+
+- Owner-authorized Sonnet 5.5 interactive primary with medium adaptive thinking
+  and the existing Dominus local secondary.
+- Native Intel Arc XTTS voice, bounded asynchronous voice jobs, complete spoken
+  replies, cancellation, and content-hashed web assets.
+- Opt-in OpenAI Images providers for reference-conditioned scenes and a separate
+  Sonnet creative-text provider for dreams and Her POV. Both default to local;
+  cloud attempt limits default to zero.
+- Persistent cross-process attempt accounting, durable cloud job ownership, and
+  offline API-to-archive E2E tests. Cloud historical backfill is refused.
+- Provider research, local GPU instructions, updated architecture diagrams, and
+  versioned release verification. Existing character pictures are preserved.
+
+### Fixed
+
+- Preserve upstream voice response metadata and stop stale/cancelled speech.
+- Correct interactive tool-synthesis and voice-job type annotations.
+- Use static SQL for job claims and promise filters without interpolating query
+  fragments; existing bound parameters and ownership checks are retained.
+
+### Security
+
+- Raise dependency floors to AnyIO 4.14.2, multidict 6.9.1, and urllib3 2.8.0;
+  regenerate the hashed lockfile to resolve six reported dependency advisories.
+- Update the pinned Python/Debian base and omit runtime pip installers, resolving
+  all fixable HIGH/CRITICAL container findings at release time.
+- Cloud providers use canonical endpoints, bounded requests, validated images,
+  stripped reference metadata, no automatic retry, and fail-closed accounting.
+
+### Compatibility and validation
+
+- Core API version: **1.1.0**. Flutter version: **1.1.0+2**.
+- Dreams remain text entries; portraits, inpainting and img2img retain the local
+  GPU path. Paid cloud image/dream activation and identity comparison are pending
+  separate spending authorization.
+- See [v1.1.0 release record](docs/releases/v1.1.0.md) for exact checks and limits.
+
+## Earlier unreleased work
+
 ### Added — S+ Phase 2/3/4 uplift batch (2026-05-17)
 
 - **scripts/s-tier-audit.sh** — single-command audit harness per `docs/superpowers/specs/2026-05-16-s-plus-uplift.md` §5.8. Exit 0 = S+; exit 1 = floor. Walks all 8 tier dimensions. Score: 32→60 / 65. Floor: C → A+.

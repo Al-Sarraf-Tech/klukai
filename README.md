@@ -10,16 +10,20 @@
 </p>
 
 <p align="center">
-  <img alt="local only" src="https://img.shields.io/badge/inference-local%20only-4FC3F7"/>
+  <img alt="local GPU and opt-in APIs" src="https://img.shields.io/badge/inference-local%20GPU%20%2B%20opt--in%20APIs-4FC3F7"/>
   <img alt="python" src="https://img.shields.io/badge/python-3.14-3776AB"/>
   <img alt="flutter" src="https://img.shields.io/badge/flutter-PWA-02569B"/>
   <img alt="coverage" src="https://img.shields.io/badge/coverage-%E2%89%A595%25-4ADE80"/>
   <img alt="ci" src="https://img.shields.io/badge/CI-self--hosted-E8923E"/>
 </p>
 
-A production-grade AI companion rooted in [Girls' Frontline 2: Exilium](https://gfl2.sunborngame.com/) canon. Klukai is the elite who waited ten years for her Commander to answer, and she builds a real bond with him: conversation, memory, affection, rituals, and initiative, all on hardware he controls.
+A production-grade AI companion rooted in [Girls' Frontline 2: Exilium](https://gfl2.sunborngame.com/) canon. Klukai is the elite who waited ten years for her Commander to answer, and she builds a real bond with him: conversation, memory, affection, rituals, and initiative, with her state and archive on hardware he controls.
 
-**All chat inference is local. There is no cloud LLM fallback. Ever.**
+**Current deployment:** Claude Sonnet 5.5 with medium adaptive thinking handles interactive chat, with Dominus as the local secondary. English speech uses local XTTS on Amarillo's Intel Arc A380. Pictures, live portraits, and background work remain local by default.
+
+This release also prepares independently opt-in OpenAI scene pictures and Anthropic dream/Her POV writing. Those creative API paths are disabled by default, with zero request allowances; publishing the code does not activate paid generation. See the [provider handoff](docs/handoff/2026-10-14-dream-image-preparation.md) for activation and recovery requirements.
+
+**Release v1.1.0:** core API `1.1.0`, Flutter `1.1.0+2`. The version sources are [the core package](docker/core/app/__init__.py) and [Flutter's pubspec](flutter_app/pubspec.yaml); checked-in defaults deliberately remain local.
 
 ---
 
@@ -36,7 +40,8 @@ A production-grade AI companion rooted in [Girls' Frontline 2: Exilium](https://
 - [Topology](#topology-redacted)
 - [Her POV](#her-pov)
 - [Proactive systems](#proactive-systems)
-- [Local-only LLM policy](#local-only-llm-policy)
+- [Provider policy](#provider-policy)
+- [Use local GPUs](#use-local-gpus)
 - [Memory model](#memory-model)
 - [Tech stack](#tech-stack)
 - [Repository layout](#repository-layout)
@@ -84,8 +89,8 @@ Her full canon lives in [`config/personality.yaml`](config/personality.yaml): ba
 | **Memory archive** | She curates her own photo journal with annotations |
 | **Her POV** | She picks a real exchange, journals it, and draws it from her side |
 | **Proactive** | Check-ins, dreams, anniversaries, seasonal lines, deferred one-shots that survive restarts |
-| **Warm-on-connect** | Model load starts when he opens the app, not when he hits send |
-| **Voice & image** | TTS/STT and ComfyUI on the GPU host, leased and auth-gated |
+| **On-demand GPU use** | The configured Sonnet primary leaves the secondary model unloaded until needed; local runtimes enforce idle release |
+| **Voice & image** | Local Arc XTTS for speech; separate Dominus STT; authenticated, leased ComfyUI pictures and live portraits |
 
 ---
 
@@ -136,7 +141,7 @@ One catalog — `costumes:` in `config/personality.yaml` — drives the prompt, 
 | **His requests** | "Wear the maid outfit" is decided by code, never the LLM: affection bands, private and denied outfits, the oath "on a day that matters", two changes a day ("I am not a mannequin"). The reply already knows the outcome; an image in the same message renders it |
 | **Her Day** | A derived duty roster — PT with Vepley, the range, the hangar, Tea Time counter duty (her special: *Racing Calm*), reports at 0200. The status line colours her first line at most; she always answers at once |
 
-Every image path asks `her_day.render_costume()` for what she has on; an explicit bath or bed scene still wins. `GET /api/her-day`, `GET /api/wardrobe/log`, `GET /api/outfits`, `POST /api/costume`, and a WS `outfit` frame feed the PWA (chat-header status line, TODAY sheet, wardrobe, worn-this-month). `scripts/wardrobe_render_check.py` renders every outfit for a canon eyeball check.
+Chat-requested pictures, Her POV, and spontaneous art ask `her_day.render_costume()` for what she has on; explicit scene requests still pass through the outfit gates. Mission pictures use tactical scene prompts, while live portraits use the selected wardrobe outfit. `GET /api/her-day`, `GET /api/wardrobe/log`, `GET /api/outfits`, `POST /api/costume`, and a WS `outfit` frame feed the PWA (chat-header status line, TODAY sheet, wardrobe, worn-this-month). `scripts/wardrobe_render_check.py` renders every outfit for a canon eyeball check.
 
 ---
 
@@ -153,7 +158,9 @@ Every image path asks `her_day.render_costume()` for what she has on; an explici
 
 ## Gaming-aware
 
-When a game owns the GPU host, chat fails over to the lighter gaming-safe model ([ADR-0018](docs/adr/0018-gaming-aware-chat-persona.md)). Klukai knows: she keeps replies to a few lines, asks whether he's winning (an elite's Commander doesn't lose), and holds her unprompted pings until the match ends. She never mentions GPUs or models.
+Klukai knows when he is mid-game: she keeps replies to a few lines and holds disruptive unprompted pings. Sonnet remains the configured interactive primary. The local router retains its gaming-aware model selection ([ADR-0018](docs/adr/0018-gaming-aware-chat-persona.md)), but the host's game marker and service guards decide whether local inference is available; selecting a model never overrides them.
+
+A game can stop the canonical Dominus AI stack. Do not start ComfyUI, an LLM, or the publish-repair path around that guard. Game end restores services through the guarded unit without eagerly loading a model.
 
 ---
 
@@ -181,21 +188,25 @@ Two hosts on a **private encrypted mesh**. Public edge terminates TLS; GPU ports
 
 | Role | Responsibility |
 |---|---|
-| **Core host** | `companion-core`, gateway, Postgres, Redis, Qdrant, RabbitMQ consumers, observability |
-| **GPU host** | `lmstudio-compat` (sole LLM ingress), llama-router (internal), ComfyUI (leased), voice, STT |
+| **Core host** | `companion-core`, gateway, Postgres, Redis, Qdrant, RabbitMQ consumers, observability, native Intel Arc TTS |
+| **NVIDIA host** | `lmstudio-compat` (local LLM ingress), llama-router (internal), ComfyUI (leased), optional Dominus voice, separate STT |
+| **Explicit API providers** | Anthropic interactive chat; separately disabled-by-default Anthropic creative text and OpenAI scene images |
 
 ```
 Public edge (TLS)
         │
         ▼
-   Core host ── private mesh ──► GPU host
-   (state + PWA)                 (RTX inference)
+   Core host ── private mesh ──► NVIDIA host
+   (state + PWA + Arc TTS)        (local LLM + ComfyUI + STT)
+        │
+        └── HTTPS ──► explicitly configured API providers
 ```
 
 **Hard rules**
 
-- Chat LLMs run only on the GPU host via the compatibility gateway.
-- If the GPU path is down, she answers with an in-character disruption line, **never** an off-box model.
+- Local LLM and ComfyUI requests use the authenticated compatibility gateway.
+- The authorized interactive primary is explicit; an API key alone cannot enable it.
+- If the selected chat routes are unavailable, she returns an in-character disruption line. A failed stream never combines two providers' partial answers.
 - Published GPU ports bind to the mesh interface only (`0.0.0.0` is forbidden).
 - Secrets live in host `.env` files; they are never committed.
 
@@ -221,7 +232,7 @@ She opens a dedicated screen (sparkle in the chat bar), picks a **real** user↔
 
 1. Job row written to Postgres (`companion_her_pov_jobs`)
 2. Id enqueued on a **quorum** work queue
-3. Events-bridge holds the message until the pipeline finishes (single-flight GPU lease)
+3. Events-bridge holds the message until the pipeline finishes; local rendering acquires its own authenticated GPU lease
 4. Progress phases: `queued → searching → thinking → drawing → done`
 5. Archive tags: `her_pov`, `from_her_side`, `commander_request`
 
@@ -231,6 +242,8 @@ GET  /api/memories/her-pov/{job_id} → status (no image blob)
 ```
 
 Progress also streams on the WebSocket (`type: her_pov`). Cross-user job reads return 404.
+
+The default writer and renderer are local. An authorized creative-provider configuration can use Sonnet for the journal/scene and OpenAI for the picture. Cloud Her POV requires `HER_POV_EXECUTION=queue` and durable database ownership: failed persistence or queue handoff cannot fall back to an inline paid call. Interrupted cloud jobs are held for review instead of automatically reclaiming and billing them again. Existing album images and cached live portraits remain on the images volume.
 
 ---
 
@@ -244,26 +257,64 @@ Progress also streams on the WebSocket (`type: her_pov`). Cross-user job reads r
 |---|---|---|
 | **APScheduler** | Recurring cron (check-ins, anniversary, seasonal, …) | `companion_job_runs` + startup catch-up allowlist |
 | **Deferred** | One-shot future work ("in three hours") | Postgres first; RabbitMQ TTL **bucket** queues; sweeper backstop |
-| **Her POV jobs** | Heavy GPU portraits | Quorum queue + job table |
+| **Her POV jobs** | Memory scene composition and rendering | Quorum queue + job table; strict ownership for opted-in cloud work |
 | **On-connect** | Return greeting, Oath capstone, birthday, fee settlement | `companion_firsts` / `companion_period_deliveries` |
 
 `companion-core` deliberately **speaks no AMQP**. The `events-bridge` owns the broker: Redis `companion:events` → `homelab.events`, delay arming, and job drain.
 
 ---
 
-## Local-only LLM policy
+## Provider policy
 
-```text
-route()  → local models only (gaming-safe model while a game is active)
-stream() → lmstudio provider only
-failure  → FAILURE_SENTINEL  ("Communications disrupted, Commander…")
+| Work | Local/default path | Explicit opt-in path |
+|---|---|---|
+| Interactive chat and tools | Dominus gateway and local models | `KLUKAI_CLAUDE_PRIMARY=true` plus an Anthropic key: Sonnet 5.5, adaptive thinking, medium effort; Dominus secondary |
+| Night/morning dream text and Her POV scene writing | Existing local LLM calls | `KLUKAI_CREATIVE_TEXT_PROVIDER=anthropic`, key, and positive text attempt allowances |
+| Scene pictures | `KLUKAI_IMAGE_PROVIDER=comfyui` | `openai`, key, adopted character reference files, and positive image attempt allowances |
+| Animated live portraits | Local NoobAI-XL + Klukai LoRA and masked expression edits | Remain local |
+| Historical memory seeding | Existing local selection, annotation, and ComfyUI pipeline | Refuses remote configuration until source-aware durable backfill jobs exist |
+| Speech | Explicit `dominus` or `amarillo-xpu` voice backend | No cloud voice provider |
+
+The prepared OpenAI models are the pinned `gpt-image-2.5-sunburst-2026-09-08` and `gpt-image-2.5-flare-2026-09-08` snapshots at `max` quality. Claude writes text; it is not the raster-image renderer. The API adapter uses an adopted fictional-character reference pack, not the local LoRA file. No provider comparison has yet established identical face, outfit, or expression fidelity; see the [research and evaluation plan](docs/research/2026-10-14-dream-image-backends.md).
+
+Cloud scene rendering bypasses local GPU readiness and leases. It does not change portrait generation, enable illustrated dream entries, or move unrelated background jobs off Dominus. A dream diary entry is still text-only.
+
+Creative API calls reserve a persistent UTC daily/monthly attempt before dispatch. Failed or uncertain requests consume an attempt. The allowances apply across users and restarts and remain active in personal mode; they are request limits, **not dollar billing caps**. Storage failure denies dispatch, and API refusal/failure causes no automatic provider retry or switch. The interactive-chat spending exception does not activate these separate paths.
+
+### Use local GPUs
+
+For entirely local inference, retain the approved private-mesh endpoints and credentials and set the core's providers to local. A deployment override makes the warm-up setting explicit:
+
+```yaml
+# compose.local-only.yaml — local operator file; do not put credentials here
+services:
+  companion-core:
+    environment:
+      KLUKAI_CLAUDE_PRIMARY: "false"
+      KLUKAI_IMAGE_PROVIDER: "comfyui"
+      KLUKAI_CREATIVE_TEXT_PROVIDER: "local"
+      KLUKAI_DISABLE_WARMUP: "1"
+      KLUKAI_CLOUD_IMAGE_DAILY_LIMIT: "0"
+      KLUKAI_CLOUD_IMAGE_MONTHLY_LIMIT: "0"
+      KLUKAI_CLOUD_TEXT_DAILY_LIMIT: "0"
+      KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT: "0"
+      VOICE_BACKEND: "amarillo-xpu"
+      VOICE_URL: "${VOICE_URL:?Set the approved local Arc TTS endpoint}"
 ```
 
-- `ANTHROPIC_API_KEY` is **not wired** in compose. If present in the environment, it is **ignored**.
-- User overrides starting with `claude` / `anthropic` are rejected.
-- Warm-up uses the same idle TTL as normal requests; it is **not** keepalive.
+`VOICE_URL` must name the already configured Amarillo Arc service; keep `VOICE_STT_URL` on the separate approved Dominus transcription endpoint. Use `VOICE_BACKEND=dominus` and its matching voice URL only when intentionally selecting the existing Dominus voice service instead. Neither choice changes the pinned voice reference.
 
-See ADR-0004 (routing), ADR-0018 (gaming persona) and the `llm_router` module docstring.
+Validate without printing resolved secrets, then apply only as part of an authorized core deployment:
+
+```bash
+docker compose -f docker-compose.yml -f compose.local-only.yaml config --quiet
+# When authorized to apply the core configuration:
+docker compose -f docker-compose.yml -f compose.local-only.yaml up -d --no-deps companion-core
+```
+
+These commands configure core; they do not authorize starting or repairing either GPU host. Read the [Dominus boot/publish handoff](docs/handoff/2026-09-25-dominus-tailscale-publish.md) and [GPU runbook](ops/dominus-nobara/RUNBOOK.md) before host work. A powered-off Dominus is normal: local pictures, local chat, and STT remain unavailable until the existing guarded service path is restored.
+
+Dominus llama.cpp releases its model within 300 idle seconds, and ComfyUI unloads under its authenticated lease after rendering. Arc XTTS loads only for speech and releases its worker after 300 idle seconds; its 68°C thermal guard and 600-second request deadline remain enforced. Keep gaming markers, fixed residency limits, and the Arc resource limits intact. The [Arc guide](ops/amarillo/voice_xpu/README.md) documents its independent local service.
 
 ---
 
@@ -285,10 +336,10 @@ TIER 3  Factual     PostgreSQL   messages, affection, jobs       permanent
 |---|---|
 | API | Python 3.14, FastAPI, uvicorn |
 | UI | Flutter Web PWA (`/app/`) |
-| Chat model | Local dolphin-mistral (Venice) via gateway; abliterated Gemma MoE while gaming |
+| Chat model | Opt-in Sonnet 5.5 interactive primary; local Venice/Qwen and gaming-aware Gemma routing via gateway |
 | Agent model | Local Qwen reasoning distill |
-| Images | ComfyUI + Illustrious + Klukai LoRA (leased) |
-| Voice | XTTS TTS + Speaches STT on GPU host |
+| Images | Local ComfyUI + NoobAI-XL/Illustrious + Klukai LoRA; opt-in OpenAI scene adapter |
+| Voice | Local XTTS v2 on Intel Arc A380; separate Dominus STT; existing Dominus TTS remains selectable |
 | Bus | RabbitMQ topic + delay buckets + quorum jobs |
 | Observability | Prometheus, Grafana, Loki, Tempo, Alloy |
 
@@ -309,6 +360,7 @@ klukai/
 │   └── voice/                  # voice container defs
 ├── flutter_app/                # PWA source (Her POV, Thread screens)
 ├── gateway/                    # nginx
+├── ops/amarillo/               # local Arc voice release + memory-seed schedule
 ├── ops/dominus-nobara/         # GPU compose, model lock, runbook
 ├── web-build/                  # release PWA artifacts
 ├── scripts/e2e_live.py         # live end-to-end suite
@@ -329,7 +381,8 @@ klukai/
 ### Prerequisites
 
 - Docker Engine + Compose v2 on the **core host**
-- GPU stack healthy on the **GPU host** (see `ops/dominus-nobara/RUNBOOK.md`)
+- Existing guarded NVIDIA services available for the local features you use (see [GPU runbook](ops/dominus-nobara/RUNBOOK.md)); the configured API chat primary can operate while that host is off
+- Existing verified Arc voice release for `VOICE_BACKEND=amarillo-xpu`; no dependency downloads or GPU service starts are implied by core setup
 - Private mesh connectivity between hosts
 - `.env` with required secrets (never commit it)
 
@@ -339,9 +392,9 @@ klukai/
 cd ~/git/klukai
 
 # env: copy example, fill secrets locally
-cp .env.example .env   # then edit — do not commit
+test -e .env || cp .env.example .env   # edit locally; preserve an existing .env
 
-docker compose up -d                       # migrations (incl. 180) apply at startup
+docker compose up -d                       # schema migrations apply at startup
 curl -sf http://127.0.0.1:8300/health
 
 # Python changes need a rebuild; personality.yaml hot-reloads on mtime
@@ -355,6 +408,8 @@ docker compose build companion-core && docker compose up -d companion-core
 ### Live verification
 
 ```bash
+# Requires a running, authorized test stack. With paid providers enabled,
+# these are real API requests; publishing code alone does not authorize them.
 # Defaults to the 'claude' test user — refuses jalsarraf without override
 python3 scripts/e2e_live.py
 python3 scripts/e2e_live.py --only chat
@@ -365,8 +420,13 @@ python3 scripts/e2e_live.py --only her-pov
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HER_POV_EXECUTION` | `queue` | `queue` = durable rail; `inline` = in-process (tests / bridge down) |
-| `KLUKAI_DISABLE_WARMUP` | unset | Set `1` to disable warm-on-connect |
+| `HER_POV_EXECUTION` | `queue` | Durable rail; `inline` is available only for local generation |
+| `KLUKAI_DISABLE_WARMUP` | unset | Pass `1` through a deployment override for local load-on-demand; Sonnet-primary mode already skips secondary warm-up |
+| `KLUKAI_CLAUDE_PRIMARY` | `false` | Separately authorized Anthropic interactive primary, requiring its key |
+| `KLUKAI_IMAGE_PROVIDER` | `comfyui` | Local pictures; `openai` also requires adopted references and attempt allowances |
+| `KLUKAI_CREATIVE_TEXT_PROVIDER` | `local` | Local dream/Her POV writing; `anthropic` requires separate allowances |
+| `KLUKAI_CLOUD_{IMAGE,TEXT}_{DAILY,MONTHLY}_LIMIT` | `0` | Persistent global UTC attempt allowances; failures count |
+| `VOICE_BACKEND` | `dominus` | `amarillo-xpu` selects the separately configured native Arc TTS service |
 | `CORE_INTERNAL_TOKEN` | required in prod | Shared secret for bridge → core internal routes |
 | `LM_STUDIO_URL` / `LM_STUDIO_TOKEN` | mesh gateway | Local LLM path only |
 
@@ -374,7 +434,8 @@ python3 scripts/e2e_live.py --only her-pov
 
 ## Security & privacy
 
-- **No cloud chat fallback**: conversations never leave the GPU path by policy.
+- **Explicit provider boundaries**: authorized API chat sends its conversation context to Anthropic; separately enabled creative writing sends the required dream/memory context. Opted-in pictures send the scene and adopted references to OpenAI. State and rendered archives remain local.
+- Provider credentials stay in core, never in the PWA. An API key alone cannot enable a cloud route.
 - Mesh-only publication for inference ports.
 - Internal fire endpoints fail closed when the shared token is unset.
 - Her POV job status and thread receipts are user-scoped.
@@ -391,9 +452,10 @@ python3 -m pytest tests/ -q --tb=short --cov=app --cov-fail-under=95
 ruff check app/ --config ruff.toml
 mypy app/ --config-file mypy.ini
 
-# PWA (widget + service tests run in Chrome)
-cd flutter_app
+# PWA (from docker/core above; browser and VM tests have separate annotations)
+cd ../../flutter_app
 flutter analyze
+flutter test
 flutter test --platform chrome
 ```
 
@@ -412,7 +474,9 @@ The live suite (`scripts/e2e_live.py`) exercises HTTP, WebSocket, Postgres, the 
 | [docs/onboarding.md](docs/onboarding.md) | Dev / deploy walkthrough |
 | [docs/adr/](docs/adr/) | Decision records (split, GPU lease, voice, gaming persona, …) |
 | [docs/runbooks/](docs/runbooks/) | Incident playbooks |
-| [ops/dominus-nobara/RUNBOOK.md](ops/dominus-nobara/RUNBOOK.md) | GPU host operations |
+| [ops/dominus-nobara/RUNBOOK.md](ops/dominus-nobara/RUNBOOK.md) | NVIDIA host operations and game/residency guards |
+| [ops/amarillo/voice_xpu/README.md](ops/amarillo/voice_xpu/README.md) | Pinned local Arc speech release |
+| [Creative provider handoff](docs/handoff/2026-10-14-dream-image-preparation.md) | Default-off API preparation, attempt caps, references, and recovery |
 
 ---
 
@@ -423,7 +487,7 @@ The live suite (`scripts/e2e_live.py`) exercises HTTP, WebSocket, Postgres, the 
 3. SACRED data is additive only.
 4. Test as `claude`, never as the primary Commander account.
 5. No second event bus; use `homelab.events` / existing rails.
-6. No cloud LLM path: local or fail closed.
+6. Local provider defaults; enable a paid route only within explicit authorization. Publishing code does not extend spending approval.
 
 ---
 
@@ -433,4 +497,4 @@ Personality and speech patterns are original engineering around publicly documen
 
 ---
 
-<p align="center"><em>Built to stay online when he reaches for her, and to keep every word on hardware he owns.</em></p>
+<p align="center"><em>Built to stay with him, with her memories kept on hardware he owns.</em></p>

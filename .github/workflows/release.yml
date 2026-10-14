@@ -6,7 +6,6 @@ name: Klukai Release
 #   - klukai:<tag> image
 #   - SBOM in CycloneDX + SPDX (syft)
 #   - keyless cosign signature on image + SBOM
-#   - SLSA L2 provenance (slsa-github-generator)
 #   - CHANGELOG entry from git-cliff
 #
 # Per absolute global CLAUDE.md: NO actions/attest-build-provenance (paid plan).
@@ -168,7 +167,9 @@ jobs:
         env:
           TAG: ${{ needs.build.outputs.image_tag }}
         run: |
-          if command -v git-cliff >/dev/null 2>&1; then
+          if [[ -f "docs/releases/${TAG}.md" ]]; then
+            cp "docs/releases/${TAG}.md" RELEASE_NOTES.md
+          elif command -v git-cliff >/dev/null 2>&1; then
             git-cliff --tag "$TAG" --unreleased > RELEASE_NOTES.md
           else
             echo "::warning title=Degraded release notes::git-cliff unavailable — release notes are just the last commit message."

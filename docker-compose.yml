@@ -42,6 +42,18 @@ services:
       # Opt-in preserves local-only behavior on other deployments.
       KLUKAI_CLAUDE_PRIMARY: "${KLUKAI_CLAUDE_PRIMARY:-false}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # Separate opt-in for cloud images/creative text; no billable defaults.
+      KLUKAI_IMAGE_PROVIDER: "${KLUKAI_IMAGE_PROVIDER:-comfyui}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      KLUKAI_OPENAI_IMAGE_MODEL: "${KLUKAI_OPENAI_IMAGE_MODEL:-gpt-image-2.5-sunburst-2026-09-08}"
+      KLUKAI_OPENAI_IMAGE_QUALITY: "${KLUKAI_OPENAI_IMAGE_QUALITY:-max}"
+      KLUKAI_IMAGE_REFERENCE_FILES: "${KLUKAI_IMAGE_REFERENCE_FILES:-[]}"
+      KLUKAI_CREATIVE_TEXT_PROVIDER: "${KLUKAI_CREATIVE_TEXT_PROVIDER:-local}"
+      KLUKAI_CLOUD_IMAGE_DAILY_LIMIT: "${KLUKAI_CLOUD_IMAGE_DAILY_LIMIT:-0}"
+      KLUKAI_CLOUD_IMAGE_MONTHLY_LIMIT: "${KLUKAI_CLOUD_IMAGE_MONTHLY_LIMIT:-0}"
+      KLUKAI_CLOUD_TEXT_DAILY_LIMIT: "${KLUKAI_CLOUD_TEXT_DAILY_LIMIT:-0}"
+      KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT: "${KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT:-0}"
+      KLUKAI_CREATIVE_LEDGER: "/images/.creative/attempts.sqlite3"
       # ComfyUI has no published raw port. Every operation is proxied by the
       # authenticated gateway and authorized again with the active GPU lease.
       COMFYUI_URL: "${COMFYUI_URL:-http://100.107.121.5:1234/api/v1/comfy}"

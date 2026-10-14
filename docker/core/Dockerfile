@@ -5,7 +5,7 @@
 # Stage 1: builder — installs build-time deps + creates a virtualenv with
 #   all Python packages. Slow path; cached aggressively.
 # Stage 2: runtime — copies just the venv + app source into a fresh
-#   python:3.13-slim. No build tools, no apt cache, no pip cache.
+#   python:3.14-slim. No build tools, no apt cache, no pip cache.
 #
 # Image hardening notes (Phase 2 S+ uplift):
 # - Base image SHA-pinned (immutable across rebuilds)
@@ -16,11 +16,11 @@
 #
 # Phase 4 stretch: switch runtime stage to `gcr.io/distroless/python3-debian12`.
 
-# python:3.14-slim @ 2026-05-29 — aligned to the Python that requirements.txt is
+# python:3.14-slim @ 2026-10-14 — aligned to the Python that requirements.txt is
 # pip-compiled for (and that the full test suite runs on). Previously 3.13, which
 # mismatched the 3.14 hash file: on 3.13 libcst pulls a transitive pyyaml-ft that
 # --require-hashes then rejects. SHA-pinned (manifest-list digest) for reproducibility.
-ARG PYTHON_IMAGE=python:3.14-slim@sha256:c845af9399020c7e562969a13689e929074a10fd057acd1b1fad06a2fb068e97
+ARG PYTHON_IMAGE=python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 
 # ───────────────────────────────────────────────────────────────────
 # Stage 1: builder
@@ -67,6 +67,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy the prebuilt venv from builder
 COPY --from=builder /opt/venv /opt/venv
+
+# Package installation belongs to the builder. Both pip copies carry vendored
+# dependencies that the application does not use; omit them from the runtime.
+RUN /opt/venv/bin/python3 -m pip uninstall --yes pip && \
+    /usr/local/bin/python3 -m pip uninstall --yes pip
 
 # Non-root runtime user
 RUN useradd --create-home --shell /bin/bash --uid 1000 appuser && \

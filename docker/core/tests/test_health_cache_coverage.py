@@ -285,7 +285,7 @@ class TestLiveHealthAndClear:
         assert out == {
             "status": "ok",
             "service": "companion-core",
-            "version": "0.1.0",
+            "version": "1.1.0",
         }
 
     def test_clear_cache_empties_entries(self):

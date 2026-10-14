@@ -455,15 +455,20 @@ class EventsMixin(_EngineBase):
             from ..fact_extractor import LM_STUDIO_URL, EXTRACTION_MODEL
             from ..llm_router import get_lm_gate
 
-            gate = get_lm_gate()
-            async with gate:
-                message = await call_llm_text(
-                    LM_STUDIO_URL, EXTRACTION_MODEL,
-                    f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
-                    f"You are NOT an AI. {dream_prompts[dream_type]}{dream_memory_ref} "
-                    f"Write ONLY the message. No explanation.",
-                    max_tokens=200, temperature=0.8,
-                )
+            prompt = (
+                f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
+                f"You are NOT an AI. {dream_prompts[dream_type]}{dream_memory_ref} "
+                f"Write ONLY the message. No explanation."
+            )
+            from ..creative_text import complete_creative_text, uses_cloud_text
+            if uses_cloud_text():
+                message = await complete_creative_text("Write Klukai's dream message.", prompt, max_tokens=1024)
+            else:
+                async with get_lm_gate():
+                    message = await call_llm_text(
+                        LM_STUDIO_URL, EXTRACTION_MODEL, prompt,
+                        max_tokens=200, temperature=0.8,
+                    )
 
             if message and self._on_message_callback:
                 self._dream_delivered_today = True

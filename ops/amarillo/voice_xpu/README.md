@@ -5,6 +5,12 @@ experiment. It uses the existing verified XTTS v2 snapshot and XPU virtual
 environment. It does not install packages, download model files, change Granite,
 or alter the Dominus CUDA service or its immutable voice reference.
 
+Klukai v1.1.0 retains this pinned voice release. Its runtime versions and
+artifact identity come from [artifacts.lock.json](artifacts.lock.json),
+[requirements-supervisor.lock](requirements-supervisor.lock), and
+[requirements-worker.lock](requirements-worker.lock), not the core/PWA version.
+Provider changes for chat, dreams, or pictures do not change the voice model.
+
 The native service is a small Python HTTP shell and one lazily started child.
 Only the child imports Torch or loads XTTS. It conditions the selected reference
 on CPU, moves the model and conditioning to `xpu:0` in FP16, and retains them for
@@ -18,6 +24,26 @@ Japanese text is rejected with 422 before any worker starts: the tested virtual
 environment does not contain XTTS's required `cutlet` tokenizer dependencies.
 The existing voice-letter default is English. STT remains a separate service;
 this endpoint advertises `stt_available: false`.
+
+## Core configuration
+
+The current deployment selects `VOICE_BACKEND=amarillo-xpu` and sets `VOICE_URL`
+to this service's approved private-mesh endpoint, using the existing matching
+`VOICE_API_TOKEN`. Keep `VOICE_STT_URL` on the separate Dominus transcription
+endpoint; Arc does not serve STT. The repository's base Compose default remains
+`dominus`, so selecting Arc requires explicit core configuration.
+
+Clients use core's authenticated `POST /api/tts`, poll
+`GET /api/tts/jobs/{job_id}`, and cancel with `DELETE /api/tts/jobs/{job_id}`.
+Core normalizes the native service's JSON/base64 response and owns queueing and
+user access. Browser clients never call this native service directly or receive
+its bearer token.
+
+Arc voice can accompany either the authorized Sonnet interactive primary or an
+entirely local Dominus LLM/ComfyUI setup. See the
+[local GPU configuration](../../../README.md#use-local-gpus) for that selection.
+Cloud creative providers remain separately disabled by default; changing them
+does not start this worker, start Dominus, or bypass either host's guards.
 
 ## Runtime contract
 
@@ -50,6 +76,9 @@ and CPU checkpoint load took 20.442 seconds. Those are observations, not latency
 limits. Public clients must use core's submit/poll interface.
 
 ## Installation without fetching or building
+
+These are the existing release's deployment instructions. Publishing a new
+core/PWA version does not itself authorize installation or a GPU service start.
 
 Prerequisites already present on the tested Amarillo host:
 

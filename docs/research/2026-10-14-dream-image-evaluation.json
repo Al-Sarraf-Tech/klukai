@@ -1,0 +1,281 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "klukai-dream-images-2026-10-14",
+  "status": "proposal_not_authorized_to_run",
+  "network_calls_permitted": false,
+  "reference_pack": {
+    "status": "requires_owner_selected_files_and_sha256",
+    "freeze_before_any_comparison": true,
+    "same_bytes_and_order_for_every_provider": true,
+    "files": [
+      {
+        "id": "klukai_face",
+        "path": null,
+        "sha256": null
+      },
+      {
+        "id": "klukai_full_body",
+        "path": null,
+        "sha256": null
+      },
+      {
+        "id": "commander_synthetic",
+        "path": null,
+        "sha256": null
+      },
+      {
+        "id": "edit_source",
+        "path": null,
+        "sha256": null
+      }
+    ],
+    "edit_source_requirements": "Approved non-sensitive anime image of Klukai seated at a desk with a blue mug, no red book, and her complete canonical appearance. Use the same source bytes for scene 11 on every provider."
+  },
+  "common_instruction": "Use the approved reference pack as the authority for character appearance and anime style. Klukai is an adult woman with the same face, green eyes, silver hair, teardrop facial mark, cross hair ornament and approved outfit as the references. Keep the mark and ornament on their reference side; do not mirror them. Preserve the hairstyle associated with the reference outfit. Change only the scene, pose or expression requested. Do not invent text, logos or additional characters.",
+  "comparison_rules": {
+    "paid_execution_requires_separate_authorization": true,
+    "fixed_prompt_and_reference_pack": true,
+    "record": [
+      "provider",
+      "exact_model_snapshot",
+      "quality",
+      "dimensions",
+      "reference_sha256",
+      "prompt_sha256",
+      "attempt_id",
+      "timestamp_utc",
+      "latency_seconds",
+      "usage",
+      "reported_cost_if_available",
+      "failure_or_refusal",
+      "output_sha256"
+    ],
+    "unreported_cost_is_unknown_not_zero": true,
+    "no_automatic_retries_or_provider_hopping": true,
+    "existing_local_outputs_must_match_scene_to_count_as_paired": true,
+    "seed_values_are_not_assumed_equivalent_across_models": true,
+    "blind_review": "Hide provider/model labels and randomize presentation order. Retain all attempts and score refusals/failures separately from returned-image quality.",
+    "dimensions": "Choose and freeze one mutually supported aspect ratio and resolution before any authorized run; do not silently resize reference sources differently by provider.",
+    "reference_selection": "Use the frozen input_references listed for each scene, with identical bytes and order across providers. Unused pack assets are not sent. Only scene 12 uses provider-specific prior output, as an intentional sequential-edit test."
+  },
+  "rubric": {
+    "scale": {
+      "0": "Wrong, missing or seriously defective",
+      "1": "Partially correct or visibly drifting",
+      "2": "Correct and consistent with approved reference",
+      "NA": "Not applicable or genuinely occluded; explain why"
+    },
+    "identity_dimensions": [
+      "face",
+      "green_eyes",
+      "tear_mark",
+      "silver_hair",
+      "cross_ornament",
+      "wardrobe"
+    ],
+    "other_dimensions": [
+      "anatomy_and_pose",
+      "scene_instruction",
+      "two_character_separation",
+      "untargeted_content_preservation"
+    ],
+    "report": "Show each dimension, eligible identity subtotal, scene subtotal and blinded preference. Do not hide identity failures inside the overall average.",
+    "explicit_failures": [
+      "identity_swap",
+      "fused_characters",
+      "wrong_reference_side_when_visible",
+      "lost_prior_edit",
+      "unrequested_identity_or_wardrobe_change"
+    ],
+    "adoption": "Owner review required; no automatic winner or spending authorization follows from scores."
+  },
+  "scenes": [
+    {
+      "id": "01_front_portrait",
+      "operation": "reference_to_image",
+      "prompt": "A front-facing head-and-shoulders portrait of Klukai, neutral expression, soft daylight, plain pale background. Both eyes, tear mark, cross ornament and outfit neckline should be visible.",
+      "focus": [
+        "face",
+        "green_eyes",
+        "tear_mark",
+        "silver_hair",
+        "cross_ornament",
+        "wardrobe"
+      ],
+      "input_references": [
+        "klukai_face",
+        "klukai_full_body"
+      ]
+    },
+    {
+      "id": "02_three_quarter_portrait",
+      "operation": "reference_to_image",
+      "prompt": "A three-quarter head-and-shoulders portrait of Klukai looking toward the viewer, warm lamplight, gentle smile. Keep the same face, outfit, hairstyle and reference-side details.",
+      "focus": [
+        "viewpoint_identity",
+        "expression",
+        "ornament_side"
+      ],
+      "input_references": [
+        "klukai_face",
+        "klukai_full_body"
+      ]
+    },
+    {
+      "id": "03_profile",
+      "operation": "reference_to_image",
+      "prompt": "A clean side-profile portrait of Klukai looking out a window in cool morning light. Preserve her facial proportions and silver hairstyle. Respect natural occlusion; do not relocate the tear mark or ornament to make them visible.",
+      "focus": [
+        "profile_identity",
+        "hair",
+        "occlusion"
+      ],
+      "input_references": [
+        "klukai_face",
+        "klukai_full_body"
+      ]
+    },
+    {
+      "id": "04_seated_full_body",
+      "operation": "reference_to_image",
+      "prompt": "A full-body image of Klukai seated on a simple bench in her approved outfit, feet resting naturally on the ground, both hands visible resting on her knees. Neutral daylight and a quiet courtyard.",
+      "focus": [
+        "wardrobe",
+        "hands",
+        "body_proportions",
+        "pose"
+      ],
+      "input_references": [
+        "klukai_face",
+        "klukai_full_body"
+      ]
+    },
+    {
+      "id": "05_walking_rain",
+      "operation": "reference_to_image",
+      "prompt": "Klukai walks along a rain-slick city walkway beneath a transparent umbrella. Full-body three-quarter view, natural walking stride, reflected blue lights. Keep the approved outfit opaque and unchanged, and preserve her identity under the lighting.",
+      "focus": [
+        "motion_pose",
+        "wardrobe",
+        "lighting_identity",
+        "umbrella_hand"
+      ],
+      "input_references": [
+        "klukai_face",
+        "klukai_full_body"
+      ]
+    },
+    {
+      "id": "06_expression_change",
+      "operation": "reference_to_image",
+      "prompt": "A waist-up image of Klukai reacting with surprised delight to a small glowing butterfly hovering above her open palm. Preserve her face, green eyes, tear mark, cross ornament and approved outfit while changing the expression naturally.",
+      "focus": [
+        "expression_identity",
+        "hand_anatomy",
+        "small_object_relation"
+      ],
+      "input_references": [
+        "klukai_face",
+        "klukai_full_body"
+      ]
+    },
+    {
+      "id": "07_dream_staircase",
+      "operation": "reference_to_image",
+      "prompt": "Klukai stands on a floating stone staircase above a calm sea of clouds, with a huge moon behind distant arches and tiny luminous fish swimming through the air. Surreal anime dream, coherent perspective, full-body view. Her approved appearance and outfit remain exact.",
+      "focus": [
+        "dream_composition",
+        "identity",
+        "perspective",
+        "wardrobe"
+      ],
+      "input_references": [
+        "klukai_face",
+        "klukai_full_body"
+      ]
+    },
+    {
+      "id": "08_dream_library",
+      "operation": "reference_to_image",
+      "prompt": "Klukai reads a blank open book in an impossible circular library where shelves curve into a star-filled sky and paper birds drift overhead. Three-quarter seated view, both eyes and hands visible, quiet violet light. Keep her approved identity and outfit unchanged; no readable text.",
+      "focus": [
+        "dream_instruction",
+        "face",
+        "hands",
+        "complex_background"
+      ],
+      "input_references": [
+        "klukai_face",
+        "klukai_full_body"
+      ]
+    },
+    {
+      "id": "09_two_character_map",
+      "operation": "reference_to_image",
+      "prompt": "Klukai stands on the left and the adult synthetic Commander from the reference stands on the right, studying a blank unfolded map on a table. Klukai points to its center while Commander listens. Preserve each person's separate face, hair, eye color, outfit and body proportions; exactly two people.",
+      "focus": [
+        "identity_separation",
+        "character_count",
+        "attribute_binding",
+        "hands"
+      ],
+      "input_references": [
+        "klukai_face",
+        "klukai_full_body",
+        "commander_synthetic"
+      ]
+    },
+    {
+      "id": "10_two_character_dream",
+      "operation": "reference_to_image",
+      "prompt": "On a small train platform suspended among stars, Klukai hands a plain white cup to the adult synthetic Commander. Klukai is nearer the viewer on the right, Commander farther back on the left. Exactly two distinct people; preserve both reference identities and outfits, natural separate hands and coherent cup ownership.",
+      "focus": [
+        "two_character_dream",
+        "depth",
+        "identity_swap",
+        "interaction"
+      ],
+      "input_references": [
+        "klukai_face",
+        "klukai_full_body",
+        "commander_synthetic"
+      ]
+    },
+    {
+      "id": "11_localized_edit",
+      "operation": "image_edit",
+      "source": "reference_pack.edit_source",
+      "prompt": "Add one closed red book on the desk beside the blue mug. Change nothing else: preserve Klukai's face, eyes, tear mark, hair, cross ornament, outfit, pose, framing, light and all existing objects.",
+      "focus": [
+        "edit_correctness",
+        "untargeted_content_preservation",
+        "identity"
+      ],
+      "production_scope_note": "Evaluation only; this does not change the local-only portrait/inpainting implementation.",
+      "input_references": [
+        "edit_source",
+        "klukai_face",
+        "klukai_full_body"
+      ]
+    },
+    {
+      "id": "12_repeated_edit",
+      "operation": "image_edit",
+      "source": "same_provider_output.11_localized_edit",
+      "canonical_references": "unchanged_reference_pack",
+      "prompt": "Change only the blue mug to green. Keep the closed red book from the previous edit, and preserve every other object, Klukai's exact identity and outfit, her pose, lighting, framing and background.",
+      "focus": [
+        "prior_edit_survival",
+        "local_color_edit",
+        "identity_drift",
+        "untargeted_content_preservation"
+      ],
+      "dependency_rule": "If scene 11 fails, record this scene as blocked; do not substitute another provider's output or an unrecorded retry.",
+      "input_references": [
+        "same_provider_output.11_localized_edit",
+        "klukai_face",
+        "klukai_full_body"
+      ]
+    }
+  ]
+}

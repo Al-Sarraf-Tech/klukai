@@ -37,6 +37,7 @@ import asyncio
 import logging
 import os
 import time
+from .. import __version__
 from dataclasses import dataclass
 from typing import Any
 
@@ -164,7 +165,7 @@ async def get_cached_health() -> dict[str, Any]:
     return {
         "status": status,
         "service": "companion-core",
-        "version": "0.1.0",
+        "version": __version__,
         "database": db,
         "redis": redis.get("status", "unknown"),
         "qdrant": qdrant.get("status", "unknown"),
@@ -196,7 +197,7 @@ def get_live_health() -> dict[str, Any]:
     return {
         "status": "ok",
         "service": "companion-core",
-        "version": "0.1.0",
+        "version": __version__,
     }
 
 

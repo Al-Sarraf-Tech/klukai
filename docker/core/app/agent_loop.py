@@ -273,8 +273,9 @@ class AgentLoop:
                 if interactive:
                     # Claude needs the declared tools for its earlier tool_use
                     # messages, even when this turn must finish with plain text.
-                    final = await complete(system_prompt, work_messages, config,
-                                           tools=tools, allow_tools=False)
+                    final = await self._router.complete_chat(
+                        system_prompt, work_messages, config, tools=tools, allow_tools=False,
+                    )
                 else:
                     final = await complete(system_prompt, work_messages, config, tools=None)
                 result.model = config.model

@@ -152,17 +152,21 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
             temperature=0.9,
             max_tokens=180,
         )
-        resp = await router.complete_local(
-            system_prompt=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-            config=config,
-        )
-        greeting = (
-            resp.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-            .strip()
-        )
+        from .creative_text import complete_creative_text, uses_cloud_text
+        if kind == "dream" and uses_cloud_text():
+            greeting = await complete_creative_text(system_prompt, user_prompt, max_tokens=1024)
+        else:
+            resp = await router.complete_local(
+                system_prompt=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+                config=config,
+            )
+            greeting = (
+                resp.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
         if not greeting or len(greeting) < 10:
             return
 

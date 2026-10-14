@@ -497,17 +497,33 @@ async def generate_image(
     seed: int | None = None,
     negative_extra: str | None = None,
 ) -> bytes | None:
-    """Generate under an exclusive gateway lease, one image at a time.
+    """Generate through the configured scene provider, defaulting to ComfyUI.
 
     ``sfw=True`` (wardrobe-driven renders below the intimacy gate) adds
     SFW_NEGATIVE_TAGS to the negative prompt; ``negative_extra`` appends a
     caller's own negatives (Live Portrait's palette guard). ``seed`` pins the
     sampler seed (Live Portrait bases); by default every render gets a fresh one.
 
-    The shared LM gate drains Klukai's own local-LLM calls.  The authenticated
+    Cloud scene requests use a separate bounded, reference-based renderer;
+    they do not acquire the local LM gate or GPU lease. ``retry`` and ``seed``
+    apply only to ComfyUI. Cloud allowance failures propagate to batch callers.
+
+    For local images, the shared LM gate drains Klukai's own local-LLM calls. The authenticated
     gateway lease then drains external inference, unloads llama.cpp, and keeps
     all model loads blocked for the complete ComfyUI operation.
     """
+    # Dispatch before any local semaphore, LM gate or GPU lease. Cloud failure
+    # must not trigger a local retry or wake a sleeping/gaming Dominus.
+    from . import image_provider
+
+    provider = image_provider.selected_provider()
+    if provider == "openai":
+        return await image_provider.generate_cloud_image(
+            prompt, width, height, sfw=sfw, negative_extra=negative_extra,
+        )
+    if provider != "comfyui":
+        logger.warning("Unknown image provider; generation disabled")
+        return None
     return await _leased(
         lambda lease: _generate_image_inner(
             prompt, width, height, retry, lease, sfw=sfw, seed=seed,

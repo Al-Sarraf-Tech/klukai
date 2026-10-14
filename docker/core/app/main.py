@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
 
+from . import __version__
 from .context import (
     affection,
     mcp,
@@ -233,7 +234,7 @@ async def lifespan(app: FastAPI):
 # behind Cloudflare; the interactive docs + schema would hand an attacker the
 # full endpoint map (incl. admin routes) for free. No auth gate needed when off.
 app = FastAPI(
-    title="Companion Core", version="0.1.0", lifespan=lifespan,
+    title="Companion Core", version=__version__, lifespan=lifespan,
     docs_url=None, redoc_url=None, openapi_url=None,
 )
 

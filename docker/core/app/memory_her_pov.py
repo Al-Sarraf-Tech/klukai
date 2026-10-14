@@ -33,6 +33,12 @@ _ACTIVE_JOB_BY_USER: dict[str, str] = {}
 _JOB_TTL_SECONDS = 3600.0
 _JOB_MAX = 200
 
+
+def _cloud_generation_enabled() -> bool:
+    from .creative_text import uses_cloud_text
+    from .image_provider import uses_cloud_images
+    return uses_cloud_text() or uses_cloud_images()
+
 _TRIVIAL = {
     "ok", "okay", "yes", "no", "yeah", "yep", "nope", "sure", "thanks",
     "thank you", "hi", "hey", "hello", "good", "nice", "cool", "hm", "hmm",
@@ -140,11 +146,14 @@ async def _set_job(job_id: str, **fields: Any) -> None:
 
 
 async def _persist_job(job_id: str, snapshot: dict[str, Any]) -> None:
-    """Best-effort write-through to Postgres. Never fails the pipeline."""
+    """Persist paid-job progress strictly; local rendering remains best-effort."""
+    cloud = _cloud_generation_enabled()
     try:
         from .db import get_pool
         get_pool()
     except Exception:
+        if cloud:
+            raise RuntimeError("Cloud memory durable state is unavailable") from None
         return
     try:
         import json as _json
@@ -198,6 +207,8 @@ async def _persist_job(job_id: str, snapshot: dict[str, Any]) -> None:
                 ),
             )
     except Exception as e:
+        if cloud:
+            raise RuntimeError("Cloud memory durable state could not be saved") from None
         logger.debug("her_pov persist failed: %s", e)
 
 
@@ -310,16 +321,32 @@ async def compose_pov(
     )
     model = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
     from .llm_router import get_lm_gate
+    from .creative_text import CreativeTextError, complete_creative_text, uses_cloud_text
     raw: dict = {}
-    try:
-        async with get_lm_gate():
-            raw = await call_llm(
-                LM_STUDIO_URL, model, prompt,
-                max_tokens=512, temperature=0.4,
-            )
-    except Exception as e:
-        logger.warning("compose_pov LLM failed: %s", e)
-        raw = {}
+    if uses_cloud_text():
+        import json
+        content = await complete_creative_text("Return only the requested memory JSON.", prompt)
+        try:
+            raw = json.loads(content)
+        except (TypeError, ValueError):
+            raise CreativeTextError("Malformed creative memory JSON") from None
+        if (not isinstance(raw, dict)
+                or not isinstance(raw.get("annotation"), str) or len(raw["annotation"].strip()) < 8
+                or not isinstance(raw.get("scene_tags"), str) or len(raw["scene_tags"].strip()) < 8
+                or not isinstance(raw.get("couple"), bool)
+                or not isinstance(raw.get("mood"), str) or not raw["mood"].strip()
+                or not isinstance(raw.get("title"), str) or not raw["title"].strip()):
+            raise CreativeTextError("Malformed creative memory fields")
+    else:
+        try:
+            async with get_lm_gate():
+                raw = await call_llm(
+                    LM_STUDIO_URL, model, prompt,
+                    max_tokens=512, temperature=0.4,
+                )
+        except Exception as e:
+            logger.warning("compose_pov LLM failed: %s", e)
+            raw = {}
 
     if not isinstance(raw, dict):
         raw = {}
@@ -629,16 +656,20 @@ async def _claim_active_from_db(user_id: str) -> dict[str, Any] | None:
         return None
     try:
         from .db import get_conn, get_conn_autocommit
-        async with get_conn_autocommit() as conn:
-            stale = await (await conn.execute(
-                "UPDATE companion_her_pov_jobs "
-                "SET status = 'failed', phase = 'failed', error = 'stale', "
-                "    finished_at = NOW(), updated_at = NOW() "
-                "WHERE user_id = %s AND status NOT IN ('done', 'failed') "
-                "  AND updated_at < NOW() - %s * INTERVAL '1 minute' "
-                "RETURNING id",
-                (user_id, _STALE_JOB_MINUTES),
-            )).fetchall()
+        stale = []
+        # Paid in-flight outcomes must be reviewed after a crash; a timeout
+        # cannot prove the provider did not bill or finish the first request.
+        if not _cloud_generation_enabled():
+            async with get_conn_autocommit() as conn:
+                stale = await (await conn.execute(
+                    "UPDATE companion_her_pov_jobs "
+                    "SET status = 'failed', phase = 'failed', error = 'stale', "
+                    "    finished_at = NOW(), updated_at = NOW() "
+                    "WHERE user_id = %s AND status NOT IN ('done', 'failed') "
+                    "  AND updated_at < NOW() - %s * INTERVAL '1 minute' "
+                    "RETURNING id",
+                    (user_id, _STALE_JOB_MINUTES),
+                )).fetchall()
         if stale:
             stale_ids = {str(r[0]) for r in stale}
             logger.warning(
@@ -681,6 +712,9 @@ async def start_her_pov(user_id: str) -> dict[str, Any]:
     durable `klukai.jobs.her_pov` rail — the events-bridge consumer (prefetch=1)
     is the GPU lease. Unit tests and local dev keep the inline asyncio path.
     """
+    cloud = _cloud_generation_enabled()
+    if cloud and _execution_mode() != "queue":
+        raise RuntimeError("Cloud memory generation requires the durable job queue")
     existing = await _claim_active_from_db(user_id)
     if existing:
         return existing
@@ -716,6 +750,17 @@ async def start_her_pov(user_id: str) -> dict[str, Any]:
     if mode == "queue":
         armed = await _enqueue_job(job_id)
         if not armed:
+            if cloud:
+                try:
+                    await _set_job(
+                        job_id, status="failed", phase="failed", error="queue_unavailable",
+                        message="The memory queue is unavailable. Please try again later.",
+                    )
+                finally:
+                    async with _JOBS_LOCK:
+                        if _ACTIVE_JOB_BY_USER.get(user_id) == job_id:
+                            _ACTIVE_JOB_BY_USER.pop(user_id, None)
+                return {"job_id": job_id, "status": "failed", "reused": False}
             # Fail-soft: run inline so a bridge outage never strands the CTA.
             logger.warning(
                 "her_pov queue arm failed; falling back to inline for %s", job_id
@@ -758,6 +803,10 @@ async def run_job_from_queue(job_id: str) -> bool:
 
     user_id: str | None = None
     try:
+        cloud = _cloud_generation_enabled()
+    except Exception:
+        return False
+    try:
         from .db import get_conn_autocommit
         async with get_conn_autocommit() as conn:
             # Take the row only if nobody is working it: 'queued', or an
@@ -766,18 +815,27 @@ async def run_job_from_queue(job_id: str) -> bool:
             # A bridge-side timeout requeues the message while the first run
             # is still rendering; re-claiming it bought a second LLM call, a
             # second GPU render and a second archive row.
-            row = await (await conn.execute(
+            claim_sql = (
                 "UPDATE companion_her_pov_jobs "
                 "SET status = 'searching', phase = 'searching', "
                 "    claimed_at = NOW(), attempts = attempts + 1, "
                 "    updated_at = NOW() "
-                "WHERE id = %s AND ("
-                "  status = 'queued' OR ("
-                "    status IN ('searching', 'thinking', 'drawing') "
-                "    AND updated_at < NOW() - %s * INTERVAL '1 minute'))"
-                "RETURNING user_id",
-                (job_id, _STALE_CLAIM_MINUTES),
-            )).fetchone()
+                "WHERE id = %s AND status = 'queued' RETURNING user_id"
+            )
+            params: tuple = (job_id,)
+            if not cloud:
+                claim_sql = (
+                    "UPDATE companion_her_pov_jobs "
+                    "SET status = 'searching', phase = 'searching', "
+                    "    claimed_at = NOW(), attempts = attempts + 1, "
+                    "    updated_at = NOW() "
+                    "WHERE id = %s AND (status = 'queued' "
+                    "OR (status IN ('searching', 'thinking', 'drawing') "
+                    "AND updated_at < NOW() - %s * INTERVAL '1 minute')) "
+                    "RETURNING user_id"
+                )
+                params = (job_id, _STALE_CLAIM_MINUTES)
+            row = await (await conn.execute(claim_sql, params)).fetchone()
         if not row:
             # Terminal, unknown, or held by a live claim — bridge should ack.
             # Redelivering a job another run is still finishing would only
@@ -785,6 +843,9 @@ async def run_job_from_queue(job_id: str) -> bool:
             return True
         user_id = row[0]
     except Exception as e:
+        if cloud:
+            logger.warning("her_pov durable claim unavailable; cloud work withheld")
+            return False
         logger.warning("her_pov claim via db failed (%s); trying memory", e)
         async with _JOBS_LOCK:
             job = _JOBS.get(job_id)

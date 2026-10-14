@@ -11,7 +11,7 @@ import base64
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,7 +50,7 @@ async def _synthesize(payload: dict[str, Any]) -> str:
 
 class VoiceJobs:
     def __init__(
-        self, *, synthesize: Callable[[dict[str, Any]], Awaitable[str]] = _synthesize,
+        self, *, synthesize: Callable[[dict[str, Any]], Coroutine[Any, Any, str]] = _synthesize,
         deadline: float = LOCAL_TTS_DEADLINE, max_outstanding: int = 8,
         terminal_ttl: float = 300.0, max_result_bytes: int = 8 * 1024 * 1024,
     ):

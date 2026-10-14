@@ -63,7 +63,7 @@ void main() {
     () async {
       final polling = Completer<void>();
       var deleted = false;
-      final client = MockClient.streaming((request, _body) async {
+      final client = MockClient.streaming((request, body) async {
         if (request.method == 'POST') {
           return http.StreamedResponse(
             Stream.value(
@@ -100,7 +100,7 @@ void main() {
 
   test('a hung voice request is bounded by its total deadline', () async {
     var aborted = false;
-    final client = MockClient.streaming((request, _body) async {
+    final client = MockClient.streaming((request, body) async {
       await (request as http.AbortableRequest).abortTrigger;
       aborted = true;
       throw http.RequestAbortedException(request.url);

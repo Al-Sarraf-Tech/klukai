@@ -268,6 +268,21 @@ async def _annotate(
 
 
 async def main() -> int:
+    from app.creative_text import uses_cloud_text
+    from app.image_provider import uses_cloud_images
+
+    try:
+        remote = uses_cloud_text() or uses_cloud_images()
+    except Exception as error:
+        logger.error("Invalid creative provider configuration (%s)", type(error).__name__)
+        return 1
+    if remote:
+        # The legacy watermark only advances after the entire run. A partial
+        # failure can reselect and redraw previously saved exchanges next run;
+        # its prompt-based dedupe is insufficient for paid generation.
+        logger.error("Remote archive seeding requires durable source-aware jobs; run skipped")
+        return 1
+
     # Parse --user argument (default: jalsarraf)
     target_user = "jalsarraf"
     for i, arg in enumerate(sys.argv[1:], 1):
