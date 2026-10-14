@@ -90,7 +90,10 @@ async def post_leased_tts(
                 if not audio or len(audio) > MAX_AUDIO_BYTES:
                     raise ValueError("Invalid voice audio result")
                 # Preserve the binary WAV contract used by existing callers.
-                return httpx.Response(200, content=audio, headers={"Content-Type": "audio/wav"})
+                return httpx.Response(
+                    200, content=audio, headers={"Content-Type": "audio/wav"},
+                    request=response.request,
+                )
 
     async with get_lm_gate():
         async with gpu_lease("companion-voice") as lease:

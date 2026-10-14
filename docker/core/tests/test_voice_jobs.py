@@ -198,6 +198,30 @@ async def test_local_voice_bypasses_dominus_lease_and_decodes_json(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_status", [200, 503])
+async def test_synthesize_handles_normalized_local_response_status(monkeypatch, upstream_status):
+    from app import voice_jobs
+
+    monkeypatch.setenv("VOICE_BACKEND", "amarillo-xpu")
+    monkeypatch.setenv("VOICE_URL", "http://local:8301")
+    monkeypatch.setenv("VOICE_API_TOKEN", "test-only")
+    client_type = httpx.AsyncClient
+
+    def handle(request):
+        return httpx.Response(upstream_status, json={"audio": "YXVkaW8="})
+
+    monkeypatch.setattr(voice_jobs.httpx, "AsyncClient", lambda **kwargs: client_type(
+        transport=httpx.MockTransport(handle), **kwargs
+    ))
+    if upstream_status == 200:
+        assert await voice_jobs._synthesize({"text": "Hello.", "language": "en"}) == "YXVkaW8="
+    else:
+        with pytest.raises(httpx.HTTPStatusError) as failed:
+            await voice_jobs._synthesize({"text": "Hello.", "language": "en"})
+        assert failed.value.response.status_code == 503
+
+
+@pytest.mark.asyncio
 async def test_poll_and_cancel_do_not_spend_synthesis_rate_limit(monkeypatch):
     from app.main import _RateLimitMiddleware
     from app.rate_limit import RateLimitExceeded

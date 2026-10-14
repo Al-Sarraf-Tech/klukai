@@ -2,12 +2,12 @@
 // a generative score, and a chat dock, all on the same session as the PWA
 // (messages sent here appear there too: the server fans out to every device).
 
-import { readToken, clearToken, createApi, AuthExpired, wsUrl, createSocket } from "./net.js";
+import { readToken, clearToken, createApi, AuthExpired, wsUrl, createSocket } from "./net.js?v=ed5305f8";
 import { moodToExpression, sceneFor, reduceFrame, abandonTurn, avatarCue } from "./logic.js";
 import { createPortrait } from "./portrait.js";
 import { createAmbience, ambienceKind } from "./ambience.js";
 import { createMusic } from "./music.js";
-import { createVoice } from "./voice.js";
+import { createVoice } from "./voice.js?v=12e6e4bd";
 import { createAppearanceSwitcher } from "./appearance.js";
 
 const $ = (id) => document.getElementById(id);
