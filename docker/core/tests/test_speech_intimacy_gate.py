@@ -32,12 +32,16 @@ def test_speech_guidelines_hides_intimacy_below_8():
 
 def test_behavioral_grammar_always_present():
     out = build_behavioral_grammar_block(0)
-    assert "denial IS the character" in out
-    assert "Mission-framing" in out
+    assert "Earned confidence" in out
+    assert "Guarded warmth" in out
+    assert "denial IS the character" not in out
 
 
-def test_behavioral_grammar_escalation_at_high_affection():
-    low = build_behavioral_grammar_block(2)
-    high = build_behavioral_grammar_block(5)
-    assert "Escalation ladder" not in low
-    assert "Escalation ladder" in high
+def test_behavioral_grammar_direct_warmth_at_trusted_boundary():
+    guarded = build_behavioral_grammar_block(6)
+    trusted = build_behavioral_grammar_block(7)
+    assert "Guarded warmth" in guarded
+    assert "Trusted warmth is direct" not in guarded
+    assert "Trusted warmth is direct" in trusted
+    assert "Guarded warmth" not in trusted
+    assert "Escalation ladder" not in trusted

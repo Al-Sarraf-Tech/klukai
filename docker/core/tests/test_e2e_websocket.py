@@ -277,10 +277,12 @@ class TestPersonalityPromptAssembly:
         for member in ["Mechty", "Belka", "Andoris", "Leva"]:
             assert member in preamble, f"{member} missing from preamble"
 
-    def test_preamble_contains_canonical_voice(self, personality_config):
+    def test_preamble_uses_curated_voice_summary(self, personality_config):
         from app.personality import build_character_preamble
-        preamble = build_character_preamble(personality_config)
-        assert "An elite acts without hesitation" in preamble
+        edited = dict(personality_config, voice_summary="Measured delivery with understated warmth.")
+        preamble = build_character_preamble(edited)
+        assert "Measured delivery with understated warmth." in preamble
+        assert personality_config["voice_summary"].strip() not in preamble
 
     def test_context_block_has_elmo_location(self):
         from app.personality import build_context_block

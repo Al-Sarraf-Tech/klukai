@@ -8,6 +8,7 @@ rules, character preamble) lands at the top and dynamic state
 
 from __future__ import annotations
 
+from .character_contract import build_character_contract
 from .loader import get_affection_level_config, load_personality
 from .memory_blocks import (
     build_conversation_recall_block,
@@ -75,6 +76,7 @@ def assemble_system_prompt(
         abs_block = "ABSOLUTE RULES (never violate):\n" + "\n".join(f"- {r}" for r in abs_rules)
 
     blocks = [
+        build_character_contract(p, affection_level),
         abs_block,
         build_character_preamble(p, affection_level),
         build_character_rules(),

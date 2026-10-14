@@ -2,10 +2,10 @@
   "cold_flavor_in_high": false,
   "contains_commander": true,
   "contains_klukai": true,
-  "first_line": "ABSOLUTE RULES (never violate):",
-  "length": 20748,
+  "first_line": "RESPONSE PRIORITY (apply in this order when guidance conflicts):",
+  "length": 20143,
   "level": 9,
   "mood": "neutral",
-  "sha256": "b1bade6a9b76c7742740f667cde2a483ee1a122ac51a4ac3b6ea8e9e8d2fd6f6",
+  "sha256": "80093e793f92f6cf273095148e85df19515ef3d8551bb049302ed9910e8d1a46",
   "time_of_day": "evening"
 }

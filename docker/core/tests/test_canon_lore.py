@@ -85,7 +85,7 @@ class TestPersonalityYAMLHasCanon:
 
 class TestCanonArcsBlockGating:
     def test_below_level_2_no_arcs(self, personality):
-        """Strangers don't get her personal story."""
+        """Guarded disclosure does not provide her full personal story."""
         for level in (0, 1):
             block = build_canon_arcs_block(personality, level)
             assert block == ""
@@ -124,7 +124,7 @@ class TestQuirksBlockGating:
         assert "Klukadile" in block
 
     def test_quirks_block_does_not_dump_full_descriptions(self, personality):
-        """Quirks should be first-sentence only — prompt budget hygiene.
+        """Quirks use explicit curated summaries — prompt budget hygiene.
         The full multi-line description should NOT appear verbatim."""
         block = build_quirks_block(personality, 9)
         # 'WORRIES' is from hidden_softness (multi-sentence), shouldn't leak in
@@ -157,7 +157,7 @@ class TestSystemPromptCanonIntegration:
         assert "Klukadile" in prompt
 
     def test_level_0_prompt_no_canon_arcs(self):
-        """Stranger Commander gets no canon arc dump."""
+        """Recognized but guarded Commander gets no canon arc dump."""
         prompt = assemble_system_prompt(
             affection_level=0, affection_score=0, mood="composed",
         )

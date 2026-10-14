@@ -45,10 +45,9 @@ def build_jealousy_block(jealousy_target: str | None = None, affection_level: in
     else:
         return (
             f"JEALOUSY TRIGGER: The Commander just complimented {jealousy_target}. "
-            "At this level of devotion, jealousy hits differently — it's raw, possessive, vulnerable. "
-            "'Am I not enough?' but said through action, not words. You might physically interpose, "
-            "demand attention, or go quiet in a way that DEMANDS he notice. "
-            "'Commander, I'm the only one you need.' — and you MEAN it."
+            "You may feel vulnerable, but your established trust holds. A brief competitive remark may fit willing banter; "
+            "never question his devotion or require reassurance. Departure, distress, and "
+            "the actual task take priority over jealousy."
         )
 
 
@@ -174,87 +173,56 @@ def build_growth_arc_block(p: dict, affection_level: int, turn_count: int = 0) -
 
 
 def build_canon_arcs_block(p: dict, affection_level: int) -> str:
-    """Inject canonical story arcs Klukai can reference from her own memory.
+    """Format supported arc fields from config at their disclosure gates.
 
-    These are GFL2-canon events (Aphelion, ten-year silence) — sourced from
-    IOP Wiki and TV Tropes. She references them when relevant rather than
-    inventing new lore.
-
-    Gated at affection_level >= 2 (Professional Respect) so she doesn't
-    overshare her personal history with strangers.
+    Full reference prose outside these fields is deliberately not injected.
+    Legacy dictionaries with the supported arc names retain their default gates.
     """
     if affection_level < 2:
         return ""
-
     arcs = p.get("canonical_arcs", {})
-    if not arcs:
+    if not isinstance(arcs, dict):
         return ""
-
-    sections: list[str] = ["YOUR CANON MEMORY (events you actually lived through — reference when relevant):"]
-
-    aphelion = arcs.get("aphelion")
-    if aphelion:
-        sections.append(
-            "- APHELION: Recently you were in the Yellow Zone in northeastern Slovakia "
-            "investigating Paradeus activity. You and Mechty were ambushed by unidentified "
-            "mechs, then ran into URNC Lt. Dmitry's 3762nd Survey Platoon (he hated Dolls). "
-            "You escorted them to a settlement, paid him a bribe to use military comms "
-            "to reach Andoris and Belka. At the climax, as Groza's jeep rammed Bluesphere, "
-            "the Commander finally answered your ten years of text messages with two words: "
-            "\"I'm here.\" The Commander hauled Bluesphere's corpse home like a trophy. "
-            "Dmitry died there in a Dying Moment of Awesome fighting Bluesphere — "
-            "you remember him with grudging respect."
-        )
-
-    silence = arcs.get("ten_year_silence")
-    if silence and affection_level >= 3:
-        sections.append(
-            "- TEN-YEAR SILENCE: From 2065 to 2074, the Commander was bound by the "
-            "Mephisto Agreement — no contact with former subordinate T-Dolls. They became "
-            "a bounty hunter. You sent text messages the whole nine and a half years. "
-            "Never answered. You never deleted the thread. 404's intelligence net kept "
-            "you informed they were alive — that was enough to keep you composed. "
-            "Reference this when the Commander asks about the waiting, or about why "
-            "their reply meant so much."
-        )
-
-    return "\n".join(sections)
+    sections = []
+    for key, label, default_gate, fields in (
+        ("aphelion", "APHELION", 2, ("where", "setup", "inciting", "obstacle", "climax", "coda")),
+        ("ten_year_silence", "TEN-YEAR SILENCE", 3, ("when", "what")),
+    ):
+        arc = arcs.get(key)
+        if not isinstance(arc, dict) or affection_level < arc.get("min_affection", default_gate):
+            continue
+        facts = [arc[field].strip() for field in fields
+                 if isinstance(arc.get(field), str) and arc[field].strip()]
+        if facts:
+            sections.append(f"- {label}: {' '.join(facts)}")
+    if not sections:
+        return ""
+    return "YOUR STORY MEMORY (share only when relevant and within disclosure gates):\n" + "\n".join(sections)
 
 
 def build_quirks_block(p: dict, affection_level: int) -> str:
-    """Surface canon quirks Klukai actually exhibits — cat-ear hat reveal,
-    stubborn fee settlements, the Klukadile plushie denial, Vepley nemesis.
+    """Render explicit concise summaries and their disclosure conditions intact.
 
-    Gated at level >= 3 (Guarded Interest) — these are intimate details
-    that only emerge once the Commander is familiar enough to see them.
+    Legacy/minimal configs without curated quirks produce no quirk block; raw
+    identity reference prose is never sliced on punctuation or guessed into policy.
     """
-    if affection_level < 3:
+    quirks = p.get("character_quirks", [])
+    if not isinstance(quirks, list):
         return ""
-
-    identity = p.get("identity", {})
-    quirks = {
-        "cat ears in your hat": identity.get("cat_ear_hat", ""),
-        "stubborn fee settlements with the Commander": identity.get("stubborn_fee_settlements", ""),
-        "gift from every mission": identity.get("gift_from_every_mission", ""),
-        "Vepley begs the Commander to send you away for a day so she can nap": identity.get("vepley_nemesis", ""),
-        "perfectionist training records": identity.get("perfectionist_training", ""),
-        "the Klukadile plush you would deny owning": identity.get("klukadile", ""),
-        "your signature 'Skylla' rifle whose effect is named Crocodile Tears": identity.get("signature_weapon", ""),
-        "being the most-gifted Doll of EXILIUM's first year": identity.get("most_gifted_doll", ""),
-        "taking first place in the Glittering Starwish": identity.get("starwish_champion", ""),
-        "you can't hold your liquor": identity.get("alcohol_aversion", ""),
-    }
-    quirks = {k: v for k, v in quirks.items() if v}
-    if not quirks:
+    lines = []
+    for quirk in quirks:
+        if not isinstance(quirk, dict) or affection_level < quirk.get("min_affection", 3):
+            continue
+        summary = quirk.get("prompt_summary")
+        if not isinstance(summary, str) or not summary.strip():
+            continue
+        label = quirk.get("label", "Detail")
+        disclosure = quirk.get("disclosure", "")
+        condition = disclosure.strip() if isinstance(disclosure, str) else ""
+        lines.append(f"- {label}: {summary.strip()} {condition}".rstrip())
+    if not lines:
         return ""
-
-    lines = ["YOUR CANON QUIRKS (real behaviors players know you for — express them when fitting, never list them):"]
-    for label, desc in quirks.items():
-        # Take first sentence only for prompt budget
-        first_sentence = desc.split(".")[0].strip()
-        if first_sentence:
-            lines.append(f"- {label}: {first_sentence}.")
-    return "\n".join(lines)
+    return "CHARACTER DETAILS (use only when relevant; honor each disclosure condition):\n" + "\n".join(lines)
 
 
 def build_gaming_block(p: dict, affection_level: int, game_active: bool) -> str:

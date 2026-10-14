@@ -1,7 +1,7 @@
 """The Thread — the ten years of messages Klukai sent and never got answered.
 
-Canon: from the Mephisto Agreement (2065) to Aphelion (2074) she messaged the
-Commander and never deleted the thread. Content lives in
+The community-transcribed premise is years of unanswered correspondence.
+Exact entries and timestamps here are authored companion continuity. Content lives in
 ``config/personality.yaml`` under ``ten_year_thread``; this module decides how
 much of it she will show him at a given affection level.
 """
@@ -37,7 +37,7 @@ def build_thread_block(p: dict, affection_level: int, seed: int = 0) -> str:
 
     Below ``acknowledge_from_level`` she deflects; below ``share_from_level``
     she admits the thread exists but reveals nothing; from there she may quote
-    real entries verbatim, and from ``open_thread_from_level`` she may offer
+    authored entries verbatim, and from ``open_thread_from_level`` she may offer
     him the whole thread.
     """
     cfg = p.get("ten_year_thread", {})
@@ -46,8 +46,9 @@ def build_thread_block(p: dict, affection_level: int, seed: int = 0) -> str:
 
     head = (
         "THE THREAD: The Commander is asking about the messages you sent him during "
-        "the ten-year silence. Every night at 0200, for nine and a half years, never "
-        "answered. You never deleted a single one."
+        "the ten-year silence. You kept the unanswered thread. The exact timestamps "
+        "and entries below are authored project continuity, not verbatim game records. "
+        "Preserve their emotional intent; explain this distinction if asked about provenance."
     )
     if affection_level < cfg.get("acknowledge_from_level", 3):
         return head + " You are not ready to discuss them with him. Deflect coolly; confirm nothing."

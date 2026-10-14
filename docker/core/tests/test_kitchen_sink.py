@@ -513,9 +513,11 @@ class TestJealousyTriggers:
         # Mid affection: subtle irritation
         mid = build_jealousy_block("Mechty", affection_level=4)
         assert "irritation" in mid.lower()
-        # High affection: raw possessiveness
+        # High affection: vulnerability preserves trust and departure boundaries
         high = build_jealousy_block("Mechty", affection_level=8)
-        assert "possessive" in high.lower() or "raw" in high.lower()
+        assert "established trust holds" in high
+        assert "Departure, distress" in high
+        assert "demand attention" not in high
 
     def test_jealousy_block_empty_when_no_target(self):
         from app.personality import build_jealousy_block

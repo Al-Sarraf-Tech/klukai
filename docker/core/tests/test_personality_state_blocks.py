@@ -53,7 +53,9 @@ class TestJealousyBlock:
     def test_very_high_affection_vulnerable(self):
         out = build_jealousy_block("Andoris", affection_level=8)
         assert "vulnerable" in out
-        assert "I'm the only one you need" in out
+        assert "established trust holds" in out
+        assert "Departure, distress" in out
+        assert "demand attention" not in out
 
     def test_boundary_3_to_4_uses_subtle(self):
         assert "subtle coolness" in build_jealousy_block("X", 3)

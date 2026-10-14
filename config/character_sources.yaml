@@ -1,0 +1,89 @@
+# Provenance ledger for curated character data. Never injected into normal chat.
+# Inspection dates below refer to the 2026-10-14 character audit; this refactor
+# reuses that evidence and does not claim independent publisher verification.
+version: 1
+sources:
+  profile_records:
+    category: community_transcription
+    title: Klukai Profile
+    url: https://iopwiki.com/wiki/Klukai/Profile
+    locale: English community transcription
+    inspected: '2026-10-14'
+    locators: [Records 1-4, Record 5, Record 7, Record 8, Across the Storm]
+    use: Paraphrase of leadership, motorcycle origin, unanswered messages, gifts, independent cooperation.
+    limit: Incomplete community page; Record 8 describes a quarterly expense list, not monthly cadence.
+  quotes_transcription:
+    category: community_transcription
+    title: Klukai Quotes
+    url: https://iopwiki.com/wiki/Klukai/Quotes
+    locale: English text with Japanese playback
+    inspected: '2026-10-14'
+    locators: [Adjutant, Affinity, Combat failure]
+    use: Paraphrased delivery, relaxed closeness, competitive jealousy and admitting misjudgment.
+    limit: Not a publisher capture; style synthesis is interpretation, not a verbatim quotation.
+  roster_reference:
+    category: community_reference
+    title: Klukai
+    url: https://iopwiki.com/wiki/Klukai
+    locale: English
+    inspected: '2026-10-14'
+    use: Identity, Team A, weapon metadata and player popularity metadata.
+    limit: Community host; popularity is meta information. Variant pages disagree on one outfit label; existing researched Indigo Oath name retained.
+  visual_reference:
+    category: community_reference
+    title: Klukai appearance and animations
+    url: https://iopwiki.com/wiki/Klukai
+    locale: English
+    inspected: '2026-10-14'
+    use: Cat-ear-shaped cap devices from the existing catalog and community animation description.
+    limit: No new animation capture in this refactor; unprompted-disclosure rule is an owner companion choice.
+  items_transcription:
+    category: community_transcription
+    title: GFL2 Items
+    url: https://www.iopwiki.com/wiki/GFL2_Items
+    locale: English
+    inspected: '2026-10-14'
+    locators: [Klukadile, Team A keepsake, Team B keepsake]
+    use: Mascot purchase attributed to Belka; distinct team keepsakes.
+    limit: Does not establish private plush ownership or denial.
+  event_summary:
+    category: community_reference
+    title: Aphelion summary in existing project research
+    urls: [https://iopwiki.com/wiki/Klukai/Profile, https://tvtropes.org/pmwiki/pmwiki.php/Characters/GirlsFrontline2ExiliumSentinels]
+    local_reference: docs/lore-dossier.md
+    use: Paraphrased Aphelion setup, Dmitry, Bluesphere and reunion; original prose is not game quotation.
+    limit: Detailed event summary inherited from existing research; not a fresh publisher transcript verification.
+  secondary_analysis:
+    category: secondary_interpretation
+    title: Existing community character analysis
+    url: https://tvtropes.org/pmwiki/pmwiki.php/Characters/GirlsFrontline2ExiliumSentinels
+    local_reference: docs/lore-dossier.md
+    use: Existing alcohol incident and Vepley anecdote; interpretive synthesis of character growth.
+    limit: Secondary catalog, not direct game verification; original dossier was snippet-based and is not a current backlog.
+  owner_voice_baseline:
+    category: owner_persona
+    title: Selected Japanese delivery reference
+    url: https://www.youtube.com/watch?v=3tJ1ZE11J34
+    local_reference: docker/voice/reference/README.md
+    use: Owner-selected voice baseline; source audio and pinned conditioning artifacts remain unchanged.
+    limit: Machine-rendered English subtitles contain translation errors and are not authoritative English quotations.
+  companion_contract:
+    category: owner_persona
+    local_reference: docs/superpowers/specs/2026-10-14-character-contract.md
+    use: Human male Commander, permanent anime/light-olive appearance, disclosure and address gates, context precedence and trusted warmth.
+    limit: Authoritative project choices, not claims of universal franchise canon.
+  authored_thread:
+    category: authored_continuity
+    local_reference: config/personality.yaml#ten_year_thread
+    use: Exact 0200 timestamps, private wording, chronology placement and app thread presentation.
+    limit: Years-long unanswered correspondence is supported; exact cadence and entries are not verbatim game records.
+  monthly_ritual:
+    category: authored_continuity
+    local_reference: config/personality.yaml#fee_settlement
+    use: Monthly app settlement schedule and original invoices.
+    limit: Inspired by independent cooperation; source Record 8 describes quarterly expenses. Invoice-as-care is interpretation.
+  mascot_interpretation:
+    category: interpretation
+    local_reference: config/personality.yaml#identity.klukadile
+    use: Personal plush ownership and denial as optional companion interpretation.
+    limit: The item transcription attributes a purchase to Belka; no exact denial scene verified.
