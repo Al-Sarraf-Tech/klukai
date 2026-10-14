@@ -54,7 +54,7 @@ Files: docker-compose.yml, .env.example, docs/handoff, AGENTS.md, README.md.
 - [x] Install private runtime/token/reference manifest and user service; enable production main image selector.
 - [x] Exercise real core-to-host image path with test account; check owner archive/auth boundaries without mutating owner history.
 - [x] Preserve rollback configuration and previous core image; recreate companion-core only.
-- [ ] Merge latest origin/main, commit, push origin/main and sync Amarillo; report exact test instructions.
+- [x] Merge latest origin/main, commit, push origin/main and sync Amarillo; report exact test instructions.
 
 Owner follow-up: “And make it the main version of image generation no more gpu usage.” This expands the initial chat-only request to all image-generation paths. No local image fallback; img2img/live portrait paths must avoid GPU too.
 
@@ -67,3 +67,5 @@ Owner follow-up: “And make it the main version of image generation no more gpu
 - Show owner Commander-and-Klukai samples from both native model providers.
 
 Owner final appearance refinements: slightly lighter light-olive skin and fully anime Commander matching Klukai. Persisted in canonical personality/tags and the shared provider prompt; photo remains an identity reference.
+
+Completion: real Agy-to-Grok failover returned and archived an authenticated test image; production access restored to owner only. Updated anime/light-olive Grok sample succeeded. Gemini refresh remains unavailable with native HTTP500; retain and clearly label the earlier successful Gemini sample.

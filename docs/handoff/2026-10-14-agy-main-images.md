@@ -44,7 +44,7 @@ Native output dimensions can differ from the requested orientation dimensions.
 - `runtime/token` (0600) and `runtime/image.sock` (0600), mounted read-only into
   core at `/run/klukai-agy`. The token is unrelated to Google credentials.
 - `references.json`: fixed `klukai` and `commander` entries with absolute paths
-  and SHA256 digests. Private photos and generated images are not committed.
+  and SHA256 digests. Private runtime files and generated images are not committed; the existing repository Commander reference is unchanged.
 - `state/`: durable request ledger and completed image cache. Preserve this on
   upgrades; deleting claims removes replay protection.
 - Repository `.env`: `KLUKAI_IMAGE_PROVIDER=agy`, `KLUKAI_AGY_ALLOWED_USERS`,
@@ -127,3 +127,30 @@ privately for rollback. Voice remains `dominus`; no Dominus containers, GPU
 image services or gaming guards were changed. Paid image allowances remain
 zero, Agy credits remain disabled, and Grok uses the owner-confirmed disabled
 extra-usage / $0-cap account.
+
+
+Final appearance deployment: source `7121621`, core image
+`sha256:d335ea82c1ca13b69f68ee8feb65a0939069e95708010d34fadb632bb488cd21`.
+The running container is healthy, loads the anime/light-olive Commander
+configuration, keeps `VOICE_BACKEND=dominus`, and allows only `jalsarraf`.
+Worker health lists both providers; the removed test user receives 403 without
+advancing rotation. The next accepted request prefers Grok, following the
+successful Agy-to-Grok failover. Rotation persists across service restarts.
+
+Final native Grok anime couple sample: 1248x832 PNG, 946715 bytes,
+SHA256 `b2ae6bd2a0c545e879f0f357690ff5ec23c331317c3096929690175997741999`.
+It passed native OAuth/session/gate/artifact validation and visual inspection:
+both characters use anime line art and shading; the Commander retains short
+dark hair, strong build and the requested lighter light-olive complexion.
+A separate attempt to update the earlier Gemini winter couple image with the
+same appearance, using a 4:3 scene reference, again returned HTTP 500 INTERNAL.
+That leaves the earlier successful Gemini image as a clearly labeled historical
+sample, not proof of the newest appearance or present provider availability.
+The failure evidence shows no explicit quota or policy refusal; cause is unknown.
+No additional automatic retry was made.
+
+Final prompt-only refinement checks: 132 worker/runtime/Grok tests, 96 core
+image tests and core lint passed. The complete earlier core suite, final 197
+ops tests plus four subtests, independent review, and live failover evidence
+above establish the release checks. Generated samples and detailed native
+streams remain in private host storage.
