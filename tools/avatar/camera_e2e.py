@@ -148,6 +148,77 @@ def check_full_body(page):
     assert bounds['feet'] < bounds['bottom'], bounds
 
 
+def check_dock_layout(page):
+    """Measure the visible menu, including narrow and short touch viewports."""
+    layout = page.evaluate("""() => {
+      const rect = el => {
+        const r = el.getBoundingClientRect();
+        return {left:r.left, right:r.right, top:r.top, bottom:r.bottom, height:r.height};
+      };
+      const dock = document.querySelector('.dock');
+      return {width:innerWidth, height:innerHeight, dock:rect(dock),
+        topbar:rect(document.querySelector('.topbar')),
+        paddingTop:parseFloat(getComputedStyle(dock).paddingTop),
+        subtitle:rect(document.querySelector('#subtitle')),
+        controls:rect(document.querySelector('#camera-controls')),
+        composer:rect(document.querySelector('#composer')),
+        buttons:[...document.querySelectorAll('#camera-controls button')].map(button => {
+          const r = rect(button), hit = document.elementFromPoint((r.left+r.right)/2, (r.top+r.bottom)/2);
+          return {...r, label:button.getAttribute('aria-label') || button.textContent,
+            reachable:hit === button || button.contains(hit)};
+        })};
+    }""")
+    assert layout['subtitle']['bottom'] <= layout['controls']['top'], layout
+    assert layout['controls']['bottom'] < layout['composer']['top'], layout
+    assert layout['composer']['bottom'] < layout['height'], layout
+    assert abs(layout['dock']['bottom'] - layout['height']) < 1, layout
+    assert layout['dock']['top'] > layout['topbar']['bottom'], layout
+    # The former first item began at dock top + padding. The empty subtitle
+    # now gives the menu 50px more downward room at every viewport size.
+    layout['menu_lower_by_pixels'] = (layout['controls']['top'] -
+        layout['dock']['top'] - layout['paddingTop'])
+    assert layout['menu_lower_by_pixels'] >= 48, layout
+    for button in layout['buttons']:
+        assert 0 <= button['left'] < button['right'] <= layout['width'], button
+        assert layout['subtitle']['bottom'] <= button['top'] < button['bottom'] <= layout['composer']['top'], button
+        assert button['reachable'], button
+    return layout
+
+
+def run_layout_viewports(browser, base, out, glb):
+    results = []
+    for width, height in [(1280, 800), (390, 844), (320, 740), (844, 390), (568, 320)]:
+        context = browser.new_context(viewport={'width': width, 'height': height},
+            has_touch=True, is_mobile=width < 500, device_scale_factor=1)
+        page = context.new_page()
+        _, errors = install_fixtures(page, glb)
+        try:
+            page.goto(base)
+            page.locator('#wake').click()
+            page.wait_for_function('window.cameraTestAvatar?.ready', timeout=90000)
+            settle(page)
+            layout = check_dock_layout(page)
+            check_full_body(page)
+            page.screenshot(path=str(out / f'layout-{width}x{height}-empty.png'))
+            # A visible reply must stay above the controls and keep all targets
+            # usable, including the compact landscape rule.
+            page.locator('#subtitle').evaluate("el => el.textContent = 'Commander, I am ready when you are.'")
+            reply_layout = check_dock_layout(page)
+            page.locator('#subtitle').evaluate("el => el.textContent = 'Commander, I am ready when you are. '.repeat(15)")
+            page.wait_for_timeout(1000)
+            long_reply_layout = check_dock_layout(page)
+            check_full_body(page)
+            screenshot = out / f'layout-{width}x{height}.png'
+            page.screenshot(path=str(screenshot))
+            assert not errors, errors
+            results.append({'viewport': f'{width}x{height}', 'status': 'passed',
+                'layout': layout, 'reply_layout': reply_layout, 'long_reply_layout': long_reply_layout,
+                'screenshot': str(screenshot)})
+        finally:
+            context.close()
+    return results
+
+
 def settle(page):
     page.wait_for_timeout(450)
 
@@ -224,6 +295,7 @@ def run_viewport(browser, base, out, glb, mobile):
     settle(page)
     reset(page)
     check_full_body(page)
+    dock_layout = check_dock_layout(page)
     before = view(page)
     page.get_by_role('button', name='Zoom in', exact=True).click()
     settle(page)
@@ -366,6 +438,7 @@ def run_viewport(browser, base, out, glb, mobile):
     result = {'viewport': f'{width}x{height}', 'status': 'passed', 'page_errors': errors,
               'vertical_drag_pixels': after_position['y'] - before_position['y'],
               'vertical_drag_pitch_change': after_position['pitch'] - before_position['pitch'],
+              'menu_lower_by_pixels': dock_layout['menu_lower_by_pixels'],
               'restored_view': chosen,
               'screenshot': str(screenshot)}
     context.close()
@@ -377,6 +450,7 @@ def main():
     parser.add_argument('--out', type=Path, default=Path('/tmp/klukai-camera-check'))
     parser.add_argument('--viewport', choices=['all', 'desktop', 'phone'], default='all')
     parser.add_argument('--base-url', help='Companion HTML URL; all API and WebSocket calls remain local fixtures')
+    parser.add_argument('--layout-only', action='store_true', help='Check menu geometry at desktop and touch viewport sizes')
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     glb = (ROOT / 'assets/build/klukai.glb').read_bytes()
@@ -389,11 +463,15 @@ def main():
                 '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'])
             results = []
             try:
-                for mobile in ([False, True] if args.viewport == 'all' else [args.viewport == 'phone']):
-                    result = run_viewport(browser, args.base_url or f'http://127.0.0.1:{server.server_address[1]}/flutter_app/web/companion.html',
-                                          args.out, glb, mobile)
-                    results.append(result)
-                    print(json.dumps(result), flush=True)
+                base = args.base_url or f'http://127.0.0.1:{server.server_address[1]}/flutter_app/web/companion.html'
+                if args.layout_only:
+                    results = run_layout_viewports(browser, base, args.out, glb)
+                    print(json.dumps(results), flush=True)
+                else:
+                    for mobile in ([False, True] if args.viewport == 'all' else [args.viewport == 'phone']):
+                        result = run_viewport(browser, base, args.out, glb, mobile)
+                        results.append(result)
+                        print(json.dumps(result), flush=True)
             finally:
                 browser.close()
                 server.shutdown()

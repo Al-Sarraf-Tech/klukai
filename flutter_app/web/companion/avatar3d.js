@@ -199,12 +199,16 @@ function bandFraming({ framing, state, aspect, headY }) {
  * so the crop is unchanged.
  */
 export function cameraFraming({ framing = 'upper', state = 'idle', aspect = 1, headY = 1.36, insets = null } = {}) {
-  let top = clamp(Number(insets?.top) || 0, 0, 0.45);
-  let bottom = clamp(Number(insets?.bottom) || 0, 0, 0.45);
+  let top = clamp(Number(insets?.top) || 0, 0, 0.9);
+  let bottom = clamp(Number(insets?.bottom) || 0, 0, 0.9);
   const lowBody = framing === 'full' || state === 'sleep';
-  if (lowBody && bottom > 0) bottom = Math.min(0.5, bottom + 0.08);
+  // Short landscape screens can genuinely lose over half their height to the
+  // dock. Fit that measured space, keeping the fade margin proportional when
+  // little room remains. Only degenerate/overlapping insets need a safety floor.
+  if (lowBody && bottom > 0) bottom += Math.min(0.08, Math.max(0, 1 - top - bottom) * 0.2);
   let band = 1 - top - bottom;
-  if (band < 0.4) { const s = 0.6 / (top + bottom); top *= s; bottom *= s; band = 0.4; }
+  // 22% keeps full framing inside the 30 m far plane even at maximum user zoom.
+  if (band < 0.22) { const s = 0.78 / (top + bottom); top *= s; bottom *= s; band = 0.22; }
   const b = bandFraming({ framing, state, aspect: aspect / band, headY });
   const portrait = aspect / band < 0.8;
   const fov = !lowBody && portrait ? UPPER_PORTRAIT_FOV : BASE_FOV;
@@ -271,6 +275,7 @@ export function createAvatarGesture({ threshold = 7, tapMs = 650 } = {}) {
   const points = new Map();
   let blocked = false;
   return {
+    get active() { return points.size > 0; },
     down(id, x, y, at) {
       if (!points.size) blocked = false;
       points.set(id, { x, y, startX: x, startY: y, at, dragged: false });
@@ -300,7 +305,10 @@ export function createAvatarGesture({ threshold = 7, tapMs = 650 } = {}) {
   };
 }
 
-const REACTION_CLIPS = Object.freeze({ salute: 'salute', acknowledge: 'thankful', pleased: 'happy' });
+const REACTION_CLIPS = Object.freeze({
+  salute: 'salute', acknowledge: 'thankful', pleased: 'happy', thoughtful: 'thinking',
+  dismiss: 'dismiss', bashful: 'bashful', playful: 'excited',
+});
 /** Reactions are transient clips, so the mood/state machine keeps its context. */
 export function createReactionController({ available = [], play = () => {}, restore = () => {}, now = () => performance.now(), cooldown = 2600 } = {}) {
   let active = null, lastAt = -Infinity, count = 0;
@@ -668,6 +676,51 @@ export function pickFidget(names, prev, rand = Math.random) {
   return pool[Math.min(pool.length - 1, Math.floor(rand() * pool.length))];
 }
 
+/** Calm visible time between passive gestures. Priority activity cancels the
+ * current gesture and starts a fresh wait; suspended time is never replayed.
+ * The renderer supplies restore(), so the latest mood remains authoritative. */
+export function createPassiveController({ available = [], play = () => {}, restore = () => {}, random = Math.random } = {}) {
+  const names = [...new Set(available)];
+  const delay = () => 12000 + clamp(Number(random()) || 0, 0, 1) * 12000;
+  let active = null, last = null, count = 0, remainingMs = delay(), blocked = false;
+  const allowed = ({ state = 'idle', speaking = 0, reacting = false, dragging = false,
+    paused = false, reducedMotion = false, enabled = true } = {}) =>
+    enabled && !paused && !reducedMotion && state === 'idle' && speaking <= 0.04 && !reacting && !dragging;
+  const controller = {
+    get active() { return active; },
+    get last() { return last; },
+    get count() { return count; },
+    get remainingMs() { return remainingMs; },
+    trigger(context = {}) {
+      if (active || !allowed(context)) return false;
+      const name = pickFidget(names, last, random);
+      if (!name) return false;
+      active = name; last = name; count++;
+      play(name);
+      return true;
+    },
+    cancel({ restore: resume = true } = {}) {
+      const wasActive = active !== null;
+      active = null; remainingMs = delay();
+      if (wasActive && resume) restore();
+    },
+    finish() { if (active) controller.cancel(); },
+    tick(dt, context = {}) {
+      if (!allowed(context)) {
+        if (!blocked || active) controller.cancel();
+        blocked = true;
+        return false;
+      }
+      if (blocked) { blocked = false; remainingMs = delay(); return false; }
+      if (dt > 1) { controller.cancel(); return false; }
+      if (active) return false;
+      remainingMs = Math.max(0, remainingMs - Math.max(0, Number(dt) || 0) * 1000);
+      return remainingMs <= 0 && controller.trigger(context);
+    },
+  };
+  return controller;
+}
+
 let libsPromise = null;
 function importLibs(withOrbit = true) {
   if (!libsPromise) {
@@ -693,12 +746,14 @@ export function warmAvatar3D({ loadModel, modelKey = 'default' } = {}) {
   if (typeof loadModel === 'function') modelPrefetch.warm(modelKey, loadModel);
 }
 
-// Idle fidgets: a short one-shot after a full idle cycle (35 %), never the
-// same twice in a row. Sub-clips of the expressive loops, at full weight.
+// Short authored one-shots, crossfaded in/out without looping their endpoints.
+// The idle excerpts retain her calm weight shifts and composed ready posture.
 const FIDGETS = Object.freeze([
   { name: 'thankful' },
   { name: 'fidget_happy', from: 'happy', start: 1.0, end: 4.0 },
-  { name: 'fidget_think', from: 'thinking', start: 0.2, end: 3.2 },
+  { name: 'fidget_glance', from: 'thinking', start: 0.2, end: 3.2 },
+  { name: 'fidget_shift', from: 'idle', start: 5.0, end: 8.5 },
+  { name: 'fidget_ready', from: 'idle', start: 11.5, end: 15.5 },
 ]);
 
 const ROLE_FALLBACK = (name) => (/hair/i.test(name) ? 'hair' : /face|eye/i.test(name) ? 'face' : /cloth/i.test(name) ? 'cloth' : 'skin');
@@ -987,6 +1042,7 @@ export async function createAvatar3D(container, opts = {}) {
   let mouthMode = 'none';
   const mouthTargets = [];
   let reactions = null;
+  let passives = null;
   let blinkIdx = -1;
   let blinkT = -1; // ms since blink start; <0 = waiting
   let blinkSlow = false;
@@ -1276,7 +1332,6 @@ export async function createAvatar3D(container, opts = {}) {
     }
     buildFidgets(gltf.animations);
     mixer.addEventListener('finished', onFinished);
-    mixer.addEventListener('loop', onLoop);
     talkAction = actions.get('talking') || null;
     if (talkAction) { talkAction.setEffectiveWeight(0); talkAction.play(); }
     shadowMesh = makeContactShadow();
@@ -1500,16 +1555,14 @@ export async function createAvatar3D(container, opts = {}) {
     controls.enableDamping = false; // exact release position, with no hidden residual input
     controls.dampingFactor = 0.08;
     controls.rotateSpeed = isIOS || globalThis.matchMedia?.('(pointer: coarse)').matches ? 0.7 : 0.5;
-    onControlStart = () => { orbitDragging = true; };
-    onControlEnd = () => { orbitDragging = false; settleView(); };
+    onControlStart = () => { orbitDragging = true; passives?.cancel(); };
+    onControlEnd = () => { orbitDragging = gesture.active; settleView(); };
     controls.addEventListener('start', onControlStart);
     controls.addEventListener('end', onControlEnd);
   }
 
   // ── animation control ────────────────────────────────────────────────────
   const FADE = 0.45;
-  let idleStartedAt = 0;
-  let lastFidget = null;
 
   function pickClip(state) {
     const spec = STATE_CLIPS[state] || STATE_CLIPS.idle;
@@ -1541,7 +1594,6 @@ export async function createAvatar3D(container, opts = {}) {
     next.setEffectiveWeight(1);
     if (clipName === 'idle') { // never start the idle from the same frame
       next.time = Math.random() * next.getClip().duration;
-      idleStartedAt = performance.now();
     }
     next.play();
     if (current?.action && current.action !== next) {
@@ -1564,11 +1616,9 @@ export async function createAvatar3D(container, opts = {}) {
       } catch { /* a missing or odd clip only means one fidget fewer */ }
     }
   }
-  function playFidget() {
-    const name = pickFidget([...fidgetActions.keys()], lastFidget);
+  function playFidget(name) {
     const next = name && fidgetActions.get(name);
     if (!next || !current?.action || current.action === next) return;
-    lastFidget = name;
     next.reset();
     next.setLoop(THREE.LoopOnce, 1);
     next.clampWhenFinished = true;
@@ -1576,26 +1626,21 @@ export async function createAvatar3D(container, opts = {}) {
     next.setEffectiveWeight(1);
     next.play();
     current.action.crossFadeTo(next, 0.6, false);
-    current = { state: 'idle', action: next, once: true, fidget: true };
-  }
-  function onLoop(e) {
-    if (!life || reducedMotion || !current || e.action !== current.action || current.fidget) return;
-    if (stateName !== 'idle' || e.action !== actions.get('idle') || speakingTarget > 0.04) return;
-    if (performance.now() - idleStartedAt < e.action.getClip().duration * 1000 * 0.98) return;
-    if (Math.random() < 0.35) playFidget();
+    current = { state: stateName, action: next, once: true, fidget: true };
   }
   function onFinished(e) {
     if (!current || e.action !== current.action || !current.once) return;
     if (current.reaction) { reactions.finish(); return; }
-    const wasFidget = current.fidget;
-    if (!wasFidget && stateName === 'greet') { sm.settle('idle'); stateName = 'idle'; }
-    play(stateName === 'idle' ? 'idle' : stateName, { fade: wasFidget ? 0.6 : FADE });
+    if (current.fidget) { passives.finish(); return; }
+    if (stateName === 'greet') { sm.settle('idle'); stateName = 'idle'; }
+    play(stateName);
   }
 
   const sm = createStateMachine({
     now: () => performance.now(),
     enter(name, prev) {
       reactions?.cancel();
+      passives?.cancel({ restore: false });
       if (prev === 'talking' && name !== 'talking') talkWeight = 1; // fade the layer out, no pop
       stateName = name;
       play(name);
@@ -1603,9 +1648,20 @@ export async function createAvatar3D(container, opts = {}) {
     },
   });
 
+  passives = createPassiveController({
+    available: [...fidgetActions.keys()], play: playFidget,
+    restore() { play(stateName, { fade: 0.6 }); },
+  });
+
+  function passiveContext(simulate = false) {
+    return { state: stateName, speaking: Math.max(speakingTarget, speaking), reacting: Boolean(reactions?.active),
+      dragging: orbitDragging || gesture.active, paused: paused && !simulate, reducedMotion, enabled: life };
+  }
+
   reactions = createReactionController({
     available: [...actions.keys()],
     play(reaction) {
+      passives.cancel({ restore: false });
       if (reducedMotion) {
         triggerBlink(performance.now(), true);
         reactions.finish();
@@ -1626,7 +1682,7 @@ export async function createAvatar3D(container, opts = {}) {
   });
 
   function react(kind = 'auto') {
-    if (disposed || paused || stateName === 'sleep' || speakingTarget > 0.04) return false;
+    if (disposed || paused || stateName === 'sleep' || speakingTarget > 0.04 || orbitDragging || gesture.active) return false;
     return reactions.trigger(kind);
   }
 
@@ -1710,7 +1766,12 @@ export async function createAvatar3D(container, opts = {}) {
     // a target behind her (orbit, inspection cameras) would clamp to ±max and flip sides as she
     // turns, snapping the head: let go of it instead
     const behind = 1 - smoothstep(90 * DEG, 130 * DEG, Math.abs(dy));
-    const wGoal = life ? (LOOK_WEIGHT[stateName] ?? 0.6) * (1 - smoothstep(30 * DEG, 90 * DEG, clipAngle)) * behind : 0;
+    // Let temporary gestures keep their authored glances instead of pulling
+    // a thoughtful or bashful reaction straight back toward the camera.
+    const shownClip = current?.action?.getClip().name;
+    const gestureState = { thankful: 'happy', salute: 'greet', dismiss: 'idle' }[shownClip] || shownClip;
+    const lookWeight = current?.fidget ? 0.45 : LOOK_WEIGHT[current?.reaction ? gestureState : stateName] ?? 0.6;
+    const wGoal = life ? lookWeight * (1 - smoothstep(30 * DEG, 90 * DEG, clipAngle)) * behind : 0;
     look.w += (wGoal - look.w) * (1 - Math.exp(-dt * 2.5));
     const lim = lookSplit({ yaw: dy, pitch: dp, headJoint }); // clamp first …
     const cy = (lim.neck.yaw + lim.head.yaw) * look.w;
@@ -2121,10 +2182,11 @@ export async function createAvatar3D(container, opts = {}) {
 
   // One frame of animation + procedural layers + camera (no render). `mixerDt` 0
   // holds the clip still while the layers settle (debug.poseAt).
-  function step(dt, now, mixerDt) {
+  function step(dt, now, mixerDt, simulate = false) {
     const t = now / 1000;
     // speaking: smooth the level, layer the talking clip over the base state
     speaking += (speakingTarget - speaking) * Math.min(1, dt * 12);
+    passives.tick(mixerDt, passiveContext(simulate));
     if (talkAction && stateName !== 'talking' && stateName !== 'sleep') {
       const goal = !reducedMotion && !reactions?.active && speaking > 0.04 ? Math.min(0.95, 0.4 + speaking) : 0;
       talkWeight += (goal - talkWeight) * Math.min(1, dt * 4);
@@ -2167,10 +2229,12 @@ export async function createAvatar3D(container, opts = {}) {
   // ── lifecycle ────────────────────────────────────────────────────────────
   // One rule for the render loop: it runs only while the page is visible, the
   // GL context is live, and the caller hasn't parked the view (setPaused).
-  function syncPaused() {
+  function syncPaused({ simulate = false } = {}) {
+    const wasPaused = paused;
     paused = (typeof document !== 'undefined' && document.hidden) || contextLost || userPaused;
+    if (!simulate && wasPaused !== paused) passives?.cancel();
     if (controls) controls.enabled = !paused;
-    if (paused) {
+    if (paused && !simulate) {
       if (ready && orbitDragging) { absorbCameraInput(); notifyView(); }
       gesture.cancel(); orbitDragging = false;
     }
@@ -2193,6 +2257,7 @@ export async function createAvatar3D(container, opts = {}) {
     gesture.down(e.pointerId, e.clientX, e.clientY, performance.now());
     canvas.setPointerCapture?.(e.pointerId);
     orbitDragging = true;
+    passives.cancel();
   };
   onViewPointerMove = (e) => {
     if (disposed || paused) return;
@@ -2208,7 +2273,7 @@ export async function createAvatar3D(container, opts = {}) {
   };
   onViewPointerUp = (e) => {
     const tap = gesture.up(e.pointerId, e.clientX, e.clientY, performance.now());
-    orbitDragging = false;
+    orbitDragging = gesture.active;
     if (!disposed) { absorbCameraInput(); notifyView(); }
     if (!tap || disposed || paused) return;
     const rect = canvas.getBoundingClientRect();
@@ -2221,9 +2286,10 @@ export async function createAvatar3D(container, opts = {}) {
     raycaster.setFromCamera({ x: 2 * (tap.x - rect.left) / rect.width - 1, y: 1 - 2 * (tap.y - rect.top) / rect.height }, camera);
     if (raycaster.intersectObjects(skinned, false).length) react();
   };
-  onViewPointerCancel = (e) => { gesture.cancel(e.pointerId); orbitDragging = false; settleView(); };
+  onViewPointerCancel = (e) => { gesture.cancel(e.pointerId); orbitDragging = gesture.active; settleView(); };
   onMotionPref = () => {
     reducedMotion = opts.reducedMotion === true || Boolean(motionMq?.matches);
+    passives.cancel();
     if (reducedMotion) reactions?.finish();
   };
   document.addEventListener('visibilitychange', onVisibility);
@@ -2260,6 +2326,7 @@ export async function createAvatar3D(container, opts = {}) {
     stop();
     clearTimeout(viewNotifyTimer);
     reactions?.cancel();
+    passives?.cancel({ restore: false });
     if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);
     if (onLost) canvas.removeEventListener('webglcontextlost', onLost);
     if (onRestored) canvas.removeEventListener('webglcontextrestored', onRestored);
@@ -2280,7 +2347,6 @@ export async function createAvatar3D(container, opts = {}) {
     timer.dispose?.();
     if (mixer) {
       mixer.removeEventListener('finished', onFinished);
-      mixer.removeEventListener('loop', onLoop);
       mixer.stopAllAction(); mixer.uncacheRoot(root);
     }
     disposeObject(root); // outline meshes live in the model tree (shared geometry: a second dispose is a no-op)
@@ -2320,7 +2386,10 @@ export async function createAvatar3D(container, opts = {}) {
       if (disposed) return;
       const v = Number(level);
       speakingTarget = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
-      if (speakingTarget > 0.04) reactions.finish();
+      if (speakingTarget > 0.04) {
+        reactions.finish();
+        if (passives.active) passives.cancel();
+      }
     },
     setFraming(f) { framing = f === 'full' ? 'full' : 'upper'; if (root) frame(); },
     /** Distance multiplier: below 1 zooms in, above 1 zooms out. */
@@ -2383,6 +2452,8 @@ export async function createAvatar3D(container, opts = {}) {
           state: sm.state, source: sm.source, pending: sm.pending, mood: sm.mood, clip: current?.action?.getClip().name, fidget: Boolean(current?.fidget),
           lookW: look.w, lookYaw: look.yaw, lookPitch: look.pitch, faceYaw: Math.atan2(f.x, f.z), facePitch: Math.asin(Math.max(-1, Math.min(1, f.y))),
           armW, pushIn, talkPresence, talkWeight, mouthOpen, mouthMode, reaction: reactions.active, reactionCount: reactions.count,
+          passive: { active: passives.active, last: passives.last, count: passives.count, remainingMs: passives.remainingMs,
+            available: [...fidgetActions.keys()] },
           nods: nods.length, blink: blinkIdx >= 0 ? skinned.find((m) => m.morphTargetInfluences)?.morphTargetInfluences[blinkIdx] ?? 0 : null,
           lid, drift: drift.toArray(), swayAmp: shared.uSwayAmp.value, sway: shared.uSway.value.toArray(), shadowA, shadowVisible: Boolean(shadowMesh?.visible),
           fov: camera.fov, cam: camera.position.toArray(), target: viewTarget.toArray(), reducedMotion, outlines: outlinesOn, headJoint,
@@ -2420,8 +2491,8 @@ export async function createAvatar3D(container, opts = {}) {
         return { ...api.debug.probe(), eyePx: px(eye), headTopPx: px(top), clipDur: a.getClip().duration };
       },
       guard: GUARD,
-      /** Play an idle fidget now (normally 35 % after a full idle cycle); returns its name. */
-      fidget() { if (stateName === 'idle') playFidget(); return current?.fidget ? lastFidget : null; },
+      /** Start a passive gesture now, with the same priority guards as its timer. */
+      fidget() { passives.trigger(passiveContext()); return passives.active; },
       /** Pose the current clip at `t` seconds, alone at full weight (comparable stills). */
       seek(t) {
         if (!current?.action) return;
@@ -2434,14 +2505,14 @@ export async function createAvatar3D(container, opts = {}) {
        *  real time (deterministic motion tests), then render once. `speaking` is a level
        *  or (t) => level. The render loop is parked while it runs. */
       run(seconds, { dt = 1 / 30, speaking = null } = {}) {
-        userPaused = true; syncPaused();
+        userPaused = true; syncPaused({ simulate: true });
         simClock = Math.max(simClock, performance.now() / 1000); // blinks/fidgets/saccades are scheduled on real time
         const n = Math.max(1, Math.round((Number(seconds) || 0) / dt));
         for (let i = 0; i < n; i++) {
           simClock += dt;
           if (speaking !== null) speakingTarget = typeof speaking === 'function' ? clamp(Number(speaking(simClock)) || 0, 0, 1) : clamp(Number(speaking) || 0, 0, 1);
           sm.tick();
-          step(dt, simClock * 1000, dt);
+          step(dt, simClock * 1000, dt, true);
         }
         camera.updateMatrixWorld();
         renderer.render(scene, camera);

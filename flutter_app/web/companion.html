@@ -15,7 +15,7 @@
   <title>Klukai — Companion</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
-  <link rel="stylesheet" href="companion/companion.css?v=4d533928c458">
+  <link rel="stylesheet" href="companion/companion.css?v=2c01d8c526d0">
 </head>
 <body>
   <main id="stage" class="stage" data-mode="portrait">
@@ -63,6 +63,7 @@
     </dialog>
 
     <footer class="dock">
+      <p class="subtitle" id="subtitle" aria-live="polite"></p>
       <div id="camera-controls" class="camera-controls" role="group" aria-label="3D view controls" hidden>
         <div class="camera-buttons">
           <button class="btn" id="btn-rotate-left" type="button" aria-label="Rotate left" title="Rotate left">↶</button>
@@ -73,12 +74,11 @@
         </div>
         <div class="camera-buttons character-buttons">
           <button class="btn" id="btn-move-up" type="button" aria-label="Move Klukai up" title="Move Klukai up">↑</button>
-          <button class="btn" id="btn-react" type="button" title="A salute, nod or smile">Interact</button>
+          <button class="btn" id="btn-react" type="button" title="Tap for a character reaction">Interact</button>
           <button class="btn" id="btn-move-down" type="button" aria-label="Move Klukai down" title="Move Klukai down">↓</button>
         </div>
         <p class="camera-hint">Drag ↔ to turn · Drag ↕ to position<br>Tap her to react · Pinch or scroll to zoom</p>
       </div>
-      <p class="subtitle" id="subtitle" aria-live="polite"></p>
       <form class="composer" id="composer" autocomplete="off">
         <input id="input" type="text" enterkeyhint="send" maxlength="4000"
                placeholder="Talk to her…" aria-label="Message Klukai">
@@ -94,6 +94,6 @@
   </main>
 
   <noscript>The companion view needs JavaScript.</noscript>
-  <script type="module" src="companion/app.js?v=2b40b27bec49"></script>
+  <script type="module" src="companion/app.js?v=088776f4eb49"></script>
 </body>
 </html>

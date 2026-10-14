@@ -261,7 +261,7 @@ function boot() {
   let requestedAppearance = prefs.appearance || "default";
   const appearances = createAppearanceSwitcher({
     async build(id, signal) {
-      const { createAvatar3D } = await import("./avatar3d.js?v=0453d86fa728");
+      const { createAvatar3D } = await import("./avatar3d.js?v=7493a8326661");
       const host = document.createElement("div");
       host.className = "model-view";
       host.style.visibility = "hidden";
@@ -464,7 +464,7 @@ function boot() {
   // parallel with the socket and the tap-to-begin, so it's ready on wake.
   if (prefs.mode === "model") {
     const modelKey = prefs.appearance || "default";
-    import("./avatar3d.js?v=0453d86fa728").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
+    import("./avatar3d.js?v=7493a8326661").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
   }
   socket.start();
   refreshAppearances();

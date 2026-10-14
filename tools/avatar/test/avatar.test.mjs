@@ -218,7 +218,7 @@ test('camera framing with insets fits the design crop into the visible band', ()
   const full = cameraFraming({ framing: 'full', aspect, insets: { top, bottom } });
   assert.ok(yAt(full, 1 - bottom - 0.05) < 0.0, 'feet clear of the dock');
   assert.ok(yAt(full, top) > 1.54, 'cap clear of the topbar');
-  // absurd insets are clamped: the band never goes below 40 % of the canvas
+  // Overlapping insets retain a finite projection instead of dividing by zero.
   const tiny = cameraFraming({ framing: 'upper', aspect, headY, insets: { top: 0.6, bottom: 0.6 } });
   assert.ok(Number.isFinite(tiny.dist) && tiny.dist > 0);
 });

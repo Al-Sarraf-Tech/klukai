@@ -11,6 +11,37 @@ function view() {
   return avatar.createCameraView();
 }
 
+test('short landscape framing keeps the full avatar above a dock occupying over half the screen', () => {
+  const width = 568, height = 320, top = 48, bottom = 181.4;
+  const placement = avatar.cameraFraming({ framing: 'full', aspect: width / height,
+    insets: { top: top / height, bottom: bottom / height } });
+  const camera = new PerspectiveCamera(placement.fov, width / height, 0.05, 30);
+  camera.position.set(0, placement.camY, placement.dist);
+  camera.lookAt(0, placement.targetY, 0);
+  camera.updateMatrixWorld();
+  const screenY = (y) => (1 - new Vector3(0, y, 0).project(camera).y) * height / 2;
+  assert.ok(screenY(1.54) >= top, 'cap clears the actual topbar');
+  assert.ok(screenY(0) < height - bottom - 8, `feet at ${screenY(0)} must clear dock at ${height - bottom}`);
+  assert.ok(screenY(0) - screenY(1.54) > 45, 'the usable band still shows a legible full body');
+});
+
+test('overlapping or invalid camera insets still produce a finite usable projection', () => {
+  for (const insets of [{ top: 0.9, bottom: 0.9 }, { top: 100, bottom: 100 }, { top: Infinity, bottom: NaN }]) {
+    const f = avatar.cameraFraming({ framing: 'full', aspect: 568 / 320, insets });
+    assert.ok([f.camY, f.targetY, f.dist].every(Number.isFinite));
+    assert.ok(f.dist > 0 && f.dist < 30, 'minimum usable band keeps the avatar within the renderer far plane');
+    const camera = new PerspectiveCamera(f.fov, 568 / 320, 0.05, 30);
+    const target = new Vector3(0, f.targetY, 0);
+    const offset = new Vector3(0, f.camY - f.targetY, f.dist);
+    const spherical = new Spherical().setFromVector3(offset);
+    const placed = avatar.createCameraView({ zoom: 1.8 }).place(spherical);
+    camera.position.copy(target).add(offset.setFromSpherical(spherical.set(placed.radius, placed.phi, placed.theta)));
+    camera.lookAt(target); camera.updateMatrixWorld();
+    const body = new Vector3(0, 0.8, 0).project(camera);
+    assert.ok(body.z > -1 && body.z < 1, 'even maximum user zoom keeps the body inside the near/far clipping planes');
+  }
+});
+
 test('camera buttons retain zoom limits while rotating past the back of the avatar', () => {
   const camera = view();
   camera.zoomBy(0.8);

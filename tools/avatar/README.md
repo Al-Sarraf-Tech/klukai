@@ -46,6 +46,8 @@ node build.mjs --debug     # every OBJ group, PNG, no compression (+ island JSON
 npm test                   # node --test (pure parts; needs no assets)
 python3 shot.py            # screenshots → assets/build/shots/
 python3 camera_e2e.py      # desktop + phone gestures/buttons, local API fixtures only
+python3 presence_e2e.py    # model tap filtering and real Web Audio mouth/hand movement
+python3 motion_e2e.py      # seven reactions and automatic passive motion/priority guards
 python3 perf.py            # load time / FPS / draw calls / texture MB (SwiftShader, --throttle 4)
 python3 debug/views.py OUT # 12-angle inspection sheet of the live viewer on a contrasting backdrop
 node vendor.mjs            # rebuild vendor/three-avatar.min.js (tree-shaken three subset)
@@ -231,9 +233,16 @@ av.setFraming('full'); av.resize(); av.dispose();
 - **Motion** (all after `mixer.update`, in world space, so bone axes don't
   matter):
   - 0.45 s crossfades with idle as the base loop; one-shot states (`greet` =
-    salute) settle back to idle. Idle starts at a random point, and after a
-    full idle cycle a short fidget sub-clip sometimes plays (never the same
-    twice in a row).
+    salute) settle back to idle. Idle starts at a random point. After 12–24
+    seconds of uninterrupted idle, one of five short passive gestures plays:
+    acknowledgment, pleased movement, thoughtful glance, weight shift, or
+    ready-posture adjustment. Consecutive gestures never repeat. Speech,
+    thinking, sleep, interaction, camera gestures, and a hidden/paused viewer
+    interrupt them and restart the quiet interval.
+  - Tapping her model or choosing **Interact** cycles seven temporary reactions:
+    salute, acknowledgment, pleased, thoughtful, dismissive, bashful, and
+    playful. Speech takes priority, and the current mood resumes afterwards.
+    A cooldown and gesture filtering prevent drags and pinches from reacting.
   - Mood changes hold for 4 s unless the new mood is strong, so a chatty
     backend doesn't make her flap. `setState()` is always immediate, and a
     state set that way (thinking, greet) is left at once by `setMood()`.
@@ -261,10 +270,11 @@ av.setFraming('full'); av.resize(); av.dispose();
   slow follow of her hips. `setInsets()` frames her in the band the stage's
   top bar and dock leave clear. Drag to rotate freely through **360°**, with
   no horizontal stops; scroll or pinch to zoom between 0.6× and 1.8× the framed
-  camera distance. The stage also has rotate, zoom and **Reset view** buttons. The
-  chosen angle and zoom stay in place through animation, resize and temporary
-  portrait mode; Reset returns to the stage's full-body framing. Panning is
-  disabled and the small vertical tilt range is retained. A soft contact-shadow
+  camera distance. Vertical dragging adjusts her height without camera tilt;
+  the stage also has rotate, zoom, up/down, **Interact**, and **Reset view**
+  buttons below the subtitle. The chosen angle, zoom, and height survive
+  animation, resize, portrait/appearance changes, and reloads; Reset returns
+  to the stage's full-body framing. A soft contact-shadow
   blob grounds her in full framing and `sleep` (no shadow maps).
 - **iOS and robustness:**
   - MSAA is on everywhere, iOS included (Apple GPUs resolve it on-tile; thin
