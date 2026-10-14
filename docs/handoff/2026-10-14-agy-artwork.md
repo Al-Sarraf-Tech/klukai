@@ -12,6 +12,9 @@ existing pinned Antigravity CLI 1.3.5. No new package or paid API is installed.
 Sign in through `agy` if needed; `agy models` should list
 `gemini-3.8-flash-medium`.
 
+The host shortcut `klukai-art-review` invokes the same script from the main
+checkout. Its six-image preview was verified after installation.
+
 Prepare a manifest from selected local wardrobe renders (one to six):
 
 ```sh
@@ -145,3 +148,15 @@ and `~/git/localai/docs/gemini-fleet.md` for fleet use and supported account set
 - [Custom agents](https://www.antigravity.google/docs/subagents/)
 - [Lifecycle hooks](https://www.antigravity.google/docs/hooks)
 - [Google's old consumer CLI retirement notice](https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals)
+
+## Completion checks
+
+Implementation commit `ca6f652` was fast-forwarded into the original main
+checkout. The merged tree passed all 46 tests in `ops/amarillo/tests`; the
+independent review closed with no unresolved material findings. The six-image
+preview also passed through the installed host command.
+
+Final fleet status publication `6553fdd6cc1b` was sent to all 19 peer feeds via
+`bus pub` under project `klukai`, topic `klukai.gemini.status`. This proves durable
+publication, not that every agent has read it. An earlier progress publication
+was `e6f463c279a9`.

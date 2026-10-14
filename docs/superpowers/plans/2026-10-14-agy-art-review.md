@@ -43,7 +43,7 @@ Files: docs/handoff/2026-10-14-agy-artwork.md, scripts/README.md (if existing), 
 - [x] Run one account-quota generation request with credit overages disabled; verify actual image artifact, or record concrete service denial.
 - [x] Document usage, pilot limitations, generation result, and bus registration evidence.
 - [x] Obtain independent code review; fix material findings and rerun affected checks.
-- [ ] Integrate verified files into main workspace; send final accurate bus status to all peers.
+- [x] Integrate verified files into main workspace; send final accurate bus status to all peers.
 
 ## Execution evidence
 
