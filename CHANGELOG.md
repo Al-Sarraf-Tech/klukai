@@ -30,6 +30,8 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- Restore the web markdown/canvas bridge initialization and cache-bust its script;
+  browser acceptance and two regression tests cover the startup syntax error.
 - Preserve upstream voice response metadata and stop stale/cancelled speech.
 - Correct interactive tool-synthesis and voice-job type annotations.
 - Use static SQL for job claims and promise filters without interpolating query
