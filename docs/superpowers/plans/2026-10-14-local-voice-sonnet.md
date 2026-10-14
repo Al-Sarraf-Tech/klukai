@@ -62,7 +62,7 @@ models and focused tests. Environment: `KLUKAI_CLAUDE_PRIMARY=true` and
 
 - [x] Review code and run combined relevant suites, then fix findings.
 - [x] Snapshot current image/env/web metadata and build core plus Flutter.
-- [ ] Install local voice unit, verify health and core network access.
-- [ ] Deploy core and web with the authorized API key and local voice settings.
-- [ ] Run bounded live chat and voice checks, verify unload and Granite continuity.
-- [ ] Record evidence/rollback, commit, fast-forward main, sync to Amarillo server.
+- [x] Install local voice unit, verify health and core network access.
+- [x] Deploy core and web with the authorized API key and local voice settings.
+- [x] Run bounded live chat and voice checks, verify unload and Granite continuity.
+- [x] Record evidence/rollback, commit, fast-forward main, sync to Amarillo server.
