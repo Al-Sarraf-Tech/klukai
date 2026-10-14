@@ -48,3 +48,16 @@ conditioning clips. Dominus XTTS retains its separately pinned
 `klukai_reference.wav` artifact. The Amarillo Arc release uses its own pinned
 excerpt and adoption record under `ops/amarillo/voice_xpu`; do not change the
 Dominus lock to deploy that release.
+
+## Gemini artwork review
+
+The owner authorized advisory artwork review through the existing Agy Google
+account, plus a one-off generation capability test. Use
+`scripts/gemini_art_review.py` and read
+`docs/handoff/2026-10-14-agy-artwork.md` for the isolated account runtime and
+pilot evidence. Preview is the default; cloud review requires explicit selected
+images. Never route this through the retired Gemini CLI MCP. Paid-credit
+fallback stays disabled. Production images remain local ComfyUI with zero
+cloud allowances; the successful one-off generation test does not enable an
+automatic cloud provider. Gemini has durable bus membership, with no unattended
+model worker.
