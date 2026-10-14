@@ -9,8 +9,12 @@ transcription keeps its separate Dominus endpoint.
 
 Klukai **v1.1.0** prepares opt-in OpenAI scene images and Anthropic dream/Her POV
 writing. Checked-in defaults remain `comfyui` and `local`, with zero daily and
-monthly creative attempt allowances. Publication does not activate those paths
-or extend the existing interactive-chat spending authorization. Consult the
+monthly creative attempt allowances. After publication, the owner authorized
+the existing Claude key for creative writing: production now sets the text
+provider to `anthropic`, with both daily and monthly attempt limits at `12`.
+This permits 12 total monthly attempts shared across all users and creative
+text paths. Pictures remain local ComfyUI, and cloud image limits remain zero.
+Consult the
 [provider handoff](../../docs/handoff/2026-10-14-dream-image-preparation.md) before
 changing them; the [local GPU configuration](../../README.md#use-local-gpus)
 documents how to keep inference local.

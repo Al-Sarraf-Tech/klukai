@@ -39,6 +39,18 @@ key, Sonnet 5.5, adaptive thinking and medium effort:
 - The ledger retained both attempts and their usage after recreation, leaving
   ten attempts in October's initial allowance at verification time.
 
+After Dominus became available, a public HTTPS Her POV E2E run passed all seven
+checks: health, anonymous rejection, forged-token rejection, authenticated
+reads, full picture generation, cross-user job isolation and archive persistence.
+The designated `claude` test account reached queued → thinking → drawing → done
+in 30.8 seconds using Claude scene writing and local ComfyUI. The generated
+832×1216 WebP was saved to that account's album and visually inspected; the GPU
+lease was inactive afterward. This consumed one additional text attempt. It
+does not constitute a cloud image comparison or prove that paid image APIs work.
+Authenticated public image and thumbnail downloads also returned valid WebP
+files (200); anonymous access returned 401 and another user's token returned
+404. The full-size download matched the saved image bytes exactly.
+
 No private conversation history or reference image was used by these checks.
 Claude writes scene descriptions; ComfyUI still renders pictures and requires
 Dominus to be available. A scene-writing attempt can be consumed even if the

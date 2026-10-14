@@ -21,10 +21,12 @@ adaptive thinking, with Dominus as the local secondary. English speech uses the
 local Intel Arc XTTS service through core's submit/poll/cancel TTS jobs. Speech
 transcription remains on its separate Dominus endpoint.
 
-Scene pictures and dream/Her POV writing default to local providers. The v1.1.0
-OpenAI image and Anthropic creative-text adapters are prepared but disabled,
-with zero attempt allowances until separately authorized. Dream entries remain
-text-only; animated live portraits retain their local masked-image pipeline.
+Scene pictures and dream/Her POV writing default to local providers. Production
+now uses the existing Claude API key for dream/Her POV writing, initially capped
+at 12 attempts per UTC month across all users. Pictures still render through
+Dominus ComfyUI; the prepared OpenAI image adapter has zero allowance and remains
+disabled. Dream entries remain text-only; animated live portraits retain their
+local masked-image pipeline.
 The app requires no API key or provider-specific build to switch core between
 authorized modes. See the [provider policy and local GPU setup](../README.md#provider-policy)
 and [creative-provider handoff](../docs/handoff/2026-10-14-dream-image-preparation.md).
