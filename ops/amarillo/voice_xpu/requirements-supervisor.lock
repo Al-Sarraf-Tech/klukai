@@ -1,0 +1,9 @@
+# Observed system site packages on Amarillo 2026-10-14, PYTHONNOUSERSITE=1.
+# Python 3.14.8
+anyio==4.13.0
+fastapi==0.136.3
+h11==0.16.0
+pydantic==2.12.5
+starlette==0.52.1
+typing_extensions==4.16.0
+uvicorn==0.40.0

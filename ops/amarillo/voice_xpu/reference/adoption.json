@@ -1,0 +1,42 @@
+{
+  "adopted_on": "2026-10-14",
+  "authority": "Owner requested production adoption after the local Intel Arc XTTS test.",
+  "scope": "Amarillo local XTTS only; original Dominus voice reference and immutable release lock are unchanged.",
+  "source": {
+    "url": "https://www.youtube.com/watch?v=3tJ1ZE11J34",
+    "title": "Klukai Voice Line [Girls' Frontline 2: Exilium]",
+    "uploader": "HollowMelody",
+    "baseline_path": "docker/voice/reference/baseline/3tJ1ZE11J34.wav",
+    "baseline_sha256": "d46080443c6d4815988310176fadbe342f4e25ed8a335b0b28bfdb405a1ce956"
+  },
+  "selection": {
+    "start_seconds": 6.536,
+    "end_seconds": 13.402,
+    "description": "First two speech passages at silence boundaries; no denoising, normalization, or pitch shift."
+  },
+  "reference": {
+    "path": "reference/selected-reference.wav",
+    "sha256": "dd5ef9d6776285742bc6c7f881171063445c2502bb1d51c3d3b2289fc321ebcf",
+    "size_bytes": 302834,
+    "sample_rate": 22050,
+    "channels": 1,
+    "sample_width_bytes": 2,
+    "frames": 151395,
+    "duration_seconds": 6.865986394557823
+  },
+  "experiment": {
+    "report_sha256": "096499ea5cc93bceac5224a06cf9b93e2518c714aaec211104d607a5897fc8d4",
+    "script_sha256": "4412cfc339fdbbf4f2d617aa64624622d555479b78126913ea148c40183faef2",
+    "runtime_sha256": "3fc8eb8bf7a0d6bb0706951ae66fab9935a768537d725e71ae785ccc3ba28362",
+    "versions": {
+      "TTS": "0.22.0",
+      "torch": "2.8.0+xpu",
+      "torchaudio": "2.8.0+xpu",
+      "transformers": "4.45.2"
+    },
+    "observed_selected_reference_inference_seconds": 32.572,
+    "observed_output_seconds": 6.08,
+    "observed_cpu_checkpoint_load_seconds": 20.442,
+    "note": "Selected reference was synthesized second; this is not a cold-latency guarantee."
+  }
+}

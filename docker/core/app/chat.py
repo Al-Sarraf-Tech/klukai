@@ -57,7 +57,7 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
     clears the client's "Listening..." indicator; a proactive toast leaves it
     spinning.
     """
-    from .voice_client import voice_url
+    from .voice_client import stt_url
 
     try:
         async with httpx.AsyncClient(
@@ -66,7 +66,7 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
             await ws.send_thinking(user_id, "Listening...")
             try:
                 from .helpers import voice_auth_headers
-                r = await client.post(f"{voice_url()}/stt", json={"audio": audio_b64}, headers=voice_auth_headers())
+                r = await client.post(f"{stt_url()}/stt", json={"audio": audio_b64}, headers=voice_auth_headers())
                 r.raise_for_status()
                 transcript = r.json().get("text", "")
             except Exception as stt_err:
@@ -102,9 +102,9 @@ async def _handle_voice(audio_b64: str, session: SessionState, user_id: str = "d
                 return
 
             try:
-                from .voice_client import post_leased_tts
+                from .voice_client import post_leased_tts, tts_timeout
 
-                r = await post_leased_tts(client, {"text": speech}, timeout=30.0)
+                r = await post_leased_tts(client, {"text": speech}, timeout=tts_timeout(30.0))
                 if r.status_code == 200:
                     import base64
                     audio_out = base64.b64encode(r.content).decode()

@@ -44,6 +44,69 @@ test("api calls carry the bearer token and decode JSON", async () => {
   assert.deepEqual(JSON.parse(f.calls[1].init.body), { text: "Report.", language: "en" });
 });
 
+test("tts follows a queued job until its audio is ready", async () => {
+  const f = fakeFetch([
+    { status: 202, body: { job_id: "voice-1", status: "queued" } },
+    { status: 200, body: { job_id: "voice-1", status: "running" } },
+    { status: 200, body: { job_id: "voice-1", status: "completed", audio: "wav" } },
+    { status: 200, body: { job_id: "voice-1", status: "completed" } },
+  ]);
+  const api = createApi({ token: "t", fetchImpl: f.impl, voicePollMs: 1 });
+  assert.equal((await api.tts("All of this sentence.")).audio, "wav");
+  assert.deepEqual(f.calls.map((c) => c.url), ["/api/tts", "/api/tts/jobs/voice-1", "/api/tts/jobs/voice-1", "/api/tts/jobs/voice-1"]);
+});
+
+test("aborting queued speech deletes it with a fresh signal", async () => {
+  const controller = new AbortController();
+  const calls = [];
+  let polled;
+  const started = new Promise((resolve) => { polled = resolve; });
+  const api = createApi({ token: "t", voicePollMs: 1, fetchImpl: async (url, init) => {
+    calls.push({ url, init });
+    if (init.method === "POST") return { status: 202, ok: true, json: async () => ({ job_id: "cancel-me", status: "queued" }) };
+    if (init.method === "DELETE") return { status: 200, ok: true, json: async () => ({ status: "cancelled" }) };
+    polled();
+    return new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+  } });
+  const pending = api.tts("Cancel this.", { signal: controller.signal });
+  await started;
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  const deletion = calls.find((c) => c.init.method === "DELETE");
+  assert.equal(deletion.url, "/api/tts/jobs/cancel-me");
+  assert.notEqual(deletion.init.signal, controller.signal);
+  assert.equal(deletion.init.signal?.aborted, false);
+});
+
+test("tts surfaces terminal job failure without expiring the session", async () => {
+  const f = fakeFetch([
+    { status: 202, body: { job_id: "failed", status: "queued" } },
+    { status: 200, body: { job_id: "failed", status: "failed", error: "Voice service unavailable" } },
+    { status: 200, body: { status: "failed" } },
+  ]);
+  const api = createApi({ token: "t", fetchImpl: f.impl, voicePollMs: 1 });
+  await assert.rejects(api.tts("Hello."), /Voice service unavailable/);
+});
+
+test("a stalled voice poll is aborted by the overall deadline and its job is cancelled", async () => {
+  let pollAborted = false;
+  let deleted = false;
+  const api = createApi({ token: "t", voicePollMs: 1, voiceDeadlineMs: 30, fetchImpl: async (_url, init) => {
+    if (init.method === "POST") return { status: 202, ok: true, json: async () => ({ job_id: "stalled", status: "queued" }) };
+    if (init.method === "DELETE") {
+      deleted = true;
+      return { status: 200, ok: true, json: async () => ({ status: "cancelled" }) };
+    }
+    return new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => {
+      pollAborted = true;
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true }));
+  } });
+  await assert.rejects(api.tts("Do not hang."), /timed out/);
+  assert.equal(pollAborted, true);
+  assert.equal(deleted, true);
+});
+
 test("401 fires onAuthExpired once; other errors carry the status", async () => {
   let n = 0;
   const f = fakeFetch([{ status: 401 }, { status: 401 }, { status: 503 }]);
@@ -157,7 +220,7 @@ test("TTS forwards cancellation without changing authentication or language", as
   const f = fakeFetch([{ status: 200, body: { audio: "x" } }]);
   const api = createApi({ token: "test", fetchImpl: f.impl });
   await api.tts("Hello.", { signal: controller.signal });
-  assert.equal(f.calls[0].init.signal, controller.signal);
+  assert.equal(f.calls[0].init.signal.aborted, false);
   assert.equal(f.calls[0].init.headers.Authorization, "Bearer test");
   assert.deepEqual(JSON.parse(f.calls[0].init.body), { text: "Hello.", language: "en" });
 });

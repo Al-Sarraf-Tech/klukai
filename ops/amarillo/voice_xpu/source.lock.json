@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "release": "amarillo-xtts-xpu-2026-10-14",
+  "files": [
+    {
+      "path": "__init__.py",
+      "size_bytes": 64,
+      "sha256": "044137e005b07574f4380b497d1cf32f76a873f20023a7a05ec506e14eba15a6"
+    },
+    {
+      "path": "artifacts.lock.json",
+      "size_bytes": 7214,
+      "sha256": "10e427536093e1629000d76fc9940aa1f8652edfcdb0499a737c0d30daae9317"
+    },
+    {
+      "path": "artifacts.py",
+      "size_bytes": 1320,
+      "sha256": "ea96618bdb9c9a9195c0ace4af6c5e7b694cd5307d4c3b2b7bdae4f5e2d21787"
+    },
+    {
+      "path": "launch.py",
+      "size_bytes": 2198,
+      "sha256": "00b5fe9e87ee38b6d203c202d983ebe3717cf3e751255fde658f0552e0d29ce7"
+    },
+    {
+      "path": "reference/adoption.json",
+      "size_bytes": 1758,
+      "sha256": "fedb5ff9064389fa5c92c18eae4609d295dea8d71433ee94fb9e4e6389f17847"
+    },
+    {
+      "path": "requirements-supervisor.lock",
+      "size_bytes": 212,
+      "sha256": "e53d13b2c01d9cb5622a8db7fdd15e245d8ddfd48050b2865fc69df803b0d516"
+    },
+    {
+      "path": "requirements-worker.lock",
+      "size_bytes": 3060,
+      "sha256": "b6dfe8460622d6eb9027e912d90a66053c7e4128fb0e0c6d2744308f2be96c55"
+    },
+    {
+      "path": "server.py",
+      "size_bytes": 13252,
+      "sha256": "cd4b1d327dbac2f12aa0ee1c3efee7b6b4e19504b2ae94dbb3c1e428cc97ee00"
+    },
+    {
+      "path": "worker.py",
+      "size_bytes": 6707,
+      "sha256": "802e3d26419c0eb89c1f453289b1efc43dca49fb1dfd5725c71995df72fe8604"
+    }
+  ]
+}

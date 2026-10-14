@@ -7,7 +7,7 @@ helpers (``get_voice_note``, ``latest_voice_note``, ``mark_played``).
 
 Design:
 - Audio bytes are produced through ``post_leased_tts``, exactly as the chat WS
-  path and ``/api/tts`` do. It holds the shared LM gate plus a remote
+  path and ``/api/tts`` do. Dominus holds the shared LM gate plus a remote
   ``companion-voice`` GPU lease and sends both voice auth and lease capability.
   The request shape mirrors ``/api/tts``: ``{"text": ..., "language": ...}``.
   Her VOICE is Japanese (the Ai Nonaka reference clip); her TEXT is English.
@@ -91,15 +91,15 @@ async def save_voice_note(
 
     # 1. Synthesize via the voice service (mirror /api/tts request shape).
     try:
-        from .voice_client import post_leased_tts
+        from .voice_client import post_leased_tts, tts_timeout
 
         async with httpx.AsyncClient(
-            timeout=60.0, trust_env=False, follow_redirects=False
+            timeout=tts_timeout(), trust_env=False, follow_redirects=False
         ) as client:
             r = await post_leased_tts(
                 client,
                 {"text": speech, "language": language},
-                timeout=60.0,
+                timeout=tts_timeout(),
             )
         if r.status_code != 200:
             logger.warning(

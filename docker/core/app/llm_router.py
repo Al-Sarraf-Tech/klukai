@@ -1,4 +1,8 @@
-"""LLM routing: local RTX 3090 only. No cloud fallback — ever."""
+"""Opt-in Sonnet primary for interactive chat, with Dominus as secondary.
+
+Background work stays local. The billable API path requires both the explicit
+deployment flag and an API key; a key alone never enables it.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 
+from .anthropic_messages import completion_message, local_messages, messages_payload, tool_definitions
 from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
 from .models import LLMConfig, SessionState
 
@@ -62,8 +67,16 @@ LOCAL_TOOLS = LOCAL_AGENT                                               # Same a
 # whole reason Venice was chosen in the first place. See
 # ~/.claude/plans/klukai-handoff-node.md for the full research trail.
 LOCAL_CASUAL_GAMING = "huihui-gemma-4-26b-a4b-abliterated"
-# Cloud fallback is intentionally absent. Owner policy: all inference stays
-# on the local RTX 3090. ANTHROPIC_API_KEY is ignored if present.
+# Owner authorized the billable API primary on 2026-10-14. Local background
+# inference, gaming guards and model residency rules remain unchanged.
+CLAUDE_PRIMARY = "claude-sonnet-5-5"
+ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+_ANTHROPIC_MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+def claude_primary_configured() -> bool:
+    return (os.environ.get("KLUKAI_CLAUDE_PRIMARY", "false").lower() == "true"
+            and bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()))
 
 # How long a cached game-active read is trusted before re-checking /health.
 # Short enough that switching in/out of gaming mode is noticed within a
@@ -121,8 +134,8 @@ class LLMStreamFailed(Exception):
     Raised instead of yielding a sentinel so callers never see a partial
     answer silently concatenated with a second full response — and so the
     sentinel prefix check can't be defeated by leading partial tokens.
-    Failures before the first token degrade in-band to FAILURE_SENTINEL only
-    (never a cloud model).
+    Failures before the first token can use the local secondary; if no backend
+    can answer, the caller receives FAILURE_SENTINEL only.
     """
 
 
@@ -136,10 +149,13 @@ AGENT_SIGNALS = [
 
 
 class LLMRouter:
-    """Routes requests to local LM Studio only. Cloud is not an option."""
+    """Routes opted-in interactive requests to Sonnet, then to Dominus."""
 
     def __init__(self) -> None:
         self._http: httpx.AsyncClient | None = None
+        self._anthropic_http: httpx.AsyncClient | None = None
+        self._anthropic_gate = asyncio.Semaphore(2)
+        self._anthropic_retry_at = 0.0
         self._lmstudio_available: bool | None = None
         self._lmstudio_last_check: float = 0.0
         self._game_active: bool = False
@@ -148,13 +164,27 @@ class LLMRouter:
     async def init(self) -> None:
         headers = _lm_headers()
         self._http = httpx.AsyncClient(timeout=60.0, headers=headers if headers else None)
-        # Deliberately never constructs an Anthropic client, even if
-        # ANTHROPIC_API_KEY is set in the environment.
+        enabled = os.environ.get("KLUKAI_CLAUDE_PRIMARY", "false").lower() == "true"
+        key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if claude_primary_configured():
+            # Separate clients prevent the local bearer token and API key from
+            # crossing provider boundaries. Never inherit endpoint/proxy overrides.
+            self._anthropic_http = httpx.AsyncClient(
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                timeout=httpx.Timeout(90.0, connect=5.0), trust_env=False,
+            )
+        elif enabled:
+            logger.warning("Sonnet primary enabled without an API key; using Dominus")
         await self._check_lmstudio()
 
     async def close(self) -> None:
         if self._http:
             await self._http.aclose()
+        if self._anthropic_http:
+            await self._anthropic_http.aclose()
+
+    def _anthropic_ready(self) -> bool:
+        return self._anthropic_http is not None and time.monotonic() >= self._anthropic_retry_at
 
     async def _check_lmstudio(self) -> bool:
         try:
@@ -210,18 +240,26 @@ class LLMRouter:
         _session: SessionState,
         needs_tools: bool = False,
         user_override: str | None = None,
+        *,
+        interactive: bool = False,
     ) -> LLMConfig:
         """Decide which model to use for this message."""
+        if interactive and self._anthropic_ready() and (
+            not user_override or user_override == CLAUDE_PRIMARY
+        ):
+            return LLMConfig(provider="anthropic", model=CLAUDE_PRIMARY,
+                             base_url=ANTHROPIC_MESSAGES_URL, max_tokens=4096,
+                             read_timeout=90.0)
+
         # Re-check LM Studio if it was previously down
         if not self._lmstudio_available:
             await self._ensure_lmstudio_fresh()
 
-        # User explicit override — local models only. Cloud model names are
-        # rejected so a stale client/UI preference can never leave the box.
+        # Unconfigured cloud overrides never enable API usage implicitly.
         if user_override:
             if user_override.startswith("claude") or user_override.startswith("anthropic"):
                 logger.warning(
-                    "Ignoring cloud model override %r — local-only policy",
+                    "Ignoring unavailable cloud model override %r",
                     user_override,
                 )
             else:
@@ -235,7 +273,7 @@ class LLMRouter:
         if needs_tools and self._lmstudio_available:
             return LLMConfig(
                 provider="lmstudio",
-                model=LOCAL_TOOLS,
+                model=LOCAL_CASUAL_GAMING if await self.is_game_active() else LOCAL_TOOLS,
                 base_url=LM_STUDIO_URL,
             )
 
@@ -252,15 +290,16 @@ class LLMRouter:
                 base_url=LM_STUDIO_URL,
             )
 
-        # No cloud fallback. Ever. If the local GPU path is down, fail closed.
+        # Background work and disabled/unavailable primaries need Dominus.
         raise RuntimeError("No local LLM backend available")
 
-    async def needs_agent(self, message: str) -> bool:
+    async def needs_agent(self, message: str, *, interactive: bool = False) -> bool:
         """Determine if a message needs the agentic tool-use loop."""
-        if not self._lmstudio_available:
+        primary_ready = interactive and self._anthropic_ready()
+        if not self._lmstudio_available and not primary_ready:
             await self._ensure_lmstudio_fresh()
-        if not self._lmstudio_available:
-            return False  # Need LM Studio for agent loop
+        if not self._lmstudio_available and not primary_ready:
+            return False
 
         lower = message.lower()
 
@@ -295,11 +334,12 @@ class LLMRouter:
     async def stream(
         self, system_prompt: str, messages: list[dict], config: LLMConfig
     ) -> AsyncIterator[str]:
-        """Stream tokens from the local LLM only.
+        """Answer using the selected primary, then stream the local secondary.
 
         LM Studio calls go through a global gate (1-at-a-time) to prevent
         queue pile-up when the server is slow or swapping models.
-        On local failure there is no cloud path — only FAILURE_SENTINEL.
+        The API answer is buffered and validated before yielding anything, so
+        a failed primary can fall back without concatenating two answers.
 
         Failure semantics: a failure BEFORE any token yields FAILURE_SENTINEL
         as the whole response. A failure AFTER tokens were yielded raises
@@ -308,10 +348,23 @@ class LLMRouter:
         """
         yielded = False
 
+        if config.provider == "anthropic" and self._anthropic_http is not None:
+            try:
+                response = await self._complete_anthropic(system_prompt, messages, config)
+                yield response["choices"][0]["message"]["content"]
+                return
+            except (httpx.HTTPError, ValueError, TimeoutError) as exc:
+                self._primary_failed(exc)
+                try:
+                    await self._select_local_secondary(config)
+                except RuntimeError:
+                    yield FAILURE_SENTINEL
+                    return
+
         if config.provider != "lmstudio":
-            # Defense in depth: even a hand-built LLMConfig cannot leave the box.
+            # A hand-built config cannot enable an unconfigured API backend.
             logger.error(
-                "Refusing non-local LLM provider %r (local-only policy)",
+                "Refusing unavailable LLM provider %r",
                 config.provider,
             )
             yield FAILURE_SENTINEL
@@ -367,8 +420,93 @@ class LLMRouter:
                 "local stream died mid-response"
             ) from local_error
 
-        # Local path is the only path. No Anthropic, no second model, no off-box.
+        # The local secondary is the final backend.
         yield FAILURE_SENTINEL
+
+    def _primary_failed(self, exc: Exception) -> None:
+        delay = 60.0
+        status = None
+        if isinstance(exc, httpx.HTTPStatusError):
+            status = exc.response.status_code
+            try:
+                delay = max(delay, min(float(exc.response.headers.get("retry-after", "60")), 3600.0))
+            except ValueError:
+                pass
+            if status in (401, 403):
+                delay = 300.0
+        self._anthropic_retry_at = time.monotonic() + delay
+        # Never log response bodies, prompts, request headers or credentials.
+        logger.warning("Sonnet primary unavailable (%s, HTTP %s); trying Dominus",
+                       type(exc).__name__, status)
+
+    async def _select_local_secondary(self, config: LLMConfig, needs_tools: bool = False) -> None:
+        local = await self.route("", SessionState(conversation_id="fallback"), needs_tools=needs_tools)
+        # Callers persist this config and display its model in the done frame.
+        config.provider, config.model, config.base_url = local.provider, local.model, local.base_url
+        config.max_tokens, config.read_timeout = local.max_tokens, local.read_timeout
+
+    async def _complete_anthropic(
+        self, system_prompt: str, messages: list[dict], config: LLMConfig,
+        tools: list[dict] | None = None,
+        *, allow_tools: bool = True,
+    ) -> dict:
+        if not self._anthropic_ready():
+            raise ValueError("Anthropic primary is unavailable")
+        system, turns = messages_payload(system_prompt, messages)
+        body = {"model": CLAUDE_PRIMARY, "system": system, "messages": turns,
+                "max_tokens": min(max(config.max_tokens, 1), 8192),
+                "thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}}
+        if tools:
+            body["tools"] = tool_definitions(tools)
+            if not allow_tools:
+                body["tool_choice"] = {"type": "none"}
+        start = time.monotonic()
+        # Bound both queueing and HTTP lifetime. Cancellation propagates rather
+        # than starting a second inference after the websocket disconnects.
+        async with asyncio.timeout(min(config.read_timeout, 90.0)):
+            async with self._anthropic_gate:
+                async with self._anthropic_http.stream("POST", ANTHROPIC_MESSAGES_URL, json=body) as response:
+                    response.raise_for_status()
+                    raw = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        raw.extend(chunk)
+                        if len(raw) > _ANTHROPIC_MAX_RESPONSE_BYTES:
+                            raise ValueError("Anthropic response exceeds size limit")
+        data = json.loads(raw)
+        message = completion_message(data, tools if allow_tools else None)
+        if not isinstance(data.get("model"), str) or not data["model"]:
+            raise ValueError("Missing response model")
+        config.model = data["model"]
+        usage = data.get("usage") or {}
+        try:
+            from .observability import record_llm_usage
+            record_llm_usage(
+                model=config.model,
+                tokens_in=sum(int(usage.get(key, 0) or 0) for key in
+                              ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")),
+                tokens_out=int(usage.get("output_tokens", 0) or 0),
+                latency_ms=(time.monotonic() - start) * 1000, route="chat",
+            )
+        except Exception:
+            pass
+        return {"model": config.model, "choices": [{"message": message}], "usage": usage}
+
+    async def complete_chat(
+        self, system_prompt: str, messages: list[dict], config: LLMConfig,
+        tools: list[dict] | None = None,
+        *, allow_tools: bool = True,
+    ) -> dict:
+        """Interactive tool-loop completion with a local secondary."""
+        if config.provider == "anthropic" and self._anthropic_http is not None:
+            try:
+                return await self._complete_anthropic(system_prompt, messages, config, tools,
+                                                       allow_tools=allow_tools)
+            except (httpx.HTTPError, ValueError, TimeoutError) as exc:
+                self._primary_failed(exc)
+                await self._select_local_secondary(config, needs_tools=bool(tools))
+        if config.provider != "lmstudio":
+            raise ValueError("Unavailable LLM provider")
+        return await self.complete_local(system_prompt, messages, config, tools if allow_tools else None)
 
     async def complete_local(
         self,
@@ -385,9 +523,11 @@ class LLMRouter:
         - choices[0].message.content (text)
         - choices[0].message.tool_calls (list of tool calls, if any)
         """
+        if config.provider != "lmstudio":
+            raise ValueError("complete_local requires a local provider")
         gate = get_lm_gate()
         async with gate:
-            oai_messages = [{"role": "system", "content": system_prompt}] + messages
+            oai_messages = [{"role": "system", "content": system_prompt}] + local_messages(messages)
 
             body: dict = {
                 "model": config.model,
@@ -432,7 +572,7 @@ class LLMRouter:
     async def _stream_lmstudio(
         self, system_prompt: str, messages: list[dict], config: LLMConfig
     ) -> AsyncIterator[str]:
-        oai_messages = [{"role": "system", "content": system_prompt}] + messages
+        oai_messages = [{"role": "system", "content": system_prompt}] + local_messages(messages)
 
         # Some models (e.g. dolphin-mistral-glm thinking variants) emit all tokens
         # under reasoning_content and leave content empty.  We collect reasoning

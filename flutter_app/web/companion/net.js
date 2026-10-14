@@ -19,7 +19,7 @@ export function clearToken(storage = globalThis.localStorage) {
 export class AuthExpired extends Error {}
 
 /** Thin API client. `onAuthExpired` runs once on the first 401. */
-export function createApi({ token, fetchImpl = globalThis.fetch, base = "", onAuthExpired = () => {} }) {
+export function createApi({ token, fetchImpl = globalThis.fetch, base = "", onAuthExpired = () => {}, voicePollMs = 1000, voiceDeadlineMs = 610000 }) {
   let expired = false;
   async function call(path, { method = "GET", body, raw = false, signal } = {}) {
     const headers = { Authorization: `Bearer ${token}` };
@@ -39,11 +39,70 @@ export function createApi({ token, fetchImpl = globalThis.fetch, base = "", onAu
     }
     return raw ? res : res.json();
   }
+
+  async function tts(text, { signal } = {}) {
+    let jobId;
+    let completed = false;
+    const callerSignal = signal;
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    callerSignal?.addEventListener("abort", cancel, { once: true });
+    if (callerSignal?.aborted) controller.abort();
+    signal = controller.signal;
+    let timedOut = false;
+    const deadline = setTimeout(() => { timedOut = true; controller.abort(); }, voiceDeadlineMs);
+    try {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      let result = await call("/api/tts", { method: "POST", body: { text, language: "en" }, signal });
+      // Dominus keeps its existing synchronous response contract.
+      if (result.audio) return result;
+      jobId = result.job_id;
+      if (!jobId) throw new Error("Voice service returned no audio or job");
+      while (true) {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        if (result.status === "completed" && result.audio) {
+          completed = true;
+          return result;
+        }
+        if (["failed", "cancelled"].includes(result.status)) throw new Error(result.error || "Voice synthesis cancelled");
+        await new Promise((resolve, reject) => {
+          const stop = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener("abort", stop);
+            reject(new DOMException("Aborted", "AbortError"));
+          };
+          const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", stop);
+            resolve();
+          }, voicePollMs);
+          signal?.addEventListener("abort", stop, { once: true });
+        });
+        result = await call(`/api/tts/jobs/${encodeURIComponent(jobId)}`, { signal });
+      }
+    } catch (err) {
+      if (timedOut) throw new Error("Voice synthesis timed out");
+      throw err;
+    } finally {
+      clearTimeout(deadline);
+      callerSignal?.removeEventListener("abort", cancel);
+      if (jobId) {
+        // The playback AbortSignal is already aborted on stop. Use a fresh,
+        // bounded request so cancellation reaches the GPU supervisor.
+        const cleanup = new AbortController();
+        const timer = setTimeout(() => cleanup.abort(), 5000);
+        const removal = call(`/api/tts/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE", signal: cleanup.signal })
+          .catch(() => {}).finally(() => clearTimeout(timer));
+        // Keep stop/cancel deterministic; successful playback needn't wait
+        // for the optional early release of its completed audio result.
+        if (!completed) await removal;
+      }
+    }
+  }
   return {
     herDay: () => call("/api/her-day"),
     portrait: () => call("/api/portrait"),
     affection: () => call("/api/affection"),
-    tts: (text, { signal } = {}) => call("/api/tts", { method: "POST", body: { text, language: "en" }, signal }),
+    tts,
     models: () => call("/api/avatar/models"),
     model: async (id = "default", { signal } = {}) => (await call(`/api/avatar/model${id === "default" ? "" : `?model=${encodeURIComponent(id)}`}`, { raw: true, signal })).arrayBuffer(),
   };

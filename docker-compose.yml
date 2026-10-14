@@ -1,6 +1,6 @@
 # Run on amarillo: companion-core (consolidated with aichat infra)
 # Shares Docker networks with infra-postgres, redis, qdrant locally
-# companion-voice remains on dominus-nobara (RTX 3090, CUDA required)
+# Voice can use the native Amarillo Arc service; Dominus remains the STT backend.
 # Pin the compose project name so `docker compose` (and every Makefile target)
 # acts on the live stack instead of the directory-default `klukai` project.
 name: companion
@@ -29,6 +29,8 @@ services:
       # Overrides are for isolated integration tests only; production must not
       # use an RFC1918/LAN endpoint.
       VOICE_URL: "${VOICE_URL:-http://100.107.121.5:8301}"
+      VOICE_BACKEND: "${VOICE_BACKEND:-dominus}"
+      VOICE_STT_URL: "${VOICE_STT_URL:-http://100.107.121.5:8301}"
       # Must match the canonical target stack's VOICE_API_TOKEN.
       VOICE_API_TOKEN: "${VOICE_API_TOKEN:?VOICE_API_TOKEN is required}"
       # LM Studio backend. Default: dominus-nobara RTX 3090 over Tailscale (auth required).
@@ -36,8 +38,10 @@ services:
       # always sends the required bearer header; test backends may ignore it.
       LM_STUDIO_URL: "${LM_STUDIO_URL:-http://100.107.121.5:1234}"
       LM_STUDIO_TOKEN: "${LM_STUDIO_TOKEN:?LM_STUDIO_TOKEN is required}"
-      # Cloud fallback is forbidden. Key is deliberately not wired.
-      # ANTHROPIC_API_KEY: deliberately omitted — local RTX 3090 only.
+      # Owner authorized paid Sonnet primary / Dominus fallback on 2026-10-14.
+      # Opt-in preserves local-only behavior on other deployments.
+      KLUKAI_CLAUDE_PRIMARY: "${KLUKAI_CLAUDE_PRIMARY:-false}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       # ComfyUI has no published raw port. Every operation is proxied by the
       # authenticated gateway and authorized again with the active GPU lease.
       COMFYUI_URL: "${COMFYUI_URL:-http://100.107.121.5:1234/api/v1/comfy}"

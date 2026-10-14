@@ -1,0 +1,43 @@
+[Unit]
+Description=Klukai local XTTS on Intel Arc A380 (lazy supervised worker)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/git/klukai/ops/amarillo/voice_xpu
+EnvironmentFile=%h/.config/klukai/voice-xpu.env
+Environment=PYTHONNOUSERSITE=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=OMP_NUM_THREADS=2
+Environment=MKL_NUM_THREADS=2
+Environment=OPENBLAS_NUM_THREADS=2
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+Environment=COQUI_TOS_AGREED=1
+Environment=XDG_CACHE_HOME=%h/.cache/klukai/voice-xpu-runtime
+Environment=NUMBA_CACHE_DIR=%h/.cache/klukai/voice-xpu-runtime/numba
+Environment=TTS_HOME=%h/.cache/klukai/voice-xpu-runtime/tts
+Environment=HF_HOME=%h/.cache/klukai/voice-xpu-runtime/huggingface
+UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH PYTHONPATH PYTHONHOME
+ExecStart=/usr/bin/python3 %h/git/klukai/ops/amarillo/voice_xpu/launch.py
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=15
+MemoryMax=8G
+MemorySwapMax=0
+CPUQuota=200%
+TasksMax=128
+OOMPolicy=stop
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/.cache/klukai/voice-xpu-runtime
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

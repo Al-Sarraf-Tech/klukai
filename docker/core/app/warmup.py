@@ -86,13 +86,18 @@ async def warm_chat_model(force: bool = False) -> bool:
     if os.environ.get("KLUKAI_DISABLE_WARMUP"):
         return False
 
+    from .llm_router import LOCAL_CASUAL, claude_primary_configured
+
+    if claude_primary_configured():
+        # A socket connection is not a reason to load the secondary GPU model.
+        # An actual fallback request still loads it on demand.
+        return False
+
     async with _lock:
         now = time.monotonic()
         if not force and _last_attempt and (now - _last_attempt) < _MIN_INTERVAL_SECONDS:
             return False
         _last_attempt = now
-
-    from .llm_router import LOCAL_CASUAL
 
     loaded = await is_loaded(LOCAL_CASUAL)
     if loaded is not False:

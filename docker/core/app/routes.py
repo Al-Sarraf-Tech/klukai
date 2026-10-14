@@ -110,6 +110,11 @@ async def _get_user_id(request: Request) -> str | None:
 def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     """Attach all HTTP endpoints to *app*."""
 
+    from .voice_jobs import VoiceJobs, VoiceQueueFull
+    from .voice_client import local_voice_enabled
+
+    app.state.voice_jobs = VoiceJobs()
+
     # ── Authentication ─────────────────────────────────────────────────────
 
     @app.post("/api/auth/login")
@@ -338,6 +343,16 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         tts_text = _strip_actions_for_tts(req.text)
         if not tts_text.strip():
             return JSONResponse({"error": "No speakable text"}, status_code=400)
+        if local_voice_enabled():
+            if len(tts_text) > 500:
+                return JSONResponse({"error": "Split speech into chunks of at most 500 characters"}, status_code=400)
+            if req.language != "en":
+                return JSONResponse({"error": "This voice currently supports English text"}, status_code=400)
+            try:
+                job = app.state.voice_jobs.submit(user_id, {"text": tts_text, "language": req.language})
+                return JSONResponse(job, status_code=202, headers={"Cache-Control": "no-store"})
+            except VoiceQueueFull:
+                return JSONResponse({"error": "Voice queue is full"}, status_code=429, headers={"Retry-After": "5"})
         try:
             from .voice_client import post_leased_tts
 
@@ -367,10 +382,31 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             logger.warning("TTS timed out waiting on the voice GPU lease")
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
         except Exception as e:
-            # A refused lease, an unreachable gateway or a bad token all end up
-            # here; without this line the only trace was on the GPU host.
+            # Upstream authentication errors must not expire the user's session.
             logger.error("TTS failed: %s: %s", type(e).__name__, e)
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
+
+    @app.get("/api/tts/jobs/{job_id}")
+    async def api_tts_job(job_id: str, request: Request):
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        try:
+            result = app.state.voice_jobs.get(user_id, job_id)
+            return JSONResponse(result, headers={"Cache-Control": "no-store"})
+        except KeyError:
+            return JSONResponse({"error": "Voice job not found"}, status_code=404)
+
+    @app.delete("/api/tts/jobs/{job_id}")
+    async def api_tts_cancel(job_id: str, request: Request):
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        try:
+            result = await app.state.voice_jobs.cancel(user_id, job_id)
+            return JSONResponse(result, headers={"Cache-Control": "no-store"})
+        except KeyError:
+            return JSONResponse({"error": "Voice job not found"}, status_code=404)
 
     # ── Image generation ───────────────────────────────────────────────────
 

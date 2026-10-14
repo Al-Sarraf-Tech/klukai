@@ -19,6 +19,8 @@ import pytest
 # services, even if the developer's shell exports production URLs. The live
 # integration target opts in explicitly from Makefile.
 if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
+    os.environ["KLUKAI_CLAUDE_PRIMARY"] = "false"
+    os.environ.pop("ANTHROPIC_API_KEY", None)
     os.environ["LM_STUDIO_URL"] = "http://127.0.0.1:1"
     os.environ.setdefault("LM_STUDIO_TOKEN", "pytest-local-lm-token")
     os.environ["VOICE_URL"] = "http://127.0.0.1:1"

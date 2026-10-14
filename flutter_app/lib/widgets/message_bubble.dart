@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:js_interop';
 import 'package:flutter/material.dart';
@@ -34,9 +35,13 @@ class _MessageBubbleState extends State<MessageBubble> {
   bool _isPlaying = false;
   bool _isLoading = false;
 
-  /// How long to wait on /api/tts. XTTS on a cold GPU can take a while; a
-  /// powered-off GPU host hangs the proxy, and the spinner must not.
-  static const _ttsTimeout = Duration(seconds: 45);
+  TtsAudioRequest? _activeTts;
+
+  @override
+  void dispose() {
+    unawaited(_activeTts?.cancel());
+    super.dispose();
+  }
 
   Future<void> _playVoice() async {
     if (_isLoading || _isPlaying) return;
@@ -53,47 +58,48 @@ class _MessageBubbleState extends State<MessageBubble> {
           ? 'http://localhost:8300'
           : Uri.base.origin;
 
-      final response = await client
-          .post(
-            Uri.parse('$serverUrl/api/tts'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer ${readAuthToken()}',
-            },
-            body: jsonEncode(ttsRequestBody(widget.message.content)),
-          )
-          .timeout(_ttsTimeout);
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final audioB64 = data['audio'] as String?;
-        if (audioB64 != null) {
-          spoke = true;
-          if (mounted) {
-            setState(() {
-              _isLoading = false;
-              _isPlaying = true;
-            });
-          }
-          // The shared, gesture-unlocked channel: the tap that started this
-          // was spent on the TTS request, so a fresh Audio element would be
-          // refused on iOS. Resolves when she finishes (or if refused), so the
-          // button can never stick on "playing".
-          await (widget.browser ?? defaultBrowserPlatform())
-              .playVoice('data:audio/wav;base64,$audioB64');
-        }
-      } else {
-        debugPrint('Voice synth failed: HTTP ${response.statusCode}');
+      for (final chunk in chunkForTts(widget.message.content)) {
+        if (!mounted) break;
+        setState(() {
+          _isLoading = true;
+          _isPlaying = false;
+        });
+        final request = TtsAudioRequest(
+          client: client,
+          baseUrl: serverUrl,
+          token: readAuthToken(),
+        );
+        _activeTts = request;
+        final audioB64 = await request.run(chunk);
+        _activeTts = null;
+        if (!mounted) break;
+        spoke = true;
+        setState(() {
+          _isLoading = false;
+          _isPlaying = true;
+        });
+        // Reuse the gesture-unlocked channel and await each clip so every
+        // sentence plays in order, including replies longer than 500 chars.
+        await (widget.browser ?? defaultBrowserPlatform()).playVoice(
+          'data:audio/wav;base64,$audioB64',
+        );
       }
     } catch (e) {
+      spoke = false;
       debugPrint('Voice playback failed: $e');
     } finally {
+      _activeTts = null;
       if (widget.client == null) client.close();
     }
 
     // Any failure (502 from a powered-off GPU host, timeout, transport error)
     // must drop the spinner and say so — the text still stands on its own.
-    if (mounted) setState(() { _isLoading = false; _isPlaying = false; });
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _isPlaying = false;
+      });
+    }
     if (!spoke) _showVoiceUnavailable();
   }
 

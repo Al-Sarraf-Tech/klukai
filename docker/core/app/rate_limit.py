@@ -58,6 +58,7 @@ LIMITS: dict[str, Limit] = {
     "login":      Limit(requests=10,  window_seconds=300),  # 10 logins / 5 min
     "export":     Limit(requests=3,   window_seconds=3600), # 3 exports / hour
     "tts":        Limit(requests=120, window_seconds=60),   # 2/sec sustained
+    "voice_jobs": Limit(requests=240, window_seconds=60),   # two active polls + cancellation
     "stt":        Limit(requests=30,  window_seconds=60),
     "image_gen":  Limit(requests=20,  window_seconds=3600), # expensive
     "gift":       Limit(requests=30,  window_seconds=3600),

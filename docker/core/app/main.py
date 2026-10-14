@@ -214,6 +214,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await app.state.voice_jobs.close()
     proactive.stop()
     await events_close()
     await memory.close()
@@ -298,6 +299,7 @@ _RATE_LIMIT_BUCKETS: dict[str, str] = {
     "/api/user/export":        "export",
     "/api/user/stats":         "stats",
     "/api/tts":                "tts",
+    "/api/tts/jobs":           "voice_jobs",
     "/api/stt":                "stt",
     "/api/generate-image":     "image_gen",
     "/api/gift":               "gift",

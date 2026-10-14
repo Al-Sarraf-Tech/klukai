@@ -1,4 +1,4 @@
-"""Agentic loop: Klukai's internal reasoning and tool-use pipeline via local LLM."""
+"""Klukai's existing tools with opt-in Sonnet reasoning and local fallback."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ import logging
 import time
 from dataclasses import dataclass, field
 
-from .llm_router import LLMRouter, LLMConfig, LM_STUDIO_URL, LOCAL_AGENT, LOCAL_CASUAL
+from .llm_router import FAILURE_SENTINEL, LLMRouter, LLMConfig, LM_STUDIO_URL, LOCAL_AGENT, LOCAL_CASUAL
+from .models import SessionState
 from .mcp_client import MCPClient
 from .tool_schemas import get_tool_schemas, get_builtin_tools
 from .ws_manager import WSManager
@@ -49,7 +50,7 @@ TOOL_STATUS = {
 
 
 class AgentLoop:
-    """Klukai's agentic reasoning loop with MCP tool access via local LLM."""
+    """Klukai's agentic reasoning loop with MCP and built-in tool access."""
 
     def __init__(
         self,
@@ -96,8 +97,10 @@ class AgentLoop:
         system_prompt: str,
         messages: list[dict],
         user_id: str = "default",
+        *,
+        interactive: bool = False,
     ) -> AgentResult:
-        """Execute the agentic loop using local LLM."""
+        """Use the interactive primary when opted in; otherwise stay local."""
         result = AgentResult(response="")
         start_time = time.monotonic()
 
@@ -123,6 +126,14 @@ class AgentLoop:
             max_tokens=2048,
             temperature=0.7,
         )
+        if interactive:
+            try:
+                config = await self._router.route(
+                    "", SessionState(conversation_id="agent"), needs_tools=True, interactive=True,
+                )
+            except RuntimeError:
+                return AgentResult(response=FAILURE_SENTINEL, model="offline")
+        complete = self._router.complete_chat if interactive else self._router.complete_local
         # Record the model that actually answers — the dataclass default is
         # LOCAL_AGENT, which is not what runs here, and the name is persisted
         # with the message and shown in the UI's done frame.
@@ -140,10 +151,11 @@ class AgentLoop:
                 break
 
             try:
-                response = await self._router.complete_local(
+                response = await complete(
                     system_prompt, work_messages, config,
                     tools=tools if tools else None,
                 )
+                result.model = config.model
             except Exception as e:
                 logger.error("Agent loop LLM call failed: %s", e)
                 # Try streaming fallback
@@ -153,6 +165,7 @@ class AgentLoop:
                     parts = []
                     async for token in self._router.stream(system_prompt, work_messages, config):
                         parts.append(token)
+                    result.model = config.model
                     if parts:
                         result.response = "".join(parts)
                         return result
@@ -179,6 +192,8 @@ class AgentLoop:
             if content:
                 assistant_msg["content"] = content
             assistant_msg["tool_calls"] = tool_calls
+            if message.get("_anthropic_content"):
+                assistant_msg["_anthropic_content"] = message["_anthropic_content"]
             work_messages.append(assistant_msg)
 
             for tc in tool_calls:
@@ -255,9 +270,14 @@ class AgentLoop:
         if not result.response:
             try:
                 await self._ws.send_thinking(user_id, "Compiling briefing...")
-                final = await self._router.complete_local(
-                    system_prompt, work_messages, config, tools=None,
-                )
+                if interactive:
+                    # Claude needs the declared tools for its earlier tool_use
+                    # messages, even when this turn must finish with plain text.
+                    final = await complete(system_prompt, work_messages, config,
+                                           tools=tools, allow_tools=False)
+                else:
+                    final = await complete(system_prompt, work_messages, config, tools=None)
+                result.model = config.model
                 final_content = (
                     final.get("choices", [{}])[0]
                     .get("message", {})

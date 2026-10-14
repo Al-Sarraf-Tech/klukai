@@ -188,9 +188,9 @@ def register_extras(app: FastAPI) -> None:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         try:
             from .helpers import voice_auth_headers
-            from .voice_client import voice_url
+            from .voice_client import stt_url
             async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(f"{voice_url()}/stt", json={"audio": req.audio}, headers=voice_auth_headers())
+                r = await client.post(f"{stt_url()}/stt", json={"audio": req.audio}, headers=voice_auth_headers())
                 # The PWA treats any 200 as a transcript, so an upstream
                 # failure must not come back as a 200 — it would silently do
                 # nothing. Status and {"error": ...} bodies both become a 502.

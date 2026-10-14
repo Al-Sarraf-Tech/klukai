@@ -505,7 +505,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     )
 
     # Check if this needs the agentic tool-use loop
-    use_agent = await router.needs_agent(content)
+    use_agent = await router.needs_agent(content, interactive=True)
     msg_id = new_id()
     stream_failed = False
 
@@ -513,7 +513,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         # Agentic path: think, use tools, then respond (agent loop sends its own thinking events)
         logger.info("Routing to agent loop (tools needed)")
         agent = AgentLoop(router, mcp, ws)
-        agent_result = await agent.run(system_prompt, messages, user_id=user_id)
+        agent_result = await agent.run(system_prompt, messages, user_id=user_id, interactive=True)
 
         response_text = _fix_narration(agent_result.response)
         model_name = agent_result.model
@@ -536,7 +536,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         # Direct path: stream from LLM
         await ws.send_thinking(user_id, "Composing response...")
         try:
-            config = await router.route(content, session)
+            config = await router.route(content, session, interactive=True)
         except RuntimeError as e:
             # No local backend: dominus-nobara is off or its gateway port is
             # not bound yet. That is normal, not a crash — degrade in-band
