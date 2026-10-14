@@ -163,7 +163,7 @@ test("stop resets output immediately, disconnects the source, and drops remainin
   lateEnded();
   assert.equal(h.speaking.at(-1), true);
   await h.finish();
-  assert.deepEqual(seen, ["First.", "Fresh."]);
+  assert.deepEqual(seen, ["First.", "Second.", "Fresh."], "prefetched second clip is discarded, not played");
   assert.ok(h.ctx.of("source").every((s) => s.outs.length === 0));
 });
 
@@ -212,7 +212,44 @@ test("speech chunks retain every word and handle boundaries, empty input, and lo
   assert.deepEqual(chunk(exact + " Next."), [exact, "Next."]);
 });
 
-test("only the current chunk is requested, and silence between chunks resets the meter", async () => {
+for (const [text, want] of [
+  ["Dr. A. B. Smith met Mr. Jones and Mrs. Green. Ms. Lee joined Prof. Rao.",
+    ["Dr. A. B. Smith met Mr. Jones and Mrs. Green.", "Ms. Lee joined Prof. Rao."]],
+  ["Use examples, e.g. apples or pears. Clarify, i.e. explain simply.",
+    ["Use examples, e.g. apples or pears.", "Clarify, i.e. explain simply."]],
+  ["The U.S. team met the U.K. delegation. Then they left.",
+    ["The U.S. team met the U.K. delegation.", "Then they left."]],
+  ["Meet J. R. R. Tolkien today. All set.", ["Meet J. R. R. Tolkien today.", "All set."]],
+  ["Temperature is 3.14. Version v1.2.3 is ready. Next.",
+    ["Temperature is 3.14.", "Version v1.2.3 is ready.", "Next."]],
+  ["I gave it a 3. She gave it a 4.", ["I gave it a 3.", "She gave it a 4."]],
+  ["Use 3D. Then continue.", ["Use 3D.", "Then continue."]],
+  ["We used 4G. Then left.", ["We used 4G.", "Then left."]],
+  ["See αDr. Next.", ["See αDr.", "Next."]],
+  ["Review the ADR. Next step.", ["Review the ADR.", "Next step."]],
+  ["Release v1.2.3. It is stable.", ["Release v1.2.3.", "It is stable."]],
+  ['She said, “Dr. Smith is here?!” Next.', ['She said, “Dr. Smith is here?!”', "Next."]],
+  ['"はい！" Next.', ['"はい！"', "Next."]],
+  ["「はい！」次です。", ["「はい！」", "次です。"]],
+]) {
+  test(`speech boundaries preserve abbreviations and punctuation: ${text}`, () => {
+    assert.deepEqual(chunkForSpeech(text), want);
+  });
+}
+
+test("conservative abbreviation handling retains ambiguous endings within the cap", () => {
+  const text = "I live in the U.S. Tomorrow I leave. Plan A. Next step.";
+  assert.deepEqual(chunkForSpeech(text), ["I live in the U.S. Tomorrow I leave.", "Plan A. Next step."]);
+  const long = "x".repeat(495) + " Dr. Smith arrived.";
+  assert.equal(chunkForSpeech(long).join(" "), long);
+  assert.ok(chunkForSpeech(long).every((s) => s.length <= SPEAK_LIMIT));
+  const quote = "a".repeat(498) + '."';
+  assert.deepEqual(chunkForSpeech(quote + " Next."), [quote, "Next."]);
+  const emoji = "x".repeat(496) + " 😀.";
+  assert.deepEqual(chunkForSpeech(emoji + " Next."), [emoji, "Next."]);
+});
+
+test("one upcoming chunk is requested during playback, and gaps reset the meter", async () => {
   const next = deferred();
   const seen = [];
   const h = harness({ ttsImpl: (t) => {
@@ -221,7 +258,7 @@ test("only the current chunk is requested, and silence between chunks resets the
   } });
   h.voice.speak("First. Second.");
   await turn();
-  assert.deepEqual(seen, ["First."]);
+  assert.deepEqual(seen, ["First.", "Second."]);
   const first = h.ctx.of("source")[0];
   first.done = true;
   first.onended();
@@ -234,6 +271,148 @@ test("only the current chunk is requested, and silence between chunks resets the
   await h.finish();
   assert.equal(h.ctx.of("source").length, 2);
 });
+
+test("lookahead waits for playback, overlaps synthesis, and holds at most one future clip", async () => {
+  const requests = new Map(["First.", "Second.", "Third."].map((t) => [t, deferred()]));
+  const decodeFirst = deferred();
+  const seen = [];
+  let decoding = false, inFlight = 0, maximum = 0;
+  const h = harness({ ttsImpl: (text) => {
+    seen.push(text);
+    inFlight++;
+    maximum = Math.max(maximum, inFlight);
+    return requests.get(text).promise.finally(() => inFlight--);
+  } });
+  let decodeCount = 0;
+  h.ctx.decodeAudioData = () => {
+    if (!decodeCount++) { decoding = true; return decodeFirst.promise; }
+    return Promise.resolve({ duration: 1 });
+  };
+  h.voice.speak("First. Second. Third.");
+  assert.deepEqual(seen, ["First."]);
+  requests.get("First.").resolve({ audio: btoa("first") });
+  await turn();
+  assert.equal(decoding, true);
+  assert.deepEqual(seen, ["First."], "no speculation during decoding");
+  decodeFirst.resolve({ duration: 1 });
+  await turn();
+  assert.deepEqual(seen, ["First.", "Second."], "synthesis overlaps the first playing source");
+  assert.equal(h.ctx.of("source").length, 1);
+  assert.equal(h.voice.pending, 2, "waiting text includes the single prefetched clip");
+  requests.get("Second.").resolve({ audio: btoa("second") });
+  await turn();
+  assert.deepEqual(seen, ["First.", "Second."], "a ready cache does not fetch the third clip");
+  assert.equal(h.ctx.of("source").length, 1);
+  const first = h.ctx.of("source")[0];
+  first.done = true; first.onended();
+  await turn();
+  assert.equal(h.ctx.of("source").length, 2);
+  assert.deepEqual(seen, ["First.", "Second.", "Third."]);
+  assert.equal(maximum, 1, "only one synthesis request in the active generation");
+  requests.get("Third.").resolve({ audio: btoa("third") });
+  await h.finish();
+  assert.equal(h.ctx.of("source").length, 3);
+});
+
+test("a reply appended during playback starts only one lookahead request", async () => {
+  const second = deferred();
+  const seen = [];
+  const h = harness({ ttsImpl: (text) => {
+    seen.push(text);
+    return text === "Second." ? second.promise : Promise.resolve({ audio: btoa(text) });
+  } });
+  h.voice.speak("First.");
+  await turn();
+  h.voice.speak("Second.");
+  h.voice.speak("Third.");
+  assert.deepEqual(seen, ["First.", "Second."]);
+  assert.equal(h.voice.pending, 2);
+  second.resolve({ audio: btoa("second") });
+  await h.finish();
+  assert.deepEqual(seen, ["First.", "Second.", "Third."]);
+});
+
+test("early lookahead rejection is handled once after the current clip ends", async () => {
+  const second = deferred();
+  const seen = [];
+  const h = harness({ ttsImpl: (text) => {
+    seen.push(text);
+    return text === "Second." ? second.promise : Promise.resolve({ audio: btoa(text) });
+  } });
+  h.voice.speak("First. Second. Third.");
+  await turn();
+  assert.deepEqual(seen, ["First.", "Second."]);
+  second.reject(new Error("lookahead failed"));
+  await turn();
+  assert.equal(h.errors.length, 0);
+  assert.equal(h.speaking.at(-1), true);
+  assert.deepEqual(seen, ["First.", "Second."], "failure does not fetch the third clip early");
+  await h.finish();
+  assert.equal(h.errors.length, 1);
+  assert.equal(h.ctx.of("source").length, 2);
+  assert.deepEqual(seen, ["First.", "Second.", "Third."]);
+});
+
+test("mute aborts pending lookahead and late failures cannot reset fresh playback", async () => {
+  const second = deferred();
+  const seen = [];
+  let staleSignal;
+  const h = harness({ ttsImpl: (text, { signal }) => {
+    seen.push(text);
+    if (text === "Second.") { staleSignal = signal; return second.promise; }
+    return Promise.resolve({ audio: btoa(text) });
+  } });
+  h.voice.speak("First. Second. Third.");
+  await turn();
+  assert.deepEqual(seen, ["First.", "Second."]);
+  const first = h.ctx.of("source")[0], lateEnded = first.onended;
+  h.voice.setEnabled(false);
+  assert.equal(staleSignal.aborted, true);
+  assert.equal(h.voice.pending, 0);
+  assert.equal(first.outs.length, 0);
+  assert.equal(h.levels.at(-1), 0);
+  assert.equal(h.speaking.at(-1), false);
+  h.voice.setEnabled(true);
+  h.voice.speak("Fresh.");
+  await turn();
+  second.reject(new Error("cancelled old lookahead"));
+  lateEnded();
+  await turn();
+  assert.equal(h.ctx.of("source").length, 2);
+  assert.equal(h.speaking.at(-1), true);
+  assert.deepEqual(seen, ["First.", "Second.", "Fresh."]);
+  assert.equal(h.errors.length, 0);
+  await h.finish();
+});
+
+for (const failure of ["base64", "decode", "start"]) {
+  test(`a prefetched ${failure} failure does not block the later chunk`, async () => {
+    const h = harness({ ttsImpl: async (text) => ({
+      audio: failure === "base64" && text === "Second." ? "%invalid%" : btoa(text),
+    }) });
+    if (failure === "decode") {
+      let n = 0;
+      h.ctx.decodeAudioData = async () => {
+        if (++n === 2) throw new Error("bad prefetched audio");
+        return { duration: 1 };
+      };
+    } else if (failure === "start") {
+      const create = h.ctx.createBufferSource.bind(h.ctx);
+      let n = 0;
+      h.ctx.createBufferSource = () => {
+        const source = create();
+        if (++n === 2) source.start = () => { throw new Error("cannot start prefetched audio"); };
+        return source;
+      };
+    }
+    h.voice.speak("First. Second. Third.");
+    await h.finish();
+    assert.equal(h.errors.length, 1);
+    assert.equal(h.ctx.of("source").filter((s) => s.startAt !== undefined).length, 2);
+    assert.ok(h.ctx.of("source").every((s) => s.outs.length === 0));
+    assert.equal(h.voice.pending, 0);
+  });
+}
 
 for (const failure of ["decode", "start"]) {
   test(`a ${failure} failure is reported and does not stall later chunks`, async () => {

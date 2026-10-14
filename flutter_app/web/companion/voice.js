@@ -1,6 +1,7 @@
 // Her voice on the companion stage: fetches TTS for each sentence she says, plays
 // it through an analyser, and reports a live loudness level (mouth flaps,
-// the 3D talking layer, music ducking). Lines queue; nothing overlaps.
+// the 3D talking layer, music ducking). Playback never overlaps; one next
+// sentence may synthesize while the current clip plays.
 // Each reply is spoken once, from its `done` text; see speak().
 
 import { speakable } from "./logic.js";
@@ -13,6 +14,10 @@ export function base64ToArrayBuffer(b64) {
 }
 
 export const SPEAK_LIMIT = 500;
+const ABBREVIATIONS = new Set([
+  "mr", "mrs", "ms", "dr", "prof", "rev", "capt", "lt", "col", "sgt", "gen", "sr", "jr", "st",
+  "vs", "etc", "approx", "dept", "fig", "vol", "inc", "ltd", "ref",
+]);
 /**
  * Speak the whole reply in sentence-sized requests, each within the server's
  * 500-character cap. Oversized sentences split at whitespace; only a single
@@ -36,12 +41,19 @@ export function chunkForSpeech(text, limit = SPEAK_LIMIT) {
     }
     if (rest) chunks.push(rest);
   }
-  // Decimal points do not end sentences. Keep closing quotation marks with
-  // their sentence, and recognise CJK punctuation without a following space.
-  const ends = /[.!?…]+["'”’]*(?=\s|$)|[。！？]+[”’」』]*/g;
+  // Keep common abbreviations and initials in context. Ambiguous endings like
+  // "in the U.S. Tomorrow..." may share a request; punctuation stays intact.
+  // Decimal/version dots need following whitespace to be a possible boundary.
+  const ends = /[.!?…]+["'”’」』]*(?=\s|$)|[。！？]+["'”’」』]*/g;
   let start = 0;
   for (const match of line.matchAll(ends)) {
     const end = match.index + match[0].length;
+    const punctuation = match[0].replace(/["'”’」』]+$/u, "");
+    if (punctuation === "." && end < line.length) {
+      const token = line.slice(start, match.index).match(/(?:^|[\s([{“"'‘])([A-Za-z.]+)$/u)?.[1] || "";
+      if (ABBREVIATIONS.has(token.toLowerCase()) || /^[A-Z]$/.test(token) ||
+          /^(?:[A-Za-z]\.)+[A-Za-z]$/.test(token)) continue;
+    }
     append(line.slice(start, end));
     start = end;
   }
@@ -92,6 +104,24 @@ export function createVoice({
     return active === run && enabled && !run.controller.signal.aborted;
   }
 
+  function requestNext(run) {
+    if (!isActive(run) || !queue.length) return null;
+    const text = queue.shift();
+    // Install both handlers now: a lookahead may fail before playback ends.
+    // There is at most one request/cache ahead in the active generation.
+    try {
+      return Promise.resolve(tts(text, { signal: run.controller.signal })).then(
+        (result) => ({ ok: true, result }), (error) => ({ ok: false, error }),
+      );
+    } catch (error) {
+      return Promise.resolve({ ok: false, error });
+    }
+  }
+
+  function prefetch(run) {
+    if (isActive(run) && run.playing && !run.next) run.next = requestNext(run);
+  }
+
   async function playBuffer(arrayBuffer, run) {
     const audio = await context.decodeAudioData(arrayBuffer);
     if (!isActive(run)) return;
@@ -105,6 +135,7 @@ export function createVoice({
         if (stop) { try { src.stop(); } catch { /* not started/already stopped */ } }
         src.disconnect();
         run.cancelPlay = null;
+        run.playing = false;
         if (isActive(run)) {
           meter(false);
           onSpeaking(false);
@@ -117,8 +148,10 @@ export function createVoice({
         src.connect(analyser);
         src.onended = () => finish();
         src.start();
+        run.playing = true;
         onSpeaking(true);
         meter(true);
+        prefetch(run);
       } catch (error) {
         // Reject before cleanup resolves the wait; the next chunk can proceed.
         reject(error);
@@ -129,15 +162,18 @@ export function createVoice({
 
   async function drain() {
     if (active) return;
-    const run = { controller: new AbortController(), cancelPlay: null };
+    const run = { controller: new AbortController(), cancelPlay: null, playing: false, next: null };
     active = run;
     try {
-      while (queue.length && isActive(run)) {
-        const text = queue.shift();
+      while (isActive(run)) {
+        const request = run.next || requestNext(run);
+        run.next = null;
+        if (!request) break;
         try {
-          const result = await tts(text, { signal: run.controller.signal });
+          const outcome = await request;
           if (!isActive(run)) break;
-          await playBuffer(base64ToArrayBuffer(result.audio), run);
+          if (!outcome.ok) throw outcome.error;
+          await playBuffer(base64ToArrayBuffer(outcome.result.audio), run);
         } catch (e) {
           if (isActive(run)) onError(e);
         }
@@ -167,6 +203,7 @@ export function createVoice({
       const line = speakable(text);
       if (!enabled || !line) return false;
       queue.push(...chunkForSpeech(line));
+      if (active) prefetch(active);
       drain();
       return true;
     },
@@ -175,6 +212,7 @@ export function createVoice({
       const run = active;
       active = null;
       if (run) {
+        run.next = null;
         run.controller.abort();
         // Also releases playback on suspended contexts where onended never fires.
         run.cancelPlay?.();
@@ -182,6 +220,6 @@ export function createVoice({
       meter(false);
       onSpeaking(false);
     },
-    get pending() { return queue.length; },
+    get pending() { return queue.length + (active?.next ? 1 : 0); },
   };
 }
