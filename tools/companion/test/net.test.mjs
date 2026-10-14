@@ -151,3 +151,13 @@ test('appearance catalog and selected model remain authenticated, with cancellat
   assert.equal(f.calls[1].init.headers.Authorization,'Bearer test');
   assert.equal(f.calls[1].init.signal,controller.signal);
 });
+
+test("TTS forwards cancellation without changing authentication or language", async () => {
+  const controller = new AbortController();
+  const f = fakeFetch([{ status: 200, body: { audio: "x" } }]);
+  const api = createApi({ token: "test", fetchImpl: f.impl });
+  await api.tts("Hello.", { signal: controller.signal });
+  assert.equal(f.calls[0].init.signal, controller.signal);
+  assert.equal(f.calls[0].init.headers.Authorization, "Bearer test");
+  assert.deepEqual(JSON.parse(f.calls[0].init.body), { text: "Hello.", language: "en" });
+});

@@ -43,7 +43,7 @@ export function createApi({ token, fetchImpl = globalThis.fetch, base = "", onAu
     herDay: () => call("/api/her-day"),
     portrait: () => call("/api/portrait"),
     affection: () => call("/api/affection"),
-    tts: (text) => call("/api/tts", { method: "POST", body: { text, language: "en" } }),
+    tts: (text, { signal } = {}) => call("/api/tts", { method: "POST", body: { text, language: "en" }, signal }),
     models: () => call("/api/avatar/models"),
     model: async (id = "default", { signal } = {}) => (await call(`/api/avatar/model${id === "default" ? "" : `?model=${encodeURIComponent(id)}`}`, { raw: true, signal })).arrayBuffer(),
   };

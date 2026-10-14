@@ -1,4 +1,4 @@
-// Her voice on the companion stage: fetches TTS for each line she says, plays
+// Her voice on the companion stage: fetches TTS for each sentence she says, plays
 // it through an analyser, and reports a live loudness level (mouth flaps,
 // the 3D talking layer, music ducking). Lines queue; nothing overlaps.
 // Each reply is spoken once, from its `done` text; see speak().
@@ -13,22 +13,40 @@ export function base64ToArrayBuffer(b64) {
 }
 
 export const SPEAK_LIMIT = 500;
-const SENTENCE_ENDS = [". ", "! ", "? ", ".\n", "!\n", "?\n"];
-
 /**
- * Keep a line under the TTS limit without cutting her off mid-word: clip at
- * the last sentence boundary that fits, or hard-cut when the only boundary is
- * so early (before limit/3) that it would drop most of what she said.
+ * Speak the whole reply in sentence-sized requests, each within the server's
+ * 500-character cap. Oversized sentences split at whitespace; only a single
+ * oversized token is hard-split (never through a UTF-16 surrogate pair).
  */
-export function clipForSpeech(text, limit = SPEAK_LIMIT) {
-  const s = String(text || "");
-  if (s.length <= limit) return s;
-  // limit + 1 so a sentence whose closing space sits exactly at `limit` counts.
-  const head = s.slice(0, limit + 1);
-  let cut = -1;
-  for (const end of SENTENCE_ENDS) cut = Math.max(cut, head.lastIndexOf(end));
-  if (cut >= limit / 3) return head.slice(0, cut + 1).trimEnd();
-  return s.slice(0, limit);
+export function chunkForSpeech(text, limit = SPEAK_LIMIT) {
+  if (!Number.isInteger(limit) || limit < 2) throw new RangeError("Speech limit must be at least 2");
+  const line = String(text || "").replace(/\s+/g, " ").trim();
+  const chunks = [];
+  function append(sentence) {
+    let rest = sentence.trim();
+    while (rest.length > limit) {
+      let cut = rest.lastIndexOf(" ", limit);
+      if (cut <= 0) {
+        cut = limit;
+        const previous = rest.charCodeAt(cut - 1);
+        if (previous >= 0xd800 && previous <= 0xdbff) cut--;
+      }
+      chunks.push(rest.slice(0, cut));
+      rest = rest.slice(cut).trimStart();
+    }
+    if (rest) chunks.push(rest);
+  }
+  // Decimal points do not end sentences. Keep closing quotation marks with
+  // their sentence, and recognise CJK punctuation without a following space.
+  const ends = /[.!?…]+["'”’]*(?=\s|$)|[。！？]+[”’」』]*/g;
+  let start = 0;
+  for (const match of line.matchAll(ends)) {
+    const end = match.index + match[0].length;
+    append(line.slice(start, end));
+    start = end;
+  }
+  append(line.slice(start));
+  return chunks;
 }
 
 /** RMS loudness 0..1 from 8-bit time-domain samples (128 = silence). */
@@ -48,9 +66,9 @@ export function createVoice({
 }) {
   const queue = [];
   let enabled = true;
-  let busy = false;
-  let current = null;
-  let release = null; // resolves the in-flight playBuffer() wait (stop() uses it)
+  // Each drain owns its requests/playback. A stopped drain may still finish
+  // decoding, but it must never play or reset the next drain's output.
+  let active = null;
   let tick = null;
   const analyser = context.createAnalyser();
   analyser.fftSize = 256;
@@ -58,53 +76,78 @@ export function createVoice({
   const samples = new Uint8Array(analyser.fftSize);
 
   function meter(on) {
-    if (on && !tick) {
+    if (on && tick === null) {
       tick = setTick(() => {
         analyser.getByteTimeDomainData(samples);
         onLevel(rmsLevel(samples));
       });
-    } else if (!on && tick) {
-      clearTick(tick);
+    } else if (!on) {
+      if (tick !== null) clearTick(tick);
       tick = null;
       onLevel(0);
     }
   }
 
-  async function playBuffer(arrayBuffer) {
+  function isActive(run) {
+    return active === run && enabled && !run.controller.signal.aborted;
+  }
+
+  async function playBuffer(arrayBuffer, run) {
     const audio = await context.decodeAudioData(arrayBuffer);
-    await new Promise((resolve) => {
+    if (!isActive(run)) return;
+    await new Promise((resolve, reject) => {
       const src = context.createBufferSource();
-      src.buffer = audio;
-      src.connect(analyser);
-      src.onended = resolve;
-      release = resolve;
-      current = src;
-      onSpeaking(true);
-      meter(true);
-      src.start();
+      let finished = false;
+      function finish(stop = false) {
+        if (finished) return;
+        finished = true;
+        src.onended = null;
+        if (stop) { try { src.stop(); } catch { /* not started/already stopped */ } }
+        src.disconnect();
+        run.cancelPlay = null;
+        if (isActive(run)) {
+          meter(false);
+          onSpeaking(false);
+        }
+        resolve();
+      }
+      run.cancelPlay = () => finish(true);
+      try {
+        src.buffer = audio;
+        src.connect(analyser);
+        src.onended = () => finish();
+        src.start();
+        onSpeaking(true);
+        meter(true);
+      } catch (error) {
+        // Reject before cleanup resolves the wait; the next chunk can proceed.
+        reject(error);
+        finish(true);
+      }
     });
-    current = null;
-    release = null;
   }
 
   async function drain() {
-    if (busy) return;
-    busy = true;
+    if (active) return;
+    const run = { controller: new AbortController(), cancelPlay: null };
+    active = run;
     try {
-      while (queue.length && enabled) {
-        const job = queue.shift();
+      while (queue.length && isActive(run)) {
+        const text = queue.shift();
         try {
-          const buf = base64ToArrayBuffer((await tts(job.text)).audio);
-          if (!enabled) break;
-          await playBuffer(buf);
+          const result = await tts(text, { signal: run.controller.signal });
+          if (!isActive(run)) break;
+          await playBuffer(base64ToArrayBuffer(result.audio), run);
         } catch (e) {
-          onError(e);
+          if (isActive(run)) onError(e);
         }
       }
     } finally {
-      busy = false;
-      meter(false);
-      onSpeaking(false);
+      if (active === run) {
+        active = null;
+        meter(false);
+        onSpeaking(false);
+      }
     }
   }
 
@@ -123,16 +166,21 @@ export function createVoice({
     speak(text) {
       const line = speakable(text);
       if (!enabled || !line) return false;
-      queue.push({ text: clipForSpeech(line) });
+      queue.push(...chunkForSpeech(line));
       drain();
       return true;
     },
     stop() {
       queue.length = 0;
-      if (current) { try { current.stop(); } catch { /* already stopped */ } }
-      // A source started on a suspended context (page backgrounded) never
-      // fires onended; release the drain ourselves so `busy` can't stick.
-      if (release) { const r = release; release = null; r(); }
+      const run = active;
+      active = null;
+      if (run) {
+        run.controller.abort();
+        // Also releases playback on suspended contexts where onended never fires.
+        run.cancelPlay?.();
+      }
+      meter(false);
+      onSpeaking(false);
     },
     get pending() { return queue.length; },
   };
