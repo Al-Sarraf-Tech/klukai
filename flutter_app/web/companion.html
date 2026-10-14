@@ -15,7 +15,7 @@
   <title>Klukai — Companion</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
-  <link rel="stylesheet" href="companion/companion.css">
+  <link rel="stylesheet" href="companion/companion.css?v=57ec8e4b69ac">
 </head>
 <body>
   <main id="stage" class="stage" data-mode="portrait">
@@ -63,6 +63,16 @@
     </dialog>
 
     <footer class="dock">
+      <div id="camera-controls" class="camera-controls" role="group" aria-label="3D view controls" hidden>
+        <div class="camera-buttons">
+          <button class="btn" id="btn-rotate-left" type="button" aria-label="Rotate left" title="Rotate left">↶</button>
+          <button class="btn" id="btn-zoom-out" type="button" aria-label="Zoom out" title="Zoom out">−</button>
+          <button class="btn" id="btn-reset-view" type="button" aria-label="Reset view">Reset view</button>
+          <button class="btn" id="btn-zoom-in" type="button" aria-label="Zoom in" title="Zoom in">+</button>
+          <button class="btn" id="btn-rotate-right" type="button" aria-label="Rotate right" title="Rotate right">↷</button>
+        </div>
+        <p class="camera-hint">Drag to rotate · Pinch or scroll to zoom</p>
+      </div>
       <p class="subtitle" id="subtitle" aria-live="polite"></p>
       <form class="composer" id="composer" autocomplete="off">
         <input id="input" type="text" enterkeyhint="send" maxlength="4000"
@@ -79,6 +89,6 @@
   </main>
 
   <noscript>The companion view needs JavaScript.</noscript>
-  <script type="module" src="companion/app.js?v=9297f315"></script>
+  <script type="module" src="companion/app.js?v=6f828779681c"></script>
 </body>
 </html>

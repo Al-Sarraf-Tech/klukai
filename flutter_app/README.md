@@ -31,6 +31,13 @@ The app requires no API key or provider-specific build to switch core between
 authorized modes. See the [provider policy and local GPU setup](../README.md#provider-policy)
 and [creative-provider handoff](../docs/handoff/2026-10-14-dream-image-preparation.md).
 
+## Companion camera
+
+In the 3D companion view, drag with a mouse or one finger to rotate up to 120°
+each way. Scroll or pinch to zoom, or use the rotation and zoom buttons above
+the chat box. **Reset view** restores automatic framing. The chosen view stays
+through animation, window resizing and a temporary switch to portrait mode.
+
 ## Development and tests
 
 From this directory, using the project's installed Flutter SDK and dependencies:

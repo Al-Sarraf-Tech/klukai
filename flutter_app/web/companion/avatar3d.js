@@ -10,6 +10,7 @@
 //   av.setMood('quietly_pleased'); av.setSpeaking(level); av.setState('greet');
 //   av.setTint('#ffb3c8');            // mood rim light colour (eases over ~1.2 s)
 //   av.setInsets({ top, bottom });    // CSS px of the canvas hidden under the topbar / dock
+//   av.zoomBy(0.85); av.rotateBy(Math.PI / 12); av.resetView();
 //   av.setPaused(true); // parked behind another view: no render loop until setPaused(false)
 //
 // Look: two-band tinted toon (per-role shadow colours, baked AO from the GLB's
@@ -214,6 +215,41 @@ export function cameraFraming({ framing = 'upper', state = 'idle', aspect = 1, h
   const out = { fov, targetY, camY: targetY + (b.camY - b.targetY) * (dist / b.dist), dist };
   if (b.side) { out.side = true; out.targetZ = b.targetZ; }
   return out;
+}
+
+/** User inspection offsets, relative to the animated automatic framing.
+ *  Absorb only changes since the last camera placement: speech push-in and
+ *  resize/state framing must never feed back into the user's zoom or orbit. */
+export function createCameraView() {
+  const maxYaw = 120 * DEG;
+  const minZoom = 0.6, maxZoom = 1.8;
+  const minPitch = -0.22, maxPitch = 0.12;
+  let dTheta = 0, dPhi = 0, zoom = 1;
+  let applied = null;
+  return {
+    get state() { return { dTheta, dPhi, zoom }; },
+    absorb(observed) {
+      if (!applied || !Number.isFinite(observed.radius) || observed.radius <= 0
+          || !Number.isFinite(observed.theta) || !Number.isFinite(observed.phi)) return;
+      dTheta = clamp(dTheta + wrapPi(observed.theta - applied.theta), -maxYaw, maxYaw);
+      dPhi = clamp(dPhi + observed.phi - applied.phi, minPitch, maxPitch);
+      zoom = clamp(zoom * observed.radius / applied.radius, minZoom, maxZoom);
+      applied = { radius: observed.radius, theta: observed.theta, phi: observed.phi };
+    },
+    place(base, pushIn = 0) {
+      const radius = base.radius * (1 - 0.03 * clamp(pushIn, 0, 1));
+      applied = { radius: radius * zoom, theta: base.theta + dTheta, phi: base.phi + dPhi };
+      return {
+        ...applied,
+        minDistance: radius * minZoom, maxDistance: radius * maxZoom,
+        minAzimuthAngle: base.theta - maxYaw, maxAzimuthAngle: base.theta + maxYaw,
+        minPolarAngle: base.phi + minPitch, maxPolarAngle: base.phi + maxPitch,
+      };
+    },
+    zoomBy(factor) { if (Number.isFinite(factor) && factor > 0) zoom = clamp(zoom * factor, minZoom, maxZoom); },
+    rotateBy(radians) { if (Number.isFinite(radians)) dTheta = clamp(dTheta + radians, -maxYaw, maxYaw); },
+    reset() { dTheta = 0; dPhi = 0; zoom = 1; applied = null; },
+  };
 }
 
 export function detectIOS(nav = globalThis.navigator) {
@@ -761,6 +797,7 @@ export async function createAvatar3D(container, opts = {}) {
   // can tell it from a live avatar (and try again later instead of keeping it).
   const stub = {
     setState() {}, setMood() {}, setSpeaking() {}, setFraming() {}, setPaused() {}, setTint() {}, setInsets() {},
+    zoomBy() {}, rotateBy() {}, resetView() {},
     resize() {}, dispose() {},
     get ready() { return false; }, get state() { return 'idle'; },
   };
@@ -1205,10 +1242,11 @@ export async function createAvatar3D(container, opts = {}) {
     out.copy(dir).applyQuaternion(q.invert());
   }
 
-  // ── camera framing (eased) + gentle orbit that springs back ───────────────
+  // ── camera framing (eased) + persistent user zoom/orbit ──────────────────
   const camGoal = { target: new THREE.Vector3(), sph: new THREE.Spherical(2, Math.PI / 2, 0), fov: BASE_FOV };
   const camCur = { target: new THREE.Vector3(), sph: new THREE.Spherical(2, Math.PI / 2, 0), fov: BASE_FOV };
-  const orbit = { dPhi: 0, dTheta: 0, dragging: false, releasedAt: -Infinity };
+  const orbit = createCameraView();
+  let orbitDragging = false;
   let camSnap = true;
   const drift = new THREE.Vector3();
   let pushIn = 0;
@@ -1230,17 +1268,19 @@ export async function createAvatar3D(container, opts = {}) {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     if (snap) camSnap = true;
-    placeCamera(0, performance.now());
+    placeCamera(0);
   }
 
-  function placeCamera(dt, now) {
-    // 1. absorb what the user orbited since the last frame (pointer handlers
-    //    call controls.update() themselves)
-    if (controls && !camSnap) {
-      _sph2.setFromVector3(_v1.subVectors(camera.position, camCur.target));
-      orbit.dTheta = wrapPi(_sph2.theta - camCur.sph.theta);
-      orbit.dPhi = _sph2.phi - camCur.sph.phi;
+  function absorbCameraInput() {
+    if (controls) {
+      _sph2.setFromVector3(_v1.subVectors(camera.position, controls.target));
+      orbit.absorb(_sph2);
     }
+  }
+  function placeCamera(dt, absorb = true) {
+    // 1. Include pointer-handler and damping updates since our last placement,
+    //    even when resize/insets snap the automatic framing this frame.
+    if (absorb) absorbCameraInput();
     // 2. ease the framing (~0.8 s, frame-rate independent)
     const k = camSnap ? 1 : 1 - Math.exp(-dt * 3.0);
     camCur.target.lerp(camGoal.target, k);
@@ -1250,34 +1290,44 @@ export async function createAvatar3D(container, opts = {}) {
     const fov = camCur.fov + (camGoal.fov - camCur.fov) * k;
     if (Math.abs(fov - camera.fov) > 1e-4) { camera.fov = fov; camera.updateProjectionMatrix(); }
     camCur.fov = fov;
-    if (camSnap) { orbit.dTheta = 0; orbit.dPhi = 0; }
     camSnap = false;
-    // 3. orbit springs back to the front ~2 s after release
-    if (!orbit.dragging && now - orbit.releasedAt > 2000) {
-      const s = Math.exp(-dt * 2.5);
-      orbit.dTheta *= s; orbit.dPhi *= s;
-    }
-    // 4. talk push-in (~3 % closer while she speaks)
-    const radius = camCur.sph.radius * (1 - 0.03 * pushIn);
-    camera.position.setFromSpherical(_sph.set(radius, camCur.sph.phi + orbit.dPhi, camCur.sph.theta + orbit.dTheta)).add(camCur.target);
+    // 3. Compose the persistent view with the automatic 3% speech push-in.
+    const view = orbit.place(camCur.sph, pushIn);
+    camera.position.setFromSpherical(_sph.set(view.radius, view.phi, view.theta)).add(camCur.target);
     if (controls) {
       controls.target.copy(camCur.target);
-      controls.minAzimuthAngle = camCur.sph.theta - 0.45; controls.maxAzimuthAngle = camCur.sph.theta + 0.45;
-      controls.minPolarAngle = camCur.sph.phi - 0.22; controls.maxPolarAngle = camCur.sph.phi + 0.12;
+      controls.minDistance = view.minDistance; controls.maxDistance = view.maxDistance;
+      controls.minAzimuthAngle = view.minAzimuthAngle; controls.maxAzimuthAngle = view.maxAzimuthAngle;
+      controls.minPolarAngle = view.minPolarAngle; controls.maxPolarAngle = view.maxPolarAngle;
       controls.update();
     } else {
       camera.lookAt(camCur.target);
     }
   }
+  function changeView(change) {
+    if (disposed || !root) return;
+    absorbCameraInput();
+    // Drain the controls' residual rotation through their public API, then
+    // replace that camera position. Otherwise a Reset during damping drifts.
+    if (controls) {
+      const damping = controls.enableDamping;
+      controls.enableDamping = false;
+      controls.update();
+      controls.enableDamping = damping;
+    }
+    change();
+    placeCamera(0, false);
+    if (paused) renderer.render(scene, camera);
+  }
   if (OrbitControls) {
     controls = new OrbitControls(camera, canvas);
     controls.enablePan = false;
-    controls.enableZoom = false;
+    controls.enableZoom = true;
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.rotateSpeed = isIOS || globalThis.matchMedia?.('(pointer: coarse)').matches ? 0.7 : 0.5;
-    onControlStart = () => { orbit.dragging = true; };
-    onControlEnd = () => { orbit.dragging = false; orbit.releasedAt = performance.now(); };
+    onControlStart = () => { orbitDragging = true; };
+    onControlEnd = () => { orbitDragging = false; };
     controls.addEventListener('start', onControlStart);
     controls.addEventListener('end', onControlEnd);
   }
@@ -1895,7 +1945,7 @@ export async function createAvatar3D(container, opts = {}) {
       follow += (bones.Hips.getWorldPosition(_v1).x * 0.85 - follow) * (1 - Math.exp(-dt * 0.8));
       camGoal.target.x = follow;
     }
-    placeCamera(dt, now);
+    placeCamera(dt);
     updateTint(dt);
   }
   function start() { if (!rafId && !disposed && !paused) { timer.reset(); sway.fresh = true; resetSprings(); rafId = requestAnimationFrame(tick); } }
@@ -2001,6 +2051,11 @@ export async function createAvatar3D(container, opts = {}) {
       speakingTarget = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
     },
     setFraming(f) { framing = f === 'full' ? 'full' : 'upper'; if (root) frame(); },
+    /** Distance multiplier: below 1 zooms in, above 1 zooms out. */
+    zoomBy(factor) { changeView(() => orbit.zoomBy(factor)); },
+    /** Horizontal camera angle in radians, relative to the current view. */
+    rotateBy(radians) { changeView(() => orbit.rotateBy(radians)); },
+    resetView() { changeView(() => orbit.reset()); },
     /** Mood rim colour: 0xRRGGBB, '#rrggbb' (or a RIM_TINTS key); eases over ~1.2 s. */
     setTint(color) {
       const c = parseTint(color);
@@ -2053,7 +2108,7 @@ export async function createAvatar3D(container, opts = {}) {
           armW, pushIn, talkPresence, nods: nods.length, blink: blinkIdx >= 0 ? skinned.find((m) => m.morphTargetInfluences)?.morphTargetInfluences[blinkIdx] ?? 0 : null,
           lid, drift: drift.toArray(), swayAmp: shared.uSwayAmp.value, sway: shared.uSway.value.toArray(), shadowA, shadowVisible: Boolean(shadowMesh?.visible),
           fov: camera.fov, cam: camera.position.toArray(), target: camCur.target.toArray(), reducedMotion, outlines: outlinesOn, headJoint,
-          orbit: { ...orbit }, follow,
+          orbit: { ...orbit.state, dragging: orbitDragging }, follow,
           eyeElevDeg: guard.e0 / DEG, eyeElevAfterDeg: guard.e1 / DEG, guardLiftDeg: guard.lift / DEG, guardW: guard.w,
           springs: springs ? { mode: springs.mode, ms: springs.ms, chains: springs.chains.map((c) => c.name), clearance: springClearance(),
             tips: springs.chains.map((c) => c.joints[c.joints.length - 1].cur.slice()) } : null,

@@ -45,6 +45,7 @@ AVATAR_FEATURES=openJacket,hairChains …                       # force optional
 node build.mjs --debug     # every OBJ group, PNG, no compression (+ island JSONs, ambiguous-island log)
 npm test                   # node --test (pure parts; needs no assets)
 python3 shot.py            # screenshots → assets/build/shots/
+python3 camera_e2e.py      # desktop + phone gestures/buttons, local API fixtures only
 python3 perf.py            # load time / FPS / draw calls / texture MB (SwiftShader, --throttle 4)
 python3 debug/views.py OUT # 12-angle inspection sheet of the live viewer on a contrasting backdrop
 node vendor.mjs            # rebuild vendor/three-avatar.min.js (tree-shaken three subset)
@@ -186,6 +187,7 @@ av.setState('greet');       // idle talking thinking happy bashful sad greet sle
 av.setSpeaking(level);      // 0..1: layers the talking clip + speech-driven nods
 av.setTint(0x8fd8ff);       // mood rim colour (number, '#rrggbb', or 'base'|'smile'|'blush'|'annoyed'), eased ~1.2 s
 av.setInsets({ top, bottom }); // CSS px of the canvas covered by the stage's top bar / dock
+av.zoomBy(0.85); av.rotateBy(Math.PI / 12); av.resetView();
 av.setFraming('full'); av.resize(); av.dispose();
 ```
 
@@ -256,10 +258,13 @@ av.setFraming('full'); av.resize(); av.dispose();
   over ~0.8 s instead of snapping. 22° FOV for upper framing on phones (26°
   otherwise, same crop), a 3% push-in while she talks, a slow drift and a
   slow follow of her hips. `setInsets()` frames her in the band the stage's
-  top bar and dock leave clear. OrbitControls are limited to about ±25°
-  azimuth with a small polar range, no pan or zoom, and spring back to the
-  front 2 s after release. A soft contact-shadow blob grounds her in full
-  framing and `sleep` (no shadow maps).
+  top bar and dock leave clear. Drag to rotate through **240° total** (120°
+  either side); scroll or pinch to zoom between 0.6× and 1.8× the framed camera
+  distance. The stage also has rotate, zoom and **Reset view** buttons. The
+  chosen angle and zoom stay in place through animation, resize and temporary
+  portrait mode; Reset returns to the current automatic framing. Panning is
+  disabled and the small vertical tilt range is retained. A soft contact-shadow
+  blob grounds her in full framing and `sleep` (no shadow maps).
 - **iOS and robustness:**
   - MSAA is on everywhere, iOS included (Apple GPUs resolve it on-tile; thin
     outlines crawl without it), with `powerPreference: 'low-power'`. DPR is

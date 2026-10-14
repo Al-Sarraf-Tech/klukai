@@ -139,6 +139,12 @@ html, body {
   padding: 10px calc(var(--safe-right) + 12px) calc(var(--safe-bottom) + 10px) calc(var(--safe-left) + 12px);
   background: linear-gradient(0deg, rgba(10, 12, 18, 0.95) 55%, transparent);
 }
+.camera-controls { margin: 0 auto 10px; text-align: center; }
+.camera-controls[hidden] { display: none; }
+.camera-buttons { display: flex; justify-content: center; gap: 6px; }
+.camera-buttons .btn { min-width: 44px; min-height: 44px; padding: 6px 10px; }
+.camera-buttons .btn:disabled { opacity: 0.45; cursor: default; }
+.camera-hint { margin: 4px 0 0; color: #a8b4c4; font-size: 11px; }
 .subtitle {
   margin: 0 auto 8px; max-width: 640px; min-height: 2.8em; max-height: 6.2em; overflow-y: auto;
   font-size: 15px; line-height: 1.4; text-shadow: 0 1px 6px #000; color: var(--text);

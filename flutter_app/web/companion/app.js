@@ -250,6 +250,10 @@ function boot() {
     const m = prefs.mode === "model";
     $("btn-mode").textContent = m ? "2D" : "3D";
     $("btn-mode").setAttribute("aria-label", m ? "Switch to portrait" : "Switch to 3D");
+    $("camera-controls").hidden = !m;
+    for (const button of $("camera-controls").querySelectorAll("button")) {
+      button.disabled = !m || !avatar?.ready;
+    }
   }
 
   // ── Portrait ⇄ 3D window ─────────────────────────────────────────────────
@@ -257,7 +261,7 @@ function boot() {
   let requestedAppearance = prefs.appearance || "default";
   const appearances = createAppearanceSwitcher({
     async build(id, signal) {
-      const { createAvatar3D } = await import("./avatar3d.js");
+      const { createAvatar3D } = await import("./avatar3d.js?v=c5955b5c1688");
       const host = document.createElement("div");
       host.className = "model-view";
       host.style.visibility = "hidden";
@@ -361,6 +365,7 @@ function boot() {
     }
     avatar?.setPaused(prefs.mode !== "model" || document.hidden);
     syncButtons();
+    syncInsets();
   }
 
   $("btn-appearance").addEventListener("click", () => {
@@ -377,6 +382,11 @@ function boot() {
   // ── Controls ─────────────────────────────────────────────────────────────
   $("wake").addEventListener("click", wake, { once: true });
   $("btn-mode").addEventListener("click", () => setMode(prefs.mode === "model" ? "portrait" : "model"));
+  $("btn-zoom-in").addEventListener("click", () => avatar?.zoomBy(0.85));
+  $("btn-zoom-out").addEventListener("click", () => avatar?.zoomBy(1 / 0.85));
+  $("btn-rotate-left").addEventListener("click", () => avatar?.rotateBy(-Math.PI / 12));
+  $("btn-rotate-right").addEventListener("click", () => avatar?.rotateBy(Math.PI / 12));
+  $("btn-reset-view").addEventListener("click", () => avatar?.resetView());
   $("btn-music").addEventListener("click", async () => {
     if (!music) return;
     if (music.playing) music.stop(); else await music.start();
@@ -440,7 +450,7 @@ function boot() {
   // parallel with the socket and the tap-to-begin, so it's ready on wake.
   if (prefs.mode === "model") {
     const modelKey = prefs.appearance || "default";
-    import("./avatar3d.js").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
+    import("./avatar3d.js?v=c5955b5c1688").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
   }
   socket.start();
   refreshAppearances();
