@@ -35,11 +35,19 @@ def _snapshot_key(level: int, mood: str, time_of_day: str) -> str:
 
 
 def _load_or_create_snapshot(key: str, payload: dict) -> dict:
-    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
     path = SNAPSHOT_DIR / key
-    if not path.exists() or os.environ.get("UPDATE_SNAPSHOTS"):
+    if os.environ.get("UPDATE_SNAPSHOTS") == "1":
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    return json.loads(path.read_text())
+    elif not path.exists():
+        raise FileNotFoundError(
+            f"Missing prompt snapshot: {path}. Review the prompt, then use UPDATE_SNAPSHOTS=1 to create it."
+        )
+    snapshot = json.loads(path.read_text())
+    if (not isinstance(snapshot, dict) or snapshot.keys() != payload.keys()
+            or any(type(snapshot[key]) is not type(value) for key, value in payload.items())):
+        raise ValueError(f"Malformed prompt snapshot: {path}")
+    return snapshot
 
 
 @pytest.mark.parametrize("level", [0, 2, 5, 7, 9])
@@ -49,26 +57,20 @@ def test_system_prompt_stable(level: int, mood: str, time_of_day: str) -> None:
     """System prompt for a given (level, mood, time) tuple is stable across
     runs. Any drift is a character regression — either intentional (rotate
     snapshot) or a bug (revert)."""
-    try:
-        from app.personality.system_prompt import assemble_system_prompt
-    except ImportError:
-        pytest.skip("assemble_system_prompt not importable in dev env")
+    from app.personality.system_prompt import assemble_system_prompt
 
     # Freeze the clock: build_context_block() embeds military time (HHMM),
     # weekday, date, and time-window/outfit logic from datetime.now(). Without
     # freezing, the snapshot sha256 drifts every minute and the golden guard is
     # worthless. Fixed to a Thursday at the time_of_day's representative hour.
     frozen = datetime(2026, 1, 15, _TOD_HOUR[time_of_day], 0, 0)
-    try:
-        with patch("app.personality.moods.now_local") as _mock_dt:
-            _mock_dt.return_value = frozen
-            prompt = assemble_system_prompt(
-                mood=mood,
-                affection_level=level,
-                affection_score=level * 100,
-            )
-    except Exception as exc:  # pragma: no cover — config-dependent
-        pytest.skip(f"assemble_system_prompt config-error: {exc!r}")
+    with patch("app.personality.moods.now_local") as _mock_dt:
+        _mock_dt.return_value = frozen
+        prompt = assemble_system_prompt(
+            mood=mood,
+            affection_level=level,
+            affection_score=level * 100,
+        )
 
     # Stable hash + length + checksum capture drift at multiple granularities.
     payload = {
@@ -86,8 +88,6 @@ def test_system_prompt_stable(level: int, mood: str, time_of_day: str) -> None:
             and ("Cold Assessment" in prompt or "state your business" in prompt.lower())
         ),
     }
-    snapshot = _load_or_create_snapshot(_snapshot_key(level, mood, time_of_day), payload)
-
     # Regression assertions — even if the snapshot hash drifts (intentional
     # rotation), these invariants must hold forever.
     if level >= 5:
@@ -96,9 +96,12 @@ def test_system_prompt_stable(level: int, mood: str, time_of_day: str) -> None:
             "see feedback_speech_routing_bug.md"
         )
 
-    # Snapshot equality (the rotation check).
-    if not os.environ.get("UPDATE_SNAPSHOTS"):
-        assert payload["sha256"] == snapshot["sha256"], (
+    # Validate invariants before writing an intentional rotation, then compare
+    # all recorded evidence. These are 45 prompt-assembly checks, not model
+    # response evaluations.
+    snapshot = _load_or_create_snapshot(_snapshot_key(level, mood, time_of_day), payload)
+    if os.environ.get("UPDATE_SNAPSHOTS") != "1":
+        assert payload == snapshot, (
             f"System prompt drifted for (level={level}, mood={mood!r}, tod={time_of_day!r}).\n"
             f"  Snapshot sha256: {snapshot['sha256']}\n"
             f"  Current  sha256: {payload['sha256']}\n"
