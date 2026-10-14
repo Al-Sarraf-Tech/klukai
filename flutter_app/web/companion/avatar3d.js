@@ -10,7 +10,9 @@
 //   av.setMood('quietly_pleased'); av.setSpeaking(level); av.setState('greet');
 //   av.setTint('#ffb3c8');            // mood rim light colour (eases over ~1.2 s)
 //   av.setInsets({ top, bottom });    // CSS px of the canvas hidden under the topbar / dock
-//   av.zoomBy(0.85); av.rotateBy(Math.PI / 12); av.resetView();
+//   av.zoomBy(0.85); av.rotateBy(Math.PI / 12); av.moveBy(0.12); av.resetView();
+//   av.react('salute'); // temporary; returns to her current mood/thinking state
+//   av.getView(); av.setView(saved); // opts.view / opts.onViewChange persist inspection
 //   av.setPaused(true); // parked behind another view: no render loop until setPaused(false)
 //
 // Look: two-band tinted toon (per-role shadow colours, baked AO from the GLB's
@@ -221,13 +223,23 @@ export function cameraFraming({ framing = 'upper', state = 'idle', aspect = 1, h
  *  Absorb only changes since the last camera placement: speech push-in and
  *  resize/state framing must never feed back into the user's zoom or orbit.
  *  Yaw wraps after each turn; horizontal orbit has no stops. */
-export function createCameraView() {
+export function createCameraView(initial = null) {
   const minZoom = 0.6, maxZoom = 1.8;
   const minPitch = -0.22, maxPitch = 0.12;
-  let dTheta = 0, dPhi = 0, zoom = 1;
+  let dTheta = 0, dPhi = 0, zoom = 1, panY = 0;
   let applied = null;
+  const set = (value) => {
+    const finite = (v, fallback) => Number.isFinite(v) ? v : fallback;
+    dTheta = wrapPi(finite(value?.dTheta, 0));
+    dPhi = clamp(finite(value?.dPhi, 0), minPitch, maxPitch);
+    zoom = clamp(finite(value?.zoom, 1), minZoom, maxZoom);
+    panY = clamp(finite(value?.panY, 0), -1.2, 1.2);
+    applied = null;
+  };
+  set(initial);
   return {
-    get state() { return { dTheta, dPhi, zoom }; },
+    get state() { return { dTheta, dPhi, zoom, panY }; },
+    set,
     absorb(observed) {
       if (!applied || !Number.isFinite(observed.radius) || observed.radius <= 0
           || !Number.isFinite(observed.theta) || !Number.isFinite(observed.phi)) return;
@@ -248,8 +260,83 @@ export function createCameraView() {
     },
     zoomBy(factor) { if (Number.isFinite(factor) && factor > 0) zoom = clamp(zoom * factor, minZoom, maxZoom); },
     rotateBy(radians) { if (Number.isFinite(radians)) dTheta = wrapPi(dTheta + radians); },
-    reset() { dTheta = 0; dPhi = 0; zoom = 1; applied = null; },
+    moveBy(metres) { if (Number.isFinite(metres)) panY = clamp(panY - metres, -1.2, 1.2); },
+    reset() { set(null); },
   };
+}
+
+/** Pointer intent shared by touch and mouse: a pinch remains a pinch until all
+ * fingers lift; small jitter is a tap, and a cancelled drag can never be a tap. */
+export function createAvatarGesture({ threshold = 7, tapMs = 650 } = {}) {
+  const points = new Map();
+  let blocked = false;
+  return {
+    down(id, x, y, at) {
+      if (!points.size) blocked = false;
+      points.set(id, { x, y, startX: x, startY: y, at, dragged: false });
+      if (points.size > 1) blocked = true;
+    },
+    move(id, x, y) {
+      const p = points.get(id);
+      if (!p || blocked) return null;
+      if (!p.dragged && Math.hypot(x - p.startX, y - p.startY) <= threshold) return null;
+      p.dragged = true;
+      const delta = { dx: x - p.x, dy: y - p.y };
+      p.x = x; p.y = y;
+      return delta;
+    },
+    up(id, x, y, at) {
+      const p = points.get(id);
+      points.delete(id);
+      return p && !blocked && !p.dragged && at - p.at <= tapMs
+        && Math.hypot(x - p.startX, y - p.startY) <= threshold ? { x, y } : null;
+    },
+    cancel(id) {
+      // Losing capture for one finger must not forget the other fingers: a
+      // replacement finger is still part of that pinch, never a new tap.
+      if (id === undefined) points.clear(); else points.delete(id);
+      blocked = true;
+    },
+  };
+}
+
+const REACTION_CLIPS = Object.freeze({ salute: 'salute', acknowledge: 'thankful', pleased: 'happy' });
+/** Reactions are transient clips, so the mood/state machine keeps its context. */
+export function createReactionController({ available = [], play = () => {}, restore = () => {}, now = () => performance.now(), cooldown = 2600 } = {}) {
+  let active = null, lastAt = -Infinity, count = 0;
+  const kinds = Object.keys(REACTION_CLIPS).filter((k) => available.includes(REACTION_CLIPS[k]));
+  return {
+    get active() { return active; },
+    get count() { return count; },
+    trigger(kind = 'auto') {
+      if (active || now() - lastAt < cooldown) return false;
+      const name = kind === 'auto' ? kinds[count % kinds.length] : kind;
+      if (!kinds.includes(name)) return false;
+      active = { kind: name, clip: REACTION_CLIPS[name] };
+      lastAt = now(); count++;
+      play(active);
+      return true;
+    },
+    finish() { if (active) { active = null; restore(); } },
+    cancel() { active = null; },
+  };
+}
+
+/** Installed face-family fallback, calibrated to its real lip rim and cavity in
+ * bind-pose metres. The narrow upper/lower lip gap opens; cheeks fade to rest.
+ * Used only on the known Clukay face atlases; other models use authored morphs. */
+export function speechMouthDelta([x, y, z], seamY = 1.3365) {
+  if (Math.abs(x) >= 0.03 || y < 1.312 || y > 1.355 || z < 0.025 || z > 0.065) return [0, 0, 0];
+  const seam = seamY + 0.0015 * Math.min(1, (x / 0.011) ** 2);
+  const width = 1 - smoothstep(0.008, 0.03, Math.abs(x));
+  const edge = y < seam ? smoothstep(1.312, 1.331, y) : 1 - smoothstep(1.341, 1.355, y);
+  const lower = y < seam;
+  return [0, (lower ? -0.007 : 0.002) * width * edge, 0];
+}
+
+/** Noise floor suppresses resting hiss; low conversational levels still read. */
+export function speechMouthLevel(level) {
+  return Math.pow(clamp((Number(level) - 0.025) / 0.65 || 0, 0, 1), 0.7);
 }
 
 export function detectIOS(nav = globalThis.navigator) {
@@ -586,7 +673,7 @@ function importLibs(withOrbit = true) {
   if (!libsPromise) {
     // One tree-shaken bundle (tools/avatar/vendor.mjs): three core subset +
     // GLTFLoader + MeshoptDecoder + OrbitControls.
-    libsPromise = import('./vendor/three-avatar.min.js')
+    libsPromise = import('./vendor/three-avatar.min.js?v=8ae676317440')
       .then((m) => ({ THREE: m, GLTFLoader: m.GLTFLoader, MeshoptDecoder: m.MeshoptDecoder, OrbitControls: m.OrbitControls }));
     libsPromise.catch(() => { libsPromise = null; });
   }
@@ -797,7 +884,7 @@ export async function createAvatar3D(container, opts = {}) {
   // can tell it from a live avatar (and try again later instead of keeping it).
   const stub = {
     setState() {}, setMood() {}, setSpeaking() {}, setFraming() {}, setPaused() {}, setTint() {}, setInsets() {},
-    zoomBy() {}, rotateBy() {}, resetView() {},
+    zoomBy() {}, rotateBy() {}, moveBy() {}, resetView() {}, setView() {}, getView() { return createCameraView().state; }, react() { return false; },
     resize() {}, dispose() {},
     get ready() { return false; }, get state() { return 'idle'; },
   };
@@ -841,7 +928,7 @@ export async function createAvatar3D(container, opts = {}) {
   canvas.style.display = 'block';
   canvas.style.width = '100%';
   canvas.style.height = '100%';
-  canvas.style.touchAction = 'pan-y';
+  canvas.style.touchAction = 'none';
   canvas.setAttribute('aria-label', 'Klukai');
   container.appendChild(canvas);
 
@@ -875,6 +962,8 @@ export async function createAvatar3D(container, opts = {}) {
   let onMotionPref = null;
   let onControlStart = null;
   let onControlEnd = null;
+  let onViewPointerDown = null, onViewPointerMove = null, onViewPointerUp = null, onViewPointerCancel = null;
+  let viewNotifyTimer = 0;
   let ro = null;
   let rafId = 0;
   let frameAcc = 0; let frameN = 0; let fpsAvg = 0; let lastNow = 0; // adaptive resolution
@@ -894,6 +983,10 @@ export async function createAvatar3D(container, opts = {}) {
   let talkWeight = 0;
   let speaking = 0;
   let speakingTarget = 0;
+  let mouthOpen = 0;
+  let mouthMode = 'none';
+  const mouthTargets = [];
+  let reactions = null;
   let blinkIdx = -1;
   let blinkT = -1; // ms since blink start; <0 = waiting
   let blinkSlow = false;
@@ -1164,13 +1257,14 @@ export async function createAvatar3D(container, opts = {}) {
     head = root.getObjectByName('mixamorigHead');
     neck = root.getObjectByName('mixamorigNeck');
     headJoint = Boolean(head && skin?.bones.includes(head));
-    for (const n of ['Hips', 'Spine1', 'Spine2', 'LeftShoulder', 'RightShoulder', 'LeftArm', 'RightArm', 'LeftForeArm', 'RightForeArm', 'LeftToeBase', 'RightToeBase', 'LeftFoot', 'RightFoot']) {
+    for (const n of ['Hips', 'Spine1', 'Spine2', 'LeftShoulder', 'RightShoulder', 'LeftArm', 'RightArm', 'LeftForeArm', 'RightForeArm', 'LeftHand', 'RightHand', 'LeftToeBase', 'RightToeBase', 'LeftFoot', 'RightFoot']) {
       bones[n] = root.getObjectByName(`mixamorig${n}`) || null;
     }
     for (const m of skinned) {
       const idx = m.morphTargetDictionary?.blink;
       if (idx !== undefined) blinkIdx = idx;
     }
+    buildSpeechMouth();
     addOutlines();
     captureRest();
     springs = hasChains ? buildSprings(root.userData) : null;
@@ -1190,6 +1284,62 @@ export async function createAvatar3D(container, opts = {}) {
     fail(e);
     teardown();
     return stub;
+  }
+
+  function buildSpeechMouth() {
+    root.updateMatrixWorld(true);
+    for (const mesh of skinned) {
+      const dict = mesh.morphTargetDictionary || {};
+      const authored = Object.keys(dict).find((n) => /^(jaw_?open|mouth_?open|viseme_?aa|aa)$/i.test(n));
+      if (authored) {
+        mouthTargets.push({ mesh, index: dict[authored], rest: mesh.morphTargetInfluences[dict[authored]] || 0 });
+        mouthMode = 'morph';
+        continue;
+      }
+      // The installed default + Garf appearances share this face family. Their
+      // decoded bind-space lips were measured separately before calibration.
+      const faceAtlas = mesh.material?.name;
+      if (!['c_Clukay_face_d', 'Klukai Face'].includes(faceAtlas)) continue;
+      const p = mesh.geometry.attributes.position;
+      if (!p || typeof mesh.applyBoneTransform !== 'function') continue;
+      const delta = new Float32Array(p.count * 3);
+      const v = new THREE.Vector3();
+      let moved = 0;
+      for (let i = 0; i < p.count; i++) {
+        v.fromBufferAttribute(p, i);
+        mesh.applyBoneTransform(i, v);
+        const offset = speechMouthDelta(v.toArray(), faceAtlas === 'Klukai Face' ? 1.33745 : 1.3365);
+        if (offset[1]) moved++;
+        for (let axis = 0; axis < 3; axis++) {
+          delta[i * 3 + axis] = offset[axis] * unitsPerMetre;
+          if (!mesh.geometry.morphTargetsRelative) delta[i * 3 + axis] += [p.getX(i), p.getY(i), p.getZ(i)][axis];
+        }
+      }
+      if (!moved) continue;
+      const attrs = mesh.geometry.morphAttributes;
+      const positions = attrs.position || (attrs.position = []);
+      const index = positions.length;
+      const attribute = new THREE.BufferAttribute(delta, 3);
+      attribute.name = 'speechMouth';
+      positions.push(attribute);
+      if (attrs.normal?.length) {
+        const normals = mesh.geometry.morphTargetsRelative ? new Float32Array(delta.length) : Float32Array.from(mesh.geometry.attributes.normal.array);
+        attrs.normal.push(new THREE.BufferAttribute(normals, 3));
+      }
+      const previous = mesh.morphTargetInfluences?.slice() || [];
+      mesh.updateMorphTargets();
+      mesh.morphTargetDictionary = { ...dict, speechMouth: index };
+      previous.forEach((value, i) => { mesh.morphTargetInfluences[i] = value; });
+      mouthTargets.push({ mesh, index, rest: 0 });
+      if (mouthMode !== 'morph') mouthMode = 'surface';
+    }
+  }
+
+  function applyMouth(dt) {
+    const target = stateName === 'sleep' ? 0 : speechMouthLevel(speakingTarget);
+    mouthOpen += (target - mouthOpen) * (1 - Math.exp(-dt / (target > mouthOpen ? 0.035 : 0.075)));
+    if (target === 0 && mouthOpen < 0.001) mouthOpen = 0;
+    for (const m of mouthTargets) m.mesh.morphTargetInfluences[m.index] = m.rest + (1 - m.rest) * mouthOpen;
   }
 
   // Hair sway bounds from all hair geometry together (one shared uniform; quantized units, never metres).
@@ -1212,7 +1362,7 @@ export async function createAvatar3D(container, opts = {}) {
   // then invisible and must not count as "where she looks").
   function captureRest() {
     faceBone = headJoint ? head : neck;
-    clean = [neck, head, ...['Spine1', 'Spine2', 'LeftShoulder', 'RightShoulder', 'LeftArm', 'RightArm', 'LeftForeArm', 'RightForeArm'].map((n) => bones[n])]
+    clean = [neck, head, ...['Spine1', 'Spine2', 'LeftShoulder', 'RightShoulder', 'LeftArm', 'RightArm', 'LeftForeArm', 'RightForeArm', 'LeftHand', 'RightHand'].map((n) => bones[n])]
       .filter(Boolean).map((bone) => ({ bone, q: bone.quaternion.clone() }));
     root.updateMatrixWorld(true);
     if (head) headRestY = head.getWorldPosition(new THREE.Vector3()).y;
@@ -1245,7 +1395,11 @@ export async function createAvatar3D(container, opts = {}) {
   // ── camera framing (eased) + persistent user zoom/orbit ──────────────────
   const camGoal = { target: new THREE.Vector3(), sph: new THREE.Spherical(2, Math.PI / 2, 0), fov: BASE_FOV };
   const camCur = { target: new THREE.Vector3(), sph: new THREE.Spherical(2, Math.PI / 2, 0), fov: BASE_FOV };
-  const orbit = createCameraView();
+  const orbit = createCameraView(opts.view);
+  const viewTarget = new THREE.Vector3();
+  const gesture = createAvatarGesture();
+  const raycaster = new THREE.Raycaster();
+  let lastView = JSON.stringify(orbit.state);
   let orbitDragging = false;
   let camSnap = true;
   const drift = new THREE.Vector3();
@@ -1293,15 +1447,16 @@ export async function createAvatar3D(container, opts = {}) {
     camSnap = false;
     // 3. Compose the persistent view with the automatic 3% speech push-in.
     const view = orbit.place(camCur.sph, pushIn);
-    camera.position.setFromSpherical(_sph.set(view.radius, view.phi, view.theta)).add(camCur.target);
+    viewTarget.copy(camCur.target); viewTarget.y += orbit.state.panY;
+    camera.position.setFromSpherical(_sph.set(view.radius, view.phi, view.theta)).add(viewTarget);
     if (controls) {
-      controls.target.copy(camCur.target);
+      controls.target.copy(viewTarget);
       controls.minDistance = view.minDistance; controls.maxDistance = view.maxDistance;
       controls.minAzimuthAngle = view.minAzimuthAngle; controls.maxAzimuthAngle = view.maxAzimuthAngle;
       controls.minPolarAngle = view.minPolarAngle; controls.maxPolarAngle = view.maxPolarAngle;
       controls.update();
     } else {
-      camera.lookAt(camCur.target);
+      camera.lookAt(viewTarget);
     }
   }
   function changeView(change) {
@@ -1317,17 +1472,36 @@ export async function createAvatar3D(container, opts = {}) {
     }
     change();
     placeCamera(0, false);
+    notifyView();
     if (paused) renderer.render(scene, camera);
+  }
+  function notifyView() {
+    const value = orbit.state;
+    // Round only the persisted snapshot: camera precision stays untouched and
+    // sub-pixel drift cannot cause localStorage writes on automatic frames.
+    for (const k of Object.keys(value)) value[k] = +value[k].toFixed(5);
+    const next = JSON.stringify(value);
+    if (next === lastView) return;
+    lastView = next;
+    try { opts.onViewChange?.(value); } catch { /* storage is caller-owned */ }
+  }
+  function settleView() {
+    clearTimeout(viewNotifyTimer);
+    viewNotifyTimer = setTimeout(() => { if (!disposed) { absorbCameraInput(); notifyView(); } }, 140);
   }
   if (OrbitControls) {
     controls = new OrbitControls(camera, canvas);
     controls.enablePan = false;
+    controls.enableRotate = false; // one pointer: our yaw + vertical-framing gesture
+    // An unsupported ONE action resets OrbitControls to NONE after a pinch.
+    // Disabled ROTATE returns early and can leave its two-pointer state alive.
+    controls.touches.ONE = null;
     controls.enableZoom = true;
-    controls.enableDamping = true;
+    controls.enableDamping = false; // exact release position, with no hidden residual input
     controls.dampingFactor = 0.08;
     controls.rotateSpeed = isIOS || globalThis.matchMedia?.('(pointer: coarse)').matches ? 0.7 : 0.5;
     onControlStart = () => { orbitDragging = true; };
-    onControlEnd = () => { orbitDragging = false; };
+    onControlEnd = () => { orbitDragging = false; settleView(); };
     controls.addEventListener('start', onControlStart);
     controls.addEventListener('end', onControlEnd);
   }
@@ -1353,7 +1527,7 @@ export async function createAvatar3D(container, opts = {}) {
       // Already on screen. If it was playing as a one-shot fidget (thankful is
       // both a fidget and a happy clip), adopt it in place with this state's
       // loop mode: no restart, and its end is no longer taken for a fidget's.
-      if (current.fidget || current.once !== !!spec.once) {
+      if (current.fidget || current.reaction || current.once !== !!spec.once) {
         next.setLoop(spec.loop ? THREE.LoopRepeat : THREE.LoopOnce, spec.loop ? Infinity : 1);
         next.clampWhenFinished = !spec.loop;
         current = { state, action: next, once: !!spec.once };
@@ -1412,6 +1586,7 @@ export async function createAvatar3D(container, opts = {}) {
   }
   function onFinished(e) {
     if (!current || e.action !== current.action || !current.once) return;
+    if (current.reaction) { reactions.finish(); return; }
     const wasFidget = current.fidget;
     if (!wasFidget && stateName === 'greet') { sm.settle('idle'); stateName = 'idle'; }
     play(stateName === 'idle' ? 'idle' : stateName, { fade: wasFidget ? 0.6 : FADE });
@@ -1420,12 +1595,40 @@ export async function createAvatar3D(container, opts = {}) {
   const sm = createStateMachine({
     now: () => performance.now(),
     enter(name, prev) {
+      reactions?.cancel();
       if (prev === 'talking' && name !== 'talking') talkWeight = 1; // fade the layer out, no pop
       stateName = name;
       play(name);
       if ((prev === 'sleep') !== (name === 'sleep')) { frame(); resetSprings(700); } // lying down / getting up: hang through the crossfade
     },
   });
+
+  reactions = createReactionController({
+    available: [...actions.keys()],
+    play(reaction) {
+      if (reducedMotion) {
+        triggerBlink(performance.now(), true);
+        reactions.finish();
+        return;
+      }
+      const next = actions.get(reaction.clip);
+      const previous = current?.action;
+      next.reset().setLoop(THREE.LoopOnce, 1);
+      next.clampWhenFinished = true;
+      next.setEffectiveTimeScale(1);
+      next.setEffectiveWeight(1);
+      next.play();
+      if (previous && previous !== next) previous.crossFadeTo(next, 0.28, false);
+      current = { state: stateName, action: next, once: true, reaction: true };
+      triggerBlink(performance.now());
+    },
+    restore() { play(stateName, { fade: 0.4 }); },
+  });
+
+  function react(kind = 'auto') {
+    if (disposed || paused || stateName === 'sleep' || speakingTarget > 0.04) return false;
+    return reactions.trigger(kind);
+  }
 
   play('idle', { fade: 0 });
   stateName = 'idle';
@@ -1461,7 +1664,7 @@ export async function createAvatar3D(container, opts = {}) {
   // Breathing: chest ±0.6°, shoulders ±0.4°, 4.2 s (the CSS `breathe` period).
   let breathPhase = 0;
   function applyBreath(dt) {
-    if (!life) return;
+    if (!life || reducedMotion) return;
     const sleep = stateName === 'sleep';
     breathPhase += (dt / (sleep ? 5.5 : 4.2)) * 2 * Math.PI;
     const amp = stateName === 'excited' || stateName === 'flustered' ? 1.3 : 1;
@@ -1548,7 +1751,7 @@ export async function createAvatar3D(container, opts = {}) {
     }
     talkPresence += ((inPhrase ? 1 : 0) - talkPresence) * (1 - Math.exp(-dt * 2.2));
     pushIn = life && !reducedMotion ? talkPresence : 0;
-    if (!life) return;
+    if (!life || reducedMotion) return;
     let nod = 0;
     for (const n of nods) nod += nodCurve((now - n.t0) / 1000, n.amp);
     while (nods.length && now - nods[0].t0 > 1500) nods.shift();
@@ -1565,6 +1768,13 @@ export async function createAvatar3D(container, opts = {}) {
     rotWorld(bone, pitchAxis, -nod);
     rotWorld(bone, AX.y, yaw);
     rotWorld(bone, fwd.normalize(), roll);
+    // Short emphases in the existing conversational clip: wrists turn with
+    // syllables, one forearm leads each phrase. All offsets are rebuilt from
+    // the clean animation pose every frame, so silence leaves no residual pose.
+    const emphasis = env.fast * talkPresence;
+    rotWorld(bones.RightForeArm, AX.x, -0.09 * emphasis);
+    rotWorld(bones.RightHand, AX.y, 0.08 * emphasis * Math.sin(now / 430));
+    rotWorld(bones.LeftHand, AX.z, -0.05 * emphasis * Math.sin(now / 600));
   }
 
   // Eye guard: she never hides her eyes from him under the cap brim. Measure how far
@@ -1916,8 +2126,10 @@ export async function createAvatar3D(container, opts = {}) {
     // speaking: smooth the level, layer the talking clip over the base state
     speaking += (speakingTarget - speaking) * Math.min(1, dt * 12);
     if (talkAction && stateName !== 'talking' && stateName !== 'sleep') {
-      const goal = speaking > 0.04 ? Math.min(0.85, 0.35 + speaking) : 0;
+      const goal = !reducedMotion && !reactions?.active && speaking > 0.04 ? Math.min(0.95, 0.4 + speaking) : 0;
       talkWeight += (goal - talkWeight) * Math.min(1, dt * 4);
+      if (goal === 0 && talkWeight < 0.001) talkWeight = 0;
+      if (talkWeight > 0) { talkAction.enabled = true; talkAction.play(); }
       talkAction.setEffectiveWeight(talkWeight);
     } else if (talkAction) {
       talkWeight = 0;
@@ -1935,6 +2147,7 @@ export async function createAvatar3D(container, opts = {}) {
     applyBreath(dt);
     applyLookAt(dt, now);
     applyTalk(dt, now);
+    applyMouth(dt);
     applyEyeGuard(dt);
     applyBlink(dt, now);
     updateSprings(dt, now);
@@ -1956,6 +2169,11 @@ export async function createAvatar3D(container, opts = {}) {
   // GL context is live, and the caller hasn't parked the view (setPaused).
   function syncPaused() {
     paused = (typeof document !== 'undefined' && document.hidden) || contextLost || userPaused;
+    if (controls) controls.enabled = !paused;
+    if (paused) {
+      if (ready && orbitDragging) { absorbCameraInput(); notifyView(); }
+      gesture.cancel(); orbitDragging = false;
+    }
     if (paused) stop(); else start();
   }
   onVisibility = syncPaused;
@@ -1970,12 +2188,56 @@ export async function createAvatar3D(container, opts = {}) {
     pointer.until = performance.now() + 2500;
   };
   onPointerLeave = () => { pointer.until = 0; };
-  onMotionPref = () => { reducedMotion = opts.reducedMotion === true || Boolean(motionMq?.matches); };
+  onViewPointerDown = (e) => {
+    if (disposed || paused || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    gesture.down(e.pointerId, e.clientX, e.clientY, performance.now());
+    canvas.setPointerCapture?.(e.pointerId);
+    orbitDragging = true;
+  };
+  onViewPointerMove = (e) => {
+    if (disposed || paused) return;
+    const delta = gesture.move(e.pointerId, e.clientX, e.clientY);
+    if (!delta) return;
+    const height = Math.max(1, canvas.clientHeight);
+    const distance = camera.position.distanceTo(viewTarget);
+    const metresPerPixel = 2 * distance * Math.tan(camera.fov * DEG / 2) / height;
+    absorbCameraInput();
+    orbit.rotateBy(-delta.dx * 2 * Math.PI / height * (controls?.rotateSpeed || 0.5));
+    orbit.moveBy(-delta.dy * metresPerPixel);
+    placeCamera(0, false);
+  };
+  onViewPointerUp = (e) => {
+    const tap = gesture.up(e.pointerId, e.clientX, e.clientY, performance.now());
+    orbitDragging = false;
+    if (!disposed) { absorbCameraInput(); notifyView(); }
+    if (!tap || disposed || paused) return;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    root.updateMatrixWorld(true);
+    camera.updateMatrixWorld(true);
+    // Bounds change with the skinned pose; recalculate before Three's coarse
+    // sphere test so a hand outside the previous animation frame is hittable.
+    for (const mesh of skinned) mesh.computeBoundingSphere();
+    raycaster.setFromCamera({ x: 2 * (tap.x - rect.left) / rect.width - 1, y: 1 - 2 * (tap.y - rect.top) / rect.height }, camera);
+    if (raycaster.intersectObjects(skinned, false).length) react();
+  };
+  onViewPointerCancel = (e) => { gesture.cancel(e.pointerId); orbitDragging = false; settleView(); };
+  onMotionPref = () => {
+    reducedMotion = opts.reducedMotion === true || Boolean(motionMq?.matches);
+    if (reducedMotion) reactions?.finish();
+  };
   document.addEventListener('visibilitychange', onVisibility);
   canvas.addEventListener('webglcontextlost', onLost, false);
   canvas.addEventListener('webglcontextrestored', onRestored, false);
   canvas.addEventListener('pointermove', onPointer, { passive: true });
   canvas.addEventListener('pointerleave', onPointerLeave, { passive: true });
+  if (OrbitControls) {
+    canvas.addEventListener('pointerdown', onViewPointerDown);
+    canvas.addEventListener('pointermove', onViewPointerMove);
+    canvas.addEventListener('pointerup', onViewPointerUp);
+    canvas.addEventListener('pointercancel', onViewPointerCancel);
+    canvas.addEventListener('lostpointercapture', onViewPointerCancel);
+  }
   motionMq?.addEventListener?.('change', onMotionPref);
   if (typeof ResizeObserver === 'function') { ro = new ResizeObserver(() => api.resize()); ro.observe(container); }
   syncOutlineRes();
@@ -1992,14 +2254,22 @@ export async function createAvatar3D(container, opts = {}) {
   }
   function teardown() {
     if (disposed) return;
+    if (ready) { absorbCameraInput(); notifyView(); }
     disposed = true;
     opts.signal?.removeEventListener('abort', onAbort);
     stop();
+    clearTimeout(viewNotifyTimer);
+    reactions?.cancel();
     if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);
     if (onLost) canvas.removeEventListener('webglcontextlost', onLost);
     if (onRestored) canvas.removeEventListener('webglcontextrestored', onRestored);
     if (onPointer) canvas.removeEventListener('pointermove', onPointer);
     if (onPointerLeave) canvas.removeEventListener('pointerleave', onPointerLeave);
+    if (onViewPointerDown) canvas.removeEventListener('pointerdown', onViewPointerDown);
+    if (onViewPointerMove) canvas.removeEventListener('pointermove', onViewPointerMove);
+    if (onViewPointerUp) canvas.removeEventListener('pointerup', onViewPointerUp);
+    if (onViewPointerCancel) canvas.removeEventListener('pointercancel', onViewPointerCancel);
+    if (onViewPointerCancel) canvas.removeEventListener('lostpointercapture', onViewPointerCancel);
     if (onMotionPref) motionMq?.removeEventListener?.('change', onMotionPref);
     ro?.disconnect();
     if (controls) {
@@ -2047,15 +2317,22 @@ export async function createAvatar3D(container, opts = {}) {
       sm.setMood(mood);
     },
     setSpeaking(level) {
+      if (disposed) return;
       const v = Number(level);
       speakingTarget = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+      if (speakingTarget > 0.04) reactions.finish();
     },
     setFraming(f) { framing = f === 'full' ? 'full' : 'upper'; if (root) frame(); },
     /** Distance multiplier: below 1 zooms in, above 1 zooms out. */
     zoomBy(factor) { changeView(() => orbit.zoomBy(factor)); },
     /** Horizontal camera angle in radians, relative to the current view. */
     rotateBy(radians) { changeView(() => orbit.rotateBy(radians)); },
+    /** Positive metres moves her up on screen; negative moves her down. */
+    moveBy(metres) { changeView(() => orbit.moveBy(metres)); },
+    getView() { if (!disposed) absorbCameraInput(); return orbit.state; },
+    setView(view) { changeView(() => orbit.set(view)); },
     resetView() { changeView(() => orbit.reset()); },
+    react,
     /** Mood rim colour: 0xRRGGBB, '#rrggbb' (or a RIM_TINTS key); eases over ~1.2 s. */
     setTint(color) {
       const c = parseTint(color);
@@ -2105,9 +2382,10 @@ export async function createAvatar3D(container, opts = {}) {
         return {
           state: sm.state, source: sm.source, pending: sm.pending, mood: sm.mood, clip: current?.action?.getClip().name, fidget: Boolean(current?.fidget),
           lookW: look.w, lookYaw: look.yaw, lookPitch: look.pitch, faceYaw: Math.atan2(f.x, f.z), facePitch: Math.asin(Math.max(-1, Math.min(1, f.y))),
-          armW, pushIn, talkPresence, nods: nods.length, blink: blinkIdx >= 0 ? skinned.find((m) => m.morphTargetInfluences)?.morphTargetInfluences[blinkIdx] ?? 0 : null,
+          armW, pushIn, talkPresence, talkWeight, mouthOpen, mouthMode, reaction: reactions.active, reactionCount: reactions.count,
+          nods: nods.length, blink: blinkIdx >= 0 ? skinned.find((m) => m.morphTargetInfluences)?.morphTargetInfluences[blinkIdx] ?? 0 : null,
           lid, drift: drift.toArray(), swayAmp: shared.uSwayAmp.value, sway: shared.uSway.value.toArray(), shadowA, shadowVisible: Boolean(shadowMesh?.visible),
-          fov: camera.fov, cam: camera.position.toArray(), target: camCur.target.toArray(), reducedMotion, outlines: outlinesOn, headJoint,
+          fov: camera.fov, cam: camera.position.toArray(), target: viewTarget.toArray(), reducedMotion, outlines: outlinesOn, headJoint,
           orbit: { ...orbit.state, dragging: orbitDragging }, follow,
           eyeElevDeg: guard.e0 / DEG, eyeElevAfterDeg: guard.e1 / DEG, guardLiftDeg: guard.lift / DEG, guardW: guard.w,
           springs: springs ? { mode: springs.mode, ms: springs.ms, chains: springs.chains.map((c) => c.name), clearance: springClearance(),

@@ -15,7 +15,7 @@
   <title>Klukai — Companion</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
-  <link rel="stylesheet" href="companion/companion.css?v=57ec8e4b69ac">
+  <link rel="stylesheet" href="companion/companion.css?v=4d533928c458">
 </head>
 <body>
   <main id="stage" class="stage" data-mode="portrait">
@@ -71,7 +71,12 @@
           <button class="btn" id="btn-zoom-in" type="button" aria-label="Zoom in" title="Zoom in">+</button>
           <button class="btn" id="btn-rotate-right" type="button" aria-label="Rotate right" title="Rotate right">↷</button>
         </div>
-        <p class="camera-hint">Drag to rotate · Pinch or scroll to zoom</p>
+        <div class="camera-buttons character-buttons">
+          <button class="btn" id="btn-move-up" type="button" aria-label="Move Klukai up" title="Move Klukai up">↑</button>
+          <button class="btn" id="btn-react" type="button" title="A salute, nod or smile">Interact</button>
+          <button class="btn" id="btn-move-down" type="button" aria-label="Move Klukai down" title="Move Klukai down">↓</button>
+        </div>
+        <p class="camera-hint">Drag ↔ to turn · Drag ↕ to position<br>Tap her to react · Pinch or scroll to zoom</p>
       </div>
       <p class="subtitle" id="subtitle" aria-live="polite"></p>
       <form class="composer" id="composer" autocomplete="off">
@@ -89,6 +94,6 @@
   </main>
 
   <noscript>The companion view needs JavaScript.</noscript>
-  <script type="module" src="companion/app.js?v=4398b6334e42"></script>
+  <script type="module" src="companion/app.js?v=2b40b27bec49"></script>
 </body>
 </html>

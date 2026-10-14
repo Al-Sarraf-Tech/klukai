@@ -261,19 +261,26 @@ function boot() {
   let requestedAppearance = prefs.appearance || "default";
   const appearances = createAppearanceSwitcher({
     async build(id, signal) {
-      const { createAvatar3D } = await import("./avatar3d.js?v=1ad86e64e05a");
+      const { createAvatar3D } = await import("./avatar3d.js?v=0453d86fa728");
       const host = document.createElement("div");
       host.className = "model-view";
       host.style.visibility = "hidden";
       $("model").appendChild(host);
       signal.addEventListener("abort", () => host.remove(), { once: true });
-      let error;
+      let error, candidate;
       try {
         const av = await createAvatar3D(host, {
           framing: "full",
+          view: prefs.view,
+          onViewChange: (view) => {
+            if (avatar !== candidate) return;
+            prefs.view = view;
+            savePrefs(prefs);
+          },
           modelKey: id, signal, loadModel: () => api.model(id, { signal }),
           onError: (e) => { error = e; },
         });
+        candidate = av;
         const dispose = av.dispose.bind(av);
         av.dispose = () => { dispose(); host.remove(); };
         if (!av.ready) { av.dispose(); throw error || new Error("3D unavailable"); }
@@ -282,8 +289,11 @@ function boot() {
       } catch (e) { host.remove(); throw e; }
     },
     commit(av, id) {
+      // A user may move the current model while the replacement is loading.
+      av.setView(avatar?.getView() ?? prefs.view);
       av.reveal();
       avatar = av;
+      prefs.view = av.getView();
       prefs.appearance = id;
       savePrefs(prefs);
       $("appearance-select").value = id;
@@ -387,6 +397,9 @@ function boot() {
   $("btn-zoom-out").addEventListener("click", () => avatar?.zoomBy(1 / 0.85));
   $("btn-rotate-left").addEventListener("click", () => avatar?.rotateBy(-Math.PI / 12));
   $("btn-rotate-right").addEventListener("click", () => avatar?.rotateBy(Math.PI / 12));
+  $("btn-move-up").addEventListener("click", () => avatar?.moveBy(0.12));
+  $("btn-move-down").addEventListener("click", () => avatar?.moveBy(-0.12));
+  $("btn-react").addEventListener("click", () => avatar?.react());
   $("btn-reset-view").addEventListener("click", () => avatar?.resetView());
   $("btn-music").addEventListener("click", async () => {
     if (!music) return;
@@ -451,7 +464,7 @@ function boot() {
   // parallel with the socket and the tap-to-begin, so it's ready on wake.
   if (prefs.mode === "model") {
     const modelKey = prefs.appearance || "default";
-    import("./avatar3d.js?v=1ad86e64e05a").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
+    import("./avatar3d.js?v=0453d86fa728").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
   }
   socket.start();
   refreshAppearances();
