@@ -61,3 +61,16 @@ Rollback restores those files, dependencies first and HTML last.
 
 Release evidence belongs under
 `/home/jalsarraf/Documents/Codex/2026-10-14/klukai-avatar-animation-expansion/`.
+
+Published commit `2c3dfa9` at 2026-10-14 16:29:59 UTC. All five installed assets
+match their committed source bytes. Public JS/CSS responses match byte-for-byte;
+public HTML carries the new hashes and subtitle/control order, with the existing
+Cloudflare script injection. Cache prefixes are avatar `7493a8326661`, app
+`088776f4eb49`, CSS `2c01d8c526d0`, and origin HTML `cab7eb25031b`.
+
+An authenticated Brave check against
+`https://klukai.appnest.cc/app/companion.html` loaded the real production model,
+verified the lowered controls, moved her framing, reloaded the saved view,
+reset it, and triggered Interact, with zero page errors. The temporary test
+session was revoked; no chat or generation request was sent. Core stayed
+healthy on its existing image and start time throughout the static deployment.
