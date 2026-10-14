@@ -21,7 +21,7 @@ A production-grade AI companion rooted in [Girls' Frontline 2: Exilium](https://
 
 **Current deployment:** Claude Sonnet 5.5 with medium adaptive thinking handles interactive chat, with Dominus as the local secondary. English speech uses local XTTS on Amarillo's Intel Arc A380. Pictures, live portraits, and background work remain local by default.
 
-This release also prepares independently opt-in OpenAI scene pictures and Anthropic dream/Her POV writing. Those creative API paths are disabled by default, with zero request allowances; publishing the code does not activate paid generation. See the [provider handoff](docs/handoff/2026-10-14-dream-image-preparation.md) for activation and recovery requirements.
+This release also supports independently opt-in OpenAI scene pictures and Anthropic dream/Her POV writing. Fresh deployments default to local providers and zero cloud allowances. On the owner's production deployment, Claude creative writing now uses the existing API key with 12 attempts per UTC month; pictures retain local ComfyUI. See the [provider handoff](docs/handoff/2026-10-14-dream-image-preparation.md) for activation evidence and recovery requirements.
 
 **[Release v1.1.0](https://github.com/Al-Sarraf-Tech/klukai/releases/tag/v1.1.0):** core API `1.1.0`, Flutter `1.1.0+2`. The version sources are [the core package](docker/core/app/__init__.py) and [Flutter's pubspec](flutter_app/pubspec.yaml); checked-in defaults deliberately remain local.
 

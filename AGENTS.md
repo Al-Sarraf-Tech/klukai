@@ -7,8 +7,16 @@ Powering that computer off is normal. On boot, Docker can restore the AI contain
 On 2026-10-14 the owner explicitly authorized paid Anthropic API use for
 Klukai: Sonnet 5.5 with medium adaptive thinking is the interactive primary,
 and Dominus is secondary. This supersedes earlier local-only instructions for
-this path only. Background local jobs and Dominus gaming/idle guards remain.
+this path only. Dominus gaming/idle guards remain.
 See `docs/superpowers/specs/2026-10-14-local-voice-sonnet.md`.
+
+Later that day, the owner requested use of the existing Claude API key for the
+dream/scene work. Anthropic creative text is now separately enabled with an
+initial limit of 12 attempts per UTC day and 12 per UTC month, shared across
+dreams and Her POV writing. This is an attempt limit, not a dollar cap. Images
+remain local ComfyUI with cloud image allowances at zero; this instruction does
+not authorize paid image APIs. Other background writers remain local. See
+`docs/handoff/2026-10-14-dream-image-preparation.md` for activation evidence.
 
 ## Voice source baseline
 

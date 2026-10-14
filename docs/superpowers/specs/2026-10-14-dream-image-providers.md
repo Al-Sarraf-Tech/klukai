@@ -5,10 +5,12 @@ Claude and Grok, and to continue until the goal is handled. Research on
 2026-10-14 favors GPT Image 2.5 Sunburst for quality and Flare for speed.
 Claude remains a text/vision model and can write dreams and scene descriptions.
 
-This change prepares opt-in providers without activating paid production
-traffic. The existing spending exception covers interactive Sonnet only.
-Default behavior remains local. Activation and any paid comparison require
-an explicit extension of that authorization.
+The initial change prepared opt-in providers without activating paid production
+traffic. The owner subsequently requested use of the existing Claude API key;
+production now enables Anthropic creative text with 12 attempts per UTC month.
+Fresh deployments remain local by default. Paid cloud images and an image
+comparison still require separate authorization. See the
+[activation record](../../handoff/2026-10-14-dream-image-preparation.md).
 
 ## Behavior
 

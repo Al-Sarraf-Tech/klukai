@@ -1,9 +1,53 @@
 # Cloud dream and picture provider preparation
 
-Status: included in the v1.1.0 release with cloud creative generation disabled
-by default. See the [release record](../releases/v1.1.0.md) for current validation
-and deployment status. Interactive Sonnet and local Arc voice remain independent
-of these creative provider settings.
+Status: included in v1.1.0 with cloud creative generation disabled by default.
+Following the owner's request to use the existing Claude API key, production
+now enables Anthropic dream and Her POV writing. Images remain local ComfyUI.
+See the [release record](../releases/v1.1.0.md) for release validation.
+Interactive Sonnet and local Arc voice remain independent of these settings.
+
+## Claude text activation — 2026-10-14
+
+The owner asked, "Could you use the claude api key", in the creative-provider
+discussion. The existing production key was reused without copying it into
+source, logs, commands or messages. Only these production environment settings
+changed; the image and interactive-chat settings were preserved:
+
+```dotenv
+KLUKAI_CREATIVE_TEXT_PROVIDER=anthropic
+KLUKAI_CLOUD_TEXT_DAILY_LIMIT=12
+KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT=12
+```
+
+This initial allowance permits **12 total attempts per UTC month**, shared by
+night dreams, morning-return dreams and Her POV scene writing across all users.
+Failed attempts count. The daily setting does not multiply the monthly limit.
+Once exhausted, creative text requests stop until the allowance resets; limits
+are not automatically raised. It is not a hard dollar cap.
+
+Live checks used synthetic content and the deployed adapter with the existing
+key, Sonnet 5.5, adaptive thinking and medium effort:
+
+- Dream prose: 256 characters in 2.09 seconds; 89 input and 88 output tokens.
+- The actual `compose_pov` path returned valid annotation, scene tags, couple,
+  mood and title fields in 2.75 seconds.
+- Both calls reserved persistent text attempts; they count toward the allowance.
+- 51 focused provider, quota, routing and creative E2E tests passed.
+- No nonterminal Her POV jobs were present before restarting the core.
+- The core was recreated from the same v1.1.0 image. Its active settings match
+  the configuration above; public and local health checks passed afterward.
+- The ledger retained both attempts and their usage after recreation, leaving
+  ten attempts in October's initial allowance at verification time.
+
+No private conversation history or reference image was used by these checks.
+Claude writes scene descriptions; ComfyUI still renders pictures and requires
+Dominus to be available. A scene-writing attempt can be consumed even if the
+later local render fails. Cloud historical memory seeding remains disabled,
+and interrupted in-flight Her POV jobs require review before another attempt.
+Ordinary reflections and scheduled template greetings keep their existing paths.
+
+To revert, set the text provider to `local` and both text limits to `0`, then
+recreate only `companion-core` using the existing image. Keep the attempt ledger.
 
 ## Selected design
 
@@ -27,9 +71,9 @@ Dream entries remain text-only; this change does not add illustrated dream entri
 
 ## Activation prerequisites
 
-The current owner exception permits paid Anthropic **interactive chat** only.
-Do not activate the prepared image or background text paths without a further
-spending authorization. The existing API key's presence does not enable them.
+The owner has authorized Anthropic interactive chat and the separately capped
+creative text deployment above. Paid cloud image generation still requires
+further authorization. A key's presence alone does not enable either provider.
 
 Before activation, select and inspect the fictional-character reference files,
 record their digests and explicitly approve their cloud use. Do not auto-upload
@@ -111,7 +155,8 @@ without uploading or committing it.
 It shows the established silver hair, green eyes, cross ornaments and tear
 mark. It is not yet an approved reference pack or an identity benchmark result.
 
-Run the offline core suite and targeted provider/ledger/queue tests. Verify
+For a future cloud image pilot, run the offline core suite and targeted
+provider/ledger/queue tests. Verify
 Compose without printing resolved secrets. After separate paid authorization
 and reference adoption, run the fixed blind comparison and record returned
 usage, latency, refusals and identity failures. Then test the selected route
