@@ -73,3 +73,27 @@ required.
 The prior five deployed files and SHA-256 manifest are saved privately in
 `/home/jalsarraf/.local/share/klukai/deploy-backups/avatar-presence-20261014T155603Z/`.
 Rollback restores those files in the same dependency-first order.
+
+Published commit `01e2678` at 2026-10-14 16:07 UTC. All five installed files
+match their committed sources. The four public JS/CSS responses also match
+byte-for-byte; the public HTML contains the new dependency hashes plus
+Cloudflare's existing injected scripts. Cache identifiers are:
+
+| Asset | SHA-256 prefix |
+| --- | --- |
+| Vendor bundle | `8ae676317440` |
+| Avatar | `0453d86fa728` |
+| App | `2b40b27bec49` |
+| CSS | `4d533928c458` |
+| Origin HTML | `76f6767dc211` |
+
+An authenticated Brave check against
+`https://klukai.appnest.cc/app/companion.html` loaded the real production model,
+moved her up, reloaded the saved view, reset it, and displayed the salute.
+No page errors occurred. The temporary `claude` test session was revoked;
+no chat or generation request was sent. The public phone gesture regression
+also passed with no errors, including staggered lift and finger replacement.
+Core health remained healthy throughout this static deployment.
+
+Screenshots, measurements, origin/public manifests and live results are preserved
+under `/home/jalsarraf/Documents/Codex/2026-10-14/klukai-avatar-presence/`.
