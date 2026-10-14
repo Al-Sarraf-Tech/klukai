@@ -43,3 +43,5 @@ assets/build/
 docker/core/mutants/
 docker/core/.mutmut-cache
 .claude/
+# Local MCP client credentials (production uses private storage outside the repo).
+.mcp-secrets/

@@ -23,6 +23,9 @@ services:
       HER_POV_EXECUTION: "${HER_POV_EXECUTION:-queue}"
       QDRANT_URL: "http://aichat-vector:6333"
       MCP_URL: "http://aichat-mcp:8096"
+      # Opt-in, scoped web/reference tools from existing host MCP servers.
+      KLUKAI_MCP_CONFIG: "${KLUKAI_MCP_CONFIG:-}"
+      KLUKAI_BRAVE_ENABLED: "${KLUKAI_BRAVE_ENABLED:-false}"
       DATA_URL: "http://aichat-data:8091"
       INFERENCE_URL: "http://aichat-inference:8105"
       # GPU services on dominus-nobara over its literal Tailscale address.
@@ -86,12 +89,15 @@ services:
       KLUKAI_PERSONAL_MODE: "${KLUKAI_PERSONAL_MODE:-true}"
     volumes:
       - ./config:/config:ro
+      - ${KLUKAI_MCP_SECRETS_DIR:-./.mcp-secrets}:/run/klukai-mcp:ro
       - ./web-build:/app/static:ro
       - companion-images:/images
       - companion-audio:/audio
       # Her 3D avatar (tools/avatar build output; game-derived, gitignored).
       # Served only by the authenticated GET /api/avatar/model — never as /app static.
       - ./assets/build:/avatar:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     deploy:
       resources:
         limits:

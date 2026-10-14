@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 5
 TIMEOUT_SECONDS = 150
-MAX_TOOL_RESULT_CHARS = 3000
+MAX_TOOL_RESULT_CHARS = 8000
 TOOL_TIMEOUT = 45
 
 
@@ -109,7 +111,7 @@ class AgentLoop:
             logger.warning("No MCP tools available — trying recovery")
             try:
                 await self._mcp._initialize_session()
-                tools = await get_tool_schemas(self._mcp)
+                tools = await get_tool_schemas(self._mcp, force_refresh=True)
                 if tools:
                     logger.info("MCP session recovered, %d tools available", len(tools))
             except Exception as e:
@@ -117,6 +119,11 @@ class AgentLoop:
 
         # Always include builtin tools (memory recall, time)
         tools = (tools or []) + get_builtin_tools()
+        declared_names = {
+            tool["function"]["name"] for tool in tools
+            if isinstance(tool.get("function"), dict)
+            and isinstance(tool["function"].get("name"), str)
+        }
 
         # Try agent model first, fall back to chat model if not available
         config = LLMConfig(
@@ -199,29 +206,38 @@ class AgentLoop:
             for tc in tool_calls:
                 tc_id = tc.get("id", "")
                 func = tc.get("function", {})
-                tool_name = func.get("name", "unknown")
+                requested_name = func.get("name")
+                tool_name = requested_name if isinstance(requested_name, str) else "unknown"
                 tool_args_str = func.get("arguments", "{}")
 
+                rejection = None
                 try:
                     tool_args = json.loads(tool_args_str) if isinstance(tool_args_str, str) else tool_args_str
                 except json.JSONDecodeError:
-                    tool_args = {}
+                    tool_args = None
+                if not isinstance(requested_name, str) or tool_name not in declared_names:
+                    rejection = "Tool is not available in this turn."
+                elif not isinstance(tool_args, dict):
+                    rejection = "Tool arguments must be a JSON object."
 
-                result.tools_used.append(tool_name)
+                if rejection is None:
+                    result.tools_used.append(tool_name)
                 result.steps.append(AgentStep(
                     type="tool_call",
-                    content=f"Invoking {tool_name}",
+                    content=f"Rejected {tool_name}" if rejection else f"Invoking {tool_name}",
                     tool_name=tool_name,
-                    tool_args=tool_args,
+                    tool_args=tool_args if isinstance(tool_args, dict) else None,
                 ))
 
                 # Send descriptive status message
-                status_msg = TOOL_STATUS.get(tool_name, f"Using {tool_name}...")
+                status_msg = "Tool request rejected." if rejection else TOOL_STATUS.get(tool_name, f"Using {tool_name}...")
                 await self._ws.send_tool_use(user_id, tool_name, "calling")
                 await self._ws.send_thinking(user_id, status_msg)
 
                 # Handle builtin tools locally, others via MCP
-                if tool_name == "recall_memory":
+                if rejection is not None:
+                    tool_result = {"error": rejection}
+                elif tool_name == "recall_memory":
                     tool_result = await self._builtin_recall_memory(tool_args, user_id)
                 elif tool_name == "get_current_time":
                     tool_result = await self._builtin_get_time()
@@ -256,14 +272,14 @@ class AgentLoop:
                 work_messages.append({
                     "role": "tool",
                     "tool_call_id": tc_id,
-                    "content": result_text[:MAX_TOOL_RESULT_CHARS],
+                    "content": _bounded_tool_text(result_text),
                 })
 
             logger.info(
                 "Agent iteration %d: %d tools called (%s)",
                 iteration + 1,
                 len(tool_calls),
-                ", ".join(tc.get("function", {}).get("name", "?") for tc in tool_calls),
+                ", ".join(str(tc.get("function", {}).get("name", "?")) for tc in tool_calls),
             )
 
         # Force synthesis if no response after all iterations
@@ -314,10 +330,19 @@ def _extract_tool_text(result: dict) -> str:
                 texts.append(item)
         if texts:
             combined = "\n".join(texts)
-            # Clean up HTML artifacts
-            import re
+            # Keep link targets before stripping presentation markup. Markdown
+            # autolinks are URLs, not HTML tags.
+            combined = re.sub(
+                r'<a\b[^>]*\bhref=[\"\'](https?://[^\"\']+)[\"\'][^>]*>(.*?)</a>',
+                lambda match: f"{match[2]} ({html.unescape(match[1])})",
+                combined, flags=re.IGNORECASE | re.DOTALL,
+            )
+            combined = re.sub(r'<(https?://[^\s<>]+)>', r'\1', combined)
             combined = re.sub(r'<[^>]+>', ' ', combined)
-            combined = re.sub(r'\s+', ' ', combined).strip()
+            combined = html.unescape(combined)
+            combined = re.sub(r'[\t\r\f\v ]+', ' ', combined)
+            combined = re.sub(r' *\n *', '\n', combined)
+            combined = re.sub(r'\n{3,}', '\n\n', combined).strip()
             return combined
 
     if isinstance(content, str):
@@ -326,3 +351,24 @@ def _extract_tool_text(result: dict) -> str:
         return f"Error: {result['error']}"
 
     return str(result)[:2000]
+
+
+def _bounded_tool_text(text: str) -> str:
+    """Bound model context while keeping a few source URLs after truncation."""
+    if len(text) <= MAX_TOOL_RESULT_CHARS:
+        return text
+    urls = list(dict.fromkeys(re.findall(r'https?://[^\s<>\"\']+', text)))
+    sources = []
+    source_chars = 0
+    for url in urls:
+        url = url.rstrip(').,;]')
+        if len(url) > 1000 or source_chars + len(url) > 2000:
+            continue
+        sources.append(url)
+        source_chars += len(url) + 1
+        if len(sources) == 6:
+            break
+    suffix = "\n[Tool result truncated.]"
+    if sources:
+        suffix += "\nSource URLs from this result:\n" + "\n".join(sources)
+    return text[:MAX_TOOL_RESULT_CHARS - len(suffix)].rstrip() + suffix

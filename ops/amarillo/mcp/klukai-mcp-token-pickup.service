@@ -1,0 +1,30 @@
+[Unit]
+Description=Publish Klukai's rotated MCP gateway credential
+ConditionPathIsDirectory=/docker/mcp/gateway/key_drops
+ConditionPathIsDirectory=/home/jalsarraf/.local/share/mcp-stack/klukai
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/klukai-mcp-token-pickup.py --owner-uid 1000 --owner-gid 1000
+TimeoutStartSec=30
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/docker/mcp/gateway/key_drops
+ReadWritePaths=/home/jalsarraf/.local/share/mcp-stack/klukai
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+StandardOutput=null
+StandardError=journal

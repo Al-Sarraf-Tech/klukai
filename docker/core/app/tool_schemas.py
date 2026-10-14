@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import logging
+import time
+from copy import deepcopy
+from weakref import WeakKeyDictionary
 
 logger = logging.getLogger(__name__)
 
-_CACHED_SCHEMAS: list[dict] | None = None
+SCHEMA_CACHE_SECONDS = 60.0
+_CACHED_SCHEMAS: WeakKeyDictionary = WeakKeyDictionary()
 
 
 def mcp_to_openai(mcp_tool: dict) -> dict:
     """Convert a single MCP tool definition to OpenAI function-calling format."""
-    input_schema = mcp_tool.get("inputSchema", {})
+    input_schema = deepcopy(mcp_tool.get("inputSchema", {}))
 
     # Ensure required top-level fields
     if "type" not in input_schema:
@@ -30,26 +34,28 @@ def mcp_to_openai(mcp_tool: dict) -> dict:
 
 
 async def get_tool_schemas(mcp_client, force_refresh: bool = False) -> list[dict]:
-    """Get OpenAI-format tool schemas from MCP, with caching."""
-    global _CACHED_SCHEMAS
-
-    if _CACHED_SCHEMAS is not None and not force_refresh:
-        return _CACHED_SCHEMAS
+    """Cache successful discovery per client briefly; empty catalogs retry."""
+    cached = _CACHED_SCHEMAS.get(mcp_client)
+    if cached and not force_refresh and time.monotonic() - cached[0] < SCHEMA_CACHE_SECONDS:
+        return cached[1]
 
     try:
         mcp_tools = await mcp_client.list_tools()
-        _CACHED_SCHEMAS = [mcp_to_openai(t) for t in mcp_tools]
-        logger.info("Loaded %d tool schemas from MCP", len(_CACHED_SCHEMAS))
-        return _CACHED_SCHEMAS
+        schemas = [mcp_to_openai(t) for t in mcp_tools]
+        if schemas:
+            _CACHED_SCHEMAS[mcp_client] = (time.monotonic(), schemas)
+        else:
+            _CACHED_SCHEMAS.pop(mcp_client, None)
+        logger.info("Loaded %d tool schemas from MCP", len(schemas))
+        return schemas
     except Exception as e:
         logger.warning("Failed to load tool schemas: %s", e)
-        return _CACHED_SCHEMAS or []
+        return cached[1] if cached else []
 
 
 def clear_cache() -> None:
     """Clear the cached schemas (e.g., on MCP reconnect)."""
-    global _CACHED_SCHEMAS
-    _CACHED_SCHEMAS = None
+    _CACHED_SCHEMAS.clear()
 
 
 # Built-in tools that don't need MCP

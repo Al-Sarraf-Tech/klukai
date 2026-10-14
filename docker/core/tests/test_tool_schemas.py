@@ -103,9 +103,8 @@ class TestGetToolSchemas:
         cached = await tool_schemas.get_tool_schemas(good_client)
 
         # Now break the client and force refresh
-        bad_client = AsyncMock()
-        bad_client.list_tools = AsyncMock(side_effect=RuntimeError("MCP down"))
-        result = await tool_schemas.get_tool_schemas(bad_client, force_refresh=True)
+        good_client.list_tools = AsyncMock(side_effect=RuntimeError("MCP down"))
+        result = await tool_schemas.get_tool_schemas(good_client, force_refresh=True)
 
         # Should return the previously-cached schemas, not empty
         assert result == cached
@@ -118,10 +117,11 @@ class TestClearCache:
         client.list_tools = AsyncMock(return_value=[{"name": "x"}])
 
         await tool_schemas.get_tool_schemas(client)
-        assert tool_schemas._CACHED_SCHEMAS is not None
+        assert client.list_tools.await_count == 1
 
         tool_schemas.clear_cache()
-        assert tool_schemas._CACHED_SCHEMAS is None
+        await tool_schemas.get_tool_schemas(client)
+        assert client.list_tools.await_count == 2
 
 
 class TestBuiltinTools:

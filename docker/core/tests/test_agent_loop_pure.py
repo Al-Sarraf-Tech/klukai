@@ -55,7 +55,7 @@ class TestToolStatusMessages:
 
     def test_all_values_non_empty(self):
         from app.agent_loop import TOOL_STATUS
-        for tool, msg in TOOL_STATUS.items():
+        for _tool, msg in TOOL_STATUS.items():
             assert msg and isinstance(msg, str)
 
 
@@ -86,11 +86,11 @@ class TestExtractToolText:
         assert "Hello" in out
         assert "there" in out
 
-    def test_collapses_whitespace(self):
+    def test_collapses_horizontal_whitespace_preserving_paragraphs(self):
         from app.agent_loop import _extract_tool_text
         result = {"content": [{"type": "text", "text": "a    b\n\n\nc"}]}
         out = _extract_tool_text(result)
-        assert "a b c" in out
+        assert out == "a b\n\nc"
 
     def test_string_content_returned_as_is(self):
         from app.agent_loop import _extract_tool_text

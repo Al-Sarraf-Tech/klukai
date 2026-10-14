@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Klukai's MCP gateway credential every 15 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00/15:00
+AccuracySec=1min
+Persistent=true
+Unit=klukai-mcp-token-pickup.service
+
+[Install]
+WantedBy=timers.target

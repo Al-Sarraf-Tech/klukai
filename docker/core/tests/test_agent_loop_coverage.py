@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app.agent_loop as al
 from app.agent_loop import AgentLoop, AgentResult, AgentStep, _extract_tool_text
+from app.tool_schemas import get_builtin_tools
 
 
 # ── Builders ────────────────────────────────────────────────────────────────
@@ -40,6 +41,10 @@ def _msg_response(content="", tool_calls=None) -> dict:
 
 def _tool_call(name, args='{}', tc_id="call_1") -> dict:
     return {"id": tc_id, "function": {"name": name, "arguments": args}}
+
+
+def _schemas(name):
+    return [{"type": "function", "function": {"name": name, "parameters": {"type": "object", "properties": {}}}}]
 
 
 def _mcp_text(text: str) -> dict:
@@ -163,7 +168,7 @@ class TestBuiltinTimeDispatch:
             ]
         )
         with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[])), patch.object(
-            al, "get_builtin_tools", return_value=[]
+            al, "get_builtin_tools", return_value=get_builtin_tools()
         ):
             res = await loop.run("sys", [{"role": "user", "content": "what time"}])
         # builtin path used — MCP NOT invoked
@@ -199,7 +204,7 @@ class TestBuiltinRecallMemory:
         )
         ctx = MagicMock(memory=fake_mem)
         with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[])), patch.object(
-            al, "get_builtin_tools", return_value=[]
+            al, "get_builtin_tools", return_value=get_builtin_tools()
         ), patch.dict(sys.modules, {"app.context": ctx}):
             res = await loop.run(
                 "sys", [{"role": "user", "content": "remember?"}], user_id="cmdr"
@@ -254,7 +259,7 @@ class TestMCPToolDispatch:
             ]
         )
         mcp.invoke_tool = AsyncMock(return_value=_mcp_text("search results here"))
-        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[{"t": 1}])), patch.object(
+        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=_schemas("web_search"))), patch.object(
             al, "get_builtin_tools", return_value=[]
         ):
             res = await loop.run("sys", [{"role": "user", "content": "search"}])
@@ -283,7 +288,7 @@ class TestMCPToolDispatch:
             ]
         )
         mcp.invoke_tool = AsyncMock(side_effect=asyncio.TimeoutError())
-        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[{"t": 1}])), patch.object(
+        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=_schemas("slow_tool"))), patch.object(
             al, "get_builtin_tools", return_value=[]
         ):
             res = await loop.run("sys", [{"role": "user", "content": "go"}])
@@ -310,7 +315,7 @@ class TestMCPToolDispatch:
         )
         mcp.invoke_tool = AsyncMock(side_effect=asyncio.TimeoutError())
         mcp._initialize_session = AsyncMock(side_effect=RuntimeError("reinit failed"))
-        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[{"t": 1}])), patch.object(
+        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=_schemas("slow_tool"))), patch.object(
             al, "get_builtin_tools", return_value=[]
         ):
             res = await loop.run("sys", [{"role": "user", "content": "go"}])
@@ -326,7 +331,7 @@ class TestMCPToolDispatch:
             ]
         )
         mcp.invoke_tool = AsyncMock(side_effect=RuntimeError("explode"))
-        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[{"t": 1}])), patch.object(
+        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=_schemas("bad_tool"))), patch.object(
             al, "get_builtin_tools", return_value=[]
         ):
             res = await loop.run("sys", [{"role": "user", "content": "go"}])
@@ -335,7 +340,7 @@ class TestMCPToolDispatch:
         assert res.response == "recovered"
 
     @pytest.mark.asyncio
-    async def test_invalid_json_args_default_to_empty_dict(self):
+    async def test_invalid_json_args_are_rejected_without_dispatch(self):
         loop, router, mcp, ws = _make_loop(
             complete_side_effect=[
                 _msg_response(tool_calls=[_tool_call("web_search", "{not valid json")]),
@@ -343,14 +348,16 @@ class TestMCPToolDispatch:
             ]
         )
         mcp.invoke_tool = AsyncMock(return_value=_mcp_text("x"))
-        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[{"t": 1}])), patch.object(
+        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=_schemas("web_search"))), patch.object(
             al, "get_builtin_tools", return_value=[]
         ):
             await loop.run("sys", [{"role": "user", "content": "go"}])
-        mcp.invoke_tool.assert_awaited_once_with("web_search", {})
+        mcp.invoke_tool.assert_not_awaited()
+        tool_message = router.complete_local.await_args_list[1].args[1][-1]
+        assert "JSON object" in tool_message["content"]
 
     @pytest.mark.asyncio
-    async def test_unknown_tool_uses_generic_status(self):
+    async def test_declared_tool_without_status_label_uses_generic_status(self):
         loop, router, mcp, ws = _make_loop(
             complete_side_effect=[
                 _msg_response(tool_calls=[_tool_call("calculator")]),
@@ -358,7 +365,7 @@ class TestMCPToolDispatch:
             ]
         )
         mcp.invoke_tool = AsyncMock(return_value=_mcp_text("42"))
-        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[{"t": 1}])), patch.object(
+        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=_schemas("calculator"))), patch.object(
             al, "get_builtin_tools", return_value=[]
         ):
             await loop.run("sys", [{"role": "user", "content": "go"}])
@@ -454,7 +461,7 @@ class TestForcedSynthesis:
         responses.append(_msg_response(content="Final synthesized briefing."))
         loop, router, mcp, ws = _make_loop(complete_side_effect=responses)
         mcp.invoke_tool = AsyncMock(return_value=_mcp_text("data"))
-        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[{"t": 1}])), patch.object(
+        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=_schemas("web_search"))), patch.object(
             al, "get_builtin_tools", return_value=[]
         ):
             res = await loop.run("sys", [{"role": "user", "content": "go"}])
@@ -482,7 +489,7 @@ class TestForcedSynthesis:
         loop, router, mcp, ws = _make_loop()
         router.complete_local = AsyncMock(side_effect=_complete)
         mcp.invoke_tool = AsyncMock(return_value=_mcp_text("data"))
-        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[{"t": 1}])), patch.object(
+        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=_schemas("web_search"))), patch.object(
             al, "get_builtin_tools", return_value=[]
         ):
             res = await loop.run("sys", [{"role": "user", "content": "go"}])
@@ -497,7 +504,7 @@ class TestForcedSynthesis:
         responses.append(_msg_response(content="   "))  # whitespace-only synth
         loop, router, mcp, ws = _make_loop(complete_side_effect=responses)
         mcp.invoke_tool = AsyncMock(return_value=_mcp_text("data"))
-        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=[{"t": 1}])), patch.object(
+        with patch.object(al, "get_tool_schemas", AsyncMock(return_value=_schemas("web_search"))), patch.object(
             al, "get_builtin_tools", return_value=[]
         ):
             res = await loop.run("sys", [{"role": "user", "content": "go"}])
@@ -553,7 +560,7 @@ class TestExtractToolText:
 
     def test_list_of_raw_strings(self):
         out = _extract_tool_text({"content": ["a", "b"]})
-        assert out == "a b"
+        assert out == "a\nb"
 
     def test_string_content_returned_directly(self):
         assert _extract_tool_text({"content": "just a string"}) == "just a string"

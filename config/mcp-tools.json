@@ -1,0 +1,46 @@
+{
+  "servers": [
+    {
+      "name": "brave",
+      "url": "http://host.docker.internal:9152/mcp",
+      "enabled_env": "KLUKAI_BRAVE_ENABLED",
+      "allowed_tools": [
+        "brave_web_search",
+        "brave_news_search",
+        "brave_image_search",
+        "brave_video_search",
+        "brave_local_search",
+        "brave_place_search",
+        "brave_llm_context"
+      ]
+    },
+    {
+      "name": "reference",
+      "url": "http://host.docker.internal:9126/mcp",
+      "token_file": "/run/klukai-mcp/gateway.token",
+      "allowed_tools": [
+        "search_mcp__search",
+        "search_mcp__search_news",
+        "utility_mcp__weather_current",
+        "utility_mcp__weather_forecast",
+        "utility_mcp__convert",
+        "utility_mcp__simplify",
+        "utility_mcp__convert_currency",
+        "utility_mcp__rate",
+        "arxiv_mcp__search",
+        "arxiv_mcp__abstract",
+        "arxiv_mcp__doi_metadata",
+        "arxiv_mcp__doi_search",
+        "stackexchange_mcp__search",
+        "stackexchange_mcp__question",
+        "stackexchange_mcp__answer",
+        "hn_mcp__search",
+        "hn_mcp__story",
+        "cve_mcp__nvd_search",
+        "cve_mcp__cve_detail",
+        "cve_mcp__osv_query",
+        "cve_mcp__osv_vulnerability"
+      ]
+    }
+  ]
+}
