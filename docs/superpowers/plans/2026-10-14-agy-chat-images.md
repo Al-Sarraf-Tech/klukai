@@ -52,7 +52,7 @@ Files: scripts/agy_image_worker.py, scripts/agy_art_runtime.py, scripts/agy_art_
 Files: docker-compose.yml, .env.example, docs/handoff, AGENTS.md, README.md.
 - [x] Review and test combined changes; build only companion-core.
 - [x] Install private runtime/token/reference manifest and user service; enable production main image selector.
-- [ ] Exercise real core-to-host image path with test account; check owner archive/auth boundaries without mutating owner history.
+- [x] Exercise real core-to-host image path with test account; check owner archive/auth boundaries without mutating owner history.
 - [x] Preserve rollback configuration and previous core image; recreate companion-core only.
 - [ ] Merge latest origin/main, commit, push origin/main and sync Amarillo; report exact test instructions.
 
@@ -65,3 +65,5 @@ Owner follow-up: “And make it the main version of image generation no more gpu
 - Persist alternating preferred providers and per-attempt attribution; at most one different-provider service failure fallback.
 - Policy/input/refusal/ambiguous timeout fails closed; no GPU image fallback.
 - Show owner Commander-and-Klukai samples from both native model providers.
+
+Owner final appearance refinements: slightly lighter light-olive skin and fully anime Commander matching Klukai. Persisted in canonical personality/tags and the shared provider prompt; photo remains an identity reference.

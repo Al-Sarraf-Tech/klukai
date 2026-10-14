@@ -18,6 +18,10 @@ COMMANDER_APPEARANCE = (
     'The adult Commander has short dark crew-cut hair, brown eyes and a strong build. '
     'Preserve his recognizable face from the photo, with a slightly lighter light-olive '
     'skin tone and natural shading, as requested for his character. '
+    'Render him fully as an anime character in the same illustration style as Klukai: '
+    'anime facial proportions, clean line art, stylized hair and matching cel shading. '
+    'Translate the photo into this anime character design; never paste a photographic face '
+    'or render him photorealistically beside an anime Klukai. '
 )
 
 

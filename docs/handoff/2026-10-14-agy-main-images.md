@@ -99,4 +99,31 @@ The host worker, rather than the core container, owns provider rotation.
 
 ## Commander appearance
 
-The owner requested a slightly lighter skin tone as part of the Commander character. The canonical personality description and image tags now use light olive skin; both native provider prompts apply that description while preserving his recognizable facial features. The private reference photo remains the identity source.
+The owner requested a slightly lighter skin tone as part of the Commander character. The canonical personality description and image tags now use light olive skin; both native provider prompts apply that description while preserving his recognizable facial features. The private reference photo remains the identity source. The owner further requested an anime Commander matching Klukai. His canonical description, image tags and the shared provider prompt now specify matching anime facial proportions, line art and cel shading; the photo supplies identity rather than a photographic rendering style.
+
+
+## Production verification, 2026-10-14
+
+The account worker is enabled on Amarillo with both `agy,grok` providers and
+persistent alternating preference. The core is healthy and selects the account
+bridge; its chat-only override is empty. An authenticated test-user request to
+`/api/generate-image` returned a validated PNG and an archive memory ID in
+33.51 seconds. An unauthenticated request was rejected with 401. The private
+ledger records the preferred Agy attempt failing as `unavailable`, followed by
+one successful Grok attempt, proving real service failover without a GPU call.
+The temporary test login was revoked. The test-user image allowance is removed
+before handoff; production is restricted to `jalsarraf`.
+
+Google's native `generate_image` returned HTTP 500 INTERNAL on the fresh couple
+and smoke attempts. Earlier Gemini couple generation succeeded and remains a
+valid provider sample; this does not establish current Gemini availability.
+Grok's native OAuth reference edit completed successfully; its validated sample
+and event evidence remain private. One intermediate Grok session validation
+failure was rejected; a retained diagnostic run subsequently passed without
+weakening validation. Neither provider is assumed always available.
+
+The original pre-change core image and environment snapshot are retained
+privately for rollback. Voice remains `dominus`; no Dominus containers, GPU
+image services or gaming guards were changed. Paid image allowances remain
+zero, Agy credits remain disabled, and Grok uses the owner-confirmed disabled
+extra-usage / $0-cap account.
