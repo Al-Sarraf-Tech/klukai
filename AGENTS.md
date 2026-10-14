@@ -18,6 +18,12 @@ remain local ComfyUI with cloud image allowances at zero; this instruction does
 not authorize paid image APIs. Other background writers remain local. See
 `docs/handoff/2026-10-14-dream-image-preparation.md` for activation evidence.
 
+The owner subsequently explicitly overrode the no-spending restriction for
+Klukai's existing Brave MCP API usage. Paid Brave search requests are authorized
+for this path; `KLUKAI_BRAVE_ENABLED=true` is the production setting. This is
+separate from image generation: cloud image generation allowances remain zero.
+See `docs/handoff/2026-10-14-web-tools.md` for activation and live-search evidence.
+
 ## Voice source baseline
 
 Read `docker/voice/reference/README.md` for the owner's selected Klukai voice

@@ -92,7 +92,7 @@ Her full canon lives in [`config/personality.yaml`](config/personality.yaml): ba
 | **On-demand GPU use** | The configured Sonnet primary leaves the secondary model unloaded until needed; local runtimes enforce idle release |
 | **Voice & image** | Local Arc XTTS for speech; separate Dominus STT; authenticated, leased ComfyUI pictures and live portraits |
 | **3D view** | Starts with her whole body visible; drag to rotate freely through 360°, pinch or scroll to zoom, or use the on-screen controls; Reset view restores the full-body framing |
-| **Web & references** | Scoped MCP tools for web search, weather, units/currency, research papers, programming references and public security advisories; Brave can be enabled separately after its usage allowance is confirmed ([operations](docs/handoff/2026-10-14-web-tools.md)) |
+| **Web & references** | Brave web search with source links, plus scoped tools for weather, units/currency, research papers, programming references and public security advisories; free metasearch is available as fallback ([operations](docs/handoff/2026-10-14-web-tools.md)) |
 
 ---
 

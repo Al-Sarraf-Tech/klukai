@@ -56,3 +56,10 @@ No tool may grant itself permissions or initiate unrelated actions.
 - Existing free quota is not presumed to authorize new Brave charges.
 
 Protocol reference: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
+
+## Activation decision
+
+On 2026-10-14 the owner explicitly overrode the no-spending restriction for
+the existing Brave MCP integration. Production now enables its seven selected
+tools alongside the 21 reference tools. The final handoff records live Brave
+search and Sonnet chat verification; this resolves the earlier activation gate.
