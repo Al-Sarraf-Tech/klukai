@@ -124,6 +124,70 @@ def projected_framing(page):
     }""")
 
 
+def visible_geometry(page):
+    """Project posed vertices and head through the renderer's actual camera."""
+    return page.evaluate("""() => {
+      const {THREE, root, camera, renderer} = cameraTestAvatar.debug;
+      root.updateMatrixWorld(true); camera.updateMatrixWorld();
+      const r = renderer.domElement.getBoundingClientRect();
+      const top = document.querySelector('.topbar').getBoundingClientRect().bottom;
+      const bottom = document.querySelector('.dock').getBoundingClientRect().top;
+      const point = new THREE.Vector3();
+      let sampled = 0, visible = 0, nearest = Infinity, farthest = -Infinity;
+      let minY = Infinity, maxY = -Infinity;
+      root.traverse(mesh => {
+        if (!mesh.isMesh || !mesh.visible || !mesh.geometry?.attributes.position) return;
+        const n = mesh.geometry.attributes.position.count;
+        for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 700))) {
+          mesh.getVertexPosition(i, point).applyMatrix4(mesh.matrixWorld).project(camera);
+          sampled++;
+          nearest = Math.min(nearest, point.z); farthest = Math.max(farthest, point.z);
+          const y = r.top + (1 - point.y) / 2 * r.height;
+          if (Math.abs(point.x) < 1 && point.z > -1 && point.z < 1 && y > top && y < bottom) {
+            visible++; minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+          }
+        }
+      });
+      const head = root.getObjectByName('mixamorigHead').getWorldPosition(new THREE.Vector3()).project(camera);
+      return {sampled, visible, nearest, farthest, visibleHeight:maxY-minY,
+        near:camera.near, far:camera.far, top, bottom,
+        head:{x:r.left+(head.x+1)/2*r.width, y:r.top+(1-head.y)/2*r.height, z:head.z}};
+    }""")
+
+
+def zoom_endpoint(page, *, close):
+    expected = 0.2 if close else 3.0
+    label = 'Zoom in' if close else 'Zoom out'
+    for _ in range(22):
+        page.get_by_role('button', name=label, exact=True).click()
+        if abs(view(page)['zoom'] - expected) < 0.001:
+            break
+    settle(page)
+    assert abs(view(page)['zoom'] - expected) < 0.001, view(page)
+    page.get_by_role('button', name=label, exact=True).click()
+    assert abs(view(page)['zoom'] - expected) < 0.001, view(page)
+
+
+def close_up(page):
+    """Use ordinary vertical dragging to bring her face into the close crop."""
+    zoom_endpoint(page, close=True)
+    before = visible_geometry(page)
+    target_y = before['top'] + (before['bottom'] - before['top']) * 0.48
+    start_y = (before['top'] + before['bottom']) / 2
+    width = page.viewport_size['width']
+    for _ in range(12):
+        delta = max(-180, min(180, target_y - visible_geometry(page)['head']['y']))
+        if abs(delta) < 12:
+            break
+        drag(page, (width * 0.6, start_y), (width * 0.6, start_y + delta))
+    after = visible_geometry(page)
+    assert after['visible'] > 100, after
+    assert after['top'] < after['head']['y'] < after['bottom'], after
+    assert -1 < after['head']['z'] < 1, after
+    assert abs(view(page)['panY']) > 0.05, view(page)
+    return after
+
+
 def angle_delta(after, before):
     return (after - before + math.pi) % (2 * math.pi) - math.pi
 
@@ -219,6 +283,37 @@ def run_layout_viewports(browser, base, out, glb):
     return results
 
 
+def run_zoom_landscape(browser, base, out, glb):
+    context = browser.new_context(viewport={'width': 568, 'height': 320}, has_touch=True)
+    page = context.new_page()
+    _, errors = install_fixtures(page, glb)
+    try:
+        page.goto(base)
+        page.locator('#wake').click()
+        page.wait_for_function('window.cameraTestAvatar?.ready', timeout=90000)
+        settle(page)
+        zoom_endpoint(page, close=False)
+        wide = visible_geometry(page)
+        assert wide['far'] > 30, wide
+        assert wide['visible'] > 100 and wide['visibleHeight'] > 10, wide
+        assert -1 < wide['nearest'] <= wide['farthest'] < 1, wide
+        page.screenshot(path=str(out / 'landscape-wide.png'))
+        saved = view(page)
+        page.reload()
+        page.locator('#wake').click()
+        page.wait_for_function('window.cameraTestAvatar?.ready', timeout=90000)
+        settle(page)
+        assert_view(page, saved)
+        assert visible_geometry(page)['far'] > 30
+        reset(page)
+        check_full_body(page)
+        assert not errors, errors
+        return {'viewport': '568x320', 'status': 'passed', 'wide': wide, 'restored_view': saved,
+            'screenshot': str(out / 'landscape-wide.png')}
+    finally:
+        context.close()
+
+
 def settle(page):
     page.wait_for_timeout(450)
 
@@ -303,6 +398,21 @@ def run_viewport(browser, base, out, glb, mobile):
     page.get_by_role('button', name='Zoom out', exact=True).click()
     settle(page)
     assert abs(view(page)['zoom'] - 1) < 0.02
+    zoom_endpoint(page, close=False)
+    wide = visible_geometry(page)
+    assert wide['visible'] > 100 and wide['visibleHeight'] > 10, wide
+    assert -1 < wide['nearest'] <= wide['farthest'] < 1, wide
+    page.screenshot(path=str(out / ('phone-wide.png' if mobile else 'desktop-wide.png')))
+    reset(page)
+    close_crop = close_up(page)
+    page.screenshot(path=str(out / ('phone-close.png' if mobile else 'desktop-close.png')))
+    saved_close = view(page)
+    page.reload()
+    page.locator('#wake').click()
+    page.wait_for_function('window.cameraTestAvatar?.ready', timeout=90000)
+    settle(page)
+    assert_view(page, saved_close)
+    reset(page)
 
     page.locator('#input').fill('Keep my draft while resetting the camera.')
     page.get_by_role('button', name='Rotate right', exact=True).click()
@@ -330,6 +440,14 @@ def run_viewport(browser, base, out, glb, mobile):
         assert view(page)['zoom'] > close + 0.1, view(page)
         assert page.evaluate('visualViewport.scale') == 1
         assert page.evaluate('scrollY') == 0
+        for _ in range(3):
+            pinch(cdp, [(165, 320), (225, 320)], [(70, 320), (320, 320)])
+        settle(page)
+        assert abs(view(page)['zoom'] - 0.2) < 0.02, view(page)
+        for _ in range(4):
+            pinch(cdp, [(70, 320), (320, 320)], [(165, 320), (225, 320)])
+        settle(page)
+        assert abs(view(page)['zoom'] - 3) < 0.02, view(page)
         reset(page)
         pinch(cdp, [(300, 320)], [(90, 320)])
         settle(page)
@@ -341,10 +459,10 @@ def run_viewport(browser, base, out, glb, mobile):
         assert view(page)['zoom'] < 0.95
         page.mouse.wheel(0, 10000)
         settle(page)
-        assert abs(view(page)['zoom'] - 1.8) < 0.02
+        assert abs(view(page)['zoom'] - 3) < 0.02
         page.mouse.wheel(0, -10000)
         settle(page)
-        assert abs(view(page)['zoom'] - 0.6) < 0.02
+        assert abs(view(page)['zoom'] - 0.2) < 0.02
         reset(page)
         drag(page, (840, 320), (440, 320))
 
@@ -381,6 +499,9 @@ def run_viewport(browser, base, out, glb, mobile):
     assert abs(after_position['pitch'] - before_position['pitch']) < 0.015, {'before': before_position, 'after': after_position}
     assert abs(view(page)['dPhi'] - before_vertical['dPhi']) < 0.015
     assert abs(view(page)['panY']) > 0.05
+    # Persist a distance beyond the former close limit across the existing
+    # resize, mode, pending appearance replacement and reload checks below.
+    zoom_endpoint(page, close=True)
     chosen = view(page)
     assert abs(chosen['dTheta']) > 0.3, chosen
     page.wait_for_timeout(3100)
@@ -439,6 +560,7 @@ def run_viewport(browser, base, out, glb, mobile):
               'vertical_drag_pixels': after_position['y'] - before_position['y'],
               'vertical_drag_pitch_change': after_position['pitch'] - before_position['pitch'],
               'menu_lower_by_pixels': dock_layout['menu_lower_by_pixels'],
+              'zoom_extremes': {'close': close_crop, 'wide': wide},
               'restored_view': chosen,
               'screenshot': str(screenshot)}
     context.close()
@@ -470,6 +592,10 @@ def main():
                 else:
                     for mobile in ([False, True] if args.viewport == 'all' else [args.viewport == 'phone']):
                         result = run_viewport(browser, base, args.out, glb, mobile)
+                        results.append(result)
+                        print(json.dumps(result), flush=True)
+                    if args.viewport == 'all':
+                        result = run_zoom_landscape(browser, base, args.out, glb)
                         results.append(result)
                         print(json.dumps(result), flush=True)
             finally:

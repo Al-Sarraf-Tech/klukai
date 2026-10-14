@@ -16,6 +16,7 @@ const repo = path.resolve(here, '../..');
 const out = path.join(repo, 'flutter_app/web/companion/vendor');
 const three = path.join(here, 'node_modules/three');
 const viewer = path.join(repo, 'flutter_app/web/companion/avatar3d.js');
+const motion = path.join(repo, 'flutter_app/web/companion/motion-library.js');
 
 export const BUNDLE = 'three-avatar.min.js';
 export const ADDONS = Object.freeze({
@@ -25,7 +26,7 @@ export const ADDONS = Object.freeze({
 });
 
 /** three.js core names the viewer uses (THREE.Foo), sorted. */
-export function coreNamesUsed(src = fs.readFileSync(viewer, 'utf8')) {
+export function coreNamesUsed(src = [viewer, motion].map((file) => fs.readFileSync(file, 'utf8')).join('\n')) {
   return [...new Set([...src.matchAll(/\bTHREE\.([A-Z][A-Za-z0-9_]*)/g)].map((m) => m[1]))].sort();
 }
 

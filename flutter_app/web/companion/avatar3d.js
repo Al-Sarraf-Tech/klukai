@@ -207,7 +207,7 @@ export function cameraFraming({ framing = 'upper', state = 'idle', aspect = 1, h
   // little room remains. Only degenerate/overlapping insets need a safety floor.
   if (lowBody && bottom > 0) bottom += Math.min(0.08, Math.max(0, 1 - top - bottom) * 0.2);
   let band = 1 - top - bottom;
-  // 22% keeps full framing inside the 30 m far plane even at maximum user zoom.
+  // Preserve a usable projection when overlapping UI insets leave no real band.
   if (band < 0.22) { const s = 0.78 / (top + bottom); top *= s; bottom *= s; band = 0.22; }
   const b = bandFraming({ framing, state, aspect: aspect / band, headY });
   const portrait = aspect / band < 0.8;
@@ -223,12 +223,21 @@ export function cameraFraming({ framing = 'upper', state = 'idle', aspect = 1, h
   return out;
 }
 
+export const CAMERA_ZOOM_RANGE = Object.freeze({ min: 0.2, max: 3 });
+
+/** Keep the model inside the far plane even when a small visible band requires
+ *  a distant camera. The 3 m margin covers her body and animated accessories;
+ *  whole-metre steps avoid rebuilding the projection for sub-pixel movement. */
+export function cameraFarPlane(distanceFromOrigin = 0) {
+  return Math.max(30, Math.ceil(distanceFromOrigin + 3));
+}
+
 /** User inspection offsets, relative to the animated automatic framing.
  *  Absorb only changes since the last camera placement: speech push-in and
  *  resize/state framing must never feed back into the user's zoom or orbit.
  *  Yaw wraps after each turn; horizontal orbit has no stops. */
 export function createCameraView(initial = null) {
-  const minZoom = 0.6, maxZoom = 1.8;
+  const { min: minZoom, max: maxZoom } = CAMERA_ZOOM_RANGE;
   const minPitch = -0.22, maxPitch = 0.12;
   let dTheta = 0, dPhi = 0, zoom = 1, panY = 0;
   let applied = null;
@@ -305,22 +314,32 @@ export function createAvatarGesture({ threshold = 7, tapMs = 650 } = {}) {
   };
 }
 
-const REACTION_CLIPS = Object.freeze({
-  salute: 'salute', acknowledge: 'thankful', pleased: 'happy', thoughtful: 'thinking',
-  dismiss: 'dismiss', bashful: 'bashful', playful: 'excited',
-});
+const REACTION_CATALOG = Object.freeze([
+  { id: 'salute', clip: 'salute', label: 'Salute', category: 'Everyday' },
+  { id: 'acknowledge', clip: 'thankful', label: 'Thank you', category: 'Everyday' },
+  { id: 'pleased', clip: 'happy', label: 'Pleased', category: 'Playful' },
+  { id: 'thoughtful', clip: 'thinking', label: 'Thoughtful', category: 'Everyday' },
+  { id: 'dismiss', clip: 'dismiss', label: 'Dismissive', category: 'Everyday' },
+  { id: 'bashful', clip: 'bashful', label: 'Bashful', category: 'Playful' },
+  { id: 'playful', clip: 'excited', label: 'Excited', category: 'Playful' },
+  { id: 'nervous', clip: 'nervous', label: 'Shy fidget', category: 'Everyday' },
+]);
 /** Reactions are transient clips, so the mood/state machine keeps its context. */
-export function createReactionController({ available = [], play = () => {}, restore = () => {}, now = () => performance.now(), cooldown = 2600 } = {}) {
-  let active = null, lastAt = -Infinity, count = 0;
-  const kinds = Object.keys(REACTION_CLIPS).filter((k) => available.includes(REACTION_CLIPS[k]));
+export function createReactionController({ available = [], catalog = REACTION_CATALOG, play = () => {}, restore = () => {}, now = () => performance.now(), cooldown = 2600 } = {}) {
+  let active = null, lastAt = -Infinity, count = 0, nextAuto = 0;
+  const choices = catalog.filter((entry) => available.includes(entry.clip));
+  const byId = new Map(choices.map((entry) => [entry.id, entry]));
+  const automatic = choices.filter((entry) => entry.auto !== false);
   return {
     get active() { return active; },
     get count() { return count; },
+    get choices() { return choices.map(({ id, label, category }) => ({ id, label, category })); },
     trigger(kind = 'auto') {
       if (active || now() - lastAt < cooldown) return false;
-      const name = kind === 'auto' ? kinds[count % kinds.length] : kind;
-      if (!kinds.includes(name)) return false;
-      active = { kind: name, clip: REACTION_CLIPS[name] };
+      const entry = kind === 'auto' ? automatic[nextAuto % automatic.length] : byId.get(kind);
+      if (!entry) return false;
+      if (kind === 'auto') nextAuto++;
+      active = { kind: entry.id, clip: entry.clip };
       lastAt = now(); count++;
       play(active);
       return true;
@@ -726,7 +745,7 @@ function importLibs(withOrbit = true) {
   if (!libsPromise) {
     // One tree-shaken bundle (tools/avatar/vendor.mjs): three core subset +
     // GLTFLoader + MeshoptDecoder + OrbitControls.
-    libsPromise = import('./vendor/three-avatar.min.js?v=8ae676317440')
+    libsPromise = import('./vendor/three-avatar.min.js?v=ba766fd1f3da')
       .then((m) => ({ THREE: m, GLTFLoader: m.GLTFLoader, MeshoptDecoder: m.MeshoptDecoder, OrbitControls: m.OrbitControls }));
     libsPromise.catch(() => { libsPromise = null; });
   }
@@ -939,7 +958,7 @@ export async function createAvatar3D(container, opts = {}) {
   // can tell it from a live avatar (and try again later instead of keeping it).
   const stub = {
     setState() {}, setMood() {}, setSpeaking() {}, setFraming() {}, setPaused() {}, setTint() {}, setInsets() {},
-    zoomBy() {}, rotateBy() {}, moveBy() {}, resetView() {}, setView() {}, getView() { return createCameraView().state; }, react() { return false; },
+    zoomBy() {}, rotateBy() {}, moveBy() {}, resetView() {}, setView() {}, getView() { return createCameraView().state; }, react() { return false; }, getReactions() { return []; },
     resize() {}, dispose() {},
     get ready() { return false; }, get state() { return 'idle'; },
   };
@@ -988,7 +1007,7 @@ export async function createAvatar3D(container, opts = {}) {
   container.appendChild(canvas);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(BASE_FOV, w / h, 0.05, 30);
+  const camera = new THREE.PerspectiveCamera(BASE_FOV, w / h, 0.05, cameraFarPlane());
   // Two lights only (cheaper per pixel on phones), calibrated so the lit side
   // is ~1.0× albedo: a dim sky/ground fill and one warm key from the front-left
   // (keeps her face in its lit band). The back rim is a shader term (uRimDir).
@@ -1043,6 +1062,8 @@ export async function createAvatar3D(container, opts = {}) {
   const mouthTargets = [];
   let reactions = null;
   let passives = null;
+  let motionCatalog = [];
+  let motionLibraryStatus = 'loading';
   let blinkIdx = -1;
   let blinkT = -1; // ms since blink start; <0 = waiting
   let blinkSlow = false;
@@ -1324,13 +1345,28 @@ export async function createAvatar3D(container, opts = {}) {
     addOutlines();
     captureRest();
     springs = hasChains ? buildSprings(root.userData) : null;
+    let extraClips = [];
+    try {
+      const { loadMotionClips } = await import('./motion-library.js?v=6c7c0d59a925');
+      const library = await loadMotionClips({ THREE, root, signal: opts.signal });
+      extraClips = library.clips;
+      motionCatalog = library.available;
+      motionLibraryStatus = extraClips.length ? 'ready' : 'unavailable';
+    } catch {
+      // An optional gesture download must never remove the model or text chat.
+      motionLibraryStatus = 'unavailable';
+    }
+    if (disposed) return stub;
     mixer = new THREE.AnimationMixer(root);
-    for (const clip of gltf.animations) {
+    for (const clip of [...gltf.animations, ...extraClips]) {
       const a = mixer.clipAction(clip);
       a.enabled = true;
       actions.set(clip.name, a);
     }
     buildFidgets(gltf.animations);
+    for (const entry of motionCatalog) {
+      if (entry.passive && actions.has(entry.clip)) fidgetActions.set(entry.clip, actions.get(entry.clip));
+    }
     mixer.addEventListener('finished', onFinished);
     talkAction = actions.get('talking') || null;
     if (talkAction) { talkAction.setEffectiveWeight(0); talkAction.play(); }
@@ -1513,6 +1549,8 @@ export async function createAvatar3D(container, opts = {}) {
     } else {
       camera.lookAt(viewTarget);
     }
+    const far = cameraFarPlane(camera.position.length());
+    if (camera.far !== far) { camera.far = far; camera.updateProjectionMatrix(); }
   }
   function changeView(change) {
     if (disposed || !root) return;
@@ -1660,6 +1698,7 @@ export async function createAvatar3D(container, opts = {}) {
 
   reactions = createReactionController({
     available: [...actions.keys()],
+    catalog: [...REACTION_CATALOG, ...motionCatalog],
     play(reaction) {
       passives.cancel({ restore: false });
       if (reducedMotion) {
@@ -1770,7 +1809,8 @@ export async function createAvatar3D(container, opts = {}) {
     // a thoughtful or bashful reaction straight back toward the camera.
     const shownClip = current?.action?.getClip().name;
     const gestureState = { thankful: 'happy', salute: 'greet', dismiss: 'idle' }[shownClip] || shownClip;
-    const lookWeight = current?.fidget ? 0.45 : LOOK_WEIGHT[current?.reaction ? gestureState : stateName] ?? 0.6;
+    const lookWeight = current?.reaction && shownClip?.startsWith('motion_') ? 0.15
+      : current?.fidget ? 0.45 : LOOK_WEIGHT[current?.reaction ? gestureState : stateName] ?? 0.6;
     const wGoal = life ? lookWeight * (1 - smoothstep(30 * DEG, 90 * DEG, clipAngle)) * behind : 0;
     look.w += (wGoal - look.w) * (1 - Math.exp(-dt * 2.5));
     const lim = lookSplit({ yaw: dy, pitch: dp, headJoint }); // clamp first …
@@ -2402,6 +2442,8 @@ export async function createAvatar3D(container, opts = {}) {
     setView(view) { changeView(() => orbit.set(view)); },
     resetView() { changeView(() => orbit.reset()); },
     react,
+    getReactions() { return disposed ? [] : reactions.choices; },
+    getMotionStatus() { return motionLibraryStatus; },
     /** Mood rim colour: 0xRRGGBB, '#rrggbb' (or a RIM_TINTS key); eases over ~1.2 s. */
     setTint(color) {
       const c = parseTint(color);
@@ -2454,6 +2496,7 @@ export async function createAvatar3D(container, opts = {}) {
           armW, pushIn, talkPresence, talkWeight, mouthOpen, mouthMode, reaction: reactions.active, reactionCount: reactions.count,
           passive: { active: passives.active, last: passives.last, count: passives.count, remainingMs: passives.remainingMs,
             available: [...fidgetActions.keys()] },
+          motionLibraryStatus, motionClips: motionCatalog.map((entry) => entry.clip),
           nods: nods.length, blink: blinkIdx >= 0 ? skinned.find((m) => m.morphTargetInfluences)?.morphTargetInfluences[blinkIdx] ?? 0 : null,
           lid, drift: drift.toArray(), swayAmp: shared.uSwayAmp.value, sway: shared.uSway.value.toArray(), shadowA, shadowVisible: Boolean(shadowMesh?.visible),
           fov: camera.fov, cam: camera.position.toArray(), target: viewTarget.toArray(), reducedMotion, outlines: outlinesOn, headJoint,

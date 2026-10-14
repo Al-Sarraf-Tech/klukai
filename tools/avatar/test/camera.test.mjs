@@ -34,11 +34,56 @@ test('overlapping or invalid camera insets still produce a finite usable project
     const target = new Vector3(0, f.targetY, 0);
     const offset = new Vector3(0, f.camY - f.targetY, f.dist);
     const spherical = new Spherical().setFromVector3(offset);
-    const placed = avatar.createCameraView({ zoom: 1.8 }).place(spherical);
+    const placed = avatar.createCameraView({ zoom: 3 }).place(spherical);
     camera.position.copy(target).add(offset.setFromSpherical(spherical.set(placed.radius, placed.phi, placed.theta)));
+    camera.far = avatar.cameraFarPlane(camera.position.length());
+    camera.updateProjectionMatrix();
     camera.lookAt(target); camera.updateMatrixWorld();
     const body = new Vector3(0, 0.8, 0).project(camera);
     assert.ok(body.z > -1 && body.z < 1, 'even maximum user zoom keeps the body inside the near/far clipping planes');
+  }
+});
+
+test('expanded inspection distances remain inside real camera clipping planes across viewport shapes', () => {
+  const layouts = [
+    { width: 1280, height: 800, top: 56, bottom: 210 },
+    { width: 390, height: 844, top: 48, bottom: 260 },
+    { width: 568, height: 320, top: 48, bottom: 181.4 },
+    { width: 160, height: 800, top: 360, bottom: 360 },
+  ];
+  for (const { width, height, top, bottom } of layouts) {
+    for (const zoom of [0.2, 3]) {
+      for (const framing of ['full', 'upper']) {
+        const f = avatar.cameraFraming({ framing, aspect: width / height,
+          insets: { top: top / height, bottom: bottom / height } });
+        const target = new Vector3(0, f.targetY, 0);
+        const spherical = new Spherical().setFromVector3(new Vector3(0, f.camY - f.targetY, f.dist));
+        const placed = avatar.createCameraView({ zoom }).place(spherical);
+        close(placed.radius / spherical.radius, zoom);
+        const camera = new PerspectiveCamera(f.fov, width / height, 0.05, 30);
+        camera.position.setFromSpherical(spherical.set(placed.radius, placed.phi, placed.theta)).add(target);
+        camera.far = avatar.cameraFarPlane(camera.position.length());
+        camera.updateProjectionMatrix();
+        camera.lookAt(target); camera.updateMatrixWorld();
+        for (const point of [target, new Vector3(0, 0, 0), new Vector3(0, 0.8, 0), new Vector3(0, 1.62, 0)]) {
+          const z = point.clone().project(camera).z;
+          assert.ok(z > -1 && z < 1, `${width}×${height} ${framing} zoom ${zoom}: depth ${z} is clipped`);
+        }
+      }
+    }
+  }
+});
+
+test('saved close and wide inspection views retain their distance through framing and reset', () => {
+  for (const zoom of [0.2, 0.4, 2.5, 3]) {
+    const camera = avatar.createCameraView({ zoom, dTheta: 0.4, panY: -0.2 });
+    close(camera.place(base).radius, 10 * zoom);
+    camera.set(camera.state);
+    close(camera.place({ ...base, radius: 4 }).radius, 4 * zoom);
+    close(camera.state.panY, -0.2);
+    camera.reset();
+    close(camera.place(base).radius, 10);
+    close(camera.state.panY, 0);
   }
 });
 
@@ -52,12 +97,12 @@ test('camera buttons retain zoom limits while rotating past the back of the avat
   camera.zoomBy(0.01);
   camera.rotateBy(Math.PI);
   placed = camera.place(base);
-  close(placed.radius, 6);
+  close(placed.radius, 2);
   close(placed.theta, -3 * Math.PI / 4);
   camera.zoomBy(100);
   camera.rotateBy(-Math.PI);
   placed = camera.place(base);
-  close(placed.radius, 18);
+  close(placed.radius, 30);
   close(placed.theta, Math.PI / 4);
 });
 
@@ -170,12 +215,12 @@ test('pointer changes respect zoom and polar limits while preserving valid state
   camera.place(base);
   camera.absorb({ radius: 0.01, theta: 2.5, phi: 3 });
   let placed = camera.place(base);
-  close(placed.radius, 6);
+  close(placed.radius, 2);
   close(placed.theta, 2.5);
   close(placed.phi, 1.62);
   camera.absorb({ radius: 1000, theta: -1, phi: -1 });
   placed = camera.place(base);
-  close(placed.radius, 18);
+  close(placed.radius, 30);
   close(placed.phi, 1.28);
 });
 

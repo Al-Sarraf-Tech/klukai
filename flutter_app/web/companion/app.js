@@ -261,7 +261,7 @@ function boot() {
   let requestedAppearance = prefs.appearance || "default";
   const appearances = createAppearanceSwitcher({
     async build(id, signal) {
-      const { createAvatar3D } = await import("./avatar3d.js?v=7493a8326661");
+      const { createAvatar3D } = await import("./avatar3d.js?v=fcbb2d7504d9");
       const host = document.createElement("div");
       host.className = "model-view";
       host.style.visibility = "hidden";
@@ -400,6 +400,38 @@ function boot() {
   $("btn-move-up").addEventListener("click", () => avatar?.moveBy(0.12));
   $("btn-move-down").addEventListener("click", () => avatar?.moveBy(-0.12));
   $("btn-react").addEventListener("click", () => avatar?.react());
+  $("btn-animations").addEventListener("click", () => {
+    if (!avatar?.ready) return;
+    const choices = $("animation-choices");
+    choices.replaceChildren();
+    const reactions = avatar.getReactions?.() || [];
+    for (const category of [...new Set(reactions.map((entry) => entry.category))]) {
+      const heading = document.createElement("h3");
+      heading.textContent = category;
+      choices.appendChild(heading);
+      const grid = document.createElement("div");
+      grid.className = "animation-grid";
+      for (const entry of reactions.filter((item) => item.category === category)) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "btn";
+        button.textContent = entry.label;
+        button.dataset.reaction = entry.id;
+        button.addEventListener("click", () => {
+          $("animation-dialog").close();
+          if (!avatar?.react(entry.id)) notice("Give her a moment, then try again.", 2500);
+        });
+        grid.appendChild(button);
+      }
+      choices.appendChild(grid);
+    }
+    if (avatar.getMotionStatus?.() === "unavailable") {
+      const message = document.createElement("p");
+      message.textContent = "Extra gestures are unavailable right now. These gestures still work.";
+      choices.appendChild(message);
+    }
+    $("animation-dialog").showModal();
+  });
   $("btn-reset-view").addEventListener("click", () => avatar?.resetView());
   $("btn-music").addEventListener("click", async () => {
     if (!music) return;
@@ -464,7 +496,7 @@ function boot() {
   // parallel with the socket and the tap-to-begin, so it's ready on wake.
   if (prefs.mode === "model") {
     const modelKey = prefs.appearance || "default";
-    import("./avatar3d.js?v=7493a8326661").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
+    import("./avatar3d.js?v=fcbb2d7504d9").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
   }
   socket.start();
   refreshAppearances();

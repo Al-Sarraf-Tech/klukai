@@ -90,6 +90,10 @@ html, body {
 .appearance-dialog h2 { font-size: 20px; margin-top: 0; }
 .appearance-dialog select { display: block; width: 100%; margin-top: 6px; padding: 12px; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
 .appearance-dialog a { color: var(--primary); }
+.animation-dialog { width: min(92vw, 460px); }
+.animation-dialog h3 { font-size: 14px; margin: 18px 0 8px; color: var(--primary); }
+.animation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.animation-grid .btn { min-height: 44px; padding: 10px; }
 .model canvas {
   display: block; width: 100% !important; height: 100% !important;
   -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 9%, #000 70%, transparent 88%);
@@ -143,7 +147,7 @@ html, body {
 .camera-controls[hidden] { display: none; }
 .camera-buttons { display: flex; justify-content: center; gap: 6px; }
 .character-buttons { margin-top: 4px; }
-.character-buttons #btn-react { min-width: 112px; }
+.character-buttons #btn-react { min-width: 80px; }
 .camera-buttons .btn { min-width: 44px; min-height: 44px; padding: 6px 10px; }
 .camera-buttons .btn:disabled { opacity: 0.45; cursor: default; }
 .camera-hint { margin: 4px 0 0; color: #a8b4c4; font-size: 11px; }

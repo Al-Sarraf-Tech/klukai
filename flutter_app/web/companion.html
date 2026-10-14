@@ -15,7 +15,7 @@
   <title>Klukai — Companion</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
-  <link rel="stylesheet" href="companion/companion.css?v=2c01d8c526d0">
+  <link rel="stylesheet" href="companion/companion.css?v=4ee5d7b6e499">
 </head>
 <body>
   <main id="stage" class="stage" data-mode="portrait">
@@ -62,6 +62,13 @@
       <p class="usage-note">Creator licenses remain in effect. Fan models do not imply publisher approval.</p>
     </dialog>
 
+    <dialog id="animation-dialog" class="appearance-dialog animation-dialog" aria-labelledby="animation-title">
+      <form method="dialog"><button class="btn" aria-label="Close animations">Close</button></form>
+      <h2 id="animation-title">Animations</h2>
+      <p>Choose a gesture. She’ll return to her mood afterwards.</p>
+      <div id="animation-choices"></div>
+    </dialog>
+
     <footer class="dock">
       <p class="subtitle" id="subtitle" aria-live="polite"></p>
       <div id="camera-controls" class="camera-controls" role="group" aria-label="3D view controls" hidden>
@@ -75,6 +82,7 @@
         <div class="camera-buttons character-buttons">
           <button class="btn" id="btn-move-up" type="button" aria-label="Move Klukai up" title="Move Klukai up">↑</button>
           <button class="btn" id="btn-react" type="button" title="Tap for a character reaction">Interact</button>
+          <button class="btn" id="btn-animations" type="button" aria-label="Choose animation" aria-haspopup="dialog" aria-controls="animation-dialog" title="Choose animation">⋯</button>
           <button class="btn" id="btn-move-down" type="button" aria-label="Move Klukai down" title="Move Klukai down">↓</button>
         </div>
         <p class="camera-hint">Drag ↔ to turn · Drag ↕ to position<br>Tap her to react · Pinch or scroll to zoom</p>
@@ -94,6 +102,6 @@
   </main>
 
   <noscript>The companion view needs JavaScript.</noscript>
-  <script type="module" src="companion/app.js?v=088776f4eb49"></script>
+  <script type="module" src="companion/app.js?v=3fe2d399503a"></script>
 </body>
 </html>
