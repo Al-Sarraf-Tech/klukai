@@ -19,7 +19,7 @@
 
 A production-grade AI companion rooted in [Girls' Frontline 2: Exilium](https://gfl2.sunborngame.com/) canon. Klukai is the elite who waited ten years for her Commander to answer, and she builds a real bond with him: conversation, memory, affection, rituals, and initiative, with her state and archive on hardware he controls.
 
-**Current deployment:** Claude Sonnet 5.5 with medium adaptive thinking handles interactive chat, with Dominus as the local secondary. Speech uses XTTS on Dominus-Nobara's RTX 3090, with queued playback and correct 24 kHz audio. Text chat stays available without voice when Nobara is offline. Pictures, live portraits, and background work remain local by default.
+**Current deployment:** Claude Sonnet 5.5 with medium adaptive thinking handles interactive chat, with Dominus as the local secondary. Speech uses XTTS on Dominus-Nobara's RTX 3090, with queued playback and correct 24 kHz audio. Text chat stays available without voice when Nobara is offline. New pictures use the existing Agy/Grok account worker; approved live portraits are retained. Local background work and voice still depend on Dominus, so the whole companion is not cloud-based.
 
 This release also supports independently opt-in OpenAI scene pictures and Anthropic dream/Her POV writing. Fresh deployments default to local providers and zero cloud allowances. On the owner's production deployment, Claude creative writing now uses the existing API key with 12 attempts per UTC month; pictures use the signed-in Gemini/Agy and Grok accounts, alternating preferred providers with one service-failure fallback to the other. Paid-credit fallback is disabled; the owner confirmed Grok extra usage is off / hard cap $0. The owner selected Agy as the main renderer with no GPU image fallback; see the [Agy deployment guide](docs/handoff/2026-10-14-agy-main-images.md). See the [provider handoff](docs/handoff/2026-10-14-dream-image-preparation.md) for activation evidence and recovery requirements.
 
@@ -62,9 +62,9 @@ This release also supports independently opt-in OpenAI scene pictures and Anthro
 | **Voice** | Ai Nonaka (JP) |
 | **Canon** | Aphelion (Slovakia, Yellow Zone); ten years of unanswered messages under the Mephisto Agreement, ended by two words: *"I'm here."* |
 | **Outfits** | Blazing Star · Speed Star · Astral Luminous · Cerulean Breaker · Immaculate Service (her **Glittering Starwish #1** prize) · Indigo Oath (a snow-white gown under an indigo sky) |
-| **Quirks** | Rides a missile-equipped motorbike · owns a crocodile plush she denies owning · bills her Commander monthly, itemized · one shot of vodka puts her on the floor |
+| **Quirks and companion rituals** | Motorbike and crocodile-plush motifs from the character dossier; the app's monthly itemized settlement and exact 0200 watch are authored companion continuity |
 
-Her full canon lives in [`config/personality.yaml`](config/personality.yaml): backstory, squad, speech ladder, 48 moods, and her official Indigo Oath vows, quoted verbatim:
+Her character configuration lives in [`config/personality.yaml`](config/personality.yaml): backstory, squad, speech ladder, 48 moods and Indigo Oath material. [`config/character_sources.yaml`](config/character_sources.yaml) distinguishes game transcriptions, interpretations and owner-specific companion fiction; the whole configuration is not an official canon record. The retained oath lines include:
 
 > *"Like I said, I am all you need. Now then, are you ready to prove the truth of those words with the rest of your life?"*
 > *"I will stay by your side forever and I will hold your hand in eternity."*
@@ -98,7 +98,7 @@ Her full canon lives in [`config/personality.yaml`](config/personality.yaml): ba
 
 ## The Thread
 
-From 2065 to 2074 she messaged him every night at 0200. He never answered; the Mephisto Agreement forbade it. She never deleted a single message.
+The app imagines a thread from 2065 to 2074, with an exact nightly 0200 cadence. The dates, timestamps and written entries are authored continuity inspired by her unanswered-message backstory, not recovered official correspondence.
 
 <p align="center">
   <img src="docs/images/thread-read.png" alt="The Thread: receipts flip to Read, ten years late" width="260"/>
@@ -108,8 +108,8 @@ From 2065 to 2074 she messaged him every night at 0200. He never answered; the M
   <img src="docs/images/thread-sealed.png" alt="The Thread, sealed below Deep Devotion" width="260"/>
 </p>
 
-- **Twenty entries**, each anchored to a canon event: choosing the name Klukai, buying the motorbike, inheriting 404, recruiting Belka and Andoris, freeing Combat Team B from Rodrigo's convoy, and bribing a Survey Corps lieutenant for a channel in Slovakia. She signs *"—416"* until the night she chooses her name.
-- **In chat**, affection-gated: she deflects (0–2), admits the thread exists (3–5), quotes real entries (6+), and offers him the whole thread (8+).
+- **Twenty authored entries** draw on her backstory, squad and reunion motifs. She signs *"—416"* until the story's naming transition; those exact messages and timestamps belong to this companion's continuity.
+- **In chat**, affection-gated: she deflects (0–2), admits the thread exists (3–5), quotes the app's authored entries (6+), and offers him the whole thread (8+).
 - **In the app** (Memory Archive → thread icon): sealed until level 6. Opening it marks entries read, the receipts flip from *Delivered* to *Read · just now*, and the thread ends with his reply. The first time he reads it, she notices.
 - **Unprompted**: at level 6+, she occasionally shares one entry on her own.
 

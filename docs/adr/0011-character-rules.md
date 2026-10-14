@@ -34,9 +34,10 @@ Encode these as **absolute_rules** in three places:
    the top of every system prompt assembly.
 2. `app/personality/rules.py:build_character_rules()` → hard-coded
    block injected immediately after the character preamble.
-3. `tests/golden/` (Phase 4) → golden tests sample 50 canonical
-   prompts × 10 affection levels × 6 moods and verify outputs never
-   contain the forbidden patterns.
+3. `tests/golden/` → 45 deterministic assembled system-prompt snapshots
+   (5 affection levels × 3 moods × 3 time windows), with explicit
+   `UPDATE_SNAPSHOTS=1` rotation. These verify prompt assembly and selected
+   invariants; they do not establish that generated answers obey the rules.
 
 Tests added before then (per `tests/test_personality_rules.py`)
 verify the rules text contains the expected anchors (no emoji,
@@ -46,11 +47,12 @@ forbidden `(You)`, allowed `(I)`, no holograms, etc.).
 
 - **Prompt budget cost**: ~50 lines of rules in every prompt. Worth
   it — rules at the top set strong priors that the LLM follows.
-- **Test discipline**: Any future personality refactor MUST preserve
-  these rules verbatim or run the golden test suite.
-- **Phase 4 mutation testing** will mutate the rules block to verify
-  the LLM actually obeys them in practice, not just that the rules
-  are present.
+- **Test discipline**: Personality changes require semantic review and the
+  golden suite. The October 14 character contract consolidates conflicting
+  instructions; preserving contradictions verbatim is not an acceptance goal.
+- **Behavior evidence**: Generated-response evaluation and mutation testing
+  are separate from prompt snapshots. Report their actual execution and
+  coverage; the old plan for 3,000 generated cases was not implemented here.
 - **Configuration drift risk**: rules in YAML + rules in Python is
   duplication. The Python block is the canonical fallback if the
   YAML is missing or malformed. Maintaining both is the cost of

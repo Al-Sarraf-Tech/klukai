@@ -43,7 +43,7 @@
 
 **Why:** Klukai's character is the product. A regression in speech pattern, mood handling, or affection-level transition is functionally an outage.
 
-**Control:** Golden test suite snapshots ~3000 (50 prompts × 10 affection levels × 6 mood categories) outputs. Drift = test fail; rotation requires explicit `--update-snapshots` flag.
+**Control:** The golden suite checks 45 assembled system prompts (5 affection levels × 3 moods × 3 time windows), comparing hashes and metadata. It does not sample generated model answers. Missing/corrupt snapshots or assembly errors fail; intentional rotation requires exact `UPDATE_SNAPSHOTS=1`. Thirteen separate harness regression tests check that evidence cannot be silently created or skipped. Character behavior evaluation uses separate public fictional cases and must be reported with actual model/version, inputs and outcomes.
 
 **Evidence:** `docker/core/tests/golden/`.
 

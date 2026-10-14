@@ -1,14 +1,17 @@
 # Klukai Architecture
 
-> Companion PWA + FastAPI core on a two-host private mesh. This document describes the **current** load-bearing shape after the princess-upgrade / durable-jobs cycle. Per-decision history lives in `docs/adr/`.
+> Companion PWA + FastAPI core on a two-host private mesh. Provider configuration below reflects the owner's October 14, 2026 deployment. Reliability work on the elite-refactor branch is tracked separately in `handoff/2026-10-14-elite-refactor-progress.md`; planned behavior is not deployment evidence. Per-decision history lives in `docs/adr/`.
 
 **Redaction:** mesh IPs, MagicDNS names, and secret values are omitted. Use host roles **core host** and **GPU host**.
 
 ## Topology
 
-![Two-host topology](images/topology.png)
-
 ```
+Existing authorized cloud services
+  Sonnet interactive + capped creative text · Brave search
+  Signed-in Agy/Grok account image worker (core host, private Unix socket)
+      ▲
+      │
 Public TLS edge
       │
       ▼
@@ -23,14 +26,17 @@ Public TLS edge
 
 \* Broker may share the core host or an adjacent ops stack; routing keys are host-scoped (`host.<name>.…`).
 
+The GPU stack retains ComfyUI for explicit rollback/other authorized work. Production Klukai image requests use the account worker; there is no automatic GPU image fallback.
+
 ### Trust boundaries
 
 | Boundary | Policy |
 |---|---|
 | Internet → gateway | TLS at the edge; static `/app/` public; API authed |
 | Core → GPU | Private mesh only; bearer / lease tokens |
-| Core → RabbitMQ | Credentials in env; not committed |
-| Process crash | Job/defer rows in Postgres survive; queues redeliver |
+| Core → account image worker | Private Unix socket, scoped authentication, owner allowlist, pinned reference paths owned by the worker; no conversational history in account prompts |
+| Bridge → RabbitMQ | Credentials in env; not committed |
+| Process crash | Job/defer rows in Postgres survive; queue redelivery is subject to idempotent claims and the no-reclaim rule for ambiguous cloud work |
 
 ## companion-core
 
@@ -38,21 +44,26 @@ Single FastAPI process. Important modules:
 
 | Module | Role |
 |---|---|
-| `chat.py` / `chat_handlers.py` | WebSocket pipeline, warm-on-connect hook |
-| `llm_router.py` | **Local-only** routing; no cloud fallback |
+| `chat.py` / `chat_handlers.py` | Authenticated multi-device WebSocket conversation pipeline |
+| `llm_router.py` | Authorized Sonnet interactive primary; Dominus local secondary |
 | `memory_her_pov.py` | Her POV pipeline + durable job board |
 | `deferred.py` | One-shot future tasks (Postgres + bridge timer) |
 | `proactive/` | Cron engine + durability catch-up |
 | `memory*.py` | Three-tier memory + archive |
-| `image_gen.py` | Comfy via gateway + GPU lease |
+| `image_provider.py` / `agy_image_provider.py` | Provider policy and private account-worker client; production selects `agy` |
+| `image_gen.py` | Local Comfy implementation retained for explicit local deployments/rollback |
 | `events.py` | Redis publish (`companion:events`) |
-| `warmup.py` | Background model warm (not keepalive) |
+| `warmup.py` | Compatibility hooks; load-on-demand policy disables periodic/model prewarming |
+| `migrations.py` | Refactor branch: checksum ledger, advisory-locked transactional startup; see migration runbook |
 
-### LLM policy (non-negotiable)
+### Production provider policy
 
-- Providers other than `lmstudio` are refused at stream time.
-- Missing local backend → in-character disruption sentinel.
-- `ANTHROPIC_API_KEY` is not used even if set.
+- Interactive: explicitly enabled Anthropic Sonnet 5.5, medium adaptive thinking; Dominus is secondary. A local GPU outage does not remove the configured cloud chat primary.
+- Dream/Her POV creative text: separately authorized Anthropic route, initially 12 attempts per UTC day and 12 per UTC month. These are attempt limits, not a dollar cap. Other background writers remain local.
+- Images: existing Agy/Grok account quotas, alternating preferred providers and at most one eligible service-error failover. Policy refusals do not fail over. Google paid-credit fallback stays disabled; owner confirmed Grok extra usage off/$0. No paid image API or GPU fallback.
+- Voice/STT: Dominus services. XTTS uses the pinned character reference and 24 kHz output; no automatic Arc or paid voice fallback. Text remains usable when voice is offline.
+- Web: existing authorized Brave MCP search path. This authorization does not extend to other new paid services.
+- Fresh checkout defaults differ from private deployment configuration. Use the dated handoffs and verified runtime settings when describing what is deployed.
 
 ## events-bridge
 
@@ -72,7 +83,8 @@ Internal routes fail closed without `CORE_INTERNAL_TOKEN`.
 
 - Table: `companion_her_pov_jobs` (migration `170`)
 - One non-terminal job per user (partial unique index)
-- `HER_POV_EXECUTION=queue` in production; `inline` for unit tests / bridge outage fallback
+- `HER_POV_EXECUTION=queue` in production. Cloud work requires a durable claim and never falls back to inline work after a queue failure. `inline` remains a local-only development path.
+- A Redis subscriber count is not proof of durable AMQP acceptance. The refactor acceptance map tracks queued-job reconciliation and bridge heartbeat fixes until verified; do not treat the legacy bridge as a completed outbox.
 
 ## Proactive durability
 
@@ -102,15 +114,16 @@ SACRED: never delete chat/memory/affection vectors for cleanup convenience.
 
 | Domain down | User impact |
 |---|---|
-| GPU host | Text disruption line; no image/voice until recovery |
-| RabbitMQ | Chat continues; defer/jobs delayed; sweeper/backstop |
-| Redis | Session/events degraded; bridge reconnects |
-| Postgres | Hard failure — core unhealthy |
+| GPU host | Local secondary, local background work and voice/STT unavailable; configured Sonnet chat and Agy/Grok pictures remain independent |
+| Account image providers | Image request reports provider failure; eligible failover only, no GPU/paid-credit fallback |
+| RabbitMQ / bridge | Text chat continues; queued jobs/deferred tasks can be delayed; recovery guarantees depend on the specific durable path |
+| Redis | Session/events unavailable or degraded; do not equate a pub/sub receipt with durable work acceptance |
+| Postgres | Persistence unavailable; startup must fail on a real migration error |
 
 ## Related ADRs
 
 - ADR-0002 Compute split (core / GPU)
-- ADR-0004 LM routing (updated: local-only enforcement in code)
+- ADR-0004 LM routing (historical local-only decision, superseded by the October 14 owner authorizations above)
 - ADR-0006 Image gen / GPU lease
 - ADR-0007 Voice on GPU host
 - ADR-0009 Public edge / gateway
