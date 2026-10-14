@@ -879,6 +879,61 @@ class TestWSLoopOwnSocket:
         return endpoint, ws, patches
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("failed_stage", ["stt", "tts"])
+    async def test_offline_voice_keeps_text_and_authenticated_socket_usable(self, monkeypatch, failed_stage):
+        from contextlib import ExitStack
+
+        import httpx
+
+        monkeypatch.setenv("VOICE_BACKEND", "dominus")
+        monkeypatch.setenv("VOICE_ASYNC_JOBS", "true")
+        monkeypatch.setenv("VOICE_URL", "http://dominus.test:8301")
+        monkeypatch.delenv("VOICE_STT_URL", raising=False)
+        sock = _FakeWebSocket(token="good", frames=[
+            {"type": "voice_end", "audio": "voice-input"},
+            {"type": "message", "content": "Continue in text."},
+        ])
+        session_seen = None
+
+        async def text_reply(content, session, user_id):
+            nonlocal session_seen
+            session_seen = session
+            reply = "Text answer: " + content
+            session.turns.append({"role": "assistant", "content": reply})
+            await ws.send(user_id, {"type": "done", "final_text": reply})
+            return reply
+
+        endpoint, ws, patches = self._run(sock, _handle_message=text_reply)
+        contacted = []
+
+        def upstream(request):
+            contacted.append(str(request.url))
+            if request.url.path == f"/{failed_stage}":
+                raise httpx.ConnectError("Nobara voice is offline", request=request)
+            assert request.url.path == "/stt"
+            return httpx.Response(200, json={"text": "Spoken question."})
+
+        client_type = httpx.AsyncClient
+        with ExitStack() as stack:
+            for context in patches:
+                stack.enter_context(context)
+            stack.enter_context(patch("httpx.AsyncClient", lambda **kwargs: client_type(
+                transport=httpx.MockTransport(upstream), **kwargs
+            )))
+            await endpoint(sock)
+
+        completed = [call.args[1]["final_text"] for call in ws.send.await_args_list if call.args[1]["type"] == "done"]
+        expected = ["Text answer: Continue in text."]
+        if failed_stage == "tts":
+            expected.insert(0, "Text answer: Spoken question.")
+        assert completed == expected
+        assert [turn["content"] for turn in session_seen.turns] == expected
+        ws.send_voice.assert_not_awaited()
+        sock.close.assert_not_awaited()
+        assert sock.receive_text.await_count == 3  # Both turns, then client disconnect.
+        assert all(url.startswith("http://dominus.test:8301/") for url in contacted)
+
+    @pytest.mark.asyncio
     async def test_malformed_frame_is_skipped_and_loop_continues(self):
         sock = _FakeWebSocket(token="good", frames=[
             "{not valid json",

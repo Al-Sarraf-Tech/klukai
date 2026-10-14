@@ -95,6 +95,45 @@ backend/URL and recreate only core to select it. Neither route is an automatic
 failover to the other host. Nobara must be online and outside game mode for its
 voice synthesis to be available.
 
+The owner explicitly requested that Klukai run without voice when Nobara is
+offline. Text chat remains available through its independent Sonnet primary.
+Speech failures remain failed jobs returned by successful HTTP polling, so an
+upstream voice authentication error does not log the user out. Microphone
+transcription failure directs the user to text; synthesis failure preserves the
+text reply and authenticated socket. No automatic Arc or cloud voice fallback
+is enabled. The next speech request can succeed when Nobara returns.
+
 Predeployment verification: 4,877 core tests passed (57 skipped, one performance
 test deselected; nine existing warnings), 33 voice tests passed, and independent
 review found no remaining issue after the microphone/archive timeout follow-up.
+
+## Production acceptance
+
+Implementation commit: `dbe4015`. Amarillo core was recreated with image
+`companion-core:nobara-voice-20261014`, ID
+`sha256:4f68e55053d6a0190acf460bc5a85b0f2db6e3afef8d0dfb8a6e11962ef00ff5`.
+The image's changed application files matched the committed source. Runtime
+environment comparison confirmed only the two voice route settings changed
+and `VOICE_ASYNC_JOBS` was added. STT, Sonnet, Brave, image allowances and
+credentials were preserved.
+
+The previous core image is retained as
+`companion-core:before-nobara-voice-20261014`. Private deployment backups are in
+`/home/jalsarraf/.local/share/klukai/deploy-backups/nobara-voice-20261014T153132Z/`
+(0700 directory, 0600 files); do not copy environment contents into handoffs.
+
+A normal authenticated production `POST /api/tts` returned HTTP 202. Polling
+completed in 8.451 seconds and returned 7.277 seconds of mono PCM16 audio at
+24,000 Hz (349,324 bytes). The temporary test session was revoked afterwards.
+`production-nobara.wav` and `production-result.json` are in the evidence directory
+above. Audio SHA-256:
+`68c3aa056d2d6a4644a52e4eef13d751567f92e7963f673b6bf9e23029260ce9`.
+After completion, voice health showed `tts_ready=false` and gateway health
+showed an inactive GPU lease, confirming model cleanup through the normal app
+job path.
+
+Five additional offline/recovery regression cases simulate gateway, synthesis,
+transcription and upstream-authentication failures without stopping Nobara.
+They verify subsequent speech recovery, continued typed conversation on the
+same socket, and no contact with another voice backend. The focused suite
+passed 97 tests; these acceptance additions change tests and documentation only.

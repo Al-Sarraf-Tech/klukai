@@ -29,6 +29,8 @@ uses `VOICE_BACKEND=dominus`, `VOICE_URL=http://100.107.121.5:8301`, and
 `VOICE_ASYNC_JOBS=true`. XTTS WAV output follows its 24 kHz decoder rate. Keep
 the original pinned Dominus reference, exclusive GPU lease and gaming/cleanup
 guards. The Arc release remains available as an explicit rollback choice.
+The owner explicitly permits running without voice when Nobara is offline:
+keep text chat available, with no automatic Arc or paid voice fallback.
 See `docs/handoff/2026-10-14-nobara-primary-voice.md` for measurements and rollout.
 
 ## Voice source baseline

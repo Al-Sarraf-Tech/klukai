@@ -106,6 +106,57 @@ async def test_dominus_async_job_preserves_japanese_binary_wav_and_gpu_lease(mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["gateway-offline", "voice-offline", "upstream-auth"])
+async def test_dominus_failed_job_keeps_session_and_next_request_recovers(monkeypatch, failure):
+    app = _app(monkeypatch)
+    online = False
+    hosts = []
+
+    def upstream(request):
+        hosts.append(request.url.host)
+        if not online and failure == "gateway-offline":
+            raise httpx.ConnectError("Nobara is offline", request=request)
+        if request.url.path.endswith("/acquire"):
+            return httpx.Response(200, json={"status": "acquired", "ttl_seconds": 600, "lease_token": "opaque-capability"})
+        if request.url.path == "/tts":
+            if not online and failure == "voice-offline":
+                raise httpx.ConnectError("Voice is offline", request=request)
+            if not online and failure == "upstream-auth":
+                return httpx.Response(401)
+            return httpx.Response(200, content=b"recovered-wav")
+        assert request.url.path.endswith("/release")
+        return httpx.Response(204)
+
+    client_type, gate = _upstream(monkeypatch, upstream)
+    try:
+        async with client_type(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            first = await client.post("/api/tts", json={"text": "This text remains available without speech."})
+            assert first.status_code == 202
+            await asyncio.wait_for(app.state.voice_jobs._queue.join(), timeout=1)
+            failed = await client.get(f'/api/tts/jobs/{first.json()["job_id"]}')
+            # The browser treats 401 as logout. A voice failure stays job data.
+            assert failed.status_code == 200
+            assert failed.json() == {
+                "job_id": first.json()["job_id"],
+                "status": "failed",
+                "error": "Voice service unavailable",
+            }
+            assert not gate.locked()
+            online = True
+            second = await client.post("/api/tts", json={"text": "Nobara is back."})
+            assert second.status_code == 202
+            await asyncio.wait_for(app.state.voice_jobs._queue.join(), timeout=1)
+            recovered = await client.get(f'/api/tts/jobs/{second.json()["job_id"]}')
+            assert recovered.status_code == 200
+            assert recovered.json()["status"] == "completed"
+            assert base64.b64decode(recovered.json()["audio"]) == b"recovered-wav"
+            assert set(hosts) <= {"gateway.test", "voice.test"}
+            assert not gate.locked()
+    finally:
+        await app.state.voice_jobs.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("backend,language,text", [
     ("dominus", "en", "x" * 501),
     ("dominus", "ja", "あ" * 501),

@@ -19,7 +19,7 @@
 
 A production-grade AI companion rooted in [Girls' Frontline 2: Exilium](https://gfl2.sunborngame.com/) canon. Klukai is the elite who waited ten years for her Commander to answer, and she builds a real bond with him: conversation, memory, affection, rituals, and initiative, with her state and archive on hardware he controls.
 
-**Current deployment:** Claude Sonnet 5.5 with medium adaptive thinking handles interactive chat, with Dominus as the local secondary. Speech uses XTTS on Dominus-Nobara's RTX 3090, with queued playback and correct 24 kHz audio. Pictures, live portraits, and background work remain local by default.
+**Current deployment:** Claude Sonnet 5.5 with medium adaptive thinking handles interactive chat, with Dominus as the local secondary. Speech uses XTTS on Dominus-Nobara's RTX 3090, with queued playback and correct 24 kHz audio. Text chat stays available without voice when Nobara is offline. Pictures, live portraits, and background work remain local by default.
 
 This release also supports independently opt-in OpenAI scene pictures and Anthropic dream/Her POV writing. Fresh deployments default to local providers and zero cloud allowances. On the owner's production deployment, Claude creative writing now uses the existing API key with 12 attempts per UTC month; pictures retain local ComfyUI. See the [provider handoff](docs/handoff/2026-10-14-dream-image-preparation.md) for activation evidence and recovery requirements.
 
