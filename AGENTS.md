@@ -61,3 +61,14 @@ fallback stays disabled. Production images remain local ComfyUI with zero
 cloud allowances; the successful one-off generation test does not enable an
 automatic cloud provider. Gemini has durable bus membership, with no unattended
 model worker.
+
+## Main image renderer (owner update, 2026-10-14)
+
+The owner explicitly authorized Gemini/Agy in chat and then made it the main
+image provider with no GPU image usage. Production selects
+`KLUKAI_IMAGE_PROVIDER=agy`, through the private Amarillo account worker. This
+supersedes earlier local-image-only and one-off-generation restrictions for
+Klukai images. No paid image APIs, credits or fallback are authorized. On Agy
+failure, return no image; never fall back to ComfyUI. Voice remains unchanged.
+Read `docs/handoff/2026-10-14-agy-main-images.md` for deployment, reference
+privacy, account/session limits and rollback.

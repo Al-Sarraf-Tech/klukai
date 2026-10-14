@@ -479,7 +479,7 @@ class MissionMixin(_EngineBase):
             async def _gen_aftermath():
                 try:
                     await asyncio.sleep(2)  # Let caption deliver first
-                    img_bytes = await generate_image(prompt, width=1216, height=832)
+                    img_bytes = await generate_image(prompt, width=1216, height=832, user_id=user_id)
                     if img_bytes:
                         import base64 as b64
                         # Import ws from context to send image

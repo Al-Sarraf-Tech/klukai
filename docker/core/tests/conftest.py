@@ -23,6 +23,10 @@ if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
     os.environ.pop("ANTHROPIC_API_KEY", None)
     os.environ.pop("OPENAI_API_KEY", None)
     os.environ["KLUKAI_IMAGE_PROVIDER"] = "comfyui"
+    os.environ["KLUKAI_CHAT_IMAGE_PROVIDER"] = ""
+    os.environ["KLUKAI_AGY_ALLOWED_USERS"] = ""
+    os.environ["KLUKAI_AGY_SOCKET"] = "/tmp/pytest-klukai-agy-unavailable/image.sock"
+    os.environ["KLUKAI_AGY_TOKEN_FILE"] = "/tmp/pytest-klukai-agy-unavailable/token"
     os.environ["KLUKAI_CREATIVE_TEXT_PROVIDER"] = "local"
     os.environ["KLUKAI_IMAGE_REFERENCE_FILES"] = "[]"
     for _creative_kind in ("IMAGE", "TEXT"):

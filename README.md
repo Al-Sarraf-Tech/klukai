@@ -21,7 +21,7 @@ A production-grade AI companion rooted in [Girls' Frontline 2: Exilium](https://
 
 **Current deployment:** Claude Sonnet 5.5 with medium adaptive thinking handles interactive chat, with Dominus as the local secondary. Speech uses XTTS on Dominus-Nobara's RTX 3090, with queued playback and correct 24 kHz audio. Text chat stays available without voice when Nobara is offline. Pictures, live portraits, and background work remain local by default.
 
-This release also supports independently opt-in OpenAI scene pictures and Anthropic dream/Her POV writing. Fresh deployments default to local providers and zero cloud allowances. On the owner's production deployment, Claude creative writing now uses the existing API key with 12 attempts per UTC month; pictures retain local ComfyUI. See the [provider handoff](docs/handoff/2026-10-14-dream-image-preparation.md) for activation evidence and recovery requirements.
+This release also supports independently opt-in OpenAI scene pictures and Anthropic dream/Her POV writing. Fresh deployments default to local providers and zero cloud allowances. On the owner's production deployment, Claude creative writing now uses the existing API key with 12 attempts per UTC month; pictures now use the signed-in Gemini/Agy account with paid-credit fallback disabled. The owner selected Agy as the main renderer with no GPU image fallback; see the [Agy deployment guide](docs/handoff/2026-10-14-agy-main-images.md). See the [provider handoff](docs/handoff/2026-10-14-dream-image-preparation.md) for activation evidence and recovery requirements.
 
 **[Release v1.1.0](https://github.com/Al-Sarraf-Tech/klukai/releases/tag/v1.1.0):** core API `1.1.0`, Flutter `1.1.0+2`. The version sources are [the core package](docker/core/app/__init__.py) and [Flutter's pubspec](flutter_app/pubspec.yaml); checked-in defaults deliberately remain local.
 
@@ -90,7 +90,7 @@ Her full canon lives in [`config/personality.yaml`](config/personality.yaml): ba
 | **Her POV** | She picks a real exchange, journals it, and draws it from her side |
 | **Proactive** | Check-ins, dreams, anniversaries, seasonal lines, deferred one-shots that survive restarts |
 | **On-demand GPU use** | The configured Sonnet primary leaves the secondary model unloaded until needed; local runtimes enforce idle release |
-| **Voice & image** | RTX 3090 XTTS for speech and separate Dominus STT; authenticated, leased ComfyUI pictures and live portraits |
+| **Voice & image** | RTX 3090 XTTS for speech and separate Dominus STT; account-quota Agy pictures; existing live portraits retained without GPU regeneration |
 | **3D view** | Starts with her whole body visible; drag sideways to rotate through 360° and up/down to position her, pinch or scroll to zoom. The chosen view stays saved on this browser. Tap her for character reactions; speech drives mouth and hand movement. On-screen controls support keyboard use, and Reset view restores full-body framing |
 | **Web & references** | Brave web search with source links, plus scoped tools for weather, units/currency, research papers, programming references and public security advisories; free metasearch is available as fallback ([operations](docs/handoff/2026-10-14-web-tools.md)) |
 
@@ -272,7 +272,7 @@ The default writer and renderer are local. An authorized creative-provider confi
 |---|---|---|
 | Interactive chat and tools | Dominus gateway and local models | `KLUKAI_CLAUDE_PRIMARY=true` plus an Anthropic key: Sonnet 5.5, adaptive thinking, medium effort; Dominus secondary |
 | Night/morning dream text and Her POV scene writing | Existing local LLM calls | `KLUKAI_CREATIVE_TEXT_PROVIDER=anthropic`, key, and positive text attempt allowances |
-| Scene pictures | `KLUKAI_IMAGE_PROVIDER=comfyui` | `openai`, key, adopted character reference files, and positive image attempt allowances |
+| Scene pictures | Fresh installs: `comfyui`; owner production: `agy` | Agy needs the private account worker and user allowlist; no GPU fallback. Paid OpenAI remains separately disabled |
 | Animated live portraits | Local NoobAI-XL + Klukai LoRA and masked expression edits | Remain local |
 | Historical memory seeding | Existing local selection, annotation, and ComfyUI pipeline | Refuses remote configuration until source-aware durable backfill jobs exist |
 | Speech | Explicit `dominus` or `amarillo-xpu` voice backend | No cloud voice provider |
@@ -341,7 +341,7 @@ TIER 3  Factual     PostgreSQL   messages, affection, jobs       permanent
 | UI | Flutter Web PWA (`/app/`) |
 | Chat model | Opt-in Sonnet 5.5 interactive primary; local Venice/Qwen and gaming-aware Gemma routing via gateway |
 | Agent model | Local Qwen reasoning distill |
-| Images | Local ComfyUI + NoobAI-XL/Illustrious + Klukai LoRA; opt-in OpenAI scene adapter |
+| Images | Production: signed-in Gemini/Agy account, no GPU fallback; local and OpenAI adapters remain explicit alternatives |
 | Voice | XTTS v2 on RTX 3090 at 24 kHz; separate Dominus STT; retained Arc TTS remains selectable |
 | Bus | RabbitMQ topic + delay buckets + quorum jobs |
 | Observability | Prometheus, Grafana, Loki, Tempo, Alloy |
@@ -426,7 +426,7 @@ python3 scripts/e2e_live.py --only her-pov
 | `HER_POV_EXECUTION` | `queue` | Durable rail; `inline` is available only for local generation |
 | `KLUKAI_DISABLE_WARMUP` | unset | Pass `1` through a deployment override for local load-on-demand; Sonnet-primary mode already skips secondary warm-up |
 | `KLUKAI_CLAUDE_PRIMARY` | `false` | Separately authorized Anthropic interactive primary, requiring its key |
-| `KLUKAI_IMAGE_PROVIDER` | `comfyui` | Local pictures; `openai` also requires adopted references and attempt allowances |
+| `KLUKAI_IMAGE_PROVIDER` | `comfyui` | Production uses `agy` with the private account worker; `openai` requires separate references and attempt allowances |
 | `KLUKAI_CREATIVE_TEXT_PROVIDER` | `local` | Local dream/Her POV writing; `anthropic` requires separate allowances |
 | `KLUKAI_CLOUD_{IMAGE,TEXT}_{DAILY,MONTHLY}_LIMIT` | `0` | Persistent global UTC attempt allowances; failures count |
 | `VOICE_BACKEND` | `dominus` | `amarillo-xpu` selects the separately configured native Arc TTS service |

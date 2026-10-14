@@ -250,27 +250,45 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         except Exception:
             results["lm_studio"] = {"status": "down"}
 
-        # ComfyUI is deliberately not queried through its protected facade:
-        # every facade request needs an active lease and health checks must not
-        # acquire, refresh, or extend GPU ownership.  The gateway performs a
-        # safe internal reachability probe in its public health document.
-        try:
-            lm_url = os.environ.get(
-                "LM_STUDIO_URL", "http://100.107.121.5:1234"
-            ).rstrip("/")
-            async with _hx.AsyncClient(
-                timeout=5.0, trust_env=False, follow_redirects=False
-            ) as c:
-                resp = await c.get(f"{lm_url}/health")
-                resp.raise_for_status()
-                gateway_health = resp.json()
-                comfy_status = gateway_health.get("comfyui_status", "unavailable")
-                results["comfyui"] = {
-                    "status": "ok" if comfy_status == "ok" else "down",
-                    "source": "gpu_gateway",
-                }
-        except Exception:
-            results["comfyui"] = {"status": "down"}
+        # Report the selected renderer without waking an unused GPU service.
+        from .image_provider import cloud_images_ready, selected_provider
+        image_provider = selected_provider()
+        if image_provider == "agy":
+            from .agy_image_provider import agy_images_ready
+            ready = await agy_images_ready()
+            results["images"] = {
+                "provider": "agy", "status": "ok" if ready else "down",
+                "source": "host_worker", "google_auth": "not_checked",
+            }
+        elif image_provider == "comfyui":
+            # The gateway health document is safe without a GPU lease; never
+            # query the protected facade from a health probe.
+            try:
+                lm_url = os.environ.get(
+                    "LM_STUDIO_URL", "http://100.107.121.5:1234"
+                ).rstrip("/")
+                async with _hx.AsyncClient(
+                    timeout=5.0, trust_env=False, follow_redirects=False
+                ) as c:
+                    resp = await c.get(f"{lm_url}/health")
+                    resp.raise_for_status()
+                    gateway_health = resp.json()
+                    comfy_status = gateway_health.get("comfyui_status", "unavailable")
+                    results["comfyui"] = {
+                        "status": "ok" if comfy_status == "ok" else "down",
+                        "source": "gpu_gateway",
+                    }
+            except Exception:
+                results["comfyui"] = {"status": "down"}
+            results["images"] = {"provider": "comfyui", **results["comfyui"]}
+        elif image_provider == "openai":
+            ready = await asyncio.to_thread(cloud_images_ready)
+            results["images"] = {
+                "provider": "openai", "status": "ok" if ready else "down",
+                "source": "configuration", "provider_auth": "not_checked",
+            }
+        else:
+            results["images"] = {"provider": image_provider, "status": "disabled"}
 
         # Embedding service
         try:
@@ -412,11 +430,21 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
     @app.post("/api/generate-image")
     async def api_generate_image(req: ImageGenRequest, request: Request):
-        """Generate an image via ComfyUI and save to memory archive."""
+        """Generate an authenticated image and save to this user's archive."""
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        img_bytes = await generate_image(req.prompt)
+        from .agy_image_provider import generate_agy_image, uses_agy_images
+        from .image_provider import selected_provider
+        if selected_provider() == "agy" or uses_agy_images(user_id):
+            from .image_gen import is_couple_scene, is_landscape
+            width, height = (1216, 832) if is_landscape(req.prompt) else (832, 1216)
+            img_bytes = await generate_agy_image(
+                req.prompt, user_id=user_id, width=width, height=height,
+                include_commander=is_couple_scene(req.prompt),
+            )
+        else:
+            img_bytes = await generate_image(req.prompt)
         if img_bytes:
             import base64
 

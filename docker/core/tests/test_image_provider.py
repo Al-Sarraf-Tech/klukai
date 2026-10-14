@@ -220,10 +220,10 @@ def test_cloud_prompt_preserves_identity_and_outfit_without_diffusion_markup():
     assert "red hair" in text
 
 
-async def test_img2img_remains_local_even_when_cloud_selected(configured, monkeypatch):
-    monkeypatch.setattr(image_gen, "_leased", AsyncMock(return_value=b"portrait-frame"))
+async def test_img2img_cannot_fall_back_to_gpu_when_cloud_selected(configured, monkeypatch):
+    monkeypatch.setattr(image_gen, "gpu_lease", lambda *a, **kw: pytest.fail("cloud mode acquired GPU"))
     fake_api(monkeypatch, lambda request: pytest.fail("portrait sent cloud HTTP"))
-    assert await image_gen.generate_img2img(b"source", "blink", denoise=0.2, seed=42) == b"portrait-frame"
+    assert await image_gen.generate_img2img(b"source", "blink", denoise=0.2, seed=42) is None
 
 
 async def test_cloud_renders_serialize_before_reference_loading(configured, monkeypatch):

@@ -247,6 +247,20 @@ def _ws_frames(ws, frame_type="her_pov"):
 
 
 class TestRunHerPovHappyPath:
+    async def test_agy_scene_preserves_user_without_sending_exchange_context(self, clean_jobs, pipeline, monkeypatch):
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
+        with patch.object(hp, "_persist_job", AsyncMock()):
+            await hp.run_her_pov("claude", "job-agy")
+        assert pipeline.build_prompt.call_args.kwargs["context"] == ""
+        assert pipeline.generate_image.await_args.kwargs["user_id"] == "claude"
+        assert pipeline.generate_image.await_args.kwargs["include_commander"] is False
+        assert (await hp.get_job("job-agy"))["status"] == "done"
+
+    async def test_owner_couple_scene_selects_owner_reference(self, clean_jobs, pipeline):
+        await hp.run_her_pov("jalsarraf", "job-owner")
+        assert pipeline.generate_image.await_args.kwargs["user_id"] == "jalsarraf"
+        assert pipeline.generate_image.await_args.kwargs["include_commander"] is True
+
     @pytest.mark.asyncio
     async def test_completes_and_saves_memory(self, clean_jobs, pipeline):
         await hp.run_her_pov("claude", "job-1")

@@ -58,8 +58,10 @@ class TestSpontaneousArt:
         with gen as g, bp, save as s, slp, patch("app.context.ws", ws):
             await e._spontaneous_art_event()
         g.assert_awaited_once()
+        assert g.await_args.kwargs["user_id"] == "jalsarraf"
         s.assert_awaited_once()                                   # persisted to album
         assert s.await_args.kwargs["curation"]["keep"] is True
+        assert s.await_args.kwargs["user_id"] == "jalsarraf"
         assert s.await_args.kwargs["curation"]["category"] == "Precious Memories"
         e._on_message_callback.assert_awaited_once()              # told him
         ws.send.assert_awaited_once()                             # showed him the image

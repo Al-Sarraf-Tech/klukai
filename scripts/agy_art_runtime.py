@@ -80,7 +80,7 @@ def command(profile: Path, work: Path, args: list[str], socket: Path):
     return cmd + args
 
 
-def parse_stream(raw: str, required: set[str]) -> dict:
+def parse_stream(raw: str, required: set[str], *, generation=False) -> dict:
     try:
         events = [json.loads(line) for line in raw.splitlines() if line.strip()]
         initial = [x['init'] for x in events if x.get('event') == 'init']
@@ -116,7 +116,8 @@ def parse_stream(raw: str, required: set[str]) -> dict:
                 continue
             name = 'finish' if step.get('step_type') == 'finish' else step.get('tool_name')
             index, state = step.get('step_index'), step.get('state')
-            if (name not in {'view_file', 'finish'} or info.get('error')
+            allowed = {'view_file', 'finish'} | ({'generate_image'} if generation else set())
+            if (name not in allowed or info.get('error')
                     or state not in {'ACTIVE', 'DONE'} or type(index) is not int):
                 raise RuntimeError('Agy used an unexpected, failed, or invalid tool')
             path = info.get('parameters', {}).get('AbsolutePath')
@@ -128,13 +129,17 @@ def parse_stream(raw: str, required: set[str]) -> dict:
                     raise RuntimeError('Invalid Agy tool lifecycle')
             calls[index] = {'tool': name, 'path': path, 'state': state, 'step': index}
         for call in calls.values():
+            if call['tool'] == 'generate_image' and call['state'] != 'DONE':
+                raise RuntimeError('Agy generation did not complete')
             if call['tool'] == 'view_file':
                 if call['state'] != 'DONE':
                     raise RuntimeError('Agy image read did not complete')
                 seen.add(call['path'])
             # Native finish may emit ACTIVE then the terminal SUCCESS result,
             # without a separate DONE event. Errors were checked above.
-        if seen != required or not isinstance(result.get('structured_output'), dict):
+        if generation and sum(c['tool'] == 'generate_image' for c in calls.values()) != 1:
+            raise RuntimeError('Agy did not complete exactly one generation')
+        if seen != required or (not generation and not isinstance(result.get('structured_output'), dict)):
             raise RuntimeError('Agy did not inspect every selected image or return structured output')
         return {**result, 'images_read': sorted(seen), 'model': initial[0].get('model'), 'tool_audit': list(calls.values())}
     except RuntimeError:
@@ -194,21 +199,24 @@ def execute(profile: Path, work: Path, args: list[str], timeout: int) -> str:
                 proxy.kill(); proxy.wait()
 
 
-def configure_gate(work: Path, images: set[str]):
+def configure_gate(work: Path, images: set[str], *, generation=False):
     shutil.copyfile(Path(__file__).with_name('agy_art_gate.py'), work / '.agents/gate.py')
-    (work / '.agents/review-policy.json').write_text(json.dumps({'images': sorted(images)}))
+    (work / '.agents/review-policy.json').write_text(json.dumps({'images': sorted(images), 'generation':generation}))
     (work / '.agents/hooks.json').write_text(json.dumps({'klukai-art-gate': {
         'PreToolUse': [{'matcher': '*', 'hooks': [{'type':'command',
             'command':'/usr/bin/python3 /work/.agents/gate.py', 'timeout':5}]}]}}))
 
 
-def verify_gate(work: Path, images: set[str]):
+def verify_gate(work: Path, images: set[str], *, generation=False):
     try:
         rows = [json.loads(x) for x in (work/'gate-audit.ndjson').read_text().splitlines()]
         if any(x['decision'] != 'allow' for x in rows):
             raise RuntimeError('Artwork gate denied an unexpected action')
         seen = {x['path'] for x in rows if x['tool'] == 'view_file'}
-        if seen != images or any(x['tool'] not in {'view_file', 'finish'} for x in rows):
+        allowed = {'view_file', 'finish'} | ({'generate_image'} if generation else set())
+        if seen != images or any(x['tool'] not in allowed for x in rows):
             raise RuntimeError('Artwork gate evidence is incomplete')
+        if generation and sum(x['tool'] == 'generate_image' for x in rows) != 1:
+            raise RuntimeError('Artwork gate requires exactly one generation')
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise RuntimeError('Artwork gate evidence is missing or invalid') from exc

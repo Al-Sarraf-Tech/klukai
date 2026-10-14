@@ -1741,7 +1741,7 @@ class TestMissionAftermathImage:
         fake_ws.send = AsyncMock()
 
         with patch("app.image_gen.build_mission_prompt", MagicMock(return_value="p")), \
-             patch("app.image_gen.generate_image", new=AsyncMock(return_value=b"\x89PNGdata")), \
+             patch("app.image_gen.generate_image", new=AsyncMock(return_value=b"\x89PNGdata")) as generate, \
              patch("app.context.ws", fake_ws), \
              patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
              patch("app.proactive.mission.asyncio.create_task", side_effect=capture_task), \
@@ -1752,6 +1752,7 @@ class TestMissionAftermathImage:
             await captured_tasks[0]
 
         fake_ws.send.assert_awaited_once()
+        assert generate.await_args.kwargs["user_id"] == "alice"
         uid, frame = fake_ws.send.await_args.args
         assert uid == "alice"
         assert frame["type"] == "image"

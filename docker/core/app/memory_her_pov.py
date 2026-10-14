@@ -36,8 +36,8 @@ _JOB_MAX = 200
 
 def _cloud_generation_enabled() -> bool:
     from .creative_text import uses_cloud_text
-    from .image_provider import uses_cloud_images
-    return uses_cloud_text() or uses_cloud_images()
+    from .image_provider import selected_provider, uses_cloud_images
+    return uses_cloud_text() or uses_cloud_images() or selected_provider() == "agy"
 
 _TRIVIAL = {
     "ok", "okay", "yes", "no", "yeah", "yep", "nope", "sure", "thanks",
@@ -468,17 +468,22 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
         else:
             tod = "night"
 
+        from .image_provider import selected_provider
+        image_context = "" if selected_provider() == "agy" else f"{exchange['user_content']} {exchange['assistant_content']}"[:400]
         prompt = build_prompt(
             pov["scene_tags"],
             couple=pov["couple"],
             affection_level=level,
-            context=f"{exchange['user_content']} {exchange['assistant_content']}"[:400],
+            context=image_context,
             mood=pov["mood"],
             time_of_day=tod,
             costume=costume,
         )
 
-        img = await generate_image(prompt, sfw=level < INTIMATE_MIN_LEVEL)
+        img = await generate_image(
+            prompt, sfw=level < INTIMATE_MIN_LEVEL, user_id=user_id,
+            include_commander=bool(pov["couple"]) and user_id == "jalsarraf",
+        )
         if not img:
             await _set_job(
                 job_id, status="failed", phase="failed",

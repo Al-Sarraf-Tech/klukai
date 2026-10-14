@@ -49,6 +49,11 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       # Separate opt-in for cloud images/creative text; no billable defaults.
       KLUKAI_IMAGE_PROVIDER: "${KLUKAI_IMAGE_PROVIDER:-comfyui}"
+      # Account-quota Agy worker on Amarillo; no credentials enter this container.
+      KLUKAI_CHAT_IMAGE_PROVIDER: "${KLUKAI_CHAT_IMAGE_PROVIDER:-}"
+      KLUKAI_AGY_ALLOWED_USERS: "${KLUKAI_AGY_ALLOWED_USERS:-}"
+      KLUKAI_AGY_SOCKET: "/run/klukai-agy/image.sock"
+      KLUKAI_AGY_TOKEN_FILE: "/run/klukai-agy/token"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       KLUKAI_OPENAI_IMAGE_MODEL: "${KLUKAI_OPENAI_IMAGE_MODEL:-gpt-image-2.5-sunburst-2026-09-08}"
       KLUKAI_OPENAI_IMAGE_QUALITY: "${KLUKAI_OPENAI_IMAGE_QUALITY:-max}"
@@ -92,6 +97,7 @@ services:
     volumes:
       - ./config:/config:ro
       - ${KLUKAI_MCP_SECRETS_DIR:-./.mcp-secrets}:/run/klukai-mcp:ro
+      - ${KLUKAI_AGY_RUNTIME_DIR:-./.agy-runtime}:/run/klukai-agy:ro
       - ./web-build:/app/static:ro
       - companion-images:/images
       - companion-audio:/audio

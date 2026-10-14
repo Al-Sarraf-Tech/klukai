@@ -186,6 +186,40 @@ class TestHealthProbes:
 
 
 class TestSubsystemHealth:
+    @pytest.mark.parametrize("ready", [True, False])
+    async def test_agy_diagnostics_report_worker_without_gpu_probe_or_google_auth_claim(self, monkeypatch, ready):
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("LM_STUDIO_URL", "http://lm.test:1234")
+        handler = _find_route(_app_with_routes(), "/api/health/subsystems", "GET")
+        redis_mock = MagicMock(ping=AsyncMock(), aclose=AsyncMock())
+        client = _fake_async_client(get_resp=_Resp(200, {"data": []}))
+        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
+             patch("redis.asyncio.from_url", return_value=redis_mock), \
+             patch("httpx.AsyncClient", return_value=client), \
+             patch("app.agy_image_provider.agy_images_ready", new=AsyncMock(return_value=ready)):
+            result = await handler(_mk_request())
+        assert result["subsystems"]["images"] == {
+            "provider": "agy", "status": "ok" if ready else "down",
+            "source": "host_worker", "google_auth": "not_checked",
+        }
+        assert "comfyui" not in result["subsystems"]
+        urls = [call.args[0] for call in client._client.get.call_args_list]
+        assert "http://lm.test:1234/health" not in urls
+
+    async def test_disabled_image_diagnostics_do_not_probe_renderer(self, monkeypatch):
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "disabled")
+        handler = _find_route(_app_with_routes(), "/api/health/subsystems", "GET")
+        redis_mock = MagicMock(ping=AsyncMock(), aclose=AsyncMock())
+        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
+             patch("redis.asyncio.from_url", return_value=redis_mock), \
+             patch("httpx.AsyncClient", return_value=_fake_async_client(get_resp=_Resp(200, {"data": []}))), \
+             patch("app.agy_image_provider.agy_images_ready", new=AsyncMock(side_effect=AssertionError("disabled renderer probe"))):
+            result = await handler(_mk_request())
+        assert result["subsystems"]["images"] == {"provider": "disabled", "status": "disabled"}
+        assert "comfyui" not in result["subsystems"]
+
     @pytest.mark.asyncio
     async def test_requires_auth(self):
         app = _app_with_routes()
@@ -434,6 +468,56 @@ class TestTTSProxy:
 
 
 class TestGenerateImage:
+    async def test_agy_api_uses_authenticated_user_explicit_prompt_and_archive(self, monkeypatch):
+        from app import agy_image_provider
+        from app.routes import ImageGenRequest
+
+        monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "alice")
+        handler = _find_route(_app_with_routes(), "/api/generate-image", "POST")
+        generate = AsyncMock(return_value=b"AGYPNG")
+        save = AsyncMock(return_value="agy-memory")
+        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch.object(agy_image_provider, "generate_agy_image", new=generate), \
+             patch("app.routes.generate_image", new=AsyncMock(side_effect=AssertionError("fallback"))), \
+             patch("app.routes.affection.get_state", new=AsyncMock(return_value=_mk_aff_state(level=6))), \
+             patch("app.routes.memory_archive.save_image", new=save):
+            result = await handler(ImageGenRequest(prompt="Draw us together at a cafe"), _mk_request())
+        assert result["memory_id"] == "agy-memory" and result["image"] == "QUdZUE5H"
+        assert generate.await_args.args == ("Draw us together at a cafe",)
+        assert generate.await_args.kwargs["user_id"] == "alice"
+        assert generate.await_args.kwargs["include_commander"] is True
+        assert save.await_args.kwargs["user_id"] == "alice"
+
+    async def test_agy_api_failure_does_not_use_local_fallback(self, monkeypatch):
+        from app import agy_image_provider
+        from app.routes import ImageGenRequest
+
+        monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "alice")
+        handler = _find_route(_app_with_routes(), "/api/generate-image", "POST")
+        local = AsyncMock(return_value=b"LOCAL")
+        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch.object(agy_image_provider, "generate_agy_image", new=AsyncMock(return_value=None)), \
+             patch("app.routes.generate_image", new=local):
+            result = await handler(ImageGenRequest(prompt="Draw Klukai"), _mk_request())
+        assert result.status_code == 500
+        local.assert_not_awaited()
+
+    async def test_api_nonallowlisted_user_keeps_local_renderer(self, monkeypatch):
+        from app import agy_image_provider
+        from app.routes import ImageGenRequest
+
+        monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "owner")
+        handler = _find_route(_app_with_routes(), "/api/generate-image", "POST")
+        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch.object(agy_image_provider, "generate_agy_image", new=AsyncMock(side_effect=AssertionError("unauthorized agy"))), \
+             patch("app.routes.generate_image", new=AsyncMock(return_value=None)) as local:
+            result = await handler(ImageGenRequest(prompt="Draw Klukai"), _mk_request())
+        assert result.status_code == 500
+        local.assert_awaited_once_with("Draw Klukai")
+
     @pytest.mark.asyncio
     async def test_requires_auth(self):
         from app.routes import ImageGenRequest

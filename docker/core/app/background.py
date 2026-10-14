@@ -416,10 +416,14 @@ async def background_image_gen(
     """Generate an anime image based on the user's request and recent chat context."""
     from .image_gen import check_comfyui_ready
     from .image_provider import cloud_images_ready, selected_provider
+    from .agy_image_provider import generate_agy_image, uses_agy_images
 
     try:
         provider = selected_provider()
-        if provider == "openai":
+        use_agy = provider == "agy" or uses_agy_images(user_id)
+        if use_agy:
+            ready = True  # The host worker fails visibly; never probe the GPU.
+        elif provider == "openai":
             if not await asyncio.to_thread(cloud_images_ready):
                 await ws.send_proactive(user_id, "...Visualization is unavailable right now, Commander.", persist=False)
                 await ws.send(user_id, {"type": "thinking", "content": ""})
@@ -440,8 +444,12 @@ async def background_image_gen(
         else:
             await ws.send_thinking(user_id, "Compiling tactical visualization, Commander...")
 
-        # Use both the request AND recent chat for context-aware generation
-        full_context = f"{chat_context}\n{user_request}" if chat_context else user_request
+        # Agy receives only the explicit request and local appearance tags.
+        # Squad hints supplied by chat_handlers may include old conversations.
+        full_context = user_request if use_agy else (f"{chat_context}\n{user_request}" if chat_context else user_request)
+        if use_agy:
+            from .image_gen import detect_squad_members
+            squad_members = detect_squad_members(user_request)
         couple = is_couple_scene(full_context)
 
         # Get affection level for mood-aware prompts
@@ -466,10 +474,18 @@ async def background_image_gen(
         else:
             width, height = 832, 1216
 
-        img_bytes = await generate_image(
-            full_prompt, width=width, height=height,
-            sfw=aff_level < INTIMATE_MIN_LEVEL,
-        )
+        if use_agy:
+            from .image_provider import cloud_prompt
+            full_prompt = f"{user_request}\n\n{cloud_prompt(full_prompt, sfw=aff_level < INTIMATE_MIN_LEVEL)}"
+            img_bytes = await generate_agy_image(
+                full_prompt, user_id=user_id, width=width, height=height,
+                include_commander=couple,
+            )
+        else:
+            img_bytes = await generate_image(
+                full_prompt, width=width, height=height,
+                sfw=aff_level < INTIMATE_MIN_LEVEL,
+            )
         if img_bytes:
             import base64 as b64
 

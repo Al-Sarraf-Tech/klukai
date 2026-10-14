@@ -383,6 +383,13 @@ async def check_comfyui_ready() -> bool:
     queue probe.  Normal image generation performs its own work under one
     continuous lease and does not use a separate preflight lease.
     """
+    from .image_provider import selected_provider
+    provider = selected_provider()
+    if provider == "agy":
+        from .agy_image_provider import agy_images_ready
+        return await agy_images_ready()
+    if provider != "comfyui":
+        return False
     from .llm_router import get_lm_gate
 
     async with _image_gen_lock:
@@ -468,6 +475,9 @@ async def _free_comfyui_vram(lease: GPULease, settle_s: float = 2.0) -> bool:
 
 async def free_comfyui_vram() -> bool:
     """Safely release stale Comfy weights under an authenticated GPU lease."""
+    from .image_provider import selected_provider
+    if selected_provider() != "comfyui":
+        return True
     from .llm_router import get_lm_gate
 
     async with _image_gen_lock:
@@ -496,6 +506,8 @@ async def generate_image(
     sfw: bool = False,
     seed: int | None = None,
     negative_extra: str | None = None,
+    user_id: str | None = None,
+    include_commander: bool = False,
 ) -> bytes | None:
     """Generate through the configured scene provider, defaulting to ComfyUI.
 
@@ -517,6 +529,18 @@ async def generate_image(
     from . import image_provider
 
     provider = image_provider.selected_provider()
+    if provider == "agy":
+        from .agy_image_provider import generate_agy_image, uses_agy_images
+        if not uses_agy_images(user_id):
+            return None
+        try:
+            description = image_provider.cloud_prompt(prompt, sfw=sfw, negative_extra=negative_extra)
+        except image_provider.ImageProviderError:
+            return None
+        return await generate_agy_image(
+            description, user_id=user_id, width=width, height=height,
+            include_commander=include_commander,
+        )
     if provider == "openai":
         return await image_provider.generate_cloud_image(
             prompt, width, height, sfw=sfw, negative_extra=negative_extra,
@@ -563,6 +587,11 @@ _T = TypeVar("_T")
 
 async def _leased(render: Callable[[GPULease], Awaitable[_T]]) -> _T | None:
     """Run ``render`` under the image lock, LM gate and one ComfyUI GPU lease."""
+    from .image_provider import selected_provider
+    if selected_provider() != "comfyui":
+        # Legacy portrait/img2img/inpaint paths are GPU-only. Preserve existing
+        # artifacts and refuse local work unless ComfyUI is explicitly selected.
+        return None
     async with _image_gen_lock:
         # Lazy import avoids coupling image prompt helpers to the LLM router at
         # module import time.

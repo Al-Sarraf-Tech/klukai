@@ -518,7 +518,10 @@ class EventsMixin(_EngineBase):
                 mood=self._last_mood, time_of_day=_time_of_day(now.hour),
                 costume=costume,
             )
-            img = await generate_image(prompt, sfw=self._affection_level < INTIMATE_MIN_LEVEL)
+            img = await generate_image(
+                prompt, sfw=self._affection_level < INTIMATE_MIN_LEVEL,
+                user_id="jalsarraf",
+            )
             if not img:
                 return
 
@@ -532,6 +535,7 @@ class EventsMixin(_EngineBase):
                     "category": "Precious Memories",
                     "image_tags": ["for_you", "spontaneous"],
                 },
+                user_id="jalsarraf",
             )
             self._last_spontaneous_art = now
 

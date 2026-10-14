@@ -116,3 +116,29 @@ def test_native_finish_done_is_valid():
     rows.insert(-1,{'event':'step_update','step_update':{'conversation_id':'test','step_index':4,
         'step_type':'finish','state':'DONE'}})
     assert m.parse_stream('\n'.join(map(json.dumps,rows)),{'/work/0.png'})['status']=='SUCCESS'
+
+def generation_stream(state='DONE', count=1):
+    rows=[json.loads(x) for x in stream().splitlines()]
+    rows[-1]['result']['structured_output']=None
+    for i in range(count):
+        rows.insert(-1,{'event':'step_update','step_update':{'conversation_id':'test',
+            'step_index':3+i,'step_type':'tool','state':state,'tool_name':'generate_image',
+            'tool_info':{'parameters':{'ImagePaths':['/work/0.png']}}}})
+    return '\n'.join(map(json.dumps,rows))
+
+def test_generation_requires_one_completed_call_and_explicit_mode():
+    m=runtime()
+    assert m.parse_stream(generation_stream(),{'/work/0.png'},generation=True)['status']=='SUCCESS'
+    for raw in [generation_stream('ACTIVE'),generation_stream(count=0),generation_stream(count=2)]:
+        with pytest.raises(m.RuntimeError):m.parse_stream(raw,{'/work/0.png'},generation=True)
+    with pytest.raises(m.RuntimeError):m.parse_stream(generation_stream(),{'/work/0.png'})
+
+def test_generation_gate_requires_exact_references_and_only_one_call(tmp_path):
+    spec=importlib.util.spec_from_file_location('agy_art_gate', SCRIPT.with_name('agy_art_gate.py'))
+    g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
+    policy={'images':['/work/0.png'],'generation':True}
+    call={'name':'generate_image','args':{'ImagePaths':['/work/0.png']}}
+    assert g.decide(call,{'images':['/work/0.png']},tmp_path/'claim')=='deny'
+    assert g.decide({'name':'generate_image','args':{'ImagePaths':['/secret']}},policy,tmp_path/'claim')=='deny'
+    assert g.decide(call,policy,tmp_path/'claim')=='allow'
+    assert g.decide(call,policy,tmp_path/'claim')=='deny'
