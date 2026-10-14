@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import io
 import json
 import sys
 import tempfile
 import threading
 import time
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -76,6 +78,12 @@ def test_load_xtts_passes_snapshot_directory_not_checkpoint_file(monkeypatch, tm
         def __init__(self, model_path, config_path, **kwargs):
             captured["model_path"] = model_path
             captured["config_path"] = config_path
+            self.synthesizer = SimpleNamespace(
+                tts_config=SimpleNamespace(
+                    audio={"sample_rate": 22050, "output_sample_rate": 24000}
+                ),
+                output_sample_rate=22050,
+            )
 
     fake_tts_api = SimpleNamespace(TTS=FakeTTS)
     monkeypatch.setitem(sys.modules, "TTS", SimpleNamespace(api=fake_tts_api))
@@ -87,6 +95,74 @@ def test_load_xtts_passes_snapshot_directory_not_checkpoint_file(monkeypatch, tm
     assert captured["model_path"] == str(model_dir)
     assert captured["config_path"] == str(model_dir / "config.json")
     assert result is not None
+
+
+def test_xtts_wav_uses_waveform_output_rate_without_resampling(monkeypatch, tmp_path):
+    """Coqui's explicit-checkpoint loader labels XTTS's 24 kHz samples 22.05 kHz.
+
+    Exercise the real service load and HTTP response with only the expensive
+    Coqui inference boundary replaced. The writer consumes the synthesizer's
+    rate exactly as Coqui 0.22 does; correcting the header must preserve PCM.
+    """
+    model_dir = tmp_path / "xtts-v2"
+    model_dir.mkdir()
+    config = {"audio": {"sample_rate": 22050, "output_sample_rate": 24000}}
+    (model_dir / "config.json").write_text(json.dumps(config))
+    for filename in (
+        "dvae.pth", "mel_stats.pth", "model.pth", "speakers_xtts.pth", "vocab.json"
+    ):
+        (model_dir / filename).write_bytes(b"pinned-test-artifact")
+    reference = tmp_path / "reference.wav"
+    reference.write_bytes(b"unchanged-reference")
+    # Exactly one second of the waveform returned by the XTTS decoder.
+    pcm = b"\x01\x00" * 24000
+
+    class CoquiBoundary:
+        def __init__(self, model_path, config_path, **kwargs):
+            loaded = json.loads(Path(config_path).read_text())
+            self.synthesizer = SimpleNamespace(
+                tts_config=SimpleNamespace(audio=loaded["audio"]),
+                output_sample_rate=loaded["audio"]["sample_rate"],
+            )
+
+        def tts_to_file(self, *, text, speaker_wav, language, file_path):
+            assert (text, speaker_wav, language) == ("hello", str(reference), "en")
+            with wave.open(file_path, "wb") as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(self.synthesizer.output_sample_rate)
+                output.writeframes(pcm)
+
+    fake_tts_api = SimpleNamespace(TTS=CoquiBoundary)
+    monkeypatch.setitem(sys.modules, "TTS", SimpleNamespace(api=fake_tts_api))
+    monkeypatch.setitem(sys.modules, "TTS.api", fake_tts_api)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        load=lambda *a, **kw: None,
+        cuda=SimpleNamespace(is_available=lambda: False),
+    ))
+    monkeypatch.setattr(voice, "XTTS_MODEL_DIR", model_dir)
+    monkeypatch.setattr(voice, "REFERENCE_WAV", str(reference))
+    monkeypatch.setattr(voice, "_tts_model", None)
+    monkeypatch.setattr(voice, "_tts_ready", False)
+    monkeypatch.setattr(voice, "VOICE_API_TOKEN", "test-voice-token")
+    _write_voice_lease(monkeypatch, tmp_path, "test-gpu-lease")
+
+    with TestClient(voice.app) as client:
+        response = client.post(
+            "/tts",
+            json={"text": "hello", "language": "en"},
+            headers={
+                "Authorization": "Bearer test-voice-token",
+                "X-GPU-Lease-Token": "test-gpu-lease",
+            },
+        )
+
+    assert response.status_code == 200
+    with wave.open(io.BytesIO(response.content), "rb") as output:
+        assert output.getframerate() == 24000
+        assert output.getnframes() == 24000
+        assert output.getnframes() / output.getframerate() == 1.0
+        assert output.readframes(output.getnframes()) == pcm
 
 
 def test_voice_ttl_cannot_exceed_fifteen_minutes(monkeypatch):

@@ -19,7 +19,7 @@
 
 A production-grade AI companion rooted in [Girls' Frontline 2: Exilium](https://gfl2.sunborngame.com/) canon. Klukai is the elite who waited ten years for her Commander to answer, and she builds a real bond with him: conversation, memory, affection, rituals, and initiative, with her state and archive on hardware he controls.
 
-**Current deployment:** Claude Sonnet 5.5 with medium adaptive thinking handles interactive chat, with Dominus as the local secondary. English speech uses local XTTS on Amarillo's Intel Arc A380. Pictures, live portraits, and background work remain local by default.
+**Current deployment:** Claude Sonnet 5.5 with medium adaptive thinking handles interactive chat, with Dominus as the local secondary. Speech uses XTTS on Dominus-Nobara's RTX 3090, with queued playback and correct 24 kHz audio. Pictures, live portraits, and background work remain local by default.
 
 This release also supports independently opt-in OpenAI scene pictures and Anthropic dream/Her POV writing. Fresh deployments default to local providers and zero cloud allowances. On the owner's production deployment, Claude creative writing now uses the existing API key with 12 attempts per UTC month; pictures retain local ComfyUI. See the [provider handoff](docs/handoff/2026-10-14-dream-image-preparation.md) for activation evidence and recovery requirements.
 
@@ -90,7 +90,7 @@ Her full canon lives in [`config/personality.yaml`](config/personality.yaml): ba
 | **Her POV** | She picks a real exchange, journals it, and draws it from her side |
 | **Proactive** | Check-ins, dreams, anniversaries, seasonal lines, deferred one-shots that survive restarts |
 | **On-demand GPU use** | The configured Sonnet primary leaves the secondary model unloaded until needed; local runtimes enforce idle release |
-| **Voice & image** | Local Arc XTTS for speech; separate Dominus STT; authenticated, leased ComfyUI pictures and live portraits |
+| **Voice & image** | RTX 3090 XTTS for speech and separate Dominus STT; authenticated, leased ComfyUI pictures and live portraits |
 | **3D view** | Starts with her whole body visible; drag to rotate freely through 360°, pinch or scroll to zoom, or use the on-screen controls; Reset view restores the full-body framing |
 | **Web & references** | Brave web search with source links, plus scoped tools for weather, units/currency, research papers, programming references and public security advisories; free metasearch is available as fallback ([operations](docs/handoff/2026-10-14-web-tools.md)) |
 
@@ -190,8 +190,8 @@ Two hosts on a **private encrypted mesh**. Public edge terminates TLS; GPU ports
 
 | Role | Responsibility |
 |---|---|
-| **Core host** | `companion-core`, gateway, Postgres, Redis, Qdrant, RabbitMQ consumers, observability, native Intel Arc TTS |
-| **NVIDIA host** | `lmstudio-compat` (local LLM ingress), llama-router (internal), ComfyUI (leased), optional Dominus voice, separate STT |
+| **Core host** | `companion-core`, gateway, Postgres, Redis, Qdrant, RabbitMQ consumers, observability; retained Arc voice service |
+| **NVIDIA host** | `lmstudio-compat` (local LLM ingress), llama-router (internal), ComfyUI (leased), primary XTTS voice, separate STT |
 | **Explicit API providers** | Anthropic interactive chat; separately disabled-by-default Anthropic creative text and OpenAI scene images |
 
 ```
@@ -199,7 +199,7 @@ Public edge (TLS)
         │
         ▼
    Core host ── private mesh ──► NVIDIA host
-   (state + PWA + Arc TTS)        (local LLM + ComfyUI + STT)
+   (state + PWA)                 (local LLM + ComfyUI + TTS/STT)
         │
         └── HTTPS ──► explicitly configured API providers
 ```
@@ -300,11 +300,12 @@ services:
       KLUKAI_CLOUD_IMAGE_MONTHLY_LIMIT: "0"
       KLUKAI_CLOUD_TEXT_DAILY_LIMIT: "0"
       KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT: "0"
-      VOICE_BACKEND: "amarillo-xpu"
-      VOICE_URL: "${VOICE_URL:?Set the approved local Arc TTS endpoint}"
+      VOICE_BACKEND: "dominus"
+      VOICE_ASYNC_JOBS: "true"
+      VOICE_URL: "${VOICE_URL:?Set the approved Dominus TTS endpoint}"
 ```
 
-`VOICE_URL` must name the already configured Amarillo Arc service; keep `VOICE_STT_URL` on the separate approved Dominus transcription endpoint. Use `VOICE_BACKEND=dominus` and its matching voice URL only when intentionally selecting the existing Dominus voice service instead. Neither choice changes the pinned voice reference.
+`VOICE_URL` must name the already configured Dominus voice service; keep `VOICE_STT_URL` on the approved Dominus transcription endpoint. `VOICE_ASYNC_JOBS=true` keeps HTTP speech on submit/poll/cancel and allows longer cold-start deadlines for microphone and archived speech. The retained Arc service is selectable with `VOICE_BACKEND=amarillo-xpu` and its matching URL. Each backend retains its independently pinned Klukai reference.
 
 Validate without printing resolved secrets, then apply only as part of an authorized core deployment:
 
@@ -341,7 +342,7 @@ TIER 3  Factual     PostgreSQL   messages, affection, jobs       permanent
 | Chat model | Opt-in Sonnet 5.5 interactive primary; local Venice/Qwen and gaming-aware Gemma routing via gateway |
 | Agent model | Local Qwen reasoning distill |
 | Images | Local ComfyUI + NoobAI-XL/Illustrious + Klukai LoRA; opt-in OpenAI scene adapter |
-| Voice | Local XTTS v2 on Intel Arc A380; separate Dominus STT; existing Dominus TTS remains selectable |
+| Voice | XTTS v2 on RTX 3090 at 24 kHz; separate Dominus STT; retained Arc TTS remains selectable |
 | Bus | RabbitMQ topic + delay buckets + quorum jobs |
 | Observability | Prometheus, Grafana, Loki, Tempo, Alloy |
 
@@ -429,6 +430,7 @@ python3 scripts/e2e_live.py --only her-pov
 | `KLUKAI_CREATIVE_TEXT_PROVIDER` | `local` | Local dream/Her POV writing; `anthropic` requires separate allowances |
 | `KLUKAI_CLOUD_{IMAGE,TEXT}_{DAILY,MONTHLY}_LIMIT` | `0` | Persistent global UTC attempt allowances; failures count |
 | `VOICE_BACKEND` | `dominus` | `amarillo-xpu` selects the separately configured native Arc TTS service |
+| `VOICE_ASYNC_JOBS` | `false` | Production uses `true` for queued Dominus speech and longer synthesis deadlines; Arc always uses jobs |
 | `CORE_INTERNAL_TOKEN` | required in prod | Shared secret for bridge → core internal routes |
 | `LM_STUDIO_URL` / `LM_STUDIO_TOKEN` | mesh gateway | Local LLM path only |
 

@@ -211,6 +211,13 @@ def _load_xtts():
                 progress_bar=False,
                 gpu=True,
             )
+            # Coqui 0.22's explicit-checkpoint path uses the input sample rate
+            # for WAV output. XTTS's decoder emits output_sample_rate instead;
+            # label those samples correctly without resampling or pitch shifts.
+            synthesizer = _tts_model.synthesizer
+            synthesizer.output_sample_rate = synthesizer.tts_config.audio[
+                "output_sample_rate"
+            ]
         finally:
             torch.load = _orig_load
         _tts_ready = True

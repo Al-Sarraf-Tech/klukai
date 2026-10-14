@@ -27,11 +27,15 @@ this endpoint advertises `stt_available: false`.
 
 ## Core configuration
 
-The current deployment selects `VOICE_BACKEND=amarillo-xpu` and sets `VOICE_URL`
+An Arc deployment selects `VOICE_BACKEND=amarillo-xpu` and sets `VOICE_URL`
 to this service's approved private-mesh endpoint, using the existing matching
 `VOICE_API_TOKEN`. Keep `VOICE_STT_URL` on the separate Dominus transcription
 endpoint; Arc does not serve STT. The repository's base Compose default remains
 `dominus`, so selecting Arc requires explicit core configuration.
+
+Production switched to the RTX 3090 voice service later on 2026-10-14 at the
+owner's request. This Arc release is retained for explicit rollback; see the
+[Nobara voice handoff](../../../docs/handoff/2026-10-14-nobara-primary-voice.md).
 
 Clients use core's authenticated `POST /api/tts`, poll
 `GET /api/tts/jobs/{job_id}`, and cancel with `DELETE /api/tts/jobs/{job_id}`.

@@ -111,7 +111,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     """Attach all HTTP endpoints to *app*."""
 
     from .voice_jobs import VoiceJobs, VoiceQueueFull
-    from .voice_client import local_voice_enabled
+    from .voice_client import async_voice_jobs_enabled, local_voice_enabled
 
     app.state.voice_jobs = VoiceJobs()
 
@@ -343,10 +343,10 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         tts_text = _strip_actions_for_tts(req.text)
         if not tts_text.strip():
             return JSONResponse({"error": "No speakable text"}, status_code=400)
-        if local_voice_enabled():
+        if async_voice_jobs_enabled():
             if len(tts_text) > 500:
                 return JSONResponse({"error": "Split speech into chunks of at most 500 characters"}, status_code=400)
-            if req.language != "en":
+            if local_voice_enabled() and req.language != "en":
                 return JSONResponse({"error": "This voice currently supports English text"}, status_code=400)
             try:
                 job = app.state.voice_jobs.submit(user_id, {"text": tts_text, "language": req.language})

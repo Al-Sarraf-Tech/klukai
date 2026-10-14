@@ -133,7 +133,8 @@ async def test_completed_result_expires_and_shutdown_cancels_upstream():
 
 
 @pytest.mark.asyncio
-async def test_job_routes_require_auth_and_hide_foreign_jobs(monkeypatch):
+@pytest.mark.parametrize("backend,async_jobs", [("amarillo-xpu", "false"), ("dominus", "true")])
+async def test_job_routes_require_auth_and_hide_foreign_jobs(monkeypatch, backend, async_jobs):
     from app.routes import register_routes
     from app.voice_jobs import VoiceJobs
 
@@ -144,7 +145,8 @@ async def test_job_routes_require_auth_and_hide_foreign_jobs(monkeypatch):
     register_routes(app)
     jobs = VoiceJobs(synthesize=synth)
     app.state.voice_jobs = jobs
-    monkeypatch.setenv("VOICE_BACKEND", "amarillo-xpu")
+    monkeypatch.setenv("VOICE_BACKEND", backend)
+    monkeypatch.setenv("VOICE_ASYNC_JOBS", async_jobs)
 
     async def user(request):
         return request.headers.get("x-user")

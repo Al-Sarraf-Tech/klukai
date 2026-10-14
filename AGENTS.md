@@ -24,6 +24,13 @@ for this path; `KLUKAI_BRAVE_ENABLED=true` is the production setting. This is
 separate from image generation: cloud image generation allowances remain zero.
 See `docs/handoff/2026-10-14-web-tools.md` for activation and live-search evidence.
 
+The owner then requested main speech output on Dominus-Nobara's GPU. Production
+uses `VOICE_BACKEND=dominus`, `VOICE_URL=http://100.107.121.5:8301`, and
+`VOICE_ASYNC_JOBS=true`. XTTS WAV output follows its 24 kHz decoder rate. Keep
+the original pinned Dominus reference, exclusive GPU lease and gaming/cleanup
+guards. The Arc release remains available as an explicit rollback choice.
+See `docs/handoff/2026-10-14-nobara-primary-voice.md` for measurements and rollout.
+
 ## Voice source baseline
 
 Read `docker/voice/reference/README.md` for the owner's selected Klukai voice

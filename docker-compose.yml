@@ -33,6 +33,8 @@ services:
       # use an RFC1918/LAN endpoint.
       VOICE_URL: "${VOICE_URL:-http://100.107.121.5:8301}"
       VOICE_BACKEND: "${VOICE_BACKEND:-dominus}"
+      # Keep long cold GPU synthesis off the browser's synchronous deadline.
+      VOICE_ASYNC_JOBS: "${VOICE_ASYNC_JOBS:-false}"
       VOICE_STT_URL: "${VOICE_STT_URL:-http://100.107.121.5:8301}"
       # Must match the canonical target stack's VOICE_API_TOKEN.
       VOICE_API_TOKEN: "${VOICE_API_TOKEN:?VOICE_API_TOKEN is required}"

@@ -22,8 +22,15 @@ def local_voice_enabled() -> bool:
     return os.environ.get("VOICE_BACKEND", "dominus") == "amarillo-xpu"
 
 
+def async_voice_jobs_enabled() -> bool:
+    """Keep Arc queued; allow other backends to opt into submit/poll speech."""
+    return local_voice_enabled() or os.environ.get("VOICE_ASYNC_JOBS", "false").strip().lower() in {
+        "true", "1", "yes", "on",
+    }
+
+
 def tts_timeout(remote_default: float = 60.0) -> float:
-    return LOCAL_TTS_DEADLINE if local_voice_enabled() else remote_default
+    return LOCAL_TTS_DEADLINE if async_voice_jobs_enabled() else remote_default
 
 
 def voice_url() -> str:
