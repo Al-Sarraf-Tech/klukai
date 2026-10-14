@@ -93,5 +93,22 @@ Rollback restores those five files, dependencies first and HTML last. The newly
 introduced module and motion directory can remain unused or be removed after
 the old HTML is restored. Do not alter unrelated assets.
 
-Publication evidence will be appended after public-file and authenticated
-Brave checks.
+Published commit `c9fbdc4` at **2026-10-14 16:58:59 UTC**. All nine installed
+files match their committed source bytes. Public JS, JSON, CSS, license and
+README responses returned HTTP 200 and matched SHA256; public HTML contains
+the new dependency hashes plus the existing Cloudflare injection. Cache
+prefixes are motion pack `04911b8d948b`, motion module `6c7c0d59a925`, vendor
+`ba766fd1f3da`, avatar `fcbb2d7504d9`, app `3fe2d399503a` and CSS `4ee5d7b6e499`.
+
+An authenticated Brave check against
+`https://klukai.appnest.cc/app/companion.html` loaded the real model, verified
+all 16 animation choices, selected Greeting, reached the 0.2 close zoom limit,
+reloaded a saved view, reset to full-body framing and confirmed the lowered
+controls. There were zero page errors. The temporary test session was revoked;
+no chat or generation request was sent.
+
+Core remained healthy on image
+`sha256:4f68e55053d6a0190acf460bc5a85b0f2db6e3afef8d0dfb8a6e11962ef00ff5`
+with its unchanged start time `2026-10-14T15:31:33.685247618Z`. Deployment,
+public-file, live-browser and health evidence is saved in the evidence directory
+above. The frontend release required no restart.
