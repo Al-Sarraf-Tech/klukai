@@ -254,15 +254,16 @@ av.setFraming('full'); av.resize(); av.dispose();
     About 0.03 ms per step on a desktop CPU.
   - `prefers-reduced-motion` turns off drift, sway, fidgets and push-in, and
     keeps blinks and look-at.
-- **Camera:** upper-body or full-body framing, a side view for `sleep`, eased
+- **Camera:** full-body framing by default in the companion stage; the renderer
+  also supports upper-body framing and a side view for `sleep`, eased
   over ~0.8 s instead of snapping. 22° FOV for upper framing on phones (26°
   otherwise, same crop), a 3% push-in while she talks, a slow drift and a
   slow follow of her hips. `setInsets()` frames her in the band the stage's
-  top bar and dock leave clear. Drag to rotate through **240° total** (120°
-  either side); scroll or pinch to zoom between 0.6× and 1.8× the framed camera
-  distance. The stage also has rotate, zoom and **Reset view** buttons. The
+  top bar and dock leave clear. Drag to rotate freely through **360°**, with
+  no horizontal stops; scroll or pinch to zoom between 0.6× and 1.8× the framed
+  camera distance. The stage also has rotate, zoom and **Reset view** buttons. The
   chosen angle and zoom stay in place through animation, resize and temporary
-  portrait mode; Reset returns to the current automatic framing. Panning is
+  portrait mode; Reset returns to the stage's full-body framing. Panning is
   disabled and the small vertical tilt range is retained. A soft contact-shadow
   blob grounds her in full framing and `sleep` (no shadow maps).
 - **iOS and robustness:**

@@ -219,9 +219,9 @@ export function cameraFraming({ framing = 'upper', state = 'idle', aspect = 1, h
 
 /** User inspection offsets, relative to the animated automatic framing.
  *  Absorb only changes since the last camera placement: speech push-in and
- *  resize/state framing must never feed back into the user's zoom or orbit. */
+ *  resize/state framing must never feed back into the user's zoom or orbit.
+ *  Yaw wraps after each turn; horizontal orbit has no stops. */
 export function createCameraView() {
-  const maxYaw = 120 * DEG;
   const minZoom = 0.6, maxZoom = 1.8;
   const minPitch = -0.22, maxPitch = 0.12;
   let dTheta = 0, dPhi = 0, zoom = 1;
@@ -231,7 +231,7 @@ export function createCameraView() {
     absorb(observed) {
       if (!applied || !Number.isFinite(observed.radius) || observed.radius <= 0
           || !Number.isFinite(observed.theta) || !Number.isFinite(observed.phi)) return;
-      dTheta = clamp(dTheta + wrapPi(observed.theta - applied.theta), -maxYaw, maxYaw);
+      dTheta = wrapPi(dTheta + wrapPi(observed.theta - applied.theta));
       dPhi = clamp(dPhi + observed.phi - applied.phi, minPitch, maxPitch);
       zoom = clamp(zoom * observed.radius / applied.radius, minZoom, maxZoom);
       applied = { radius: observed.radius, theta: observed.theta, phi: observed.phi };
@@ -242,12 +242,12 @@ export function createCameraView() {
       return {
         ...applied,
         minDistance: radius * minZoom, maxDistance: radius * maxZoom,
-        minAzimuthAngle: base.theta - maxYaw, maxAzimuthAngle: base.theta + maxYaw,
+        minAzimuthAngle: -Infinity, maxAzimuthAngle: Infinity,
         minPolarAngle: base.phi + minPitch, maxPolarAngle: base.phi + maxPitch,
       };
     },
     zoomBy(factor) { if (Number.isFinite(factor) && factor > 0) zoom = clamp(zoom * factor, minZoom, maxZoom); },
-    rotateBy(radians) { if (Number.isFinite(radians)) dTheta = clamp(dTheta + radians, -maxYaw, maxYaw); },
+    rotateBy(radians) { if (Number.isFinite(radians)) dTheta = wrapPi(dTheta + radians); },
     reset() { dTheta = 0; dPhi = 0; zoom = 1; applied = null; },
   };
 }

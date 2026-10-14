@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { PerspectiveCamera, Spherical, Vector3 } from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import * as avatar from '../../../flutter_app/web/companion/avatar3d.js';
 
 const base = { radius: 10, phi: 1.5, theta: 0 };
@@ -9,7 +11,7 @@ function view() {
   return avatar.createCameraView();
 }
 
-test('camera buttons clamp zoom and horizontal rotation to the usable inspection range', () => {
+test('camera buttons retain zoom limits while rotating past the back of the avatar', () => {
   const camera = view();
   camera.zoomBy(0.8);
   camera.rotateBy(Math.PI / 4);
@@ -17,15 +19,32 @@ test('camera buttons clamp zoom and horizontal rotation to the usable inspection
   close(placed.radius, 8);
   close(placed.theta, Math.PI / 4);
   camera.zoomBy(0.01);
-  camera.rotateBy(10);
+  camera.rotateBy(Math.PI);
   placed = camera.place(base);
   close(placed.radius, 6);
-  close(placed.theta, 2 * Math.PI / 3);
+  close(placed.theta, -3 * Math.PI / 4);
   camera.zoomBy(100);
-  camera.rotateBy(-20);
+  camera.rotateBy(-Math.PI);
   placed = camera.place(base);
   close(placed.radius, 18);
-  close(placed.theta, -2 * Math.PI / 3);
+  close(placed.theta, Math.PI / 4);
+});
+
+test('repeated button turns normalize yaw without losing the chosen zoom or pitch', () => {
+  const camera = view();
+  camera.place(base);
+  camera.absorb({ radius: 8, theta: Math.PI / 6, phi: 1.6 });
+  camera.place(base);
+  for (const direction of [1, -1]) {
+    for (let turn = 0; turn < 240; turn++) {
+      camera.rotateBy(direction * Math.PI / 12);
+      assert.ok(Math.abs(camera.state.dTheta) <= Math.PI);
+    }
+    const placed = camera.place(base);
+    close(placed.theta, Math.PI / 6);
+    close(placed.radius, 8);
+    close(placed.phi, 1.6);
+  }
 });
 
 test('pointer camera changes persist after release without an automatic springback', () => {
@@ -67,12 +86,52 @@ test('resize and sleep framing retain zoom and orbit relative to the new frame',
   close(placed.phi, 1.1);
 });
 
-test('crossing the spherical angle wrap does not jump to the opposite orbit limit', () => {
+test('crossing the spherical angle wrap preserves an offset relative to framing', () => {
   const camera = view();
   camera.rotateBy(1.5);
   camera.place({ ...base, theta: 1.6 });
   camera.absorb({ radius: 10, phi: 1.5, theta: 3.2 - 2 * Math.PI });
   close(camera.state.dTheta, 1.6);
+});
+
+test('pointer motion crosses the rear seam continuously in both directions', () => {
+  const camera = view();
+  camera.rotateBy(3.1);
+  camera.place(base);
+  camera.absorb({ radius: 10, phi: 1.5, theta: -3.1 });
+  close(camera.state.dTheta, -3.1);
+  camera.place(base);
+  camera.absorb({ radius: 10, phi: 1.5, theta: 3.1 });
+  close(camera.state.dTheta, 3.1);
+});
+
+test('camera bounds allow real OrbitControls to make repeated full turns in either direction', () => {
+  const viewState = view();
+  const camera = new PerspectiveCamera();
+  const spherical = new Spherical();
+  const offset = new Vector3();
+  const controls = new OrbitControls(camera);
+  controls.enableDamping = false;
+  const place = () => {
+    const placed = viewState.place(base);
+    camera.position.setFromSpherical(spherical.set(placed.radius, placed.phi, placed.theta));
+    controls.minAzimuthAngle = placed.minAzimuthAngle;
+    controls.maxAzimuthAngle = placed.maxAzimuthAngle;
+    controls.update();
+  };
+  place();
+  for (const direction of [1, -1]) {
+    for (let quarter = 1; quarter <= 12; quarter++) {
+      controls.rotateLeft(-direction * Math.PI / 2);
+      viewState.absorb(spherical.setFromVector3(offset.subVectors(camera.position, controls.target)));
+      place();
+      const expected = direction * quarter * Math.PI / 2;
+      close(Math.sin(viewState.state.dTheta), Math.sin(expected));
+      close(Math.cos(viewState.state.dTheta), Math.cos(expected));
+      assert.ok(Math.abs(viewState.state.dTheta) <= Math.PI);
+      close(viewState.state.zoom, 1);
+    }
+  }
 });
 
 test('pointer changes respect zoom and polar limits while preserving valid state', () => {
@@ -81,7 +140,7 @@ test('pointer changes respect zoom and polar limits while preserving valid state
   camera.absorb({ radius: 0.01, theta: 2.5, phi: 3 });
   let placed = camera.place(base);
   close(placed.radius, 6);
-  close(placed.theta, 2 * Math.PI / 3);
+  close(placed.theta, 2.5);
   close(placed.phi, 1.62);
   camera.absorb({ radius: 1000, theta: -1, phi: -1 });
   placed = camera.place(base);

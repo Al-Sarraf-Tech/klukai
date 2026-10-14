@@ -91,7 +91,7 @@ Her full canon lives in [`config/personality.yaml`](config/personality.yaml): ba
 | **Proactive** | Check-ins, dreams, anniversaries, seasonal lines, deferred one-shots that survive restarts |
 | **On-demand GPU use** | The configured Sonnet primary leaves the secondary model unloaded until needed; local runtimes enforce idle release |
 | **Voice & image** | Local Arc XTTS for speech; separate Dominus STT; authenticated, leased ComfyUI pictures and live portraits |
-| **3D view** | Drag to rotate through 240°, pinch or scroll to zoom, or use the on-screen controls; Reset view restores the framing |
+| **3D view** | Starts with her whole body visible; drag to rotate freely through 360°, pinch or scroll to zoom, or use the on-screen controls; Reset view restores the full-body framing |
 
 ---
 

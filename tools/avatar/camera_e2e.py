@@ -18,7 +18,6 @@ from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
-ANGLE = 2 * math.pi / 3
 
 
 class Quiet(http.server.SimpleHTTPRequestHandler):
@@ -82,6 +81,30 @@ def view(page):
     return page.evaluate('cameraTestAvatar.debug.probe().orbit')
 
 
+def angle_delta(after, before):
+    return (after - before + math.pi) % (2 * math.pi) - math.pi
+
+
+def check_full_body(page):
+    bounds = page.evaluate("""() => {
+      const {THREE, root, camera, renderer} = cameraTestAvatar.debug;
+      root.updateMatrixWorld(true);
+      camera.updateMatrixWorld();
+      const box = new THREE.Box3().setFromObject(root, true);
+      const centre = box.getCenter(new THREE.Vector3());
+      const canvas = renderer.domElement.getBoundingClientRect();
+      const screenY = y => {
+        const point = new THREE.Vector3(centre.x, y, centre.z).project(camera);
+        return canvas.top + (1 - point.y) / 2 * canvas.height;
+      };
+      return {head:screenY(box.max.y), feet:screenY(box.min.y),
+        top:document.querySelector('.topbar').getBoundingClientRect().bottom,
+        bottom:document.querySelector('.dock').getBoundingClientRect().top};
+    }""")
+    assert bounds['head'] > bounds['top'], bounds
+    assert bounds['feet'] < bounds['bottom'], bounds
+
+
 def settle(page):
     page.wait_for_timeout(450)
 
@@ -143,6 +166,7 @@ def run_viewport(browser, base, out, glb, mobile):
     page.get_by_role('button', name='Zoom in', exact=True).wait_for(timeout=3000)
     settle(page)
     reset(page)
+    check_full_body(page)
     before = view(page)
     page.get_by_role('button', name='Zoom in', exact=True).click()
     settle(page)
@@ -185,15 +209,27 @@ def run_viewport(browser, base, out, glb, mobile):
         settle(page)
         assert abs(view(page)['zoom'] - 0.6) < 0.02
         reset(page)
-        for _ in range(4):
-            drag(page, (840, 320), (440, 320))
-        positive = view(page)['dTheta']
-        assert abs(positive - ANGLE) < 0.02, positive
-        for _ in range(7):
-            drag(page, (440, 320), (840, 320))
-        negative = view(page)['dTheta']
-        assert abs(negative + ANGLE) < 0.02, negative
-        assert abs(positive - negative - 4 * math.pi / 3) < 0.04
+        drag(page, (840, 320), (440, 320))
+
+    # Buttons must pass the old ±120° stops, cross the back seam and keep
+    # turning in both directions. Sum wrapped deltas to observe full turns.
+    reset(page)
+    for label, sign in [('Rotate right', 1), ('Rotate left', -1)]:
+        previous = view(page)['dTheta']
+        travelled = 0
+        for _ in range(25):
+            page.get_by_role('button', name=label, exact=True).click()
+            current = view(page)['dTheta']
+            delta = angle_delta(current, previous)
+            assert abs(delta - sign * math.pi / 12) < 0.02, delta
+            travelled += delta
+            previous = current
+        assert abs(travelled) > 2 * math.pi, travelled
+    reset(page)
+    if mobile:
+        pinch(cdp, [(300, 320)], [(90, 320)])
+    else:
+        drag(page, (840, 320), (440, 320))
 
     settle_rotation(page)
     chosen = view(page)
@@ -218,6 +254,7 @@ def run_viewport(browser, base, out, glb, mobile):
     assert abs(view(page)['dTheta'] - chosen['dTheta']) < 0.03
     assert abs(view(page)['zoom'] - chosen['zoom']) < 0.01
     reset(page)
+    check_full_body(page)
     screenshot = out / ('phone.png' if mobile else 'desktop.png')
     page.screenshot(path=str(screenshot))
     assert not errors, errors
