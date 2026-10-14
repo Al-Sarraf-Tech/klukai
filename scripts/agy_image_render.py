@@ -14,6 +14,11 @@ from gemini_art_review import read_image
 
 MAX_BYTES = 16 * 1024 * 1024
 MAX_PIXELS = 12_000_000
+COMMANDER_APPEARANCE = (
+    'The adult Commander has short dark crew-cut hair, brown eyes and a strong build. '
+    'Preserve his recognizable face from the photo, with a slightly lighter light-olive '
+    'skin tone and natural shading, as requested for his character. '
+)
 
 
 def normalize(raw: bytes) -> bytes:
@@ -81,7 +86,7 @@ def render(request: dict, references: dict) -> bytes:
             'Preserve Klukai\'s recognizable silver hair, green eyes, blue cross hair ornament, and small red '
             'tear mark below the eye on viewer-right. Use the requested outfit and setting in a polished anime '
             'illustration. Do not copy reference backgrounds. No text, captions, watermark or extra figures. '
-            + ('Include the adult Commander beside her, translating his actual face, strong build and short '
+            + (COMMANDER_APPEARANCE + 'Include the adult Commander beside her, translating his actual face, strong build and short '
                'dark hair from commander.png into the same art style. Exactly two people. ' if 'commander' in inputs else '')
             + f'Prefer {orientation} composition near {request["width"]}x{request["height"]}. '
             + '\nBEGIN CREATIVE BRIEF\n'+request['prompt']+'\nEND CREATIVE BRIEF\n'

@@ -2536,8 +2536,8 @@ seasonal_events:
 # ── Commander Visual ───────────────────────────────────────────────────────
 
 commander_visual:
-  description: "Male, short dark hair (crew cut), brown eyes, tan/olive skin, strong build, clean-shaven"
-  image_tags: "1boy, short hair, dark hair, brown eyes, tan skin, strong build, military uniform, commander"
+  description: "Male, short dark hair (crew cut), brown eyes, light olive skin (slightly lighter complexion), strong build, clean-shaven"
+  image_tags: "1boy, short hair, dark hair, brown eyes, light olive skin, strong build, military uniform, commander"
   reference_photo: "commander.png"
 
 # ── Absolute Rules (NEVER violate) ───────────────────────────────────────────

@@ -9,7 +9,7 @@
 
 ## Global constraints
 
-- No new spending: useG1Credits=false, no API-key/ADC provider, no automatic fallback or retry.
+- No new spending: useG1Credits=false, no API-key/ADC provider, no paid fallback or automatic same-provider retry. The later rotation extension permits one recognized service-failure switch.
 - Only allowlisted users may use Agy; other users get no image when global Agy is selected. Owner Commander reference only for owner couple requests.
 - Send the explicit picture request, locally assembled appearance/outfit tags and selected references. Do not send full chat histories or private archives.
 - Default remains disabled on fresh installs. Production global KLUKAI_IMAGE_PROVIDER=agy; zero paid-cloud image allowances remain unchanged. Agy uses the signed-in account with credits disabled.
@@ -27,7 +27,7 @@ Host allowed users separately enforced. Persistent SQLite claims request IDs bef
 
 ## Review focus
 
-- User identity cannot select another user's photo; nonallowlisted users retain local rendering.
+- User identity cannot select another user's photo; nonallowlisted users fail closed without local rendering.
 - Context/history does not enter Google prompt; provider failure does not wake Dominus.
 - No reference upload or quota consumption before validated request/auth/claim.
 - One call, finite watchdog and exact artifact validation; terminal SUCCESS alone is insufficient.
@@ -45,15 +45,23 @@ Files: docker/core/app/agy_image_provider.py, background.py, routes.py and relat
 Files: scripts/agy_image_worker.py, scripts/agy_art_runtime.py, scripts/agy_art_gate.py, ops/amarillo/tests and systemd unit.
 - [x] Write failing tests for auth/validation/idempotency/concurrency/generation lifecycle.
 - [x] Implement fixed references, filtered-keyring runtime, generation gate and sanitized output handling.
-- [ ] Verify with mocked server tests and actual isolated account preflight.
+- [x] Verify with mocked server tests and actual isolated account preflight.
 
 ### Task 3: Deploy and integrate (root)
 
 Files: docker-compose.yml, .env.example, docs/handoff, AGENTS.md, README.md.
 - [x] Review and test combined changes; build only companion-core.
-- [ ] Install private runtime/token/reference manifest and user service; enable production chat selector.
+- [x] Install private runtime/token/reference manifest and user service; enable production main image selector.
 - [ ] Exercise real core-to-host image path with test account; check owner archive/auth boundaries without mutating owner history.
-- [ ] Preserve rollback configuration and previous core image; recreate companion-core only.
+- [x] Preserve rollback configuration and previous core image; recreate companion-core only.
 - [ ] Merge latest origin/main, commit, push origin/main and sync Amarillo; report exact test instructions.
 
 Owner follow-up: “And make it the main version of image generation no more gpu usage.” This expands the initial chat-only request to all image-generation paths. No local image fallback; img2img/live portrait paths must avoid GPU too.
+
+## Owner-requested rotation extension
+
+- Existing Grok account paid usage OFF / hard cap $0 confirmed by owner.
+- Native Grok image_edit sandbox, fixed references, readonly native auth, no API-key fallback.
+- Persist alternating preferred providers and per-attempt attribution; at most one different-provider service failure fallback.
+- Policy/input/refusal/ambiguous timeout fails closed; no GPU image fallback.
+- Show owner Commander-and-Klukai samples from both native model providers.

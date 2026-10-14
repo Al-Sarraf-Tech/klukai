@@ -1,4 +1,4 @@
-"""Opt-in explicit chat images through the isolated Agy host worker.
+"""Account images through the isolated Agy/Grok host worker.
 
 Only a private bearer token crosses the Unix socket. Desktop credentials,
 Google API clients, retries and alternate renderers do not belong here.
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
 MAX_IMAGE_PIXELS = 12_000_000
-REQUEST_DEADLINE_SECONDS = 200
+REQUEST_DEADLINE_SECONDS = 380  # Two bounded 170s providers plus transport/setup.
 
 
 def uses_agy_images(user_id: str | None) -> bool:

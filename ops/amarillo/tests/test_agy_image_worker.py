@@ -3,13 +3,16 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import http.client
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import socket
 import sqlite3
+import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -23,7 +26,8 @@ TOKEN = "test-private-token-" + "a" * 32
 
 
 @pytest.fixture
-def worker():
+def worker(monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
     assert SCRIPT.exists(), "the authenticated image worker is not implemented"
     spec = importlib.util.spec_from_file_location("agy_image_worker", SCRIPT)
     module = importlib.util.module_from_spec(spec)
@@ -103,7 +107,7 @@ def running(worker, setup_files, render=None, **kwargs):
     runtime, state, references = setup_files
     server = worker.create_server(
         runtime, state, references, {"jalsarraf", "test-user"},
-        renderer=render or default_render, **kwargs,
+        renderer=(render or default_render) if "providers" not in kwargs else None, **kwargs,
     )
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
     thread.start()
@@ -124,7 +128,10 @@ def test_health_and_generation_require_token_before_reading_body(worker, setup_f
         assert b"Connection: close" in raw
         status, headers, data = request(path, method="GET", target="/health")
         assert status == 200
-        assert json.loads(data) == {"status": "ready", "provider": "agy", "busy": False}
+        assert json.loads(data) == {
+            "status": "ready", "provider": "agy", "busy": False,
+            "providers": ["agy"], "rotation": "alternate",
+        }
         assert TOKEN.encode() not in data
 
 
@@ -353,3 +360,224 @@ def test_startup_rejects_untrusted_reference_manifest(worker, setup_files, kind)
     reference_path.write_text(json.dumps(references))
     with pytest.raises(ValueError):
         worker.create_server(*setup_files, {"jalsarraf"}, renderer=lambda *args: PNG)
+
+
+def ledger(setup_files, query, parameters=()):
+    with sqlite3.connect(setup_files[1] / "requests.sqlite3") as db:
+        return db.execute(query, parameters).fetchall()
+
+
+def named_renderers(calls):
+    def render(name):
+        def generate(value, references):
+            calls.append((name, value["request_id"]))
+            return PNG
+        return generate
+    return [(name, render(name)) for name in ("agy", "grok")]
+
+
+def test_alternates_new_requests_and_persists_selected_provider(worker, setup_files):
+    calls = []
+    values = [payload() for _ in range(4)]
+    with running(worker, setup_files, providers=named_renderers(calls)) as path:
+        health = json.loads(request(path, method="GET", target="/health")[2])
+        assert health["providers"] == ["agy", "grok"]
+        assert health["rotation"] == "alternate"
+        for value in values:
+            assert request(path, value)[0] == 200
+    assert calls == list(zip(["agy", "grok", "agy", "grok"], [v["request_id"] for v in values]))
+    rows = ledger(setup_files, "SELECT preferred_provider, selected_provider, failure_category FROM requests ORDER BY rowid")
+    assert rows == [(name, name, None) for name in ["agy", "grok", "agy", "grok"]]
+
+
+def test_rotation_survives_restart_and_replay_or_invalid_requests_do_not_advance(worker, setup_files):
+    calls = []
+    first, second, third = payload(), payload(), payload()
+    providers = named_renderers(calls)
+    with running(worker, setup_files, providers=providers) as path:
+        assert request(path, first)[0] == 200
+        assert request(path, first)[2] == PNG
+        assert request(path, dict(first, prompt="changed"))[0] == 409
+        assert request(path, payload(width=False))[0] == 400
+        assert request(path, payload(user_id="unauthorized"))[0] == 403
+        assert request(path, payload(), token="wrong")[0] == 401
+    with running(worker, setup_files, providers=providers) as path:
+        assert request(path, first)[2] == PNG
+        assert request(path, second)[0] == 200
+        assert request(path, third)[0] == 200
+    assert calls == [("agy", first["request_id"]), ("grok", second["request_id"]), ("agy", third["request_id"])]
+
+
+@pytest.mark.parametrize("failed_name", ["agy", "grok"])
+def test_unavailable_provider_fails_over_once_in_both_directions(worker, setup_files, failed_name):
+    from agy_art_runtime import ProviderUnavailable
+    calls = []
+    def render(name):
+        def generate(value, references):
+            calls.append(name)
+            if name == failed_name:
+                raise ProviderUnavailable("quota")
+            return PNG
+        return generate
+    names = ["agy", "grok"] if failed_name == "agy" else ["grok", "agy"]
+    value = payload()
+    with running(worker, setup_files, providers=[(name, render(name)) for name in names]) as path:
+        assert request(path, value)[2] == PNG
+        assert request(path, value)[2] == PNG
+    assert calls == names
+    assert ledger(setup_files, "SELECT provider, status, failure_category FROM attempts ORDER BY attempt_index") == [
+        (names[0], "failed", "unavailable"), (names[1], "completed", None),
+    ]
+    assert ledger(setup_files, "SELECT preferred_provider, selected_provider, status FROM requests") == [(names[0], names[1], "completed")]
+
+
+@pytest.mark.parametrize("reason", ["policy denied", "invalid input", "invalid output", "secret timeout"])
+def test_ordinary_errors_never_trigger_failover_and_failures_consume_turn(worker, setup_files, reason):
+    calls = []
+    def fail(value, references):
+        calls.append("agy")
+        raise ValueError(reason)
+    def succeed(value, references):
+        calls.append("grok")
+        return PNG
+    first, second = payload(), payload()
+    providers = [("agy", fail), ("grok", succeed)]
+    with running(worker, setup_files, providers=providers) as path:
+        response = request(path, first)
+        assert response[0] in {502, 504}
+        assert reason.encode() not in response[2]
+        assert calls == ["agy"]
+        assert request(path, first)[0] == 409
+    with running(worker, setup_files, providers=providers) as path:
+        assert request(path, first)[0] == 409
+        assert request(path, second)[0] == 200
+    assert calls == ["agy", "grok"]
+    assert ledger(setup_files, "SELECT COUNT(*) FROM attempts WHERE request_id = ?", (first["request_id"],)) == [(1,)]
+    serialized = str(ledger(setup_files, "SELECT * FROM attempts"))
+    assert reason not in serialized
+
+
+@pytest.mark.parametrize("second_error,status", [("quota", 502), ("timeout", 504)])
+def test_both_unavailable_attempt_only_twice_and_claim_remains_nonretryable(worker, setup_files, second_error, status):
+    from agy_art_runtime import ProviderUnavailable
+    calls = []
+    def render(name, reason):
+        def fail(value, references):
+            calls.append(name)
+            raise ProviderUnavailable(reason)
+        return fail
+    value = payload()
+    providers = [("agy", render("agy", "quota")), ("grok", render("grok", second_error))]
+    with running(worker, setup_files, providers=providers) as path:
+        assert request(path, value)[0] == status
+        assert request(path, value)[0] == 409
+    with running(worker, setup_files, providers=providers) as path:
+        assert request(path, value)[0] == 409
+    assert calls == ["agy", "grok"]
+    assert ledger(setup_files, "SELECT status FROM requests") == [("failed",)]
+
+
+def test_busy_rejections_do_not_advance_rotation(worker, setup_files):
+    started, release = threading.Event(), threading.Event()
+    calls = []
+    def slow(value, references):
+        calls.append("agy")
+        started.set()
+        assert release.wait(3)
+        return PNG
+    def fast(value, references):
+        calls.append("grok")
+        return PNG
+    first, second = payload(), payload()
+    with running(worker, setup_files, providers=[("agy", slow), ("grok", fast)]) as path, ThreadPoolExecutor() as pool:
+        pending = pool.submit(request, path, first)
+        try:
+            assert started.wait(2)
+            assert request(path, first)[0] == 409
+            assert request(path, second)[0] == 429
+            assert request(path, payload())[0] == 429
+        finally:
+            release.set()
+        assert pending.result()[0] == 200
+        assert request(path, second)[0] == 200
+    assert calls == ["agy", "grok"]
+
+
+def test_rotation_and_attempt_are_committed_before_native_call(worker, setup_files):
+    def render(value, references):
+        assert ledger(setup_files, "SELECT value FROM worker_state WHERE key = 'rotation_next'") == [(1,)]
+        assert ledger(setup_files, "SELECT preferred_provider, selected_provider, status FROM requests") == [("agy", "agy", "pending")]
+        assert ledger(setup_files, "SELECT provider, status FROM attempts") == [("agy", "pending")]
+        return PNG
+    with running(worker, setup_files, providers=[("agy", render), ("grok", render)]) as path:
+        assert request(path, payload())[0] == 200
+
+
+def test_existing_database_migration_preserves_cache_and_ambiguous_claims(worker, setup_files):
+    state = setup_files[1]
+    state.mkdir(mode=0o700)
+    values = [payload() for _ in range(3)]
+    with sqlite3.connect(state / "requests.sqlite3") as db:
+        db.execute("CREATE TABLE requests (request_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, status TEXT NOT NULL, output BLOB)")
+        for value, status in zip(values, ["completed", "pending", "failed"]):
+            digest = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+            db.execute("INSERT INTO requests VALUES (?, ?, ?, ?)", (value["request_id"], digest, status, PNG if status == "completed" else None))
+    calls = []
+    with running(worker, setup_files, providers=named_renderers(calls)) as path:
+        assert request(path, values[0])[2] == PNG
+        assert request(path, values[1])[0] == 409
+        assert request(path, values[2])[0] == 409
+        assert calls == []
+        assert request(path, payload())[0] == 200
+    assert len(calls) == 1 and calls[0][0] == "agy"
+    assert ledger(setup_files, "SELECT COUNT(*) FROM requests") == [(4,)]
+
+
+@pytest.mark.parametrize("names", [[], ["agy", "agy"], ["agy", "grok", "agy"], ["paid"], ["grok", "unknown"]])
+def test_invalid_provider_configuration_is_rejected(worker, setup_files, names):
+    with pytest.raises(ValueError):
+        worker.create_server(*setup_files, {"jalsarraf"}, providers=[(name, lambda *args: PNG) for name in names])
+
+
+def test_legacy_worker_constructor_remains_compatible(worker, setup_files):
+    setup_files[1].mkdir(mode=0o700)
+    app = worker.Worker(setup_files[1], TOKEN.encode(), {}, {"jalsarraf"}, renderer=lambda *args: PNG)
+    try:
+        assert app.generate(payload()) == (200, PNG)
+    finally:
+        app.close()
+
+
+def test_provider_loading_imports_only_explicit_native_selection(worker, monkeypatch):
+    import builtins
+    native_import = builtins.__import__
+    imports = []
+    def guarded_import(name, *args, **kwargs):
+        if name in {"agy_image_render", "grok_image_render"}:
+            imports.append(name)
+        return native_import(name, *args, **kwargs)
+    fake_agy = lambda *args: PNG
+    fake_grok = lambda *args: PNG
+    monkeypatch.setitem(sys.modules, "agy_image_render", SimpleNamespace(render=fake_agy))
+    monkeypatch.setitem(sys.modules, "grok_image_render", SimpleNamespace(render=fake_grok))
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    assert worker.load_providers(["agy"]) == [("agy", fake_agy)]
+    assert imports == ["agy_image_render"]
+    assert worker.load_providers(["grok", "agy"]) == [("grok", fake_grok), ("agy", fake_agy)]
+    assert imports == ["agy_image_render", "grok_image_render", "agy_image_render"]
+    with pytest.raises(ValueError):
+        worker.load_providers(["agy", "paid"])
+    assert imports == ["agy_image_render", "grok_image_render", "agy_image_render"]
+
+
+def test_invalid_output_cannot_trigger_alternate_provider(worker, setup_files):
+    calls = []
+    def invalid(value, references):
+        calls.append("agy")
+        return b"broken png"
+    def alternate(value, references):
+        calls.append("grok")
+        return PNG
+    with running(worker, setup_files, providers=[("agy", invalid), ("grok", alternate)]) as path:
+        assert request(path, payload())[0] == 502
+    assert calls == ["agy"]

@@ -17,6 +17,8 @@ import sys
 import threading
 import uuid
 
+from agy_art_runtime import ProviderUnavailable
+
 
 MAX_BODY = 80 * 1024
 MAX_IMAGE = 16 * 1024 * 1024
@@ -116,11 +118,14 @@ def valid_image(data):
 
 
 class Worker:
-    def __init__(self, state_dir, token, references, allowed_users, renderer):
+    def __init__(self, state_dir, token, references, allowed_users, renderer=None, *, providers=None):
         self.token = token
         self.references = references
         self.allowed_users = frozenset(allowed_users)
-        self.renderer = renderer
+        if providers is not None and renderer is not None:
+            raise ValueError("choose providers or legacy renderer")
+        self.providers = validate_providers(providers if providers is not None else [("agy", renderer)])
+        self.renderer = self.providers[0][1]
         self.slot = threading.BoundedSemaphore(1)
         self.db_lock = threading.Lock()
         database = state_dir / "requests.sqlite3"
@@ -137,6 +142,17 @@ class Worker:
         self.db.execute("CREATE TABLE IF NOT EXISTS requests ("
                         "request_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, "
                         "status TEXT NOT NULL, output BLOB)")
+        # Add metadata without rewriting existing claims or cached image bytes.
+        # Migration and initialization are serialized by the process state lock.
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(requests)")}
+        for column in ("preferred_provider", "selected_provider", "failure_category"):
+            if column not in columns:
+                self.db.execute(f"ALTER TABLE requests ADD COLUMN {column} TEXT")
+        self.db.execute("CREATE TABLE IF NOT EXISTS worker_state (key TEXT PRIMARY KEY, value INTEGER NOT NULL)")
+        self.db.execute("INSERT OR IGNORE INTO worker_state VALUES ('rotation_next', 0)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS attempts ("
+                        "request_id TEXT NOT NULL, attempt_index INTEGER NOT NULL, provider TEXT NOT NULL, "
+                        "status TEXT NOT NULL, failure_category TEXT, PRIMARY KEY (request_id, attempt_index))")
         self.db.commit()
 
     def busy(self):
@@ -169,31 +185,62 @@ class Worker:
                 return 429, None
             try:
                 # Committed before the renderer can upload a reference or consume
-                # a generation. Pending survives crashes and is never retried.
-                self.db.execute("INSERT INTO requests VALUES (?, ?, 'pending', NULL)",
-                                (value["request_id"], digest))
+                # a generation. Turn selection and the claim commit atomically:
+                # busy/replay/invalid requests never consume a rotation turn.
+                self.db.execute("BEGIN IMMEDIATE")
+                turn = self.db.execute("SELECT value FROM worker_state WHERE key = 'rotation_next'").fetchone()[0]
+                first = turn % len(self.providers)
+                ordered = self.providers[first:] + self.providers[:first]
+                preferred = ordered[0][0]
+                self.db.execute("INSERT INTO requests (request_id, request_hash, status, preferred_provider, selected_provider) "
+                                "VALUES (?, ?, 'pending', ?, ?)",
+                                (value["request_id"], digest, preferred, preferred))
+                self.db.execute("UPDATE worker_state SET value = value + 1 WHERE key = 'rotation_next'")
+                self.db.execute("INSERT INTO attempts VALUES (?, 0, ?, 'pending', NULL)",
+                                (value["request_id"], preferred))
                 self.db.commit()
             except BaseException:
                 self.db.rollback()
                 self.slot.release()
                 raise
         try:
-            try:
-                output = self.renderer(value, self.references)
-                if not valid_image(output):
-                    raise ValueError("invalid generated image")
-            except Exception as error:
+            for index, (provider, renderer) in enumerate(ordered):
+                if index:
+                    # The alternate attempt gets its own durable attribution
+                    # before its native call; interrupted jobs remain pending.
+                    with self.db_lock:
+                        self.db.execute("INSERT INTO attempts VALUES (?, ?, ?, 'pending', NULL)",
+                                        (value["request_id"], index, provider))
+                        self.db.execute("UPDATE requests SET selected_provider = ? WHERE request_id = ?",
+                                        (provider, value["request_id"]))
+                        self.db.commit()
+                try:
+                    output = renderer(value, self.references)
+                    if not valid_image(output):
+                        raise ValueError("invalid generated image")
+                except Exception as error:
+                    eligible = isinstance(error, ProviderUnavailable)
+                    timeout = "timeout" in str(error).lower() or "timed out" in str(error).lower()
+                    category = "timeout" if timeout else ("unavailable" if eligible else "generation_failed")
+                    terminal = not eligible or index + 1 == len(ordered)
+                    with self.db_lock:
+                        self.db.execute("UPDATE attempts SET status = 'failed', failure_category = ? "
+                                        "WHERE request_id = ? AND attempt_index = ?",
+                                        (category, value["request_id"], index))
+                        if terminal:
+                            self.db.execute("UPDATE requests SET status = 'failed', failure_category = ? WHERE request_id = ?",
+                                            (category, value["request_id"]))
+                        self.db.commit()
+                    if terminal:
+                        return (504 if timeout else 502), None
+                    continue
                 with self.db_lock:
-                    self.db.execute("UPDATE requests SET status = 'failed' WHERE request_id = ?",
-                                    (value["request_id"],))
+                    self.db.execute("UPDATE attempts SET status = 'completed' WHERE request_id = ? AND attempt_index = ?",
+                                    (value["request_id"], index))
+                    self.db.execute("UPDATE requests SET status = 'completed', output = ? WHERE request_id = ?",
+                                    (output, value["request_id"]))
                     self.db.commit()
-                timeout = "timeout" in str(error).lower() or "timed out" in str(error).lower()
-                return (504 if timeout else 502), None
-            with self.db_lock:
-                self.db.execute("UPDATE requests SET status = 'completed', output = ? WHERE request_id = ?",
-                                (output, value["request_id"]))
-                self.db.commit()
-            return 200, output
+                return 200, output
         finally:
             self.slot.release()
 
@@ -261,7 +308,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path != "/health":
             self.reply(404)
         else:
-            self.reply(200, {"status": "ready", "provider": "agy", "busy": self.server.worker.busy()})
+            self.reply(200, {"status": "ready", "provider": "agy", "busy": self.server.worker.busy(),
+                             "providers": [name for name, _ in self.server.worker.providers], "rotation": "alternate"})
 
     def do_POST(self):
         if not self.authorized():
@@ -316,7 +364,31 @@ class UnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
         self.lock_fds = []
 
 
-def create_server(runtime_dir, state_dir, references, allowed_users, *, renderer=None, read_timeout=10):
+def validate_providers(providers):
+    if (not isinstance(providers, (list, tuple)) or not 1 <= len(providers) <= 2
+            or any(not isinstance(item, (tuple, list)) or len(item) != 2 for item in providers)):
+        raise ValueError("invalid image providers")
+    names = [item[0] for item in providers]
+    if (any(type(name) is not str or name not in {"agy", "grok"} for name in names)
+            or len(set(names)) != len(names) or any(not callable(item[1]) for item in providers)):
+        raise ValueError("invalid image providers")
+    return tuple(tuple(item) for item in providers)
+
+
+def load_providers(names):
+    # Validate the complete selection before importing any native provider.
+    validate_providers([(name, lambda *_: None) for name in names])
+    providers = []
+    for name in names:
+        if name == "agy":
+            from agy_image_render import render
+        else:
+            from grok_image_render import render
+        providers.append((name, render))
+    return providers
+
+
+def create_server(runtime_dir, state_dir, references, allowed_users, *, renderer=None, providers=None, read_timeout=10):
     runtime_dir, state_dir = private_directory(runtime_dir), private_directory(state_dir)
     token = private_read(runtime_dir / "token", 1024).strip()
     if not re.fullmatch(rb"[\x21-\x7e]{32,256}", token):
@@ -325,9 +397,11 @@ def create_server(runtime_dir, state_dir, references, allowed_users, *, renderer
     if (not allowed_users or any(type(user) is not str or not 1 <= len(user) <= 128 for user in allowed_users)
             or read_timeout <= 0):
         raise ValueError("invalid worker configuration")
-    if renderer is None:
-        from agy_image_render import render
-        renderer = render
+    if providers is not None and renderer is not None:
+        raise ValueError("choose providers or legacy renderer")
+    if providers is None:
+        providers = [("agy", renderer)] if renderer is not None else load_providers(["agy"])
+    providers = validate_providers(providers)
     locks, worker, server = [], None, None
     try:
         locks.append(exclusive_lock(runtime_dir / ".worker.lock"))
@@ -338,7 +412,7 @@ def create_server(runtime_dir, state_dir, references, allowed_users, *, renderer
             if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
                 raise ValueError("invalid worker socket")
             socket_path.unlink()
-        worker = Worker(state_dir, token, references, allowed_users, renderer)
+        worker = Worker(state_dir, token, references, allowed_users, providers=providers)
         server = UnixHTTPServer(str(socket_path), Handler)
         socket_path.chmod(0o600)
         server.worker = worker
@@ -362,10 +436,12 @@ def main():
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--references", type=Path, required=True)
     parser.add_argument("--allowed-users", required=True)
+    parser.add_argument("--providers", default="agy", help="Ordered providers: agy, grok, or agy,grok")
     args = parser.parse_args()
     try:
         server = create_server(args.runtime_dir, args.state_dir, args.references,
-                               {user.strip() for user in args.allowed_users.split(",") if user.strip()})
+                               {user.strip() for user in args.allowed_users.split(",") if user.strip()},
+                               providers=load_providers([name.strip() for name in args.providers.split(",")]))
     except Exception:
         print("Image worker configuration unavailable", file=sys.stderr)
         return 1

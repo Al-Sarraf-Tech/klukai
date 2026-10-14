@@ -142,3 +142,43 @@ def test_generation_gate_requires_exact_references_and_only_one_call(tmp_path):
     assert g.decide({'name':'generate_image','args':{'ImagePaths':['/secret']}},policy,tmp_path/'claim')=='deny'
     assert g.decide(call,policy,tmp_path/'claim')=='allow'
     assert g.decide(call,policy,tmp_path/'claim')=='deny'
+
+def test_generation_service_error_permits_bounded_other_provider_failover():
+    m=runtime();rows=[json.loads(x) for x in generation_stream().splitlines()]
+    step=rows[-2]['step_update'];step['state']='ERROR'
+    step['tool_info']['error']={'type':'TOOL_ERROR','message':'failed to generate content: 500 Internal Server Error'}
+    with pytest.raises(m.ProviderUnavailable):
+        m.parse_stream('\n'.join(map(json.dumps,rows)),{'/work/0.png'},generation=True)
+
+@pytest.mark.parametrize('message', ['403 Forbidden','safety policy refusal: 500','invalid image input','content blocked'])
+def test_policy_and_unclassified_tool_errors_do_not_permit_failover(message):
+    m=runtime();rows=[json.loads(x) for x in generation_stream().splitlines()]
+    step=rows[-2]['step_update'];step['state']='ERROR';step['tool_info']['error']={'message':message}
+    with pytest.raises(m.RuntimeError) as error:
+        m.parse_stream('\n'.join(map(json.dumps,rows)),{'/work/0.png'},generation=True)
+    assert not isinstance(error.value,m.ProviderUnavailable)
+
+@pytest.mark.parametrize('message', ['invalid image dimensions: width must be 500 pixels', 'render this in 500 steps', 'policy refused: failed to generate content: 500 Internal Server Error'])
+def test_plain_numbers_or_refusals_are_not_service_statuses(message):
+    assert not runtime().service_unavailable({'message':message})
+
+def test_missing_native_account_runtime_is_failover_eligible(tmp_path, monkeypatch):
+    m=runtime();monkeypatch.setattr(m.Path,'home',lambda:tmp_path)
+    with pytest.raises(m.ProviderUnavailable):m.command(tmp_path,tmp_path,[],tmp_path/'missing')
+
+def test_failed_keyring_proxy_is_failover_eligible(tmp_path, monkeypatch):
+    m=runtime()
+    class FailedProxy:
+        def poll(self):return 1
+        def terminate(self):pass
+        def wait(self,**kw):return 1
+    monkeypatch.setattr(m.subprocess,'Popen',lambda *a,**kw:FailedProxy())
+    with pytest.raises(m.ProviderUnavailable):m.execute(tmp_path,tmp_path,[],10)
+
+def test_later_refusal_prevents_failover_from_earlier_server_error():
+    m=runtime();rows=[json.loads(x) for x in generation_stream().splitlines()]
+    step=rows[-2]['step_update'];step['state']='ERROR';step['tool_info']['error']={'message':'failed to generate content: 500 Internal Server Error'}
+    rows.insert(-1,{'event':'step_update','step_update':{'conversation_id':'test','step_index':7,'step_type':'finish','state':'ERROR','error':{'message':'Safety policy refusal'}}})
+    with pytest.raises(m.RuntimeError) as error:
+        m.parse_stream('\n'.join(map(json.dumps,rows)),{'/work/0.png'},generation=True)
+    assert not isinstance(error.value,m.ProviderUnavailable)

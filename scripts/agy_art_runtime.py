@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import shutil
 import subprocess
@@ -23,6 +24,21 @@ MAX_OUTPUT = 2_000_000
 
 class RuntimeError(ValueError):
     """Sanitized runtime failure suitable for reports."""
+
+
+class ProviderUnavailable(RuntimeError):
+    """A service/transport failure eligible for one different-provider attempt."""
+
+
+def service_unavailable(error) -> bool:
+    """Fail over only recognized service errors, never policy/input refusals."""
+    if not isinstance(error, dict):
+        return False
+    message = str(error.get('message', '')).lower()
+    if any(word in message for word in ('safety','policy','refus','blocked','prohibited','content filter','invalid','moderation')):
+        return False
+    return bool(re.search(r'\b(?:http\s*|status\s*[:=]?\s*|failed to generate content:\s*)'
+                          r'(?:401|402|408|429|500|502|503|504)\b', message))
 
 
 def environment(source=None):
@@ -65,7 +81,7 @@ def command(profile: Path, work: Path, args: list[str], socket: Path):
     home = Path.home()
     binary = home / '.local/opt/antigravity-cli' / VERSION / 'agy'
     if not binary.is_file() or not socket.exists():
-        raise RuntimeError('Pinned Agy or desktop keyring session is unavailable')
+        raise ProviderUnavailable('Pinned Agy or desktop keyring session is unavailable')
     # Preserve user authentication through the official keyring, without exposing
     # their home, project, hooks, MCP configuration, or API credential files.
     cmd = ['/usr/bin/bwrap', '--die-with-parent', '--new-session', '--unshare-pid',
@@ -98,9 +114,11 @@ def parse_stream(raw: str, required: set[str], *, generation=False) -> dict:
         result = terminal[0]
         if result.get('conversation_id') != conversation:
             raise RuntimeError('Agy result belongs to a different conversation')
-        if result.get('status') != 'SUCCESS' or result.get('error') or result.get('denied_actions'):
+        if (result.get('status') != 'SUCCESS' or result.get('error') or result.get('denied_actions')
+                or result.get('stop_reason') == 'refusal' or result.get('refusal')):
             raise RuntimeError('Agy CLI reported an incomplete or denied review')
         seen, calls = set(), {}
+        unavailable = False
         for event in events:
             if event.get('event') not in {'init', 'step_update', 'result'}:
                 raise RuntimeError('Unexpected Agy event')
@@ -110,15 +128,20 @@ def parse_stream(raw: str, required: set[str], *, generation=False) -> dict:
             if step.get('subagent_info'):
                 raise RuntimeError('Agy unexpectedly delegated the review')
             info = step.get('tool_info', {})
-            if step and (step.get('error') or info.get('error') or step.get('state') not in {'ACTIVE','DONE'}):
+            eligible = generation and step.get('tool_name') == 'generate_image' and service_unavailable(info.get('error'))
+            unavailable = unavailable or eligible
+            # Classify only after validating the entire stream. A later refusal
+            # or invalid operation must override an earlier service error.
+            if step and (step.get('error') or (not eligible and
+                    (info.get('error') or step.get('state') not in {'ACTIVE','DONE'}))):
                 raise RuntimeError('Agy reported a failed or invalid step')
             if step.get('step_type') not in {'tool', 'finish'}:
                 continue
             name = 'finish' if step.get('step_type') == 'finish' else step.get('tool_name')
             index, state = step.get('step_index'), step.get('state')
             allowed = {'view_file', 'finish'} | ({'generate_image'} if generation else set())
-            if (name not in allowed or info.get('error')
-                    or state not in {'ACTIVE', 'DONE'} or type(index) is not int):
+            if (name not in allowed or (info.get('error') and not eligible)
+                    or state not in ({'ACTIVE', 'DONE', 'ERROR'} if eligible else {'ACTIVE', 'DONE'}) or type(index) is not int):
                 raise RuntimeError('Agy used an unexpected, failed, or invalid tool')
             path = info.get('parameters', {}).get('AbsolutePath')
             if name == 'view_file' and path not in required:
@@ -129,7 +152,7 @@ def parse_stream(raw: str, required: set[str], *, generation=False) -> dict:
                     raise RuntimeError('Invalid Agy tool lifecycle')
             calls[index] = {'tool': name, 'path': path, 'state': state, 'step': index}
         for call in calls.values():
-            if call['tool'] == 'generate_image' and call['state'] != 'DONE':
+            if call['tool'] == 'generate_image' and call['state'] != 'DONE' and not (unavailable and call['state'] == 'ERROR'):
                 raise RuntimeError('Agy generation did not complete')
             if call['tool'] == 'view_file':
                 if call['state'] != 'DONE':
@@ -141,6 +164,8 @@ def parse_stream(raw: str, required: set[str], *, generation=False) -> dict:
             raise RuntimeError('Agy did not complete exactly one generation')
         if seen != required or (not generation and not isinstance(result.get('structured_output'), dict)):
             raise RuntimeError('Agy did not inspect every selected image or return structured output')
+        if unavailable:
+            raise ProviderUnavailable('Agy image service unavailable')
         return {**result, 'images_read': sorted(seen), 'model': initial[0].get('model'), 'tool_audit': list(calls.values())}
     except RuntimeError:
         raise
@@ -159,7 +184,7 @@ def _execute(profile: Path, work: Path, args: list[str], timeout: int, socket: P
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL); process.wait()
-            raise RuntimeError('Agy timed out; attempt not retried') from None
+            raise RuntimeError('Agy timed out with unknown completion; attempt not retried') from None
         except BaseException:
             os.killpg(process.pid, signal.SIGKILL); process.wait()
             raise
@@ -188,7 +213,7 @@ def execute(profile: Path, work: Path, args: list[str], timeout: int) -> str:
             deadline = time.monotonic() + 5
             while not socket.exists():
                 if proxy.poll() is not None or time.monotonic() > deadline:
-                    raise RuntimeError('Filtered keyring proxy failed to start')
+                    raise ProviderUnavailable('Filtered keyring proxy failed to start')
                 time.sleep(0.02)
             return _execute(profile, work, args, timeout, socket)
         finally:

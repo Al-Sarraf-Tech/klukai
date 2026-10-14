@@ -47,7 +47,7 @@ def worker_api(monkeypatch, handler):
     def client(**kwargs):
         assert kwargs["trust_env"] is False
         assert kwargs["follow_redirects"] is False
-        assert kwargs["timeout"].read <= 200
+        assert kwargs["timeout"].read <= 380
         return original(**kwargs)
 
     monkeypatch.setattr(agy.httpx, "AsyncHTTPTransport", transport)

@@ -69,6 +69,14 @@ image provider with no GPU image usage. Production selects
 `KLUKAI_IMAGE_PROVIDER=agy`, through the private Amarillo account worker. This
 supersedes earlier local-image-only and one-off-generation restrictions for
 Klukai images. No paid image APIs, credits or fallback are authorized. On Agy
-failure, return no image; never fall back to ComfyUI. Voice remains unchanged.
+failure, only the later authorized account-provider failover below is allowed; never fall back to ComfyUI. Voice remains unchanged.
 Read `docs/handoff/2026-10-14-agy-main-images.md` for deployment, reference
 privacy, account/session limits and rollback.
+
+The owner then requested Agy/Grok alternation and mutual failover, confirmed
+Grok extra usage is off / hard cap $0, and requested Commander couple samples
+from both. The private worker supports `KLUKAI_ACCOUNT_IMAGE_PROVIDERS=agy,grok`
+with durable alternating preference and at most one service-error failover.
+Never fail over policy refusals or enable API keys, paid credits, or GPU images.
+Keep Grok's account paid usage disabled. Its official native client uses a
+read-only auth-file mount; account refresh remains outside the image worker.

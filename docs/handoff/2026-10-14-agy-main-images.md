@@ -1,4 +1,4 @@
-# Agy is the main Klukai image renderer
+# Account-backed Gemini and Grok images
 
 The owner first authorized account-backed images in chat, then explicitly asked:
 “And make it the main version of image generation no more gpu usage.” This
@@ -31,15 +31,15 @@ access remain trusted; the proxy filters services, not individual keyring items.
 Request IDs are claimed durably in SQLite before generation. A completed replay
 returns cached bytes; an interrupted, failed or conflicting replay never starts
 another generation. Only one request runs at once; concurrent requests get 429.
-The client has no retries. CLI timeout is 170 seconds; core deadline is 200 seconds.
+The client has no retries. CLI timeout is 170 seconds; core deadline is 380 seconds for at most two bounded providers.
 Native output dimensions can differ from the requested orientation dimensions.
 
 ## Amarillo setup
 
 - Unit: `ops/amarillo/systemd/klukai-agy-images.service`, installed under the
   owner's `~/.config/systemd/user/`.
-- Unit environment: `~/.config/klukai/agy-images.env`, containing only the user
-  allowlist. The unit uses the owner's desktop keyring session.
+- Unit environment: `~/.config/klukai/agy-images.env`, containing the user allowlist and `KLUKAI_ACCOUNT_IMAGE_PROVIDERS`
+  (`agy,grok` for alternating preferred providers). The unit uses the owner's desktop keyring session.
 - Private host root: `~/.local/share/klukai/agy-bridge/` (0700).
 - `runtime/token` (0600) and `runtime/image.sock` (0600), mounted read-only into
   core at `/run/klukai-agy`. The token is unrelated to Google credentials.
@@ -69,6 +69,34 @@ restoring GPU image generation accidentally.
 
 ## Verification
 
-Offline release checks: full core suite 4,947 passed, 57 skipped, one deselected, 96.74% coverage; required threshold 95%. Amarillo suite: 100 passed. Core lint and diff checks passed. Independent worker/runtime/core reviews found no remaining material issues. Native retained generation stream and artifact revalidated successfully. Live deployment evidence follows after rollout.
+Offline release checks: full core suite 4,947 passed, 57 skipped, one deselected, 96.74% coverage; required threshold 95%. Amarillo suite: 100 passed. Core lint and diff checks passed. Independent worker/runtime/core reviews found no remaining material issues. Native retained generation stream and artifact revalidated successfully. The rotation extension additionally passed 197 ops tests and 4 subtests, 149 targeted core image tests and core lint. The independent follow-up review reproduced and verified the refusal-precedence and string-error fixes; no material findings remain. Live deployment evidence follows below.
 
-Manual wardrobe/regeneration scripts without a user identity fail closed under Agy; bulk historical archive regeneration remains separately scoped. The owner also requested Grok alternation/failover if possible. Native Grok image tools exist; activation requires verified included-quota-only enforcement and is pending that check.
+Manual wardrobe/regeneration scripts without a user identity fail closed under Agy; bulk historical archive regeneration remains separately scoped. The rotation extension below records the owner’s later Grok authorization.
+
+## Agy/Grok rotation update
+
+The owner requested alternation and mutual failover, then explicitly confirmed
+Grok extra usage is off / hard paid-usage cap $0. Native Grok Build 1.0.52 has
+account-backed image generation/editing; the native dashboard verified the
+signed-in SuperGrok Lite account. Keep that account's paid usage disabled.
+No developer API key, API credits, topup, purchase or subscription change is
+authorized. Grok credentials are mounted read-only into an isolated fresh
+profile for the official client. Refresh requiring a write fails closed; use
+the owner's normal Grok login to refresh outside this worker.
+
+`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=agy,grok` in the private service environment
+enables deterministic alternating preferred providers. The durable counter
+advances only for an accepted new request. At most one attempt per provider
+is permitted. Only recognized service/quota/auth failures permit the other
+provider; policy refusals, invalid input, unverified output and ambiguous
+process timeout stop the request. There is no retry loop or GPU fallback.
+Both provider attempts are recorded without prompts in the private ledger;
+completed request replays return the same cached bytes.
+
+The core selector retains `KLUKAI_IMAGE_PROVIDER=agy` for the compatible host
+bridge protocol; the worker health document lists the actual enabled providers.
+The host worker, rather than the core container, owns provider rotation.
+
+## Commander appearance
+
+The owner requested a slightly lighter skin tone as part of the Commander character. The canonical personality description and image tags now use light olive skin; both native provider prompts apply that description while preserving his recognizable facial features. The private reference photo remains the identity source.

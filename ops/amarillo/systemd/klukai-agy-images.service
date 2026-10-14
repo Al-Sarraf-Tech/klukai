@@ -8,8 +8,9 @@ UMask=0077
 WorkingDirectory=%h/git/klukai
 Environment=HOME=%h
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+Environment=KLUKAI_ACCOUNT_IMAGE_PROVIDERS=agy
 EnvironmentFile=%h/.config/klukai/agy-images.env
-ExecStart=/usr/bin/python3 %h/git/klukai/scripts/agy_image_worker.py --runtime-dir %h/.local/share/klukai/agy-bridge/runtime --state-dir %h/.local/share/klukai/agy-bridge/state --references %h/.local/share/klukai/agy-bridge/references.json --allowed-users ${KLUKAI_AGY_ALLOWED_USERS}
+ExecStart=/usr/bin/python3 %h/git/klukai/scripts/agy_image_worker.py --runtime-dir %h/.local/share/klukai/agy-bridge/runtime --state-dir %h/.local/share/klukai/agy-bridge/state --references %h/.local/share/klukai/agy-bridge/references.json --allowed-users ${KLUKAI_AGY_ALLOWED_USERS} --providers ${KLUKAI_ACCOUNT_IMAGE_PROVIDERS}
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=10

@@ -80,7 +80,7 @@ OUTFIT_MAP = {
 }
 
 COMMANDER_IDENTITY = (
-    "1boy, male focus, masculine, short hair, dark hair, brown eyes, tan skin, "
+    "1boy, male focus, masculine, short hair, dark hair, brown eyes, light olive skin, "
     "strong build, tall, broad shoulders, male"
 )
 COMMANDER_DEFAULT_OUTFIT = "military uniform, commander, jacket"
