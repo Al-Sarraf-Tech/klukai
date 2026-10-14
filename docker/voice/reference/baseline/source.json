@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "purpose": "Owner-selected Klukai voice source baseline",
+  "selected_on": "2026-10-13",
+  "downloaded_at_utc": "2026-10-14T04:25:53+00:00",
+  "source": {
+    "video_id": "3tJ1ZE11J34",
+    "url": "https://www.youtube.com/watch?v=3tJ1ZE11J34",
+    "submitted_url": "https://youtu.be/3tJ1ZE11J34?is=11v7ORtgBILWuCaD",
+    "title": "Klukai Voice Line [Girls' Frontline 2: Exilium]",
+    "uploader": "HollowMelody",
+    "channel_url": "https://www.youtube.com/channel/UCSGXv5gdr87mmfCi2N10SaA",
+    "upload_date": "2025-05-23",
+    "language": "ja",
+    "reported_duration_seconds": 279
+  },
+  "processing": {
+    "downloader": "yt-dlp 2026.08.19 (existing vetted image package)",
+    "download_format_ids": [
+      "232",
+      "234"
+    ],
+    "video": "HLS H.264 720p and AAC audio remuxed into MP4 without re-encoding",
+    "audio": "Full MP4 audio decoded to mono 22050 Hz signed 16-bit PCM; no trimming, normalization, denoising, or pitch changes",
+    "ffmpeg_version": "7.0.2"
+  },
+  "artifacts": {
+    "3tJ1ZE11J34.mp4": {
+      "size_bytes": 49716084,
+      "sha256": "799467265093a21334560ffd767d8845ae4f37d1becace2e9a575cac5d3feae1",
+      "duration_seconds": 278.454,
+      "streams": [
+        {
+          "codec_type": "video",
+          "codec_name": "h264",
+          "width": 1280,
+          "height": 720
+        },
+        {
+          "codec_type": "audio",
+          "codec_name": "aac",
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      ]
+    },
+    "3tJ1ZE11J34.wav": {
+      "size_bytes": 12279886,
+      "sha256": "d46080443c6d4815988310176fadbe342f4e25ed8a335b0b28bfdb405a1ce956",
+      "codec": "pcm_s16le",
+      "sample_rate_hz": 22050,
+      "channels": 1,
+      "sample_width_bytes": 2,
+      "frames": 6139904,
+      "duration_seconds": 278.4536961451247
+    }
+  }
+}
