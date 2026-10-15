@@ -17,13 +17,23 @@
   <img alt="ci" src="https://img.shields.io/badge/CI-self--hosted-E8923E"/>
 </p>
 
-A production-grade AI companion rooted in [Girls' Frontline 2: Exilium](https://gfl2.sunborngame.com/) canon. Klukai is the elite who waited ten years for her Commander to answer, and she builds a real bond with him: conversation, memory, affection, rituals, and initiative, with her state and archive on hardware he controls.
+A personal AI companion rooted in [Girls' Frontline 2: Exilium](https://gfl2.sunborngame.com/) canon. Klukai is the elite who waited ten years for her Commander to answer, and she builds a bond with him through conversation, memory, affection, rituals, and initiative. Her state and archive stay on hardware he controls.
 
-**Current deployment:** Claude Sonnet 5.5 with medium adaptive thinking handles interactive chat, with Dominus as the local secondary. Speech uses XTTS on Dominus-Nobara's RTX 3090, with queued playback and correct 24 kHz audio. Text chat stays available without voice when Nobara is offline. New pictures use the existing Agy/Grok account worker; approved live portraits are retained. Local background work and voice still depend on Dominus, so the whole companion is not cloud-based.
+## Current state — October 15, 2026
 
-This release also supports independently opt-in OpenAI scene pictures and Anthropic dream/Her POV writing. Fresh deployments default to local providers and zero cloud allowances. On the owner's production deployment, Claude creative writing now uses the existing API key with 12 attempts per UTC month; pictures use the signed-in Gemini/Agy and Grok accounts, alternating preferred providers with one service-failure fallback to the other. Paid-credit fallback is disabled; the owner confirmed Grok extra usage is off / hard cap $0. The owner selected Agy as the main renderer with no GPU image fallback; see the [Agy deployment guide](docs/handoff/2026-10-14-agy-main-images.md). See the [provider handoff](docs/handoff/2026-10-14-dream-image-preparation.md) for activation evidence and recovery requirements.
+The documented production configuration combines explicitly authorized cloud services with local state and GPU speech. Fresh checkouts retain local provider defaults and zero creative API allowances.
 
-**[Release v1.1.0](https://github.com/Al-Sarraf-Tech/klukai/releases/tag/v1.1.0):** core API `1.1.0`, Flutter `1.1.0+2`. The version sources are [the core package](docker/core/app/__init__.py) and [Flutter's pubspec](flutter_app/pubspec.yaml); checked-in defaults deliberately remain local.
+| Path | Documented production configuration |
+|---|---|
+| **Conversation** | Claude Sonnet 5.5, medium adaptive thinking; Dominus is the local secondary |
+| **Speech** | Dominus-Nobara RTX 3090 XTTS, asynchronous jobs and 24 kHz WAV output; text chat remains available when voice is offline |
+| **Pictures** | Private Gemini/Agy and Grok account worker, alternating preferred providers with at most one eligible service-error failover; no GPU or paid-image fallback |
+| **Dreams & Her POV writing** | Separately enabled Anthropic text, initially 12 attempts per UTC day and month shared across both features; other background writers remain local |
+| **Web & references** | Authorized Brave MCP search, free metasearch fallback, and scoped reference tools |
+
+The latest source adds current WebSocket authorization, mission ownership isolation, safe retries for definitely unaccepted image requests, immutable recovered-image context, and working heavy/light CI with disposable database tests. These changes are tracked under [Unreleased](CHANGELOG.md#unreleased); merging source is separate from deploying it.
+
+**Latest tagged release: [v1.1.0](https://github.com/Al-Sarraf-Tech/klukai/releases/tag/v1.1.0).** Core API `1.1.0`, Flutter `1.1.0+2`; see [the core version](docker/core/app/__init__.py), [Flutter's pubspec](flutter_app/pubspec.yaml), and the dated [deployment guides](#documentation-map) for activation evidence. No new release number is implied by the Unreleased changes.
 
 ---
 
@@ -36,6 +46,7 @@ This release also supports independently opt-in OpenAI scene pictures and Anthro
 - [Wardrobe & Her Day](#wardrobe--her-day)
 - [Small mercies](#small-mercies)
 - [Gaming-aware](#gaming-aware)
+- [Conversation & recovery](#conversation--recovery)
 - [Affection ladder](#affection-ladder)
 - [Topology](#topology-redacted)
 - [Her POV](#her-pov)
@@ -47,6 +58,8 @@ This release also supports independently opt-in OpenAI scene pictures and Anthro
 - [Repository layout](#repository-layout)
 - [Quick start](#quick-start-operators)
 - [Testing](#testing)
+- [Security & privacy](#security--privacy)
+- [Documentation map](#documentation-map)
 - [Ground rules](#ground-rules-agents--humans)
 
 ---
@@ -87,6 +100,7 @@ Her character configuration lives in [`config/personality.yaml`](config/personal
 | **Gaming-aware** | Knows when he's mid-game: short replies, no pings until the match ends |
 | **Small mercies** | Clean goodbyes, the 0200 watch, operation briefs before his real-life events, command decisions he makes for her |
 | **Memory archive** | She curates her own photo journal with annotations |
+| **Recoverable pictures** | Explicit chat/API requests retain durable IDs and original archive context; reconnects can retrieve a finished picture without generating it again |
 | **Her POV** | She picks a real exchange, journals it, and draws it from her side |
 | **Proactive** | Check-ins, dreams, anniversaries, seasonal lines, deferred one-shots that survive restarts |
 | **On-demand GPU use** | The configured Sonnet primary leaves the secondary model unloaded until needed; local runtimes enforce idle release |
@@ -166,6 +180,18 @@ A game can stop the canonical Dominus AI stack. Do not start ComfyUI, an LLM, or
 
 ---
 
+## Conversation & recovery
+
+- **One conversation across devices.** Text and voice turns share per-user session ownership and revision checks. A stale background completion cannot overwrite a newer turn's mood or mission state, and complete assistant replies remain in history.
+- **Authorization stays current.** Public WebSockets bind their authenticated session hash. Inbound frames, queued-turn admission and outgoing delivery recheck ownership, expiry and account status. Password changes and deactivation close that user's local devices; passive delivery does not extend session expiry.
+- **Missions stay with their owner.** Prompt context, timers, reconnect restoration, callbacks, push delivery, mood and affection use the requesting user's identity. A missing session never borrows another connected user's context. Scheduled proactivity remains scoped to the primary owner.
+- **A request ID identifies a picture.** The core journals an explicit account-image request before dispatch. Completed retries recover stored bytes and original prompt, conversation, mood and affection. Only a worker-proven, unaccepted `429 busy` can claim a retry; pending or uncertain requests remain recovery-only.
+- **Startup verifies migration history.** SQL migrations run transactionally under an advisory lock and checksum ledger. Migration `220` adds image archive context without rewriting historical records. Applied migrations must remain available during rollback.
+
+See the [session architecture](docs/architecture.md#live-session-ownership), [security and recovery handoff](docs/handoff/2026-10-15-security-recovery-isolation-fixes.md), and [migration runbook](docs/runbooks/database-migrations.md). The current session coordinator and eager socket revocation are process-local; multiple core workers require a replacement coordinator. Streaming latency and database-pool load must be measured before deploying per-frame authorization checks.
+
+---
+
 ## Affection ladder
 
 | Level | Register | Vibe | Unlocks |
@@ -190,18 +216,18 @@ Two hosts on a **private encrypted mesh**. Public edge terminates TLS; GPU ports
 
 | Role | Responsibility |
 |---|---|
-| **Core host** | `companion-core`, gateway, Postgres, Redis, Qdrant, RabbitMQ consumers, observability; retained Arc voice service |
-| **NVIDIA host** | `lmstudio-compat` (local LLM ingress), llama-router (internal), ComfyUI (leased), primary XTTS voice, separate STT |
-| **Explicit API providers** | Anthropic interactive chat; separately disabled-by-default Anthropic creative text and OpenAI scene images |
+| **Core host** | `companion-core`, gateway, Postgres, Redis, Qdrant, RabbitMQ consumers, observability; private account-image worker and retained Arc voice service |
+| **NVIDIA host** | `lmstudio-compat` (local LLM ingress), llama-router (internal), primary XTTS voice and separate STT; guarded ComfyUI retained for explicit local deployments |
+| **Authorized external services** | Anthropic chat and separately capped creative text, Brave search, signed-in Gemini/Agy and Grok images; paid OpenAI image adapter remains disabled in production |
 
 ```
 Public edge (TLS)
         │
         ▼
    Core host ── private mesh ──► NVIDIA host
-   (state + PWA)                 (local LLM + ComfyUI + TTS/STT)
+   (state + PWA + image worker)   (local LLM + TTS/STT)
         │
-        └── HTTPS ──► explicitly configured API providers
+        └── HTTPS ──► authorized Anthropic / Brave / account image services
 ```
 
 **Hard rules**
@@ -245,7 +271,9 @@ GET  /api/memories/her-pov/{job_id} → status (no image blob)
 
 Progress also streams on the WebSocket (`type: her_pov`). Cross-user job reads return 404.
 
-The default writer and renderer are local. An authorized creative-provider configuration can use Sonnet for the journal/scene and OpenAI for the picture. Cloud Her POV requires `HER_POV_EXECUTION=queue` and durable database ownership: failed persistence or queue handoff cannot fall back to an inline paid call. Interrupted cloud jobs are held for review instead of automatically reclaiming and billing them again. Existing album images and cached live portraits remain on the images volume.
+Fresh installs use local writing and rendering. The documented production path uses separately capped Anthropic scene writing and the private Agy/Grok account renderer. OpenAI remains a separately disabled API adapter. External Her POV generation requires `HER_POV_EXECUTION=queue` and durable database ownership: failed persistence or queue handoff cannot fall back to inline generation. Interrupted or ambiguous work is held for review rather than blindly resubmitted. Existing album images and cached live portraits remain on the images volume.
+
+The PostgreSQL job row is durable acceptance. Startup and periodic reconciliation republish eligible unstarted jobs with their original UUID after a lost wake-up; they do not reclaim a started provider attempt. See [durable job recovery](docs/runbooks/durable-job-handoff.md).
 
 ---
 
@@ -272,16 +300,18 @@ The default writer and renderer are local. An authorized creative-provider confi
 |---|---|---|
 | Interactive chat and tools | Dominus gateway and local models | `KLUKAI_CLAUDE_PRIMARY=true` plus an Anthropic key: Sonnet 5.5, adaptive thinking, medium effort; Dominus secondary |
 | Night/morning dream text and Her POV scene writing | Existing local LLM calls | `KLUKAI_CREATIVE_TEXT_PROVIDER=anthropic`, key, and positive text attempt allowances |
-| Scene pictures | Fresh installs: `comfyui`; owner production: `agy` | Agy needs the private account worker and user allowlist; no GPU fallback. Paid OpenAI remains separately disabled |
-| Animated live portraits | Local NoobAI-XL + Klukai LoRA and masked expression edits | Remain local |
+| Scene pictures | Fresh installs: `comfyui`; owner production: `agy` | The private account worker alternates Agy/Grok with a user allowlist; paid OpenAI remains separately disabled |
+| Animated live portraits | Local NoobAI-XL + Klukai LoRA and masked expression edits | Production retains existing portraits; account-provider selection does not authorize GPU regeneration |
 | Historical memory seeding | Existing local selection, annotation, and ComfyUI pipeline | Refuses remote configuration until source-aware durable backfill jobs exist |
-| Speech | Explicit `dominus` or `amarillo-xpu` voice backend | No cloud voice provider |
+| Speech | Production: `dominus`; retained `amarillo-xpu` is an explicit rollback choice | No automatic Arc or cloud voice fallback |
 
 The prepared OpenAI models are the pinned `gpt-image-2.5-sunburst-2026-09-08` and `gpt-image-2.5-flare-2026-09-08` snapshots at `max` quality. Claude writes text; it is not the raster-image renderer. The API adapter uses an adopted fictional-character reference pack, not the local LoRA file. No provider comparison has yet established identical face, outfit, or expression fidelity; see the [research and evaluation plan](docs/research/2026-10-14-dream-image-backends.md).
 
 Cloud scene rendering bypasses local GPU readiness and leases. It does not change portrait generation, enable illustrated dream entries, or move unrelated background jobs off Dominus. A dream diary entry is still text-only.
 
 Creative API calls reserve a persistent UTC daily/monthly attempt before dispatch. Failed or uncertain requests consume an attempt. The allowances apply across users and restarts and remain active in personal mode; they are request limits, **not dollar billing caps**. Storage failure denies dispatch, and API refusal/failure causes no automatic provider retry or switch. The interactive-chat spending exception does not activate these separate paths.
+
+Account images follow a separate policy: included account quotas only, Google paid-credit fallback disabled, and Grok extra usage off with a $0 hard cap. Alternation permits one failover on an eligible service error; policy refusals never fail over. Exhausted quota or unavailable accounts yield no image, with no automatic ComfyUI or paid API fallback. Keep the worker's ledger, cached images and fixed reference manifest across upgrades. See the [account image guide](docs/handoff/2026-10-14-agy-main-images.md).
 
 ### Use local GPUs
 
@@ -294,6 +324,8 @@ services:
     environment:
       KLUKAI_CLAUDE_PRIMARY: "false"
       KLUKAI_IMAGE_PROVIDER: "comfyui"
+      KLUKAI_CHAT_IMAGE_PROVIDER: ""
+      KLUKAI_AGY_ALLOWED_USERS: ""
       KLUKAI_CREATIVE_TEXT_PROVIDER: "local"
       KLUKAI_DISABLE_WARMUP: "1"
       KLUKAI_CLOUD_IMAGE_DAILY_LIMIT: "0"
@@ -306,6 +338,8 @@ services:
 ```
 
 `VOICE_URL` must name the already configured Dominus voice service; keep `VOICE_STT_URL` on the approved Dominus transcription endpoint. `VOICE_ASYNC_JOBS=true` keeps HTTP speech on submit/poll/cancel and allows longer cold-start deadlines for microphone and archived speech. The retained Arc service is selectable with `VOICE_BACKEND=amarillo-xpu` and its matching URL. Each backend retains its independently pinned Klukai reference.
+
+The [voice source baseline](docker/voice/reference/README.md) records the owner's selected full recording and checksums. That listening/curation source is distinct from the independently pinned conditioning clips used by Dominus and Arc; adopting a new clip requires the matching lock and guarded deployment.
 
 Validate without printing resolved secrets, then apply only as part of an authorized core deployment:
 
@@ -337,7 +371,7 @@ TIER 3  Factual     PostgreSQL   messages, affection, jobs       permanent
 
 | Layer | Choice |
 |---|---|
-| API | Python 3.14, FastAPI, uvicorn |
+| API | Python 3.14 container, FastAPI, uvicorn; self-hosted CI also exercises Python 3.12 |
 | UI | Flutter Web PWA (`/app/`) |
 | Chat model | Opt-in Sonnet 5.5 interactive primary; local Venice/Qwen and gaming-aware Gemma routing via gateway |
 | Agent model | Local Qwen reasoning distill |
@@ -365,6 +399,7 @@ klukai/
 ├── gateway/                    # nginx
 ├── ops/amarillo/               # local Arc voice release + memory-seed schedule
 ├── ops/dominus-nobara/         # GPU compose, model lock, runbook
+├── scripts/agy_image_worker.py # isolated Agy/Grok renderer + durable claim/cache
 ├── web-build/                  # release PWA artifacts
 ├── scripts/e2e_live.py         # live end-to-end suite
 ├── docs/
@@ -383,7 +418,7 @@ klukai/
 
 ### Prerequisites
 
-- Docker Engine + Compose v2 on the **core host**
+- Docker Engine + supported Compose on the **core host**; Compose 5.6.0 is the pinned CI contract renderer
 - Existing guarded NVIDIA services available for the local features you use (see [GPU runbook](ops/dominus-nobara/RUNBOOK.md)); the configured API chat primary can operate while that host is off
 - Existing verified Arc voice release for `VOICE_BACKEND=amarillo-xpu`; no dependency downloads or GPU service starts are implied by core setup
 - Private mesh connectivity between hosts
@@ -427,6 +462,9 @@ python3 scripts/e2e_live.py --only her-pov
 | `KLUKAI_DISABLE_WARMUP` | unset | Pass `1` through a deployment override for local load-on-demand; Sonnet-primary mode already skips secondary warm-up |
 | `KLUKAI_CLAUDE_PRIMARY` | `false` | Separately authorized Anthropic interactive primary, requiring its key |
 | `KLUKAI_IMAGE_PROVIDER` | `comfyui` | Production uses `agy` with the private account worker; `openai` requires separate references and attempt allowances |
+| `KLUKAI_CHAT_IMAGE_PROVIDER` | unset | Optional chat-only account-provider selection; clear it too when disabling account images |
+| `KLUKAI_AGY_ALLOWED_USERS` | empty | Authenticated identities allowed to call the private account worker; the worker enforces its own allowlist |
+| `KLUKAI_BRAVE_ENABLED` | `false` | Production explicitly enables the configured Brave MCP search route |
 | `KLUKAI_CREATIVE_TEXT_PROVIDER` | `local` | Local dream/Her POV writing; `anthropic` requires separate allowances |
 | `KLUKAI_CLOUD_{IMAGE,TEXT}_{DAILY,MONTHLY}_LIMIT` | `0` | Persistent global UTC attempt allowances; failures count |
 | `VOICE_BACKEND` | `dominus` | `amarillo-xpu` selects the separately configured native Arc TTS service |
@@ -434,25 +472,29 @@ python3 scripts/e2e_live.py --only her-pov
 | `CORE_INTERNAL_TOKEN` | required in prod | Shared secret for bridge → core internal routes |
 | `LM_STUDIO_URL` / `LM_STUDIO_TOKEN` | mesh gateway | Local LLM path only |
 
+Account-worker settings are separate from core: `KLUKAI_ACCOUNT_IMAGE_PROVIDERS=agy,grok` selects alternating preference in its private host environment. Session credentials and reference paths stay with that worker, outside the core container and repository.
+
 ---
 
 ## Security & privacy
 
-- **Explicit provider boundaries**: authorized API chat sends its conversation context to Anthropic; separately enabled creative writing sends the required dream/memory context. Opted-in pictures send the scene and adopted references to OpenAI. State and rendered archives remain local.
-- Provider credentials stay in core, never in the PWA. An API key alone cannot enable a cloud route.
+- **Explicit provider boundaries**: authorized chat sends conversation context to Anthropic; separately enabled creative writing sends required dream/memory context. Account images send the selected scene and fixed references through the private worker; a separately enabled OpenAI adapter uses its adopted reference pack. State and rendered archives remain local.
+- Anthropic/OpenAI keys stay in core; Brave's key stays in its existing MCP server, and account-provider credentials stay with the isolated host worker. None belongs in the PWA. An API key alone cannot enable a cloud route.
 - Mesh-only publication for inference ports.
 - Internal fire endpoints fail closed when the shared token is unset.
-- Her POV job status and thread receipts are user-scoped.
+- Session authorization, mission context, explicit image recovery, Her POV job status and thread receipts are user-scoped.
 - Do not log or commit tokens, cookies, or private keys.
 
 ---
 
 ## Testing
 
+Use an isolated environment without production service credentials. Core fixtures disable live provider backends by default; real database checks opt in through `KLUKAI_MIGRATION_TEST_DATABASE_URL`, which must point to a disposable PostgreSQL database. The live-stack suite is a separate acceptance step.
+
 ```bash
 # Backend (95% coverage gate)
 cd docker/core
-python3 -m pytest tests/ -q --tb=short --cov=app --cov-fail-under=95
+KLUKAI_TEST_ALLOW_LIVE_BACKENDS=0 python3 -m pytest tests/ -q --tb=short --cov=app --cov-fail-under=95
 ruff check app/ --config ruff.toml
 mypy app/ --config-file mypy.ini
 
@@ -465,9 +507,11 @@ flutter test --platform chrome
 
 Golden snapshots in `docker/core/tests/golden/` pin the system prompt across affection × mood × time of day. Rotate them deliberately with `UPDATE_SNAPSHOTS=1` and review the diff.
 
-From the repository root, `make test-all` also runs the bot, host-operation, voice, events bridge, JavaScript and shell checks as separate test roots. Use `TEST_PYTHON=/absolute/path/to/existing/python` and, when needed, `TGBOT_TEST_PYTHON=/absolute/path/to/tgbot/.venv/bin/python` to select already-installed environments. Do not combine these pytest directories into a single collection: components have separate import namespaces. Flutter VM and Chrome tests are separate acceptance commands; a VM-only run does not cover browser-only message tests.
+From the repository root, `make test-all` covers core, bot, host operations, voice, events bridge, JavaScript and shell checks. Each component uses a separate pytest process because import namespaces overlap. Select already-installed environments with `TEST_PYTHON` and `TGBOT_TEST_PYTHON`; run `make test-bridge TEST_PYTHON=/absolute/path/to/bridge/python` separately when matching its Redis 5.2.1 pin, since core pins Redis 7.4.0. Voice fixtures also require `python-multipart`. JavaScript needs Node 22+ and `npm ci --prefix tools/avatar --ignore-scripts`; CI selects Node 24. Operations tests require Compose, Bubblewrap and a kernel policy that permits its sandbox. Flutter VM and Chrome acceptance commands remain separate.
 
-The live suite (`scripts/e2e_live.py`) exercises HTTP, WebSocket, Postgres, the delay rail, and the full Her POV path against a running stack. CI uses **self-hosted** runners only.
+GitHub CI uses the existing self-hosted heavy Nobara VM and ephemeral light fleet. Seven PR checks cover core coverage, isolated components, Ruff, mypy, dependency/security checks, container scanning and the performance gate. Core uses a digest-pinned disposable PostgreSQL service, retains the **95% coverage gate and 75-skip ceiling**, and executes migration/recovery tests instead of skipping them for lack of a database. See [CI validation and runner policy](docs/handoff/2026-10-15-ci-runner-validation.md) for native tools, scoped AppArmor preparation and verified results. Optional local avatar assets can legitimately skip; a skipped live performance probe is not a latency measurement.
+
+The live suite (`scripts/e2e_live.py`) exercises HTTP, WebSocket, Postgres, the delay rail and the full Her POV path against a running stack. It requires separate authorization for real provider calls. CI uses **self-hosted** runners only; nightly work must finish by **23:30 America/Chicago**, and Nobara must be shut down by **23:45**.
 
 ---
 
@@ -483,6 +527,13 @@ The live suite (`scripts/e2e_live.py`) exercises HTTP, WebSocket, Postgres, the 
 | [ops/dominus-nobara/RUNBOOK.md](ops/dominus-nobara/RUNBOOK.md) | NVIDIA host operations and game/residency guards |
 | [ops/amarillo/voice_xpu/README.md](ops/amarillo/voice_xpu/README.md) | Pinned local Arc speech release |
 | [Creative provider handoff](docs/handoff/2026-10-14-dream-image-preparation.md) | Default-off API preparation, attempt caps, references, and recovery |
+| [Account image guide](docs/handoff/2026-10-14-agy-main-images.md) | Agy/Grok rotation, reference privacy, quotas, durable worker state and rollback |
+| [Primary voice handoff](docs/handoff/2026-10-14-nobara-primary-voice.md) | Dominus XTTS, asynchronous speech, 24 kHz output and offline behavior |
+| [Web tools handoff](docs/handoff/2026-10-14-web-tools.md) | Brave authorization, scoped MCP configuration and source links |
+| [Security & recovery fixes](docs/handoff/2026-10-15-security-recovery-isolation-fixes.md) | Session revocation, mission ownership and original image provenance |
+| [CI runner validation](docs/handoff/2026-10-15-ci-runner-validation.md) | Heavy/light selectors, disposable PostgreSQL, native fixtures and check results |
+| [Database migrations](docs/runbooks/database-migrations.md) | Checksum ledger, transactional startup and rollback requirements |
+| [Durable job recovery](docs/runbooks/durable-job-handoff.md) | Lost wake-ups, original job IDs and ambiguous provider outcomes |
 
 ---
 
@@ -494,6 +545,7 @@ The live suite (`scripts/e2e_live.py`) exercises HTTP, WebSocket, Postgres, the 
 4. Test as `claude`, never as the primary Commander account.
 5. No second event bus; use `homelab.events` / existing rails.
 6. Local provider defaults; enable a paid route only within explicit authorization. Publishing code does not extend spending approval.
+7. Preserve gaming/idle guards and the 23:30 nightly / 23:45 Nobara deadlines in America/Chicago. Host power or GPU-stack changes require their existing operational workflow.
 
 ---
 

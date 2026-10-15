@@ -48,7 +48,7 @@ The original behavioral regressions were reproduced before implementation.
 Independent review caught migration replay safety; migration 220 uses
 `ADD COLUMN IF NOT EXISTS` for pre-ledger schema adoption.
 
-## Verification in the isolated checkout
+## Original verification in the isolated checkout
 
 Final core run: **5,079 passed, 85 skipped, 2 deselected, 8 warnings**.
 No failures/errors. External sockets were disabled, allowing only loopback
@@ -76,6 +76,23 @@ No PostgreSQL migration, real Unix transport, live chat/voice, provider,
 container build/security scan, or deployment smoke test is claimed.
 Before merge/release, run the real PostgreSQL and transport suites in a
 permitted disposable environment and inspect CI for the exact PR head.
+
+## Follow-up verification on Amarillo
+
+Independent pre-merge review of `8d0d014` passed 488 tests: 418 focused
+session/auth/mission/recovery and existing caller tests, plus 70 tests covering
+real disposable PostgreSQL migrations/account-image recovery and Unix-socket
+transport. The 47 dedicated new regressions are included in that count. Ruff,
+mypy (105 production source files), and `git diff --check` also passed.
+The disposable database was removed after verification. No production state,
+account renderer, live voice or paid provider was used.
+
+The owner then approved repairing and merging CI PR #6 first, updating this
+PR against the new main, and merging after green CI. The owner also requested
+the README refresh. README now distinguishes documented production settings
+from Unreleased source, explains session/image recovery and the new CI setup,
+and corrects the local-only override and provider credential boundaries.
+Final exact-head GitHub CI results are recorded in the PR description.
 
 ## Compatibility and operational notes
 
