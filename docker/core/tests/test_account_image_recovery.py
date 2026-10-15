@@ -1,7 +1,8 @@
 """Explicit account-image recovery against a real worker and disposable Postgres.
 
-The renderer stands in only for the native provider. Recovery, refusal,
-and archive retries go through POST /api/generate-image.
+The renderer stands in only for the native provider. API recovery, refusal,
+and archive retries go through POST /api/generate-image. The chat test enters
+through _handle_message, which schedules the real background_image_gen.
 """
 
 from __future__ import annotations
@@ -253,14 +254,91 @@ class _Socket:
         self.close = AsyncMock()
 
 
+def _chat_turn_patches():
+    """Stub the reply pipeline. Leave the image job and the socket manager real."""
+    from contextlib import ExitStack
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from app.models import LLMConfig
+
+    async def _stream(_system, _messages, _config):
+        yield "Already done."
+
+    router = MagicMock()
+    router.needs_agent = AsyncMock(return_value=False)
+    router.is_game_active = AsyncMock(return_value=False)
+    router.route = AsyncMock(return_value=LLMConfig(provider="anthropic", model="stub"))
+    router.stream = _stream
+
+    async def _add_turn(_sid, role, content, state):
+        state.turns.append({"role": role, "content": content})
+        state.turn_count += 1
+        return state
+
+    chat_memory = MagicMock()
+    chat_memory.add_turn = AsyncMock(side_effect=_add_turn)
+    chat_memory.save_session = AsyncMock()
+    chat_memory.recall_for_prompt = AsyncMock(return_value=([], {}, []))
+    chat_memory.get_memory_nudge = AsyncMock(return_value=None)
+    chat_memory.get_inside_jokes = AsyncMock(return_value=[])
+
+    aff_state = MagicMock()
+    aff_state.level = 6
+    aff_state.score = 600
+    aff_state.first_interaction = None
+    aff_state.last_interaction_date = None
+    aff_state.consecutive_days = 0
+    affection = MagicMock()
+    affection.get_state = AsyncMock(return_value=aff_state)
+
+    proactive = MagicMock()
+    proactive.mission_active = False
+    proactive.mark_user_messaged_today = MagicMock()
+    proactive.mark_responded = MagicMock()
+    proactive.check_anniversaries = AsyncMock(return_value=[])
+    proactive.get_comfort_objects = AsyncMock(return_value=[])
+    proactive.record_first = AsyncMock()
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    stack = ExitStack()
+    for target, value in (
+        ("app.chat_handlers.router", router),
+        ("app.chat_handlers.memory", chat_memory),
+        ("app.chat_handlers.affection", affection),
+        ("app.chat_handlers.proactive", proactive),
+        ("app.chat_handlers._store_message", AsyncMock(return_value=True)),
+        ("app.chat_handlers.assemble_system_prompt", lambda **_kwargs: "SYS"),
+        ("app.chat_handlers._hours_since_last_exchange", AsyncMock(return_value=None)),
+        ("app.chat_handlers.get_conn_autocommit", MagicMock(side_effect=RuntimeError("skip read receipt"))),
+        ("app.chat_handlers.wardrobe.ensure_today", AsyncMock(side_effect=RuntimeError("skip her day"))),
+        ("app.chat_handlers.rituals.birthday_prompt_block", AsyncMock(return_value="")),
+        ("app.chat_handlers.background_extraction", _noop),
+        ("app.chat_handlers.background_compaction", _noop),
+        ("app.chat_handlers.background_recall", _noop),
+        ("app.night_watch.night_watch_prompt_block", AsyncMock(return_value="")),
+        ("app.decisions.resolve_prompt_block", AsyncMock(return_value="")),
+        ("app.decisions.her_world_prompt_block", AsyncMock(return_value="")),
+        ("app.context.physical.get_state", AsyncMock(return_value=("rested", ""))),
+        ("app.tributes.get_crown_jewel", AsyncMock(return_value=None)),
+        ("app.helpers.detect_squad_address", lambda _text: None),
+        ("app.helpers.detect_jealousy_trigger", lambda _text: None),
+        ("app.llm_router.mark_user_active", MagicMock()),
+    ):
+        stack.enter_context(patch(target, value))
+    return stack
+
+
 async def test_chat_picture_survives_disconnect_and_repeats_without_another_render(
     account_db, account_worker, monkeypatch,
 ):
     """One explicit chat picture keeps its journal id when the last device leaves."""
     from app.account_images import explicit_request_id
-    from app.background import background_image_gen
+    from app.chat_handlers import _handle_message
     from app.context import memory, ws
     from app.image_gen import is_couple_scene, is_landscape
+    from app.models import SessionState
 
     prompt = "Draw Klukai standing in a quiet garden"
     user_id = "alice"
@@ -272,19 +350,27 @@ async def test_chat_picture_survives_disconnect_and_repeats_without_another_rend
     await ws.connect(socket, user_id)
     account_worker["release"].clear()
     account_worker["entered"].clear()
-    task = asyncio.create_task(background_image_gen(prompt, user_id=user_id))
-    ws.track_task(user_id, task, survive_disconnect=True)
+    session = SessionState(conversation_id="conv-picture")
+    task = None
     try:
-        await asyncio.wait_for(asyncio.to_thread(account_worker["entered"].wait, 10), 12)
-        await ws.disconnect(user_id, socket)
-        assert not task.cancelled()
-        assert task.done() is False
-        account_worker["release"].set()
-        await task
-        await background_image_gen(prompt, user_id=user_id)
+        with _chat_turn_patches():
+            await _handle_message(prompt, session, user_id)
+            await asyncio.wait_for(asyncio.to_thread(account_worker["entered"].wait, 10), 12)
+            durable = [item for item in ws._durable_tasks.get(user_id, ()) if not item.done()]
+            assert len(durable) == 1
+            task = durable[0]
+            await ws.disconnect(user_id, socket)
+            assert task.cancelled() is False
+            assert task.done() is False
+            account_worker["release"].set()
+            await task
+            await _handle_message(prompt, session, user_id)
+            pending = [item for item in ws._durable_tasks.get(user_id, ()) if not item.done()]
+            if pending:
+                await asyncio.gather(*pending)
     finally:
         account_worker["release"].set()
-        if not task.done():
+        if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         if ws.is_connected(user_id):
