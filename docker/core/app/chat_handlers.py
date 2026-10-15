@@ -169,7 +169,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
 
     # ── Mission timer detection ───────────────────────────────────────────
     if _wants_mission_cancel(content):
-        if proactive.mission_active:
+        if proactive.get_mission_timer(user_id) or session.mission_description:
             proactive.stop_mission(user_id=user_id)
             # Clear session mission state
             session.mission_description = None
@@ -188,7 +188,8 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
             mission_desc = content
 
         aff_state = await affection.get_state(user_id)
-        proactive.start_mission(mission_desc, interval)
+        proactive.set_affection_level(aff_state.level, user_id=user_id)
+        proactive.start_mission(mission_desc, interval, user_id=user_id)
 
         # Persist mission state in session so it survives Redis restores
         session.mission_description = mission_desc
@@ -255,8 +256,9 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
 
     # Get active mission description for context injection
     mission_desc = None
-    if proactive.mission_active and hasattr(proactive, '_mission_timer') and proactive._mission_timer:
-        mission_desc = proactive._mission_timer.mission_description
+    mission_timer = proactive.get_mission_timer(user_id)
+    if mission_timer:
+        mission_desc = mission_timer.mission_description
 
     # Detect if Commander is addressing a squad member
     from .helpers import detect_squad_address, detect_jealousy_trigger

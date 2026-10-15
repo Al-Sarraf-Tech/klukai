@@ -39,7 +39,7 @@ def register_wardrobe_routes(app: FastAPI) -> None:
         now = await her_day.her_now(
             user_id, level,
             game_active=await context.router.is_game_active(),
-            mission=her_day.active_mission(),
+            mission=her_day.active_mission(user_id),
         )
         row = await wardrobe.ensure_today(user_id, level)
         weather = row.weather or {}

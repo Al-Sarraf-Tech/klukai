@@ -653,8 +653,8 @@ class TestLifespan:
         assert result is wanted
         assert lifespan_mocks.memory.get_session.await_args.args[0] == "session:bob"
 
-    async def test_session_getter_scans_connected_users(self, lifespan_mocks, monkeypatch):
-        """With no user_id, the getter walks connected sockets and returns a hit."""
+    async def test_session_getter_defaults_to_primary_despite_other_connections(self, lifespan_mocks, monkeypatch):
+        """Connected users never supply private context to the primary schedule."""
         monkeypatch.delenv("KLUKAI_LLM_KEEPALIVE", raising=False)
         captured = {}
         lifespan_mocks.proactive.set_session_getter.side_effect = (
@@ -663,13 +663,13 @@ class TestLifespan:
         ws = MagicMock()
         ws._connections = {"carol": object()}
         monkeypatch.setattr(main, "ws", ws)
-        carol_session = SessionState(conversation_id="carol-conv")
-        lifespan_mocks.memory.get_session = AsyncMock(return_value=carol_session)
+        primary_session = SessionState(conversation_id="primary-conv")
+        lifespan_mocks.memory.get_session = AsyncMock(return_value=primary_session)
 
         async with main.lifespan(main.app):
-            result = await captured["getter"]()  # no user_id -> scan connections
-        assert result is carol_session
-        assert lifespan_mocks.memory.get_session.await_args.args[0] == "session:carol"
+            result = await captured["getter"]()  # no user_id -> primary owner
+        assert result is primary_session
+        assert lifespan_mocks.memory.get_session.await_args.args[0] == "session:jalsarraf"
 
     async def test_keepalive_override_cannot_trigger_warmup(self, lifespan_mocks, monkeypatch):
         monkeypatch.setenv("KLUKAI_LLM_KEEPALIVE", "1")

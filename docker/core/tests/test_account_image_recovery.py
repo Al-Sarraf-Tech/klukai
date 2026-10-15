@@ -429,3 +429,23 @@ async def test_chat_picture_survives_disconnect_and_repeats_without_another_rend
             (user_id,),
         )).fetchall()
     assert rows == [(expected,)]
+
+
+async def test_busy_claim_and_archive_context_are_durable(account_db):
+    """The real SQL claim admits one retry and preserves first-generation data."""
+    from app import account_images as journal
+
+    request_id = str(uuid.uuid4())
+    original = {"conversation_id": "original", "mood": "composed", "affection_level": 2}
+    await journal.insert_request(request_id, "alice", "original prompt", 832, 1216,
+                                 False, "digest", original)
+    await journal.update_request(request_id, phase="busy")
+    assert not await journal.claim_unsubmitted_request(request_id, "mallory")
+    claims = await asyncio.gather(*(journal.claim_unsubmitted_request(request_id, "alice") for _ in range(8)))
+    assert claims.count(True) == 1
+    row = await journal.fetch_request(request_id)
+    assert row["phase"] == "accepted"
+    assert row["archive_context"] == original
+    await journal.update_request(request_id, phase="archived", memory_id=request_id)
+    await journal.update_request(request_id, phase="unknown")
+    assert (await journal.fetch_request(request_id))["phase"] == "archived"

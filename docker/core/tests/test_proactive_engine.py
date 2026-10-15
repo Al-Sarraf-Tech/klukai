@@ -146,12 +146,12 @@ class TestProactiveEngineSetters:
         e.set_affection_level(2, user_id="bob")
         assert e._affection_levels == {"alice": 5, "bob": 2}
 
-    def test_set_affection_level_legacy_compat_uses_last_call(self):
+    def test_scheduled_affection_only_tracks_primary_owner(self):
         e = ProactiveEngine()
-        e.set_affection_level(5, "alice")
-        # Legacy field reflects the most recent call
+        e.set_affection_level(5, "jalsarraf")
+        e.set_affection_level(8, "alice")
         assert e._affection_level == 5
-        e.set_affection_level(2, "bob")
+        e.set_affection_level(2, "jalsarraf")
         assert e._affection_level == 2
 
     def test_set_last_mood_per_user(self):

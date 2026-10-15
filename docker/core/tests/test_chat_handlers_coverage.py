@@ -115,6 +115,7 @@ def _patched_pipeline(
     proactive.mark_responded = MagicMock()
     proactive.mission_active = False
     proactive._mission_timer = None
+    proactive.get_mission_timer = MagicMock(return_value=None)
     proactive.start_mission = MagicMock()
     proactive.stop_mission = MagicMock()
     proactive.record_first = AsyncMock()
@@ -695,6 +696,7 @@ class TestPromptAssembly:
             ns.proactive.mission_active = True
             ns.proactive._mission_timer = MagicMock()
             ns.proactive._mission_timer.mission_description = "scout sector 7"
+            ns.proactive.get_mission_timer.return_value = ns.proactive._mission_timer
             with patch("app.chat_handlers.assemble_system_prompt", side_effect=_capture_prompt):
                 await _handle_message("A meaningful long enough message", _fresh_session())
                 await _drain_tasks()

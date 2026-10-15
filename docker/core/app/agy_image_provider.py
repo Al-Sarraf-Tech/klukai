@@ -131,7 +131,11 @@ def _interpret_worker(path: str, status: int, body: bytes, content_type: str) ->
         return {"status": "unavailable", "image": None}
     if status == 403:
         return {"status": "refused", "image": None}
-    if status in {409, 429}:
+    if status == 429:
+        # Worker checks its slot before inserting a claim. This is the only
+        # response that proves this request was not accepted for generation.
+        return {"status": "busy", "image": None}
+    if status == 409:
         return {"status": "pending", "image": None}
     logger.warning("Agy image worker rejected request (HTTP %d)", status)
     return {"status": "failed", "image": None}

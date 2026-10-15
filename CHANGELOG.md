@@ -12,6 +12,17 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+### Security
+
+- Revalidate active WebSocket sessions and revoke connected devices after
+  password changes or deactivation; isolate mission context and delivery by user.
+
+### Fixed
+
+- Retry only explicitly unaccepted account-image requests with an atomic claim,
+  and preserve original prompt/archive context when recovering a saved image.
+  See [verification and migration notes](docs/handoff/2026-10-15-security-recovery-isolation-fixes.md).
+
 ## [1.1.0] — 2026-10-14
 
 ### Added

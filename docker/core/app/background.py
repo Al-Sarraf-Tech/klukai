@@ -62,7 +62,7 @@ async def _apply_extracted_state(snapshot: SessionState, mood: str, user_id: str
         # The mood she was in BEFORE this turn — read it before set_last_mood
         # overwrites it, or the vigilant-after-battle_ready check below only
         # ever sees the new mood and can never fire.
-        prev_mood = proactive._last_mood
+        prev_mood = proactive._moods.get(user_id, "composed")
 
         session.mood = mood
 
@@ -72,7 +72,7 @@ async def _apply_extracted_state(snapshot: SessionState, mood: str, user_id: str
         # Vigilant triggers mission only if previous mood was battle_ready (mid-combat awareness)
         if mood == "vigilant" and prev_mood == "battle_ready":
             mission_moods.add("vigilant")
-        if mood in mission_moods and not proactive.mission_active:
+        if mood in mission_moods and not proactive.get_mission_timer(user_id):
             recent_text = " ".join(
                 t.get("content", "")[:100] for t in session.turns[-4:]
                 if t.get("role") == "user"
@@ -84,9 +84,9 @@ async def _apply_extracted_state(snapshot: SessionState, mood: str, user_id: str
             logger.info("Mission auto-started from battle_ready mood: %s", recent_text[:60])
 
         await memory.save_session(key, session)
-        proactive.set_last_mood(mood)
+        proactive.set_last_mood(mood, user_id=user_id)
         if start_mission:
-            proactive.start_mission(session.mission_description, interval_minutes=30)
+            proactive.start_mission(session.mission_description, interval_minutes=30, user_id=user_id)
         await ws.send_mood(user_id, mood)
 
         # Persist mood so it survives session expiry
@@ -257,7 +257,7 @@ async def background_extraction(
                 logger.info("Heartbeat spike: %s bpm=%d intensity=%d", mood, bpm, intensity)
 
             # Sync affection level to proactive engine
-            proactive.set_affection_level(aff_change.new_level)
+            proactive.set_affection_level(aff_change.new_level, user_id=user_id)
 
             # Send real-time affection update to UI
             await ws.send_affection(user_id,
@@ -498,9 +498,16 @@ async def background_image_gen(
             full_prompt = f"{user_request}\n\n{cloud_prompt(full_prompt, sfw=aff_level < INTIMATE_MIN_LEVEL)}"
             # The id is the explicit sentence, so a repeat finds this journal row.
             request_id = explicit_request_id(user_id, user_request, width, height, couple)
+            accepted_session = await memory.get_session(session_id(user_id))
+            archive_context = {
+                "conversation_id": accepted_session.conversation_id if accepted_session else "unknown",
+                "mood": accepted_session.mood if accepted_session else "composed",
+                "affection_level": aff_level,
+            }
             outcome = await fulfill_account_image(
                 user_id, full_prompt, width=width, height=height,
                 include_commander=couple, request_id=request_id,
+                archive_context=archive_context,
             )
             img_bytes = outcome.get("image")
         else:
@@ -517,8 +524,10 @@ async def background_image_gen(
             session_mood = session_for_save.mood if session_for_save else "composed"
 
             if outcome is not None and outcome.get("needs_archive"):
+                metadata = outcome["archive_metadata"]
                 memory_id = await memory_archive.save_image(
-                    img_bytes, full_prompt, conv_id, session_mood, aff_level,
+                    img_bytes, metadata["prompt"], metadata["conversation_id"],
+                    metadata["mood"], metadata["affection_level"],
                     user_id=user_id, memory_id=outcome["request_id"],
                 )
                 outcome = await complete_archive(outcome["request_id"], memory_id, img_bytes, user_id)

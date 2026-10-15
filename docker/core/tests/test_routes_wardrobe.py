@@ -38,7 +38,7 @@ def _services(level: int = 5, user: str | None = "claude", game: bool = False):
     router = MagicMock()
     router.is_game_active = AsyncMock(return_value=game)
     with patch.object(context, "affection", aff), patch.object(context, "router", router), \
-         patch.object(context, "proactive", SimpleNamespace(mission_active=False)), \
+         patch.object(context, "proactive", SimpleNamespace(get_mission_timer=MagicMock(return_value=None))), \
          patch("app.auth.get_user_from_token", AsyncMock(return_value=user)):
         yield
 
