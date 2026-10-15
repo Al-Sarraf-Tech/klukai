@@ -180,7 +180,7 @@ async def fulfill_account_image(
     user_id: str, prompt: str, *, width: int, height: int, include_commander: bool,
     request_id: str | None = None,
 ) -> dict:
-    """Accept one explicit picture, or recover that same request without rendering."""
+    """Accept one explicit picture, or return the image already stored for that id."""
     request_id = _normalize_request_id(request_id)
     digest = payload_digest(canonical_payload(
         request_id, user_id, prompt, width, height, include_commander,
@@ -189,8 +189,9 @@ async def fulfill_account_image(
     if current is not None:
         if current["user_id"] != user_id:
             return _result(request_id, phase="unknown")
-        if current["payload_digest"] != digest:
-            return _result(request_id, phase="conflict")
+        # The id is the picture. Chat rebuilds the prompt from the current
+        # affection level and hour-block outfit, so a digest of that new text
+        # must not hide the image already stored for this id.
         return await _recover_saved(current)
 
     try:
@@ -199,8 +200,8 @@ async def fulfill_account_image(
         current = await fetch_request(request_id)
         if current is None:
             raise
-        if current["user_id"] != user_id or current["payload_digest"] != digest:
-            return _result(request_id, phase="conflict" if current["user_id"] == user_id else "unknown")
+        if current["user_id"] != user_id:
+            return _result(request_id, phase="unknown")
         return await _recover_saved(current)
 
     from . import agy_image_provider

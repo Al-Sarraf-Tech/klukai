@@ -330,11 +330,24 @@ def _chat_turn_patches():
     return stack
 
 
+def _image_payloads(socket: _Socket) -> list[tuple[dict, bytes]]:
+    import base64
+
+    found = []
+    for call in socket.send_text.await_args_list:
+        payload = json.loads(call.args[0])
+        if payload.get("type") == "image":
+            found.append((payload, base64.b64decode(payload["data"])))
+    return found
+
+
 async def test_chat_picture_survives_disconnect_and_repeats_without_another_render(
     account_db, account_worker, monkeypatch,
 ):
-    """One explicit chat picture keeps its journal id when the last device leaves."""
-    from app.account_images import explicit_request_id
+    """One explicit sentence keeps its archived bytes when affection and outfit change."""
+    from unittest.mock import MagicMock, patch
+
+    from app.account_images import explicit_request_id, fulfill_account_image
     from app.chat_handlers import _handle_message
     from app.context import memory, ws
     from app.image_gen import is_couple_scene, is_landscape
@@ -346,14 +359,34 @@ async def test_chat_picture_survives_disconnect_and_repeats_without_another_rend
     monkeypatch.setattr(memory, "record_milestone", AsyncMock())
     width, height = (1216, 832) if is_landscape(prompt) else (832, 1216)
     expected = explicit_request_id(user_id, prompt, width, height, is_couple_scene(prompt))
+    levels = [2, 8]
+    costumes = ["range_kit", "night_ride"]
+    composed: list[str] = []
+
+    async def _level(_user_id):
+        state = MagicMock()
+        state.level = levels.pop(0)
+        return state
+
+    async def _costume(_user_id, _level):
+        return costumes.pop(0)
+
+    async def _record(user_id, composed_prompt, **kwargs):
+        composed.append(composed_prompt)
+        return await fulfill_account_image(user_id, composed_prompt, **kwargs)
+
     socket = _Socket()
+    returned = _Socket()
     await ws.connect(socket, user_id)
     account_worker["release"].clear()
     account_worker["entered"].clear()
     session = SessionState(conversation_id="conv-picture")
     task = None
     try:
-        with _chat_turn_patches():
+        with _chat_turn_patches(), \
+                patch("app.background.affection.get_state", _level), \
+                patch("app.her_day.render_costume", _costume), \
+                patch("app.account_images.fulfill_account_image", _record):
             await _handle_message(prompt, session, user_id)
             await asyncio.wait_for(asyncio.to_thread(account_worker["entered"].wait, 10), 12)
             durable = [item for item in ws._durable_tasks.get(user_id, ()) if not item.done()]
@@ -364,6 +397,7 @@ async def test_chat_picture_survives_disconnect_and_repeats_without_another_rend
             assert task.done() is False
             account_worker["release"].set()
             await task
+            await ws.connect(returned, user_id)
             await _handle_message(prompt, session, user_id)
             pending = [item for item in ws._durable_tasks.get(user_id, ()) if not item.done()]
             if pending:
@@ -374,7 +408,20 @@ async def test_chat_picture_survives_disconnect_and_repeats_without_another_rend
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         if ws.is_connected(user_id):
-            await ws.disconnect(user_id, socket)
+            await ws.disconnect(user_id)
+    assert len(composed) == 2
+    assert composed[0] != composed[1]
+    assert "slight smile" in composed[0] and "professional setting" in composed[0]
+    assert "towel around neck" in composed[0]
+    assert "fully clothed" in composed[0]
+    assert "devoted" in composed[1] and "holding helmet" in composed[1]
+    assert "fully clothed" not in composed[1]
+    frames = _image_payloads(returned)
+    archived = (memory_archive.IMAGES_DIR / f"{expected}.png").read_bytes()
+    assert len(frames) == 1
+    payload, image = frames[0]
+    assert payload["request_id"] == expected
+    assert image == archived == PNG
     assert account_worker["calls"] == [expected]
     async with account_db.connection() as conn:
         rows = await (await conn.execute(
