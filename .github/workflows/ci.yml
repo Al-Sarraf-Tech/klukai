@@ -25,6 +25,17 @@ jobs:
       KLUKAI_AGY_TOKEN_FILE: "/tmp/klukai-ci-no-account/token"
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare native operations test tools
+        run: |
+          if ! docker compose version >/dev/null 2>&1 || ! command -v bwrap >/dev/null 2>&1; then
+            sudo -n apt-get update
+            sudo -n apt-get install -y --no-install-recommends --no-upgrade docker-compose-v2 bubblewrap
+          fi
+          docker compose version
+          bwrap --version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Prepare isolated test environment from existing component requirements
         run: |
           python3 -m venv "${RUNNER_TEMP}/klukai-component-tests"
