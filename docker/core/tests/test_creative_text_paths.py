@@ -159,19 +159,19 @@ async def test_cloud_pov_requires_queue_mode(writer, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cloud_pov_missed_queue_handoff_is_failed_without_inline_work(writer, monkeypatch):
+async def test_cloud_pov_missed_queue_hint_stays_queued_without_inline_work(writer, monkeypatch):
     from app import memory_her_pov as hp
     monkeypatch.setenv("HER_POV_EXECUTION", "queue")
     monkeypatch.setattr(hp, "_JOBS", {})
     monkeypatch.setattr(hp, "_ACTIVE_JOB_BY_USER", {})
     with patch.object(hp, "_claim_active_from_db", AsyncMock(return_value=None)), \
          patch.object(hp, "_persist_job", AsyncMock()), \
-         patch.object(hp, "_enqueue_job", AsyncMock(return_value=False)), \
+         patch("app.job_handoff.reconcile_once", AsyncMock(return_value=1)), \
          patch.object(hp, "_start_inline", AsyncMock()) as inline:
         result = await hp.start_her_pov("alice")
-    assert result["status"] == "failed"
-    assert hp._JOBS[result["job_id"]]["error"] == "queue_unavailable"
-    assert "alice" not in hp._ACTIVE_JOB_BY_USER
+    assert result["status"] == "queued"
+    assert hp._JOBS[result["job_id"]]["status"] == "queued"
+    assert hp._ACTIVE_JOB_BY_USER["alice"] == result["job_id"]
     inline.assert_not_awaited()
 
 

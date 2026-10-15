@@ -475,10 +475,13 @@ class TestGenerateImage:
         monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
         monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "alice")
         handler = _find_route(_app_with_routes(), "/api/generate-image", "POST")
-        generate = AsyncMock(return_value=b"AGYPNG")
+        generate = AsyncMock(return_value={"status": "completed", "image": b"AGYPNG"})
         save = AsyncMock(return_value="agy-memory")
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch.object(agy_image_provider, "generate_agy_image", new=generate), \
+             patch.object(agy_image_provider, "submit_agy_image", new=generate), \
+             patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)), \
+             patch("app.account_images.insert_request", new=AsyncMock()), \
+             patch("app.account_images.update_request", new=AsyncMock()), \
              patch("app.routes.generate_image", new=AsyncMock(side_effect=AssertionError("fallback"))), \
              patch("app.routes.affection.get_state", new=AsyncMock(return_value=_mk_aff_state(level=6))), \
              patch("app.routes.memory_archive.save_image", new=save):
@@ -498,7 +501,10 @@ class TestGenerateImage:
         handler = _find_route(_app_with_routes(), "/api/generate-image", "POST")
         local = AsyncMock(return_value=b"LOCAL")
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch.object(agy_image_provider, "generate_agy_image", new=AsyncMock(return_value=None)), \
+             patch.object(agy_image_provider, "submit_agy_image", new=AsyncMock(return_value={"status": "failed", "image": None})), \
+             patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)), \
+             patch("app.account_images.insert_request", new=AsyncMock()), \
+             patch("app.account_images.update_request", new=AsyncMock()), \
              patch("app.routes.generate_image", new=local):
             result = await handler(ImageGenRequest(prompt="Draw Klukai"), _mk_request())
         assert result.status_code == 500

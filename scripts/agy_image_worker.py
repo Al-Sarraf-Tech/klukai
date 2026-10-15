@@ -111,6 +111,11 @@ def validate_request(value):
     return value
 
 
+def request_digest(value):
+    identity = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    return hashlib.sha256(identity).hexdigest()
+
+
 def valid_image(data):
     # The renderer fully decodes and normalizes its output; enforce the transport
     # contract here as well, including before replaying stored output.
@@ -175,8 +180,7 @@ class Worker:
             return 403, None
         if value["include_commander"] and value["user_id"] != "jalsarraf":
             return 403, None
-        identity = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-        digest = hashlib.sha256(identity).hexdigest()
+        digest = request_digest(value)
         with self.db_lock:
             prior = self.existing(value["request_id"], digest)
             if prior:
@@ -243,6 +247,30 @@ class Worker:
                 return 200, output
         finally:
             self.slot.release()
+
+    def recover(self, value):
+        """Read one existing claim. Never claims, rotates, renders, or fails over."""
+        if value["user_id"] not in self.allowed_users:
+            return 403, {"status": "refused"}
+        if value["include_commander"] and value["user_id"] != "jalsarraf":
+            return 403, {"status": "refused"}
+        digest = request_digest(value)
+        with self.db_lock:
+            row = self.db.execute(
+                "SELECT request_hash, status, output, failure_category FROM requests WHERE request_id = ?",
+                (value["request_id"],),
+            ).fetchone()
+        if row is None:
+            return 404, {"status": "unknown"}
+        if row[0] != digest:
+            return 409, {"status": "conflict"}
+        if row[1] == "completed" and valid_image(row[2]):
+            return 200, row[2]
+        if row[1] == "pending":
+            return 409, {"status": "pending"}
+        if row[1] == "failed":
+            return 409, {"status": "refused" if row[3] == "refused" else "failed"}
+        return 409, {"status": "unavailable"}
 
     def close(self):
         self.db.close()
@@ -314,7 +342,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.authorized():
             return
-        if self.path != "/generate":
+        if self.path not in {"/generate", "/recover"}:
             self.reply(404)
             return
         lengths = self.headers.get_all("Content-Length", [])
@@ -335,7 +363,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(400)
             return
         try:
-            status, output = self.server.worker.generate(value)
+            operation = self.server.worker.recover if self.path == "/recover" else self.server.worker.generate
+            status, output = operation(value)
         except Exception:
             # Durable claims remain non-retryable if database/cache handling fails.
             status, output = 502, None

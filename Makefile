@@ -9,7 +9,7 @@ VOICE_URL ?= http://$(DOMINUS_TAILSCALE_IPV4):8301
 CURL_HEALTH = curl -sf --connect-timeout 3 --max-time 10
 DOMINUS_SSH = ssh -T -o AddressFamily=inet -o BatchMode=yes -o ClearAllForwardings=yes -o ConnectTimeout=10 -o ControlMaster=no -o ControlPath=none -o ForwardAgent=no -o StrictHostKeyChecking=yes
 
-.PHONY: build build-backend build-pwa run stop logs logs-core logs-voice restart rebuild health dominus-preflight gateway gateway-stop gateway-logs deploy perf-baseline test-local test-integration test-js test-tgbot test-ops test-voice test-shell test-all lint-local type-check security-scan
+.PHONY: build build-backend build-pwa run stop logs logs-core logs-voice restart rebuild health dominus-preflight gateway gateway-stop gateway-logs deploy perf-baseline test-local test-integration test-js test-tgbot test-ops test-voice test-bridge test-shell test-all lint-local type-check security-scan
 
 # ── Local (amarillo) commands ────────────────────────────────────────────────
 
@@ -146,20 +146,26 @@ test-js:
 	node --test --test-timeout=20000 tools/companion/test/*.test.mjs
 	@if [ -d tools/avatar/test ]; then cd tools/avatar && node --test --test-timeout=60000 test/*.test.mjs; fi
 
+TEST_PYTHON ?= python3
+TGBOT_TEST_PYTHON ?= $(TEST_PYTHON)
+
 test-local:
-	cd docker/core && python3 -m pytest tests/ -q --tb=short --cov=app --cov-report=term-missing --cov-fail-under=95
+	cd docker/core && $(TEST_PYTHON) -m pytest tests/ -q --tb=short --cov=app --cov-report=term-missing --cov-fail-under=95
 
 # The smaller suites that live outside docker/core. None needs a running
 # stack; tgbot needs python-telegram-bot and redis importable, voice needs
 # fastapi + python-multipart (faster-whisper is mocked by its tests).
 test-tgbot:
-	TELEGRAM_BOT_TOKEN=test-token-not-real COMPANION_DIR=/tmp python3 -m pytest tgbot/tests -q --tb=short
+	TELEGRAM_BOT_TOKEN=test-token-not-real COMPANION_DIR=/tmp $(TGBOT_TEST_PYTHON) -m pytest tgbot/tests -q --tb=short
 
 test-ops:
-	python3 -m pytest ops/dominus-nobara/tests ops/amarillo/tests -q --tb=short
+	$(TEST_PYTHON) -m pytest ops/dominus-nobara/tests ops/amarillo/tests -q --tb=short
 
 test-voice:
-	cd docker/voice && python3 -m pytest tests -q --tb=short
+	cd docker/voice && $(TEST_PYTHON) -m pytest tests -q --tb=short
+
+test-bridge:
+	$(TEST_PYTHON) -m pytest docker/events-bridge/tests -q --tb=short
 
 # Every shell script in the repo, at shellcheck's warning level.
 test-shell:
@@ -168,7 +174,7 @@ test-shell:
 		| xargs -r awk 'FNR==1 && /^#!.*sh/ {print FILENAME}' \
 		| xargs -r shellcheck -S warning
 
-test-all: test-local test-tgbot test-ops test-voice test-js test-shell
+test-all: test-local test-tgbot test-ops test-voice test-bridge test-js test-shell
 
 lint-local:
 	cd docker/core && ruff check app/ --config ruff.toml

@@ -26,6 +26,8 @@ import json
 import os
 import socket
 import time
+import threading
+import uuid
 
 import pika
 import redis
@@ -56,9 +58,8 @@ CORE_URL = os.environ.get("CORE_URL", "http://companion-core:8300")
 CORE_INTERNAL_TOKEN = os.environ.get("CORE_INTERNAL_TOKEN", "")
 
 # ── Durable Her POV work queue ──────────────────────────────────────────────
-# Quorum queue, prefetch=1. Holding one unacked message while core runs the
-# pipeline *is* the GPU lease — structural rather than bookkeeping. Core still
-# speaks no AMQP; the bridge is the only AMQP citizen.
+# One active HTTP job per bridge process. Core owns durable claims and any
+# provider/GPU leases; the bridge is the only AMQP citizen.
 JOBS_EXCHANGE = os.environ.get("JOBS_EXCHANGE", "klukai.jobs")
 JOBS_QUEUE = os.environ.get("JOBS_QUEUE", "klukai.jobs.her_pov")
 JOBS_ROUTING_KEY = os.environ.get("JOBS_ROUTING_KEY", "her_pov")
@@ -70,8 +71,8 @@ JOBS_ROUTING_KEY = os.environ.get("JOBS_ROUTING_KEY", "her_pov")
 # At 600s the bridge gave up on a job that was still legitimately finishing
 # and requeued it; core's claim then re-ran the whole pipeline (second LLM
 # call, second GPU render, second archive row). 900s covers the budget with
-# margin, and core's claim additionally refuses to take over a job whose
-# heartbeat is under 15 minutes old.
+# margin. Core never takes over a started cloud claim after an ambiguous
+# timeout; local work retains its separate stale-claim policy.
 JOB_RUN_TIMEOUT = int(os.environ.get("JOB_RUN_TIMEOUT", "900"))
 
 
@@ -121,6 +122,7 @@ def arm_defer(ch, payload: dict) -> bool:
     rest = hops[1:]
     ch.basic_publish(
         exchange=DEFER_EXCHANGE,
+        mandatory=True,
         routing_key=defer_queue(head),
         body=json.dumps({"task_id": task_id, "hops": rest}),
         properties=pika.BasicProperties(
@@ -160,53 +162,11 @@ def notify_core_due(task_id: str) -> bool:
         return False
 
 
-def drain_due(ch) -> int:
-    """Deliver every task whose timer has expired.
-
-    Each message is acked only after core has accepted it, so a core restart
-    mid-delivery redelivers rather than drops. A task whose remaining hops are
-    non-empty is re-parked in the next bucket instead of being delivered.
-    """
-    delivered = 0
-    while True:
-        method, _props, body = ch.basic_get(queue=DUE_QUEUE, auto_ack=False)
-        if method is None:
-            return delivered
-        try:
-            payload = json.loads(body)
-            task_id = str(payload.get("task_id") or "")
-            hops = payload.get("hops") or []
-        except Exception:
-            ch.basic_ack(method.delivery_tag)  # unparseable: drop, don't loop
-            continue
-
-        if not task_id:
-            ch.basic_ack(method.delivery_tag)
-            continue
-
-        if hops:
-            # More waiting to do -- hop to the next bucket.
-            if arm_defer(ch, {"task_id": task_id, "hops": hops}):
-                ch.basic_ack(method.delivery_tag)
-            else:
-                ch.basic_nack(method.delivery_tag, requeue=False)
-            continue
-
-        if notify_core_due(task_id):
-            ch.basic_ack(method.delivery_tag)
-            delivered += 1
-        else:
-            # Leave it queued; core's own sweeper is the backstop either way.
-            ch.basic_nack(method.delivery_tag, requeue=True)
-            return delivered
-
-
-
 def declare_jobs_topology(ch) -> None:
     """Declare the durable Her POV work queue. Idempotent.
 
-    Quorum + prefetch=1 is the point: only one Her POV render is in flight
-    fleet-wide, and a crash redelivers rather than losing the job id.
+    Persistent quorum messages survive broker/process restarts. Core owns the
+    durable claim; one HTTP slot serializes this bridge process only.
     """
     ch.exchange_declare(exchange=JOBS_EXCHANGE, exchange_type="direct", durable=True)
     ch.queue_declare(
@@ -227,6 +187,7 @@ def enqueue_job(ch, payload: dict) -> bool:
         return False
     ch.basic_publish(
         exchange=JOBS_EXCHANGE,
+        mandatory=True,
         routing_key=JOBS_ROUTING_KEY,
         body=json.dumps({"job_id": job_id, "kind": kind}),
         properties=pika.BasicProperties(
@@ -239,8 +200,8 @@ def enqueue_job(ch, payload: dict) -> bool:
 def notify_core_run_her_pov(job_id: str) -> bool:
     """Block until companion-core finishes (or rejects) a Her POV job.
 
-    Long timeout on purpose: the HTTP call *is* the lease hold. Returning
-    success means the bridge may ack; failure means requeue.
+    Called only in the bounded job worker. Core owns claims/provider leases.
+    Returning success means the bridge may ack; failure means requeue.
     """
     import urllib.error
     import urllib.request
@@ -257,10 +218,13 @@ def notify_core_run_her_pov(job_id: str) -> bool:
     )
     try:
         with urllib.request.urlopen(req, timeout=JOB_RUN_TIMEOUT) as resp:
-            return 200 <= resp.status < 300
+            payload = json.loads(resp.read())
+            return 200 <= resp.status < 300 and isinstance(payload, dict) and payload.get("ok") is True
     except urllib.error.HTTPError as e:
-        # 4xx from core (forbidden / bad id) should not requeue forever.
-        if 400 <= e.code < 500:
+        # Only malformed requests are terminal. Auth/config/routing failures
+        # do not establish that the durable job is invalid. Unknown job IDs
+        # are acknowledged by core with 2xx.
+        if e.code in (400, 422):
             print(
                 f"bridge: core rejected her_pov job {job_id}: HTTP {e.code}",
                 flush=True,
@@ -276,37 +240,6 @@ def notify_core_run_her_pov(job_id: str) -> bool:
         return False
 
 
-def drain_jobs(ch) -> int:
-    """Pull at most one Her POV job and run it to completion.
-
-    basic_get + hold-until-done approximates prefetch=1 without a second
-    consumer thread, so the idle tick can still service defer heartbeats
-    between jobs. While a job is running this call blocks — that is the
-    serialization guarantee.
-    """
-    method, _props, body = ch.basic_get(queue=JOBS_QUEUE, auto_ack=False)
-    if method is None:
-        return 0
-    try:
-        payload = json.loads(body)
-        job_id = str(payload.get("job_id") or "")
-    except Exception:
-        ch.basic_ack(method.delivery_tag)
-        return 0
-    if not job_id:
-        ch.basic_ack(method.delivery_tag)
-        return 0
-
-    print(f"bridge: running her_pov job {job_id}", flush=True)
-    if notify_core_run_her_pov(job_id):
-        ch.basic_ack(method.delivery_tag)
-        print(f"bridge: her_pov job {job_id} done", flush=True)
-        return 1
-    ch.basic_nack(method.delivery_tag, requeue=True)
-    print(f"bridge: her_pov job {job_id} requeued", flush=True)
-    return 0
-
-
 def rabbit_connect():
     creds = pika.PlainCredentials(RABBIT_USER, RABBIT_PASS)
     params = pika.ConnectionParameters(
@@ -319,18 +252,16 @@ def rabbit_connect():
         retry_delay=2,
     )
     conn = pika.BlockingConnection(params)
-    ch = conn.channel()
-    ch.exchange_declare(exchange=EXCHANGE, exchange_type="topic", durable=True)
-    # The deferred rail lives on the same connection; declaring it here means a
-    # reconnect re-establishes it without a separate code path.
+    # Channel/declare failures must not leak a partially usable connection.
     try:
+        ch = conn.channel()
+        ch.exchange_declare(exchange=EXCHANGE, exchange_type="topic", durable=True)
         declare_defer_topology(ch)
-    except Exception as exc:
-        print(f"bridge: defer topology declare failed ({exc})", flush=True)
-    try:
         declare_jobs_topology(ch)
-    except Exception as exc:
-        print(f"bridge: jobs topology declare failed ({exc})", flush=True)
+        ch.confirm_delivery()
+    except BaseException:
+        conn.close()
+        raise
     return conn, ch
 
 
@@ -381,130 +312,176 @@ def parse_payload(raw) -> dict:
     return payload
 
 
-def run():
-    r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-    pubsub = r.pubsub(ignore_subscribe_messages=True)
-    pubsub.subscribe(CHANNEL)
-    conn, ch = rabbit_connect()
-    published = 0
-    print(
-        f"bridge: subscribed {CHANNEL} @ {REDIS_URL} -> "
-        f"amqp://{RABBIT_HOST}:{RABBIT_PORT}/{EXCHANGE} as host.{LOCAL_HOSTNAME}.*",
-        flush=True,
-    )
-    # Poll rather than block in pubsub.listen(): companion events are sparse
-    # (check-ins, GPU lease pairs), so a blocking read would starve the AMQP
-    # connection of heartbeats and the broker would drop us between events.
-    while True:
-        message = pubsub.get_message(timeout=POLL_TIMEOUT)
-        if message is None:
-            # Idle tick — service the AMQP socket so the connection stays alive,
-            # and deliver any deferred task whose timer expired.
-            try:
-                conn.process_data_events(0)
-                drain_due(ch)
-                # One job at a time; blocks until core finishes. That hold is
-                # the GPU lease. Heartbeats pause for the duration — acceptable
-                # because the lease is intentional and JOB_RUN_TIMEOUT-bounded.
-                drain_jobs(ch)
-            except Exception as exc:
-                print(f"bridge: idle tick failed ({exc}), reconnecting...",
-                      flush=True)
-                conn, ch = _reconnect(conn)
-            continue
-        if message.get("type") != "message":
-            continue
+# Small bounded batches keep due-hop traffic from monopolizing the owner loop.
+DUE_BATCH = 8
+RETRY_SECONDS = 5.0
 
-        payload = parse_payload(message.get("data") or "")
 
-        # Durable Her POV work — park the job id on the quorum queue.
-        if str(payload.get("type") or "") == "job.enqueue":
-            try:
-                if enqueue_job(ch, payload):
-                    print(
-                        f"bridge: enqueued her_pov job {payload.get('job_id') or payload.get('data')}",
-                        flush=True,
-                    )
-            except Exception as exc:
-                print(f"bridge: job enqueue failed ({exc}), reconnecting...", flush=True)
-                conn, ch = _reconnect(conn)
-                try:
-                    enqueue_job(ch, payload)
-                except Exception as exc2:
-                    print(
-                        f"bridge: job enqueue retry failed ({exc2}); "
-                        f"core sweeper will cover it",
-                        flush=True,
-                    )
-            continue
+class HttpWork:
+    """One bounded HTTP call. This object never receives a channel/connection."""
 
-        # Deferred-task arm requests are handled here, not forwarded to the bus.
-        if str(payload.get("type") or "") == "defer.arm":
-            try:
-                if arm_defer(ch, payload):
-                    print(f"bridge: armed defer task {payload.get('task_id')} "
-                          f"hops={payload.get('hops')}", flush=True)
-            except Exception as exc:
-                print(f"bridge: arm failed ({exc}), reconnecting...", flush=True)
-                conn, ch = _reconnect(conn)
-                try:
-                    arm_defer(ch, payload)
-                except Exception as exc2:
-                    print(f"bridge: arm retry failed ({exc2}); core sweeper "
-                          f"will cover it", flush=True)
-            continue
+    def __init__(self, callback, identifier, generation, tag):
+        self.generation = generation
+        self.tag = tag
+        self.success = False
+        self.thread = threading.Thread(
+            target=self._run, args=(callback, identifier), daemon=True,
+            name="bridge-http",
+        )
+        self.thread.start()
 
-        rk, body = routing_and_body(payload)
-        encoded = json.dumps(body, default=str)
-
-        # One retry across a reconnect: the publish that discovers a dead
-        # connection must not be the event we throw away.
-        for attempt in (1, 2):
-            try:
-                ch.basic_publish(
-                    exchange=EXCHANGE,
-                    routing_key=rk,
-                    body=encoded,
-                    properties=pika.BasicProperties(
-                        delivery_mode=2,
-                        content_type="application/json",
-                    ),
-                )
-                published += 1
-                if published % 20 == 0:
-                    print(f"bridge: published {published} events (last rk={rk})",
-                          flush=True)
-                break
-            except Exception as exc:
-                if attempt == 2:
-                    print(f"bridge: dropping event after retry ({exc}) rk={rk}",
-                          flush=True)
-                    break
-                print(f"bridge: publish error ({exc}), reconnecting rabbit...",
-                      flush=True)
-                conn, ch = _reconnect(conn)
-
-        # After any event path, pull at most one durable job so a busy
-        # companion:events channel cannot starve the work queue.
+    def _run(self, callback, identifier):
         try:
-            drain_jobs(ch)
+            self.success = bool(callback(identifier))
         except Exception as exc:
-            print(f"bridge: job drain failed ({exc}), reconnecting...", flush=True)
-            conn, ch = _reconnect(conn)
+            print(f"bridge: HTTP worker failed ({exc})", flush=True)
 
 
-def _reconnect(conn):
+class Bridge:
+    """Own AMQP on one thread; preserve HTTP slots across all reconnects."""
+
+    def __init__(self):
+        self.conn = self.ch = None
+        self.generation = 0
+        self.job = self.due = None
+        self.retry_at = {"job": 0.0, "due": 0.0}
+        self.closed = False
+
+    def attach(self, conn, ch):
+        self.disconnect()
+        self.generation += 1
+        self.conn, self.ch = conn, ch
+
+    def disconnect(self):
+        if self.conn is not None:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+        self.conn = self.ch = None
+
+    def close(self):
+        self.closed = True
+        self.disconnect()
+        # urllib cannot safely be cancelled mid-request. Daemon threads own no
+        # AMQP resources, keep their bounded HTTP timeout, and never ack. Do not
+        # wait 900 seconds at shutdown or pretend the provider outcome is known.
+
+    def _complete(self, name):
+        work = getattr(self, name)
+        if work is None or work.thread.is_alive():
+            return
+        work.thread.join()
+        setattr(self, name, None)
+        if not work.success:
+            self.retry_at[name] = time.monotonic() + RETRY_SECONDS
+        if work.generation != self.generation:
+            return  # Old delivery tags are meaningful only on the old channel.
+        if work.success:
+            self.ch.basic_ack(work.tag)
+        else:
+            self.ch.basic_nack(work.tag, requeue=True)
+
+    def _pull(self, name, queue, callback, key, batch):
+        if getattr(self, name) is not None or time.monotonic() < self.retry_at[name]:
+            return
+        for _ in range(batch):
+            method, _props, body = self.ch.basic_get(queue=queue, auto_ack=False)
+            if method is None:
+                return
+            try:
+                payload = json.loads(body)
+                identifier = payload[key]
+                if not isinstance(identifier, str) or not identifier:
+                    raise ValueError("missing identifier")
+                if name == "job":
+                    uuid.UUID(identifier)
+                    if payload.get("kind", "her_pov") != "her_pov":
+                        raise ValueError("unknown job kind")
+                hops = payload.get("hops", [])
+                if not isinstance(hops, list):
+                    raise ValueError("invalid hops")
+            except (ValueError, TypeError, KeyError):
+                self.ch.basic_nack(method.delivery_tag, requeue=False)
+                continue
+            if name == "due" and hops:
+                # Confirmed mandatory re-park before ack. Any failure escapes,
+                # closes the channel, and leaves the original delivery unacked.
+                if arm_defer(self.ch, payload):
+                    self.ch.basic_ack(method.delivery_tag)
+                else:
+                    self.ch.basic_nack(method.delivery_tag, requeue=False)
+                continue
+            setattr(self, name, HttpWork(callback, identifier, self.generation, method.delivery_tag))
+            return
+
+    def forward(self, message):
+        if not message or message.get("type") != "message":
+            return
+        payload = parse_payload(message.get("data") or "")
+        if payload.get("type") == "job.enqueue":
+            enqueue_job(self.ch, payload)
+        elif payload.get("type") == "defer.arm":
+            arm_defer(self.ch, payload)
+        else:
+            rk, body = routing_and_body(payload)
+            self.ch.basic_publish(
+                exchange=EXCHANGE, routing_key=rk,
+                body=json.dumps(body, default=str),
+                properties=pika.BasicProperties(delivery_mode=2, content_type="application/json"),
+            )
+
+    def tick(self, message=None):
+        if self.closed:
+            return
+        self.conn.process_data_events(0)
+        self._complete("job")
+        self._complete("due")
+        self._pull("job", JOBS_QUEUE, notify_core_run_her_pov, "job_id", 1)
+        self._pull("due", DUE_QUEUE, notify_core_due, "task_id", DUE_BATCH)
+        self.forward(message)
+
+
+def run():
+    runner = Bridge()
+    r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+    pubsub = None
     try:
-        conn.close()
-    except Exception:
-        pass
-    return rabbit_connect()
+        while True:
+            message = None
+            try:
+                if pubsub is None:
+                    pubsub = r.pubsub(ignore_subscribe_messages=True)
+                    pubsub.subscribe(CHANNEL)
+                if runner.conn is None:
+                    runner.attach(*rabbit_connect())
+                message = pubsub.get_message(timeout=min(POLL_TIMEOUT, 5.0))
+                runner.tick(message)
+            except Exception as exc:
+                print(f"bridge: loop failed ({exc}); reconnecting", flush=True)
+                runner.disconnect()
+                if pubsub is not None:
+                    try:
+                        pubsub.close()
+                    except Exception:
+                        pass
+                    pubsub = None
+                # One bounded retry for this Redis event; queued jobs also have
+                # the DB reconciler, and deferred tasks have core's sweeper.
+                try:
+                    runner.attach(*rabbit_connect())
+                    runner.tick(message)
+                except Exception as retry_exc:
+                    print(f"bridge: event retry failed ({retry_exc}); ordinary event lost; "
+                          "durable work remains recoverable", flush=True)
+                    runner.disconnect()
+                time.sleep(RETRY_SECONDS)
+    finally:
+        runner.close()
+        if pubsub is not None:
+            pubsub.close()
+        r.close()
 
 
 if __name__ == "__main__":
-    while True:
-        try:
-            run()
-        except Exception as exc:
-            print(f"bridge: fatal ({exc}), retry in 5s", flush=True)
-            time.sleep(5)
+    run()

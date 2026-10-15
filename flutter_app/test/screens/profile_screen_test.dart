@@ -169,5 +169,73 @@ void main() {
     expect(paths, ['/api/milestones', '/api/user/stats']);
     expect(_statValue(tester, 'INTERACTIONS'), '77');
     expect(_statValue(tester, 'MILESTONES'), '1');
+    expect(find.byKey(const Key('profile-records-empty')), findsNothing);
+    expect(find.byKey(const Key('profile-records-error')), findsNothing);
+  });
+
+  testWidgets('a missing archive is empty, not an error', (tester) async {
+    await _pump(tester, FakeWardrobeService());
+    expect(find.byKey(const Key('profile-records-empty')), findsOneWidget);
+    expect(find.byKey(const Key('profile-records-error')), findsNothing);
+    expect(_statValue(tester, 'INTERACTIONS'), '0');
+  });
+
+  testWidgets('a failed refresh keeps the last good records', (tester) async {
+    tester.view.physicalSize = const Size(390, 3000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    var calls = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: ProfileScreen(
+        serverUrl: 'http://127.0.0.1:1',
+        affectionScore: 420,
+        affectionLevel: 4,
+        affectionLevelName: 'Trusted',
+        wardrobeService: FakeWardrobeService(),
+        client: MockClient((req) async {
+          calls += 1;
+          if (calls <= 2) {
+            return switch (req.url.path) {
+              '/api/milestones' => http.Response('{"milestones":{"oath":"kept"}}', 200),
+              _ => http.Response('{"affection":{"total_interactions":7}}', 200),
+            };
+          }
+          return http.Response('down', 500);
+        }),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(_statValue(tester, 'INTERACTIONS'), '7');
+    expect(find.byKey(const Key('profile-records-error')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('profile-records-retry')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('profile-records-error')), findsOneWidget);
+    expect(find.byKey(const Key('profile-records-empty')), findsNothing);
+    expect(_statValue(tester, 'INTERACTIONS'), '7');
+    expect(_statValue(tester, 'MILESTONES'), '1');
+  });
+
+  testWidgets('authentication expiry uses the existing reauth callback', (tester) async {
+    tester.view.physicalSize = const Size(390, 3000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    var expired = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: ProfileScreen(
+        serverUrl: 'http://127.0.0.1:1',
+        affectionScore: 1,
+        affectionLevel: 1,
+        affectionLevelName: 'Known',
+        wardrobeService: FakeWardrobeService(),
+        onAuthExpired: () => expired += 1,
+        client: MockClient((_) async => http.Response('expired', 401)),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(expired, 1);
+    expect(find.byKey(const Key('profile-records-error')), findsOneWidget);
+    expect(find.byKey(const Key('profile-records-empty')), findsNothing);
   });
 }

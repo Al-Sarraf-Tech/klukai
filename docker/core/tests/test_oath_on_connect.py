@@ -25,10 +25,8 @@ def _ws():
     return ws
 
 
-def _proactive(first_result: bool):
-    prox = MagicMock()
-    prox.record_first = AsyncMock(return_value=first_result)
-    return prox
+def _commit(saved: bool):
+    return AsyncMock(return_value=saved)
 
 
 def _affection(level: int):
@@ -41,23 +39,29 @@ class TestMaybeDeliverOath:
     @pytest.mark.asyncio
     async def test_delivers_when_unfired_and_scene_present(self):
         from app import background
-        ws, prox = _ws(), _proactive(True)
+        ws, commit = _ws(), _commit(True)
         with patch("app.background.load_personality", return_value=_OATH_CFG), \
              patch("app.background.ws", ws), \
-             patch("app.background.proactive", prox), \
+             patch("app.background.commit_oath_scene", commit), \
              patch("app.background.asyncio.sleep", new=AsyncMock()):
             delivered = await background.maybe_deliver_oath("jalsarraf")
         assert delivered is True
-        prox.record_first.assert_awaited_once_with("jalsarraf", "oath_fulfilled")
+        commit.assert_awaited_once_with(
+            "jalsarraf", ["Stay.", "I chose you.", "Thank you."]
+        )
         assert ws.send_proactive.await_count == 3  # one per scene line
+        assert all(
+            call.kwargs["persist"] is False
+            for call in ws.send_proactive.await_args_list
+        )
 
     @pytest.mark.asyncio
     async def test_skips_when_already_fired(self):
         from app import background
-        ws, prox = _ws(), _proactive(False)
+        ws, commit = _ws(), _commit(False)
         with patch("app.background.load_personality", return_value=_OATH_CFG), \
              patch("app.background.ws", ws), \
-             patch("app.background.proactive", prox), \
+             patch("app.background.commit_oath_scene", commit), \
              patch("app.background.asyncio.sleep", new=AsyncMock()):
             delivered = await background.maybe_deliver_oath("jalsarraf")
         assert delivered is False
@@ -65,15 +69,15 @@ class TestMaybeDeliverOath:
 
     @pytest.mark.asyncio
     async def test_does_not_consume_first_when_scene_missing(self):
-        """A missing/empty oath scene must NOT burn the once-ever 'first'."""
+        """A missing/empty oath scene must NOT burn the once-ever trigger."""
         from app import background
-        prox = _proactive(True)
+        commit = _commit(True)
         with patch("app.background.load_personality", return_value={"affection": {}}), \
-             patch("app.background.proactive", prox), \
+             patch("app.background.commit_oath_scene", commit), \
              patch("app.background.asyncio.sleep", new=AsyncMock()):
             delivered = await background.maybe_deliver_oath("jalsarraf")
         assert delivered is False
-        prox.record_first.assert_not_awaited()
+        commit.assert_not_awaited()
 
 
 class TestOathOnConnect:

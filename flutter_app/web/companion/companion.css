@@ -157,15 +157,26 @@ html, body {
   -webkit-user-select: text; user-select: text;
 }
 .subtitle.thinking::after { content: " …"; color: var(--dim); animation: pulse 1.2s infinite; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.btn.latest { display: block; margin: 0 auto 6px; min-height: 44px; }
+.btn.latest[hidden] { display: none; }
+.audio-status { margin: 0 auto 6px; max-width: 640px; color: var(--accent); font-size: 13px; }
+.audio-status[hidden] { display: none; }
 .composer { display: flex; gap: 8px; max-width: 640px; margin: 0 auto; }
 .composer input {
-  flex: 1; min-width: 0; height: 42px; padding: 0 12px; border-radius: 10px;
+  flex: 1; min-width: 0; height: 44px; padding: 0 12px; border-radius: 10px;
   border: 1px solid var(--border); background: rgba(18, 21, 30, 0.9); color: var(--text);
   font-size: 16px; /* ≥16px stops iOS Safari zooming on focus */
   -webkit-user-select: text; user-select: text;
 }
 .composer input:focus { outline: none; border-color: var(--primary); }
-.btn.send { width: 46px; height: 42px; color: var(--primary); font-size: 17px; }
+.btn.send { width: 44px; height: 44px; color: var(--primary); font-size: 17px; }
+.wake:focus-visible, .btn:focus-visible, .composer input:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 2px;
+}
 
 /* ── Wake overlay: the user gesture iOS needs for audio ────────────────── */
 .wake {
@@ -176,6 +187,27 @@ html, body {
 .wake[hidden] { display: none; }
 .wake-title { font-size: 26px; font-weight: 700; letter-spacing: 0.3em; color: var(--primary); }
 .wake-sub { font-size: 13px; color: var(--dim); letter-spacing: 0.08em; }
+
+@media (prefers-reduced-motion: reduce) {
+  .portrait-motion,
+  .stage.speaking .portrait-glow,
+  .subtitle.thinking::after {
+    animation: none !important;
+    transition: none !important;
+    translate: 0 0 !important;
+    transform: none !important;
+    rotate: 0deg !important;
+  }
+}
+html[data-reduced-motion="reduce"] .portrait-motion,
+html[data-reduced-motion="reduce"] .portrait-glow,
+html[data-reduced-motion="reduce"] .subtitle.thinking::after {
+  animation: none !important;
+  transition: none !important;
+  translate: 0 0 !important;
+  transform: none !important;
+  rotate: 0deg !important;
+}
 
 /* Reserve two reply lines so her framing stays clear when landscape text grows. */
 @media (orientation: landscape) and (max-height: 500px) {

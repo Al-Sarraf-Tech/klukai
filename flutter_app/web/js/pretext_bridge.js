@@ -139,6 +139,16 @@
       nextHandle = 1;
     },
 
+    /** Structured lexer boundary: never insert HTML or load external images. */
+    parseMarkdown(text) {
+      try {
+        if (!window.marked || typeof window.marked.lexer !== 'function') return null;
+        return JSON.stringify(window.marked.lexer(text));
+      } catch (_) {
+        return null;
+      }
+    },
+
     // ── Markdown rendering ──────────────────────────────────────────
 
     /**

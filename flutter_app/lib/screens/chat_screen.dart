@@ -12,13 +12,12 @@ import '../models/companion_state.dart';
 import '../models/her_day.dart';
 import '../platform/browser.dart';
 import '../services/resume_policy.dart';
+import '../services/speech_capture.dart';
 import '../services/wardrobe_service.dart';
 import '../services/websocket_service.dart';
-import '../services/pretext_interop.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/voice_button.dart';
 import '../widgets/tool_status_indicator.dart';
-import '../widgets/canvas_message_bubble.dart';
 import '../widgets/date_divider.dart';
 import '../widgets/chat_header.dart';
 import '../widgets/her_day_widgets.dart';
@@ -73,6 +72,12 @@ class ChatScreen extends StatefulWidget {
   /// When a resume should redial the socket.
   final ResumePolicy resumePolicy;
 
+  /// Microphone bridge. Defaults to the page audioRecorder; tests inject a fake.
+  final SpeechBridge? speechBridge;
+
+  /// HTTP client for speech transcription. History keeps the shared client.
+  final http.Client? httpClient;
+
   const ChatScreen({
     super.key,
     required this.serverUrl,
@@ -81,6 +86,8 @@ class ChatScreen extends StatefulWidget {
     this.herDayRefresh = const Duration(minutes: 10),
     this.browser,
     this.resumePolicy = const ResumePolicy(),
+    this.speechBridge,
+    this.httpClient,
   });
 
   @override
@@ -114,7 +121,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   CompanionState _state = const CompanionState();
   String _streamingBuffer = '';
   String? _streamingId;
-  bool _isRecording = false;
+  final SpeechCapture _speech = SpeechCapture();
   int? _lastAffectionDelta;
   String? _thinkingText;
   final List<Map<String, String>> _activeTools = [];
@@ -356,9 +363,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         _messages.insert(idx, m);
       }
     });
-    for (var i = 0; i < _messages.length; i++) {
-      _prepareMessageLayout(i);
-    }
   }
 
   void _showHistoryError() {
@@ -430,19 +434,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _ws.connectionState.listen((connected) {
       if (!mounted) return;
       final wasConnected = _state.isConnected;
-      int? cutOff;
       setState(() {
         _state = _state.copyWith(isConnected: connected);
         // The link died (or was redialed) mid-reply: no more tokens are coming
         // for that bubble. Freeze it where it stands so the next reply gets a
         // bubble of its own instead of being appended to a dead one, and free
         // the composer instead of leaving it locked for the 60s safety timer.
-        if (!connected) cutOff = _finalizeStreamingBubble();
+        if (!connected) _finalizeStreamingBubble();
       });
       if (!connected) {
         _clearWarmupHint();
         _unlockInput();
-        if (cutOff != null) _prepareMessageLayout(cutOff!);
       }
       if (connected && !wasConnected) {
         // (Re)connected — refetch recent history and merge by id so anything
@@ -511,9 +513,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         // <think> blocks stripped). Showing it instead of the raw stream also
         // keeps the next history merge from adding a second copy of the line.
         final finalText = msg['text'];
-        int? completedIdx;
         setState(() {
-          completedIdx = _finalizeStreamingBubble(
+          _finalizeStreamingBubble(
             content: finalText is String && finalText.isNotEmpty
                 ? finalText
                 : null,
@@ -523,7 +524,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         });
         _clearWarmupHint();
         _unlockInput();
-        if (completedIdx != null) _prepareMessageLayout(completedIdx!);
         _playNotificationSound();
 
       case 'read_receipt':
@@ -740,9 +740,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final errText =
             msg['message'] as String? ??
             '...Something glitched on my end, Commander. Try again.';
-        int? cutOff;
         setState(() {
-          cutOff = _finalizeStreamingBubble();
+          _finalizeStreamingBubble();
           _messages.add(
             ChatMessage(
               id: 'error-${DateTime.now().millisecondsSinceEpoch}',
@@ -752,7 +751,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           );
         });
         _unlockInput();
-        if (cutOff != null) _prepareMessageLayout(cutOff!);
         _scrollToBottom();
     }
   }
@@ -934,17 +932,88 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// proxy until it gives up. Bound the wait so he isn't left wondering.
   static const _sttTimeout = Duration(seconds: 35);
 
-  Future<void> _transcribeAndSend(String audioBase64) async {
+  Future<bool> _startRecorder() async {
+    final bridge = widget.speechBridge;
+    if (bridge != null) return bridge.start();
+    return (await _jsStartRecording().toDart).toDart;
+  }
+
+  Future<String?> _stopRecorder() async {
+    final bridge = widget.speechBridge;
+    if (bridge != null) return bridge.stop();
+    final audio = await _jsStopRecording().toDart;
+    return audio?.toDart;
+  }
+
+  Future<void> _onVoiceDown() async {
+    final epoch = _speech.begin();
+    if (epoch == null) return;
+    if (mounted) setState(() {});
+    var started = false;
+    try {
+      started = await _startRecorder();
+    } catch (_) {
+      started = false;
+    }
+    if (!mounted || !_speech.isCurrent(epoch)) return;
+    if (!started) {
+      setState(() => _speech.fail(epoch, 'permission'));
+      _showVoiceLinkError();
+      return;
+    }
+    setState(() => _speech.markRecording(epoch));
+  }
+
+  Future<void> _onVoiceUp() async {
+    final epoch = _speech.epoch;
+    if (_speech.phase == SpeechPhase.requestingPermission) {
+      _speech.cancel();
+      if (mounted) setState(() {});
+      try {
+        await _stopRecorder();
+      } catch (_) {}
+      return;
+    }
+    if (_speech.phase != SpeechPhase.recording) return;
+    setState(() => _speech.markTranscribing(epoch));
+    String? audio;
+    try {
+      audio = await _stopRecorder();
+    } catch (_) {
+      audio = null;
+    }
+    if (!mounted || !_speech.isCurrent(epoch)) return;
+    if (audio == null || audio.isEmpty) {
+      setState(() => _speech.fail(epoch, 'empty'));
+      _showVoiceLinkError();
+      return;
+    }
+    await _transcribeAndSend(audio, epoch);
+  }
+
+  Future<void> _cancelVoice() async {
+    if (_speech.phase == SpeechPhase.idle) return;
+    _speech.cancel();
+    if (mounted) setState(() {});
+    try {
+      await _stopRecorder();
+    } catch (_) {}
+  }
+
+  Future<http.Response> _postStt(String audioBase64) {
+    final uri = Uri.parse('${widget.serverUrl}/api/stt');
+    final body = jsonEncode({'audio': audioBase64});
+    final client = widget.httpClient;
+    if (client != null) {
+      return client.post(uri, headers: _authHeaders, body: body);
+    }
+    return http.post(uri, headers: _authHeaders, body: body);
+  }
+
+  Future<void> _transcribeAndSend(String audioBase64, int epoch) async {
     var text = '';
     try {
-      final serverUrl = widget.serverUrl;
-      final response = await http
-          .post(
-            Uri.parse('$serverUrl/api/stt'),
-            headers: _authHeaders,
-            body: jsonEncode({'audio': audioBase64}),
-          )
-          .timeout(_sttTimeout);
+      final response = await _postStt(audioBase64).timeout(_sttTimeout);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         text = (data['text'] as String? ?? '').trim();
@@ -954,23 +1023,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     } catch (e) {
       debugPrint('STT failed: $e');
     }
-    if (!mounted) return;
+    if (!mounted || !_speech.isCurrent(epoch)) return;
+    final spoken = SpeechCapture.voiceUtterance(text);
+    final kept = SpeechCapture.draftAfterTranscript(_textController.text, spoken);
+    if (kept != _textController.text) _textController.text = kept;
     // GPU host off (502), request timed out, or nothing intelligible came
-    // back: say so instead of swallowing his words.
-    if (text.isEmpty) {
+    // back: say so instead of swallowing his words. The typed draft stays.
+    if (spoken.isEmpty) {
+      setState(() => _speech.fail(epoch, 'stt'));
       _showVoiceLinkError();
       return;
     }
-    if (!_ws.sendMessage(text)) {
+    if (!_ws.sendMessage(spoken)) {
+      setState(() => _speech.fail(epoch, 'send'));
       _showSendError();
       return;
     }
     setState(() {
+      _speech.succeed(epoch);
       _messages.add(
         ChatMessage(
           id: 'user-${DateTime.now().millisecondsSinceEpoch}',
           role: 'user',
-          content: text,
+          content: spoken,
         ),
       );
     });
@@ -1077,6 +1152,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           affectionLevel: _state.affectionLevel,
           affectionLevelName: _state.affectionLevelName,
           wardrobeService: _wardrobe,
+          onAuthExpired: _handleAuthExpired,
         ),
       ),
     ).then((_) => _loadHerDay()); // a wardrobe change in the dossier shows here
@@ -1128,7 +1204,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       context,
       MaterialPageRoute(
         builder: (_) =>
-            SubscriptionScreen(serverUrl: widget.serverUrl, authToken: token),
+            SubscriptionScreen(
+              serverUrl: widget.serverUrl,
+              authToken: token,
+              onAuthExpired: _handleAuthExpired,
+            ),
       ),
     );
   }
@@ -1162,21 +1242,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  void _prepareMessageLayout(int messageIndex) {
-    if (!PretextService.isReady) return;
-    final msg = _messages[messageIndex];
-    if (msg.pretextHandle != null || msg.content.isEmpty) return;
-    final handle = PretextService.prepare(msg.content);
-    if (handle < 0) return;
-    final tightWidth = PretextService.tightBubbleWidth(handle, 360.0);
-    setState(() {
-      _messages[messageIndex] = msg.copyWith(
-        pretextHandle: handle,
-        tightBubbleWidth: tightWidth,
-      );
-    });
-  }
-
   void _scrollToBottom({bool instant = false, int retries = 0}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -1208,6 +1273,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _warmupTimer?.cancel();
     _herDayTimer?.cancel();
     _resumeSub?.cancel();
+    _speech.dispose();
     _ws.dispose();
     _textController.dispose();
     _scrollController.dispose();
@@ -1403,16 +1469,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             );
             if (msgDate != prevDate) showDivider = true;
           }
-          // Use canvas bubble for finalized Klukai text (markdown rendering).
-          // An image goes through MessageBubble: the canvas bubble only draws
-          // text (it would show the literal "[IMAGE]") and has no speaker.
-          final bubble =
-              (msg.role == 'assistant' &&
-                  !msg.isStreaming &&
-                  msg.imageData == null &&
-                  PretextService.isReady)
-              ? CanvasMessageBubble(message: msg)
-              : MessageBubble(message: msg);
+          final bubble = MessageBubble(message: msg, browser: widget.browser);
           if (showDivider) {
             return Column(
               mainAxisSize: MainAxisSize.min,
@@ -1507,29 +1564,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       child: Row(
         children: [
           VoiceButton(
-            isRecording: _isRecording,
+            isRecording: _speech.phase == SpeechPhase.recording ||
+                _speech.phase == SpeechPhase.requestingPermission,
             enabled: !_inputDisabled,
-            onTapDown: () async {
-              setState(() => _isRecording = true);
-              // start() resolves false when the mic was refused or the gesture
-              // ended before it arrived: nothing is recording, so don't show
-              // it as if it were.
-              var started = false;
-              try {
-                started = (await _jsStartRecording().toDart).toDart;
-              } catch (_) {}
-              if (!started && mounted) setState(() => _isRecording = false);
+            onTapDown: () {
+              _onVoiceDown();
             },
-            onTapUp: () async {
-              setState(() => _isRecording = false);
-              try {
-                final b64 = await _jsStopRecording().toDart;
-                if (b64 != null) {
-                  _transcribeAndSend(b64.toDart);
-                }
-              } catch (e) {
-                debugPrint('Recording failed: $e');
-              }
+            onTapUp: () {
+              _onVoiceUp();
+            },
+            onCancel: () {
+              _cancelVoice();
             },
           ),
           const SizedBox(width: 8),
@@ -1586,6 +1631,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ),
           const SizedBox(width: 8),
           IconButton(
+            tooltip: 'Send',
             onPressed: _inputDisabled ? null : _sendMessage,
             icon: const Icon(Icons.send, color: Colors.white, size: 20),
             style: IconButton.styleFrom(

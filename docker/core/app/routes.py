@@ -55,6 +55,7 @@ class STTRequest(BaseModel):
 
 class ImageGenRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=2000)
+    request_id: str | None = Field(default=None, max_length=36)
 
 
 class GiftRequest(BaseModel):
@@ -434,17 +435,52 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        from .agy_image_provider import generate_agy_image, uses_agy_images
+        from .agy_image_provider import uses_agy_images
         from .image_provider import selected_provider
         if selected_provider() == "agy" or uses_agy_images(user_id):
+            from .account_images import complete_archive, fulfill_account_image
             from .image_gen import is_couple_scene, is_landscape
             width, height = (1216, 832) if is_landscape(req.prompt) else (832, 1216)
-            img_bytes = await generate_agy_image(
-                req.prompt, user_id=user_id, width=width, height=height,
-                include_commander=is_couple_scene(req.prompt),
+            try:
+                outcome = await fulfill_account_image(
+                    user_id, req.prompt, width=width, height=height,
+                    include_commander=is_couple_scene(req.prompt),
+                    request_id=req.request_id,
+                )
+            except ValueError:
+                return JSONResponse({"error": "Invalid image request"}, status_code=400)
+            if outcome.get("needs_archive"):
+                aff_state = await affection.get_state(user_id)
+                mem_id = await memory_archive.save_image(
+                    outcome["image"], req.prompt, "api",
+                    mood="composed", affection_level=aff_state.level,
+                    user_id=user_id, memory_id=outcome["request_id"],
+                )
+                outcome = await complete_archive(outcome["request_id"], mem_id, outcome["image"], user_id)
+            if outcome.get("image"):
+                import base64
+                body = {
+                    "image": base64.b64encode(outcome["image"]).decode(),
+                    "format": "png",
+                    "generated": True,
+                    "archived": bool(outcome.get("archived")),
+                    "request_id": outcome["request_id"],
+                }
+                if outcome.get("archived") and outcome.get("memory_id"):
+                    body["memory_id"] = outcome["memory_id"]
+                return body
+            status = 409 if outcome.get("phase") in {"conflict", "refused", "pending", "unknown"} else 500
+            return JSONResponse(
+                {
+                    "error": "Generation failed",
+                    "phase": outcome.get("phase"),
+                    "request_id": outcome.get("request_id"),
+                    "generated": False,
+                    "archived": False,
+                },
+                status_code=status,
             )
-        else:
-            img_bytes = await generate_image(req.prompt)
+        img_bytes = await generate_image(req.prompt)
         if img_bytes:
             import base64
 
@@ -461,6 +497,8 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                 "image": base64.b64encode(img_bytes).decode(),
                 "format": "png",
                 "memory_id": mem_id,
+                "archived": mem_id is not None,
+                "generated": True,
             }
         return JSONResponse({"error": "Generation failed"}, status_code=500)
 

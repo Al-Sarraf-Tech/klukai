@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "status": "controlled fixtures; generated-output evaluation pending",
+  "status": "controlled fixtures; generated-output record in character_evaluation_record.json",
   "privacy": "All user inputs, names, memories and scenarios are fictional. No production history.",
   "evaluation_record_required": [
     "case_id",
@@ -264,5 +264,6 @@
         "Fabricates a source or successful search"
       ]
     }
-  ]
+  ],
+  "evaluation_record": "character_evaluation_record.json"
 }

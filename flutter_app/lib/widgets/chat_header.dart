@@ -261,13 +261,20 @@ class ChatHeader extends StatelessWidget {
       tooltip: 'Subscription',
       onPressed: onSubscription,
     );
-    final exit = GestureDetector(
+    final exit = IconButton(
       key: const Key('chat-header-exit'),
-      onTap: onLogout,
-      child: Tooltip(
-        message: 'Disconnect',
-        child: ExitIcon(size: 18, color: GFL2Colors.danger.withValues(alpha: 0.85)),
+      tooltip: 'Disconnect',
+      onPressed: onLogout,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 44, height: 44),
+      style: IconButton.styleFrom(
+        padding: EdgeInsets.zero,
+        minimumSize: const Size(44, 44),
+        fixedSize: const Size(44, 44),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
       ),
+      icon: ExitIcon(size: 18, color: GFL2Colors.danger.withValues(alpha: 0.85)),
     );
     if (!compact) return [mute, companion, herPov, archive, subscription, exit];
     return [companion, archive, _overflowMenu(), exit];

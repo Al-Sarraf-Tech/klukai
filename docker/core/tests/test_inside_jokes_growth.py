@@ -3,10 +3,9 @@
 Covers three feature surfaces, all with mocked DB/LLM (no live services):
 
 PRIMARY  — the one-time level-9 "Oath Fulfilled" capstone in background.py:
-           lv8→9 fires the distinctive oath scene EXACTLY once (guarded by the
-           companion_firsts table via proactive.record_first); a repeat arrival
-           at lv9 (record_first→False) gets only the short level_up line; a
-           non-9 level-up never touches the oath path.
+           lv8→9 commits the distinctive oath scene exactly once, then paces it
+           live; a repeat arrival whose commit is declined gets only the short
+           level_up line; a non-9 level-up never touches the oath path.
 SECONDARY — inside jokes: fact_extractor validation, the memory store/recall
            roundtrip (rel:joke:* namespace, dossier exclusion), background
            wiring, and the per-message surfacing block.
@@ -114,6 +113,7 @@ def bg_mocks(monkeypatch):
     proactive.start_mission = MagicMock()
     proactive.mission_active = False
     proactive._last_mood = "composed"
+    commit_oath = AsyncMock(return_value=True)
 
     context_mod = MagicMock()
     context_mod.COMPACT_THRESHOLD = 8
@@ -142,11 +142,12 @@ def bg_mocks(monkeypatch):
             "milestone_scenes": {9: ["generic lv9 line"]},
         }
     }))
+    monkeypatch.setattr(bg, "commit_oath_scene", commit_oath)
 
     return SimpleNamespace(
         affection=affection, memory=memory, ws=ws, proactive=proactive,
         context=context_mod, memory_archive=memory_archive,
-        extract_facts=extract_facts,
+        extract_facts=extract_facts, commit_oath=commit_oath,
     )
 
 
@@ -162,14 +163,15 @@ class TestOathFulfilledCapstone:
             assert line in sent, f"missing oath line: {line!r}"
 
     async def test_oath_guarded_by_record_first_oath_fulfilled(self, bg_mocks):
-        """The once-ever guard is companion_firsts via record_first('oath_fulfilled')."""
+        """The once-ever guard commits the full scene before any live line."""
         await bg.background_extraction("m", "r", _session(1), user_id="u1")
-        bg_mocks.proactive.record_first.assert_any_await("u1", "oath_fulfilled")
+        bg_mocks.commit_oath.assert_awaited_once()
+        assert list(bg_mocks.commit_oath.await_args.args[1]) == list(_OATH_SCENE)
 
     async def test_oath_does_not_repeat_when_already_recorded(self, bg_mocks):
-        """A second arrival at lv9 (record_first→False) suppresses the oath scene
+        """A second arrival whose scene commit is declined suppresses the oath
         and the generic milestone scene; only the short level-up line is sent."""
-        bg_mocks.proactive.record_first.return_value = False  # already happened
+        bg_mocks.commit_oath.return_value = False
         bg_mocks.memory.record_milestone.return_value = False  # milestone seen too
         await bg.background_extraction("m", "r", _session(1), user_id="u1")
         sent = [c.args[1] for c in bg_mocks.ws.send_proactive.await_args_list]
@@ -201,9 +203,7 @@ class TestOathFulfilledCapstone:
             new_level=8, new_level_name="Bonded"
         )
         await bg.background_extraction("m", "r", _session(1), user_id="u1")
-        # record_first was never called with the oath event type.
-        calls = [c.args for c in bg_mocks.proactive.record_first.await_args_list]
-        assert ("u1", "oath_fulfilled") not in calls
+        bg_mocks.commit_oath.assert_not_awaited()
         sent = [c.args[1] for c in bg_mocks.ws.send_proactive.await_args_list]
         assert not any(line in sent for line in _OATH_SCENE)
 
@@ -213,8 +213,7 @@ class TestOathFulfilledCapstone:
             level_changed=False, level_direction=""
         )
         await bg.background_extraction("m", "r", _session(1), user_id="u1")
-        calls = [c.args for c in bg_mocks.proactive.record_first.await_args_list]
-        assert ("u1", "oath_fulfilled") not in calls
+        bg_mocks.commit_oath.assert_not_awaited()
 
 
 # ══ SECONDARY: Inside jokes ══════════════════════════════════════════════════

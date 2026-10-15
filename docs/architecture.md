@@ -72,8 +72,16 @@ Separate small container so core never imports AMQP:
 1. Subscribe Redis `companion:events`
 2. Forward companion / gpu_lease lifecycle to `homelab.events`
 3. Arm deferred delay-bucket queues on `defer.arm`
-4. Drain `klukai.jobs.her_pov` (quorum) with hold-until-done → `POST /internal/jobs/her-pov/run`
-5. Fire due deferred tasks → `POST /internal/deferred/fire`
+4. Hold one `klukai.jobs.her_pov` (quorum) delivery while a worker calls `POST /internal/jobs/her-pov/run`
+5. Use a separate single worker for due callbacks → `POST /internal/deferred/fire`
+
+The main thread alone owns AMQP: each loop services heartbeats, completions,
+bounded due hops and Redis forwarding. Reconnect retains active HTTP slots;
+results from an old channel generation cannot ack/nack a new delivery tag.
+Jobs and deferred re-parking use publisher confirms with mandatory routing.
+Retryable HTTP/claim failures requeue with a five-second cooldown. On shutdown,
+unacked deliveries remain with the broker; bounded daemon HTTP workers never
+touch channels or assert an unfinished provider outcome.
 
 Internal routes fail closed without `CORE_INTERNAL_TOKEN`.
 
@@ -81,10 +89,11 @@ Internal routes fail closed without `CORE_INTERNAL_TOKEN`.
 
 ![Her POV flow](images/her-pov-flow.png)
 
-- Table: `companion_her_pov_jobs` (migration `170`)
+- Table: `companion_her_pov_jobs` (migration `170`); dispatch mark `last_enqueued_at` (migration `200`)
 - One non-terminal job per user (partial unique index)
 - `HER_POV_EXECUTION=queue` in production. Cloud work requires a durable claim and never falls back to inline work after a queue failure. `inline` remains a local-only development path.
-- A Redis subscriber count is not proof of durable AMQP acceptance. The refactor acceptance map tracks queued-job reconciliation and bridge heartbeat fixes until verified; do not treat the legacy bridge as a completed outbox.
+- The committed PostgreSQL row is acceptance. Redis is only a wake-up hint. A core lifecycle task reconciles immediately at startup and every five seconds: at most 16 unstarted queued rows per pass, with a 30-second per-row retry interval. It commits dispatch marks before publication using `FOR UPDATE SKIP LOCKED`, without changing pipeline timestamps or generation attempts.
+- Reconciliation excludes started, claimed, attempted and terminal jobs. It republishes the same UUID and does not provide end-to-end exactly-once execution. See [durable job recovery](runbooks/durable-job-handoff.md) for ambiguous outcomes and deployment checks.
 
 ## Proactive durability
 
@@ -152,3 +161,9 @@ WebSocket fan-out snapshots device membership and bounds each send to ten second
 Last-device cleanup detaches the old task bucket before awaiting cancellation,
 retrieves task failures, and excludes its own sending task. Reconnecting devices
 and their newly tracked tasks belong to a new bucket and survive old cleanup.
+Failed sends also revoke that device's admission, wake a pending receive, and
+attempt transport close with a two-second bound. The endpoint rechecks device
+membership after acquiring turn ownership. Terminal failure events remain inside
+ownership so they cannot interrupt the next device's reply. Completed assistant
+replies append to PostgreSQL before Redis finalization, preserving delivered
+history even if the session cache write fails visibly.

@@ -142,6 +142,21 @@ async def _is_duplicate_annotation(
     return False
 
 
+async def _memory_owner(memory_id: str) -> str | None:
+    try:
+        async with get_conn_autocommit() as conn:
+            row = await (await conn.execute(
+                "SELECT user_id FROM companion_memories WHERE id = %s",
+                (memory_id,),
+            )).fetchone()
+    except Exception as exc:
+        logger.debug("memory owner lookup failed: %s", exc)
+        return None
+    if row is None:
+        return None
+    return str(row[0])
+
+
 async def save_image(
     image_bytes: bytes,
     prompt: str,
@@ -150,13 +165,26 @@ async def save_image(
     affection_level: int = 0,
     curation: dict | None = None,
     user_id: str = "jalsarraf",
+    memory_id: str | None = None,
 ) -> str | None:
     """Save a generated image to the volume and create a metadata row.
 
     Returns:
         Memory ID (UUID string) or None on failure.
     """
-    memory_id = str(uuid.uuid4())
+    supplied = memory_id is not None
+    if supplied:
+        try:
+            memory_id = str(uuid.UUID(str(memory_id)))
+        except ValueError:
+            return None
+        owner = await _memory_owner(memory_id)
+        if owner == user_id:
+            return memory_id
+        if owner is not None:
+            return None
+    else:
+        memory_id = str(uuid.uuid4())
     png_filename = f"{memory_id}.png"          # lossless original (archive)
     filename = f"{memory_id}.webp"             # served full image (full-res WebP)
     thumb_filename = f"{memory_id}_thumb.webp"
@@ -204,8 +232,9 @@ async def save_image(
             )
             annotation = "Uncaptioned moment."
 
-        # Deduplication — skip if a very similar annotation already exists
-        if await _is_duplicate_annotation(annotation, user_id=user_id):
+        # Account pictures dedupe on the request id. Annotation overlap must
+        # not drop a distinct requested picture or report it as saved.
+        if not supplied and await _is_duplicate_annotation(annotation, user_id=user_id):
             logger.info("Skipping duplicate memory: %s", annotation[:60])
             # Clean up the already-written image files
             _discard_files(png_path, img_path, thumb_path)
@@ -233,6 +262,8 @@ async def save_image(
 
     except Exception as e:
         logger.error("Failed to save memory: %s", e)
+        if supplied and await _memory_owner(memory_id) == user_id:
+            return memory_id
         # A failed INSERT (or encode) must not leave the PNG/WebP/thumbnail
         # orphaned on the volume forever.
         _discard_files(png_path, img_path, thumb_path)

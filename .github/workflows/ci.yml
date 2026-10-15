@@ -8,6 +8,46 @@ on:
   workflow_dispatch:
 
 jobs:
+  components:
+    name: Isolated component suites
+    runs-on: [self-hosted, dominus]
+    timeout-minutes: 20
+    env:
+      KLUKAI_TEST_ALLOW_LIVE_BACKENDS: "0"
+      KLUKAI_CLAUDE_PRIMARY: "false"
+      KLUKAI_CREATIVE_TEXT_PROVIDER: "local"
+      ANTHROPIC_API_KEY: ""
+      OPENAI_API_KEY: ""
+      LM_STUDIO_URL: "http://127.0.0.1:1"
+      VOICE_URL: "http://127.0.0.1:1"
+      COMFYUI_URL: "http://127.0.0.1:1"
+      KLUKAI_AGY_SOCKET: "/tmp/klukai-ci-no-account/image.sock"
+      KLUKAI_AGY_TOKEN_FILE: "/tmp/klukai-ci-no-account/token"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated test environment from existing component requirements
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/klukai-component-tests"
+          "${RUNNER_TEMP}/klukai-component-tests/bin/python" -m pip install \
+            -r docker/core/requirements.txt -r tgbot/requirements.txt \
+            -r docker/events-bridge/requirements.txt pytest pytest-asyncio pytest-timeout
+      - name: Run bot, operations, voice and bridge in separate pytest processes
+        run: |
+          make test-tgbot test-ops test-voice test-bridge \
+            TEST_PYTHON="${RUNNER_TEMP}/klukai-component-tests/bin/python"
+      - name: Check existing JavaScript and shell tooling
+        # Missing tooling is a failed gate, never a silently skipped suite.
+        # Keep the owner's existing runner; no hosted/paid runner fallback.
+        run: |
+          command -v node
+          command -v shellcheck
+          node --version
+          shellcheck --version
+      - name: Run companion and avatar JavaScript tests
+        run: make test-js
+      - name: Check shell scripts
+        run: make test-shell
+
   test:
     name: Test Suite
     runs-on: [self-hosted, dominus]
@@ -31,8 +71,8 @@ jobs:
             --junitxml=/tmp/pytest-report.xml
 
       - name: Enforce skip ceiling
-        # The integration suite (~58 tests) legitimately skips on this runner
-        # (no live stack). But a green run with hundreds of skips would mean
+        # Live-stack and explicitly opted-in disposable-PostgreSQL fixtures
+        # legitimately skip without their test URLs. Hundreds of skips mean
         # the skip logic broke and is silently eating unit tests — fail that.
         env:
           MAX_SKIPS: "75"

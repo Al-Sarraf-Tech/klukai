@@ -6,6 +6,7 @@ and all supporting handlers (message, voice, tap-interact).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -172,20 +173,57 @@ async def _initialize_session(user_id: str) -> SessionState:
         return session
 
 
-async def _admit_turn(kind: str, content: str, user_id: str) -> None:
+async def _admit_turn(
+    kind: str, content: str, user_id: str, websocket: WebSocket | None = None
+) -> None:
     """Read authoritative state after admission and own the full text/voice turn."""
     key = session_id(user_id)
     async with memory.session_owner(key):
-        session = await memory.get_session(key)
-        if session is None:
-            raise SessionUnavailable("Session expired; reconnect and retry")
-        # Invalidate older background work even if this turn aborts or rolls back.
-        session.revision += 1
-        await memory.save_session(key, session)
-        if kind == "voice_end":
-            await _handle_voice(content, session, user_id)
-        else:
-            await _handle_message(content, session, user_id)
+        # The device may have been retired while this turn waited for ownership.
+        if websocket is not None and not ws.has_connection(user_id, websocket):
+            return
+        try:
+            session = await memory.get_session(key)
+            if session is None:
+                raise SessionUnavailable("Session expired; reconnect and retry")
+            # Invalidate older work even if this turn aborts or rolls back.
+            session.revision += 1
+            await memory.save_session(key, session)
+            if kind == "voice_end":
+                await _handle_voice(content, session, user_id)
+            else:
+                await _handle_message(content, session, user_id)
+        except WebSocketDisconnect:
+            raise
+        except SessionUnavailable:
+            # Terminal output belongs to this turn too. Releasing ownership
+            # before delivery lets this error finalize another device's reply.
+            await ws.send(user_id, {
+                "type": "error",
+                "message": "Session storage is temporarily unavailable. Please reconnect and retry.",
+            })
+        except Exception as e:
+            logger.error("Message handler crashed (type=%s): %s", kind, e, exc_info=True)
+            await ws.send(user_id, {
+                "type": "error",
+                "message": "...Something glitched on my end, Commander. Please try again.",
+            })
+
+
+async def _receive_device_frame(websocket: WebSocket, disconnected: asyncio.Event) -> str:
+    """Read only this device, waking immediately when its membership is revoked."""
+    receiving = asyncio.create_task(websocket.receive_text())
+    retired = asyncio.create_task(disconnected.wait())
+    try:
+        await asyncio.wait((receiving, retired), return_when=asyncio.FIRST_COMPLETED)
+        if disconnected.is_set():
+            raise WebSocketDisconnect()
+        return receiving.result()
+    finally:
+        for task in (receiving, retired):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(receiving, retired, return_exceptions=True)
 
 
 def register_websocket(app: FastAPI) -> None:
@@ -211,8 +249,9 @@ def register_websocket(app: FastAPI) -> None:
             await websocket.close(code=4001, reason="Authentication required")
             return
 
+        disconnected = asyncio.Event()
         try:
-            await ws.connect(websocket, user_id)
+            await ws.connect(websocket, user_id, disconnected=disconnected)
 
             # He just opened the app. Start loading the model now so it is resident
             # by the time he has finished typing, instead of making him watch a
@@ -247,6 +286,8 @@ def register_websocket(app: FastAPI) -> None:
 
             try:
                 while True:
+                    if not ws.has_connection(user_id, websocket):
+                        break
                     # He closed the app mid-reply: a send to this socket failed
                     # during the turn and Starlette marked it disconnected. Its
                     # next receive would raise RuntimeError, not
@@ -259,8 +300,12 @@ def register_websocket(app: FastAPI) -> None:
                     # socket of the user let device A's frames — and its
                     # disconnect — be consumed by device B's loop and tear B down.
                     try:
-                        raw = await websocket.receive_text()
+                        raw = await _receive_device_frame(websocket, disconnected)
                     except WebSocketDisconnect:
+                        break
+                    # A failed send may retire this socket while receive was
+                    # pending, including when its bounded close timed out.
+                    if not ws.has_connection(user_id, websocket):
                         break
                     try:
                         data = json.loads(raw)
@@ -276,13 +321,13 @@ def register_websocket(app: FastAPI) -> None:
                             content = data.get("content", "")
                             if isinstance(content, str):
                                 content = content[:4000]  # Input length limit
-                            await _admit_turn("message", content, user_id)
+                            await _admit_turn("message", content, user_id, websocket)
                         elif msg_type == "typing":
                             pass
                         elif msg_type == "voice_end":
                             audio = data.get("audio")
                             if audio:
-                                await _admit_turn("voice_end", audio, user_id)
+                                await _admit_turn("voice_end", audio, user_id, websocket)
                         elif msg_type == "tap_interact":
                             await _handle_tap_interact(user_id)
                     except SessionUnavailable:

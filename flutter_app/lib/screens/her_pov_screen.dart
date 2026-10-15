@@ -7,8 +7,10 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:web/web.dart' as web;
 
+import '../widgets/artwork_view.dart';
 import '../main.dart' show GFL2Colors;
 import '../models/memory.dart';
+import '../services/gallery_board.dart';
 import '../services/memory_service.dart';
 import 'memory_archive_screen.dart';
 
@@ -44,8 +46,7 @@ class _HerPovScreenState extends State<HerPovScreen>
   String? _title;
   String? _annotation;
   String? _memoryId;
-  List<Memory> _gallery = [];
-  bool _galleryLoading = true;
+  GalleryBoard _board = const GalleryBoard();
   Timer? _poll;
   int _pollFailures = 0;
   static const int _maxPollFailures = 5;
@@ -82,28 +83,38 @@ class _HerPovScreenState extends State<HerPovScreen>
     };
   }
 
-  Future<void> _loadGallery() async {
-    setState(() => _galleryLoading = true);
+  void _handleAuthExpired() {
     try {
-      final all = await _memories.fetchMemories(limit: 40);
-      final hers = all.where((m) {
-        final tags = m.sceneTags.map((t) => t.toLowerCase());
-        return tags.contains('her_pov') ||
-            tags.contains('from_her_side') ||
-            m.category == 'Precious Memories';
-      }).toList();
+      web.window.localStorage.removeItem('klukai_token');
+    } catch (_) {}
+    web.window.location.href = '/';
+  }
+
+  Future<void> _loadGallery() async {
+    final previous = _board;
+    if (previous.phase != GalleryPhase.loading && !previous.hasGood && mounted) {
+      setState(() => _board = previous.loading());
+    }
+    try {
+      final next = await GalleryBoard.load(
+        previous: previous,
+        fetch: () => _memories.fetchMemories(limit: 40),
+      );
+      if (!mounted) return;
+      setState(() => _board = next);
+    } on MemoryServiceException catch (error) {
+      if (error.isAuthExpired) {
+        _handleAuthExpired();
+        return;
+      }
       if (!mounted) return;
       setState(() {
-        _gallery = hers.isNotEmpty ? hers : all.take(12).toList();
-        _galleryLoading = false;
+        _board = GalleryBoard(
+          phase: GalleryPhase.error,
+          items: previous.items,
+          hasGood: previous.hasGood,
+        );
       });
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _gallery = [];
-          _galleryLoading = false;
-        });
-      }
     }
   }
 
@@ -462,18 +473,9 @@ class _HerPovScreenState extends State<HerPovScreen>
                     fontSize: 15)),
           const SizedBox(height: 10),
           Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: Image.network(
-                _memories.imageUrl(_memoryId!),
-                fit: BoxFit.cover,
-                width: double.infinity,
-                headers: _headers,
-                errorBuilder: (context, error, stack) => const Icon(
-                    Icons.image_outlined,
-                    color: GFL2Colors.textDim,
-                    size: 48),
-              ),
+            child: ArtworkView.network(
+              url: _memories.imageUrl(_memoryId!),
+              headers: _headers,
             ),
           ),
           if (_annotation != null) ...[
@@ -638,86 +640,116 @@ class _HerPovScreenState extends State<HerPovScreen>
                 ],
               ),
             ),
-            Expanded(
-              child: _galleryLoading
-                  ? const Center(
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: GFL2Colors.primary))
-                  : _gallery.isEmpty
-                      ? Center(
-                          child: Text(
-                            'No portraits yet.\nAsk her to find a moment.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                color: GFL2Colors.textDim, height: 1.5),
-                          ),
-                        )
-                      : GridView.builder(
-                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2,
-                            mainAxisSpacing: 10,
-                            crossAxisSpacing: 10,
-                            childAspectRatio: 0.78,
-                          ),
-                          itemCount: _gallery.length,
-                          itemBuilder: (_, i) {
-                            final m = _gallery[i];
-                            return ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: Stack(
-                                fit: StackFit.expand,
-                                children: [
-                                  Image.network(
-                                    _memories.thumbnailUrl(m.id),
-                                    fit: BoxFit.cover,
-                                    headers: _headers,
-                                    errorBuilder: (context, error, stack) => Container(
-                                      color: GFL2Colors.panel,
-                                      child: const Icon(
-                                          Icons.image_not_supported_outlined,
-                                          color: GFL2Colors.textDim),
-                                    ),
-                                  ),
-                                  Positioned(
-                                    left: 0,
-                                    right: 0,
-                                    bottom: 0,
-                                    child: Container(
-                                      padding: const EdgeInsets.fromLTRB(
-                                          8, 18, 8, 8),
-                                      decoration: BoxDecoration(
-                                        gradient: LinearGradient(
-                                          begin: Alignment.topCenter,
-                                          end: Alignment.bottomCenter,
-                                          colors: [
-                                            Colors.transparent,
-                                            Colors.black.withValues(alpha: 0.78),
-                                          ],
-                                        ),
-                                      ),
-                                      child: Text(
-                                        m.annotation ?? m.category,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 11,
-                                          height: 1.25,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-            ),
+            Expanded(child: _galleryBody()),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _galleryBody() {
+    if (_board.phase == GalleryPhase.loading && _board.items.isEmpty) {
+      return const Center(
+        child: CircularProgressIndicator(
+          key: Key('gallery-loading'),
+          strokeWidth: 2,
+          color: GFL2Colors.primary,
+        ),
+      );
+    }
+    if (_board.phase == GalleryPhase.error) {
+      return Column(
+        key: const Key('gallery-error'),
+        children: [
+          if (_board.items.isNotEmpty) Expanded(child: _galleryGrid(_board.items)),
+          const SizedBox(height: 8),
+          const Text(
+            'Portraits unavailable',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: GFL2Colors.textPrimary, fontSize: 13),
+          ),
+          TextButton(
+            key: const Key('gallery-retry'),
+            onPressed: _loadGallery,
+            child: const Text('Retry'),
+          ),
+        ],
+      );
+    }
+    if (_board.items.isEmpty) {
+      return const Center(
+        child: Text(
+          'No portraits yet.\nAsk her to find a moment.',
+          key: Key('gallery-empty'),
+          textAlign: TextAlign.center,
+          style: TextStyle(color: GFL2Colors.textDim, height: 1.5),
+        ),
+      );
+    }
+    return _galleryGrid(_board.items);
+  }
+
+  Widget _galleryGrid(List<Memory> items) {
+    return GridView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+        childAspectRatio: 0.78,
+      ),
+      itemCount: items.length,
+      itemBuilder: (_, i) {
+        final m = items[i];
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.network(
+                _memories.thumbnailUrl(m.id),
+                fit: BoxFit.cover,
+                headers: _headers,
+                errorBuilder: (context, error, stack) => Container(
+                  color: GFL2Colors.panel,
+                  child: const Icon(
+                    Icons.image_not_supported_outlined,
+                    color: GFL2Colors.textDim,
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(8, 18, 8, 8),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withValues(alpha: 0.78),
+                      ],
+                    ),
+                  ),
+                  child: Text(
+                    m.annotation ?? m.category,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      height: 1.25,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

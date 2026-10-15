@@ -8,10 +8,20 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+enum _StatusPhase { loading, ready, empty, error }
+
 class SubscriptionScreen extends StatefulWidget {
   final String serverUrl;
   final String? authToken;
-  const SubscriptionScreen({super.key, required this.serverUrl, this.authToken});
+  final http.Client? client;
+  final VoidCallback? onAuthExpired;
+  const SubscriptionScreen({
+    super.key,
+    required this.serverUrl,
+    this.authToken,
+    this.client,
+    this.onAuthExpired,
+  });
 
   @override
   State<SubscriptionScreen> createState() => _SubscriptionScreenState();
@@ -21,7 +31,10 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   Map<String, dynamic>? _tiersInfo;
   Map<String, dynamic>? _currentSub;
   Map<String, dynamic>? _usage;
-  bool _loading = true;
+  _StatusPhase _phase = _StatusPhase.loading;
+  bool _hasGood = false;
+  late final http.Client _client = widget.client ?? http.Client();
+  late final bool _ownClient = widget.client == null;
 
   @override
   void initState() {
@@ -29,43 +42,102 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    if (_ownClient) _client.close();
+    super.dispose();
+  }
+
+  String? get _verifiedTier {
+    final tier = _currentSub?['tier'];
+    if (tier is String && tier.isNotEmpty) return tier;
+    return null;
+  }
+
+  bool _expired(int status) {
+    if (status != 401) return false;
+    widget.onAuthExpired?.call();
+    return true;
+  }
+
   Future<void> _load() async {
+    if (_phase != _StatusPhase.loading && !_hasGood && mounted) {
+      setState(() => _phase = _StatusPhase.loading);
+    }
     try {
-      final tiersResp = await http.get(Uri.parse('${widget.serverUrl}/api/billing/tiers'));
+      final tiersResp = await _client.get(Uri.parse('${widget.serverUrl}/api/billing/tiers'));
+      if (!mounted) return;
+      if (_expired(tiersResp.statusCode)) {
+        setState(() => _phase = _StatusPhase.error);
+        return;
+      }
       Map<String, dynamic>? sub;
       Map<String, dynamic>? usage;
+      var failed = tiersResp.statusCode != 200;
       if (widget.authToken != null) {
-        final subResp = await http.get(
+        final subResp = await _client.get(
           Uri.parse('${widget.serverUrl}/api/billing/subscription'),
           headers: {'Authorization': 'Bearer ${widget.authToken}'},
         );
-        if (subResp.statusCode == 200) {
-          sub = jsonDecode(subResp.body);
+        if (!mounted) return;
+        if (_expired(subResp.statusCode)) {
+          setState(() => _phase = _StatusPhase.error);
+          return;
         }
-        final usageResp = await http.get(
+        if (subResp.statusCode == 200) {
+          final decoded = jsonDecode(subResp.body);
+          if (decoded is Map<String, dynamic>) sub = decoded;
+        } else if (subResp.statusCode != 404) {
+          failed = true;
+        }
+        final usageResp = await _client.get(
           Uri.parse('${widget.serverUrl}/api/billing/usage'),
           headers: {'Authorization': 'Bearer ${widget.authToken}'},
         );
+        if (!mounted) return;
+        if (_expired(usageResp.statusCode)) {
+          setState(() => _phase = _StatusPhase.error);
+          return;
+        }
         if (usageResp.statusCode == 200) {
-          usage = jsonDecode(usageResp.body);
+          final decoded = jsonDecode(usageResp.body);
+          if (decoded is Map<String, dynamic>) usage = decoded;
+        } else if (usageResp.statusCode != 404) {
+          failed = true;
         }
       }
       if (!mounted) return;
+      if (failed) {
+        setState(() => _phase = _StatusPhase.error);
+        return;
+      }
+      final decodedTiers = jsonDecode(tiersResp.body);
       setState(() {
-        _tiersInfo = jsonDecode(tiersResp.body);
-        _currentSub = sub;
-        _usage = usage;
-        _loading = false;
+        if (decodedTiers is Map<String, dynamic>) _tiersInfo = decodedTiers;
+        if (sub != null) {
+          _currentSub = sub;
+        } else if (widget.authToken != null) {
+          _currentSub = null;
+        }
+        if (usage != null) _usage = usage;
+        final features = _tiersInfo?['features'];
+        final hasFeatures = features is Map && features.isNotEmpty;
+        if (_verifiedTier == null && !hasFeatures && _usage == null) {
+          _phase = _StatusPhase.empty;
+          _hasGood = false;
+        } else {
+          _phase = _StatusPhase.ready;
+          _hasGood = true;
+        }
       });
     } catch (_) {
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() => _phase = _StatusPhase.error);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final currentTier = _currentSub?['tier'] as String? ?? 'elite';
     return Scaffold(
       backgroundColor: const Color(0xFF0A0F1A),
       appBar: AppBar(
@@ -73,18 +145,81 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         backgroundColor: const Color(0xFF12182A),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _buildContent(currentTier),
+      body: _body(),
     );
   }
 
-  Widget _buildContent(String currentTier) {
+  Widget _body() {
+    if (_phase == _StatusPhase.loading && !_hasGood) {
+      return const Center(
+        child: CircularProgressIndicator(key: Key('subscription-loading')),
+      );
+    }
+    if (_phase == _StatusPhase.empty) {
+      return _statusNotice(
+        key: const Key('subscription-empty'),
+        message: 'No status on file',
+      );
+    }
+    if (_phase == _StatusPhase.error && !_hasGood) {
+      return _statusNotice(
+        key: const Key('subscription-error'),
+        message: 'Status unavailable',
+        retry: true,
+      );
+    }
+    return Column(
+      children: [
+        if (_phase == _StatusPhase.error)
+          const Padding(
+            key: Key('subscription-error'),
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Text(
+              'Status unavailable',
+              style: TextStyle(color: Colors.white, fontSize: 16),
+            ),
+          ),
+        Expanded(child: _buildContent(_verifiedTier)),
+      ],
+    );
+  }
+
+  Widget _statusNotice({
+    required Key key,
+    required String message,
+    bool retry = false,
+  }) {
+    return Center(
+      child: Column(
+        key: key,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(message, style: const TextStyle(color: Colors.white, fontSize: 16)),
+          if (retry)
+            TextButton(
+              key: const Key('subscription-retry'),
+              onPressed: _load,
+              child: const Text('Retry'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContent(String? currentTier) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              key: const Key('subscription-retry'),
+              onPressed: _load,
+              child: const Text('Retry'),
+            ),
+          ),
           _buildPersonalModeBanner(currentTier),
           const SizedBox(height: 16),
           if (_usage != null) ..._buildUsageBlock(),
@@ -97,7 +232,14 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     );
   }
 
-  Widget _buildPersonalModeBanner(String currentTier) {
+  Widget _buildPersonalModeBanner(String? currentTier) {
+    if (currentTier == null) {
+      return const Text(
+        'No verified status',
+        key: Key('subscription-unverified'),
+        style: TextStyle(color: Colors.white70, fontSize: 14),
+      );
+    }
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(

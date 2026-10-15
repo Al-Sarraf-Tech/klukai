@@ -92,21 +92,19 @@ for f in index.html flutter_bootstrap.js main.dart.js canvaskit/canvaskit.js can
     "$(( $(stat -c %s "$OUT/$f") / 1024 ))" "$(( $(gzip -9c "$OUT/$f" | wc -c) / 1024 ))"
 done
 
+echo ""
+echo "=== Login from flutter_app/web/login.html ==="
+cp "$FLUTTER_APP/web/login.html" "$OUT/login.html"
+test -s "$OUT/login.html"
+cmp -s "$FLUTTER_APP/web/login.html" "$OUT/login.html"
+
 if [[ $BUILD_ONLY -eq 1 ]]; then
   echo ""; echo "=== Build only: $OUT (web-build/ untouched) ==="; exit 0
 fi
 
 echo ""
-echo "=== Step 4: Save login.html ==="
-cp "$WEB_BUILD/login.html" /tmp/login_backup.html
-
-echo ""
-echo "=== Step 5: Rsync Flutter build to web-build ==="
+echo "=== Step 4: Rsync Flutter build to web-build ==="
 rsync -a --delete "$OUT/" "$WEB_BUILD/"
-
-echo ""
-echo "=== Step 6: Restore login.html ==="
-cp /tmp/login_backup.html "$WEB_BUILD/login.html"
 
 echo ""
 echo "=== Step 7: Content-hash JS files ==="

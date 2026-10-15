@@ -100,6 +100,20 @@ void main() {
     }
   });
 
+  testWidgets('disconnect is a 44px labeled control', (tester) async {
+    final taps = await _pump(tester, 390);
+    final finder = find.byKey(const Key('chat-header-exit'));
+    final size = tester.getSize(finder);
+    expect(size.width, greaterThanOrEqualTo(44));
+    expect(size.height, greaterThanOrEqualTo(44));
+    expect(tester.widget<IconButton>(finder).tooltip, 'Disconnect');
+    await tester.tap(finder);
+    await tester.pump();
+    expect(taps.calls, contains('logout'));
+    final semantics = tester.getSemantics(finder);
+    expect(semantics, isNotNull);
+  });
+
   testWidgets('companion, archive, exit, portrait and Her Day line call through', (tester) async {
     final taps = await _pump(tester, 390);
     await tester.tap(find.byKey(const Key('chat-header-companion')));

@@ -19,6 +19,7 @@ from .fact_extractor import create_episode_summary, extract_facts
 from .helpers import enhance_image_prompt as _enhance_image_prompt
 from .image_gen import build_prompt, generate_image, is_couple_scene, is_landscape
 from .image_gen_constants import INTIMATE_MIN_LEVEL
+from .character_scenes import commit_oath_scene, oath_lines
 from .models import SessionState
 from .personality import load_personality
 
@@ -27,22 +28,25 @@ logger = logging.getLogger(__name__)
 
 async def maybe_deliver_oath(user_id: str) -> bool:
     """Deliver the one-time level-9 "Oath Fulfilled" capstone if it has never
-    fired for this user. Guarded by companion_firsts('oath_fulfilled') so it
-    fires EXACTLY once ever — safe to call both on the level-up-to-9 transition
-    and on connect (for a Commander who reached lv9 before this feature existed).
+    fired for this user. The full scene and companion_firsts('oath_fulfilled')
+    commit together, so a disconnect during pacing cannot consume the trigger
+    or leave a partial scene. Safe to call on the level-up-to-9 transition and
+    on connect (for a Commander who reached lv9 before this feature existed).
 
-    The once-ever "first" is only consumed when there is actually a scene to
-    deliver, so a missing/empty config can't silently burn the trigger.
-    Returns True iff the scene was delivered this call.
+    Missing or invalid scene config does not touch the trigger. An existing
+    trigger is left exactly as found. Returns True only after the history
+    commit; live lines are then paced with persistence disabled.
     """
-    oath_scene = load_personality().get("affection", {}).get("oath_fulfilled_scene", [])
-    if not oath_scene:
+    scene = oath_lines(
+        load_personality().get("affection", {}).get("oath_fulfilled_scene")
+    )
+    if not scene:
         return False
-    if not await proactive.record_first(user_id, "oath_fulfilled"):
-        return False  # already fired once — never repeat
-    for line in oath_scene:
-        await ws.send_proactive(user_id, line)
-        await asyncio.sleep(3)  # weighty pacing
+    if not await commit_oath_scene(user_id, scene):
+        return False
+    for line in scene:
+        await ws.send_proactive(user_id, line, persist=False)
+        await asyncio.sleep(3)  # weighty pacing; history is already complete
     logger.info("Oath Fulfilled capstone delivered (once-ever) for %s", user_id)
     return True
 
@@ -429,7 +433,7 @@ async def background_image_gen(
     """Generate an anime image based on the user's request and recent chat context."""
     from .image_gen import check_comfyui_ready
     from .image_provider import cloud_images_ready, selected_provider
-    from .agy_image_provider import generate_agy_image, uses_agy_images
+    from .agy_image_provider import uses_agy_images
 
     try:
         provider = selected_provider()
@@ -487,13 +491,16 @@ async def background_image_gen(
         else:
             width, height = 832, 1216
 
+        outcome = None
         if use_agy:
+            from .account_images import complete_archive, fulfill_account_image
             from .image_provider import cloud_prompt
             full_prompt = f"{user_request}\n\n{cloud_prompt(full_prompt, sfw=aff_level < INTIMATE_MIN_LEVEL)}"
-            img_bytes = await generate_agy_image(
-                full_prompt, user_id=user_id, width=width, height=height,
+            outcome = await fulfill_account_image(
+                user_id, full_prompt, width=width, height=height,
                 include_commander=couple,
             )
+            img_bytes = outcome.get("image")
         else:
             img_bytes = await generate_image(
                 full_prompt, width=width, height=height,
@@ -507,17 +514,33 @@ async def background_image_gen(
             conv_id = session_for_save.conversation_id if session_for_save else "unknown"
             session_mood = session_for_save.mood if session_for_save else "composed"
 
-            # Save to memory archive before sending to UI
-            memory_id = await memory_archive.save_image(
-                img_bytes, full_prompt, conv_id, session_mood, aff_level,
-                user_id=user_id,
-            )
-            if memory_id:
+            if outcome is not None and outcome.get("needs_archive"):
+                memory_id = await memory_archive.save_image(
+                    img_bytes, full_prompt, conv_id, session_mood, aff_level,
+                    user_id=user_id, memory_id=outcome["request_id"],
+                )
+                outcome = await complete_archive(outcome["request_id"], memory_id, img_bytes, user_id)
+            elif outcome is None:
+                memory_id = await memory_archive.save_image(
+                    img_bytes, full_prompt, conv_id, session_mood, aff_level,
+                    user_id=user_id,
+                )
+            else:
+                memory_id = outcome.get("memory_id") if outcome.get("archived") else None
+            archived = bool(memory_id)
+            if archived:
                 context.set_last_memory_id(user_id, memory_id)
                 logger.info("Image archived as memory %s", memory_id)
 
             img_b64 = b64.b64encode(img_bytes).decode()
-            await ws.send(user_id, {"type": "image", "data": img_b64, "memory_id": memory_id})
+            frame = {"type": "image", "data": img_b64, "archived": archived}
+            if archived:
+                frame["memory_id"] = memory_id
+            if outcome is not None:
+                frame["request_id"] = outcome["request_id"]
+            elif memory_id:
+                frame["memory_id"] = memory_id
+            await ws.send(user_id, frame)
             logger.info("Image sent to UI (%d bytes)", len(img_bytes))
 
             # Record first image milestone (both DB table and fact store)

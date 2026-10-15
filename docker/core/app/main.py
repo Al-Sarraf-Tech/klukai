@@ -202,21 +202,24 @@ async def lifespan(app: FastAPI):
 
     logger.info("Klukai companion core started (session cleanup every 1h)")
 
-    yield
-
-    await app.state.voice_jobs.close()
-    proactive.stop()
-    await events_close()
-    await memory.close()
-    await router.close()
-    await mcp.close()
-    await affection.close()
-    from .caches import close as _caches_close
-    from .rate_limit import close as _rate_limit_close
-    await _caches_close()
-    await _rate_limit_close()
-    await close_pool()
-    logger.info("Klukai companion core stopped")
+    from . import job_handoff
+    try:
+        async with job_handoff.running():
+            yield
+    finally:
+        await app.state.voice_jobs.close()
+        proactive.stop()
+        await events_close()
+        await memory.close()
+        await router.close()
+        await mcp.close()
+        await affection.close()
+        from .caches import close as _caches_close
+        from .rate_limit import close as _rate_limit_close
+        await _caches_close()
+        await _rate_limit_close()
+        await close_pool()
+        logger.info("Klukai companion core stopped")
 
 
 # docs_url/redoc_url/openapi_url disabled: this is a private single-owner app

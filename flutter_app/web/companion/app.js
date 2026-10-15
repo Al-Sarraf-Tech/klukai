@@ -9,6 +9,10 @@ import { createAmbience, ambienceKind } from "./ambience.js";
 import { createMusic } from "./music.js";
 import { createVoice } from "./voice.js?v=12e6e4bd";
 import { createAppearanceSwitcher } from "./appearance.js";
+import {
+  applySubtitle, completedAnnouncement, clearDecorativeMotion, motionPreference,
+  beginWake, portraitStatusNotice,
+} from "./stage_life.js";
 
 const $ = (id) => document.getElementById(id);
 const PREFS_KEY = "klukai_companion_prefs";
@@ -69,11 +73,44 @@ function boot() {
     if (text && ms) noticeTimer = setTimeout(() => { n.hidden = true; }, ms);
   };
 
-  function renderLine() {
+  function renderLine({ jumpToLatest = false } = {}) {
     const sub = $("subtitle");
-    sub.textContent = state.line;
+    const placed = applySubtitle(sub, state.line, { jumpToLatest });
     sub.classList.toggle("thinking", state.thinking);
-    sub.scrollTop = sub.scrollHeight;
+    const latest = $("btn-latest");
+    if (latest) latest.hidden = placed.followed;
+  }
+
+  function announceCompleted(frame) {
+    const text = completedAnnouncement(frame);
+    const live = $("reply-live");
+    if (text == null || !live) return;
+    live.textContent = text;
+  }
+
+  function reducedNow() {
+    return motionPreference(globalThis.matchMedia?.("(prefers-reduced-motion: reduce)"));
+  }
+
+  function applyMotionPreference() {
+    const reduced = reducedNow();
+    document.documentElement.dataset.reducedMotion = reduced ? "reduce" : "no-preference";
+    if (reduced) clearDecorativeMotion(document);
+  }
+
+  function coverForWake(covered) {
+    for (const id of ["portrait", "model"]) {
+      const el = $(id);
+      if (!el) continue;
+      if (covered) el.setAttribute("inert", "");
+      else el.removeAttribute("inert");
+    }
+    for (const sel of [".topbar", ".dock"]) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      if (covered) el.setAttribute("inert", "");
+      else el.removeAttribute("inert");
+    }
   }
 
   function applyMood() {
@@ -153,13 +190,14 @@ function boot() {
     portraitHasFrames = Boolean(p.frames?.base);
     portrait.setFrames(p.frames || {}, { pending: !portraitHasFrames });
     applyMood();
+    const portraitNote = portraitStatusNotice(p.status, { hasFrames: portraitHasFrames });
     if (p.status === "pending" || p.status === "partial") {
       portraitTimer = setTimeout(refreshPortrait, PORTRAIT_POLL_MS);
       // Only while she has no portrait at all; once the base exists the
       // remaining expression frames fill in silently.
-      notice(portraitHasFrames ? "" : "She's getting ready — her portrait is being drawn.", 0);
+      notice(portraitNote, 0);
     } else if (p.status === "unavailable") {
-      notice("She's off-camera for now — the GPU is busy.", 6000);
+      notice(portraitNote, 6000);
     } else {
       notice("");
     }
@@ -187,6 +225,7 @@ function boot() {
     if (frame?.type === "error" && !(typeof frame.message === "string" && frame.message.trim())) {
       notice("Something went wrong — try again.", 4000);
     }
+    announceCompleted(frame);
     for (const fx of effects) {
       // One voice channel: her reply is spoken from its `done` text. The
       // server's `voice_audio` clips are dropped in logic.js (see reduceFrame).
@@ -214,33 +253,63 @@ function boot() {
   });
 
   // ── Wake: the one user gesture iOS needs before any audio can play ──────
-  async function wake() {
-    if (awake) return;
-    awake = true;
-    $("wake").hidden = true;
+  async function startAudio() {
+    if (voice && music) return true;
     const AC = window.AudioContext || window.webkitAudioContext;
-    if (AC) {
-      const ctx = new AC();
-      music = createMusic({ context: ctx });
-      voice = createVoice({
-        context: ctx,
-        tts: api.tts,
-        onLevel: (level) => {
-          portrait.setLevel(level);
-          avatar?.setSpeaking(level);
-          stage.classList.toggle("speaking", level > 0.06);
-        },
-        onSpeaking: (on) => music?.duck(on),
-        onError: () => notice("Her voice didn't come through.", 3000),
-      });
-      voice.setEnabled(prefs.voice);
+    if (!AC) return false;
+    const ctx = new AC();
+    music = createMusic({ context: ctx });
+    voice = createVoice({
+      context: ctx,
+      tts: api.tts,
+      onLevel: (level) => {
+        portrait.setLevel(level);
+        avatar?.setSpeaking(level);
+        stage.classList.toggle("speaking", level > 0.06);
+      },
+      onSpeaking: (on) => music?.duck(on),
+      onError: () => notice("Her voice didn't come through.", 3000),
+    });
+    voice.setEnabled(prefs.voice);
+    try {
       if (prefs.music) await music.start();
       if (ctx.state === "suspended") await ctx.resume();
+    } catch {
+      return false;
+    }
+    return ctx.state !== "suspended";
+  }
+
+  function showAudioStatus(text) {
+    const status = $("audio-status");
+    if (!status) return;
+    status.hidden = !text;
+    status.textContent = text || "";
+  }
+
+  async function wake() {
+    if (awake) return;
+    const plan = beginWake();
+    awake = plan.visual;
+    $("wake").hidden = plan.hideOverlay;
+    coverForWake(false);
+    let audioReady = false;
+    try {
+      audioReady = await startAudio();
+    } catch {
+      audioReady = false;
+    }
+    if (!audioReady) {
+      notice(plan.audioMissing, 0);
+      showAudioStatus(plan.audioMissing);
+    } else {
+      showAudioStatus("");
     }
     syncButtons();
     applyScene();
     portrait.setActive(prefs.mode === "portrait");
     if (prefs.mode === "model") setMode("model");
+    $("input")?.focus();
   }
 
   function syncButtons() {
@@ -440,8 +509,17 @@ function boot() {
     savePrefs(prefs);
     syncButtons();
   });
-  $("btn-voice").addEventListener("click", () => {
-    if (!voice) return;
+  $("btn-voice").addEventListener("click", async () => {
+    if (!voice) {
+      let ready = false;
+      try { ready = await startAudio(); } catch { ready = false; }
+      if (!ready) {
+        notice(beginWake().audioMissing, 4000);
+        showAudioStatus(beginWake().audioMissing);
+        return;
+      }
+      showAudioStatus("");
+    }
     voice.setEnabled(!voice.enabled);
     prefs.voice = voice.enabled;
     savePrefs(prefs);
@@ -462,9 +540,20 @@ function boot() {
   });
 
   // Parallax: she follows the pointer a few pixels (desktop); calm on touch.
+  // Reduced motion clears the tilt and skips new ones.
   const motion = document.querySelector(".portrait-motion");
-  motion.classList.add("parallax");
+  if (!reducedNow()) motion.classList.add("parallax");
+  const motionQuery = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
+  motionQuery?.addEventListener?.("change", applyMotionPreference);
+  applyMotionPreference();
+  $("btn-latest")?.addEventListener("click", () => {
+    renderLine({ jumpToLatest: true });
+  });
   window.addEventListener("pointermove", (ev) => {
+    if (reducedNow()) {
+      clearDecorativeMotion(document);
+      return;
+    }
     if (ev.pointerType !== "mouse") return;
     const dx = (ev.clientX / innerWidth - 0.5) * 8;
     const dy = (ev.clientY / innerHeight - 0.5) * 5;
@@ -490,6 +579,7 @@ function boot() {
   window.addEventListener("pageshow", () => socket.resume());
   window.addEventListener("resize", () => { ambience.resize(); avatar?.resize(); syncInsets(); }, { passive: true });
 
+  coverForWake(true);
   portrait.setFrames({});
   ambience.start();
   // 3D was his last view: start fetching three.js + the model now, in

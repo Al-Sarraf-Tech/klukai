@@ -11,6 +11,8 @@ import '../widgets/her_day_widgets.dart';
 import '../widgets/wardrobe_widgets.dart';
 import 'timeline_screen.dart';
 
+enum _RecordPhase { loading, ready, empty, error }
+
 class ProfileScreen extends StatefulWidget {
   final String serverUrl;
   final int affectionScore;
@@ -23,6 +25,9 @@ class ProfileScreen extends StatefulWidget {
   /// Client for the milestones / stats fetches. Injectable for tests.
   final http.Client? client;
 
+  /// 401 keeps the chat logout/reauth path. The screen does not import the browser.
+  final VoidCallback? onAuthExpired;
+
   const ProfileScreen({
     super.key,
     required this.serverUrl,
@@ -31,6 +36,7 @@ class ProfileScreen extends StatefulWidget {
     required this.affectionLevelName,
     this.wardrobeService,
     this.client,
+    this.onAuthExpired,
   });
 
   @override
@@ -42,6 +48,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   late final http.Client _client;
   Map<String, String> _milestones = {};
   int _interactions = 0;
+  _RecordPhase _records = _RecordPhase.loading;
+  bool _recordsGood = false;
 
   // Today's Outfit / Her Day. Each loads independently and fails soft: a
   // section whose fetch failed simply doesn't render.
@@ -65,20 +73,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _loadData() async {
+    if (_records != _RecordPhase.loading && !_recordsGood && mounted) {
+      setState(() => _records = _RecordPhase.loading);
+    }
     try {
       final milestonesR = await _client.get(Uri.parse('${widget.serverUrl}/api/milestones'), headers: _authHeaders);
       final statsR = await _client.get(Uri.parse('${widget.serverUrl}/api/user/stats'), headers: _authHeaders);
       if (!mounted) return;
-      if (milestonesR.statusCode == 200) {
-        final data = jsonDecode(milestonesR.body)['milestones'] as Map<String, dynamic>? ?? {};
-        setState(() => _milestones = data.map((k, v) => MapEntry(k, v.toString())));
+      if (milestonesR.statusCode == 401 || statsR.statusCode == 401) {
+        widget.onAuthExpired?.call();
+        setState(() => _records = _RecordPhase.error);
+        return;
       }
-      if (statsR.statusCode == 200) {
-        final aff = jsonDecode(statsR.body)['affection'] as Map<String, dynamic>?;
+      final milestonesOk = milestonesR.statusCode == 200;
+      final statsOk = statsR.statusCode == 200;
+      final milestonesMissing = milestonesR.statusCode == 404;
+      final statsMissing = statsR.statusCode == 404;
+      if ((!milestonesOk && !milestonesMissing) || (!statsOk && !statsMissing)) {
+        setState(() => _records = _RecordPhase.error);
+        return;
+      }
+      var milestones = _milestones;
+      var interactions = _interactions;
+      if (milestonesOk) {
+        final body = jsonDecode(milestonesR.body);
+        final data = body is Map<String, dynamic>
+            ? body['milestones'] as Map<String, dynamic>? ?? {}
+            : <String, dynamic>{};
+        milestones = data.map((k, v) => MapEntry(k, v.toString()));
+      }
+      if (statsOk) {
+        final body = jsonDecode(statsR.body);
+        final aff = body is Map<String, dynamic> ? body['affection'] as Map<String, dynamic>? : null;
         final ti = aff?['total_interactions'];
-        if (ti is int && mounted) setState(() => _interactions = ti);
+        if (ti is int) interactions = ti;
       }
-    } catch (_) {}
+      setState(() {
+        _milestones = milestones;
+        _interactions = interactions;
+        final empty = _milestones.isEmpty && _interactions == 0;
+        _records = empty ? _RecordPhase.empty : _RecordPhase.ready;
+        _recordsGood = _records == _RecordPhase.ready;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _records = _RecordPhase.error);
+    }
   }
 
   Future<void> _loadWardrobe() async {
@@ -234,6 +274,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
         children: [
           _sectionTitle('OPERATIONAL STATUS'),
           const SizedBox(height: 8),
+          if (_records == _RecordPhase.loading && !_recordsGood)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text('Loading records',
+                  key: Key('profile-records-loading'),
+                  style: TextStyle(color: GFL2Colors.textMuted, fontSize: 12)),
+            ),
+          if (_records == _RecordPhase.empty)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text('No milestones yet',
+                  key: Key('profile-records-empty'),
+                  style: TextStyle(color: GFL2Colors.textMuted, fontSize: 12)),
+            ),
+          if (_records == _RecordPhase.error)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 4),
+              child: Text('Records unavailable',
+                  key: Key('profile-records-error'),
+                  style: TextStyle(color: GFL2Colors.danger, fontSize: 12)),
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              key: const Key('profile-records-retry'),
+              onPressed: _loadData,
+              child: const Text('Retry'),
+            ),
+          ),
           _statRow('TRUST LEVEL', widget.affectionLevelName.toUpperCase()),
           // Affection is on a 0–1000 scale (the gauge fills score/1000).
           _statRow('AFFECTION', '${widget.affectionScore}/1000'),

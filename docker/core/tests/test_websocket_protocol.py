@@ -20,30 +20,31 @@ class TestWSManager:
     def ws(self):
         return WSManager()
 
+    def _socket(self):
+        socket = MagicMock()
+        socket.accept = AsyncMock()
+        socket.send_text = AsyncMock()
+        socket.close = AsyncMock()
+        return socket
+
     @pytest.mark.asyncio
     async def test_connect_tracks_user(self, ws):
-        mock_socket = MagicMock()
-        mock_socket.accept = AsyncMock()
-        mock_socket.send_json = AsyncMock()
+        mock_socket = self._socket()
         await ws.connect(mock_socket, "user1")
         assert ws.is_connected("user1")
+        sent = mock_socket.send_text.await_args.args[0]
+        assert '"type": "connected"' in sent
 
     @pytest.mark.asyncio
     async def test_disconnect_removes_user(self, ws):
-        mock_socket = MagicMock()
-        mock_socket.accept = AsyncMock()
-        mock_socket.send_json = AsyncMock()
+        mock_socket = self._socket()
         await ws.connect(mock_socket, "user1")
         await ws.disconnect("user1", mock_socket)
         assert not ws.is_connected("user1")
 
     @pytest.mark.asyncio
     async def test_multiple_users_isolated(self, ws):
-        s1, s2 = MagicMock(), MagicMock()
-        s1.accept = AsyncMock()
-        s1.send_json = AsyncMock()
-        s2.accept = AsyncMock()
-        s2.send_json = AsyncMock()
+        s1, s2 = self._socket(), self._socket()
         await ws.connect(s1, "user1")
         await ws.connect(s2, "user2")
         assert ws.is_connected("user1")

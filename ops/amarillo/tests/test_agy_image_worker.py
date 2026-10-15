@@ -539,6 +539,36 @@ def test_invalid_provider_configuration_is_rejected(worker, setup_files, names):
         worker.create_server(*setup_files, {"jalsarraf"}, providers=[(name, lambda *args: PNG) for name in names])
 
 
+def test_recover_reads_completed_bytes_and_does_not_render_unknown_pending_or_refusal(worker, setup_files):
+    calls = []
+
+    def render(value, references):
+        calls.append(value["request_id"])
+        return PNG
+
+    done = payload()
+    pending = payload()
+    refused = payload(user_id="test-user", include_commander=True)
+    missing = payload()
+    with running(worker, setup_files, render=render) as path:
+        assert request(path, done)[0] == 200
+        digest = worker.request_digest(pending)
+        with sqlite3.connect(setup_files[1] / "requests.sqlite3") as db:
+            db.execute(
+                "INSERT INTO requests (request_id, request_hash, status) VALUES (?, ?, 'pending')",
+                (pending["request_id"], digest),
+            )
+        before = list(calls)
+        assert request(path, done, target="/recover")[2] == PNG
+        status, _headers, body = request(path, pending, target="/recover")
+        assert status == 409 and json.loads(body)["status"] == "pending"
+        status, _headers, body = request(path, missing, target="/recover")
+        assert status == 404 and json.loads(body)["status"] == "unknown"
+        status, _headers, body = request(path, refused, target="/recover")
+        assert status == 403 and json.loads(body)["status"] == "refused"
+        assert calls == before == [done["request_id"]]
+
+
 def test_legacy_worker_constructor_remains_compatible(worker, setup_files):
     setup_files[1].mkdir(mode=0o700)
     app = worker.Worker(setup_files[1], TOKEN.encode(), {}, {"jalsarraf"}, renderer=lambda *args: PNG)

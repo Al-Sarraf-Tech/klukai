@@ -465,6 +465,8 @@ flutter test --platform chrome
 
 Golden snapshots in `docker/core/tests/golden/` pin the system prompt across affection × mood × time of day. Rotate them deliberately with `UPDATE_SNAPSHOTS=1` and review the diff.
 
+From the repository root, `make test-all` also runs the bot, host-operation, voice, events bridge, JavaScript and shell checks as separate test roots. Use `TEST_PYTHON=/absolute/path/to/existing/python` and, when needed, `TGBOT_TEST_PYTHON=/absolute/path/to/tgbot/.venv/bin/python` to select already-installed environments. Do not combine these pytest directories into a single collection: components have separate import namespaces. Flutter VM and Chrome tests are separate acceptance commands; a VM-only run does not cover browser-only message tests.
+
 The live suite (`scripts/e2e_live.py`) exercises HTTP, WebSocket, Postgres, the delay rail, and the full Her POV path against a running stack. CI uses **self-hosted** runners only.
 
 ---

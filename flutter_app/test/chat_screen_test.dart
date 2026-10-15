@@ -19,19 +19,24 @@ library;
 // is false, so finalized assistant messages render through MessageBubble (a
 // SelectableText), which is what we assert against.
 import 'dart:async';
+import 'dart:convert';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:web/web.dart' as web;
 
 import 'package:companion_app/models/her_day.dart';
 import 'package:companion_app/screens/chat_screen.dart';
 import 'package:companion_app/services/resume_policy.dart';
+import 'package:companion_app/services/speech_capture.dart';
 import 'package:companion_app/services/wardrobe_service.dart';
 import 'package:companion_app/services/websocket_service.dart';
+import 'package:companion_app/widgets/voice_button.dart';
 import 'package:companion_app/widgets/canvas_message_bubble.dart';
 import 'package:companion_app/widgets/message_bubble.dart';
 import 'package:companion_app/widgets/heartbeat_sensor.dart';
@@ -156,7 +161,11 @@ class FakeWebSocketService implements WebSocketService {
 
 /// Pumps ChatScreen with an injected fake and a primed auth token (so the
 /// real `_connectWS` path doesn't bounce to the login page). Returns the fake.
-Future<FakeWebSocketService> _pumpChat(WidgetTester tester) async {
+Future<FakeWebSocketService> _pumpChat(
+  WidgetTester tester, {
+  SpeechBridge? speechBridge,
+  http.Client? httpClient,
+}) async {
   // ChatScreen redirects to "/" when no token is present; prime one.
   web.window.localStorage.setItem('klukai_token', 'test-token');
 
@@ -165,7 +174,12 @@ Future<FakeWebSocketService> _pumpChat(WidgetTester tester) async {
     MaterialApp(
       // A non-routable origin keeps the (try/caught) history/affection fetches
       // from reaching any real backend; failures are swallowed by the screen.
-      home: ChatScreen(serverUrl: 'http://localhost:0', webSocketService: fake),
+      home: ChatScreen(
+        serverUrl: 'http://localhost:0',
+        webSocketService: fake,
+        speechBridge: speechBridge,
+        httpClient: httpClient,
+      ),
     ),
   );
   // Let initState() wire up its stream listeners.
@@ -322,6 +336,95 @@ void main() {
         fake.dispose();
       },
     );
+
+    testWidgets('a transcript keeps the typed draft', (tester) async {
+      final fake = await _pumpChat(
+        tester,
+        speechBridge: SpeechBridge(
+          start: () async => true,
+          stop: () async => 'clip',
+        ),
+        httpClient: MockClient((request) async {
+          expect(request.url.path, '/api/stt');
+          return http.Response(jsonEncode({'text': 'spoken line'}), 200);
+        }),
+      );
+      await tester.enterText(find.byType(TextField), 'keep this draft');
+      await tester.pump();
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(VoiceButton)),
+      );
+      await tester.pump();
+      await gesture.up();
+      await tester.pump();
+
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'keep this draft',
+      );
+      expect(fake.sent.last['content'], 'spoken line');
+      fake.dispose();
+    });
+
+    testWidgets('text still sends while voice is down', (tester) async {
+      final fake = await _pumpChat(
+        tester,
+        speechBridge: SpeechBridge(
+          start: () async => false,
+          stop: () async => null,
+        ),
+      );
+      await tester.tap(find.byType(VoiceButton));
+      await tester.pump();
+      expect(find.textContaining('VOICE LINK GARBLED'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), 'typed while voice is down');
+      await tester.pump();
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      expect(fake.sent.last['content'], 'typed while voice is down');
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        isEmpty,
+      );
+      fake.dispose();
+    });
+
+    testWidgets('a cancelled transcript does not replace the draft', (tester) async {
+      final gate = Completer<http.Response>();
+      final fake = await _pumpChat(
+        tester,
+        speechBridge: SpeechBridge(
+          start: () async => true,
+          stop: () async => 'clip',
+        ),
+        httpClient: MockClient((_) => gate.future),
+      );
+      await tester.enterText(find.byType(TextField), 'keep this draft');
+      await tester.pump();
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(VoiceButton)),
+      );
+      await tester.pump();
+      await gesture.up();
+      await tester.pump();
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      gate.complete(http.Response(jsonEncode({'text': 'spoken line'}), 200));
+      await tester.pump();
+
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'keep this draft',
+      );
+      expect(
+        fake.sent.where((frame) => frame['content'] == 'spoken line'),
+        isEmpty,
+      );
+      fake.dispose();
+    });
   });
 
   group('ChatScreen — reconnect', () {
@@ -625,6 +728,20 @@ void main() {
       expect(fake.reconnectNowCalls, 1);
       fake.dispose();
     });
+  });
+
+  testWidgets('pretext-ready finalization retains selectable text and replay', (tester) async {
+    _installPretextStub();
+    addTearDown(_removePretextStub);
+    final fake = await _pumpChat(tester);
+    fake.emit({'type': 'token', 'text': '> Hold position.\n\n3. Three\n4. Four'});
+    await tester.pump();
+    fake.emit({'type': 'done'});
+    await tester.pump();
+    expect(find.byType(CanvasMessageBubble), findsNothing);
+    expect(find.byType(SelectableText), findsWidgets);
+    expect(find.byTooltip('Replay Klukai voice'), findsOneWidget);
+    fake.dispose();
   });
 
   group('ChatScreen — image frames', () {

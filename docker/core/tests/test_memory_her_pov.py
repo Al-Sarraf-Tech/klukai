@@ -654,8 +654,10 @@ class TestStartHerPov:
     async def test_failed_scheduling_releases_the_claim(self, clean_jobs):
         """A stranded claim would lock the user out of the feature until
         the worker restarted."""
-        with patch.object(hp.asyncio, "create_task",
-                          side_effect=RuntimeError("no running loop")):
+        def reject_task(coro):
+            coro.close()  # The injected scheduler failure must release its coroutine.
+            raise RuntimeError("no running loop")
+        with patch.object(hp.asyncio, "create_task", side_effect=reject_task):
             with patch("app.context.ws") as mock_ws:
                 mock_ws.track_task = MagicMock()
                 with pytest.raises(RuntimeError):
@@ -1063,18 +1065,18 @@ class TestEnqueueJob:
             assert await hp._enqueue_job("job-1") is False
 
     @pytest.mark.asyncio
-    async def test_queue_mode_falls_back_to_inline_when_handoff_is_missed(
+    async def test_queue_mode_keeps_durable_acceptance_when_hint_is_missed(
         self, clean_jobs, monkeypatch
     ):
-        """The fail-soft branch in start_her_pov was unreachable while
-        publish() swallowed everything and _enqueue_job always said True."""
+        """A missing hint must not start a second, inline execution path."""
         monkeypatch.setenv("HER_POV_EXECUTION", "queue")
         inline = AsyncMock(return_value={"job_id": "x", "status": "queued", "reused": False})
-        with patch("app.events.publish", AsyncMock(return_value=0)), \
+        with patch("app.job_handoff.reconcile_once", AsyncMock(return_value=1)), \
+             patch.object(hp, "_persist_job", AsyncMock()), \
              patch.object(hp, "_start_inline", inline):
             out = await hp.start_her_pov("claude")
-        inline.assert_awaited_once()
-        assert out["reused"] is False
+        inline.assert_not_awaited()
+        assert out["status"] == "queued" and out["reused"] is False
 
     @pytest.mark.asyncio
     async def test_queue_mode_stays_queued_when_bridge_heard_it(
@@ -1082,7 +1084,8 @@ class TestEnqueueJob:
     ):
         monkeypatch.setenv("HER_POV_EXECUTION", "queue")
         inline = AsyncMock()
-        with patch("app.events.publish", AsyncMock(return_value=1)), \
+        with patch("app.job_handoff.reconcile_once", AsyncMock(return_value=1)), \
+             patch.object(hp, "_persist_job", AsyncMock()), \
              patch.object(hp, "_start_inline", inline):
             out = await hp.start_her_pov("claude")
         inline.assert_not_awaited()
@@ -1181,7 +1184,7 @@ class TestStartHerPovDurableRail:
 
     @pytest.mark.asyncio
     async def test_failed_job_insert_releases_the_claim(self, clean_jobs):
-        with patch.object(hp, "_set_job", AsyncMock(side_effect=RuntimeError("db"))):
+        with patch.object(hp, "_persist_job", AsyncMock(side_effect=RuntimeError("db"))):
             with pytest.raises(RuntimeError):
                 await hp.start_her_pov("claude")
         assert "claude" not in hp._ACTIVE_JOB_BY_USER

@@ -103,48 +103,126 @@ async def agy_images_ready() -> bool:
         return False
 
 
+def _request_id(request_id: str | None) -> str:
+    if request_id is None:
+        return str(uuid.uuid4())
+    parsed = uuid.UUID(str(request_id))
+    if str(parsed) != str(request_id).lower():
+        raise ValueError("Invalid Agy image request")
+    return str(parsed)
+
+
+def _interpret_worker(path: str, status: int, body: bytes, content_type: str) -> dict:
+    """Map one worker response. Recovery never treats a miss as a new render."""
+    if status == 200 and content_type.split(";", 1)[0].strip().lower() == "image/png":
+        return {"status": "completed", "image": _normalize_png(body)}
+    if path == "/recover":
+        try:
+            data = json.loads(body) if body else {}
+        except (UnicodeError, json.JSONDecodeError):
+            data = {}
+        reported = data.get("status") if isinstance(data, dict) else None
+        if reported in {"unknown", "pending", "refused", "failed", "conflict", "unavailable"}:
+            return {"status": reported, "image": None}
+        if status == 404:
+            return {"status": "unknown", "image": None}
+        if status == 403:
+            return {"status": "refused", "image": None}
+        return {"status": "unavailable", "image": None}
+    if status == 403:
+        return {"status": "refused", "image": None}
+    if status in {409, 429}:
+        return {"status": "pending", "image": None}
+    logger.warning("Agy image worker rejected request (HTTP %d)", status)
+    return {"status": "failed", "image": None}
+
+
+async def _post_worker(path: str, payload: dict) -> dict:
+    socket, token = _settings()
+    async with asyncio.timeout(REQUEST_DEADLINE_SECONDS):
+        transport = httpx.AsyncHTTPTransport(uds=socket, retries=0, trust_env=False)
+        async with httpx.AsyncClient(
+            transport=transport, trust_env=False, follow_redirects=False,
+            timeout=httpx.Timeout(REQUEST_DEADLINE_SECONDS, connect=5),
+        ) as client:
+            async with client.stream(
+                "POST", f"http://klukai-agy{path}", json=payload,
+                headers={"Authorization": f"Bearer {token}", "Accept": "image/png"},
+            ) as response:
+                raw = bytearray()
+                async for chunk in response.aiter_bytes():
+                    if len(raw) + len(chunk) > MAX_IMAGE_BYTES:
+                        raise ValueError("Agy image exceeds byte limit")
+                    raw.extend(chunk)
+                content_type = response.headers.get("content-type", "")
+                status = response.status_code
+    return _interpret_worker(path, status, bytes(raw), content_type)
+
+
+async def _validated_payload(
+    prompt: str, *, user_id: str, width: int, height: int,
+    include_commander: bool, request_id: str | None,
+) -> dict | None:
+    if not uses_agy_images(user_id):
+        return None
+    if (
+        not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 16_000
+        or type(width) is not int or type(height) is not int
+        or min(width, height) <= 0 or width * height > MAX_IMAGE_PIXELS
+        or type(include_commander) is not bool
+    ):
+        raise ValueError("Invalid Agy image request")
+    return {
+        "request_id": _request_id(request_id), "user_id": user_id, "prompt": prompt,
+        "width": width, "height": height, "include_commander": include_commander,
+    }
+
+
+async def submit_agy_image(
+    prompt: str, *, user_id: str, width: int = 832, height: int = 1216,
+    include_commander: bool = False, request_id: str | None = None,
+) -> dict:
+    """POST /generate once. A miss is not retried and never falls back."""
+    try:
+        payload = await _validated_payload(
+            prompt, user_id=user_id, width=width, height=height,
+            include_commander=include_commander, request_id=request_id,
+        )
+        if payload is None:
+            return {"status": "refused", "image": None}
+        return await _post_worker("/generate", payload)
+    except (OSError, ValueError, SyntaxError, httpx.HTTPError, TimeoutError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+        logger.warning("Agy image request failed (%s)", type(error).__name__)
+        return {"status": "unknown", "image": None}
+
+
+async def recover_agy_image(
+    prompt: str, *, user_id: str, width: int, height: int,
+    include_commander: bool, request_id: str,
+) -> dict:
+    """POST /recover only. This never submits, rotates, or renders."""
+    try:
+        payload = await _validated_payload(
+            prompt, user_id=user_id, width=width, height=height,
+            include_commander=include_commander, request_id=request_id,
+        )
+        if payload is None:
+            return {"status": "refused", "image": None}
+        return await _post_worker("/recover", payload)
+    except (OSError, ValueError, SyntaxError, httpx.HTTPError, TimeoutError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+        logger.warning("Agy image recovery failed (%s)", type(error).__name__)
+        return {"status": "unknown", "image": None}
+
+
 async def generate_agy_image(
     prompt: str, *, user_id: str, width: int = 832, height: int = 1216,
-    include_commander: bool = False,
+    include_commander: bool = False, request_id: str | None = None,
 ) -> bytes | None:
     """Submit exactly one request; failures are generic and never fall back."""
-    try:
-        if not uses_agy_images(user_id):
-            return None
-        if (
-            not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 16_000
-            or type(width) is not int or type(height) is not int
-            or min(width, height) <= 0 or width * height > MAX_IMAGE_PIXELS
-            or type(include_commander) is not bool
-        ):
-            raise ValueError("Invalid Agy image request")
-        socket, token = _settings()
-        payload = {
-            "request_id": str(uuid.uuid4()), "user_id": user_id, "prompt": prompt,
-            "width": width, "height": height, "include_commander": include_commander,
-        }
-        async with asyncio.timeout(REQUEST_DEADLINE_SECONDS):
-            transport = httpx.AsyncHTTPTransport(uds=socket, retries=0, trust_env=False)
-            async with httpx.AsyncClient(
-                transport=transport, trust_env=False, follow_redirects=False,
-                timeout=httpx.Timeout(REQUEST_DEADLINE_SECONDS, connect=5),
-            ) as client:
-                async with client.stream(
-                    "POST", "http://klukai-agy/generate", json=payload,
-                    headers={"Authorization": f"Bearer {token}", "Accept": "image/png"},
-                ) as response:
-                    if response.status_code != 200:
-                        logger.warning("Agy image worker rejected request (HTTP %d)", response.status_code)
-                        return None
-                    if response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "image/png":
-                        raise ValueError("Unsupported Agy response")
-                    raw = bytearray()
-                    async for chunk in response.aiter_bytes():
-                        if len(raw) + len(chunk) > MAX_IMAGE_BYTES:
-                            raise ValueError("Agy image exceeds byte limit")
-                        raw.extend(chunk)
-            return _normalize_png(bytes(raw))
-    except (OSError, ValueError, SyntaxError, httpx.HTTPError, TimeoutError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
-        # Error details may contain the prompt, token or remote diagnostics.
-        logger.warning("Agy image request failed (%s)", type(error).__name__)
-        return None
+    result = await submit_agy_image(
+        prompt, user_id=user_id, width=width, height=height,
+        include_commander=include_commander, request_id=request_id,
+    )
+    if result.get("status") == "completed":
+        return result.get("image")
+    return None

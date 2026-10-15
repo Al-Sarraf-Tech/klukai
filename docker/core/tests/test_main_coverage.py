@@ -773,3 +773,36 @@ class TestLifespan:
             # signal) escapes — proving the janitor doesn't die on a bad cleanup.
             with pytest.raises(asyncio.CancelledError):
                 await captured[-1]
+
+
+@pytest.mark.parametrize('cancelled', [False, True])
+async def test_lifespan_owns_handoff_before_closing_dependencies(lifespan_mocks, monkeypatch, cancelled):
+    from contextlib import asynccontextmanager
+    from app import job_handoff
+    order = []
+
+    @asynccontextmanager
+    async def running():
+        order.append('start')
+        try:
+            yield
+        finally:
+            order.append('stop')
+
+    async def close_events():
+        order.append('events_closed')
+
+    monkeypatch.setattr(job_handoff, 'running', running)
+    monkeypatch.setattr(main, 'events_close', close_events)
+    async def serve():
+        async with main.lifespan(main.app):
+            assert order == ['start']
+            if cancelled:
+                raise asyncio.CancelledError
+    if cancelled:
+        with pytest.raises(asyncio.CancelledError):
+            await serve()
+    else:
+        await serve()
+    assert order == ['start', 'stop', 'events_closed']
+    lifespan_mocks.close_pool.assert_awaited_once()

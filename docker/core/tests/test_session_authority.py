@@ -80,8 +80,10 @@ async def test_failed_turn_still_invalidates_delayed_state(manager, monkeypatch)
         await chat_handlers._drop_unanswered_turn(sid, state)
         raise RuntimeError('aborted')
     monkeypatch.setattr(chat, '_handle_message', abort)
-    with pytest.raises(RuntimeError, match='aborted'):
-        await chat._admit_turn('message', 'new', 'alice')
+    outgoing = AsyncMock()
+    monkeypatch.setattr(chat, 'ws', outgoing)
+    await chat._admit_turn('message', 'new', 'alice')
+    assert outgoing.send.await_args.args[1]['type'] == 'error'
     current = await manager.get_session(sid)
     assert current.revision > before.revision
     assert current.turns == before.turns

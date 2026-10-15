@@ -34,8 +34,8 @@ async def publish(event_type: str, data: str = "", **kwargs) -> int:
 
     Returns the number of subscribers Redis delivered to (0 when Redis is
     not configured or the publish failed). Pub/sub has no queue: an event
-    published while nobody is subscribed is gone, so callers that hand off
-    work this way (her_pov enqueue) use the count to know the hand-off landed.
+    published while nobody is subscribed is gone. The count is only a Redis
+    receipt, never durable broker acceptance; Her POV recovers from its DB row.
     """
     if _redis is None:
         return 0

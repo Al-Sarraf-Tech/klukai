@@ -146,14 +146,14 @@ async def _set_job(job_id: str, **fields: Any) -> None:
 
 
 async def _persist_job(job_id: str, snapshot: dict[str, Any]) -> None:
-    """Persist paid-job progress strictly; local rendering remains best-effort."""
-    cloud = _cloud_generation_enabled()
+    """Queue acceptance/progress must be durable; inline local work is best-effort."""
+    strict = _cloud_generation_enabled() or _execution_mode() == "queue"
     try:
         from .db import get_pool
         get_pool()
     except Exception:
-        if cloud:
-            raise RuntimeError("Cloud memory durable state is unavailable") from None
+        if strict:
+            raise RuntimeError("Memory durable state is unavailable") from None
         return
     try:
         import json as _json
@@ -207,8 +207,8 @@ async def _persist_job(job_id: str, snapshot: dict[str, Any]) -> None:
                 ),
             )
     except Exception as e:
-        if cloud:
-            raise RuntimeError("Cloud memory durable state could not be saved") from None
+        if strict:
+            raise RuntimeError("Memory durable state could not be saved") from None
         logger.debug("her_pov persist failed: %s", e)
 
 
@@ -614,12 +614,10 @@ def _execution_mode() -> str:
 
 
 async def _enqueue_job(job_id: str) -> bool:
-    """Ask the events-bridge to park this job on the durable work queue.
+    """Send a best-effort wake-up hint. Subscriber count is not acceptance.
 
-    Redis pub/sub does not queue: if the bridge is not subscribed at this
-    instant the event is simply gone and the job row would sit at 'queued'
-    forever. publish() returns the subscriber count, so a zero here is a
-    missed hand-off and the caller runs the job inline instead.
+    The durable row and queued-only reconciler cover missing subscribers and
+    crashes/failures anywhere before confirmed AMQP publication.
     """
     try:
         from . import events
@@ -648,11 +646,9 @@ _STALE_CLAIM_MINUTES = 15
 async def _claim_active_from_db(user_id: str) -> dict[str, Any] | None:
     """Return an existing non-terminal DB job for this user, if any.
 
-    Before looking, retire rows that stopped moving: a lost hand-off (bridge
-    not subscribed when the enqueue was published, core restarted between
-    insert and claim) leaves a non-terminal row that nothing will ever
-    finish. Without this sweep every later tap returned {"reused": true,
-    "status": "queued"} and idx_her_pov_one_active rejected a fresh insert.
+    Unstarted queued work remains recoverable by the reconciler, regardless
+    of age. Only stalled local in-progress work may be retired; ambiguous
+    cloud outcomes require review and must never buy a new generation.
     """
     try:
         from .db import get_pool
@@ -671,6 +667,7 @@ async def _claim_active_from_db(user_id: str) -> dict[str, Any] | None:
                     "SET status = 'failed', phase = 'failed', error = 'stale', "
                     "    finished_at = NOW(), updated_at = NOW() "
                     "WHERE user_id = %s AND status NOT IN ('done', 'failed') "
+                    "  AND status <> 'queued' "
                     "  AND updated_at < NOW() - %s * INTERVAL '1 minute' "
                     "RETURNING id",
                     (user_id, _STALE_JOB_MINUTES),
@@ -713,9 +710,10 @@ async def start_her_pov(user_id: str) -> dict[str, Any]:
     partial unique index in Postgres) before any work is scheduled, so a
     double-tapped CTA can never buy a second LLM call and a second GPU render.
 
-    Production (`HER_POV_EXECUTION=queue`) only enqueues the job id onto the
-    durable `klukai.jobs.her_pov` rail — the events-bridge consumer (prefetch=1)
-    is the GPU lease. Unit tests and local dev keep the inline asyncio path.
+    Production (`HER_POV_EXECUTION=queue`) commits the durable job row before
+    returning acceptance. A Redis hint and queued-only reconciler dispatch its
+    UUID to the bridge. Core owns claims and provider/GPU leases. Unit tests
+    and local dev keep the inline asyncio path.
     """
     cloud = _cloud_generation_enabled()
     if cloud and _execution_mode() != "queue":
@@ -734,43 +732,25 @@ async def start_her_pov(user_id: str) -> dict[str, Any]:
                 "status": job.get("status", "queued"),
                 "reused": True,
             }
+        # Publish the in-process acceptance only after durable insertion.
+        # Holding the admission lock makes a concurrent tap wait for that
+        # outcome instead of returning a cache-only job that may never exist.
+        snapshot = {
+            "id": job_id, "user_id": user_id, "status": "queued",
+            "phase": "queued", "message": "Standing by…",
+            "created_at": _now_iso(), "updated_at": _now_iso(),
+        }
+        await _persist_job(job_id, snapshot)
+        _JOBS[job_id] = {**snapshot, "_touched": time.monotonic()}
         _ACTIVE_JOB_BY_USER[user_id] = job_id
-
-    try:
-        await _set_job(
-            job_id,
-            user_id=user_id,
-            status="queued",
-            phase="queued",
-            message="Standing by…",
-            created_at=_now_iso(),
-        )
-    except Exception:
-        async with _JOBS_LOCK:
-            if _ACTIVE_JOB_BY_USER.get(user_id) == job_id:
-                _ACTIVE_JOB_BY_USER.pop(user_id, None)
-        raise
+        _prune_jobs_locked()
 
     mode = _execution_mode()
     if mode == "queue":
-        armed = await _enqueue_job(job_id)
-        if not armed:
-            if cloud:
-                try:
-                    await _set_job(
-                        job_id, status="failed", phase="failed", error="queue_unavailable",
-                        message="The memory queue is unavailable. Please try again later.",
-                    )
-                finally:
-                    async with _JOBS_LOCK:
-                        if _ACTIVE_JOB_BY_USER.get(user_id) == job_id:
-                            _ACTIVE_JOB_BY_USER.pop(user_id, None)
-                return {"job_id": job_id, "status": "failed", "reused": False}
-            # Fail-soft: run inline so a bridge outage never strands the CTA.
-            logger.warning(
-                "her_pov queue arm failed; falling back to inline for %s", job_id
-            )
-            return await _start_inline(user_id, job_id)
+        try:
+            await _enqueue_job(job_id)
+        except Exception:
+            logger.warning("her_pov initial dispatch failed; durable job %s remains queued", job_id)
         return {"job_id": job_id, "status": "queued", "reused": False}
 
     return await _start_inline(user_id, job_id)
@@ -825,7 +805,8 @@ async def run_job_from_queue(job_id: str) -> bool:
                 "SET status = 'searching', phase = 'searching', "
                 "    claimed_at = NOW(), attempts = attempts + 1, "
                 "    updated_at = NOW() "
-                "WHERE id = %s AND status = 'queued' RETURNING user_id"
+                "WHERE id = %s AND status = 'queued' "
+                "AND claimed_at IS NULL AND attempts = 0 AND finished_at IS NULL RETURNING user_id"
             )
             params: tuple = (job_id,)
             if not cloud:

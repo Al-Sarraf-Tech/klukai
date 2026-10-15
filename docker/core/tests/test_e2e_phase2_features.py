@@ -343,11 +343,11 @@ def _aff_change(*, new_level=9, level_changed=True, level_direction="up"):
 
 
 def _session(turn_count: int = 1):
+    from app.models import SessionState
     turns = [{"role": "user", "content": f"Turn {i}"} for i in range(turn_count)]
-    return SimpleNamespace(
+    return SessionState(
         conversation_id="conv-1", turns=turns, context_summary=None,
         mood="composed", turn_count=turn_count,
-        mission_description=None, mission_interval=None, mission_started_at=None,
     )
 
 
@@ -398,6 +398,7 @@ def bg_mocks(monkeypatch):
     proactive.start_mission = MagicMock()
     proactive.mission_active = False
     proactive._last_mood = "composed"
+    commit_oath = AsyncMock(return_value=True)
 
     context_mod = MagicMock()
     context_mod.COMPACT_THRESHOLD = 8
@@ -426,33 +427,38 @@ def bg_mocks(monkeypatch):
             "milestone_scenes": {9: ["generic lv9 line"]},
         }
     }))
+    monkeypatch.setattr(bg, "commit_oath_scene", commit_oath)
 
     return SimpleNamespace(
         affection=affection, memory=memory, ws=ws, proactive=proactive,
         context=context_mod, memory_archive=memory_archive,
-        extract_facts=extract_facts,
+        extract_facts=extract_facts, commit_oath=commit_oath,
     )
 
 
 class TestLevelNineOathE2E:
     @pytest.mark.asyncio
     async def test_oath_scene_delivered_once_when_firsts_guard_unset(self, bg_mocks):
-        """First arrival at lv9 with the firsts-guard UNSET (record_first->True)
-        dispatches every oath-scene line via ws.send_proactive, and guards it
-        through record_first('oath_fulfilled')."""
+        """First arrival at lv9 commits the whole scene, then paces each line
+        without writing it a second time."""
         await bg.background_extraction("m", "r", _session(1), user_id="u1")
 
-        sent = [c.args[1] for c in bg_mocks.ws.send_proactive.await_args_list]
-        for line in _OATH_SCENE:
-            assert line in sent, f"missing oath line: {line!r}"
-        bg_mocks.proactive.record_first.assert_any_await("u1", "oath_fulfilled")
+        bg_mocks.commit_oath.assert_awaited_once()
+        assert bg_mocks.commit_oath.await_args.args[0] == "u1"
+        assert list(bg_mocks.commit_oath.await_args.args[1]) == list(_OATH_SCENE)
+        oath_calls = [
+            call for call in bg_mocks.ws.send_proactive.await_args_list
+            if call.args[1] in _OATH_SCENE
+        ]
+        assert [call.args[1] for call in oath_calls] == list(_OATH_SCENE)
+        assert all(call.kwargs.get("persist") is False for call in oath_calls)
 
     @pytest.mark.asyncio
     async def test_oath_not_redelivered_when_firsts_guard_set(self, bg_mocks):
-        """With the firsts-guard SET (record_first->False) the oath scene and the
+        """With the once-ever scene already committed, the oath scene and the
         generic milestone scene are both suppressed; only the short level-up line
-        is sent — proving the once-ever guard is honored end-to-end."""
-        bg_mocks.proactive.record_first.return_value = False  # guard already set
+        is sent."""
+        bg_mocks.commit_oath.return_value = False
         bg_mocks.memory.record_milestone.return_value = False  # milestone seen too
 
         await bg.background_extraction("m", "r", _session(1), user_id="u1")

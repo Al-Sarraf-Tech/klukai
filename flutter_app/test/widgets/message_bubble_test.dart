@@ -9,6 +9,9 @@ library;
 //   flutter test --platform chrome test/widgets/message_bubble_test.dart
 import 'dart:async';
 import 'dart:convert';
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
+import 'package:flutter/services.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -46,6 +49,95 @@ ChatMessage _msg({
 }
 
 void main() {
+  testWidgets(
+    'mixed Markdown remains selectable with numbered lists and tables',
+    (tester) async {
+      final bridge = JSObject();
+      bridge['parseMarkdown'] = ((String source) => jsonEncode([
+        {
+          'type': 'blockquote',
+          'raw': '> Hold position.\n',
+          'tokens': [
+            {
+              'type': 'paragraph',
+              'text': 'Hold position.',
+              'tokens': [
+                {'type': 'text', 'text': 'Hold position.'},
+              ],
+            },
+          ],
+        },
+        {
+          'type': 'list',
+          'ordered': true,
+          'start': 3,
+          'items': [
+            {
+              'type': 'list_item',
+              'text': 'Three',
+              'tokens': [
+                {'type': 'text', 'text': 'Three'},
+              ],
+            },
+            {
+              'type': 'list_item',
+              'text': 'Four',
+              'tokens': [
+                {'type': 'text', 'text': 'Four'},
+              ],
+            },
+          ],
+        },
+        {
+          'type': 'table',
+          'header': [
+            {
+              'text': 'Name',
+              'tokens': [
+                {'type': 'text', 'text': 'Name'},
+              ],
+            },
+          ],
+          'rows': [
+            [
+              {
+                'text': 'Klukai',
+                'tokens': [
+                  {'type': 'text', 'text': 'Klukai'},
+                ],
+              },
+            ],
+          ],
+          'align': [null],
+        },
+      ]).toJS).toJS;
+      globalContext['pretextBridge'] = bridge;
+      addTearDown(() => globalContext.delete('pretextBridge'.toJS));
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: _msg(
+              content:
+                  '> Hold position.\n\n3. Three\n4. Four\n\n| Name |\n| --- |\n| Klukai |',
+            ),
+          ),
+        ),
+      );
+      final text = tester
+          .widgetList<SelectableText>(find.byType(SelectableText))
+          .map((w) => w.data ?? w.textSpan!.toPlainText())
+          .join(' ');
+      expect(tester.takeException(), isNull);
+      expect(text, contains('Hold position.'));
+      expect(text, contains('Three'));
+      expect(text, contains('Four'));
+      expect(text, contains('Klukai'));
+      expect(find.text('3.'), findsOneWidget);
+      expect(find.text('4.'), findsOneWidget);
+      expect(find.byType(Table), findsOneWidget);
+    },
+  );
+
   group('MessageBubble — companion (assistant) messages', () {
     testWidgets('shows the KLUKAI comm tag and a voice (speaker) control', (
       tester,
@@ -138,23 +230,36 @@ void main() {
   });
 
   group('MessageBubble — image content', () {
-    testWidgets('shows an image (not selectable text) when imageData present', (
-      tester,
-    ) async {
-      await tester.pumpWidget(
-        _wrap(
-          MessageBubble(
-            message: _msg(content: 'see attached', imageData: _pngB64),
+    testWidgets(
+      'preserves the caption and complete artwork when imageData present',
+      (tester) async {
+        await tester.pumpWidget(
+          _wrap(
+            MessageBubble(
+              message: _msg(content: 'see attached', imageData: _pngB64),
+            ),
           ),
-        ),
-      );
-      await tester.pump();
-      expect(find.byType(Image), findsOneWidget);
-      // Text body is replaced by the image branch.
-      expect(find.byType(SelectableText), findsNothing);
-      // A download affordance is overlaid on the image.
-      expect(find.byIcon(Icons.download), findsOneWidget);
-    });
+        );
+        await tester.pump();
+        expect(find.byType(Image), findsOneWidget);
+        // Image captions remain selectable.
+        expect(find.text('see attached'), findsOneWidget);
+        expect(tester.widget<Image>(find.byType(Image)).fit, BoxFit.contain);
+        expect(find.byTooltip('View full artwork'), findsOneWidget);
+        expect(find.byTooltip('Download artwork'), findsOneWidget);
+        // A labeled download control follows the image.
+        expect(find.byIcon(Icons.download), findsOneWidget);
+      },
+    );
+  });
+
+  testWidgets('artwork shows loading while its image decoder is pending', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _wrap(MessageBubble(message: _msg(imageData: _pngB64))),
+    );
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
   });
 
   group('MessageBubble — her voice (speaker control)', () {
@@ -219,6 +324,67 @@ void main() {
       expect(find.text(offline), findsNothing);
       expect(find.byType(CircularProgressIndicator), findsNothing);
     });
+  });
+
+  testWidgets('completed replay is a labeled keyboard-accessible button', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_wrap(MessageBubble(message: _msg())));
+    expect(find.byTooltip('Replay Klukai voice'), findsOneWidget);
+    expect(find.byType(IconButton), findsOneWidget);
+  });
+
+  testWidgets('invalid artwork bytes keep text and show an error', (
+    tester,
+  ) async {
+    for (final invalid in ['not base64', 'AAECAwQ=']) {
+      await tester.runAsync(() async {
+        await tester.pumpWidget(
+          _wrap(
+            MessageBubble(
+              key: ValueKey(invalid),
+              message: _msg(content: 'Retained caption', imageData: invalid),
+            ),
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pump();
+      expect(find.text('Retained caption'), findsOneWidget);
+      expect(find.text('Artwork unavailable'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('replay keyboard activation reports refused browser playback', (
+    tester,
+  ) async {
+    final browser = FakeBrowserPlatform(voiceResult: false);
+    final client = MockClient(
+      (req) async => http.Response(jsonEncode({'audio': 'UklGRg=='}), 200),
+    );
+    await tester.pumpWidget(
+      _wrap(MessageBubble(message: _msg(), browser: browser, client: client)),
+    );
+    final button = find.byWidgetPredicate(
+      (w) => w is IconButton && w.tooltip == 'Replay Klukai voice',
+    );
+    Focus.of(
+      tester.element(
+        find.descendant(of: button, matching: find.byType(Icon)).first,
+      ),
+    ).requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(browser.voices, ['data:audio/wav;base64,UklGRg==']);
+    expect(
+      find.text('// VOICE SYNTH OFFLINE — her words stand.'),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(seconds: 5));
   });
 
   group('MessageBubble — alignment', () {

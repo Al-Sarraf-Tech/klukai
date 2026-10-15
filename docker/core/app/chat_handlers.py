@@ -617,6 +617,13 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         await _drop_unanswered_turn(sid, session)
         return None
 
+    # She has already delivered this reply. Preserve append-only history
+    # independently of a Redis finalization failure, which must still surface.
+    await _store_message(
+        session.conversation_id, "assistant", response_text, model_name,
+        latency_ms=latency_ms, user_id=user_id,
+    )
+
     # Add assistant turn to session
     session = await memory.add_turn(sid, "assistant", response_text, session)
 
@@ -633,11 +640,6 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
     except Exception as e:
         logger.warning("Failed to set read_at: %s", e)
     await ws.send(user_id, {"type": "read_receipt", "read_at": datetime.now().isoformat()})
-
-    await _store_message(
-        session.conversation_id, "assistant", response_text, model_name,
-        latency_ms=latency_ms, user_id=user_id,
-    )
 
     # Commander save/discard overrides — operate on the most recent memory
     content_lower = content.lower()

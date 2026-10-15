@@ -11,6 +11,7 @@ from fastapi import WebSocket
 logger = logging.getLogger(__name__)
 
 SEND_TIMEOUT_SECONDS = 10.0
+CLOSE_TIMEOUT_SECONDS = 2.0
 
 
 class WSManager:
@@ -23,6 +24,7 @@ class WSManager:
 
     def __init__(self) -> None:
         self._connections: dict[str, set[WebSocket]] = {}
+        self._disconnect_events: dict[WebSocket, asyncio.Event] = {}
         # Per-user background tasks (image gen, reflection, decompression,
         # warmup timers). Cancelled on full-user disconnect so an old session
         # can't write to a stale conn_id or send to a closed WS.
@@ -52,35 +54,60 @@ class WSManager:
     def is_connected(self, user_id: str = "default") -> bool:
         return bool(self._connections.get(user_id))
 
-    async def connect(self, ws: WebSocket, user_id: str = "default") -> None:
+    def has_connection(self, user_id: str, ws: WebSocket) -> bool:
+        """Whether this particular endpoint may still admit inbound turns."""
+        return ws in self._connections.get(user_id, ())
+
+    async def connect(
+        self, ws: WebSocket, user_id: str = "default", *,
+        disconnected: asyncio.Event | None = None,
+    ) -> None:
         await ws.accept()
+        if disconnected is not None:
+            self._disconnect_events[ws] = disconnected
         if user_id not in self._connections:
             self._connections[user_id] = set()
         self._connections[user_id].add(ws)
         count = len(self._connections[user_id])
         logger.info("WebSocket connected: user=%s (devices=%d)", user_id, count)
         if not await self._send_one(ws, {"type": "connected", "status": "ok"}):
-            await self.disconnect(user_id, ws)
+            await self.disconnect(user_id, ws, close=True)
             raise ConnectionError("Initial WebSocket send failed")
 
-    async def disconnect(self, user_id: str = "default", ws: WebSocket | None = None) -> None:
+    async def disconnect(
+        self, user_id: str = "default", ws: WebSocket | None = None, *, close: bool = False
+    ) -> None:
         conns = self._connections.get(user_id)
+        retired = tuple(conns or ()) if ws is None else (ws,)
+        for socket in retired:
+            disconnected = self._disconnect_events.pop(socket, None)
+            if disconnected is not None:
+                disconnected.set()
         if conns is not None:
             if ws is None:
                 conns.clear()
             else:
                 conns.discard(ws)
-            if conns:
-                return
+        tasks: set[asyncio.Task] = set()
+        if not conns:
             self._connections.pop(user_id, None)
-        # Detach this generation before awaiting cancellation. A reconnect can
-        # create a new bucket while old tasks unwind; never touch that bucket.
-        tasks = self._user_tasks.pop(user_id, set())
+            # Detach before any await. Reconnects receive a new task bucket.
+            tasks = self._user_tasks.pop(user_id, set())
         current = asyncio.current_task()
         pending = [task for task in tasks if task is not current]
         for task in pending:
             if not task.done():
                 task.cancel()
+        if close and ws is not None:
+            try:
+                await asyncio.wait_for(
+                    ws.close(code=1011, reason="Connection send failed; reconnect"),
+                    CLOSE_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                # Membership is already revoked, so this endpoint cannot
+                # process another frame even if the transport cannot close.
+                logger.debug("Could not close retired WebSocket for %s", user_id)
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
@@ -99,7 +126,7 @@ class WSManager:
             return
         for socket in tuple(conns):
             if not await self._send_one(socket, data):
-                await self.disconnect(user_id, socket)
+                await self.disconnect(user_id, socket, close=True)
 
     async def send_token(self, user_id: str, text: str) -> None:
         await self.send(user_id, {"type": "token", "text": text})

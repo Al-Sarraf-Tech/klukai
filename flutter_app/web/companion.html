@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <!-- viewport-fit=cover + env(safe-area-inset-*) keeps the stage clear of the
        notch and home indicator on iPhone; no zoom so double-taps don't jump. -->
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#12151E">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -70,7 +70,10 @@
     </dialog>
 
     <footer class="dock">
-      <p class="subtitle" id="subtitle" aria-live="polite"></p>
+      <p id="reply-live" class="sr-only" aria-live="polite"></p>
+      <p class="subtitle" id="subtitle"></p>
+      <button type="button" id="btn-latest" class="btn latest" hidden>Latest</button>
+      <p id="audio-status" class="audio-status" role="status" hidden></p>
       <div id="camera-controls" class="camera-controls" role="group" aria-label="3D view controls" hidden>
         <div class="camera-buttons">
           <button class="btn" id="btn-rotate-left" type="button" aria-label="Rotate left" title="Rotate left">↶</button>
@@ -95,7 +98,7 @@
       <p class="usage-note">For personal, noncommercial use only.</p>
     </footer>
 
-    <button class="wake" id="wake" type="button">
+    <button class="wake" id="wake" type="button" aria-label="Open the channel">
       <span class="wake-title">KLUKAI</span>
       <span class="wake-sub">Tap to open the channel</span>
     </button>

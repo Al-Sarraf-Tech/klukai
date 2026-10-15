@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KLUKAI // NEURAL LINK AUTH</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #12151E;
+    color: #D4DDE6;
+    font-family: 'Courier New', monospace;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .login-box {
+    background: #1A1F2E;
+    border: 1px solid #3A4256;
+    border-radius: 6px;
+    padding: 40px 32px;
+    width: 100%;
+    max-width: 380px;
+    box-shadow: 0 0 40px rgba(79,195,247,0.05);
+  }
+  .title {
+    text-align: center;
+    margin-bottom: 8px;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 3px;
+    color: #D4DDE6;
+  }
+  .accent-bar {
+    width: 48px;
+    height: 2px;
+    background: #E8923E;
+    margin: 0 auto 6px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 10px;
+    color: #6B7D8D;
+    letter-spacing: 1.2px;
+    margin-bottom: 28px;
+  }
+  .field {
+    margin-bottom: 16px;
+  }
+  label {
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #6B7D8D;
+    margin-bottom: 6px;
+  }
+  input {
+    width: 100%;
+    padding: 10px 14px;
+    background: #12151E;
+    border: 1px solid #3A4256;
+    border-radius: 4px;
+    color: #D4DDE6;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input:focus {
+    border-color: #4FC3F7;
+  }
+  .btn {
+    width: 100%;
+    padding: 12px;
+    background: #E8923E;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: background 0.2s;
+  }
+  .btn:hover { background: #d17e2f; }
+  .btn:disabled {
+    background: #3A4256;
+    cursor: not-allowed;
+  }
+  .error {
+    color: #EF4444;
+    font-size: 11px;
+    text-align: center;
+    margin-top: 12px;
+    min-height: 16px;
+    letter-spacing: 0.5px;
+  }
+  .status {
+    text-align: center;
+    font-size: 10px;
+    color: #4FC3F7;
+    margin-top: 16px;
+    letter-spacing: 0.8px;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .status.visible { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="login-box">
+  <div class="title">KLUKAI</div>
+  <div class="accent-bar"></div>
+  <div class="subtitle">SST-05 // H.I.D.E. 404 — NEURAL LINK AUTH</div>
+
+  <form id="loginForm">
+    <div class="field">
+      <label>CALLSIGN</label>
+      <input type="text" id="username" autocomplete="username" autofocus required>
+    </div>
+    <div class="field">
+      <label>PASSPHRASE</label>
+      <input type="password" id="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit" class="btn" id="submitBtn">ESTABLISH LINK</button>
+  </form>
+
+  <div class="error" id="error"></div>
+  <div class="status" id="status">AUTHENTICATING...</div>
+</div>
+
+<script>
+const form = document.getElementById('loginForm');
+const errorEl = document.getElementById('error');
+const statusEl = document.getElementById('status');
+const submitBtn = document.getElementById('submitBtn');
+
+// Unregister any Flutter service workers so this page loads fresh
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(regs => {
+    regs.forEach(r => r.unregister());
+  });
+}
+
+// If already authenticated, skip to app
+const existing = localStorage.getItem('klukai_token');
+if (existing) {
+  fetch('/api/auth/verify', { headers: { 'Authorization': 'Bearer ' + existing } })
+    .then(r => { if (r.ok) window.location.href = '/app/?_=' + Date.now(); })
+    .catch(() => {});
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  errorEl.textContent = '';
+  statusEl.classList.add('visible');
+  submitBtn.disabled = true;
+
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+
+    if (res.ok && data.token) {
+      localStorage.setItem('klukai_token', data.token);
+      statusEl.textContent = 'LINK ESTABLISHED — REDIRECTING...';
+      setTimeout(() => { window.location.href = '/app/?_=' + Date.now(); }, 400);
+    } else {
+      errorEl.textContent = data.error || 'AUTHENTICATION FAILED';
+      statusEl.classList.remove('visible');
+      submitBtn.disabled = false;
+    }
+  } catch (err) {
+    errorEl.textContent = 'COMM LINK DOWN — CHECK CONNECTION';
+    statusEl.classList.remove('visible');
+    submitBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

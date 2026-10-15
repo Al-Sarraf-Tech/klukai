@@ -601,8 +601,11 @@ class TestImageGen:
 
         monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
         monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
-        generate = AsyncMock(return_value=b"PNG")
-        with patch.object(agy_image_provider, "generate_agy_image", new=generate), \
+        generate = AsyncMock(return_value={"status": "completed", "image": b"PNG"})
+        with patch.object(agy_image_provider, "submit_agy_image", new=generate), \
+             patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)), \
+             patch("app.account_images.insert_request", new=AsyncMock()), \
+             patch("app.account_images.update_request", new=AsyncMock()), \
              patch("app.image_gen.check_comfyui_ready", new=AsyncMock(side_effect=AssertionError("GPU readiness"))), \
              patch.object(bg, "generate_image", new=AsyncMock(side_effect=AssertionError("local rendering"))), \
              patch("app.her_day.render_costume", new=AsyncMock(return_value="blazing_star")):
@@ -616,7 +619,11 @@ class TestImageGen:
         assert "silver hair" in prompt and "green eyes" in prompt
         assert "black leotard" in prompt and "purple jacket" in prompt
         assert "medical-history" not in prompt and "beach" not in prompt and "g11" not in prompt
-        assert generate.await_args.kwargs == {"user_id": "u1", "width": 832, "height": 1216, "include_commander": False}
+        assert generate.await_args.kwargs["user_id"] == "u1"
+        assert generate.await_args.kwargs["width"] == 832
+        assert generate.await_args.kwargs["height"] == 1216
+        assert generate.await_args.kwargs["include_commander"] is False
+        assert generate.await_args.kwargs["request_id"]
         assert any(call.args[1].get("type") == "image" for call in bg_mocks.ws.send.await_args_list)
         assert bg_mocks.memory_archive.save_image.await_args.kwargs["user_id"] == "u1"
 
@@ -625,21 +632,31 @@ class TestImageGen:
 
         monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
         monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
-        generate = AsyncMock(return_value=b"PNG")
-        with patch.object(agy_image_provider, "generate_agy_image", new=generate), \
+        generate = AsyncMock(return_value={"status": "completed", "image": b"PNG"})
+        with patch.object(agy_image_provider, "submit_agy_image", new=generate), \
+             patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)), \
+             patch("app.account_images.insert_request", new=AsyncMock()), \
+             patch("app.account_images.update_request", new=AsyncMock()), \
              patch("app.her_day.render_costume", new=AsyncMock(return_value=None)), \
              patch("app.image_gen.check_comfyui_ready", new=AsyncMock(side_effect=AssertionError("GPU readiness"))):
             await bg.background_image_gen("Draw us together in a landscape", user_id="u1")
-        assert generate.await_args.kwargs == {"user_id": "u1", "width": 1216, "height": 832, "include_commander": True}
+        assert generate.await_args.kwargs["user_id"] == "u1"
+        assert generate.await_args.kwargs["width"] == 1216
+        assert generate.await_args.kwargs["height"] == 832
+        assert generate.await_args.kwargs["include_commander"] is True
+        assert generate.await_args.kwargs["request_id"]
 
     async def test_agy_failure_is_visible_and_never_falls_back(self, bg_mocks, monkeypatch):
         from app import agy_image_provider
 
         monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
         monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
-        generate = AsyncMock(return_value=None)
+        generate = AsyncMock(return_value={"status": "failed", "image": None})
         local = AsyncMock(side_effect=AssertionError("local fallback"))
-        with patch.object(agy_image_provider, "generate_agy_image", new=generate), \
+        with patch.object(agy_image_provider, "submit_agy_image", new=generate), \
+             patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)), \
+             patch("app.account_images.insert_request", new=AsyncMock()), \
+             patch("app.account_images.update_request", new=AsyncMock()), \
              patch.object(bg, "generate_image", new=local), \
              patch("app.her_day.render_costume", new=AsyncMock(return_value=None)), \
              patch("app.image_gen.check_comfyui_ready", new=AsyncMock(side_effect=AssertionError("GPU readiness"))):

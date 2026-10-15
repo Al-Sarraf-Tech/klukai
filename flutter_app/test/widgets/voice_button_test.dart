@@ -3,6 +3,7 @@
 //
 // Imports main.dart (GFL2Colors) -> package:web, so run under chrome.
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:companion_app/widgets/voice_button.dart';
 
@@ -79,6 +80,31 @@ void main() {
       // Toggle back off — exercises the stop/reset branch in didUpdateWidget.
       await tester.pumpWidget(_wrap(const VoiceButton(isRecording: false)));
       expect(find.byIcon(Icons.mic), findsOneWidget);
+    });
+
+    testWidgets('enter starts voice and escape cancels it', (tester) async {
+      var downs = 0;
+      var cancels = 0;
+      await tester.pumpWidget(
+        _wrap(
+          VoiceButton(
+            onTapDown: () => downs++,
+            onCancel: () => cancels++,
+          ),
+        ),
+      );
+      final focus = tester.widget<Focus>(
+        find.descendant(of: find.byType(VoiceButton), matching: find.byType(Focus)),
+      );
+      focus.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(downs, 1);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(cancels, 1);
+      expect(tester.getSize(find.byType(VoiceButton)).shortestSide, greaterThanOrEqualTo(44));
     });
   });
 }
