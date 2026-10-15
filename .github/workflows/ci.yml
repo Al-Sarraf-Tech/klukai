@@ -17,7 +17,7 @@ jobs:
       - name: Verify one-job container bounds and public egress
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           test "$(id -u)" = 1000
           test ! -S /var/run/docker.sock
           test "$(cat /sys/fs/cgroup/memory.max)" = 4294967296
