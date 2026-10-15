@@ -43,4 +43,4 @@ jobs:
           print('Nonroot, cgroup limits, TLS/DNS and sampled private egress verified')
           PY
       - name: Hold all eight slots for host-side concurrency evidence
-        run: sleep 60
+        run: sleep 180
