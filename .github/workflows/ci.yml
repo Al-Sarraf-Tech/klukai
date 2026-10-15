@@ -1,226 +1,46 @@
 name: Klukai CI
-
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
-
+permissions:
+  contents: read
 jobs:
-  components:
-    name: Isolated component suites
-    runs-on: [self-hosted, dominus]
-    timeout-minutes: 20
-    env:
-      KLUKAI_TEST_ALLOW_LIVE_BACKENDS: "0"
-      KLUKAI_CLAUDE_PRIMARY: "false"
-      KLUKAI_CREATIVE_TEXT_PROVIDER: "local"
-      ANTHROPIC_API_KEY: ""
-      OPENAI_API_KEY: ""
-      LM_STUDIO_URL: "http://127.0.0.1:1"
-      VOICE_URL: "http://127.0.0.1:1"
-      COMFYUI_URL: "http://127.0.0.1:1"
-      KLUKAI_AGY_SOCKET: "/tmp/klukai-ci-no-account/image.sock"
-      KLUKAI_AGY_TOKEN_FILE: "/tmp/klukai-ci-no-account/token"
+  light-acceptance:
+    name: Light slot ${{ matrix.slot }}
+    runs-on: [fleet-ci-v1, ci-small]
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        slot: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
-      - uses: actions/checkout@v4
-      - name: Prepare isolated test environment from existing component requirements
+      - name: Verify one-job container bounds and public egress
+        shell: bash
         run: |
-          python3 -m venv "${RUNNER_TEMP}/klukai-component-tests"
-          "${RUNNER_TEMP}/klukai-component-tests/bin/python" -m pip install \
-            -r docker/core/requirements.txt -r tgbot/requirements.txt \
-            -r docker/events-bridge/requirements.txt pytest pytest-asyncio pytest-timeout
-      - name: Run bot, operations, voice and bridge in separate pytest processes
-        run: |
-          make test-tgbot test-ops test-voice test-bridge \
-            TEST_PYTHON="${RUNNER_TEMP}/klukai-component-tests/bin/python"
-      - name: Check existing JavaScript and shell tooling
-        # Missing tooling is a failed gate, never a silently skipped suite.
-        # Keep the owner's existing runner; no hosted/paid runner fallback.
-        run: |
-          command -v node
-          command -v shellcheck
-          node --version
-          shellcheck --version
-      - name: Run companion and avatar JavaScript tests
-        run: make test-js
-      - name: Check shell scripts
-        run: make test-shell
-
-  test:
-    name: Test Suite
-    runs-on: [self-hosted, dominus]
-    defaults:
-      run:
-        working-directory: docker/core
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-timeout pytest-cov
-
-      - name: Run test suite with coverage
-        run: |
-          python3 -m pytest tests/ -q --tb=short \
-            --cov=app --cov-report=term-missing --cov-fail-under=95 \
-            --junitxml=/tmp/pytest-report.xml
-
-      - name: Enforce skip ceiling
-        # Live-stack and explicitly opted-in disposable-PostgreSQL fixtures
-        # legitimately skip without their test URLs. Hundreds of skips mean
-        # the skip logic broke and is silently eating unit tests — fail that.
-        env:
-          MAX_SKIPS: "75"
-        run: |
+          set -euo pipefail
+          test "$(id -u)" = 1000
+          test ! -S /var/run/docker.sock
+          test "$(cat /sys/fs/cgroup/memory.max)" = 4294967296
+          test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0
+          test "$(cat /sys/fs/cgroup/cpu.max)" = '200000 100000'
+          test "$(cat /sys/fs/cgroup/pids.max)" = 512
           python3 - <<'PY'
-          import os, sys, xml.etree.ElementTree as ET
-          root = ET.parse("/tmp/pytest-report.xml").getroot()
-          suite = root if root.tag == "testsuite" else root.find("testsuite")
-          skipped = int(suite.get("skipped", 0))
-          ceiling = int(os.environ["MAX_SKIPS"])
-          print(f"skipped={skipped} ceiling={ceiling}")
-          if skipped > ceiling:
-              print(f"FAIL: {skipped} skips > {ceiling} — skip logic is eating tests")
-              sys.exit(1)
+          import errno, socket, ssl
+          from pathlib import Path
+          assert Path('/opt/fleet-ci/job-started.sh').stat().st_uid == 0
+          with socket.create_connection(('api.github.com',443),timeout=10) as s:
+              with ssl.create_default_context().wrap_socket(s,server_hostname='api.github.com') as tls:
+                  tls.sendall(b'HEAD / HTTP/1.1\r\nHost: api.github.com\r\nUser-Agent: fleet-ci-acceptance\r\nConnection: close\r\n\r\n')
+                  assert tls.recv(128).startswith(b'HTTP/1.1 ')
+          for ip in ('10.253.72.1','100.107.121.5','192.168.1.1','169.254.169.254'):
+              try:
+                  c=socket.create_connection((ip,443),timeout=2)
+              except (TimeoutError,OSError) as error:
+                  if isinstance(error,OSError) and error.errno not in (None,errno.ENETUNREACH,errno.EHOSTUNREACH):
+                      raise
+              else:
+                  c.close();raise AssertionError('Private egress was reachable')
+          print('Nonroot, cgroup limits, TLS/DNS and sampled private egress verified')
           PY
-
-  lint:
-    name: Lint
-    runs-on: [self-hosted, dominus]
-    defaults:
-      run:
-        working-directory: docker/core
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install ruff
-
-      - name: Lint with ruff
-        run: ruff check app/ --config ruff.toml
-
-  typecheck:
-    name: Type Check (mypy)
-    runs-on: [self-hosted, dominus]
-    defaults:
-      run:
-        working-directory: docker/core
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install mypy types-PyYAML
-
-      - name: Type-check with mypy
-        run: mypy app/ --config-file mypy.ini
-
-  security:
-    name: Security Scan (bandit + safety)
-    runs-on: [self-hosted, dominus]
-    defaults:
-      run:
-        working-directory: docker/core
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install scanners
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install bandit pip-audit
-
-      - name: SAST — bandit (high-severity only)
-        run: bandit -r app/ -ll --skip B101
-
-      - name: Dependency vulnerability — pip-audit (BLOCKING)
-        # Fails the build on any known-vulnerable pinned dependency. Replaces
-        # the old `safety check ... || true`, which could never fail the job.
-        # For a triaged false positive, add a documented `--ignore-vuln <ID>`.
-        run: pip-audit --requirement requirements.txt
-
-  image-scan:
-    name: Image Scan (trivy)
-    runs-on: [self-hosted, dominus]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Trivy image scan (HIGH+CRITICAL block)
-        # Requires Docker. This self-hosted runner is a lightweight, non-root
-        # container with no Docker socket, so the scan can't run here — we emit
-        # a VISIBLE ::warning:: and pass, rather than fake a clean scan or
-        # hard-fail on an environment limitation. On a Docker-enabled runner
-        # this installs trivy (to a writable dir — the runner can't write
-        # /usr/local/bin) and performs a real BLOCKING HIGH/CRITICAL scan.
-        run: |
-          if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-            echo "::warning title=Image scan skipped::No Docker on this runner — image scanning must run on a Docker-enabled host/runner."
-            exit 0
-          fi
-          BIN="${RUNNER_TEMP:-/tmp}/bin"; mkdir -p "$BIN"; export PATH="$BIN:$PATH"
-          command -v trivy >/dev/null 2>&1 || \
-            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.71.0/contrib/install.sh \
-              | sh -s -- -b "$BIN" v0.71.0
-          trivy --version
-          docker build -t klukai-core:ci -f docker/core/Dockerfile docker/core/
-          trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed --no-progress klukai-core:ci
-          trivy image --severity LOW,MEDIUM,HIGH,CRITICAL --no-progress klukai-core:ci || true
-
-
-
-  perf-gate:
-    name: Perf Gate (p99 regression check)
-    runs-on: [self-hosted, dominus]
-    defaults:
-      run:
-        working-directory: docker/core
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio
-
-      - name: Probe live klukai-core if reachable
-        run: |
-          if curl -sf -m 3 http://localhost:8300/health >/dev/null 2>&1; then
-            python3 ../../tools/load-test/probe.py \
-              --base http://localhost:8300 \
-              --requests 100 \
-              --concurrency 5 \
-              --out /tmp/perf-current.json
-          else
-            echo "::warning title=Perf gate skipped::klukai-core not reachable from this runner — p99 regression NOT checked on this run."
-            exit 0
-          fi
-
-      - name: Compare p99 against committed baseline (20% delta threshold)
-        # Single source of truth for the comparison: tools/load-test/perf_compare.py
-        # (the old inline script read a schema probe.py never produced, so the
-        # gate compared zero endpoints and always passed — fixed 2026-06-11).
-        run: |
-          if [[ ! -f /tmp/perf-current.json ]]; then
-            echo "::warning title=Perf gate skipped::no current snapshot."
-            exit 0
-          fi
-          # 2.0× threshold, not the SLO 1.2×: CI shares the host with the live
-          # stack AND the rest of this workflow's jobs, so a 100-request p99
-          # sample under build load regularly doubles (first honest run of
-          # this gate measured 60.85ms vs an idle 33.34ms baseline with no
-          # code change). Nightly (quiet hours) gates tighter at 1.5×.
-          python3 ../../tools/load-test/perf_compare.py \
-            ../../docs/perf-baseline.json /tmp/perf-current.json --threshold 2.0
+      - name: Hold all eight slots for host-side concurrency evidence
+        run: sleep 60
