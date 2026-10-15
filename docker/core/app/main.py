@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -43,23 +42,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class _RedactTokenLogFilter(logging.Filter):
-    """Scrub ``?token=...`` from access logs. The WS auth token is passed as a
-    query param, so uvicorn's access log would otherwise persist 30-day bearer
-    tokens in plaintext. (Tokens are already hashed at rest in the DB.)"""
+from .observability.redaction import (  # noqa: E402
+    CredentialLogFilter as _RedactTokenLogFilter,  # noqa: F401 - compatibility
+    install_log_redaction,
+)
 
-    _pat = re.compile(r"token=[^&\s\"']+")
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.args, tuple):
-            record.args = tuple(
-                self._pat.sub("token=***", a) if isinstance(a, str) and "token=" in a else a
-                for a in record.args
-            )
-        return True
-
-
-logging.getLogger("uvicorn.access").addFilter(_RedactTokenLogFilter())
+install_log_redaction()
 
 
 # ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -152,65 +140,65 @@ async def proactive_callback(message: str, user_id: str | None = None) -> bool:
     return (await send_push(title="Klukai", body=message, user_id=recipient)) > 0
 
 
+async def _session_cleanup_loop() -> None:
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            from .auth import cleanup_expired_sessions
+            await cleanup_expired_sessions()
+        except Exception:
+            logger.warning("Session cleanup failed; will retry", exc_info=True)
+
+
+async def _cancel_task(task: asyncio.Task) -> None:
+    if not task.done() and not task.cancelling():
+        task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application startup/shutdown."""
-    await init_pool(min_size=2, max_size=10)
-    await run_migration()
-    from .auth import init_users
-    await init_users()
-    await memory.init()
-    await router.init()
-    await mcp.init()
-    await affection.init()
-    proactive.set_callback(proactive_callback)
-    proactive.set_recap_callback(generate_daily_recap)
-    # A missing session must never fall back to somebody else's private context.
-    async def _get_user_session(user_id: str | None = None):
-        from .decisions import PRIMARY_USER
-        return await memory.get_session(session_id(user_id or PRIMARY_USER))
-    proactive.set_session_getter(_get_user_session)
-    proactive.set_game_active_probe(router.is_game_active)
-    proactive.start()
-    await events_init()
-    load_personality()
-
-    # Strict residency policy: LLMs are load-on-demand and no application
-    # setting can warm or periodically ping them. The compatibility gateway
-    # and runtimes enforce a maximum 900-second idle residency.
-    logger.info("LLM load-on-demand mode (keepalive disabled, max idle TTL 900s)")
-
-    # Session token cleanup — runs every 6 hours
-    async def _session_cleanup_loop():
-        while True:
-            await asyncio.sleep(3600)
-            try:
-                from .auth import cleanup_expired_sessions
-                await cleanup_expired_sessions()
-            except Exception:
-                pass
-    asyncio.create_task(_session_cleanup_loop())
-
-    logger.info("Klukai companion core started (session cleanup every 1h)")
-
+    """Own resources before initialization so partial failures also unwind."""
     from . import job_handoff
-    try:
-        async with job_handoff.running():
-            yield
-    finally:
-        await app.state.voice_jobs.close()
-        proactive.stop()
-        await events_close()
-        await memory.close()
-        await router.close()
-        await mcp.close()
-        await affection.close()
-        from .caches import close as _caches_close
-        from .rate_limit import close as _rate_limit_close
-        await _caches_close()
-        await _rate_limit_close()
-        await close_pool()
-        logger.info("Klukai companion core stopped")
+    from .auth import init_users
+    from .caches import close as _caches_close
+    from .rate_limit import close as _rate_limit_close
+
+    async with AsyncExitStack() as cleanup:
+        # Register before each init: clients/pool workers can exist even when
+        # that initializer raises. ExitStack continues after a cleanup error.
+        cleanup.push_async_callback(close_pool)
+        cleanup.push_async_callback(_caches_close)
+        cleanup.push_async_callback(_rate_limit_close)
+        await init_pool(min_size=2, max_size=10)
+        await run_migration()
+        await init_users()
+        for resource in (memory, router, mcp, affection):
+            cleanup.push_async_callback(resource.close)
+            await resource.init()
+        cleanup.push_async_callback(app.state.voice_jobs.close)
+        proactive.set_callback(proactive_callback)
+        proactive.set_recap_callback(generate_daily_recap)
+        # Missing sessions never borrow another user's private context.
+        async def _get_user_session(user_id: str | None = None):
+            from .decisions import PRIMARY_USER
+            return await memory.get_session(session_id(user_id or PRIMARY_USER))
+        proactive.set_session_getter(_get_user_session)
+        proactive.set_game_active_probe(router.is_game_active)
+        cleanup.push_async_callback(events_close)
+        await events_init()
+        cleanup.push_async_callback(proactive.close)
+        proactive.start()
+        load_personality()
+
+        # Never warm/ping models: load-on-demand with a maximum 900s idle TTL.
+        logger.info("LLM load-on-demand mode (keepalive disabled, max idle TTL 900s)")
+        task = asyncio.create_task(_session_cleanup_loop(), name="session-cleanup")
+        cleanup.push_async_callback(_cancel_task, task)
+        await cleanup.enter_async_context(job_handoff.running())
+        logger.info("Klukai companion core started (session cleanup every 1h)")
+        yield
+    logger.info("Klukai companion core stopped")
 
 
 # docs_url/redoc_url/openapi_url disabled: this is a private single-owner app

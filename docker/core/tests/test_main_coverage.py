@@ -493,9 +493,8 @@ class TestProactiveCallback:
 def lifespan_mocks(monkeypatch):
     """Patch every lifespan collaborator. Returns the key mocks for assertions.
 
-    asyncio.create_task is replaced with a synchronous stub that records the
-    coroutine and closes it (so the never-awaited session-cleanup loop doesn't
-    warn or run).
+    Task creation records real tasks so lifespan must cancel and join them;
+    no application services or provider calls run.
     """
     init_pool = AsyncMock()
     close_pool = AsyncMock()
@@ -523,6 +522,7 @@ def lifespan_mocks(monkeypatch):
     proactive.set_session_getter = MagicMock()
     proactive.start = MagicMock()
     proactive.stop = MagicMock()
+    proactive.close = AsyncMock(side_effect=proactive.stop)
 
     monkeypatch.setattr(main, "memory", memory)
     monkeypatch.setattr(main, "router", router)
@@ -538,13 +538,13 @@ def lifespan_mocks(monkeypatch):
     monkeypatch.setattr("app.auth.cleanup_expired_sessions", AsyncMock(),
                         raising=False)
 
-    # create_task: record + immediately close the coro (don't schedule it).
+    # Run real owned tasks so shutdown cancellation/join is exercised.
     created = []
 
-    def fake_create_task(coro):
-        created.append(coro)
-        coro.close()
-        return MagicMock(spec=asyncio.Task)
+    def fake_create_task(coro, **kwargs):
+        task = asyncio.Task(coro, **kwargs)
+        created.append(task)
+        return task
 
     monkeypatch.setattr(main.asyncio, "create_task", fake_create_task)
 
@@ -679,100 +679,20 @@ class TestLifespan:
         lifespan_mocks.router.keepalive.assert_not_awaited()
         lifespan_mocks.close_pool.assert_awaited_once()
 
-    async def test_session_cleanup_loop_calls_cleanup(self, monkeypatch):
-        """Drive the inner _session_cleanup_loop one iteration via patched sleep.
-
-        We capture the coroutine handed to create_task instead of closing it,
-        then run it once with a sleep that returns then raises CancelledError.
-        """
-        # Patch all startup collaborators minimally.
-        for name in ("init_pool", "close_pool", "run_migration", "events_init",
-                     "events_close"):
-            monkeypatch.setattr(main, name, AsyncMock())
-        for name in ("memory", "router", "mcp", "affection"):
-            obj = MagicMock()
-            obj.init = AsyncMock()
-            obj.close = AsyncMock()
-            obj.keepalive = AsyncMock()
-            obj.get_session = AsyncMock(return_value=None)
-            monkeypatch.setattr(main, name, obj)
-        proactive = MagicMock()
-        for m in ("set_callback", "set_recap_callback", "set_session_getter",
-                  "start", "stop"):
-            setattr(proactive, m, MagicMock())
-        monkeypatch.setattr(main, "proactive", proactive)
-        monkeypatch.setattr(main, "load_personality", MagicMock())
-        monkeypatch.setattr("app.auth.init_users", AsyncMock(), raising=False)
-        cleanup = AsyncMock()
-        monkeypatch.setattr("app.auth.cleanup_expired_sessions", cleanup, raising=False)
-        monkeypatch.delenv("KLUKAI_LLM_KEEPALIVE", raising=False)
-
-        captured = []
-        monkeypatch.setattr(main.asyncio, "create_task",
-                            lambda coro: captured.append(coro) or MagicMock())
-
-        calls = {"n": 0}
-
+    @pytest.mark.parametrize("fail", [False, True])
+    async def test_session_cleanup_loop_retries_after_errors(self, monkeypatch, fail):
+        cleanup = AsyncMock(side_effect=RuntimeError("db blip") if fail else None)
+        monkeypatch.setattr("app.auth.cleanup_expired_sessions", cleanup)
+        calls = 0
         async def sleep_then_cancel(_secs):
-            calls["n"] += 1
-            if calls["n"] >= 2:
+            nonlocal calls
+            calls += 1
+            if calls >= 2:
                 raise asyncio.CancelledError
-
-        async with main.lifespan(main.app):
-            pass
-
-        # Run the captured cleanup-loop coroutine one iteration.
-        assert captured, "session cleanup loop was not scheduled"
         with patch("app.main.asyncio.sleep", new=sleep_then_cancel):
             with pytest.raises(asyncio.CancelledError):
-                await captured[-1]
-        cleanup.assert_awaited()
-
-    async def test_session_cleanup_loop_survives_cleanup_error(self, monkeypatch):
-        """A failing cleanup must be swallowed so the 6h janitor keeps running."""
-        for name in ("init_pool", "close_pool", "run_migration", "events_init",
-                     "events_close"):
-            monkeypatch.setattr(main, name, AsyncMock())
-        for name in ("memory", "router", "mcp", "affection"):
-            obj = MagicMock()
-            obj.init = AsyncMock()
-            obj.close = AsyncMock()
-            obj.keepalive = AsyncMock()
-            obj.get_session = AsyncMock(return_value=None)
-            monkeypatch.setattr(main, name, obj)
-        proactive = MagicMock()
-        for m in ("set_callback", "set_recap_callback", "set_session_getter",
-                  "start", "stop"):
-            setattr(proactive, m, MagicMock())
-        monkeypatch.setattr(main, "proactive", proactive)
-        monkeypatch.setattr(main, "load_personality", MagicMock())
-        monkeypatch.setattr("app.auth.init_users", AsyncMock(), raising=False)
-        # cleanup raises — the loop's except: pass must absorb it.
-        monkeypatch.setattr("app.auth.cleanup_expired_sessions",
-                            AsyncMock(side_effect=RuntimeError("db blip")),
-                            raising=False)
-        monkeypatch.delenv("KLUKAI_LLM_KEEPALIVE", raising=False)
-
-        captured = []
-        monkeypatch.setattr(main.asyncio, "create_task",
-                            lambda coro: captured.append(coro) or MagicMock())
-
-        calls = {"n": 0}
-
-        async def sleep_then_cancel(_secs):
-            calls["n"] += 1
-            if calls["n"] >= 2:
-                raise asyncio.CancelledError
-
-        async with main.lifespan(main.app):
-            pass
-
-        assert captured
-        with patch("app.main.asyncio.sleep", new=sleep_then_cancel):
-            # The RuntimeError is swallowed; only the CancelledError (our stop
-            # signal) escapes — proving the janitor doesn't die on a bad cleanup.
-            with pytest.raises(asyncio.CancelledError):
-                await captured[-1]
+                await main._session_cleanup_loop()
+        cleanup.assert_awaited_once()
 
 
 @pytest.mark.parametrize('cancelled', [False, True])

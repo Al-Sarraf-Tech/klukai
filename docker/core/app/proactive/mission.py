@@ -290,6 +290,8 @@ class MissionMixin(_EngineBase):
     def start_mission(self, description: str, interval_minutes: int = 30,
                        user_id: str = "jalsarraf") -> None:
         """Start a per-user mission timer with periodic LLM-generated field reports."""
+        if self._closing:
+            return
         # Stop existing mission for this user if any
         existing = self._mission_timers.get(user_id)
         if existing and existing.active:
@@ -302,6 +304,8 @@ class MissionMixin(_EngineBase):
                       if self._on_message_callback else None),
             affection_level=self._affection_levels.get(user_id, 0),
         )
+        if timer._task is not None:
+            self._track_task(timer._task)
         self._mission_timers[user_id] = timer
         if user_id == "jalsarraf":
             self._mission_timer = timer  # Primary-owner scheduled context only
@@ -313,13 +317,13 @@ class MissionMixin(_EngineBase):
             timer_snapshot = timer
             had_injury = any("injured" in e for e in timer_snapshot.active_events)
             if trigger_aftermath:
-                asyncio.create_task(
+                self._spawn(
                     self.trigger_mission_aftermath_image(user_id, timer=timer_snapshot)
                 )
-                asyncio.create_task(
+                self._spawn(
                     self._decompression_message(user_id, had_injury, timer_snapshot.update_count)
                 )
-            asyncio.create_task(self._set_post_mission_physical(user_id, had_injury))
+            self._spawn(self._set_post_mission_physical(user_id, had_injury))
             timer.stop()
         self._mission_timers.pop(user_id, None)
         if self._mission_timer is timer:
@@ -500,7 +504,7 @@ class MissionMixin(_EngineBase):
                 except Exception as e:
                     logger.warning("Aftermath image gen failed: %s", e)
 
-            asyncio.create_task(_gen_aftermath())
+            self._spawn(_gen_aftermath())
             logger.info("Mission aftermath triggered: scene=%s", scene_type)
 
         except Exception as e:

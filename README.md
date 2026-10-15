@@ -485,6 +485,8 @@ Account-worker settings are separate from core: `KLUKAI_ACCOUNT_IMAGE_PROVIDERS=
 - Session authorization, mission context, explicit image recovery, Her POV job status and thread receipts are user-scoped.
 - Do not log or commit tokens, cookies, or private keys.
 
+**Stability and security hardening:** [the reviewed patch](docs/handoff/2026-10-15-stability-security-hardening.md) adds credential redaction across logs and trace exports, transactional password-change protection, bounded authentication/socket work, and owned startup/shutdown cleanup. The owner authorized deployment on October 15; the handoff records verification and activation evidence.
+
 ---
 
 ## Testing

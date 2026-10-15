@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from . import memory_archive
 from .context import ws, memory, affection
 from .auth import is_admin
+from .passwords import PasswordWorkBusy
 from .db import get_pool
 
 from .routes import (
@@ -396,7 +397,11 @@ def register_extras(app: FastAPI) -> None:
         if not user_id:
             return ec.auth_required()
         from .auth import change_password
-        ok = await change_password(user_id, req.old_password, req.new_password)
+        try:
+            ok = await change_password(user_id, req.old_password, req.new_password)
+        except PasswordWorkBusy:
+            return JSONResponse({"error": "Authentication busy; retry shortly"},
+                                status_code=503, headers={"Retry-After": "1"})
         if not ok:
             return ec.err(ec.AUTH_INVALID, "Current password incorrect or new password too weak",
                            status_code=400)

@@ -15,6 +15,8 @@ it introduces zero behavior change.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Coroutine
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -37,6 +39,9 @@ class _EngineBase:
     # ── Per-user state maps ────────────────────────────────────────────────
     _affection_levels: dict[str, int]
     _mission_timers: dict[str, MissionTimer]
+    _closing: bool
+    _spawn: Callable[[Coroutine[Any, Any, Any]], asyncio.Task | None]
+    _track_task: Callable[[asyncio.Task], asyncio.Task]
 
     # ── Shared scalar / legacy-compat state ───────────────────────────────
     _muted_until: datetime | None

@@ -44,7 +44,9 @@ class AuthDatabase:
         elif sql.startswith("SELECT password_hash"):
             row = (self.password,)
         elif sql.startswith("UPDATE companion_users SET password_hash"):
-            self.password = params[0]
+            if len(params) < 3 or self.password == params[2]:
+                self.password = params[0]
+                row = (params[1],)
         elif sql.startswith("UPDATE companion_users SET deactivated_at"):
             self.users[params[0]] = False
         elif sql.startswith("DELETE FROM companion_auth_sessions WHERE user_id"):

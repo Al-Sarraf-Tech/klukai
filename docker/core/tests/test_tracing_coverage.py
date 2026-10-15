@@ -110,7 +110,9 @@ class TestInstrumentFastapi:
         with patch("opentelemetry.instrumentation.fastapi.FastAPIInstrumentor",
                    instrumentor):
             assert tracing.instrument_fastapi(app) is True
-        instrumentor.instrument_app.assert_called_once_with(app)
+        assert instrumentor.instrument_app.call_args.args == (app,)
+        assert callable(instrumentor.instrument_app.call_args.kwargs["server_request_hook"])
+        assert "authorization" in instrumentor.instrument_app.call_args.kwargs["http_capture_headers_sanitize_fields"]
 
     def test_failure_is_fail_soft(self):
         tracing._TRACING_INITIALIZED = True

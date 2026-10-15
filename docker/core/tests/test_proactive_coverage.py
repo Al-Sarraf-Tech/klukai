@@ -440,39 +440,24 @@ class TestSchedulerErrorListener:
             return real_add_listener(cb, mask)
 
         with patch.object(e._scheduler, "add_listener", side_effect=spy_add_listener):
-            try:
-                e.start()
-            finally:
-                e.stop()
-
-        assert "cb" in captured, "error listener was not registered"
-
-        # Now drive the listener with a synthetic failing-job event.
-        event = MagicMock()
-        event.job_id = "anniversary_check"
-        event.exception = ValueError("kaboom")
-        event.traceback = "Traceback ..."
-
-        # `from . import audit` resolves the real module attribute, so patch
-        # audit.log directly. create_task is stubbed to consume the coroutine.
-        created = []
-
-        def consume(coro):
-            created.append(coro)
-            coro.close()
-            return MagicMock()
-
-        with patch("app.proactive.engine.logger") as log, \
-             patch("app.audit.log", new=AsyncMock()), \
-             patch("asyncio.create_task", side_effect=consume):
-            captured["cb"](event)
-
-        # The failure was surfaced through the structured logger.
-        assert log.error.called
-        msg = log.error.call_args.args[0]
-        assert "SCHEDULED_JOB_FAILED" in msg
-        # And the best-effort audit write was dispatched.
-        assert len(created) == 1
+            e.start()
+        try:
+            assert "cb" in captured, "error listener was not registered"
+            event = MagicMock(job_id="anniversary_check", exception=ValueError("kaboom"), traceback="Traceback ...")
+            created = []
+            def consume(coro):
+                created.append(coro)
+                coro.close()
+                return MagicMock()
+            with patch("app.proactive.engine.logger") as log, \
+                 patch("app.audit.log", new=AsyncMock()), \
+                 patch("asyncio.create_task", side_effect=consume):
+                captured["cb"](event)
+            assert log.error.called
+            assert "SCHEDULED_JOB_FAILED" in log.error.call_args.args[0]
+            assert len(created) == 1
+        finally:
+            e.stop()
 
     @pytest.mark.asyncio
     async def test_listener_audit_write_failure_is_swallowed(self):
@@ -489,22 +474,16 @@ class TestSchedulerErrorListener:
             return real_add(cb, mask)
 
         with patch.object(e._scheduler, "add_listener", side_effect=spy):
-            try:
-                e.start()
-            finally:
-                e.stop()
-
-        event = MagicMock()
-        event.job_id = "x"
-        event.exception = ValueError("boom")
-        event.traceback = "tb"
-        # audit.log is stubbed to a plain MagicMock (no coroutine created), and
-        # create_task raises — exercising the inner best-effort except/pass.
-        with patch("app.proactive.engine.logger") as log, \
-             patch("app.audit.log", new=MagicMock(return_value=object())), \
-             patch("asyncio.create_task", side_effect=RuntimeError("no loop")):
-            captured["cb"](event)  # must not raise despite create_task failing
-        assert log.error.called  # structured log still emitted
+            e.start()
+        try:
+            event = MagicMock(job_id="x", exception=ValueError("boom"), traceback="tb")
+            with patch("app.proactive.engine.logger") as log, \
+                 patch("app.audit.log", new=AsyncMock()), \
+                 patch("asyncio.create_task", side_effect=RuntimeError("no loop")):
+                captured["cb"](event)
+            assert log.error.called
+        finally:
+            e.stop()
 
     def test_listener_registration_failure_is_swallowed(self):
         """If add_listener itself raises, start() logs a warning and continues
@@ -521,7 +500,7 @@ class TestSchedulerErrorListener:
         warnings = [c.args[0] for c in log.warning.call_args_list]
         assert any("scheduler error listener" in w for w in warnings)
 
-    def test_stop_shuts_down_scheduler_and_active_mission(self):
+    def test_stop_handles_unstarted_scheduler_and_active_mission(self):
         e = ProactiveEngine()
         timer = MagicMock()
         timer.active = True
@@ -529,7 +508,7 @@ class TestSchedulerErrorListener:
         with patch.object(e._scheduler, "shutdown") as shutdown:
             e.stop()
         timer.stop.assert_called_once()
-        shutdown.assert_called_once()
+        shutdown.assert_not_called()  # never started; close must still be safe
 
 
 # ═══════════════════════════════════════════════════════════════════════════

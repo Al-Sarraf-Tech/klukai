@@ -64,10 +64,12 @@ class MemoryManager:
         await self._ensure_msg_collection()
 
     async def close(self) -> None:
-        if self._redis:
-            await self._redis.aclose()
-        if self._http:
-            await self._http.aclose()
+        try:
+            if self._redis:
+                await self._redis.aclose()
+        finally:
+            if self._http:
+                await self._http.aclose()
 
     # ── Stubs for methods attached from memory_exchange.py (S+ Phase 2 §6.1) ──
     # Real implementations are bound at module load via memory_exchange.attach_to().

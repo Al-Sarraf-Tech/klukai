@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 SEND_TIMEOUT_SECONDS = 10.0
 CLOSE_TIMEOUT_SECONDS = 2.0
 SESSION_CHECK_TIMEOUT_SECONDS = 5.0
+HANDSHAKE_TIMEOUT_SECONDS = 5.0
 
 
 class WSManager:
@@ -23,7 +24,12 @@ class WSManager:
     shared cross-socket receive let one device's disconnect tear down another.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_connections: int = 64, max_per_user: int = 8) -> None:
+        if max_connections < 1 or max_per_user < 1:
+            raise ValueError("WebSocket capacity must be positive")
+        self._max_connections = max_connections
+        self._max_per_user = max_per_user
+        self._admissions: dict[WebSocket, str] = {}
         self._connections: dict[str, set[WebSocket]] = {}
         self._disconnect_events: dict[WebSocket, asyncio.Event] = {}
         # Database identities only, never bearer tokens. The endpoint supplies
@@ -105,21 +111,52 @@ class WSManager:
         disconnected: asyncio.Event | None = None,
         session_hash: str | None = None,
     ) -> None:
-        await ws.accept()
-        if disconnected is not None:
-            self._disconnect_events[ws] = disconnected
-        if user_id not in self._connections:
-            self._connections[user_id] = set()
-        self._connections[user_id].add(ws)
-        if session_hash is not None:
-            self._session_hashes[ws] = session_hash
-        count = len(self._connections[user_id])
-        logger.info("WebSocket connected: user=%s (devices=%d)", user_id, count)
-        if not await self.validate_connection(user_id, ws):
-            raise ConnectionError("WebSocket session is no longer valid")
-        if not await self._send_one(ws, {"type": "connected", "status": "ok"}):
-            await self.disconnect(user_id, ws, close=True)
-            raise ConnectionError("Initial WebSocket send failed")
+        total = sum(map(len, self._connections.values())) + len(self._admissions)
+        owned = len(self._connections.get(user_id, ())) + sum(u == user_id for u in self._admissions.values())
+        if total >= self._max_connections:
+            try:
+                # No room even for a rejection handshake. Deny before accept
+                # (HTTP403 under Uvicorn); clients back off without logging out.
+                await asyncio.wait_for(ws.close(code=1013, reason="Connection capacity reached"), CLOSE_TIMEOUT_SECONDS)
+            except Exception:
+                pass
+            raise ConnectionError("WebSocket capacity reached")
+        self._admissions[ws] = user_id
+        if owned >= self._max_per_user:
+            try:
+                # Complete the handshake so clients receive a retryable close,
+                # rather than confusing capacity with invalid authentication.
+                await asyncio.wait_for(ws.accept(), HANDSHAKE_TIMEOUT_SECONDS)
+                await asyncio.wait_for(ws.close(code=1013, reason="Connection capacity reached; retry later"), CLOSE_TIMEOUT_SECONDS)
+            except Exception:
+                pass
+            finally:
+                self._admissions.pop(ws, None)
+            raise ConnectionError("WebSocket capacity reached")
+        # Reserve synchronously before the first await. Concurrent handshakes
+        # count against both bounds until promoted or cleaned up.
+        try:
+            await asyncio.wait_for(ws.accept(), HANDSHAKE_TIMEOUT_SECONDS)
+            self._connections.setdefault(user_id, set()).add(ws)
+            self._admissions.pop(ws, None)
+            if disconnected is not None:
+                self._disconnect_events[ws] = disconnected
+            if session_hash is not None:
+                self._session_hashes[ws] = session_hash
+            count = len(self._connections[user_id])
+            logger.info("WebSocket connected: user=%s (devices=%d)", user_id, count)
+            if not await self.validate_connection(user_id, ws):
+                raise ConnectionError("WebSocket session is no longer valid")
+            if not await self._send_one(ws, {"type": "connected", "status": "ok"}):
+                raise ConnectionError("Initial WebSocket send failed")
+        except asyncio.CancelledError:
+            await self.disconnect(user_id, ws, close=self.has_connection(user_id, ws) or ws in self._admissions)
+            raise
+        except Exception as exc:
+            await self.disconnect(user_id, ws, close=self.has_connection(user_id, ws) or ws in self._admissions)
+            raise ConnectionError("WebSocket admission failed") from exc
+        finally:
+            self._admissions.pop(ws, None)
 
     async def disconnect(
         self, user_id: str = "default", ws: WebSocket | None = None, *, close: bool = False,

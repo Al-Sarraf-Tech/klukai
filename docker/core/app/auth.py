@@ -8,9 +8,8 @@ import os
 import secrets
 from datetime import datetime, timezone
 
-import bcrypt
-
 from .db import get_conn, get_conn_autocommit
+from .passwords import MAX_PASSWORD_BYTES, PasswordWorkBusy, hash_password, verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +79,7 @@ async def init_users() -> None:
                     )
                     continue
 
-                pw_hash = bcrypt.hashpw(
-                    password.encode(), bcrypt.gensalt()
-                ).decode()
+                pw_hash = await hash_password(password)
                 await conn.execute(
                     "INSERT INTO companion_users (id, username, password_hash, display_name) "
                     "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
@@ -139,7 +136,21 @@ async def authenticate(username: str, password: str, ip: str) -> str | None:
                 )
             ).fetchone()
 
-            if row and bcrypt.checkpw(password.encode(), row[1].encode()):
+        # No database connection/transaction is held during expensive CPU work.
+        valid = bool(row) and await verify_password(password, row[1])
+        async with get_conn_autocommit() as conn:
+            if valid:
+                # Serialize with password change/deactivation and recheck the
+                # exact credential verified above. A stale login must never
+                # mint a new session after another transaction revoked it.
+                current = await (await conn.execute(
+                    "SELECT id, password_hash FROM companion_users "
+                    "WHERE id = %s AND password_hash = %s "
+                    "AND deactivated_at IS NULL FOR UPDATE",
+                    (row[0], row[1]),
+                )).fetchone()
+                valid = current is not None
+            if valid:
                 # Success — create token
                 token = secrets.token_urlsafe(48)
                 await conn.execute(
@@ -153,14 +164,6 @@ async def authenticate(username: str, password: str, ip: str) -> str | None:
                     "VALUES (%s, TRUE)",
                     (ip,),
                 )
-                logger.info("User %s authenticated from %s", username, ip)
-                try:
-                    from . import audit
-                    await audit.log(audit.EVENT_LOGIN_SUCCESS, user_id=row[0],
-                                    ip_address=ip, metadata={"username": username})
-                except Exception:
-                    pass
-                return token
             else:
                 # Failure — record attempt
                 await conn.execute(
@@ -168,14 +171,22 @@ async def authenticate(username: str, password: str, ip: str) -> str | None:
                     "VALUES (%s, FALSE)",
                     (ip,),
                 )
-                logger.warning("Failed login for '%s' from %s", username, ip)
-                try:
-                    from . import audit
-                    await audit.log(audit.EVENT_LOGIN_FAILURE, user_id=None,
-                                    ip_address=ip, metadata={"username": username})
-                except Exception:
-                    pass
-                return None
+        # Audit after commit; nested audit connections must not wait while
+        # this transaction owns the user's credential lock.
+        try:
+            from . import audit
+            await audit.log(audit.EVENT_LOGIN_SUCCESS if valid else audit.EVENT_LOGIN_FAILURE,
+                            user_id=row[0] if valid else None,
+                            ip_address=ip, metadata={"username": username})
+        except Exception:
+            pass
+        if valid:
+            logger.info("User %s authenticated from %s", username, ip)
+            return token
+        logger.warning("Failed login for '%s' from %s", username, ip)
+        return None
+    except PasswordWorkBusy:
+        raise
     except Exception as e:
         logger.error("Authentication error: %s", e)
         return None
@@ -291,7 +302,7 @@ async def change_password(user_id: str, old_password: str, new_password: str) ->
     Returns True on success. On success, invalidates ALL existing sessions
     for this user (forces logout on all devices).
     """
-    if not new_password or len(new_password) < 8:
+    if not new_password or len(new_password) < 8 or len(new_password.encode()) > MAX_PASSWORD_BYTES:
         return False
     try:
         async with get_conn_autocommit() as conn:
@@ -301,26 +312,35 @@ async def change_password(user_id: str, old_password: str, new_password: str) ->
                     (user_id,),
                 )
             ).fetchone()
-            if not row or not bcrypt.checkpw(old_password.encode(), row[0].encode()):
+        if not row or not await verify_password(old_password, row[0]):
+            return False
+        new_hash = await hash_password(new_password)
+        async with get_conn_autocommit() as conn:
+            changed = await (await conn.execute(
+                "UPDATE companion_users SET password_hash = %s "
+                "WHERE id = %s AND password_hash = %s AND deactivated_at IS NULL "
+                "RETURNING id",
+                (new_hash, user_id, row[0]),
+            )).fetchone()
+            if changed is None:
                 return False
-            new_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
-            await conn.execute(
-                "UPDATE companion_users SET password_hash = %s WHERE id = %s",
-                (new_hash, user_id),
-            )
             # Invalidate all existing sessions for this user
             await conn.execute(
                 "DELETE FROM companion_auth_sessions WHERE user_id = %s",
                 (user_id,),
             )
-            from .context import ws
-            await ws.revoke_user(user_id)
-            try:
-                from . import audit
-                await audit.log("password.changed", user_id=user_id)
-            except Exception:
-                pass
-            return True
+        # Commit the credential change and session deletion before closing
+        # transports; a reconnect must already see the revoked state.
+        from .context import ws
+        await ws.revoke_user(user_id)
+        try:
+            from . import audit
+            await audit.log("password.changed", user_id=user_id)
+        except Exception:
+            pass
+        return True
+    except PasswordWorkBusy:
+        raise
     except Exception as e:
         logger.error("Password change failed for %s: %s", user_id, e)
         return False

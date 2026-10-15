@@ -66,6 +66,7 @@ def init_tracing() -> bool:
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from .trace_redaction import CredentialRedactingExporter
 
         service_name = os.getenv("OTEL_SERVICE_NAME", "klukai-core")
         endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
@@ -78,7 +79,7 @@ def init_tracing() -> bool:
 
         provider = TracerProvider(resource=resource)
         exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
-        provider.add_span_processor(BatchSpanProcessor(exporter))
+        provider.add_span_processor(BatchSpanProcessor(CredentialRedactingExporter(exporter)))
         trace.set_tracer_provider(provider)
 
         _TRACING_INITIALIZED = True
@@ -99,13 +100,28 @@ def init_tracing() -> bool:
         return False
 
 
+def _redact_request_span(span: Any, _scope: Any) -> None:
+    from .redaction import redact_credentials
+
+    for key, value in (span.attributes or {}).items():
+        if key in {"http.url", "http.target", "url.full", "url.query"} and isinstance(value, str):
+            span.set_attribute(key, redact_credentials(value))
+
+
 def instrument_fastapi(app: Any) -> bool:
     """Wrap a FastAPI app with OTel HTTP middleware. Fail-soft."""
     if not _TRACING_INITIALIZED:
         return False
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        FastAPIInstrumentor.instrument_app(app)
+        sanitized = [v.strip() for v in os.getenv(
+            "OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS", ""
+        ).split(",") if v.strip()]
+        sanitized.extend(["authorization", "proxy-authorization", "cookie", "set-cookie", ".*token.*", ".*api.key.*"])
+        FastAPIInstrumentor.instrument_app(
+            app, server_request_hook=_redact_request_span,
+            http_capture_headers_sanitize_fields=sanitized,
+        )
         logger.info("OTel FastAPI instrumentation enabled")
         return True
     except Exception as e:

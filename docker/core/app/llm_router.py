@@ -178,10 +178,12 @@ class LLMRouter:
         await self._check_lmstudio()
 
     async def close(self) -> None:
-        if self._http:
-            await self._http.aclose()
-        if self._anthropic_http:
-            await self._anthropic_http.aclose()
+        try:
+            if self._http:
+                await self._http.aclose()
+        finally:
+            if self._anthropic_http:
+                await self._anthropic_http.aclose()
 
     def _anthropic_ready(self) -> bool:
         return self._anthropic_http is not None and time.monotonic() >= self._anthropic_retry_at

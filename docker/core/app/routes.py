@@ -15,7 +15,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from . import memory_archive
 from .context import ws, router, affection
@@ -31,6 +31,7 @@ from .lm_gateway import lm_studio_auth_headers
 from .models import SessionState
 from .personality import load_personality
 from .push import add_subscription, get_vapid_public_key
+from .passwords import MAX_PASSWORD_BYTES, PasswordWorkBusy
 from .voice_client import voice_url as _voice_url
 
 
@@ -38,8 +39,8 @@ from .voice_client import voice_url as _voice_url
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=128)
 
 
 class TTSRequest(BaseModel):
@@ -74,6 +75,13 @@ class PushSubscription(BaseModel):
 class ChangePasswordRequest(BaseModel):
     old_password: str = Field(min_length=1)
     new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def bcrypt_byte_limit(cls, value: str) -> str:
+        if len(value.encode()) > MAX_PASSWORD_BYTES:
+            raise ValueError("Password must be at most 72 UTF-8 bytes")
+        return value
 
 
 class TributeRequest(BaseModel):
@@ -125,7 +133,11 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         ip = client_ip(request)
         if await check_ip_banned(ip):
             return JSONResponse({"error": "IP banned"}, status_code=403)
-        token = await authenticate(req.username, req.password, ip)
+        try:
+            token = await authenticate(req.username, req.password, ip)
+        except PasswordWorkBusy:
+            return JSONResponse({"error": "Authentication busy; retry shortly"},
+                                status_code=503, headers={"Retry-After": "1"})
         if token:
             return {"token": token, "user_id": req.username}
         return JSONResponse({"error": "Invalid credentials"}, status_code=401)

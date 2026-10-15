@@ -146,9 +146,13 @@ class TestSchedulerWiringE2E:
             for call in fake_scheduler.add_job.call_args_list
             if "id" in call.kwargs and call.args
         }
-        assert bound["memory_recall"] == e._memory_recall_tick
-        assert bound["seasonal_check"] == e._seasonal_check
-        assert bound["quiet_day_check"] == e._quiet_day_check
+        try:
+            # The ownership wrapper retains the original handler binding.
+            assert bound["memory_recall"].__wrapped__ == e._memory_recall_tick
+            assert bound["seasonal_check"].__wrapped__ == e._seasonal_check
+            assert bound["quiet_day_check"].__wrapped__ == e._quiet_day_check
+        finally:
+            await e.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
