@@ -11,11 +11,11 @@ the change remains entirely on existing self-hosted runners.
 - Keep hashed core dependencies separate from test-tool installation. Bridge
   has its own test environment because it pins Redis 5.2.1 while core pins
   Redis 7.4.0. Voice fixtures require python-multipart; avatar tests require
-  their committed npm lock and Node 24. Operations fixtures require the Docker
-  Compose v2 plugin and Bubblewrap; install missing tools from the CI VM's
-  distribution packages without upgrading existing packages. These are guest
-  tools, not changes to Nobara's host or its AI stack. No inference/model
-  runtime is installed.
+  their committed npm lock and Node 24. Operations fixtures require Bubblewrap
+  and AppArmor tools from the CI VM's distribution packages. A
+  SHA-256-verified official Compose 5.6.0 binary supplies a job-local plugin.
+  These are guest tools, not changes to Nobara's host or its AI stack. No
+  inference/model runtime is installed.
 - Run opt-in migration, durable handoff and account-image recovery tests
   against a digest-pinned disposable PostgreSQL service, never production.
   Keep the existing 75-skip ceiling and 95% coverage requirement.
@@ -37,6 +37,22 @@ and `/usr/bin/bwrap` in the VM during operations tests. The workflow now
 prepares those native tools explicitly and selects supported Node 24 before
 running the unchanged suites. No tests were skipped to accommodate missing
 tools.
+
+Run `38794499397` passed every job except two operations cases: Compose
+2.40.3 omitted explicit `create_host_path: false` values in JSON, and Ubuntu
+denied Bubblewrap's UID mapping. The exact Compose failure was reproduced
+locally with 2.40.3; the official checksum-verified 5.6.0 binary passed all
+15 unchanged Compose contract tests. Keep the contract strict.
+
+When the basic Bubblewrap probe fails, the job loads a checksum-pinned
+upstream AppArmor 4.0.3 `bwrap-userns-restrict` profile (ABI 4.0), scoped to
+`/usr/bin/bwrap` with capability denial for its children. The job refuses to
+replace an existing loaded Bubblewrap policy and removes its own profile in
+an `always()` cleanup step. It never changes the global AppArmor/user-namespace
+sysctls or runs the sandbox regression as root. The profile approach is
+documented by [Ubuntu Security](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007).
+Compose's [official 5.6.0 release](https://github.com/docker/compose/releases/tag/v5.6.0)
+publishes the pinned binary SHA-256 used in the workflow.
 
 Fresh local validation on the repaired tree passed: core 5,060 passed,
 57 skipped, one performance test deselected, with 96.42% coverage; bot 36,
