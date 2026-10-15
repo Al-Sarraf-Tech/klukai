@@ -75,3 +75,41 @@ authorize multiple core workers. Sanitization protects future emitted data;
 it does not rewrite old logs, traces or sealed audit rows. Local tests do not
 establish live provider or browser acceptance. Rollout results, image identity,
 backup and live checks are recorded separately after activation.
+
+## Activated on Amarillo — October 15, 2026
+
+The owner-authorized core-only rollout is live at
+[klukai.appnest.cc/app/](https://klukai.appnest.cc/app/). The deployed source is
+`a56979d7a23c71806a1c0d1319b982048b3d3ea0`, built as
+`klukai-core:stability-security-20261015`, image
+`sha256:37346bb544fe8cccf814491aca8434de7a31ebd2b446286bc587e6d6f6a49a0b`.
+All 108 packaged Python files match that reviewed commit. The subsequent
+documentation commit does not change the runtime source.
+
+The new core is healthy with zero restarts; its 55 environment values, mounts
+and network membership match the prior running container exactly. Gateway
+and PostgreSQL remained running. Local and public readiness, public Flutter
+delivery, authenticated session reads, public authenticated WSS, rejection of
+anonymous/forged credentials, and revocation close `4001` passed. Live Uvicorn
+access logs show redacted WebSocket tokens with no raw probe token. The
+post-rollout server log had no errors. Database, Redis, Qdrant, local model
+ingress, image worker, embeddings and voice health all returned `ok`.
+
+These checks did not render an image, synthesize speech or invoke a paid text
+provider. Image worker health does not verify Google account authentication.
+The temporary test-account session was removed in a `finally` block; no
+existing sessions, passwords or conversation history were deleted.
+
+A fresh backup at
+`/mnt/nvmeINT/backups/klukai/deploy-20261015-hardening/companion.dump` restored
+without errors in disposable PostgreSQL. The restored database has 23 migration
+ledger rows, 32 users and 1,132 messages. The prior core image is retained as
+`klukai-core:before-hardening-20261015` (source `df5cc96`). It already supports
+the current schema; this patch adds no migrations.
+
+Private rollout evidence and the exact runtime-preserving Compose override
+are in `~/.local/state/klukai/deploy-20261015-hardening/`. Future core-only
+operations must retain that override; an unqualified Compose command can
+reintroduce environment drift or select the older default image. Neither this
+patch nor the deployment was pushed to GitHub; the reviewed branch and its
+documentation are mirrored to the owner's Amarillo git server.
