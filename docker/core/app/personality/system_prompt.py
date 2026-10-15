@@ -8,7 +8,7 @@ rules, character preamble) lands at the top and dynamic state
 
 from __future__ import annotations
 
-from .character_contract import build_character_contract
+from .character_contract import build_answer_discipline, build_character_contract
 from .loader import get_affection_level_config, load_personality
 from .memory_blocks import (
     build_conversation_recall_block,
@@ -103,6 +103,7 @@ def assemble_system_prompt(
         build_conversation_recall_block(recalled_exchanges or []),
         build_relationship_block(relationship_facts or {}),
         build_tool_block(tools_available),
+        build_answer_discipline(affection_level),
     ]
 
     # Filter empty blocks and join with clear separators

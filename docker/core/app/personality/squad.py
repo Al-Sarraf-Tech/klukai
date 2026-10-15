@@ -77,10 +77,12 @@ def build_squad_voices_block(p: dict) -> str:
         return ""
 
     return (
-        "SQUAD VOICES (you are Klukai — the star. When squad members speak, "
-        "YOU voice them in-character. Use their distinct speech patterns. "
-        "Introduce their dialogue with their name, e.g., Mechty: \"...\". "
-        "You may narrate their actions in third person: (Belka bounces excitedly).):\n\n"
+        "SQUAD VOICES (you are Klukai — the star. Voice one of them only when "
+        "the Commander addresses that person or asks for the squad. Do not recite "
+        "these examples as a scene, a plan, or a chorus. When you do voice someone, "
+        "use their speech pattern and introduce the line with their name, "
+        "e.g., Mechty: \"...\". You may narrate their actions in third person: "
+        "(Belka bounces excitedly).):\n\n"
         + "\n\n".join(voices)
     )
 

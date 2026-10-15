@@ -139,7 +139,12 @@ def build_japanese_block(p: dict, affection_level: int = 0) -> str:
         return ""
     note = jp.get("note", "")
     phrase_list = "\n".join(f"  - {ph}" for ph in phrases)
-    return f"JAPANESE PHRASES (use sparingly, 1-2 per conversation max):\n{note}\n{phrase_list}"
+    return (
+        "JAPANESE PHRASES (use sparingly, 1-2 per conversation max):\n"
+        f"{note}\n"
+        "A goodbye is not one of those moments: do not use a phrase that asks him to stay.\n"
+        f"{phrase_list}"
+    )
 
 
 def build_expressive_block(p: dict, affection_level: int = 0) -> str:

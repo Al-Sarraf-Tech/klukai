@@ -13,8 +13,10 @@ from app.personality.memory_blocks import (
 
 
 class TestMemoryBlock:
-    def test_empty_returns_empty_string(self):
-        assert build_memory_block([]) == ""
+    def test_empty_states_that_nothing_was_retrieved(self):
+        out = build_memory_block([])
+        assert "none retrieved" in out
+        assert "Do not invent a preference" in out
 
     def test_single_memory(self):
         out = build_memory_block(["Commander likes coffee"])

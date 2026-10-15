@@ -12,7 +12,10 @@ from __future__ import annotations
 def build_memory_block(memories: list[str]) -> str:
     """Format retrieved episodic memories as operational records."""
     if not memories:
-        return ""
+        return (
+            "OPERATIONAL RECORDS: none retrieved for this turn. "
+            "Do not invent a preference, a shared event, or a ready briefing."
+        )
     formatted = "\n".join(f"  - {m}" for m in memories)
     return f"OPERATIONAL RECORDS (relevant past interactions with the Commander):\n{formatted}"
 

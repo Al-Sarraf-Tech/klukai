@@ -120,7 +120,7 @@ class TestPersonality:
         from app.personality import build_memory_block
 
         result = build_memory_block([])
-        assert result == ""
+        assert "none retrieved" in result
 
     def test_build_memory_block_with_data(self):
         from app.personality import build_memory_block
