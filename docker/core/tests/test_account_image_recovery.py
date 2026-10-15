@@ -7,6 +7,7 @@ and archive retries go through POST /api/generate-image.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import asyncio
 import importlib.util
 import io
 import json
@@ -75,9 +76,15 @@ async def account_db(migration_pool, monkeypatch, tmp_path):  # noqa: F811
 def account_worker(monkeypatch):
     module = _worker_module()
     calls: list[str] = []
+    entered = threading.Event()
+    release = threading.Event()
+    release.set()
 
     def render(value, _references):
         calls.append(value["request_id"])
+        entered.set()
+        if not release.wait(15):
+            raise TimeoutError("renderer gate")
         return PNG
 
     with tempfile.TemporaryDirectory(prefix="agyimg-") as directory:
@@ -102,7 +109,10 @@ def account_worker(monkeypatch):
         monkeypatch.setenv("KLUKAI_AGY_SOCKET", str(runtime / "image.sock"))
         monkeypatch.setenv("KLUKAI_AGY_TOKEN_FILE", str(token))
         try:
-            yield {"calls": calls, "state": state, "module": module}
+            yield {
+                "calls": calls, "state": state, "module": module,
+                "entered": entered, "release": release,
+            }
         finally:
             server.shutdown()
             server.server_close()
@@ -234,3 +244,55 @@ async def test_unknown_pending_and_refusal_never_render(account_db, account_work
     assert repeated.status_code == 409
     assert json.loads(repeated.body)["phase"] == "refused"
     assert account_worker["calls"] == []
+
+
+class _Socket:
+    def __init__(self):
+        self.accept = AsyncMock()
+        self.send_text = AsyncMock()
+        self.close = AsyncMock()
+
+
+async def test_chat_picture_survives_disconnect_and_repeats_without_another_render(
+    account_db, account_worker, monkeypatch,
+):
+    """One explicit chat picture keeps its journal id when the last device leaves."""
+    from app.account_images import explicit_request_id
+    from app.background import background_image_gen
+    from app.context import memory, ws
+    from app.image_gen import is_couple_scene, is_landscape
+
+    prompt = "Draw Klukai standing in a quiet garden"
+    user_id = "alice"
+    monkeypatch.setattr(memory, "get_session", AsyncMock(return_value=None))
+    monkeypatch.setattr(memory, "record_milestone", AsyncMock())
+    width, height = (1216, 832) if is_landscape(prompt) else (832, 1216)
+    expected = explicit_request_id(user_id, prompt, width, height, is_couple_scene(prompt))
+    socket = _Socket()
+    await ws.connect(socket, user_id)
+    account_worker["release"].clear()
+    account_worker["entered"].clear()
+    task = asyncio.create_task(background_image_gen(prompt, user_id=user_id))
+    ws.track_task(user_id, task, survive_disconnect=True)
+    try:
+        await asyncio.wait_for(asyncio.to_thread(account_worker["entered"].wait, 10), 12)
+        await ws.disconnect(user_id, socket)
+        assert not task.cancelled()
+        assert task.done() is False
+        account_worker["release"].set()
+        await task
+        await background_image_gen(prompt, user_id=user_id)
+    finally:
+        account_worker["release"].set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if ws.is_connected(user_id):
+            await ws.disconnect(user_id, socket)
+    assert account_worker["calls"] == [expected]
+    async with account_db.connection() as conn:
+        rows = await (await conn.execute(
+            "SELECT id::text FROM companion_account_image_requests WHERE user_id = %s",
+            (user_id,),
+        )).fetchall()
+    assert rows == [(expected,)]

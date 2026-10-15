@@ -25,17 +25,22 @@ class WSManager:
     def __init__(self) -> None:
         self._connections: dict[str, set[WebSocket]] = {}
         self._disconnect_events: dict[WebSocket, asyncio.Event] = {}
-        # Per-user background tasks (image gen, reflection, decompression,
-        # warmup timers). Cancelled on full-user disconnect so an old session
-        # can't write to a stale conn_id or send to a closed WS.
+        # Per-user background tasks (reflection, decompression, warmup timers).
+        # Cancelled on full-user disconnect so an old session can't write to a
+        # stale conn_id or send to a closed WS. Accepted account-image jobs are
+        # kept in _durable_tasks so a closed tab does not abandon the journal.
         self._user_tasks: dict[str, set[asyncio.Task]] = {}
+        self._durable_tasks: dict[str, set[asyncio.Task]] = {}
 
-    def track_task(self, user_id: str, task: asyncio.Task) -> None:
-        """Register a per-user background task. It will be cancelled when the
-        user's last device disconnects. Idempotent — auto-removes completed
-        tasks via add_done_callback.
+    def track_task(self, user_id: str, task: asyncio.Task, *, survive_disconnect: bool = False) -> None:
+        """Register a per-user background task.
+
+        The default is cancelled when the user's last device disconnects.
+        survive_disconnect keeps an accepted account-image job until it finishes.
+        Completed tasks remove themselves.
         """
-        bucket = self._user_tasks.setdefault(user_id, set())
+        store = self._durable_tasks if survive_disconnect else self._user_tasks
+        bucket = store.setdefault(user_id, set())
         bucket.add(task)
 
         def _discard(t: asyncio.Task, _b: set[asyncio.Task] = bucket) -> None:

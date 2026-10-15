@@ -501,6 +501,11 @@ class TestBackgroundDispatch:
             await _drain_tasks()
 
         ns.background_image_gen.assert_awaited_once()
+        image_tracks = [
+            call for call in ns.ws.track_task.call_args_list
+            if call.kwargs.get("survive_disconnect") is True
+        ]
+        assert image_tracks and image_tracks[0].args[0] == "default"
 
     @pytest.mark.asyncio
     async def test_nontrivial_message_schedules_extraction(self):

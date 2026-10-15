@@ -493,12 +493,14 @@ async def background_image_gen(
 
         outcome = None
         if use_agy:
-            from .account_images import complete_archive, fulfill_account_image
+            from .account_images import complete_archive, explicit_request_id, fulfill_account_image
             from .image_provider import cloud_prompt
             full_prompt = f"{user_request}\n\n{cloud_prompt(full_prompt, sfw=aff_level < INTIMATE_MIN_LEVEL)}"
+            # The id is the explicit sentence, so a repeat finds this journal row.
+            request_id = explicit_request_id(user_id, user_request, width, height, couple)
             outcome = await fulfill_account_image(
                 user_id, full_prompt, width=width, height=height,
-                include_commander=couple,
+                include_commander=couple, request_id=request_id,
             )
             img_bytes = outcome.get("image")
         else:

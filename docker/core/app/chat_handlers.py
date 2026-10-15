@@ -674,7 +674,7 @@ async def _handle_message(content: str, session: SessionState, user_id: str = "d
         ws.track_task(user_id, asyncio.create_task(background_image_gen(
             content, chat_context=chat_ctx, squad_members=mentioned_squad,
             user_id=user_id,
-        )))
+        )), survive_disconnect=True)
 
     # Background: extract facts and create episodes
     # Skip extraction for trivial messages (no facts to extract, saves a full LLM round-trip)

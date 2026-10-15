@@ -100,6 +100,26 @@ async def test_slow_socket_times_out_and_self_cleanup_does_not_cancel_sender(mon
 
 
 @pytest.mark.asyncio
+async def test_account_image_job_survives_the_last_device_disconnect():
+    manager = WSManager()
+    socket = Socket()
+    await manager.connect(socket, 'u')
+    release = asyncio.Event()
+
+    async def job():
+        await release.wait()
+        return 'kept'
+
+    task = asyncio.create_task(job())
+    manager.track_task('u', task, survive_disconnect=True)
+    await manager.disconnect('u', socket)
+    assert not task.cancelled()
+    assert manager.is_connected('u') is False
+    release.set()
+    assert await task == 'kept'
+
+
+@pytest.mark.asyncio
 async def test_background_exception_is_retrieved_and_reported(caplog):
     manager = WSManager()
     callback_ran = asyncio.Event()

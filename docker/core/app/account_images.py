@@ -35,6 +35,26 @@ def payload_digest(payload: dict) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+_EXPLICIT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "klukai:explicit-account-image:v1")
+
+
+def explicit_request_id(
+    user_id: str, prompt: str, width: int, height: int, include_commander: bool,
+) -> str:
+    """One id for one explicit picture, stable across a closed tab or a new process."""
+    raw = json.dumps(
+        {
+            "height": height,
+            "include_commander": include_commander,
+            "prompt": prompt,
+            "user_id": user_id,
+            "width": width,
+        },
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    )
+    return str(uuid.uuid5(_EXPLICIT_NAMESPACE, raw))
+
+
 def _normalize_request_id(request_id: str | None) -> str:
     if request_id is None:
         return str(uuid.uuid4())
