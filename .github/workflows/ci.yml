@@ -10,7 +10,7 @@ on:
 jobs:
   components:
     name: Isolated component suites
-    runs-on: [self-hosted, dominus]
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
     timeout-minutes: 20
     env:
       KLUKAI_TEST_ALLOW_LIVE_BACKENDS: "0"
@@ -50,7 +50,7 @@ jobs:
 
   test:
     name: Test Suite
-    runs-on: [self-hosted, dominus]
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
     defaults:
       run:
         working-directory: docker/core
@@ -91,13 +91,19 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: [self-hosted, dominus]
+    runs-on: [fleet-ci-v1, ci-small]
     defaults:
       run:
         working-directory: docker/core
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare isolated Python environment
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/python"
+          echo "${RUNNER_TEMP}/python/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=${RUNNER_TEMP}/python" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: |
@@ -109,13 +115,19 @@ jobs:
 
   typecheck:
     name: Type Check (mypy)
-    runs-on: [self-hosted, dominus]
+    runs-on: [fleet-ci-v1, ci-small]
     defaults:
       run:
         working-directory: docker/core
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare isolated Python environment
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/python"
+          echo "${RUNNER_TEMP}/python/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=${RUNNER_TEMP}/python" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: |
@@ -128,13 +140,19 @@ jobs:
 
   security:
     name: Security Scan (bandit + safety)
-    runs-on: [self-hosted, dominus]
+    runs-on: [fleet-ci-v1, ci-small]
     defaults:
       run:
         working-directory: docker/core
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare isolated Python environment
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/python"
+          echo "${RUNNER_TEMP}/python/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=${RUNNER_TEMP}/python" >> "$GITHUB_ENV"
 
       - name: Install scanners
         run: |
@@ -152,7 +170,7 @@ jobs:
 
   image-scan:
     name: Image Scan (trivy)
-    runs-on: [self-hosted, dominus]
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
 
     steps:
       - uses: actions/checkout@v4
@@ -182,7 +200,7 @@ jobs:
 
   perf-gate:
     name: Perf Gate (p99 regression check)
-    runs-on: [self-hosted, dominus]
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
     defaults:
       run:
         working-directory: docker/core
