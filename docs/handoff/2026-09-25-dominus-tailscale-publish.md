@@ -2,6 +2,18 @@
 
 Date: 2026-09-25. For Claude and Codex. Keep reviewing this. Do not treat a green container healthcheck as proof that Amarillo can reach her.
 
+## CI selector update — owner approved 2026-10-15
+
+After reviewing PRs #5 and #6, the owner instructed Codex to repair and validate
+#6, merge it, then update and merge #5 after CI passes. This supersedes only
+this handoff's historical instruction to retain the `dominus` runner label.
+CI, nightly and release jobs now use the existing self-hosted Nobara
+`[self-hosted, Linux, X64, ci-heavy]` runner; lint, type checking and dependency
+security jobs use the self-hosted ephemeral `[fleet-ci-v1, ci-small]` fleet.
+No GitHub-hosted or paid runner fallback is authorized. GPU/game guards,
+publish-repair rules and the owner's nightly/shutdown deadlines still apply.
+See [the CI handoff](2026-10-15-ci-runner-validation.md).
+
 ## Continue here — reboot proof passed 2026-09-25 11:15 CDT
 
 The owner asked for the proof reboot. The note was written first. Then
