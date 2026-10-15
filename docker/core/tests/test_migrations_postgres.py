@@ -56,9 +56,9 @@ async def legacy_schema(pool, before=None):
 
 async def test_fresh_schema_then_repeat_changes_nothing(migration_pool):
     applied = await apply_migrations(migration_pool, MIGRATIONS)
-    assert len(applied) == 22
+    assert len(applied) == 23
     assert await rows(migration_pool, "SELECT count(*) FROM companion_gifts") == [(1,)]
-    assert await rows(migration_pool, "SELECT count(*) FROM companion_schema_migrations") == [(22,)]
+    assert await rows(migration_pool, "SELECT count(*) FROM companion_schema_migrations") == [(23,)]
     assert await apply_migrations(migration_pool, MIGRATIONS) == []
     assert await rows(migration_pool, "SELECT count(*) FROM companion_gifts") == [(1,)]
 

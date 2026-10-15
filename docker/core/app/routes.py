@@ -441,19 +441,22 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             from .account_images import complete_archive, fulfill_account_image
             from .image_gen import is_couple_scene, is_landscape
             width, height = (1216, 832) if is_landscape(req.prompt) else (832, 1216)
+            aff_state = await affection.get_state(user_id)
             try:
                 outcome = await fulfill_account_image(
                     user_id, req.prompt, width=width, height=height,
                     include_commander=is_couple_scene(req.prompt),
                     request_id=req.request_id,
+                    archive_context={"conversation_id": "api", "mood": "composed",
+                                     "affection_level": aff_state.level},
                 )
             except ValueError:
                 return JSONResponse({"error": "Invalid image request"}, status_code=400)
             if outcome.get("needs_archive"):
-                aff_state = await affection.get_state(user_id)
+                metadata = outcome["archive_metadata"]
                 mem_id = await memory_archive.save_image(
-                    outcome["image"], req.prompt, "api",
-                    mood="composed", affection_level=aff_state.level,
+                    outcome["image"], metadata["prompt"], metadata["conversation_id"],
+                    mood=metadata["mood"], affection_level=metadata["affection_level"],
                     user_id=user_id, memory_id=outcome["request_id"],
                 )
                 outcome = await complete_archive(outcome["request_id"], mem_id, outcome["image"], user_id)
@@ -469,7 +472,8 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                 if outcome.get("archived") and outcome.get("memory_id"):
                     body["memory_id"] = outcome["memory_id"]
                 return body
-            status = 409 if outcome.get("phase") in {"conflict", "refused", "pending", "unknown"} else 500
+            status = (429 if outcome.get("phase") == "busy" else
+                      409 if outcome.get("phase") in {"conflict", "refused", "pending", "unknown"} else 500)
             return JSONResponse(
                 {
                     "error": "Generation failed",

@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 SEND_TIMEOUT_SECONDS = 10.0
 CLOSE_TIMEOUT_SECONDS = 2.0
+SESSION_CHECK_TIMEOUT_SECONDS = 5.0
 
 
 class WSManager:
@@ -25,6 +26,9 @@ class WSManager:
     def __init__(self) -> None:
         self._connections: dict[str, set[WebSocket]] = {}
         self._disconnect_events: dict[WebSocket, asyncio.Event] = {}
+        # Database identities only, never bearer tokens. The endpoint supplies
+        # a hash for every authenticated connection.
+        self._session_hashes: dict[WebSocket, str] = {}
         # Per-user background tasks (reflection, decompression, warmup timers).
         # Cancelled on full-user disconnect so an old session can't write to a
         # stale conn_id or send to a closed WS. Accepted account-image jobs are
@@ -63,9 +67,43 @@ class WSManager:
         """Whether this particular endpoint may still admit inbound turns."""
         return ws in self._connections.get(user_id, ())
 
+    async def validate_connection(
+        self, user_id: str, ws: WebSocket, *, refresh: bool = False
+    ) -> bool:
+        """Fail closed on expired, revoked, deactivated or unavailable auth."""
+        if not self.has_connection(user_id, ws):
+            return False
+        session_hash = self._session_hashes.get(ws)
+        if session_hash is None:
+            # Internal manager users can still connect without token auth;
+            # the public endpoint always binds its authenticated session.
+            return True
+        from .auth import get_user_from_session_hash
+        try:
+            owner = await asyncio.wait_for(
+                get_user_from_session_hash(session_hash, refresh=refresh),
+                SESSION_CHECK_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            owner = None
+        if owner != user_id:
+            await self.disconnect(
+                user_id, ws, close=True, code=4001, reason="Invalid or expired token"
+            )
+            return False
+        # Password reset / disconnect can retire membership during the lookup.
+        return self.has_connection(user_id, ws)
+
+    async def revoke_user(self, user_id: str) -> None:
+        """Retire all devices before waiting on transport or task cleanup."""
+        await self.disconnect(
+            user_id, close=True, code=4001, reason="Invalid or expired token"
+        )
+
     async def connect(
         self, ws: WebSocket, user_id: str = "default", *,
         disconnected: asyncio.Event | None = None,
+        session_hash: str | None = None,
     ) -> None:
         await ws.accept()
         if disconnected is not None:
@@ -73,18 +111,24 @@ class WSManager:
         if user_id not in self._connections:
             self._connections[user_id] = set()
         self._connections[user_id].add(ws)
+        if session_hash is not None:
+            self._session_hashes[ws] = session_hash
         count = len(self._connections[user_id])
         logger.info("WebSocket connected: user=%s (devices=%d)", user_id, count)
+        if not await self.validate_connection(user_id, ws):
+            raise ConnectionError("WebSocket session is no longer valid")
         if not await self._send_one(ws, {"type": "connected", "status": "ok"}):
             await self.disconnect(user_id, ws, close=True)
             raise ConnectionError("Initial WebSocket send failed")
 
     async def disconnect(
-        self, user_id: str = "default", ws: WebSocket | None = None, *, close: bool = False
+        self, user_id: str = "default", ws: WebSocket | None = None, *, close: bool = False,
+        code: int = 1011, reason: str = "Connection send failed; reconnect",
     ) -> None:
         conns = self._connections.get(user_id)
         retired = tuple(conns or ()) if ws is None else (ws,)
         for socket in retired:
+            self._session_hashes.pop(socket, None)
             disconnected = self._disconnect_events.pop(socket, None)
             if disconnected is not None:
                 disconnected.set()
@@ -103,16 +147,18 @@ class WSManager:
         for task in pending:
             if not task.done():
                 task.cancel()
-        if close and ws is not None:
+        async def close_socket(socket: WebSocket) -> None:
             try:
                 await asyncio.wait_for(
-                    ws.close(code=1011, reason="Connection send failed; reconnect"),
+                    socket.close(code=code, reason=reason),
                     CLOSE_TIMEOUT_SECONDS,
                 )
             except Exception:
                 # Membership is already revoked, so this endpoint cannot
                 # process another frame even if the transport cannot close.
                 logger.debug("Could not close retired WebSocket for %s", user_id)
+        if close:
+            await asyncio.gather(*(close_socket(socket) for socket in retired))
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
@@ -130,6 +176,8 @@ class WSManager:
         if not conns:
             return
         for socket in tuple(conns):
+            if not await self.validate_connection(user_id, socket):
+                continue
             if not await self._send_one(socket, data):
                 await self.disconnect(user_id, socket, close=True)
 

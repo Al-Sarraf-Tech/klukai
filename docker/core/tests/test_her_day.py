@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -197,12 +197,14 @@ class TestHerNow:
 class TestActiveMission:
     def test_states(self):
         timer = SimpleNamespace(mission_description="recon")
-        with patch("app.context.proactive", SimpleNamespace(mission_active=True, _mission_timer=timer)):
-            assert hd.active_mission() == "recon"
-        with patch("app.context.proactive", SimpleNamespace(mission_active=True, _mission_timer=None)):
-            assert hd.active_mission() == "on mission"
-        with patch("app.context.proactive", SimpleNamespace(mission_active=False)):
-            assert hd.active_mission() is None
+        getter = MagicMock(return_value=timer)
+        with patch("app.context.proactive", SimpleNamespace(get_mission_timer=getter)):
+            assert hd.active_mission("alice") == "recon"
+            getter.assert_called_once_with("alice")
+            timer.mission_description = ""
+            assert hd.active_mission("alice") == "on mission"
+            getter.return_value = None
+            assert hd.active_mission("alice") is None
 
 
 class TestRenderCostume:

@@ -131,11 +131,11 @@ async def generate_daily_recap(affection_level: int, user_id: str = "jalsarraf")
         return None
 
 
-async def proactive_callback(message: str) -> bool:
+async def proactive_callback(message: str, user_id: str | None = None) -> bool:
     """Deliver a proactive line: into history always, then live or by push.
 
-    Scheduled proactivity is single-user (see the engine's BOUNDARY note), so
-    this addresses the Commander. ``send_proactive`` persists the row even
+    Scheduled proactivity defaults to the primary owner; mission callbacks
+    explicitly carry their owner. ``send_proactive`` persists the row even
     with no device connected — she spoke, it lands in history either way —
     then a connected device has it live, otherwise it goes out as a push.
 
@@ -145,10 +145,11 @@ async def proactive_callback(message: str) -> bool:
     """
     from .decisions import PRIMARY_USER
 
-    await ws.send_proactive(PRIMARY_USER, message)
-    if ws.is_connected(PRIMARY_USER):
+    recipient = user_id or PRIMARY_USER
+    await ws.send_proactive(recipient, message)
+    if ws.is_connected(recipient):
         return True
-    return (await send_push(title="Klukai", body=message)) > 0
+    return (await send_push(title="Klukai", body=message, user_id=recipient)) > 0
 
 
 @asynccontextmanager
@@ -164,21 +165,11 @@ async def lifespan(app: FastAPI):
     await affection.init()
     proactive.set_callback(proactive_callback)
     proactive.set_recap_callback(generate_daily_recap)
-    # Session getter tries the primary user first, then any connected user
-    async def _get_any_session(user_id: str = None):
-        # Try specific user first if provided
-        if user_id:
-            s = await memory.get_session(session_id(user_id))
-            if s:
-                return s
-        # Try any connected user
-        for uid in list(ws._connections.keys()):
-            s = await memory.get_session(session_id(uid))
-            if s:
-                return s
-        # Fallback to primary user
-        return await memory.get_session(session_id("jalsarraf"))
-    proactive.set_session_getter(_get_any_session)
+    # A missing session must never fall back to somebody else's private context.
+    async def _get_user_session(user_id: str | None = None):
+        from .decisions import PRIMARY_USER
+        return await memory.get_session(session_id(user_id or PRIMARY_USER))
+    proactive.set_session_getter(_get_user_session)
     proactive.set_game_active_probe(router.is_game_active)
     proactive.start()
     await events_init()

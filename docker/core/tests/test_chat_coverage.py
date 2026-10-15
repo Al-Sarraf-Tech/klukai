@@ -82,6 +82,7 @@ def _fake_ws_manager():
     ws = MagicMock()
     ws.connect = AsyncMock()
     ws.disconnect = AsyncMock()
+    ws.validate_connection = AsyncMock(return_value=True)
     ws.track_task = MagicMock()
     ws.send = AsyncMock()
     ws.send_mood = AsyncMock()
@@ -533,6 +534,7 @@ class TestWebSocketEndpoint:
 
         proactive = MagicMock()
         proactive.mission_active = False
+        proactive.get_mission_timer = MagicMock(return_value=None)
         proactive.set_affection_level = MagicMock()
         proactive.start_mission = MagicMock()
 
@@ -552,8 +554,8 @@ class TestWebSocketEndpoint:
         ):
             await endpoint(sock)
 
-        proactive.set_affection_level.assert_called_once_with(6)
-        proactive.start_mission.assert_called_once_with("patrol", 20)
+        proactive.set_affection_level.assert_called_once_with(6, user_id="u1")
+        proactive.start_mission.assert_called_once_with("patrol", 20, user_id="u1")
 
     @pytest.mark.asyncio
     async def test_message_type_dispatches_to_handle_message(self):

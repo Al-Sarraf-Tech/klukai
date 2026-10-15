@@ -127,18 +127,9 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         self._last_random_event: datetime | None = None
         self._last_message_time: datetime | None = None
         self._last_spontaneous_art: datetime | None = None
-        # Globally-scoped state for SCHEDULED broadcasts (morning / dream /
-        # romance / quiet-day / seasonal check-ins). Those jobs fire ONE message
-        # that is fanned out to every connected device, so they intentionally
-        # read a single shared value instead of per-user state.
-        #
-        # BOUNDARY: this assumes a single primary user (the Commander). With
-        # multiple distinct users connected, set_affection_level / set_last_mood
-        # are last-writer-wins for these scalars, so a scheduled broadcast would
-        # pick messages for whoever updated last. True per-recipient scheduled
-        # proactivity would require _deliver to iterate connected users and key
-        # these flags/levels by user_id. Deferred until the product is multi-user
-        # — the message-DRIVEN paths above are already correctly per-user.
+        # Scheduled proactivity intentionally belongs to the primary owner.
+        # Keep its legacy scalar state separate from other users' missions,
+        # moods and affection; user-driven work must use the per-user maps.
         self._proactive_count_today: int = 0
         self._last_proactive_answered: bool = True
         self._random_events_today: int = 0
@@ -169,12 +160,14 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
     def set_affection_level(self, level: int, user_id: str = "jalsarraf") -> None:
         """Update the current affection level for message selection (per-user)."""
         self._affection_levels[user_id] = level
-        self._affection_level = level  # Legacy compat for scheduled jobs
+        if user_id == "jalsarraf":
+            self._affection_level = level  # Primary-owner scheduled jobs
 
     def set_last_mood(self, mood: str, user_id: str = "jalsarraf") -> None:
         """Track the last mood for context-aware event filtering (per-user)."""
         self._moods[user_id] = mood
-        self._last_mood = mood  # Legacy compat for scheduled jobs
+        if user_id == "jalsarraf":
+            self._last_mood = mood  # Primary-owner scheduled jobs
 
     def set_session_getter(self, getter) -> None:
         """Set a callback to retrieve current session state (for romance context)."""
@@ -473,6 +466,10 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             logger.info("Scheduler catch-up replayed: %s", ", ".join(ran))
 
     def stop(self) -> None:
+        for timer in self._mission_timers.values():
+            if timer.active:
+                timer.stop()
+        self._mission_timers.clear()
         if self._mission_timer and self._mission_timer.active:
             self._mission_timer.stop()
         self._scheduler.shutdown(wait=False)

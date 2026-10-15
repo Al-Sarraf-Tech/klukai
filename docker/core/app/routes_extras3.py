@@ -321,6 +321,8 @@ def register_extras3(app: FastAPI) -> None:
                     "DELETE FROM companion_auth_sessions WHERE user_id = %s",
                     (user_id,),
                 )
+            from .context import ws
+            await ws.revoke_user(user_id)
             try:
                 from . import audit
                 await audit.log(

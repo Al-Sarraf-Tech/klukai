@@ -169,15 +169,12 @@ class HerNow:
         return out
 
 
-def active_mission() -> str | None:
-    """The running mission's description, if she is deployed."""
+def active_mission(user_id: str = "jalsarraf") -> str | None:
+    """The requested user's running mission, if she is deployed for them."""
     from . import context
 
-    pro = context.proactive
-    if not getattr(pro, "mission_active", False):
-        return None
-    timer = getattr(pro, "_mission_timer", None)
-    return getattr(timer, "mission_description", None) or "on mission"
+    timer = context.proactive.get_mission_timer(user_id)
+    return (timer.mission_description or "on mission") if timer else None
 
 
 async def her_now(

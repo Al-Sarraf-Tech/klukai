@@ -116,6 +116,8 @@ def bg_mocks(monkeypatch):
     proactive.start_mission = MagicMock()
     proactive.mission_active = False
     proactive._last_mood = "composed"
+    proactive._moods = {"u1": "composed"}
+    proactive.get_mission_timer = MagicMock(return_value=None)
 
     context_mod = MagicMock()
     context_mod.COMPACT_THRESHOLD = 8
@@ -217,7 +219,7 @@ class TestExtractionMood:
         await bg.background_extraction("m", "r", session, user_id="u1")
         assert bg_mocks.memory.get_session.return_value.mood == "affectionate"
         bg_mocks.ws.send_mood.assert_awaited_once_with("u1", "affectionate")
-        bg_mocks.proactive.set_last_mood.assert_called_once_with("affectionate")
+        bg_mocks.proactive.set_last_mood.assert_called_once_with("affectionate", user_id="u1")
 
     async def test_mood_contagion_nudges_toward_sentiment(self, bg_mocks):
         """When interaction maps to a sentiment, nudge_mood adjusts the mood."""
@@ -280,22 +282,22 @@ class TestExtractionMilestones:
         against _last_mood AFTER set_last_mood passed here while being dead
         code in production (it only ever saw the new mood)."""
         proactive.set_last_mood.side_effect = (
-            lambda mood, **_kw: setattr(proactive, "_last_mood", mood)
+            lambda mood, **kw: proactive._moods.__setitem__(kw["user_id"], mood)
         )
 
     async def test_vigilant_starts_mission_only_after_battle_ready(self, bg_mocks):
         """vigilant joins mission_moods only when the PREVIOUS mood was battle_ready."""
         bg_mocks.extract_facts.return_value = _base_extract_result(mood="vigilant")
-        bg_mocks.proactive._last_mood = "battle_ready"
+        bg_mocks.proactive._moods["u1"] = "battle_ready"
         self._real_set_last_mood(bg_mocks.proactive)
         bg_mocks.proactive.mission_active = False
         await bg.background_extraction("m", "r", _session(2), user_id="u1")
         bg_mocks.proactive.start_mission.assert_called_once()
-        assert bg_mocks.proactive._last_mood == "vigilant"  # the new mood was still recorded
+        assert bg_mocks.proactive._moods["u1"] == "vigilant"  # the new mood was still recorded
 
     async def test_vigilant_no_mission_when_prev_mood_calm(self, bg_mocks):
         bg_mocks.extract_facts.return_value = _base_extract_result(mood="vigilant")
-        bg_mocks.proactive._last_mood = "composed"
+        bg_mocks.proactive._moods["u1"] = "composed"
         self._real_set_last_mood(bg_mocks.proactive)
         bg_mocks.proactive.mission_active = False
         await bg.background_extraction("m", "r", _session(2), user_id="u1")
@@ -315,7 +317,7 @@ class TestExtractionAffection:
         bg_mocks.affection.apply_classification.assert_awaited_once_with(
             "affection", 6, "u1"
         )
-        bg_mocks.proactive.set_affection_level.assert_called_once_with(6)
+        bg_mocks.proactive.set_affection_level.assert_called_once_with(6, user_id="u1")
         bg_mocks.ws.send_affection.assert_awaited_once()
 
     async def test_intensity_clamped_into_1_10(self, bg_mocks):

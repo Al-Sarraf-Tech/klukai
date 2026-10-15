@@ -92,7 +92,7 @@ class TestDecompressionMessage:
         e = ProactiveEngine()
         cb = AsyncMock()
         e._on_message_callback = cb
-        e._affection_level = 8  # >= 7 threshold
+        e.set_affection_level(8, user_id="alice")  # >= 7 threshold for this owner
         with _freeze(_AFTERNOON), \
              patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
              patch("app.proactive.mission.random.uniform", return_value=0):

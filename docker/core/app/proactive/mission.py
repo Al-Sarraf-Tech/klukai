@@ -11,6 +11,7 @@ import logging
 import random
 import time
 from datetime import timedelta
+from functools import partial
 
 from . import state
 from .base import _EngineBase
@@ -281,6 +282,11 @@ class MissionMixin(_EngineBase):
 
     # ── Mission timer management ──────────────────────────────────────────
 
+    def get_mission_timer(self, user_id: str = "jalsarraf") -> MissionTimer | None:
+        """Return only this user's active mission, never a shared fallback."""
+        timer = self._mission_timers.get(user_id)
+        return timer if timer and timer.active else None
+
     def start_mission(self, description: str, interval_minutes: int = 30,
                        user_id: str = "jalsarraf") -> None:
         """Start a per-user mission timer with periodic LLM-generated field reports."""
@@ -292,15 +298,17 @@ class MissionMixin(_EngineBase):
         timer.start(
             description=description,
             interval_minutes=interval_minutes,
-            callback=self._on_message_callback,
+            callback=(partial(self._on_message_callback, user_id=user_id)
+                      if self._on_message_callback else None),
             affection_level=self._affection_levels.get(user_id, 0),
         )
         self._mission_timers[user_id] = timer
-        self._mission_timer = timer  # Legacy compat
+        if user_id == "jalsarraf":
+            self._mission_timer = timer  # Primary-owner scheduled context only
 
     def stop_mission(self, user_id: str = "jalsarraf", trigger_aftermath: bool = True) -> None:
         """Stop the active mission timer for a user. Triggers aftermath image + decompression."""
-        timer = self._mission_timers.get(user_id) or self._mission_timer
+        timer = self._mission_timers.get(user_id)
         if timer and timer.active:
             timer_snapshot = timer
             had_injury = any("injured" in e for e in timer_snapshot.active_events)
@@ -314,7 +322,8 @@ class MissionMixin(_EngineBase):
             asyncio.create_task(self._set_post_mission_physical(user_id, had_injury))
             timer.stop()
         self._mission_timers.pop(user_id, None)
-        self._mission_timer = None  # Legacy compat
+        if self._mission_timer is timer:
+            self._mission_timer = None
 
     async def _set_post_mission_physical(self, user_id: str, had_injury: bool) -> None:
         """Set physical state after mission ends."""
@@ -351,7 +360,7 @@ class MissionMixin(_EngineBase):
             # Normal decompression
             messages = _decompression_normal()
 
-        if self._affection_level >= 7:
+        if self._affection_levels.get(user_id, 0) >= 7:
             # At high affection, add physical closeness
             intimate_addons = _decompression_intimate_addons()
             message = random.choice(messages) + random.choice(intimate_addons)
@@ -360,11 +369,12 @@ class MissionMixin(_EngineBase):
 
         self._proactive_count_today += 1
         self._last_proactive_answered = False
-        await self._on_message_callback(message)
+        await self._on_message_callback(message, user_id=user_id)
         logger.info("Decompression message delivered (injury=%s, updates=%d)", had_injury, update_count)
 
     @property
     def mission_active(self) -> bool:
+        """Whether the primary owner is deployed (for scheduled check-ins)."""
         return self._mission_timer is not None and self._mission_timer.active
 
     async def _mission_report(self) -> None:
@@ -467,13 +477,13 @@ class MissionMixin(_EngineBase):
             prompt = build_mission_prompt(
                 scene_type=scene_type,
                 injuries=timer.active_events,
-                affection_level=self._affection_level,
+                affection_level=self._affection_levels.get(user_id, 0),
             )
 
             # Aftermath caption (config-driven; literal fallback preserves behavior)
             captions = _aftermath_captions()
             caption = random.choice(captions.get(scene_type, captions["victory"]))
-            await self._on_message_callback(caption)
+            await self._on_message_callback(caption, user_id=user_id)
 
             # Generate and send the aftermath image in background
             async def _gen_aftermath():

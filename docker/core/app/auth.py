@@ -208,16 +208,24 @@ async def get_user_from_token(token: str) -> str | None:
     current expiry is <3 days away, so an active user never gets logged
     out mid-session.
     """
+    return await get_user_from_session_hash(_hash_token(token), refresh=True)
+
+
+async def get_user_from_session_hash(session_hash: str, *, refresh: bool = False) -> str | None:
+    """Revalidate an admitted session without retaining its bearer credential.
+
+    Passive WebSocket delivery must not extend a session's idle lifetime.
+    Explicit inbound activity may request the same refresh as HTTP auth.
+    """
     try:
         async with get_conn_autocommit() as conn:
-            token_hash = _hash_token(token)
             row = await (
                 await conn.execute(
                     "SELECT s.user_id, s.expires_at, s.created_at "
                     "FROM companion_auth_sessions s "
                     "JOIN companion_users u ON u.id = s.user_id "
                     "WHERE s.token = %s AND u.deactivated_at IS NULL",
-                    (token_hash,),
+                    (session_hash,),
                 )
             ).fetchone()
             if row:
@@ -236,13 +244,13 @@ async def get_user_from_token(token: str) -> str | None:
                     logger.debug("Token exceeded absolute lifetime (%dd) for user %s", SESSION_MAX_DAYS, row[0])
                 elif now < expires:
                     # Roll the expiry forward on active use (within 3 days of expiry)
-                    if expires - now < timedelta(days=3):
+                    if refresh and expires - now < timedelta(days=3):
                         try:
                             await conn.execute(
                                 "UPDATE companion_auth_sessions "
                                 "SET expires_at = NOW() + INTERVAL '7 days' "
                                 "WHERE token = %s",
-                                (token_hash,),
+                                (session_hash,),
                             )
                         except Exception:
                             pass  # refresh is best-effort
@@ -305,6 +313,8 @@ async def change_password(user_id: str, old_password: str, new_password: str) ->
                 "DELETE FROM companion_auth_sessions WHERE user_id = %s",
                 (user_id,),
             )
+            from .context import ws
+            await ws.revoke_user(user_id)
             try:
                 from . import audit
                 await audit.log("password.changed", user_id=user_id)

@@ -166,10 +166,10 @@ async def _initialize_session(user_id: str) -> SessionState:
             await memory.save_session(key, session)
         if session.mood != "composed":
             await ws.send_mood(user_id, session.mood)
-        if session.mission_description and session.mission_interval and not proactive.mission_active:
+        if session.mission_description and session.mission_interval and not proactive.get_mission_timer(user_id):
             aff_state = await affection.get_state(user_id)
-            proactive.set_affection_level(aff_state.level)
-            proactive.start_mission(session.mission_description, session.mission_interval)
+            proactive.set_affection_level(aff_state.level, user_id=user_id)
+            proactive.start_mission(session.mission_description, session.mission_interval, user_id=user_id)
         return session
 
 
@@ -180,7 +180,7 @@ async def _admit_turn(
     key = session_id(user_id)
     async with memory.session_owner(key):
         # The device may have been retired while this turn waited for ownership.
-        if websocket is not None and not ws.has_connection(user_id, websocket):
+        if websocket is not None and not await ws.validate_connection(user_id, websocket, refresh=True):
             return
         try:
             session = await memory.get_session(key)
@@ -237,7 +237,7 @@ def register_websocket(app: FastAPI) -> None:
         # Flutter app reconnects forever instead of returning to login.
         token = websocket.query_params.get("token", "")
         if token:
-            from .auth import get_user_from_token
+            from .auth import get_user_from_token, _hash_token
             user_id = await get_user_from_token(token)
             if not user_id:
                 await websocket.accept()
@@ -251,7 +251,11 @@ def register_websocket(app: FastAPI) -> None:
 
         disconnected = asyncio.Event()
         try:
-            await ws.connect(websocket, user_id, disconnected=disconnected)
+            await ws.connect(
+                websocket, user_id, disconnected=disconnected,
+                session_hash=_hash_token(token),
+            )
+            token = ""  # Do not keep another bearer reference for the socket's lifetime.
 
             # He just opened the app. Start loading the model now so it is resident
             # by the time he has finished typing, instead of making him watch a
@@ -303,9 +307,9 @@ def register_websocket(app: FastAPI) -> None:
                         raw = await _receive_device_frame(websocket, disconnected)
                     except WebSocketDisconnect:
                         break
-                    # A failed send may retire this socket while receive was
-                    # pending, including when its bounded close timed out.
-                    if not ws.has_connection(user_id, websocket):
+                    # Authentication may expire or be revoked while receive
+                    # waits, including on another process. Check every frame.
+                    if not await ws.validate_connection(user_id, websocket, refresh=True):
                         break
                     try:
                         data = json.loads(raw)

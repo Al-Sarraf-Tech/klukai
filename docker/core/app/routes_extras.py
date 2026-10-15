@@ -149,7 +149,7 @@ def register_extras(app: FastAPI) -> None:
         # is the permission, no daily cap) — the onesie, the oath "on a day that
         # matters", the seasons and the hour hold here too.
         from . import her_day
-        now = await her_day.her_now(user_id, aff.level, mission=her_day.active_mission())
+        now = await her_day.her_now(user_id, aff.level, mission=her_day.active_mission(user_id))
         row = await wardrobe.ensure_today(user_id, aff.level)
         outcome = wardrobe.decide_request(
             cat[oid], aff.level, current_id=now.outfit.id, request_changes=0,
