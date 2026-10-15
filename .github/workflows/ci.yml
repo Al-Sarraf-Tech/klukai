@@ -10,7 +10,7 @@ on:
 jobs:
   components:
     name: Isolated component suites
-    runs-on: [self-hosted, dominus]
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
     timeout-minutes: 20
     env:
       KLUKAI_TEST_ALLOW_LIVE_BACKENDS: "0"
@@ -25,16 +25,67 @@ jobs:
       KLUKAI_AGY_TOKEN_FILE: "/tmp/klukai-ci-no-account/token"
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare native operations test tools
+        run: |
+          if ! command -v bwrap >/dev/null 2>&1 || ! command -v apparmor_parser >/dev/null 2>&1; then
+            sudo -n apt-get update
+            sudo -n apt-get install -y --no-install-recommends --no-upgrade bubblewrap apparmor
+          fi
+          bwrap --version
+      - name: Prepare pinned Compose contract renderer
+        run: |
+          # Compose 2.40 omits explicit false values from JSON. Use the same
+          # supported renderer as the local contract proof; do not relax it.
+          ci_docker_config="${RUNNER_TEMP}/klukai-compose"
+          mkdir -p "$ci_docker_config/cli-plugins"
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 \
+            https://github.com/docker/compose/releases/download/v5.6.0/docker-compose-linux-x86_64 \
+            --output "$ci_docker_config/cli-plugins/docker-compose"
+          echo "40343e21ca777173e69cff5dbafeb37c6f81f3b0d57d9e597f036e95eb63e76a  $ci_docker_config/cli-plugins/docker-compose" | sha256sum --check
+          chmod 0755 "$ci_docker_config/cli-plugins/docker-compose"
+          echo "DOCKER_CONFIG=$ci_docker_config" >> "$GITHUB_ENV"
+          DOCKER_CONFIG="$ci_docker_config" docker compose version
+      - name: Prepare scoped Bubblewrap namespace policy
+        run: |
+          if ! bwrap --ro-bind / / -- /usr/bin/true; then
+            # Use the upstream ABI 4.0 profile recommended by Ubuntu. Children
+            # lose capabilities; the global user-namespace restriction stays on.
+            sudo -n test -r /sys/kernel/security/apparmor/profiles
+            if sudo -n grep -q bwrap /sys/kernel/security/apparmor/profiles; then
+              echo 'An existing Bubblewrap policy requires operator review; refusing to replace it.' >&2
+              exit 1
+            fi
+            ci_bwrap_profile="${RUNNER_TEMP}/klukai-bwrap-userns-restrict"
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 \
+              https://gitlab.com/apparmor/apparmor/-/raw/b4dfdf50f50ed1d64161424d036a2453645f0cfe/profiles/apparmor/profiles/extras/bwrap-userns-restrict \
+              --output "$ci_bwrap_profile"
+            echo "a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859  $ci_bwrap_profile" | sha256sum --check
+            echo "KLUKAI_CI_BWRAP_PROFILE=$ci_bwrap_profile" >> "$GITHUB_ENV"
+            sudo -n apparmor_parser --replace "$ci_bwrap_profile"
+            bwrap --ro-bind / / -- /usr/bin/true
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Prepare isolated test environment from existing component requirements
         run: |
           python3 -m venv "${RUNNER_TEMP}/klukai-component-tests"
+          # Keep the hashed application lock in its own pip invocation.
           "${RUNNER_TEMP}/klukai-component-tests/bin/python" -m pip install \
-            -r docker/core/requirements.txt -r tgbot/requirements.txt \
-            -r docker/events-bridge/requirements.txt pytest pytest-asyncio pytest-timeout
+            -r docker/core/requirements.txt
+          "${RUNNER_TEMP}/klukai-component-tests/bin/python" -m pip install \
+            -r tgbot/requirements.txt python-multipart==0.0.22 \
+            pytest==9.0.2 pytest-asyncio==1.3.0 pytest-timeout==2.4.0
+          # Bridge pins an older Redis than core; never resolve them together.
+          python3 -m venv "${RUNNER_TEMP}/klukai-bridge-tests"
+          "${RUNNER_TEMP}/klukai-bridge-tests/bin/python" -m pip install \
+            -r docker/events-bridge/requirements.txt \
+            pytest==9.0.2 pytest-asyncio==1.3.0 pytest-timeout==2.4.0
       - name: Run bot, operations, voice and bridge in separate pytest processes
         run: |
-          make test-tgbot test-ops test-voice test-bridge \
+          make test-tgbot test-ops test-voice \
             TEST_PYTHON="${RUNNER_TEMP}/klukai-component-tests/bin/python"
+          make test-bridge TEST_PYTHON="${RUNNER_TEMP}/klukai-bridge-tests/bin/python"
       - name: Check existing JavaScript and shell tooling
         # Missing tooling is a failed gate, never a silently skipped suite.
         # Keep the owner's existing runner; no hosted/paid runner fallback.
@@ -43,14 +94,42 @@ jobs:
           command -v shellcheck
           node --version
           shellcheck --version
+      - name: Install locked avatar test dependencies
+        run: npm ci --prefix tools/avatar --ignore-scripts
       - name: Run companion and avatar JavaScript tests
         run: make test-js
       - name: Check shell scripts
         run: make test-shell
+      - name: Remove job-specific Bubblewrap policy
+        if: always()
+        run: |
+          if [ -n "${KLUKAI_CI_BWRAP_PROFILE:-}" ]; then
+            if ! sudo -n apparmor_parser --remove "$KLUKAI_CI_BWRAP_PROFILE"; then
+              # Loading may have been interrupted. Absence is clean; a
+              # remaining profile is a real cleanup failure.
+              if sudo -n grep -Eq '^(bwrap|unpriv_bwrap)( |//)' /sys/kernel/security/apparmor/profiles; then
+                exit 1
+              fi
+            fi
+          fi
 
   test:
     name: Test Suite
-    runs-on: [self-hosted, dominus]
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1
+        env:
+          POSTGRES_PASSWORD: klukai-ci-disposable
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      KLUKAI_TEST_ALLOW_LIVE_BACKENDS: "0"
     defaults:
       run:
         working-directory: docker/core
@@ -65,6 +144,8 @@ jobs:
           pip install pytest pytest-asyncio pytest-timeout pytest-cov
 
       - name: Run test suite with coverage
+        env:
+          KLUKAI_MIGRATION_TEST_DATABASE_URL: postgresql://postgres:klukai-ci-disposable@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
         run: |
           python3 -m pytest tests/ -q --tb=short \
             --cov=app --cov-report=term-missing --cov-fail-under=95 \
@@ -91,13 +172,19 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: [self-hosted, dominus]
+    runs-on: [fleet-ci-v1, ci-small]
     defaults:
       run:
         working-directory: docker/core
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare isolated Python environment
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/python"
+          echo "${RUNNER_TEMP}/python/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=${RUNNER_TEMP}/python" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: |
@@ -109,13 +196,19 @@ jobs:
 
   typecheck:
     name: Type Check (mypy)
-    runs-on: [self-hosted, dominus]
+    runs-on: [fleet-ci-v1, ci-small]
     defaults:
       run:
         working-directory: docker/core
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare isolated Python environment
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/python"
+          echo "${RUNNER_TEMP}/python/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=${RUNNER_TEMP}/python" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: |
@@ -128,13 +221,19 @@ jobs:
 
   security:
     name: Security Scan (bandit + safety)
-    runs-on: [self-hosted, dominus]
+    runs-on: [fleet-ci-v1, ci-small]
     defaults:
       run:
         working-directory: docker/core
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare isolated Python environment
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/python"
+          echo "${RUNNER_TEMP}/python/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=${RUNNER_TEMP}/python" >> "$GITHUB_ENV"
 
       - name: Install scanners
         run: |
@@ -152,7 +251,7 @@ jobs:
 
   image-scan:
     name: Image Scan (trivy)
-    runs-on: [self-hosted, dominus]
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
 
     steps:
       - uses: actions/checkout@v4
@@ -182,7 +281,7 @@ jobs:
 
   perf-gate:
     name: Perf Gate (p99 regression check)
-    runs-on: [self-hosted, dominus]
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
     defaults:
       run:
         working-directory: docker/core
