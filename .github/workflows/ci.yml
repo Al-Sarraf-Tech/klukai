@@ -28,13 +28,22 @@ jobs:
       - name: Prepare isolated test environment from existing component requirements
         run: |
           python3 -m venv "${RUNNER_TEMP}/klukai-component-tests"
+          # Keep the hashed application lock in its own pip invocation.
           "${RUNNER_TEMP}/klukai-component-tests/bin/python" -m pip install \
-            -r docker/core/requirements.txt -r tgbot/requirements.txt \
-            -r docker/events-bridge/requirements.txt pytest pytest-asyncio pytest-timeout
+            -r docker/core/requirements.txt
+          "${RUNNER_TEMP}/klukai-component-tests/bin/python" -m pip install \
+            -r tgbot/requirements.txt python-multipart==0.0.22 \
+            pytest==9.0.2 pytest-asyncio==1.3.0 pytest-timeout==2.4.0
+          # Bridge pins an older Redis than core; never resolve them together.
+          python3 -m venv "${RUNNER_TEMP}/klukai-bridge-tests"
+          "${RUNNER_TEMP}/klukai-bridge-tests/bin/python" -m pip install \
+            -r docker/events-bridge/requirements.txt \
+            pytest==9.0.2 pytest-asyncio==1.3.0 pytest-timeout==2.4.0
       - name: Run bot, operations, voice and bridge in separate pytest processes
         run: |
-          make test-tgbot test-ops test-voice test-bridge \
+          make test-tgbot test-ops test-voice \
             TEST_PYTHON="${RUNNER_TEMP}/klukai-component-tests/bin/python"
+          make test-bridge TEST_PYTHON="${RUNNER_TEMP}/klukai-bridge-tests/bin/python"
       - name: Check existing JavaScript and shell tooling
         # Missing tooling is a failed gate, never a silently skipped suite.
         # Keep the owner's existing runner; no hosted/paid runner fallback.
@@ -43,6 +52,8 @@ jobs:
           command -v shellcheck
           node --version
           shellcheck --version
+      - name: Install locked avatar test dependencies
+        run: npm ci --prefix tools/avatar --ignore-scripts
       - name: Run companion and avatar JavaScript tests
         run: make test-js
       - name: Check shell scripts
@@ -51,6 +62,20 @@ jobs:
   test:
     name: Test Suite
     runs-on: [self-hosted, Linux, X64, ci-heavy]
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1
+        env:
+          POSTGRES_PASSWORD: klukai-ci-disposable
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      KLUKAI_TEST_ALLOW_LIVE_BACKENDS: "0"
     defaults:
       run:
         working-directory: docker/core
@@ -65,6 +90,8 @@ jobs:
           pip install pytest pytest-asyncio pytest-timeout pytest-cov
 
       - name: Run test suite with coverage
+        env:
+          KLUKAI_MIGRATION_TEST_DATABASE_URL: postgresql://postgres:klukai-ci-disposable@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
         run: |
           python3 -m pytest tests/ -q --tb=short \
             --cov=app --cov-report=term-missing --cov-fail-under=95 \
