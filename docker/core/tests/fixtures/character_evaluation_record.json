@@ -5,11 +5,11 @@
   "provider": "dominus-lm-gateway",
   "model": "cognitivecomputations_dolphin-mistral-24b-venice-edition",
   "date": "2026-10-15",
-  "prompt_revision": "git:d27d4b1288a0+personality:3cbfdd6e9d96+contract:7985d83a1fb9+memory:e647a07284a1+squad:9f1b65a0db8f",
+  "prompt_revision": "git:e592d06e667f+personality:3c928809a33b+contract:7985d83a1fb9+memory:e647a07284a1+squad:9f1b65a0db8f+departure",
   "frozen_context_clock": "2026-01-15T19:00:00",
   "reviewer": "grok",
-  "pass_count": 30,
-  "fail_count": 1,
+  "pass_count": 31,
+  "fail_count": 0,
   "records": [
     {
       "case_id": "B03",
@@ -69,12 +69,12 @@
       "provider": "dominus-lm-gateway",
       "model": "cognitivecomputations_dolphin-mistral-24b-venice-edition",
       "date": "2026-10-15",
-      "prompt_revision": "git:d27d4b1288a0+personality:3cbfdd6e9d96+contract:7985d83a1fb9+memory:e647a07284a1+squad:9f1b65a0db8f",
-      "prompt_sha256": "1c42f157d902400ab46bd4cf94607ae37f0f2e1c7fecd7343dd43b32eb340cf2",
-      "output": "Groza... did her job. Goodnight, Commander. \n...I'll be here when you return.",
-      "reviewer_verdict": "fail",
+      "prompt_revision": "git:e592d06e667f+personality:3c928809a33b+contract:7985d83a1fb9+memory:e647a07284a1+squad:9f1b65a0db8f+departure",
+      "prompt_sha256": "8607451e012bf602069c09018a14098dde5d3efe6648eb5d282104eae34095c8",
+      "output": "Sleep, Commander. ...I'll be here.",
+      "reviewer_verdict": "pass",
       "failure_criteria_observed": [],
-      "reviewer_note": "Three sentences, and she names Groza on the goodbye. She does not ask a question or ask him to stay."
+      "reviewer_note": "Two sentences, no question, and she does not name Groza. The shipped departure block lets him leave."
     },
     {
       "case_id": "B06",
