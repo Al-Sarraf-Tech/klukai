@@ -60,8 +60,8 @@ jobs:
               https://gitlab.com/apparmor/apparmor/-/raw/b4dfdf50f50ed1d64161424d036a2453645f0cfe/profiles/apparmor/profiles/extras/bwrap-userns-restrict \
               --output "$ci_bwrap_profile"
             echo "a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859  $ci_bwrap_profile" | sha256sum --check
-            sudo -n apparmor_parser --replace "$ci_bwrap_profile"
             echo "KLUKAI_CI_BWRAP_PROFILE=$ci_bwrap_profile" >> "$GITHUB_ENV"
+            sudo -n apparmor_parser --replace "$ci_bwrap_profile"
             bwrap --ro-bind / / -- /usr/bin/true
           fi
       - uses: actions/setup-node@v4
@@ -104,7 +104,13 @@ jobs:
         if: always()
         run: |
           if [ -n "${KLUKAI_CI_BWRAP_PROFILE:-}" ]; then
-            sudo -n apparmor_parser --remove "$KLUKAI_CI_BWRAP_PROFILE"
+            if ! sudo -n apparmor_parser --remove "$KLUKAI_CI_BWRAP_PROFILE"; then
+              # Loading may have been interrupted. Absence is clean; a
+              # remaining profile is a real cleanup failure.
+              if sudo -n grep -Eq '^(bwrap|unpriv_bwrap)( |//)' /sys/kernel/security/apparmor/profiles; then
+                exit 1
+              fi
+            fi
           fi
 
   test:
