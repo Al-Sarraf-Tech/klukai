@@ -257,25 +257,18 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Trivy image scan (HIGH+CRITICAL block)
-        # Requires Docker. This self-hosted runner is a lightweight, non-root
-        # container with no Docker socket, so the scan can't run here — we emit
-        # a VISIBLE ::warning:: and pass, rather than fake a clean scan or
-        # hard-fail on an environment limitation. On a Docker-enabled runner
-        # this installs trivy (to a writable dir — the runner can't write
-        # /usr/local/bin) and performs a real BLOCKING HIGH/CRITICAL scan.
+        # This job requires heavy Docker-capable capacity. Missing capability
+        # is a failed gate and must never certify an unscanned release.
         run: |
-          if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-            echo "::warning title=Image scan skipped::No Docker on this runner — image scanning must run on a Docker-enabled host/runner."
-            exit 0
-          fi
+          command -v docker
+          docker info >/dev/null
           BIN="${RUNNER_TEMP:-/tmp}/bin"; mkdir -p "$BIN"; export PATH="$BIN:$PATH"
           command -v trivy >/dev/null 2>&1 || \
             curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.71.0/contrib/install.sh \
               | sh -s -- -b "$BIN" v0.71.0
           trivy --version
           docker build -t klukai-core:ci -f docker/core/Dockerfile docker/core/
-          trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed --no-progress klukai-core:ci
-          trivy image --severity LOW,MEDIUM,HIGH,CRITICAL --no-progress klukai-core:ci || true
+          trivy image --severity HIGH,CRITICAL --exit-code 1 --no-progress klukai-core:ci
 
 
 
@@ -294,32 +287,20 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
 
-      - name: Probe live klukai-core if reachable
+      - name: Require target and capture performance samples
         run: |
-          if curl -sf -m 3 http://localhost:8300/health >/dev/null 2>&1; then
-            python3 ../../tools/load-test/probe.py \
-              --base http://localhost:8300 \
-              --requests 100 \
-              --concurrency 5 \
-              --out /tmp/perf-current.json
-          else
-            echo "::warning title=Perf gate skipped::klukai-core not reachable from this runner — p99 regression NOT checked on this run."
-            exit 0
-          fi
+          curl --fail --silent --show-error --max-time 3 http://localhost:8300/health >/dev/null
+          python3 ../../tools/load-test/probe.py \
+            --base http://localhost:8300 \
+            --requests 100 \
+            --concurrency 5 \
+            --out /tmp/perf-current.json
 
       - name: Compare p99 against committed baseline (20% delta threshold)
         # Single source of truth for the comparison: tools/load-test/perf_compare.py
         # (the old inline script read a schema probe.py never produced, so the
         # gate compared zero endpoints and always passed — fixed 2026-06-11).
         run: |
-          if [[ ! -f /tmp/perf-current.json ]]; then
-            echo "::warning title=Perf gate skipped::no current snapshot."
-            exit 0
-          fi
-          # 2.0× threshold, not the SLO 1.2×: CI shares the host with the live
-          # stack AND the rest of this workflow's jobs, so a 100-request p99
-          # sample under build load regularly doubles (first honest run of
-          # this gate measured 60.85ms vs an idle 33.34ms baseline with no
-          # code change). Nightly (quiet hours) gates tighter at 1.5×.
+          test -s /tmp/perf-current.json
           python3 ../../tools/load-test/perf_compare.py \
-            ../../docs/perf-baseline.json /tmp/perf-current.json --threshold 2.0
+            ../../docs/perf-baseline.json /tmp/perf-current.json --threshold 1.20

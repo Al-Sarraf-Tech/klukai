@@ -236,8 +236,11 @@ class TestSecurityConfig:
 
             pytest.skip("Dockerfile not shipped into runtime image")
         text = dockerfile.read_text()
-        assert "USER appuser" in text
-        assert "useradd" in text
+        users = [line.split()[1] for line in text.splitlines() if line.startswith("USER ")]
+        assert users, "The final runtime must explicitly select a user"
+        assert users[-1].split(":")[0] not in {"root", "0"}
+        # The release suite additionally checks the actual image UID. A
+        # distroless runtime has no shell/useradd and accepts numeric IDs.
 
     def test_costume_endpoints_require_auth(self):
         source = Path(__file__).resolve().parent.parent / "app" / "routes_extras.py"

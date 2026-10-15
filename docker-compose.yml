@@ -9,6 +9,11 @@ services:
   companion-core:
     build: ./docker/core
     container_name: companion-core
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
     ports:
       - "127.0.0.1:8300:8300"
     environment:
@@ -117,7 +122,7 @@ services:
       - obs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8300/health"]
+      test: ["CMD", "/opt/venv/bin/python", "/app/healthcheck.py"]
       interval: 15s
       timeout: 5s
       retries: 3

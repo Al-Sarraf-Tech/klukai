@@ -1,92 +1,57 @@
-# syntax=docker/dockerfile:1.7
-#
-# Multi-stage build for klukai's companion-core.
-#
-# Stage 1: builder — installs build-time deps + creates a virtualenv with
-#   all Python packages. Slow path; cached aggressively.
-# Stage 2: runtime — copies just the venv + app source into a fresh
-#   python:3.14-slim. No build tools, no apt cache, no pip cache.
-#
-# Image hardening notes (Phase 2 S+ uplift):
-# - Base image SHA-pinned (immutable across rebuilds)
-# - Non-root `appuser`
-# - HEALTHCHECK matches docker-compose.yml so `docker run` works standalone
-# - Cache mount on pip layer keeps rebuild fast without polluting image
-# - Reproducible: SOURCE_DATE_EPOCH from build ARG (set by CI)
-#
-# Phase 4 stretch: switch runtime stage to `gcr.io/distroless/python3-debian12`.
-
-# python:3.14-slim @ 2026-10-14 — aligned to the Python that requirements.txt is
-# pip-compiled for (and that the full test suite runs on). Previously 3.13, which
-# mismatched the 3.14 hash file: on 3.13 libcst pulls a transitive pyyaml-ft that
-# --require-hashes then rejects. SHA-pinned (manifest-list digest) for reproducibility.
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+# Preserve CPython 3.14's ABI on Debian 13; distroless/python3 ships 3.13.
+# Only verified runtime wheels, interpreter and missing native libraries cross
+# into the final image. No package installer, compiler or shell is included.
 ARG PYTHON_IMAGE=python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
+ARG DISTROLESS_IMAGE=gcr.io/distroless/base-debian13:nonroot@sha256:a0d70d6a97cd697d9362bc2aae4a6560dd65817e365d0043b07325a97975dc91
 
-# ───────────────────────────────────────────────────────────────────
-# Stage 1: builder
-# ───────────────────────────────────────────────────────────────────
+FROM ${DISTROLESS_IMAGE} AS runtime-base
 FROM ${PYTHON_IMAGE} AS builder
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
+ARG SOURCE_DATE_EPOCH=0
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 WORKDIR /build
+COPY requirements-build.txt requirements.txt ./
+# pip is fixed by the immutable builder image. Build tools have their own hash
+# lock; the http-ece sdist is built offline without isolated dependency downloads.
+RUN python -m pip install --require-hashes -r requirements-build.txt && \
+    python -m pip download --no-deps --no-build-isolation --require-hashes \
+      --dest /downloads -r requirements.txt
+COPY package_runtime.py ./
+RUN --network=none python -m pip wheel --no-index --find-links=/downloads \
+      --no-deps --no-build-isolation --require-hashes -r requirements.txt \
+      --wheel-dir=/wheels && \
+    python package_runtime.py wheels && \
+    python -m venv --without-pip /opt/venv && \
+    python -m pip --python /opt/venv/bin/python install --no-index \
+      --find-links=/wheels --no-deps --require-hashes --no-compile -r /runtime.lock
+COPY --from=runtime-base / /distroless-root/
+RUN --network=none python package_runtime.py runtime && \
+    cp /wheel-materials.json /runtime/usr/share/klukai-runtime/ && \
+    cp /runtime.lock /runtime/usr/share/klukai-runtime/ && \
+    mkdir -p /runtime/images /runtime/audio /runtime/home/appuser /runtime/app && \
+    chown 1000:1000 /runtime/images /runtime/audio /runtime/home/appuser
 
-# Build-time deps only — present in builder, NOT in runtime
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create an isolated venv so we can COPY it cleanly to the runtime stage
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip && \
-    pip install -r requirements.txt
-
-# ───────────────────────────────────────────────────────────────────
-# Stage 2: runtime
-# ───────────────────────────────────────────────────────────────────
-FROM ${PYTHON_IMAGE} AS runtime
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:$PATH"
-
+FROM ${DISTROLESS_IMAGE} AS runtime
+ARG VCS_REF=unverified
+ARG SOURCE_DATE_EPOCH=0
+LABEL org.opencontainers.image.source="https://github.com/Al-Sarraf-Tech/klukai" \
+    org.opencontainers.image.revision="${VCS_REF}" \
+    cc.appnest.klukai.source-date-epoch="${SOURCE_DATE_EPOCH}"
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:/usr/local/bin" \
+    LD_LIBRARY_PATH="/usr/local/lib:/opt/runtime-libs" \
+    HOME="/home/appuser" XDG_CACHE_HOME="/tmp/klukai-cache"
 WORKDIR /app
-
-# Runtime needs curl for HEALTHCHECK; nothing else
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/apt/*
-
-# Copy the prebuilt venv from builder
+COPY --from=builder /runtime/ /
 COPY --from=builder /opt/venv /opt/venv
-
-# Package installation belongs to the builder. Both pip copies carry vendored
-# dependencies that the application does not use; omit them from the runtime.
-RUN /opt/venv/bin/python3 -m pip uninstall --yes pip && \
-    /usr/local/bin/python3 -m pip uninstall --yes pip
-
-# Non-root runtime user
-RUN useradd --create-home --shell /bin/bash --uid 1000 appuser && \
-    mkdir -p /images /audio && chown appuser:appuser /images /audio
-
-# App source LAST so code changes only invalidate the small final layer
-COPY --chown=appuser:appuser app/ ./app/
-COPY --chown=appuser:appuser migrations/ ./migrations/
-COPY --chown=appuser:appuser seed_memories.py .
-
-USER appuser
-
+COPY app/ ./app/
+COPY migrations/ ./migrations/
+COPY seed_memories.py healthcheck.py ./
+USER 1000:1000
 EXPOSE 8300
-
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -sf http://localhost:8300/health || exit 1
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8300", "--log-level", "info"]
+    CMD ["/opt/venv/bin/python", "/app/healthcheck.py"]
+ENTRYPOINT ["/opt/venv/bin/python"]
+CMD ["-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8300", "--log-level", "info"]

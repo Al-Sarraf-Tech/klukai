@@ -1,0 +1,14 @@
+**
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!requirements-build.txt
+!package_runtime.py
+!healthcheck.py
+!seed_memories.py
+!app/
+!app/**
+!migrations/
+!migrations/**
+**/__pycache__
+**/*.pyc
