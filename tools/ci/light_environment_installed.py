@@ -63,7 +63,12 @@ def capture(directory: Path, host: Path) -> dict[str, Any]:
             if not target.is_relative_to(directory):
                 require(
                     path.parent == directory / "bin"
-                    and re.fullmatch(r"python(?:\d+(?:\.\d+)?)?", path.name)
+                    and (
+                        re.fullmatch(
+                            r"python(?:\d+(?:\.\d+)?)?", path.name, flags=re.ASCII
+                        )
+                        or path.name == "\U0001d70bthon"
+                    )
                     and target == host,
                     "Installed link escapes the venv",
                 )
