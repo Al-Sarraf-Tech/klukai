@@ -1,0 +1,19 @@
+name: Verified Node 24 toolchain
+description: Use the checksum-pinned official archive on existing self-hosted capacity
+runs:
+  using: composite
+  steps:
+    - name: Verify and select Node 24.22.0
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        node_dir="${RUNNER_TEMP:?}/klukai-node-v24.22.0"
+        mkdir -m 0700 "$node_dir"
+        curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 \
+          https://nodejs.org/dist/v24.22.0/node-v24.22.0-linux-x64.tar.xz --output "$node_dir/archive.tar.xz"
+        echo "cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008  $node_dir/archive.tar.xz" | sha256sum --check
+        tar --extract --xz --file "$node_dir/archive.tar.xz" --directory "$node_dir" --strip-components=1
+        test "$("$node_dir/bin/node" --version)" = v24.22.0
+        echo "$node_dir/bin" >> "$GITHUB_PATH"
+        "$node_dir/bin/node" --version

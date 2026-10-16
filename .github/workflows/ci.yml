@@ -3,13 +3,88 @@ name: Klukai CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      expected_revision:
+        description: Full reviewed branch-head SHA; a moved branch must fail
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  KLUKAI_CI_ARTIFACT_ROOT: /opt/klukai-ci/artifacts
+  KLUKAI_CI_REVISION: ${{ github.sha }}
 
 jobs:
+  # Dispatch uses GitHub's repository write ACL and binds the reviewed branch
+  # head on existing self-hosted capacity. No PR event executes fork source.
+  source-policy:
+    name: Authorized exact source
+    runs-on: [fleet-ci-v1, ci-small]
+    timeout-minutes: 2
+    steps:
+      - name: Require reviewed exact source before checkout
+        id: admit
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_REVISION: ${{ github.sha }}
+          EXPECTED_REVISION: ${{ inputs.expected_revision }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_REF" == refs/heads/* ]]
+          case "$EVENT_NAME" in
+            push) [[ "$SOURCE_REF" == refs/heads/main ]] ;;
+            workflow_dispatch) [[ "$EXPECTED_REVISION" == "$SOURCE_REVISION" ]] ;;
+            *) echo 'Unauthorized CI event' >&2; exit 1 ;;
+          esac
+
+  ci-image:
+    name: Pinned Python CI executor
+    needs: source-policy
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    timeout-minutes: 30
+    outputs:
+      image_id: ${{ steps.build.outputs.image_id }}
+    env:
+      KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/ci-image
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build once and prove the complete pinned Python environment
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -m tools.ci.tool_image --root "$GITHUB_WORKSPACE" \
+            --output "$KLUKAI_CI_OUTPUT" --revision "$KLUKAI_CI_REVISION" --timeout 1500
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          result = json.loads((pathlib.Path(os.environ['KLUKAI_CI_OUTPUT']) / 'manifest.json').read_text())
+          if result.get('passed') is not True or result.get('certifying') is not True:
+              raise SystemExit('CI image producer did not certify its result')
+          if result.get('source_unchanged') is not True:
+              raise SystemExit('CI image producer source changed')
+          if result.get('source_revision') != os.environ['KLUKAI_CI_REVISION']:
+              raise SystemExit('CI image producer source revision differs')
+          image = result.get('image_id')
+          if not isinstance(image, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
+              raise SystemExit('CI image producer returned an invalid immutable image ID')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'image_id={image}\n')
+          PY
+
   components:
     name: Isolated component suites
+    needs: source-policy
     runs-on: [self-hosted, Linux, X64, ci-heavy]
     timeout-minutes: 20
     env:
@@ -24,7 +99,10 @@ jobs:
       KLUKAI_AGY_SOCKET: "/tmp/klukai-ci-no-account/image.sock"
       KLUKAI_AGY_TOKEN_FILE: "/tmp/klukai-ci-no-account/token"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - name: Prepare native operations test tools
         run: |
           if ! command -v bwrap >/dev/null 2>&1 || ! command -v apparmor_parser >/dev/null 2>&1; then
@@ -64,9 +142,7 @@ jobs:
             sudo -n apparmor_parser --replace "$ci_bwrap_profile"
             bwrap --ro-bind / / -- /usr/bin/true
           fi
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
+      - uses: ./.github/actions/node
       - name: Prepare isolated test environment from existing component requirements
         run: |
           python3 -m venv "${RUNNER_TEMP}/klukai-component-tests"
@@ -115,70 +191,53 @@ jobs:
 
   test:
     name: Test Suite
+    needs: ci-image
     runs-on: [self-hosted, Linux, X64, ci-heavy]
-    services:
-      postgres:
-        image: postgres:17-alpine@sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1
-        env:
-          POSTGRES_PASSWORD: klukai-ci-disposable
-        ports:
-          - 5432/tcp
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
+    timeout-minutes: 25
     env:
-      KLUKAI_TEST_ALLOW_LIVE_BACKENDS: "0"
-    defaults:
-      run:
-        working-directory: docker/core
-
+      KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/core
+      KLUKAI_CORE_CI_IMAGE: ${{ needs.ci-image.outputs.image_id }}
+      KLUKAI_CORE_POSTGRES_IMAGE: postgres@sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Run full core with disposable PostgreSQL and retained coverage
+        run: scripts/ci/core.sh
 
-      - name: Install dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-timeout pytest-cov
-
-      - name: Run test suite with coverage
-        env:
-          KLUKAI_MIGRATION_TEST_DATABASE_URL: postgresql://postgres:klukai-ci-disposable@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
-        run: |
-          python3 -m pytest tests/ -q --tb=short \
-            --cov=app --cov-report=term-missing --cov-fail-under=95 \
-            --junitxml=/tmp/pytest-report.xml
-
-      - name: Enforce skip ceiling
-        # Live-stack and explicitly opted-in disposable-PostgreSQL fixtures
-        # legitimately skip without their test URLs. Hundreds of skips mean
-        # the skip logic broke and is silently eating unit tests — fail that.
-        env:
-          MAX_SKIPS: "75"
-        run: |
-          python3 - <<'PY'
-          import os, sys, xml.etree.ElementTree as ET
-          root = ET.parse("/tmp/pytest-report.xml").getroot()
-          suite = root if root.tag == "testsuite" else root.find("testsuite")
-          skipped = int(suite.get("skipped", 0))
-          ceiling = int(os.environ["MAX_SKIPS"])
-          print(f"skipped={skipped} ceiling={ceiling}")
-          if skipped > ceiling:
-              print(f"FAIL: {skipped} skips > {ceiling} — skip logic is eating tests")
-              sys.exit(1)
-          PY
+  real-backends:
+    name: Real PostgreSQL, Valkey and Qdrant recovery
+    needs: ci-image
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    timeout-minutes: 20
+    env:
+      KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/backends
+      KLUKAI_CORE_CI_IMAGE: ${{ needs.ci-image.outputs.image_id }}
+      KLUKAI_CORE_POSTGRES_IMAGE: postgres@sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1
+      KLUKAI_CORE_REDIS_IMAGE: valkey/valkey@sha256:cb3339abbd6e18942cd8ac3349f0c371a82ba5b6204b242563ba299e7956cbd0
+      KLUKAI_CORE_QDRANT_IMAGE: qdrant/qdrant@sha256:f1c7272cdac52b38c1a0e89313922d940ba50afd90d593a1605dbbc214e66ffb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require all nine real-driver fault and recovery cases
+        run: scripts/ci/backends.sh
 
   lint:
     name: Lint
+    needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
     defaults:
       run:
         working-directory: docker/core
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Prepare isolated Python environment
         run: |
@@ -196,13 +255,17 @@ jobs:
 
   typecheck:
     name: Type Check (mypy)
+    needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
     defaults:
       run:
         working-directory: docker/core
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Prepare isolated Python environment
         run: |
@@ -221,13 +284,17 @@ jobs:
 
   security:
     name: Security Scan (bandit + safety)
+    needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
     defaults:
       run:
         working-directory: docker/core
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Prepare isolated Python environment
         run: |
@@ -251,10 +318,14 @@ jobs:
 
   image-scan:
     name: Image Scan (trivy)
+    needs: source-policy
     runs-on: [self-hosted, Linux, X64, ci-heavy]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Trivy image scan (HIGH+CRITICAL block)
         # This job requires heavy Docker-capable capacity. Missing capability
@@ -274,12 +345,16 @@ jobs:
 
   perf-gate:
     name: Perf Gate (p99 regression check)
+    needs: source-policy
     runs-on: [self-hosted, Linux, X64, ci-heavy]
     defaults:
       run:
         working-directory: docker/core
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Install dependencies
         run: |
@@ -307,6 +382,7 @@ jobs:
 
   frontend:
     name: Frontend validation and immutable PWA evidence
+    needs: source-policy
     runs-on: [self-hosted, Linux, X64, ci-heavy]
     timeout-minutes: 30
     permissions:
@@ -321,12 +397,38 @@ jobs:
       KLUKAI_CHROME_BINARY: /opt/klukai-ci/toolchains/b838d34bba223857b3cab6b924de31a9ddee0c1f7c81df7611f3a0cb883a17c7/chrome/chrome
     steps:
       - name: Check out exact source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/node
       - name: Require private evidence storage and run all frontend gates
         shell: bash
         run: |
           : "${KLUKAI_CI_ARTIFACT_ROOT:?Configure private storage on the existing heavy runner}"
           export KLUKAI_CI_OUTPUT="${KLUKAI_CI_ARTIFACT_ROOT%/}/${GITHUB_SHA}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/frontend"
           scripts/ci/frontend.sh
+
+  all-required:
+    name: Required CI gates
+    if: always()
+    needs: [source-policy, ci-image, components, test, real-backends, lint, typecheck, security, image-scan, perf-gate, frontend]
+    runs-on: [fleet-ci-v1, ci-small]
+    timeout-minutes: 2
+    env:
+      REQUIRED_JOBS: '["source-policy","ci-image","components","test","real-backends","lint","typecheck","security","image-scan","perf-gate","frontend"]'
+    steps:
+      - name: Reject missing, failed, cancelled or skipped required jobs
+        id: verify
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          actual = json.loads(os.environ['NEEDS_JSON'])
+          expected = json.loads(os.environ['REQUIRED_JOBS'])
+          if set(actual) != set(expected) or not actual:
+              raise SystemExit('Missing required CI results')
+          if any(row.get('result') != 'success' for row in actual.values()):
+              raise SystemExit('Required CI jobs did not all succeed')
+          PY
