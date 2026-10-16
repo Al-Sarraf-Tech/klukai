@@ -40,18 +40,19 @@ async def get_image_bytes(
         async with get_conn() as conn:
             col = "thumb_filename" if thumbnail else "filename"
             if user_id:
+                # `col` is one of two literal column names; values stay bound.
                 row = await (
                     await conn.execute(
-                        f"SELECT {col} FROM companion_memories WHERE id = %s AND user_id = %s",  # nosec B608 — `col` is one of two literal column names; values bound via %s
+                        f"SELECT {col} FROM companion_memories WHERE id = %s AND user_id = %s",  # nosec B608
                         (memory_id, user_id),
                     )
                 ).fetchone()
             else:
-                # Internal calls (e.g., recall) may not have user context
+                # Internal recall may lack user context; `col` remains a fixed literal.
                 row = await (
                     await conn.execute(
-                        f"SELECT {col} FROM companion_memories WHERE id = %s",
-                        (memory_id,),  # nosec B608 — same as above
+                        f"SELECT {col} FROM companion_memories WHERE id = %s",  # nosec B608
+                        (memory_id,),
                     )
                 ).fetchone()
             if not row or not row[0]:
@@ -100,9 +101,10 @@ async def list_memories(
 
             rows = await (
                 await conn.execute(
-                    f"SELECT id, filename, thumb_filename, annotation, scene_tags, "
+                    f"SELECT id, filename, thumb_filename, annotation, scene_tags, "  # nosec B608
                     f"mood, affection_level, kept_by, category, created_at "
-                    f"FROM companion_memories WHERE {where} "  # nosec B608 — `where` is built from a fixed allow-list of column predicates; values bound via %s
+                    # `where` uses fixed column predicates; values stay bound.
+                    f"FROM companion_memories WHERE {where} "
                     f"ORDER BY created_at DESC LIMIT %s",
                     tuple(params),
                 )

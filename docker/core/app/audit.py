@@ -141,9 +141,10 @@ async def recent(
             where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
             params.append(limit)
             rows = await conn.execute(
-                "SELECT id, event_type, user_id, ip_address, request_id, "
+                "SELECT id, event_type, user_id, ip_address, request_id, "  # nosec B608
                 "metadata, created_at "
-                f"FROM companion_audit_log {where} "  # nosec B608 — `where` is built from a fixed allow-list of columns; user input is bound via %s
+                # `where` uses fixed column predicates; user values stay bound.
+                f"FROM companion_audit_log {where} "
                 "ORDER BY created_at DESC LIMIT %s",
                 tuple(params),
             )
