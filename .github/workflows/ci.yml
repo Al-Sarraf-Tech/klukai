@@ -103,91 +103,39 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Prepare native operations test tools
-        run: |
-          if ! command -v bwrap >/dev/null 2>&1 || ! command -v apparmor_parser >/dev/null 2>&1; then
-            sudo -n apt-get update
-            sudo -n apt-get install -y --no-install-recommends --no-upgrade bubblewrap apparmor
-          fi
-          bwrap --version
-      - name: Prepare pinned Compose contract renderer
-        run: |
-          # Compose 2.40 omits explicit false values from JSON. Use the same
-          # supported renderer as the local contract proof; do not relax it.
-          ci_docker_config="${RUNNER_TEMP}/klukai-compose"
-          mkdir -p "$ci_docker_config/cli-plugins"
-          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 \
-            https://github.com/docker/compose/releases/download/v5.6.0/docker-compose-linux-x86_64 \
-            --output "$ci_docker_config/cli-plugins/docker-compose"
-          echo "40343e21ca777173e69cff5dbafeb37c6f81f3b0d57d9e597f036e95eb63e76a  $ci_docker_config/cli-plugins/docker-compose" | sha256sum --check
-          chmod 0755 "$ci_docker_config/cli-plugins/docker-compose"
-          echo "DOCKER_CONFIG=$ci_docker_config" >> "$GITHUB_ENV"
-          DOCKER_CONFIG="$ci_docker_config" docker compose version
-      - name: Prepare scoped Bubblewrap namespace policy
-        run: |
-          if ! bwrap --ro-bind / / -- /usr/bin/true; then
-            # Use the upstream ABI 4.0 profile recommended by Ubuntu. Children
-            # lose capabilities; the global user-namespace restriction stays on.
-            sudo -n test -r /sys/kernel/security/apparmor/profiles
-            if sudo -n grep -q bwrap /sys/kernel/security/apparmor/profiles; then
-              echo 'An existing Bubblewrap policy requires operator review; refusing to replace it.' >&2
-              exit 1
-            fi
-            ci_bwrap_profile="${RUNNER_TEMP}/klukai-bwrap-userns-restrict"
-            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 \
-              https://gitlab.com/apparmor/apparmor/-/raw/b4dfdf50f50ed1d64161424d036a2453645f0cfe/profiles/apparmor/profiles/extras/bwrap-userns-restrict \
-              --output "$ci_bwrap_profile"
-            echo "a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859  $ci_bwrap_profile" | sha256sum --check
-            echo "KLUKAI_CI_BWRAP_PROFILE=$ci_bwrap_profile" >> "$GITHUB_ENV"
-            sudo -n apparmor_parser --replace "$ci_bwrap_profile"
-            bwrap --ro-bind / / -- /usr/bin/true
-          fi
       - uses: ./.github/actions/node
-      - name: Prepare isolated test environment from existing component requirements
+      - name: Verify native component prerequisites and private Compose
         run: |
-          python3 -m venv "${RUNNER_TEMP}/klukai-component-tests"
-          # Keep the hashed application lock in its own pip invocation.
-          "${RUNNER_TEMP}/klukai-component-tests/bin/python" -m pip install \
-            -r docker/core/requirements.txt
-          "${RUNNER_TEMP}/klukai-component-tests/bin/python" -m pip install \
-            -r tgbot/requirements.txt python-multipart==0.0.22 \
-            pytest==9.0.2 pytest-asyncio==1.3.0 pytest-timeout==2.4.0
-          # Bridge pins an older Redis than core; never resolve them together.
-          python3 -m venv "${RUNNER_TEMP}/klukai-bridge-tests"
-          "${RUNNER_TEMP}/klukai-bridge-tests/bin/python" -m pip install \
-            -r docker/events-bridge/requirements.txt \
-            pytest==9.0.2 pytest-asyncio==1.3.0 pytest-timeout==2.4.0
+          python3 -m tools.ci.component_environment prepare --root "$GITHUB_WORKSPACE" \
+            --output "${RUNNER_TEMP}/klukai-component-native" --revision "$GITHUB_SHA"
+      - uses: ./.github/actions/python-tools
+        env:
+          KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-component-python
+          KLUKAI_CI_REVISION: ${{ github.sha }}
+      - name: Build isolated complete bridge test closure
+        run: |
+          python3 -m tools.ci.light_environment --role bridge --root "$GITHUB_WORKSPACE" \
+            --output "${RUNNER_TEMP}/klukai-bridge-python" --revision "$GITHUB_SHA"
+      - name: Validate all environments before selecting component interpreters
+        run: |
+          python3 -m tools.ci.component_environment export --root "$GITHUB_WORKSPACE" \
+            --output "${RUNNER_TEMP}/klukai-component-native" --revision "$GITHUB_SHA" \
+            --tools "${RUNNER_TEMP}/klukai-component-python" \
+            --bridge "${RUNNER_TEMP}/klukai-bridge-python" --github-env "$GITHUB_ENV"
       - name: Run bot, operations, voice and bridge in separate pytest processes
+        env:
+          PYTHONWARNINGS: error
+          PYTEST_ADDOPTS: "-o asyncio_default_fixture_loop_scope=function -o asyncio_default_test_loop_scope=function"
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
-          make test-tgbot test-ops test-voice \
-            TEST_PYTHON="${RUNNER_TEMP}/klukai-component-tests/bin/python"
-          make test-bridge TEST_PYTHON="${RUNNER_TEMP}/klukai-bridge-tests/bin/python"
-      - name: Check existing JavaScript and shell tooling
-        # Missing tooling is a failed gate, never a silently skipped suite.
-        # Keep the owner's existing runner; no hosted/paid runner fallback.
-        run: |
-          command -v node
-          command -v shellcheck
-          node --version
-          shellcheck --version
+          make test-tgbot test-ops test-voice TEST_PYTHON="$KLUKAI_COMPONENT_PYTHON"
+          make test-bridge TEST_PYTHON="$KLUKAI_BRIDGE_PYTHON"
       - name: Install locked avatar test dependencies
         run: npm ci --prefix tools/avatar --ignore-scripts
       - name: Run companion and avatar JavaScript tests
         run: make test-js
       - name: Check shell scripts
         run: make test-shell
-      - name: Remove job-specific Bubblewrap policy
-        if: always()
-        run: |
-          if [ -n "${KLUKAI_CI_BWRAP_PROFILE:-}" ]; then
-            if ! sudo -n apparmor_parser --remove "$KLUKAI_CI_BWRAP_PROFILE"; then
-              # Loading may have been interrupted. Absence is clean; a
-              # remaining profile is a real cleanup failure.
-              if sudo -n grep -Eq '^(bwrap|unpriv_bwrap)( |//)' /sys/kernel/security/apparmor/profiles; then
-                exit 1
-              fi
-            fi
-          fi
 
   test:
     name: Test Suite

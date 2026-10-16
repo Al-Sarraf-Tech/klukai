@@ -24,6 +24,7 @@ from . import (
     light_environment_process,
     light_environment_supervisor,
     light_environment_ca,
+    light_environment_role,
 )
 from .cancellation import cancellation_scope
 from .light_environment_process import Commands
@@ -39,6 +40,7 @@ INPUTS = (
     "tools/ci/light_environment_process.py",
     "tools/ci/light_environment_supervisor.py",
     "tools/ci/light_environment_ca.py",
+    "tools/ci/light_environment_role.py",
     "tools/ci/core_source.py",
     "tools/ci/cancellation.py",
     "tools/ci/tool_materials.py",
@@ -88,6 +90,7 @@ def helpers(root: Path, captured: dict[str, Any]) -> dict[str, Any]:
         "tools/ci/light_environment_process.py": light_environment_process.__file__,
         "tools/ci/light_environment_supervisor.py": light_environment_supervisor.__file__,
         "tools/ci/light_environment_ca.py": light_environment_ca.__file__,
+        "tools/ci/light_environment_role.py": light_environment_role.__file__,
         "tools/ci/core_source.py": core_source.__file__,
         "tools/ci/cancellation.py": cancellation.__file__,
         "tools/ci/tool_materials.py": tool_materials.__file__,
@@ -140,14 +143,17 @@ def bootstrap(args: argparse.Namespace, report: dict[str, Any]) -> None:
     )
     report["helpers"] = helpers(root, captured)
     report["inputs"] = {name: captured["files"][name] for name in INPUTS}
-    directory = output / "source/docker/core"
-    build_lock, ci_lock = (
-        directory / "requirements-build.txt",
-        directory / "requirements-ci.txt",
+    role = getattr(args, "role", "tools")
+    selected_inputs = (*INPUTS, *light_environment_role.inputs(role))
+    require(
+        all(name in captured["files"] for name in selected_inputs), "Missing role input"
     )
+    report["inputs"] = {name: captured["files"][name] for name in selected_inputs}
+    report["role"], report["lock"] = role, light_environment_role.lock(role)
+    build_lock = output / "source/docker/core/requirements-build.txt"
+    ci_lock = output / "source" / report["lock"]
     tool_materials.validate_hash_lock(build_lock.read_text(), 3)
-    expected = python_executor.lock_versions(ci_lock.read_text())
-    tool_materials.validate_hash_lock(ci_lock.read_text(), len(expected))
+    expected = light_environment_role.expected(output / "source", role)
     commands = Commands(output, args.timeout)
     host = Path(sys.executable).resolve(strict=True)
     host_hash = sha256(host)
@@ -246,6 +252,7 @@ def bootstrap(args: argparse.Namespace, report: dict[str, Any]) -> None:
 
 def run(args: argparse.Namespace) -> None:
     root, output = args.root, args.output
+    light_environment_role.lock(getattr(args, "role", "tools"))
     require(
         root.is_absolute()
         and root == root.resolve()
@@ -290,7 +297,7 @@ def run(args: argparse.Namespace) -> None:
         latch.checkpoint()
 
 
-def selection(root: Path, output: Path, revision: str) -> str:
+def selection(root: Path, output: Path, revision: str, *, role: str = "tools") -> str:
     """Revalidate source and private terminal evidence before GitHub exports."""
     require(
         output.is_absolute()
@@ -300,6 +307,7 @@ def selection(root: Path, output: Path, revision: str) -> str:
         and output.stat().st_mode & 0o777 == 0o700,
         "Invalid private bootstrap output",
     )
+    light_environment_role.lock(role)
     filename = output / "manifest.json"
     require(
         filename.is_file()
@@ -318,9 +326,12 @@ def selection(root: Path, output: Path, revision: str) -> str:
             and report["source"]["revision"] == revision,
             "Incomplete, failed or wrong-source native bootstrap",
         )
-        text = (root / "docker/core/requirements-ci.txt").read_text()
-        expected = python_executor.lock_versions(text)
-        tool_materials.validate_hash_lock(text, len(expected))
+        require(
+            (report["role"], report["lock"])
+            == (role, light_environment_role.lock(role)),
+            "Native environment role/lock mismatch",
+        )
+        expected = light_environment_role.expected(root, role)
         require(report["packages"] == expected, "Incomplete native tools manifest")
         core_source.unchanged(root, output, report["source"])
         require(
@@ -329,7 +340,10 @@ def selection(root: Path, output: Path, revision: str) -> str:
         )
         require(
             report["inputs"]
-            == {name: report["source"]["files"][name] for name in INPUTS},
+            == {
+                name: report["source"]["files"][name]
+                for name in (*INPUTS, *light_environment_role.inputs(role))
+            },
             "Bootstrap input identities differ",
         )
         require(
@@ -383,6 +397,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--timeout", type=float, default=900)
+    parser.add_argument("--role", choices=("tools", "bridge"), default="tools")
     args = parser.parse_args()
     try:
         run(args)
