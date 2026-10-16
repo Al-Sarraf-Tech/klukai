@@ -51,9 +51,10 @@ print(json.dumps({'implementation':platform.python_implementation(),
 'platform':platform.platform(),'openssl':ssl.OPENSSL_VERSION,
 'machine':platform.machine(),'executable':sys.executable}))
 """
-PACKAGE_PROBE = """import importlib.metadata, json
+PACKAGE_PROBE = """import importlib.metadata, json, os, sys
+roots=list(dict.fromkeys(os.path.realpath(path) for path in sys.path))
 print(json.dumps({'packages':[[d.metadata['Name'],d.version]
-for d in importlib.metadata.distributions()]}))
+for d in importlib.metadata.distributions(path=roots)]}))
 """
 
 
