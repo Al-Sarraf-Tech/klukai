@@ -96,7 +96,12 @@ class Commands:
                 with cancellation_scope() as latch, latch.deferred():
                     child = subprocess.Popen(
                         command,
-                        env=self.environment,
+                        env={
+                            **self.environment,
+                            supervisor.PARENT_VARIABLE: (
+                                f"{os.getpid()}:{supervisor.identity(os.getpid())[1]}"
+                            ),
+                        },
                         cwd=self.output,
                         text=True,
                         stdout=stdout,

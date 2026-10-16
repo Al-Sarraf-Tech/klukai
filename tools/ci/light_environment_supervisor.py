@@ -6,6 +6,7 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from types import FrameType
 from typing import Any
 
 CLEANUP_SECONDS = 2.0
+PARENT_VARIABLE = "KLUKAI_COMMAND_PARENT"
 
 
 def capabilities() -> dict[str, bool]:
@@ -41,6 +43,22 @@ def children() -> list[int]:
 def identity(pid: int) -> tuple[int, int]:
     fields = Path(f"/proc/{pid}/stat").read_text().rpartition(") ")[2].split()
     return int(fields[1]), int(fields[19])  # PPID and kernel start ticks.
+
+
+def parent_handle(record: dict[str, Any]) -> int:
+    expected = os.environ.get(PARENT_VARIABLE, "")
+    pid, ticks = map(int, expected.split(":"))
+    if pid < 1 or os.getppid() != pid or identity(pid)[1] != ticks:
+        raise RuntimeError("Original command caller identity changed")
+    descriptor = os.pidfd_open(pid)
+    try:
+        if os.getppid() != pid or identity(pid)[1] != ticks:
+            raise RuntimeError("Original command caller changed during acquisition")
+        record["parent_identity"] = {"pid": pid, "start_ticks": ticks}
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def kill_owned(pid: int, record: dict[str, Any]) -> None:
@@ -95,23 +113,33 @@ def cleanup(record: dict[str, Any], child: subprocess.Popen[bytes] | None) -> No
 
 
 def monitor(
-    record: dict[str, Any], child: subprocess.Popen[bytes], timeout: float, stop: Path
+    record: dict[str, Any],
+    child: subprocess.Popen[bytes],
+    timeout: float,
+    stop: Path,
+    parent_descriptor: int,
 ) -> None:
     end = time.monotonic() + timeout
+    finished = False
     while not record["signals"] and not stop.exists() and time.monotonic() < end:
-        if reap(record, child):
+        record["parent_dead"] = bool(select.select([parent_descriptor], [], [], 0)[0])
+        if record["parent_dead"]:
             break
-        if record["exit_code"] is not None:
-            record["orphaned_descendants"] = True
+        if reap(record, child):
+            finished = True
             break
         time.sleep(0.005)
     record["parent_stop"] = stop.exists()
     if (
-        record["exit_code"] is None
+        not finished
         and not record["signals"]
         and not record["parent_stop"]
+        and not record["parent_dead"]
     ):
-        record["timed_out"] = True
+        if record["exit_code"] is None:
+            record["timed_out"] = True
+        else:
+            record["orphaned_descendants"] = True
 
 
 def supervise(argv: list[str], timeout: float, report: Path) -> int:
@@ -132,21 +160,33 @@ def supervise(argv: list[str], timeout: float, report: Path) -> int:
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, receive)
     child: subprocess.Popen[bytes] | None = None
+    parent_descriptor: int | None = None
     try:
         record["capabilities"] = capabilities()
+        parent_descriptor = parent_handle(record)
         record["parent_stop"] = report.with_suffix(".cancel").exists()
-        if not record["parent_stop"]:
+        record["parent_dead"] = bool(select.select([parent_descriptor], [], [], 0)[0])
+        if not record["parent_stop"] and not record["parent_dead"]:
             child = subprocess.Popen(argv, start_new_session=True)
             record["command_pid"] = child.pid
-            monitor(record, child, timeout, report.with_suffix(".cancel"))
+            monitor(
+                record, child, timeout, report.with_suffix(".cancel"), parent_descriptor
+            )
     except (Exception, KeyboardInterrupt) as error:
         record["error_type"], record["error"] = type(error).__name__, str(error)
     finally:
         try:
             cleanup(record, child)
+            if parent_descriptor is not None:
+                record["parent_dead"] = record.get("parent_dead", False) or bool(
+                    select.select([parent_descriptor], [], [], 0)[0]
+                )
         except (Exception, KeyboardInterrupt) as error:
             record["cleanup_complete"] = False
             record["cleanup_errors"].append(str(error))
+        finally:
+            if parent_descriptor is not None:
+                os.close(parent_descriptor)
         passed = (
             record["exit_code"] == 0
             and record["cleanup_complete"] is True
@@ -156,6 +196,8 @@ def supervise(argv: list[str], timeout: float, report: Path) -> int:
             and not record.get("timed_out")
             and not record.get("orphaned_descendants")
             and not record.get("parent_stop")
+            and not record.get("parent_dead")
+            and all(row["exit_code"] == 0 for row in record["reaped"])
         )
         record["passed"] = passed
         temporary = report.with_suffix(".tmp")

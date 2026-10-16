@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -100,6 +101,7 @@ def test_detached_child_is_terminated_reaped_and_recorded_without_outer_rescue(
     records = json.loads((tmp_path / "commands.json").read_text())
     state = json.loads((tmp_path / records[0]["supervisor_report"]).read_text())
     assert state["cleanup_complete"] is True
+    assert state["passed"] is False
     assert state["capabilities"] == {"pidfd": True, "subreaper": True}
     detached = int((tmp_path / "detached.pid").read_text())
     assert detached in [row["pid"] for row in state["reaped"]]
@@ -108,6 +110,90 @@ def test_detached_child_is_terminated_reaped_and_recorded_without_outer_rescue(
     if cancel is True:
         worker = json.loads((tmp_path / "worker-result.json").read_text())
         assert len(worker["signals"]) >= 2
+    elif cancel == "exit":
+        assert state["orphaned_descendants"] is True
+    else:
+        assert state["timed_out"] is True
+
+
+@pytest.mark.parametrize("descendant_exit", [0, 9])
+def test_recently_exiting_adopted_child_is_reaped_before_deciding_success(
+    tmp_path, descendant_exit
+):
+    from tools.ci.light_environment_process import Commands
+
+    # Like bwrap's helper, this owned child finishes shortly after its parent.
+    code = """import os,sys,time
+reader,writer=os.pipe()
+if os.fork()==0:
+    os.close(reader)
+    os.write(writer,b'ready')
+    os.close(writer)
+    time.sleep(.04)
+    os._exit(int(sys.argv[1]))
+os.close(writer)
+os.read(reader,5)
+os.close(reader)
+os._exit(0)
+"""
+    commands = Commands(tmp_path, 1)
+    argv = [sys.executable, "-I", "-c", code, str(descendant_exit)]
+    if descendant_exit:
+        with pytest.raises(ValueError):
+            commands.run(argv)
+    else:
+        commands.run(argv)
+    state = json.loads((tmp_path / "commands.json").read_text())[0]["supervisor"]
+    assert state["cleanup_complete"] is True
+    assert state["passed"] is (descendant_exit == 0)
+    assert state["exit_code"] == 0
+    assert state["terminated"] == []
+    assert not state.get("orphaned_descendants")
+    adopted = [row for row in state["reaped"] if row["pid"] != state["command_pid"]]
+    assert len(adopted) == 1 and adopted[0]["exit_code"] == descendant_exit
+
+
+def test_persistent_adopted_child_does_not_reset_original_command_deadline(tmp_path):
+    from tools.ci.light_environment_process import Commands
+
+    code = """import os,time
+if os.fork()==0:
+    os.setsid()
+    time.sleep(30)
+    os._exit(0)
+time.sleep(.4)
+os._exit(0)
+"""
+    started = time.monotonic()
+    with pytest.raises(ValueError):
+        Commands(tmp_path, 0.6).run([sys.executable, "-I", "-c", code])
+    assert time.monotonic() - started < 0.9
+    state = json.loads((tmp_path / "commands.json").read_text())[0]["supervisor"]
+    assert state["passed"] is False and state["orphaned_descendants"] is True
+    assert state["cleanup_complete"] is True
+    assert len(state["reaped"]) == 2 and state["terminated"]
+
+
+@pytest.mark.parametrize("damage", ["ownership", "start-ticks"])
+def test_owned_pidfd_signal_refuses_changed_ownership_or_identity(monkeypatch, damage):
+    from tools.ci import light_environment_supervisor as supervisor
+
+    parent = os.getpid()
+    identities = iter([(parent, 1), (parent, 2)])
+    monkeypatch.setattr(
+        supervisor,
+        "identity",
+        lambda _pid: (parent + 1, 1) if damage == "ownership" else next(identities),
+    )
+
+    def forbidden_signal(*_args):
+        raise AssertionError("Unsafe identity reached the signalling boundary")
+
+    monkeypatch.setattr(supervisor.signal, "pidfd_send_signal", forbidden_signal)
+    record = {"terminated": []}
+    with pytest.raises(RuntimeError, match="ownership|identity"):
+        supervisor.kill_owned(parent, record)
+    assert record["terminated"] == []
 
 
 def test_command_spawn_failure_still_writes_terminal_private_evidence(
