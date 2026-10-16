@@ -1,23 +1,27 @@
 # Amarillo operations
 
 Amarillo owns Klukai's core services, persistent state, PWA, event bridge, and
-the native [Intel Arc XTTS release](voice_xpu/README.md). In the current
-deployment, Sonnet 5.5 with medium adaptive thinking is the interactive primary;
-Dominus is the local secondary. Arc handles English speech independently of
-that choice. Local pictures and live portraits still use Dominus ComfyUI, and
-transcription keeps its separate Dominus endpoint.
+the retained [Intel Arc XTTS release](voice_xpu/README.md). The documented
+production conversation primary is Sonnet 5.5 with medium adaptive thinking;
+Dominus is secondary. Main speech uses Dominus-Nobara XTTS with asynchronous
+jobs and 24 kHz WAV output. Arc speech is an explicit rollback choice, with no
+automatic Arc or paid voice fallback. Text remains available without Dominus.
+Transcription retains its separate Dominus endpoint.
 
-Klukai **v1.1.0** prepares opt-in OpenAI scene images and Anthropic dream/Her POV
-writing. Checked-in defaults remain `comfyui` and `local`, with zero daily and
-monthly creative attempt allowances. After publication, the owner authorized
-the existing Claude key for creative writing: production now sets the text
-provider to `anthropic`, with both daily and monthly attempt limits at `12`.
-This permits 12 total monthly attempts shared across all users and creative
-text paths. Pictures remain local ComfyUI, and cloud image limits remain zero.
-Consult the
-[provider handoff](../../docs/handoff/2026-10-14-dream-image-preparation.md) before
-changing them; the [local GPU configuration](../../README.md#use-local-gpus)
-documents how to keep inference local.
+Production images use the private Agy/Grok account pair with alternating
+preference and bounded eligible failover. The newly requested Dominus-third,
+Amarillo-last image chain is research work, not an activated production route.
+See the [account-image guide](../../docs/handoff/2026-10-14-agy-main-images.md),
+[main voice handoff](../../docs/handoff/2026-10-14-nobara-primary-voice.md) and
+[ordered-backup samples](../../docs/handoff/2026-10-15-ordered-image-backup-research.md).
+
+Fresh checkouts retain local creative defaults and zero creative API allowances.
+The owner authorized production Anthropic dream/Her POV writing with 12 attempts
+per UTC day and month, shared across both text features. Account-quota images
+are separately authorized; paid image API allowances stay zero, Google paid
+credit fallback stays disabled and Grok extra usage stays off. The
+[creative-provider handoff](../../docs/handoff/2026-10-14-dream-image-preparation.md)
+distinguishes API attempts from the later account-image activation.
 
 Operator changes must preserve the independent hosts' admission rules: no
 synthetic warmup when local load-on-demand is selected, bounded GPU residency,

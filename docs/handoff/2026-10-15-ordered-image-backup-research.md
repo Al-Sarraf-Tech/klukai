@@ -61,9 +61,10 @@ presented as a canonical artwork provider. Preserve the current mainline while
 these requirements remain open.
 
 The owner also requested Dominus shutdown. Its graceful RabbitMQ action was
-acknowledged, but subsequent controller checks still reported on. Remote jobs
-are held; no hard power cut or power-on is authorized by that acknowledgment.
-Do not resume GPU/heavy work there without checking the owner's latest intent.
+acknowledged; after earlier on-state observations, the controller confirmed off
+at 22:14:31 CDT on October 15. No hard power cut was sent. Remote jobs remain
+held. Do not resume GPU/heavy work there or power it on without checking the
+owner's latest intent and the existing host schedule.
 
 Private raw evidence is under `~/.local/state/klukai/s-uplift-20261015/`, including
 `gpu-samples-20261016T021100Z`, `amarillo-bksdm-export20261016` and

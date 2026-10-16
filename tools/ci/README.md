@@ -148,7 +148,9 @@ The output directory must be new and outside the checkout. Evidence contains
 only freshly generated disposable service credentials; preserve its private
 permissions. `--development` is explicitly noncertifying.
 
-Validation status: the managed runner's unit, cancellation, fixture-selection and
-source-binding tests pass. Actual execution of this new managed mode in the
-heavy guest is still pending; the earlier nine passing host-mode cases do not
-certify this mode. Full GitHub CI and deployment remain separate requirements.
+Validation status: clean checkpoint `4afa6db` completed all nine managed-mode
+real-backend cases in the heavy guest under CPython 3.14.8, with inspected
+resources removed and source unchanged. The retained core coverage database was
+also independently checked. This establishes that checkpoint's managed mode;
+final-source execution, complete GitHub CI and deployment remain separate
+requirements. See the [dated validation evidence](../../docs/handoff/2026-10-15-s-tier-packaging.md).
