@@ -155,6 +155,7 @@ def notify_core_due(task_id: str) -> bool:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return 200 <= resp.status < 300
     except urllib.error.HTTPError as e:
+        e.close()
         print(f"bridge: core rejected due task {task_id}: HTTP {e.code}", flush=True)
         return False
     except Exception as e:
@@ -221,6 +222,7 @@ def notify_core_run_her_pov(job_id: str) -> bool:
             payload = json.loads(resp.read())
             return 200 <= resp.status < 300 and isinstance(payload, dict) and payload.get("ok") is True
     except urllib.error.HTTPError as e:
+        e.close()
         # Only malformed requests are terminal. Auth/config/routing failures
         # do not establish that the durable job is invalid. Unknown job IDs
         # are acknowledged by core with 2xx.

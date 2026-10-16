@@ -1,7 +1,7 @@
 """Exercise the private host API over real Unix HTTP with no cloud calls."""
 import base64
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import http.client
 import hashlib
 import importlib.util
@@ -299,13 +299,13 @@ def test_failed_claims_never_retry_and_errors_do_not_leak(worker, setup_files, r
 def test_pending_claim_is_committed_before_renderer_and_survives_restart(worker, setup_files):
     value = payload()
     def render(data, references):
-        with sqlite3.connect(setup_files[1] / "requests.sqlite3") as db:
+        with closing(sqlite3.connect(setup_files[1] / "requests.sqlite3")) as db, db:
             row = db.execute("SELECT status FROM requests WHERE request_id = ?", (value["request_id"],)).fetchone()
         assert row == ("pending",)
         raise ValueError("simulate interruption")
     with running(worker, setup_files, render) as path:
         assert request(path, value)[0] == 502
-    with sqlite3.connect(setup_files[1] / "requests.sqlite3") as db:
+    with closing(sqlite3.connect(setup_files[1] / "requests.sqlite3")) as db, db:
         db.execute("UPDATE requests SET status = 'pending'")
     with running(worker, setup_files) as path:
         assert request(path, value)[0] == 409
@@ -363,7 +363,7 @@ def test_startup_rejects_untrusted_reference_manifest(worker, setup_files, kind)
 
 
 def ledger(setup_files, query, parameters=()):
-    with sqlite3.connect(setup_files[1] / "requests.sqlite3") as db:
+    with closing(sqlite3.connect(setup_files[1] / "requests.sqlite3")) as db, db:
         return db.execute(query, parameters).fetchall()
 
 
@@ -517,7 +517,7 @@ def test_existing_database_migration_preserves_cache_and_ambiguous_claims(worker
     state = setup_files[1]
     state.mkdir(mode=0o700)
     values = [payload() for _ in range(3)]
-    with sqlite3.connect(state / "requests.sqlite3") as db:
+    with closing(sqlite3.connect(state / "requests.sqlite3")) as db, db:
         db.execute("CREATE TABLE requests (request_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, status TEXT NOT NULL, output BLOB)")
         for value, status in zip(values, ["completed", "pending", "failed"]):
             digest = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
@@ -553,7 +553,7 @@ def test_recover_reads_completed_bytes_and_does_not_render_unknown_pending_or_re
     with running(worker, setup_files, render=render) as path:
         assert request(path, done)[0] == 200
         digest = worker.request_digest(pending)
-        with sqlite3.connect(setup_files[1] / "requests.sqlite3") as db:
+        with closing(sqlite3.connect(setup_files[1] / "requests.sqlite3")) as db, db:
             db.execute(
                 "INSERT INTO requests (request_id, request_hash, status) VALUES (?, ?, 'pending')",
                 (pending["request_id"], digest),

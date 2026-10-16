@@ -1,3 +1,4 @@
+import io
 import json
 import threading
 from collections import defaultdict, deque
@@ -170,10 +171,32 @@ def test_failure_requeues_with_cooldown_and_due_worker_does_not_block_job(monkey
 
 @pytest.mark.parametrize('code,ack', [(400, True), (422, True), (401, False), (403, False), (404, False), (429, False), (500, False), (503, False)])
 def test_http_auth_and_infrastructure_failures_are_retryable(monkeypatch, code, ack):
-    def reject(*args, **kwargs):
-        raise urllib.error.HTTPError('http://unit.invalid', code, 'test', {}, None)
-    monkeypatch.setattr(urllib.request, 'urlopen', reject)
-    assert bridge.notify_core_run_her_pov(JOB) is ack
+    with io.BytesIO(b'core error') as body:
+        error = urllib.error.HTTPError('http://unit.invalid', code, 'test', {}, body)
+        def reject(*args, **kwargs):
+            raise error
+        monkeypatch.setattr(urllib.request, 'urlopen', reject)
+        try:
+            assert bridge.notify_core_run_her_pov(JOB) is ack
+            assert error.closed
+            assert body.closed
+        finally:
+            error.close()
+
+
+@pytest.mark.parametrize('code', [400, 422, 401, 403, 404, 429, 500, 503])
+def test_due_http_errors_are_retryable_and_close_response(monkeypatch, code):
+    with io.BytesIO(b'core error') as body:
+        error = urllib.error.HTTPError('http://unit.invalid', code, 'test', {}, body)
+        def reject(*args, **kwargs):
+            raise error
+        monkeypatch.setattr(urllib.request, 'urlopen', reject)
+        try:
+            assert bridge.notify_core_due('due') is False
+            assert error.closed
+            assert body.closed
+        finally:
+            error.close()
 
 
 def test_publish_uses_mandatory_routing_and_propagates_rejection():
