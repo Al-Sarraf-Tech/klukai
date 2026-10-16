@@ -210,7 +210,7 @@ def test_image_handoff_rejects_invalid_manifests_before_export(
         '  test "$9" = --timeout && test "${10}" = 1500\n'
         "  exit 0\nfi\n"
         'test "$#" = 1 && test "$1" = -\n'
-        'exec "$TASK_INLINE_PYTHON" "$@"\n'
+        'exec "$TASK_INLINE_PYTHON" -B "$@"\n'
     )
     python.chmod(0o700)
     selected = tmp_path / "selected image output"
