@@ -12,6 +12,37 @@ import { viewerSources, coreNamesUsed } from '../vendor.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
+function assertRendererSandbox(report) {
+  assert.equal(report?.url, 'chrome://sandbox/', 'Chrome internal sandbox report is required');
+  for (const [protection, expected] of [
+    ['Layer 1 Sandbox', 'Namespace'], ['PID namespaces', 'Yes'],
+    ['Network namespaces', 'Yes'], ['Seccomp-BPF sandbox', 'Yes'],
+  ]) {
+    const row = report.rows.find(([name]) => name === protection);
+    assert.equal(row?.[1], expected, `${protection} must be active: ${JSON.stringify(report)}`);
+  }
+}
+
+test('sandbox admission rejects disabled, missing and support-only renderer protections', () => {
+  const active = {
+    url: 'chrome://sandbox/',
+    rows: [['Layer 1 Sandbox', 'Namespace'], ['PID namespaces', 'Yes'], ['Network namespaces', 'Yes'], ['Seccomp-BPF sandbox', 'Yes']],
+  };
+  assert.doesNotThrow(() => assertRendererSandbox(active));
+  for (const protection of ['Layer 1 Sandbox', 'PID namespaces', 'Network namespaces', 'Seccomp-BPF sandbox']) {
+    assert.throws(() => assertRendererSandbox({ ...active,
+      rows: active.rows.map(([name, value]) => [name, name === protection ? 'No' : value]),
+    }), /must be active/);
+    assert.throws(() => assertRendererSandbox({ ...active,
+      rows: active.rows.filter(([name]) => name !== protection),
+    }), /must be active/);
+  }
+  assert.throws(() => assertRendererSandbox({ ...active,
+    rows: [['Layer 1 Sandbox', 'Namespace'], ['PID namespaces', 'Yes'], ['Network namespaces', 'Yes'], ['Seccomp-BPF sandbox supports TSYNC', 'Yes']],
+  }), /Seccomp-BPF sandbox must be active/);
+  assert.throws(() => assertRendererSandbox({ ...active, url: 'http://127.0.0.1/sandbox' }), /Chrome internal sandbox report/);
+});
+
 test('the public avatar module retains its original callable and constant interface', async () => {
   assert.deepEqual(Object.keys(avatar), [
     'CAMERA_ZOOM_RANGE', 'EYE_GUARD', 'LOOK_WEIGHT', 'MOOD_HOLD_MS', 'RIM_TINTS', 'SPRING',
@@ -219,7 +250,7 @@ test('isolated Chrome loads the real rig, preserves camera/state and releases We
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'klukai-avatar-browser-'));
   const browser = spawn(process.env.KLUKAI_CHROME_BINARY || '/usr/bin/google-chrome', [
-    '--headless', '--no-sandbox', '--password-store=basic', '--remote-debugging-port=0',
+    '--headless', '--disable-setuid-sandbox', '--password-store=basic', '--remote-debugging-port=0',
     '--disable-background-networking', '--disable-component-update', '--disable-sync',
     '--disable-extensions', '--no-first-run', '--no-default-browser-check',
     '--use-angle=swiftshader', `--user-data-dir=${profile}`,
@@ -239,6 +270,7 @@ test('isolated Chrome loads the real rig, preserves camera/state and releases We
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (stderr) t.diagnostic(`Chrome stderr:\n${stderr}`);
   });
   const deadline = Date.now() + 10000;
   const portFile = path.join(profile, 'DevToolsActivePort');
@@ -257,13 +289,16 @@ test('isolated Chrome loads the real rig, preserves camera/state and releases We
     const { resolve, reject, timer } = pending.get(message.id); pending.delete(message.id); clearTimeout(timer);
     if (message.error) reject(new Error(JSON.stringify(message.error))); else resolve(message.result);
   });
-  const evaluate = async (expression) => {
+  const command = async (method, params) => {
     const id = ++nextId;
-    const result = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error('Browser evaluation timed out')); }, 10000);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Browser ${method} timed out`)); }, 10000);
       pending.set(id, { resolve, reject, timer });
-      socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }));
+      socket.send(JSON.stringify({ id, method, params }));
     });
+  };
+  const evaluate = async (expression) => {
+    const result = await command('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
     if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
     return result.result.value;
   };
@@ -309,4 +344,23 @@ test('isolated Chrome loads the real rig, preserves camera/state and releases We
   assert.equal(result.canvases, 0, 'dispose must release the host canvas');
   assert.deepEqual(result.pretext, { lineCount: 2, height: 42, rendered: true, pixels: true, released: null });
   assert.ok(requests.includes('/vendor/three-avatar.min.js'), 'Three must load from the same origin');
+
+  // Inspect the same browser after the real rendering/disposal assertions.
+  // Namespace startup must fail closed; supported-but-disabled is insufficient.
+  const navigation = await command('Page.navigate', { url: 'chrome://sandbox/' });
+  assert.equal(navigation.errorText, undefined, 'Chrome must expose its internal sandbox report');
+  const sandboxDeadline = Date.now() + 10000;
+  let sandbox;
+  do {
+    try {
+      sandbox = await evaluate(`({ url: location.href, text: document.body?.innerText ?? '',
+        rows: [...document.querySelectorAll('tr')].map(row => [...row.cells].map(cell => cell.innerText.trim())) })`);
+    } catch (error) {
+      if (!/Execution context was destroyed|Cannot find context/.test(error.message)) throw error;
+    }
+    if (sandbox?.url === 'chrome://sandbox/' && sandbox.rows.length) break;
+    await delay(25);
+  } while (Date.now() < sandboxDeadline);
+  t.diagnostic(`Chrome sandbox report: ${JSON.stringify(sandbox)}`);
+  assertRendererSandbox(sandbox);
 });
