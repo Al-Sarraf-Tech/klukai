@@ -8,6 +8,7 @@ import sys
 from typing import Any, Protocol
 
 from .core_source import require, sha256
+from . import light_environment_ca
 
 BWRAP = Path("/usr/bin/bwrap")
 
@@ -36,13 +37,25 @@ def unchanged(record: dict[str, Any]) -> None:
     )
 
 
-def command(builder: Path, downloads: Path, wheels: Path, lock: Path) -> list[str]:
+def command(
+    builder: Path,
+    downloads: Path,
+    wheels: Path,
+    lock: Path,
+    *,
+    ca: dict[str, Any] | None = None,
+) -> list[str]:
     mounts = [
-        (builder, "--ro-bind"),
-        (downloads, "--ro-bind"),
-        (wheels, "--bind"),
-        (lock, "--ro-bind"),
+        (builder, builder, "--ro-bind"),
+        (downloads, downloads, "--ro-bind"),
+        (wheels, wheels, "--bind"),
+        (lock, lock, "--ro-bind"),
     ]
+    if ca is not None:
+        mounts.extend(
+            (source, target, "--ro-bind")
+            for source, target in light_environment_ca.mounts(ca, builder)
+        )
     prefix = Path(sys.base_prefix).resolve(strict=True)
     if not prefix.is_relative_to("/usr"):
         require(
@@ -51,7 +64,7 @@ def command(builder: Path, downloads: Path, wheels: Path, lock: Path) -> list[st
             and not prefix.is_relative_to("/root"),
             "Unsafe native base prefix",
         )
-        mounts.append((prefix, "--ro-bind"))
+        mounts.append((prefix, prefix, "--ro-bind"))
     args = [
         str(BWRAP),
         "--unshare-all",
@@ -81,22 +94,24 @@ def command(builder: Path, downloads: Path, wheels: Path, lock: Path) -> list[st
             )
             args.extend(["--symlink", os.readlink(path), str(path)])
     directories: set[Path] = {Path("/"), Path("/usr"), Path("/tmp"), Path("/run")}
-    for path, flag in mounts:
+    for path, target, flag in mounts:
         require(
             path.is_absolute()
             and path == path.resolve()
             and not any(p.is_symlink() for p in (path, *path.parents)),
             "Sandbox material is linked or relative",
         )
-        for parent in reversed(path.parents):
+        for parent in reversed(target.parents):
             if parent not in directories:
                 args.extend(["--dir", str(parent)])
                 directories.add(parent)
-        args.extend([flag, str(path), str(path)])
-        directories.add(path)
+        args.extend([flag, str(path), str(target)])
+        directories.add(target)
     cache = Path("/etc/ld.so.cache")
     if cache.is_file():
-        args.extend(["--dir", "/etc", "--ro-bind", str(cache), str(cache)])
+        if Path("/etc") not in directories:
+            args.extend(["--dir", "/etc"])
+        args.extend(["--ro-bind", str(cache), str(cache)])
     args.extend(["--chdir", str(wheels), "--dir", "/tmp/home"])
     for key, value in {
         "HOME": "/tmp/home",

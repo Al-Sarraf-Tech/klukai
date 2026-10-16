@@ -23,6 +23,7 @@ from . import (
     light_environment_installed,
     light_environment_process,
     light_environment_supervisor,
+    light_environment_ca,
 )
 from .cancellation import cancellation_scope
 from .light_environment_process import Commands
@@ -37,6 +38,7 @@ INPUTS = (
     "tools/ci/light_environment_installed.py",
     "tools/ci/light_environment_process.py",
     "tools/ci/light_environment_supervisor.py",
+    "tools/ci/light_environment_ca.py",
     "tools/ci/core_source.py",
     "tools/ci/cancellation.py",
     "tools/ci/tool_materials.py",
@@ -84,6 +86,7 @@ def helpers(root: Path, captured: dict[str, Any]) -> dict[str, Any]:
         "tools/ci/light_environment_installed.py": light_environment_installed.__file__,
         "tools/ci/light_environment_process.py": light_environment_process.__file__,
         "tools/ci/light_environment_supervisor.py": light_environment_supervisor.__file__,
+        "tools/ci/light_environment_ca.py": light_environment_ca.__file__,
         "tools/ci/core_source.py": core_source.__file__,
         "tools/ci/cancellation.py": cancellation.__file__,
         "tools/ci/tool_materials.py": tool_materials.__file__,
@@ -183,8 +186,11 @@ def bootstrap(args: argparse.Namespace, report: dict[str, Any]) -> None:
         ]
     )
     report["downloads"] = core_source.inventory(downloads)
+    report["builder_ca"] = light_environment_ca.discover(commands, builder)
     report["sandbox"] = light_environment_sandbox.identity(commands)
-    sandbox = light_environment_sandbox.command(builder, downloads, wheels, ci_lock)
+    sandbox = light_environment_sandbox.command(
+        builder, downloads, wheels, ci_lock, ca=report["builder_ca"]
+    )
     commands.run([*sandbox, "--", "/usr/bin/true"])
     report["sandbox"]["capability"] = True
     commands.run(
@@ -230,6 +236,7 @@ def bootstrap(args: argparse.Namespace, report: dict[str, Any]) -> None:
     commands.run([final_python, "-I", "-m", "pip", "--isolated", "check"])
     require(sha256(host) == host_hash, "Native interpreter changed during bootstrap")
     light_environment_sandbox.unchanged(report["sandbox"])
+    light_environment_ca.unchanged(report["builder_ca"], builder)
     report["installed_environment"] = light_environment_installed.capture(
         environment, host
     )
@@ -360,6 +367,7 @@ def selection(root: Path, output: Path, revision: str) -> str:
         )
     except (KeyError, TypeError) as error:
         raise ValueError("Malformed native tools manifest") from error
+    light_environment_ca.unchanged(report.get("builder_ca"), output / "builder")
     light_environment_installed.unchanged(
         Path(environment),
         Path(report["host"]["executable"]),

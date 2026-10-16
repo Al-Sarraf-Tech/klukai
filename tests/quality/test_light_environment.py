@@ -93,6 +93,37 @@ def boundary(monkeypatch, subject):
         assert "PIP_INDEX_URL" not in env and "PYTHONPATH" not in env
         assert "ANTHROPIC_API_KEY" not in env
         code = ""
+        if "-c" in argv and "klukai_builder_ca" in argv[-1]:
+            candidates = [
+                Path(value)
+                for value in (
+                    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+                    "/etc/ssl/certs/ca-certificates.crt",
+                    "/etc/ssl/ca-bundle.pem",
+                )
+            ]
+            selected = next(path for path in candidates if path.is_file())
+            if state.get("ca_bundle"):
+                import shutil
+
+                selected_bundle = (
+                    Path(argv[0]).parent.parent
+                    / "lib/site-packages/pip/_vendor/certifi/cacert.pem"
+                )
+                selected_bundle.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(selected, selected_bundle)
+                selected = selected_bundle
+            return execute(
+                [
+                    sys.executable,
+                    "-I",
+                    "-B",
+                    "-c",
+                    "print("
+                    + repr(json.dumps({"klukai_builder_ca": str(selected)}))
+                    + ")",
+                ]
+            )
         if "-c" in argv and "importlib.metadata" not in argv[-1]:
             return execute(argv)  # Real native interpreter probe.
         if "venv" in argv:
