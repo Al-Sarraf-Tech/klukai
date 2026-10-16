@@ -25,6 +25,7 @@ from . import (
     light_environment_supervisor,
     light_environment_ca,
     light_environment_role,
+    light_environment_init,
 )
 from .cancellation import cancellation_scope
 from .light_environment_process import Commands
@@ -41,6 +42,7 @@ INPUTS = (
     "tools/ci/light_environment_supervisor.py",
     "tools/ci/light_environment_ca.py",
     "tools/ci/light_environment_role.py",
+    "tools/ci/light_environment_init.py",
     "tools/ci/core_source.py",
     "tools/ci/cancellation.py",
     "tools/ci/tool_materials.py",
@@ -91,6 +93,7 @@ def helpers(root: Path, captured: dict[str, Any]) -> dict[str, Any]:
         "tools/ci/light_environment_supervisor.py": light_environment_supervisor.__file__,
         "tools/ci/light_environment_ca.py": light_environment_ca.__file__,
         "tools/ci/light_environment_role.py": light_environment_role.__file__,
+        "tools/ci/light_environment_init.py": light_environment_init.__file__,
         "tools/ci/core_source.py": core_source.__file__,
         "tools/ci/cancellation.py": cancellation.__file__,
         "tools/ci/tool_materials.py": tool_materials.__file__,

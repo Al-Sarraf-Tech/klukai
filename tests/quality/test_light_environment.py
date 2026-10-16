@@ -82,6 +82,9 @@ def boundary(monkeypatch, subject):
                 argv[i : i + 3] == ["--ro-bind", "/", "/"] for i in range(len(argv))
             )
             argv = argv[argv.index("--") + 1 :]
+            # This external-boundary stub substitutes bwrap and its namespace
+            # init; the actual init lifecycle is tested with real subprocesses.
+            argv = argv[argv.index("--") + 1 :]
             if argv == ["/usr/bin/true"]:
                 if state["mode"] == "sandbox-fails":
                     return actual(
