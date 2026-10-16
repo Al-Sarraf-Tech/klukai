@@ -80,3 +80,21 @@ with durable alternating preference and at most one service-error failover.
 Never fail over policy refusals or enable API keys, paid credits, or GPU images.
 Keep Grok's account paid usage disabled. Its official native client uses a
 read-only auth-file mount; account refresh remains outside the image worker.
+
+## Ordered GPU image backups (owner update, 2026-10-15)
+
+The owner subsequently requested Dominus GPU as the third image backend and
+Amarillo GPU as the final fallback, and reaffirmed that Agy and Grok remain
+mainline. The target order is the existing alternating Agy/Grok pair, then
+Dominus ComfyUI, then Amarillo Arc. This supersedes the earlier categorical
+prohibition on GPU images for these ordered backups. The owner also authorized
+obtaining necessary free models/runtime and requested Klukai samples from both
+hosts with two agents assessing Amarillo.
+
+This is authorized work in progress, not evidence of a deployed fallback.
+Production still uses the account pair. Preserve policy-refusal precedence,
+durable request identity, and observational recovery of uncertain attempts;
+do not interpret a generic failure as permission to start another renderer.
+Dominus gaming, exclusive lease, bounded residency and cleanup guards remain.
+No paid image APIs, credits, new charges or provider upgrades are authorized.
+Image backup authorization does not change text or voice provider selection.

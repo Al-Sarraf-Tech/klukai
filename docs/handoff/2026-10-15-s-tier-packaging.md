@@ -143,6 +143,49 @@ are still required. Original reports are preserved unchanged,
 including their rejected success flags. This result does not certify coverage,
 other jobs, GitHub branch protection, the application release image or deployment.
 
+## Corrected clean-checkpoint validation
+
+Clean source `4afa6db586365b60b584d8c8395a629bbc308460` completed one new CI-image
+build, one full core producer and one managed-backend producer on the existing
+heavy guest. The CI image was
+`sha256:b8653846686e8698b365a6bc71f2ded193c32c50c247875385ae1e19b6bffbb9`.
+Its strict native probe verified CPython 3.14.8 and all 131 locked packages.
+
+Core passed 5,443 cases, with 57 skips and one performance deselection. The
+retained SQLite database contains 162 files and 27,271 arcs; its SHA256 is
+`960c129c12f2d088caa8f5cecb1c2662973a04c65fa743f721388e1937d5d27c`.
+An independent networkless analysis reproduced 13,990/14,281 statements
+(97.9623%) and 3,742/3,932 branches (95.1679%), with the database unchanged.
+The first observer exposed an unclosed observer-only file handle; that evidence
+is retained. A corrected observer completed with empty stderr, without rerunning
+the core producer. The original rejected `cbbe65f` database remains rejected.
+
+All nine managed real-backend cases passed with PostgreSQL 17, Valkey 8.1.6
+and Qdrant 1.17.0 under the intended non-root, read-only service profiles.
+All 21 owned resources were independently confirmed absent and tracked source
+remained unchanged. Eighteen expected disposable-service startup notices are
+retained and classified; they are not suppressed or described as empty logs.
+Private evidence is in
+`heavy-managed-validation-4afa6db-20261016T013508Z/validation-report.json`
+(SHA256 `ae05c20aae06e63bb9eb0eacf5f91feed34943457c50407dbb67911e68636771`).
+
+The same clean checkpoint completed 254 Flutter VM and 109 Chrome tests with
+zero skips, then built an 818-file PWA bundle with digest
+`0aa86daaae31eed85dea545532a5b03e212727156d63f9aea78a8e1877399261`.
+Production `web-build` was untouched. A separately requested JS run passed
+its assertions but was rejected as sandbox-compliant evidence because its
+avatar launcher explicitly used `--no-sandbox`. A subsequent local source fix
+requires the same native Chrome instance to report active namespace and
+Seccomp protections; its full JS suite passed 238 cases with 21 existing
+optional-asset skips. Exact committed guest validation of that fix remains open.
+
+The canonical CI-image builder is committed at `1c34860`; it validates complete
+material history and a closed, digest-pinned Dockerfile grammar. Independent
+review reproduced and closed a hidden-extra-stage parsing defect. Its first
+actual clean-commit build remains open. These checkpoint results do not certify
+the complete GitHub workflow, final release artifact, all S-tier dimensions or
+deployment.
+
 ## Secret-store capability probe
 
 A dummy credential successfully round-tripped using systemd 259 with
