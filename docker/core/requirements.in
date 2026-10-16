@@ -2,6 +2,8 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
 websockets>=15.0
 anthropic>=0.84.0
+# Native dependency security floors verified for the 2026-10-15 repair tranche.
+jiter>=0.16.0
 httpx>=0.28.0
 # Keep the shared URL codec compatible with Starlette's maintained test backend.
 idna>=3.18
@@ -12,10 +14,10 @@ urllib3>=2.8.0
 apscheduler>=3.10.4
 pywebpush>=2.0.0
 pyyaml>=6.0
-psycopg[binary]>=3.2.0
+psycopg[binary]>=3.3.6
 psycopg_pool>=3.2.0
 redis>=5.2.0
-pydantic>=2.10.0
+pydantic>=2.14.1
 Pillow>=12.3.0
 bcrypt>=4.0
 types-PyYAML>=6.0

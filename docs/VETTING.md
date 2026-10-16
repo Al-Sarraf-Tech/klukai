@@ -105,3 +105,67 @@ commands/output, immutable source references and the failed format check remain
 under `~/.local/state/klukai/s-uplift-20261015/tool-vetting/syft-1.54.1/`.
 A separate attempt to retain that documentation page returned HTTP 403; the
 page was read through the web tool, without a paid fallback.
+
+## Selected native dependency repair — 2026-10-15
+
+This seven-distribution repair selects jiter 0.16.0, pydantic 2.14.1,
+pydantic-core 2.50.1, typing-extensions 4.16.0, typing-inspection 0.4.4,
+psycopg 3.3.6 and psycopg-binary 3.3.6. Explicit input floors cover jiter,
+pydantic and psycopg; pydantic's metadata selects the matched core and typing
+dependencies. All other runtime and CI distribution/version/hash sets remain
+unchanged. These are candidate dependency inputs, not whole-runtime security,
+license, compatibility, release or deployment clearance.
+
+- The non-yanked selected wheel bytes match official versioned PyPI metadata
+  and their internal RECORD entries. The retained metadata reports no known
+  Python-package advisories for these seven versions at observation time.
+  Sources: [jiter](https://pypi.org/pypi/jiter/0.16.0/json),
+  [pydantic](https://pypi.org/pypi/pydantic/2.14.1/json),
+  [pydantic-core](https://pypi.org/pypi/pydantic-core/2.50.1/json),
+  [typing-extensions](https://pypi.org/pypi/typing-extensions/4.16.0/json),
+  [typing-inspection](https://pypi.org/pypi/typing-inspection/0.4.4/json),
+  [psycopg](https://pypi.org/pypi/psycopg/3.3.6/json) and
+  [psycopg-binary](https://pypi.org/pypi/psycopg-binary/3.3.6/json).
+- Selected CPython 3.14 manylinux x86-64 jiter/core wheels contain ELF paths
+  and embedded Cargo SBOMs corroborating PyO3 0.29.0/0.29.2, beyond the affected
+  ranges of RUSTSEC-2026-0176/0177. Retained offline database scans recognized
+  38/100 Cargo packages and reported zero known matches. The corrected observer
+  revalidated the saved results after its first read-handle ResourceWarnings;
+  both outputs remain retained. This does not establish reachability, every
+  platform wheel, or complete runtime vulnerability closure.
+- The selected psycopg-binary wheel SHA256 is
+  `31cd942c23f613276b81a6e6598cefa12960058b0f46e1e874b540c793f6aca5`;
+  pure psycopg is
+  `a1db9f7148b06a28606767efaca51fa6f9398c5c0a3810519be69d7000bdb631`.
+  Actual bundled libcrypto identifies OpenSSL 3.5.8, replacing 3.5.4 in the
+  prior wheel; CVE-2025-15467 was a HIGH candidate fixed upstream in 3.5.5.
+  The replacement still requires final artifact scanning and adjudication.
+- Wheel license declarations/notices identify MIT for jiter, pydantic,
+  pydantic-core and typing-inspection, PSF-2.0 for typing-extensions, and
+  LGPL-3.0-only for the psycopg packages. These declarations do not cover every
+  bundled native library. The static notice investigation corroborates six
+  CentOS package identities with signed RPM content and preserves their exact
+  source notices, but wheel rewriting prevents whole-file equality and no
+  reproducible source-to-wheel attestation was established. Exact libcrypt
+  version/build provenance remains unresolved despite a libxcrypt family lead.
+  Successor libpq/OpenSSL/OpenLDAP version-matched notices, complete per-library
+  notice packaging, and final license review remain open; generic parent-wheel
+  license inheritance is not sufficient.
+- Both complete locks were regenerated with existing pip-tools 7.5.3 and
+  compatible pip 26.0.1 in a fresh private compiler assembled from recorded
+  installed tool bytes. Existing environments were unchanged. Resolution used
+  public PyPI, binary-only candidates, no build isolation, and an existing
+  source-derived http-ece wheel solely for metadata. Its cached origin digest
+  matches the unchanged locked source digest; no sdist was executed. Generated
+  headers retain the portable canonical command; the complete actual argv,
+  sanitized environment, compiler file hashes and logs are retained separately.
+
+Evidence is under `~/.local/state/klukai/s-uplift-20261015/`:
+`pyo3-patch-materials-20261016/` (primary metadata, actual wheel/static and Cargo
+scan receipts), `native-repair-candidates-20261016/` (psycopg metadata, actual
+wheels and `native-notices-investigation/report.json`), and
+`task5-dependency-repair-20261016/` (compiler, complete before/after hash maps,
+primary metadata/hash checks, constraint graph, commands and scoped tests).
+Selected package payloads were not installed or imported in this repair.
+Final native installation, compatibility, image scans, complete CI and rollout
+remain required after review and clean integration.
