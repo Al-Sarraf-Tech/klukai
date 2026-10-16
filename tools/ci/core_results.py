@@ -172,6 +172,12 @@ def junit_results(path: Path) -> dict[str, int]:
         raw = path.read_bytes()
         require(b"<!DOCTYPE" not in raw and b"<!ENTITY" not in raw, "Unsafe JUnit XML")
         root = ET.fromstring(raw)
+        for element in root.iter():
+            if element.tag in {"system-out", "system-err"}:
+                require(
+                    not re.search(r"\b\w*Warning:", element.text or ""),
+                    "Unexpected test warning",
+                )
         require(root.tag in {"testsuite", "testsuites"}, "Invalid JUnit root")
         suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
         require(
@@ -215,6 +221,17 @@ def junit_results(path: Path) -> dict[str, int]:
             )
             skipped += suite_skips
         passed = len(identities) - skipped
+        if root.tag == "testsuites":
+            for key, expected in {
+                "tests": len(identities),
+                "failures": 0,
+                "errors": 0,
+                "skipped": skipped,
+            }.items():
+                if key in root.attrib:
+                    require(
+                        xml_count(root, key) == expected, "JUnit outer counter differs"
+                    )
         require(
             passed > 0 and skipped <= 75, "Empty passing suite or skip ceiling exceeded"
         )
@@ -223,3 +240,192 @@ def junit_results(path: Path) -> dict[str, int]:
         if isinstance(exc, InvalidResults):
             raise
         raise InvalidResults("Invalid core JUnit results") from exc
+
+
+def raw_arc_results(path: Path, observations: list[tuple[int, int]]) -> None:
+    """Validate every raw sysmon arc before Coverage JSON's lossy projection.
+
+    Coupled intentionally to the pinned CPython/coverage collector. Compile and
+    inspect trusted source only; never execute the resulting code objects.
+    """
+    import coverage
+    import dis
+    import platform
+    from types import CodeType
+    from coverage.bytecode import ALWAYS_JUMPS, BranchArcResolver, bytes_to_lines
+    from coverage.parser import PythonParser
+
+    require(
+        coverage.__version__ == "7.16.2" and platform.python_version() == "3.14.8",
+        "Raw arc semantics require pinned coverage7.16.2/CPython3.14.8",
+    )
+    parser = PythonParser(filename=str(path))
+    parser.parse_source()
+    possible = set(parser.arcs())
+    pending = [
+        compile(path.read_text(), str(path), "exec", dont_inherit=True, optimize=0)
+    ]
+    while pending:
+        code = pending.pop()
+        pending.extend(item for item in code.co_consts if isinstance(item, CodeType))
+        if code.co_name == "__annotate__":
+            continue  # The pinned collector explicitly ignores annotation code.
+        lines = bytes_to_lines(code)
+        possible.update((line, line) for line in lines.values())
+        instructions = list(dis.get_instructions(code))
+        offsets = {
+            instruction.offset: index for index, instruction in enumerate(instructions)
+        }
+        successors: dict[int, set[int]] = {}
+        exception_entries = dis.Bytecode(code).exception_entries
+        resolver = BranchArcResolver(code, lines, parser.multiline_map)
+        for index, instruction in enumerate(instructions):
+            line = lines.get(instruction.offset)
+            if instruction.opname == "RETURN_VALUE" and line is not None:
+                possible.add((line, -code.co_firstlineno))
+                possible.add((parser.first_line(line), -code.co_firstlineno))
+            targets: set[int] = set()
+            terminal = instruction.opname in {
+                "RETURN_VALUE",
+                "RETURN_GENERATOR",
+                "RAISE_VARARGS",
+                "RERAISE",
+            }
+            if instruction.opcode in dis.hasjump:
+                targets.add(instruction.argval)
+            if (
+                not terminal
+                and instruction.opcode not in ALWAYS_JUMPS
+                and index + 1 < len(instructions)
+            ):
+                targets.add(instructions[index + 1].offset)
+            targets.update(
+                entry.target
+                for entry in exception_entries
+                if entry.start <= instruction.offset < entry.end
+            )
+            successors[instruction.offset] = targets
+            if (
+                instruction.opcode in dis.hasjump
+                and instruction.opcode not in ALWAYS_JUMPS
+            ):
+                for target in targets:
+                    if (
+                        arc := resolver.resolve(instruction.offset, target)
+                    ) is not None:
+                        possible.add(arc)
+        # A raw sysmon branch can expose an expression's individual lines,
+        # while its resolver/AST report normalizes them. Retain both compiler
+        # CFG edges and their source normalization; never connect across a
+        # terminating return/raise merely because statements are adjacent.
+        for offset, targets in successors.items():
+            start = lines.get(offset)
+            if start is None:
+                continue
+            pending_targets = list(targets)
+            seen: set[int] = set()
+            while pending_targets:
+                target_offset = pending_targets.pop()
+                if target_offset in seen or target_offset not in offsets:
+                    continue
+                seen.add(target_offset)
+                end = lines.get(target_offset)
+                if end is None:
+                    pending_targets.extend(successors[target_offset])
+                elif start > 0 and end > 0:
+                    possible.add((start, end))
+                    possible.update(parser.translate_arcs([(start, end)]))
+    require(
+        all(
+            type(arc) is tuple
+            and len(arc) == 2
+            and all(type(line) is int for line in arc)
+            and arc in possible
+            for arc in observations
+        ),
+        f"Raw SQLite arc differs from trusted source control flow: {path.name}; {sorted(set(observations) - possible)[:8]}",
+    )
+
+
+def retained_results(
+    core: Path, database: Path, original: Any, recomputed: Any
+) -> dict[str, float | int]:
+    """Reconstruct both reports from a private database copy and trusted source.
+
+    Map only the producer's fixed /source/docker/core prefix. No retained Python is imported or executed.
+    """
+    import json
+    import shutil
+    import tempfile
+
+    from .core_profile import coverage_database
+    from .core_resources import ResourceFailure
+    from .core_source import sha256
+
+    before = sha256(database)
+    try:
+        coverage_database(database)
+        expected = {str(p.resolve()) for p in (core / "app").rglob("*.py")}
+        with tempfile.TemporaryDirectory(prefix="core-evidence-") as temporary:
+            private = Path(temporary)
+            copied = private / ".coverage"
+            shutil.copyfile(database, copied)
+            observed = Coverage(data_file=str(copied), config_file=False)
+            mapped = Coverage(data_file=None, config_file=False)
+            config = core / ".coveragerc"
+            if config.exists():
+                mapped = Coverage(data_file=None, config_file=str(config))
+            raw, target = observed.get_data(), mapped.get_data()
+            try:
+                observed.load()
+                require(raw.has_arcs(), "Retained SQLite has no arcs")
+
+                def map_path(name: str) -> str:
+                    prefix = "/source/docker/core/"
+                    require(name.startswith(prefix), "Unexpected SQLite source path")
+                    if name.startswith(prefix):
+                        relative = PurePosixPath(name[len(prefix) :])
+                        require(".." not in relative.parts, "Unsafe SQLite source path")
+                        name = str(core.joinpath(*relative.parts).resolve())
+                    require(name in expected, "Unexpected SQLite runtime module")
+                    return name
+
+                require(
+                    {map_path(name) for name in raw.measured_files()} == expected,
+                    "Retained SQLite module inventory differs",
+                )
+                for name in raw.measured_files():
+                    raw_arc_results(Path(map_path(name)), raw.arcs(name) or [])
+                target.update(raw, map_path=map_path)
+                report = private / "reconstructed.json"
+                mapped.json_report(outfile=str(report))
+                actual = json.loads(report.read_text())
+                actual["files"] = {
+                    Path(name).resolve().relative_to(core.resolve()).as_posix(): value
+                    for name, value in actual["files"].items()
+                }
+                # Source-derived possible arcs and actual observations must
+                # agree with BOTH retained reports, including destinations.
+                for candidate in (original, recomputed):
+                    require(
+                        candidate["files"] == actual["files"]
+                        and candidate["totals"] == actual["totals"],
+                        "Coverage JSON differs from independently reconstructed SQLite",
+                    )
+                return coverage_results(core, actual)
+            finally:
+                raw.close(force=True)
+                target.close(force=True)
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        CoverageException,
+        ResourceFailure,
+    ) as exc:
+        if isinstance(exc, InvalidResults):
+            raise
+        raise InvalidResults("Invalid retained core observations") from exc
+    finally:
+        require(sha256(database) == before, "Retained SQLite changed during validation")

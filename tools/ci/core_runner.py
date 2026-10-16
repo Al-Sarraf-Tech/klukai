@@ -71,6 +71,36 @@ def image_info(docker: Docker, reference: str) -> dict[str, Any]:
     return info
 
 
+def retained_image_identity(
+    info: dict[str, Any], *, postgres: bool = False
+) -> dict[str, Any]:
+    """Retain only actual nonsecret fields required by independent validation."""
+    config = info["Config"]
+    labels = config.get("Labels") or {}
+    result = {key: info.get(key) for key in ("Id", "Architecture", "Os", "RepoDigests")}
+    result["Config"] = {
+        "User": config.get("User"),
+        "Entrypoint": config.get("Entrypoint"),
+        "Labels": {
+            key: labels.get(key)
+            for key in (
+                "org.opencontainers.image.revision",
+                "cc.appnest.klukai.ci-lock-sha256",
+            )
+        },
+    }
+    if postgres:
+        majors = [
+            value.partition("=")[2]
+            for value in config.get("Env", [])
+            if value.startswith("PG_MAJOR=")
+        ]
+        if len(majors) != 1:
+            raise ResourceFailure("Missing or duplicate PostgreSQL image major")
+        result["PG_MAJOR"] = majors[0]
+    return result
+
+
 def ready_postgres(docker: Docker, cid: str, password: str) -> str:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
@@ -243,13 +273,20 @@ def _execute(config: RunConfig, cancellation: SignalLatch) -> dict[str, Any]:
                     "core": {
                         "input": config.image,
                         "id": tool_image["Id"],
-                        "config": {
-                            k: v for k, v in tool_image["Config"].items() if k != "Env"
-                        },
+                        "config": retained_image_identity(tool_image)["Config"],
                     },
                     "postgres": {"input": config.postgres_image, "id": pg_image["Id"]},
                 },
             }
+        )
+        from .core_source import write_json
+
+        write_json(
+            output / "image-identity.json",
+            {
+                "core": retained_image_identity(tool_image),
+                "postgres": retained_image_identity(pg_image, postgres=True),
+            },
         )
         report["docker_version"] = json.loads(
             docker.run("version", "--format={{json .}}").stdout

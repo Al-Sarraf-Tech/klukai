@@ -178,6 +178,57 @@ def mutations(
     return f"{killed}/{total} execution-verified mutants killed ({rate:.2%})"
 
 
+def core_tests(root: Path, revision: str, max_age: int, evidence: Path) -> str:
+    """Consume actual managed output through the requirement-specific CLI."""
+    raw = run(
+        [
+            sys.executable,
+            "-B",
+            "-m",
+            "tools.ci.core_evidence",
+            "--root",
+            str(root),
+            "--output",
+            str(evidence),
+            "--revision",
+            revision,
+            "--max-age-days",
+            str(max_age),
+        ],
+        root,
+    )
+    try:
+        result = json.loads(raw)
+        coverage, junit = result["coverage"], result["junit"]
+        if result["certifying"] is not True or result["source_revision"] != revision:
+            raise InvalidEvidence(
+                "core semantic verifier did not establish final execution"
+            )
+        for key in ("statements_percent", "branches_percent"):
+            value = coverage[key]
+            if (
+                type(value) not in (int, float)
+                or not math.isfinite(value)
+                or not 95 <= value <= 100
+            ):
+                raise InvalidEvidence("invalid independently measured core coverage")
+        if any(
+            type(junit[key]) is not int for key in ("passed", "skipped", "tests")
+        ) or not (
+            junit["passed"] > 0
+            and 0 <= junit["skipped"] <= 75
+            and junit["tests"] == junit["passed"] + junit["skipped"]
+        ):
+            raise InvalidEvidence("invalid independently measured JUnit results")
+        return (
+            f"SQLite/source-verified statements={coverage['statements_percent']:.2f}% "
+            f"branches={coverage['branches_percent']:.2f}%; "
+            f"{junit['passed']} passed, {junit['skipped']} skipped"
+        )
+    except (ValueError, TypeError, KeyError) as exc:
+        raise InvalidEvidence("invalid core semantic verifier result") from exc
+
+
 def evaluate(
     check: dict[str, Any],
     root: Path,
@@ -207,6 +258,13 @@ def evaluate(
             run(["gitleaks", "git", "--no-banner", "--redact", "--log-opts=HEAD"], root)
             return "required secret scan passed"
         case "evidence":
+            if (
+                check["id"] == "TEST-1"
+                and (evidence / "TEST-1/manifest.json").is_file()
+            ):
+                return core_tests(
+                    root, revision, limits["evidence_max_age_days"], evidence / "TEST-1"
+                )
             load_bundle(
                 evidence, check["id"], revision, limits["evidence_max_age_days"]
             )
