@@ -26,7 +26,11 @@ from app import warmup  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _fresh():
+def _fresh(monkeypatch):
+    # This module stubs gateway calls and explicitly exercises warmup. Keep the
+    # surrounding CI guard intact outside each test; the off-switch case below
+    # sets it again to verify that disabled warmup never reaches the gateway.
+    monkeypatch.delenv("KLUKAI_DISABLE_WARMUP", raising=False)
     warmup._reset_for_tests()
     yield
     warmup._reset_for_tests()

@@ -163,7 +163,7 @@ def test_explicit_sampling_is_bounded(monkeypatch, raw, expected):
     assert tracing.sampling_ratio() == expected
 
 
-def test_trace_export_contains_sampled_redacted_correlation():
+def test_trace_export_contains_sampled_redacted_correlation(monkeypatch):
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -172,18 +172,22 @@ def test_trace_export_contains_sampled_redacted_correlation():
     from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
     from app.observability.trace_redaction import CredentialRedactingExporter
 
+    # This test exports only to memory; enable its SDK despite the CI guard.
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "false")
     output = InMemorySpanExporter()
     provider = TracerProvider(sampler=ParentBased(TraceIdRatioBased(1)))
     provider.add_span_processor(
         SimpleSpanProcessor(CredentialRedactingExporter(output))
     )
-    with provider.get_tracer("test").start_as_current_span("request") as span:
-        tracing.correlate_request("safe-request-id")
-        span.set_attribute("url.full", "http://test/?token=secret-value")
-    (exported,) = output.get_finished_spans()
-    assert exported.attributes["klukai.request_id"] == "safe-request-id"
-    assert exported.attributes["url.full"] == "http://test/?token=***"
-    provider.shutdown()
+    try:
+        with provider.get_tracer("test").start_as_current_span("request") as span:
+            tracing.correlate_request("safe-request-id")
+            span.set_attribute("url.full", "http://test/?token=secret-value")
+        (exported,) = output.get_finished_spans()
+        assert exported.attributes["klukai.request_id"] == "safe-request-id"
+        assert exported.attributes["url.full"] == "http://test/?token=***"
+    finally:
+        provider.shutdown()
 
 
 def test_prometheus_preserves_trailing_template_braces():

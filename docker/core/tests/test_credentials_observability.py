@@ -128,6 +128,8 @@ def test_real_fastapi_traces_redact_credentials_even_with_header_capture(monkeyp
         InMemorySpanExporter,
     )
 
+    # This test exports only to memory; enable its SDK despite the CI guard.
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "false")
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -169,7 +171,8 @@ def test_real_fastapi_traces_redact_credentials_even_with_header_capture(monkeyp
 
 
 def test_real_configured_export_pipeline_redacts_exception_events(monkeypatch):
-    # Export-pipeline verification needs every test span; production defaults to10%.
+    # This pipeline exports only to memory and needs every span for verification.
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "false")
     monkeypatch.setenv("OTEL_TRACES_SAMPLER_ARG", "1")
     from opentelemetry import trace
     from opentelemetry.exporter.otlp.proto.grpc import trace_exporter
