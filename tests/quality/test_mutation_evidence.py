@@ -40,7 +40,7 @@ from mutmut.mutation.file_mutation import mutate_file_contents
 json.dump(mutate_file_contents("app/sample.py", sys.stdin.read()), sys.stdout)
 """
     result = subprocess.run(
-        [sys.executable, "-I", "-c", code],
+        [sys.executable, "-I", "-B", "-c", code],
         input=source,
         text=True,
         capture_output=True,

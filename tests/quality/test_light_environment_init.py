@@ -146,6 +146,7 @@ def test_init_refuses_host_execution_before_spawning_or_reaping(tmp_path, optimi
         [
             sys.executable,
             "-I",
+            "-B",
             optimization,
             light_environment_init.__file__,
             "--",

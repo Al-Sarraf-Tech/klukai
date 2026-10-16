@@ -41,7 +41,7 @@ json.dump({name: mutate_file_contents(name, code)[0]
         Path(name, "setup.cfg").write_text("[mutmut]\nsource_paths=app\n")
         try:
             result = subprocess.run(
-                [sys.executable, "-I", "-c", program],
+                [sys.executable, "-I", "-B", "-c", program],
                 input=json.dumps(sources),
                 text=True,
                 capture_output=True,
