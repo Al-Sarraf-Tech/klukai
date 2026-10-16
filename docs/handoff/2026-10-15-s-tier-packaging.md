@@ -95,6 +95,54 @@ The frontend runner's invalid `--platform vm` invocation has been replaced with
 Flutter's default tester invocation; Chrome retains its explicit platform.
 Full clean-source runner execution and final PWA artifact binding remain open.
 
+## Clean checkpoint core evidence
+
+At 01:16 UTC on October 16 (October 15 Central), the full core producer reported
+success for clean source
+`cbbe65f127a279a5013e50c6754a0b58a5465838`. It ran in newly labeled CI tool image
+`sha256:38d4125e7816ba15d02ca22f406be6ea58e53015d25abb3fae60d3f57828b803`,
+with CPython 3.14.8 and all 131 packages matching CI lock
+`cd64b56d600f64971115f5fdeba2c7196b385a07bce2ab1addf3212932a0a8cc`.
+The image is a test executor, not the application release artifact.
+
+The run passed 5,443 cases with 57 skips and one explicit performance
+deselection. Warnings remained errors. Coverage was recomputed from retained
+SQLite observations and checked against the full 162-module source inventory:
+13,990/14,281 statements (97.9623%) and 3,742/3,932 branches (95.1679%). The
+producer reported both 95% gates passed, unchanged source and successful cleanup.
+Independent validation then found the retained SQLite database contained no
+file or arc observations, so its coverage certification was rejected. The
+5,443 passing JUnit cases remain valid. Private original manifests, JUnit,
+coverage and command
+output are retained under `heavy-core-validation-cbbe65f-20261016T011256Z/`
+in the private evidence root above.
+
+The earlier strict-startup failure was resolved with the vetted pytest-asyncio
+1.4.0 lock and explicit fixture loop scopes. Three test modules then received
+scoped setup corrections for deliberately stubbed warmup and in-memory tracing;
+the global CI guards, assertions and coverage thresholds were preserved.
+
+CI tool-image reproducibility uses the latest commit timestamp of its five
+material inputs for `SOURCE_DATE_EPOCH` (1792111937 here), while the OCI revision
+label and tested source bind the complete checkpoint. This image contains no
+application or test source. The five inputs were unchanged from `83feed6`, and
+their cached layers were reused in one new image build, followed by one probe
+and one full core run.
+
+The coverage defect is in source-only analysis: `Coverage()` inherited the
+observed `COVERAGE_FILE` instead of using an in-memory database, then replaced
+observations with empty source-analysis arcs. Regressions reproduce database
+mutation in both successful and rejected validations. The correction selects
+`data_file=None` and explicitly closes the parser database. The driver also
+closes its read-only SQLite handle, rejects empty observations and verifies the
+retained database hash/counts before and after source analysis. Focused real
+SQLite regressions pass, including corrupt/empty inputs and handle closure;
+the combined quality/helper suite passes 531 cases under warnings-as-errors.
+The full clean-source rerun and independent retained-database recomputation
+are still required. Original reports are preserved unchanged,
+including their rejected success flags. This result does not certify coverage,
+other jobs, GitHub branch protection, the application release image or deployment.
+
 ## Secret-store capability probe
 
 A dummy credential successfully round-tripped using systemd 259 with

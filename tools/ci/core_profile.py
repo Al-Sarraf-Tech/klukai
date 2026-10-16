@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 import re
+import sqlite3
 from typing import Any
 
 from .core_resources import ResourceFailure
@@ -42,9 +44,11 @@ try:
     # Recompute from retained SQLite under this same interpreter. Percentages
     # or an independently fabricated JSON report cannot replace observed arcs.
     from coverage import Coverage
-    with sqlite3.connect('file:/evidence/.coverage?mode=ro', uri=True) as database:
-        if database.execute('PRAGMA quick_check').fetchone() != ('ok',):
-            raise ValueError('Coverage SQLite integrity failed')
+    from tools.ci.core_profile import coverage_database
+    from tools.ci.core_source import sha256
+    database_path = out / '.coverage'
+    observations = coverage_database(database_path)
+    observed_digest = sha256(database_path)
     measured = Coverage(data_file='/evidence/.coverage', config_file='/source/docker/core/.coveragerc')
     measured.load()
     if not measured.get_data().has_arcs():
@@ -56,6 +60,9 @@ try:
         raise ValueError('Coverage JSON differs from retained SQLite observations')
     from tools.ci.core_results import coverage_results, junit_results
     result['coverage'] = coverage_results(pathlib.Path('/source/docker/core'), data)
+    if coverage_database(database_path) != observations or sha256(database_path) != observed_digest:
+        raise ValueError('Retained coverage observations changed during validation')
+    result['retained_coverage'] = {**observations, 'sha256': observed_digest}
     result['junit'] = junit_results(out / 'junit.xml')
     result['passed'] = True
 except BaseException as error:
@@ -66,6 +73,29 @@ finally:
     (out / 'validation.json').write_text(json.dumps(result, indent=2) + '\n')
 sys.exit(0 if result['passed'] else 1)
 """
+
+
+def coverage_database(path: Path) -> dict[str, int]:
+    """Inspect retained observations read-only and close the real SQLite handle."""
+    try:
+        with closing(
+            sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        ) as db:
+            if db.execute("PRAGMA quick_check").fetchone() != ("ok",):
+                raise ResourceFailure("Coverage SQLite integrity failed")
+            if db.execute("SELECT value FROM meta WHERE key='has_arcs'").fetchone() != (
+                "1",
+            ):
+                raise ResourceFailure("Coverage SQLite has no branch observations")
+            counts = {
+                table: db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("file", "arc")
+            }
+            if not all(type(value) is int and value > 0 for value in counts.values()):
+                raise ResourceFailure("Coverage SQLite has empty file/arc observations")
+            return {"files": counts["file"], "arcs": counts["arc"]}
+    except sqlite3.Error as error:
+        raise ResourceFailure("Invalid retained coverage SQLite") from error
 
 
 def safe_environment(password: str) -> dict[str, str]:

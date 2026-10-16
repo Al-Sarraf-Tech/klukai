@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import copy
+from contextlib import closing
 import json
+import shutil
+import sqlite3
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -11,6 +14,8 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from tools.ci.core_results import InvalidResults, coverage_results, junit_results
+from tools.ci import core_profile
+from tools.ci.core_resources import ResourceFailure
 
 
 @pytest.fixture(scope="module")
@@ -52,6 +57,66 @@ def test_actual_pytest_and_full_coverage_pass(measured):
     assert result["branches_percent"] == 100
     assert result["modules"] == 2
     assert junit_results(core / "junit.xml") == {"passed": 1, "skipped": 0, "tests": 1}
+
+
+@pytest.mark.parametrize("reject", [False, True])
+def test_source_analysis_preserves_actual_coverage_database(
+    measured, tmp_path, monkeypatch, reject
+):
+    core, original = measured
+    database = tmp_path / "retained.coverage"
+    shutil.copy2(core / ".coverage", database)
+    monkeypatch.setenv("COVERAGE_FILE", str(database))
+    before = database.read_bytes()
+    with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as observed:
+        assert observed.execute("SELECT COUNT(*) FROM file").fetchone()[0] > 0
+        assert observed.execute("SELECT COUNT(*) FROM arc").fetchone()[0] > 0
+    data = copy.deepcopy(original)
+    if reject:
+        data["totals"]["num_statements"] += 1
+        with pytest.raises(InvalidResults):
+            coverage_results(core, data)
+    else:
+        assert coverage_results(core, data)["branches_percent"] == 100
+    assert database.read_bytes() == before, (
+        "Source analysis overwrote observed coverage"
+    )
+
+
+@pytest.mark.parametrize("fault", ["none", "empty", "corrupt"])
+def test_observed_database_check_rejects_missing_arcs_and_closes_its_connection(
+    measured, tmp_path, monkeypatch, fault
+):
+    core, _ = measured
+    database = tmp_path / "retained.coverage"
+    shutil.copy2(core / ".coverage", database)
+    if fault == "empty":
+        with closing(sqlite3.connect(database)) as writer:
+            writer.execute("DELETE FROM arc")
+            writer.commit()
+    elif fault == "corrupt":
+        database.write_bytes(b"invalid SQLite observations")
+    before = database.read_bytes()
+    connect = sqlite3.connect
+    opened = []
+
+    def observed_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", observed_connect)
+    if fault == "none":
+        counts = core_profile.coverage_database(database)
+        assert counts["files"] > 0 and counts["arcs"] > 0
+    else:
+        with pytest.raises(ResourceFailure):
+            core_profile.coverage_database(database)
+    assert database.read_bytes() == before
+    assert opened
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
 
 
 @pytest.mark.parametrize(

@@ -73,12 +73,45 @@ class Backends:
 
 
 @pytest.fixture(scope="module")
-def backends(tmp_path_factory: pytest.TempPathFactory):
+def backends(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest):
     if os.environ.get("KLUKAI_RUNTIME_BACKENDS") != "1":
         pytest.fail("Explicit disposable gate requires KLUKAI_RUNTIME_BACKENDS=1")
     output = os.environ.get("KLUKAI_RUNTIME_EVIDENCE")
     if not output:
         pytest.fail("KLUKAI_RUNTIME_EVIDENCE must name a private evidence directory")
+    context_path = os.environ.get("KLUKAI_RUNTIME_CONTEXT")
+    context_sha = os.environ.get("KLUKAI_RUNTIME_CONTEXT_SHA256")
+    if context_path or context_sha:
+        from tests.runtime_backend_context import load_context
+
+        if context_path != "/runtime-context/context.json" or not context_sha:
+            pytest.fail(
+                "Managed backend context requires its fixed readonly path and hash"
+            )
+        module = "tests/" + Path(request.module.__file__).name
+        context = load_context(Path(context_path), context_sha, module, ROOT.parents[1])
+        evidence = Path(output)
+        if (
+            output != "/evidence/runtime"
+            or evidence.is_symlink()
+            or not evidence.is_dir()
+        ):
+            pytest.fail(
+                "Managed evidence must be the separate private worker directory"
+            )
+        endpoints = context["backends"]
+        (evidence / "containers.json").write_text(
+            json.dumps(endpoints, indent=2) + "\n"
+        )
+        yield Backends(
+            {name: endpoint["port"] for name, endpoint in endpoints.items()},
+            {name: endpoint["host"] for name, endpoint in endpoints.items()},
+            context["password"],
+            evidence,
+        )
+        return
+    if os.environ.get("KLUKAI_RUNTIME_MODULE"):
+        pytest.fail("Managed backend mode cannot fall back to Docker without context")
     evidence = Path(output)
     evidence.mkdir(parents=True, exist_ok=True)
     suffix = secrets.token_hex(5)

@@ -111,24 +111,31 @@ def coverage_results(core: Path, data: Any) -> dict[str, float | int]:
         )
         totals: dict[str, int] = {}
         config = core / ".coveragerc"
-        source = Coverage(config_file=str(config) if config.exists() else False)
+        source = Coverage(
+            data_file=None, config_file=str(config) if config.exists() else False
+        )
         # Analyze source possibilities with no executed arcs. This is an
         # in-memory parser input, never submitted as observed execution data.
-        source.get_data().add_arcs(
-            {str(path.resolve()): [] for path in expected.values()}
-        )
-        for name, path in expected.items():
-            pure = PurePosixPath(name)
-            require(
-                not pure.is_absolute() and ".." not in pure.parts, "Unsafe source path"
+        parser_data = source.get_data()
+        try:
+            parser_data.add_arcs(
+                {str(path.resolve()): [] for path in expected.values()}
             )
-            require(
-                path.is_file()
-                and not any(p.is_symlink() for p in (path, *path.parents)),
-                "Linked or missing runtime module",
-            )
-            for key, number in file_counts(path, files[name], source).items():
-                totals[key] = totals.get(key, 0) + number
+            for name, path in expected.items():
+                pure = PurePosixPath(name)
+                require(
+                    not pure.is_absolute() and ".." not in pure.parts,
+                    "Unsafe source path",
+                )
+                require(
+                    path.is_file()
+                    and not any(p.is_symlink() for p in (path, *path.parents)),
+                    "Linked or missing runtime module",
+                )
+                for key, number in file_counts(path, files[name], source).items():
+                    totals[key] = totals.get(key, 0) + number
+        finally:
+            parser_data.close(force=True)
         require(
             all(count(data["totals"][key]) == number for key, number in totals.items()),
             "Coverage totals differ from measured modules",

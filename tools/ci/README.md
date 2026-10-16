@@ -113,3 +113,42 @@ python -m pytest -q tests/release/test_perf_gate.py
 mypy --strict --namespace-packages --explicit-package-bases tools/ci/perf_*.py
 ruff check tools/ci/perf_*.py tests/release/test_perf_gate.py
 ```
+
+## Managed real-backend gate
+
+The heavy guest's host Python orchestrates Docker; the source-bound CI image
+runs all nine real-backend cases under CPython 3.14.8 and the complete hashed
+CI dependency lock. Supply immutable cached image IDs or repository digests and
+the full expected clean Git revision:
+
+```sh
+export KLUKAI_CI_OUTPUT="$NEW_PRIVATE_BACKEND_EVIDENCE_DIRECTORY"
+export KLUKAI_CI_REVISION="$EXPECTED_SOURCE_REVISION"
+export KLUKAI_CORE_CI_IMAGE="$CI_IMAGE_DIGEST"
+export KLUKAI_CORE_POSTGRES_IMAGE="$POSTGRES_IMAGE_DIGEST"
+export KLUKAI_CORE_REDIS_IMAGE="$VALKEY_IMAGE_DIGEST"
+export KLUKAI_CORE_QDRANT_IMAGE="$QDRANT_IMAGE_DIGEST"
+scripts/ci/backends.sh
+```
+
+Each of the runtime, readiness and accepted-image shutdown drivers receives a
+fresh PostgreSQL 17, Valkey and Qdrant set on its own internal network. Services
+have no published ports or host mounts. The worker has a read-only committed
+source snapshot, a separate read-only generated connection context, and writable
+private evidence. It has no Docker socket, owner home, GPU, external provider
+credentials or network fallback. Existing TCP fault proxies and all nine driver
+assertions remain in the worker. The original opt-in manual Docker fixture mode
+remains available for local checks.
+
+The manifest records actual service versions, immutable image and container IDs,
+inspected quotas/capabilities, package probe, exact JUnit identities, raw driver
+evidence and source hashes. Missing or skipped cases, an altered context/source,
+nonzero execution, interrupted work or unverified resource cleanup fail the gate.
+The output directory must be new and outside the checkout. Evidence contains
+only freshly generated disposable service credentials; preserve its private
+permissions. `--development` is explicitly noncertifying.
+
+Validation status: the managed runner's unit, cancellation, fixture-selection and
+source-binding tests pass. Actual execution of this new managed mode in the
+heavy guest is still pending; the earlier nine passing host-mode cases do not
+certify this mode. Full GitHub CI and deployment remain separate requirements.
