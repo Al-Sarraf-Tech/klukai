@@ -9,6 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/quality"))
 from checks import complexity, structure  # noqa: E402
 from evidence import InvalidEvidence  # noqa: E402
+from runtime_scope import runtime_sources  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -19,6 +20,7 @@ from evidence import InvalidEvidence  # noqa: E402
         "tgbot/bot.py",
         "ops/dominus-nobara/lmstudio-compat/gateway/main.py",
         "flutter_app/web/companion/avatar/renderer.js",
+        "flutter_app/web/companion/vendor/project-runtime.js",
     ],
 )
 def test_oversized_served_component_is_rejected(tmp_path, name):
@@ -52,3 +54,19 @@ def test_complexity_measures_every_maintained_python_runtime(monkeypatch, tmp_pa
     monkeypatch.setattr("checks.run", radon)
     assert "5 callables" in complexity(tmp_path, 10, 20)
     assert set(calls[0][2:-1]) == set(names)
+
+
+def test_only_attributed_generated_bundle_is_outside_handwritten_inventory(tmp_path):
+    generated = "flutter_app/web/companion/vendor/three-avatar.min.js"
+    maintained = {
+        "flutter_app/web/companion/vendor/project-runtime.js",
+        "flutter_app/web/companion/avatar/three-avatar.min.js",
+    }
+    for name in {generated, *maintained}:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("/* runtime */\n" * 500)
+    measured = {
+        path.relative_to(tmp_path).as_posix() for path in runtime_sources(tmp_path)
+    }
+    assert measured == maintained
