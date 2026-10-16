@@ -8,9 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from functools import wraps
-from inspect import isawaitable
-from collections.abc import Coroutine
 from typing import Any
 import random
 from datetime import datetime, timedelta, timezone
@@ -19,8 +16,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from ..events import publish as publish_event
-from ..observability.redaction import redact_credentials
 from .events import EventsMixin
+from .schedule import register_schedule
+from .scheduler_listeners import register_listeners
+from .lifecycle import SchedulerLifecycleMixin
 from .milestones import MilestonesMixin
 from .mission import MissionMixin, MissionTimer
 from .patterns import PatternsMixin
@@ -31,11 +30,15 @@ from .state import (
     QUIET_HOUR_START,
     now_local,
 )
+
 from .templates import (
     EVENING_MESSAGES,
     IDLE_MESSAGES,
     MORNING_MESSAGES,
-    _content,
+)
+from .templates import (
+    _tap_lines as _tap_lines,
+    _TAP_LINES_FALLBACK as _TAP_LINES_FALLBACK,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,44 +53,9 @@ IDLE_AFTER = timedelta(minutes=90)
 # ``proactive_content.tap_lines`` in personality.yaml so they can be tuned
 # without a code change; the literal below is the fallback used verbatim when
 # the YAML key is missing (or the config can't be loaded).
-_TAP_LINES_FALLBACK: dict[int, list[str]] = {
-    0: [
-        "Hm? Need something, Commander?",
-        "Right here.",
-        "You have my attention.",
-        "Status nominal. What do you need?",
-    ],
-    1: [
-        "I'm listening, Commander.",
-        "Something on your mind?",
-        "Ready for orders.",
-        "All systems green. Go ahead.",
-    ],
-    2: [
-        "Hey. What's up?",
-        "I was just thinking about the last op.",
-        "Commander. Good timing.",
-        "Need me for something?",
-    ],
-    3: [
-        "There you are. I was wondering when you'd check in.",
-        "Missed you. ...Operationally speaking.",
-        "Hey, Commander. Everything okay?",
-    ],
-    4: [
-        "...You always know when I need company.",
-        "Hey. I'm glad you're here.",
-        "Commander... hi.",
-    ],
-}
 
 
-def _tap_lines() -> dict[int, list[str]]:
-    """Affection-keyed tap lines from YAML, falling back to the literal."""
-    return _content("tap_lines", _TAP_LINES_FALLBACK)
-
-
-def _cron(**fields) -> CronTrigger:
+def _cron(**fields: Any) -> CronTrigger:
     """A CronTrigger pinned to the Commander's timezone (America/Chicago).
 
     CronTrigger resolves its timezone at construction, so every trigger must
@@ -96,7 +64,9 @@ def _cron(**fields) -> CronTrigger:
     return CronTrigger(timezone=LOCAL_TZ, **fields)
 
 
-class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin):
+class ProactiveEngine(
+    MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin, SchedulerLifecycleMixin
+):
     """Manages scheduled and contextual proactive messages, themed to Klukai."""
 
     def __init__(self) -> None:
@@ -106,6 +76,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # job whenever the event loop is busy at its fire time (a cold model
         # load or an image render is easily longer than that).
         from .durability import MISFIRE_GRACE_SECONDS
+
         self._scheduler = AsyncIOScheduler(
             timezone=LOCAL_TZ,
             job_defaults={
@@ -126,8 +97,8 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         self._moods: dict[str, str] = {}
         self._affection_levels: dict[str, int] = {}
         self._mission_timers: dict[str, MissionTimer] = {}
-        self._background_tasks: set[asyncio.Task] = set()
-        self._scheduled_tasks: set[asyncio.Task] = set()
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._scheduled_tasks: set[asyncio.Task[Any]] = set()
         self._closing = False
         self._romance_delivered: dict[str, bool] = {}
         self._dream_delivered: dict[str, bool] = {}
@@ -158,11 +129,15 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # midnight reset, so a 2200 goodnight still holds until 0800.
         self._goodbye_hold_until: datetime | None = None
 
-    def set_callback(self, callback) -> None:
+    @property
+    def _task_logger(self) -> logging.Logger:
+        return logger
+
+    def set_callback(self, callback: Any) -> None:
         """Set callback for delivering proactive messages."""
         self._on_message_callback = callback
 
-    def set_recap_callback(self, callback) -> None:
+    def set_recap_callback(self, callback: Any) -> None:
         """Set callback for generating daily recap (calls LLM)."""
         self._on_recap_callback = callback
 
@@ -178,11 +153,11 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         if user_id == "jalsarraf":
             self._last_mood = mood  # Primary-owner scheduled jobs
 
-    def set_session_getter(self, getter) -> None:
+    def set_session_getter(self, getter: Any) -> None:
         """Set a callback to retrieve current session state (for romance context)."""
         self._session_getter = getter
 
-    def set_game_active_probe(self, probe) -> None:
+    def set_game_active_probe(self, probe: Any) -> None:
         """Set an async callable reporting whether the Commander is mid-game;
         random events hold off while it returns True."""
         self._game_active_probe = probe
@@ -192,282 +167,39 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         self._user_messaged[user_id] = True
         self._user_messaged_today = True  # Legacy compat
 
-    def _track_task(self, task: asyncio.Task) -> asyncio.Task:
-        self._background_tasks.add(task)
-        def finished(done: asyncio.Task) -> None:
-            self._background_tasks.discard(done)
-            if not done.cancelled() and done.exception() is not None:
-                logger.warning("Proactive background work failed: %s", done.exception())
-        task.add_done_callback(finished)
-        return task
-
-    def _spawn(self, coroutine: Coroutine[Any, Any, Any]) -> asyncio.Task | None:
-        if self._closing:
-            coroutine.close()
-            return None
-        try:
-            return self._track_task(asyncio.create_task(coroutine))
-        except BaseException:
-            coroutine.close()
-            raise
-
-    def _add_job(self, function, *args, **kwargs):
-        @wraps(function)
-        async def owned(*job_args, **job_kwargs):
-            if self._closing:
-                return
-            task = asyncio.current_task()
-            self._scheduled_tasks.add(task)
-            try:
-                result = function(*job_args, **job_kwargs)
-                if isawaitable(result):
-                    return await result
-                return result
-            finally:
-                self._scheduled_tasks.discard(task)
-        return self._scheduler.add_job(owned, *args, **kwargs)
-
     def start(self) -> None:
         # Morning briefing at 0800
         self._closing = False
-        self._add_job(
-            self._morning_checkin,
-            _cron(hour=8, minute=0),
-            id="morning_checkin",
-            replace_existing=True,
+        register_schedule(
+            self._add_job,
+            {
+                "_morning_checkin": self._morning_checkin,
+                "_daily_challenge": self._daily_challenge,
+                "_promise_followup_check": self._promise_followup_check,
+                "_evening_checkin": self._evening_checkin,
+                "_idle_check": self._idle_check,
+                "_unsent_message_check": self._unsent_message_check,
+                "_mission_report": self._mission_report,
+                "_random_event": self._random_event,
+                "_mission_random_event": self._mission_random_event,
+                "_dream_event": self._dream_event,
+                "_memory_recall_tick": self._memory_recall_tick,
+                "_spontaneous_art_tick": self._spontaneous_art_tick,
+                "_daily_recap": self._daily_recap,
+                "_romance_window": self._romance_window,
+                "_reset_daily": self._reset_daily,
+                "_weekly_reflection": self._weekly_reflection,
+                "_anniversary_check": self._anniversary_check,
+                "_seasonal_check": self._seasonal_check,
+                "_quiet_day_check": self._quiet_day_check,
+                "_command_decision_check": self._command_decision_check,
+                "_portrait_backfill": self._portrait_backfill,
+                "_deferred_sweep": self._deferred_sweep,
+            },
+            _cron,
         )
 
-        # Daily challenge at 09:00
-        self._add_job(
-            self._daily_challenge,
-            _cron(hour=9, minute=0),
-            id="daily_challenge",
-            replace_existing=True,
-        )
-
-        # Promise follow-ups — check thrice daily (10:00 / 14:00 / 18:00 local)
-        self._add_job(
-            self._promise_followup_check,
-            _cron(hour="10,14,18", minute=0),
-            id="promise_followup",
-            replace_existing=True,
-        )
-
-        # Evening wind-down at 2200
-        self._add_job(
-            self._evening_checkin,
-            _cron(hour=22, minute=0),
-            id="evening_checkin",
-            replace_existing=True,
-        )
-
-        # Idle check every 2 hours during operational hours
-        self._add_job(
-            self._idle_check,
-            _cron(hour="9-21/2", minute=30),
-            id="idle_check",
-            replace_existing=True,
-        )
-
-        # Unsent messages — fires on same schedule as idle, separate roll
-        self._add_job(
-            self._unsent_message_check,
-            _cron(hour="10-22/3", minute=15),
-            id="unsent_message_check",
-            replace_existing=True,
-        )
-
-        # Mission report — once per day, random afternoon
-        self._add_job(
-            self._mission_report,
-            _cron(hour=14, minute=45),
-            id="mission_report",
-            replace_existing=True,
-        )
-
-        # Random lore events — every 30 min during normal hours. The last slot
-        # is 22:45: QUIET_HOUR_START is 2300, and _random_event does not go
-        # through _can_send(), so the schedule itself must stop short of it.
-        self._add_job(
-            self._random_event,
-            _cron(hour="9-22", minute="15,45"),
-            id="random_event",
-            replace_existing=True,
-        )
-
-        # Mission events — every 5 min, 24/7 (only fires if mission is active)
-        self._add_job(
-            self._mission_random_event,
-            "interval",
-            minutes=5,
-            id="mission_random_event",
-            replace_existing=True,
-        )
-
-        # Late-night dreams — fires once between 1-4 AM if conditions are right
-        self._add_job(
-            self._dream_event,
-            _cron(hour="1-4", minute=37),
-            id="dream_event",
-            replace_existing=True,
-        )
-
-        # Living memory recall — warm "remember when…" from the real archive.
-        # Fires at two daytime hours; each tick rolls ~35% so it isn't every day.
-        self._add_job(
-            self._memory_recall_tick,
-            _cron(hour="11,17", minute=20),
-            id="memory_recall",
-            replace_existing=True,
-        )
-
-        # Spontaneous art — she occasionally draws something for the Commander
-        # unprompted and leaves it in the album. ~18% roll per fire + a ~2.5-day
-        # cooldown keep it rare and treasured.
-        self._add_job(
-            self._spontaneous_art_tick,
-            _cron(hour="15,19", minute=40),
-            id="spontaneous_art",
-            replace_existing=True,
-        )
-
-        # Daily recap at 2100
-        self._add_job(
-            self._daily_recap,
-            _cron(hour=21, minute=0),
-            id="daily_recap",
-            replace_existing=True,
-        )
-
-        # Evening romance window at 20:30 local
-        self._add_job(
-            self._romance_window,
-            _cron(hour=20, minute=30),
-            id="romance_window",
-            replace_existing=True,
-        )
-
-        # Reset daily counter at midnight
-        self._add_job(
-            self._reset_daily,
-            _cron(hour=0, minute=0),
-            id="daily_reset",
-            replace_existing=True,
-        )
-
-        # Weekly reflection: Sunday 21:00 local
-        self._add_job(
-            self._weekly_reflection,
-            _cron(day_of_week="sun", hour=21, minute=0),
-            id="weekly_reflection",
-            replace_existing=True,
-        )
-
-        # Daily anniversary check: 08:00 local, the first minute outside quiet
-        # hours. It used to run at 07:58, "just before the morning greeting",
-        # but _anniversary_check now goes through _can_send(), which refuses
-        # anything before QUIET_HOUR_END — so it shares the greeting's minute.
-        self._add_job(
-            self._anniversary_check,
-            _cron(hour=QUIET_HOUR_END, minute=0),
-            id="anniversary_check",
-            replace_existing=True,
-        )
-
-        # Seasonal/holiday greeting check: daily at 09:00. Matches today's
-        # month/day against seasonal_events; fires once per occurrence.
-        self._add_job(
-            self._seasonal_check,
-            _cron(hour=9, minute=0),
-            id="seasonal_check",
-            replace_existing=True,
-        )
-
-        # Pattern-aware "quiet day" check-in: early afternoon, after the day's
-        # activity (or lack of it) is established. Once/day, gated on a strong
-        # low-activity weekday pattern matching today.
-        self._add_job(
-            self._quiet_day_check,
-            _cron(hour=15, minute=10),
-            id="quiet_day_check",
-            replace_existing=True,
-        )
-
-        # Command decisions: she may bring him a small call from her life
-        # (app/decisions.py). Rolled per slot; capped at 2 per rolling week.
-        self._add_job(
-            self._command_decision_check,
-            _cron(hour=14, minute=40),
-            id="command_decision",
-            replace_existing=True,
-        )
-
-        # Live Portrait idle backfill (opt-in, PORTRAIT_BACKFILL=1): draw the
-        # other unlocked outfits one set at a time in the small hours.
-        self._add_job(
-            self._portrait_backfill,
-            _cron(hour="2-6", minute="*/15"),
-            id="portrait_backfill",
-            replace_existing=True,
-        )
-
-        # Deferred-task safety net: fire anything already due that the RabbitMQ
-        # delay rail did not deliver. This is what turns a broker outage into
-        # late delivery instead of lost work, so it must stay unconditional.
-        self._add_job(
-            self._deferred_sweep,
-            "interval",
-            minutes=1,
-            id="deferred_sweep",
-            replace_existing=True,
-        )
-
-        # Surface scheduled-job failures via audit log + structured logger.
-        # Without this, an anniversary check (or any other scheduled job) that
-        # raises gets swallowed by APScheduler's default handler — the user
-        # would silently lose a feature for days.
-        try:
-            from apscheduler.events import EVENT_JOB_ERROR
-
-            def _on_job_error(event):
-                error = redact_credentials(str(event.exception))
-                logger.error(
-                    "SCHEDULED_JOB_FAILED: job=%s exception=%s traceback=%s",
-                    event.job_id, error, redact_credentials(str(event.traceback)),
-                )
-                # Best-effort audit write — never let it block the listener.
-                try:
-
-                    from .. import audit
-                    self._spawn(audit.log(
-                        event_type="scheduled_job.failed",
-                        metadata={
-                            "job_id": event.job_id,
-                            "exception": error[:500],
-                        },
-                    ))
-                except Exception:
-                    pass
-
-            self._scheduler.add_listener(_on_job_error, EVENT_JOB_ERROR)
-        except Exception as e:
-            logger.warning("Could not wire scheduler error listener: %s", e)
-
-        # Record every successful run so a restart can tell what it missed.
-        try:
-            from apscheduler.events import EVENT_JOB_EXECUTED
-
-            from .durability import record_fire
-
-            def _on_job_executed(event):
-                try:
-                    self._spawn(record_fire(event.job_id))
-                except Exception:
-                    pass
-
-            self._scheduler.add_listener(_on_job_executed, EVENT_JOB_EXECUTED)
-        except Exception as e:
-            logger.warning("Could not wire scheduler run recorder: %s", e)
+        register_listeners(self._scheduler, self._spawn, lambda: logger)
 
         self._scheduler.start()
 
@@ -483,64 +215,30 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
     async def _command_decision_check(self) -> None:
         """Maybe ask the Commander to make a call (see app/decisions.py)."""
         from ..decisions import PRIMARY_USER, maybe_ask
+
         await maybe_ask(self, PRIMARY_USER)
 
     async def _portrait_backfill(self) -> None:
         """Opt-in idle backfill of portrait sets (see app/portrait.py)."""
         from ..decisions import PRIMARY_USER
         from ..portrait import backfill_tick
+
         await backfill_tick(PRIMARY_USER)
 
     async def _deferred_sweep(self) -> None:
         """Backstop for the RabbitMQ delay rail."""
         from ..deferred import sweep
+
         await sweep()
 
     async def _catch_up_missed(self) -> None:
         """Run allowlisted jobs whose fire time passed while she was down."""
         from .durability import run_catch_up
 
-        jobs = [
-            (job.id, job.trigger, job.func)
-            for job in self._scheduler.get_jobs()
-        ]
+        jobs = [(job.id, job.trigger, job.func) for job in self._scheduler.get_jobs()]
         ran = await run_catch_up(jobs)
         if ran:
             logger.info("Scheduler catch-up replayed: %s", ", ".join(ran))
-
-    def stop(self) -> None:
-        self._closing = True
-        for timer in self._mission_timers.values():
-            if timer.active:
-                timer.stop()
-        self._mission_timers.clear()
-        if self._mission_timer and self._mission_timer.active:
-            self._mission_timer.stop()
-        try:
-            current = asyncio.current_task()
-        except RuntimeError:
-            current = None  # synchronous compatibility callers outside a loop
-        for task in self._background_tasks:
-            if task is not current and not task.done() and not task.cancelling():
-                task.cancel()
-        if self._scheduler.running:
-            self._scheduler.shutdown(wait=False)
-
-    async def close(self) -> None:
-        """Stop admission and join owned maintenance before clients/DB close."""
-        try:
-            self.stop()
-        finally:
-            # AsyncIOScheduler marshals shutdown onto its event loop. Let it
-            # cancel jobs once before joining; double cancellation interrupts
-            # asynchronous finalizers and can leak connections.
-            await asyncio.sleep(0)
-            tasks = (self._background_tasks | self._scheduled_tasks) - {asyncio.current_task()}
-            for task in tasks:
-                if not task.done() and not task.cancelling():
-                    task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
 
     def mute(self, hours: int | None = None) -> None:
         """Mute proactive messages for N hours (None = permanent)."""
@@ -548,6 +246,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             self._muted_until = datetime(9999, 12, 31)
         else:
             from datetime import timedelta
+
             self._muted_until = now_local() + timedelta(hours=hours)
         logger.info("Proactive muted until %s", self._muted_until)
 
@@ -653,6 +352,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Update physical state based on time of day for all connected users
         try:
             from ..context import physical, ws
+
             hour = now_local().hour
             for uid in list(ws._connections.keys()):
                 await physical.on_time_of_day(uid, hour)
@@ -666,6 +366,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         try:
             from ..weather_client import fetch_weather
             from ..weather_mood import weather_phrase, weather_to_mood
+
             weather = await fetch_weather()
             mood = weather_to_mood(weather, self._affection_level)
             if mood:
@@ -683,6 +384,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
             return
         try:
             from ..promises import due_promises, followup_message, mark_followup_sent
+
             # UTC: scheduled_followup is stored as a real instant (timestamptz);
             # comparing against now_local() (naive Chicago) made Postgres read it
             # as UTC and fire ~5-6h off, drifting with DST.
@@ -708,12 +410,14 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
 
         try:
             from ..personality import load_personality
+
             p = load_personality()
             challenges = p.get("daily_challenges", {}).get("challenges", [])
             if not challenges:
                 return
 
             import random
+
             challenge = random.choice(challenges)
             self._proactive_count_today += 1
             await self._on_message_callback(challenge["prompt"])
@@ -725,6 +429,7 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
         # Update physical state for late watch for all connected users
         try:
             from ..context import physical, ws
+
             hour = now_local().hour
             for uid in list(ws._connections.keys()):
                 await physical.on_time_of_day(uid, hour)
@@ -734,7 +439,10 @@ class ProactiveEngine(MissionMixin, EventsMixin, MilestonesMixin, PatternsMixin)
 
     async def _idle_check(self) -> None:
         """Nudge him only once he has actually gone quiet (IDLE_AFTER)."""
-        if self._last_message_time and now_local() - self._last_message_time < IDLE_AFTER:
+        if (
+            self._last_message_time
+            and now_local() - self._last_message_time < IDLE_AFTER
+        ):
             return
         await self._deliver(self._pick_message(IDLE_MESSAGES))
 

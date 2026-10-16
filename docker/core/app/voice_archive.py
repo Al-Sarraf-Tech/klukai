@@ -28,6 +28,8 @@ plain text greeting whenever this returns ``None``.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import asyncio
 import logging
@@ -104,7 +106,8 @@ async def save_voice_note(
         if r.status_code != 200:
             logger.warning(
                 "Voice letter synth failed (HTTP %s) for %s — falling back to text",
-                r.status_code, user_id,
+                r.status_code,
+                user_id,
             )
             return None
         audio_bytes = r.content
@@ -121,7 +124,9 @@ async def save_voice_note(
         path = AUDIO_DIR / filename
         await asyncio.to_thread(path.write_bytes, audio_bytes)
     except Exception as e:
-        logger.warning("Voice letter write failed for %s (%s): %s", user_id, filename, e)
+        logger.warning(
+            "Voice letter write failed for %s (%s): %s", user_id, filename, e
+        )
         return None
 
     # 3. Record the metadata row.
@@ -133,8 +138,16 @@ async def save_voice_note(
                 "(id, audio_filename, text_prompt, kind, mood, affection_level, "
                 "conversation_id, user_id) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                (note_id, filename, text.strip(), kind, mood, affection_level,
-                 conversation_id, user_id),
+                (
+                    note_id,
+                    filename,
+                    text.strip(),
+                    kind,
+                    mood,
+                    affection_level,
+                    conversation_id,
+                    user_id,
+                ),
             )
             await conn.commit()
     except Exception as e:
@@ -148,7 +161,10 @@ async def save_voice_note(
 
     logger.info(
         "Voice letter saved for %s: id=%s kind=%s len=%d",
-        user_id, note_id[:8], kind, len(text),
+        user_id,
+        note_id[:8],
+        kind,
+        len(text),
     )
     return note_id
 
@@ -163,11 +179,13 @@ async def get_voice_note(note_id: str, user_id: str) -> tuple[bytes, str] | None
     try:
         pool = get_pool()
         async with pool.connection() as conn:
-            row = await (await conn.execute(
-                "SELECT audio_filename FROM companion_voice_notes "
-                "WHERE id = %s AND user_id = %s",
-                (note_id, user_id),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "SELECT audio_filename FROM companion_voice_notes "
+                    "WHERE id = %s AND user_id = %s",
+                    (note_id, user_id),
+                )
+            ).fetchone()
         if not row or not row[0]:
             return None
         filename = row[0]
@@ -181,7 +199,7 @@ async def get_voice_note(note_id: str, user_id: str) -> tuple[bytes, str] | None
         return None
 
 
-async def latest_voice_note(user_id: str) -> dict | None:
+async def latest_voice_note(user_id: str) -> dict[str, Any] | None:
     """Return metadata for the user's most recent voice letter, or ``None``.
 
     Used by the client to surface an unheard letter. Returns a small dict (no
@@ -191,12 +209,14 @@ async def latest_voice_note(user_id: str) -> dict | None:
     try:
         pool = get_pool()
         async with pool.connection() as conn:
-            row = await (await conn.execute(
-                "SELECT id, kind, mood, affection_level, played_at, created_at "
-                "FROM companion_voice_notes WHERE user_id = %s "
-                "ORDER BY created_at DESC LIMIT 1",
-                (user_id,),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "SELECT id, kind, mood, affection_level, played_at, created_at "
+                    "FROM companion_voice_notes WHERE user_id = %s "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (user_id,),
+                )
+            ).fetchone()
         if not row:
             return None
         return {

@@ -7,6 +7,7 @@ These three short blocks inject retrieved context into Klukai's prompt:
 """
 
 from __future__ import annotations
+from typing import Any
 
 
 def build_memory_block(memories: list[str]) -> str:
@@ -20,19 +21,23 @@ def build_memory_block(memories: list[str]) -> str:
     return f"OPERATIONAL RECORDS (relevant past interactions with the Commander):\n{formatted}"
 
 
-def build_relationship_block(facts: dict) -> str:
+def build_relationship_block(facts: dict[str, Any]) -> str:
     """Format relationship facts as Commander dossier."""
     if not facts:
         return ""
     lines = [f"  - {k}: {v}" for k, v in facts.items()]
-    return "COMMANDER DOSSIER (what you know about your Commander):\n" + "\n".join(lines)
+    return "COMMANDER DOSSIER (what you know about your Commander):\n" + "\n".join(
+        lines
+    )
 
 
-def build_conversation_recall_block(exchanges: list[dict]) -> str:
+def build_conversation_recall_block(exchanges: list[dict[str, Any]]) -> str:
     """Format recalled past conversation exchanges for the prompt."""
     if not exchanges:
         return ""
-    lines = ["RECALLED CONVERSATIONS (exact past exchanges with the Commander — reference naturally):"]
+    lines = [
+        "RECALLED CONVERSATIONS (exact past exchanges with the Commander — reference naturally):"
+    ]
     for i, ex in enumerate(exchanges, 1):
         lines.append(f"  [{i}] Commander: {ex['user_content'][:200]}")
         lines.append(f"      Klukai: {ex['assistant_content'][:200]}")
@@ -41,7 +46,7 @@ def build_conversation_recall_block(exchanges: list[dict]) -> str:
 
 
 def build_inside_jokes_block(
-    jokes: list[dict] | None,
+    jokes: list[dict[str, Any]] | None,
     affection_level: int = 0,
     max_surfaced: int = 2,
     min_affection_level: int = 3,

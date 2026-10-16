@@ -13,6 +13,8 @@ can never crash the background extraction or the scheduler tick.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import json
 import logging
@@ -38,7 +40,7 @@ def _is_event(commitment: object) -> bool:
 
 
 async def store_promise(
-    commitment: dict,
+    commitment: dict[str, Any],
     user_id: str = "jalsarraf",
     scheduled_followup: datetime | None = None,
 ) -> str | None:
@@ -51,7 +53,9 @@ async def store_promise(
     no-op (returns None without touching the DB) — there's nothing to follow
     up on.
     """
-    action = (commitment.get("action") or "").strip() if isinstance(commitment, dict) else ""
+    action = (
+        (commitment.get("action") or "").strip() if isinstance(commitment, dict) else ""
+    )
     if not action:
         return None
 
@@ -62,25 +66,31 @@ async def store_promise(
 
     try:
         async with get_conn() as conn:
-            row = await (await conn.execute(
-                "INSERT INTO companion_promises "
-                "(user_id, promise_text, commitment, scheduled_followup) "
-                "VALUES (%s, %s, %s, %s) RETURNING id",
-                (user_id, action, json.dumps(commitment), scheduled_followup),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "INSERT INTO companion_promises "
+                    "(user_id, promise_text, commitment, scheduled_followup) "
+                    "VALUES (%s, %s, %s, %s) RETURNING id",
+                    (user_id, action, json.dumps(commitment), scheduled_followup),
+                )
+            ).fetchone()
             await conn.commit()
         if not row:
             return None
         promise_id = str(row[0])
-        logger.info("Promise stored for %s: %s (followup %s)",
-                    user_id, action[:60], scheduled_followup.isoformat())
+        logger.info(
+            "Promise stored for %s: %s (followup %s)",
+            user_id,
+            action[:60],
+            scheduled_followup.isoformat(),
+        )
         return promise_id
     except Exception as e:
         logger.warning("store_promise failed for %s: %s", user_id, e)
         return None
 
 
-async def due_promises(user_id: str, now: datetime) -> list[dict]:
+async def due_promises(user_id: str, now: datetime) -> list[dict[str, Any]]:
     """Return unresolved promises whose follow-up time has arrived, oldest first.
 
     Called from the proactive scheduler tick. Fails soft to [] so a DB outage
@@ -88,16 +98,18 @@ async def due_promises(user_id: str, now: datetime) -> list[dict]:
     """
     try:
         async with get_conn() as conn:
-            rows = await (await conn.execute(
-                "SELECT id, promise_text, commitment, made_at, scheduled_followup "
-                "FROM companion_promises "
-                "WHERE user_id = %s AND scheduled_followup <= %s "
-                "AND resolved_at IS NULL AND followup_sent_at IS NULL "
-                "AND COALESCE(commitment->>'kind', '') <> 'event' "
-                "ORDER BY scheduled_followup ASC",
-                (user_id, now),
-            )).fetchall()
-        out: list[dict] = []
+            rows = await (
+                await conn.execute(
+                    "SELECT id, promise_text, commitment, made_at, scheduled_followup "
+                    "FROM companion_promises "
+                    "WHERE user_id = %s AND scheduled_followup <= %s "
+                    "AND resolved_at IS NULL AND followup_sent_at IS NULL "
+                    "AND COALESCE(commitment->>'kind', '') <> 'event' "
+                    "ORDER BY scheduled_followup ASC",
+                    (user_id, now),
+                )
+            ).fetchall()
+        out: list[dict[str, Any]] = []
         for r in rows:
             commitment = r[2]
             # psycopg returns JSONB as a dict already; tolerate a str just in case.
@@ -108,20 +120,22 @@ async def due_promises(user_id: str, now: datetime) -> list[dict]:
                     commitment = {}
             if _is_event(commitment):
                 continue  # his interview is not his promise — op_brief owns it
-            out.append({
-                "id": str(r[0]),
-                "promise_text": r[1],
-                "commitment": commitment or {},
-                "made_at": r[3].isoformat() if r[3] else None,
-                "scheduled_followup": r[4].isoformat() if r[4] else None,
-            })
+            out.append(
+                {
+                    "id": str(r[0]),
+                    "promise_text": r[1],
+                    "commitment": commitment or {},
+                    "made_at": r[3].isoformat() if r[3] else None,
+                    "scheduled_followup": r[4].isoformat() if r[4] else None,
+                }
+            )
         return out
     except Exception as e:
         logger.warning("due_promises failed for %s: %s", user_id, e)
         return []
 
 
-async def open_promises(user_id: str, limit: int = 50) -> list[dict]:
+async def open_promises(user_id: str, limit: int = 50) -> list[dict[str, Any]]:
     """All unresolved promises for a user, newest first (for the REST view).
 
     Fails soft to [] so the endpoint degrades to "no open promises" rather than
@@ -129,15 +143,17 @@ async def open_promises(user_id: str, limit: int = 50) -> list[dict]:
     """
     try:
         async with get_conn() as conn:
-            rows = await (await conn.execute(
-                "SELECT id, promise_text, commitment, made_at, scheduled_followup, "
-                "followup_sent_at FROM companion_promises "
-                "WHERE user_id = %s AND resolved_at IS NULL "
-                "AND COALESCE(commitment->>'kind', '') <> 'event' "
-                "ORDER BY made_at DESC LIMIT %s",
-                (user_id, limit),
-            )).fetchall()
-        out: list[dict] = []
+            rows = await (
+                await conn.execute(
+                    "SELECT id, promise_text, commitment, made_at, scheduled_followup, "
+                    "followup_sent_at FROM companion_promises "
+                    "WHERE user_id = %s AND resolved_at IS NULL "
+                    "AND COALESCE(commitment->>'kind', '') <> 'event' "
+                    "ORDER BY made_at DESC LIMIT %s",
+                    (user_id, limit),
+                )
+            ).fetchall()
+        out: list[dict[str, Any]] = []
         for r in rows:
             commitment = r[2]
             if isinstance(commitment, str):
@@ -147,14 +163,16 @@ async def open_promises(user_id: str, limit: int = 50) -> list[dict]:
                     commitment = {}
             if _is_event(commitment):
                 continue
-            out.append({
-                "id": str(r[0]),
-                "promise_text": r[1],
-                "commitment": commitment or {},
-                "made_at": r[3].isoformat() if r[3] else None,
-                "scheduled_followup": r[4].isoformat() if r[4] else None,
-                "followup_sent": r[5] is not None,
-            })
+            out.append(
+                {
+                    "id": str(r[0]),
+                    "promise_text": r[1],
+                    "commitment": commitment or {},
+                    "made_at": r[3].isoformat() if r[3] else None,
+                    "scheduled_followup": r[4].isoformat() if r[4] else None,
+                    "followup_sent": r[5] is not None,
+                }
+            )
         return out
     except Exception as e:
         logger.warning("open_promises failed for %s: %s", user_id, e)
@@ -166,8 +184,7 @@ async def mark_followup_sent(promise_id: str) -> bool:
     try:
         async with get_conn() as conn:
             await conn.execute(
-                "UPDATE companion_promises SET followup_sent_at = NOW() "
-                "WHERE id = %s",
+                "UPDATE companion_promises SET followup_sent_at = NOW() WHERE id = %s",
                 (promise_id,),
             )
             await conn.commit()
@@ -178,7 +195,9 @@ async def mark_followup_sent(promise_id: str) -> bool:
 
 
 async def resolve_promise(
-    promise_id: str, sentiment: str, response_text: str | None = None,
+    promise_id: str,
+    sentiment: str,
+    response_text: str | None = None,
     user_id: str = "jalsarraf",
 ) -> bool:
     """Close a promise with the Commander's response + a sentiment.
@@ -203,7 +222,7 @@ async def resolve_promise(
         return False
 
 
-def followup_message(promise: dict, affection_level: int) -> str:
+def followup_message(promise: dict[str, Any], affection_level: int) -> str:
     """Render an in-character follow-up nudge, tone scaled by affection.
 
     Low affection (0-2): light, almost businesslike — a brief check-in.
@@ -225,8 +244,7 @@ def followup_message(promise: dict, affection_level: int) -> str:
 
     if affection_level <= 2:
         return (
-            f"Commander — a quick check. You said you'd {action}. "
-            f"Did that get handled?"
+            f"Commander — a quick check. You said you'd {action}. Did that get handled?"
         )
     if affection_level <= 6:
         return (

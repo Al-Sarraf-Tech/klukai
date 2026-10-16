@@ -5,8 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app import chat_handlers, main
+from app import chat_handlers, chat_prompt, main
 from app.models import SessionState
+from app.ws_manager import WSManager
 from app.proactive import MissionTimer, ProactiveEngine
 from .test_chat_handlers_coverage import _patched_pipeline
 from .test_main_coverage import lifespan_mocks  # noqa: F401
@@ -26,20 +27,32 @@ def _timer(description=PRIVATE):
     return timer
 
 
-async def _capture_prompt(engine, user_id, content="hello", session=None, *, start=False):
+async def _capture_prompt(
+    engine, user_id, content="hello", session=None, *, start=False
+):
     """Exercise the real chat path until prompt assembly; never call a provider."""
     engine.check_anniversaries = AsyncMock(return_value=[])
     engine.get_comfort_objects = AsyncMock(return_value=[])
     engine.record_first = AsyncMock()
-    with _patched_pipeline(), \
-         patch.object(chat_handlers, "proactive", engine), \
-         patch.object(chat_handlers, "_wants_mission_start", return_value=start), \
-         patch.object(chat_handlers.wardrobe, "ensure_today", AsyncMock()), \
-         patch.object(chat_handlers.her_day, "her_now", AsyncMock(side_effect=RuntimeError("offline test"))), \
-         patch.object(chat_handlers, "assemble_system_prompt", side_effect=PromptCaptured) as assemble:
+    with (
+        _patched_pipeline(),
+        patch.object(chat_handlers, "proactive", engine),
+        patch.object(chat_handlers, "_wants_mission_start", return_value=start),
+        patch.object(chat_prompt.wardrobe, "ensure_today", AsyncMock()),
+        patch.object(
+            chat_prompt.her_day,
+            "her_now",
+            AsyncMock(side_effect=RuntimeError("offline test")),
+        ),
+        patch.object(
+            chat_handlers, "assemble_system_prompt", side_effect=PromptCaptured
+        ) as assemble,
+    ):
         with pytest.raises(PromptCaptured):
             await chat_handlers._handle_message(
-                content, session or SessionState(conversation_id=user_id), user_id=user_id,
+                content,
+                session or SessionState(conversation_id=user_id),
+                user_id=user_id,
             )
     return assemble.call_args.kwargs
 
@@ -93,8 +106,13 @@ async def test_timer_updates_are_delivered_only_to_the_owner():
         deliveries.append((user_id, message))
 
     engine.set_callback(deliver)
-    with patch.object(MissionTimer, "_tick_loop", AsyncMock()), \
-         patch("app.fact_extractor.generate_mission_update", AsyncMock(return_value=PRIVATE)):
+    with (
+        patch.object(MissionTimer, "_tick_loop", AsyncMock()),
+        patch(
+            "app.fact_extractor.generate_mission_update",
+            AsyncMock(return_value=PRIVATE),
+        ),
+    ):
         engine.start_mission(PRIVATE, user_id="alice")
         try:
             await engine._mission_timers["alice"]._fire_update(30, None)
@@ -152,16 +170,26 @@ async def test_mission_callback_persists_and_pushes_to_its_owner(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("requested", [None, "bob"])
-async def test_session_getter_never_falls_back_to_another_user(lifespan_mocks, monkeypatch, requested):
+async def test_session_getter_never_falls_back_to_another_user(
+    lifespan_mocks, monkeypatch, requested
+):
     captured = {}
-    lifespan_mocks.proactive.set_session_getter.side_effect = lambda fn: captured.setdefault("getter", fn)
-    monkeypatch.setattr(main, "ws", SimpleNamespace(_connections={"alice": object()}))
+    lifespan_mocks.proactive.set_session_getter.side_effect = lambda fn: (
+        captured.setdefault("getter", fn)
+    )
+    manager = WSManager()
+    manager._connections = {"alice": {MagicMock(close=AsyncMock())}}
+    monkeypatch.setattr(main, "ws", manager)
     private_session = SessionState(conversation_id=PRIVATE)
-    lifespan_mocks.memory.get_session.side_effect = lambda sid: private_session if sid == "session:alice" else None
+    lifespan_mocks.memory.get_session.side_effect = lambda sid: (
+        private_session if sid == "session:alice" else None
+    )
     async with main.lifespan(main.app):
         result = await captured["getter"](requested)
     assert result is None
-    assert [call.args[0] for call in lifespan_mocks.memory.get_session.await_args_list] == [f"session:{requested or PRIMARY}"]
+    assert [
+        call.args[0] for call in lifespan_mocks.memory.get_session.await_args_list
+    ] == [f"session:{requested or PRIMARY}"]
 
 
 @pytest.mark.asyncio
@@ -175,10 +203,15 @@ async def test_decompression_uses_owners_affection_and_delivery():
         deliveries.append((user_id, message))
 
     engine.set_callback(deliver)
-    with patch.object(engine, "_can_send", return_value=True), \
-         patch("app.proactive.mission.asyncio.sleep", AsyncMock()), \
-         patch("app.proactive.mission._decompression_normal", return_value=["normal"]), \
-         patch("app.proactive.mission._decompression_intimate_addons", return_value=["intimate"]):
+    with (
+        patch.object(engine, "_can_send", return_value=True),
+        patch("app.proactive.mission.asyncio.sleep", AsyncMock()),
+        patch("app.proactive.mission._decompression_normal", return_value=["normal"]),
+        patch(
+            "app.proactive.mission._decompression_intimate_addons",
+            return_value=["intimate"],
+        ),
+    ):
         await engine._decompression_message("alice", False, 1)
     assert deliveries == [("alice", "normal")]
 
@@ -198,9 +231,14 @@ async def test_aftermath_caption_and_image_context_belong_to_owner():
         return MagicMock()
 
     engine.set_callback(deliver)
-    with patch("app.image_gen.build_mission_prompt", return_value="prompt") as build, \
-         patch("app.proactive.mission._aftermath_captions", return_value={"victory": [PRIVATE]}), \
-         patch("app.proactive.mission.asyncio.create_task", side_effect=discard_task):
+    with (
+        patch("app.image_gen.build_mission_prompt", return_value="prompt") as build,
+        patch(
+            "app.proactive.mission._aftermath_captions",
+            return_value={"victory": [PRIVATE]},
+        ),
+        patch("app.proactive.mission.asyncio.create_task", side_effect=discard_task),
+    ):
         await engine.trigger_mission_aftermath_image("alice", timer=_timer())
     assert deliveries == [("alice", PRIVATE)]
     assert build.call_args.kwargs["affection_level"] == 0
@@ -208,6 +246,7 @@ async def test_aftermath_caption_and_image_context_belong_to_owner():
 
 def test_her_day_context_reads_only_requested_mission(monkeypatch):
     from app import context, her_day
+
     engine = ProactiveEngine()
     alice = _timer()
     engine._mission_timers["alice"] = alice
@@ -229,7 +268,9 @@ def test_engine_shutdown_stops_every_users_timer():
 
 
 @pytest.mark.asyncio
-async def test_reconnect_restores_each_owners_mission_with_primary_already_active(monkeypatch):
+async def test_reconnect_restores_each_owners_mission_with_primary_already_active(
+    monkeypatch,
+):
     from app import chat
     from app.memory import MemoryManager
     from .test_session_authority import StoredRedis
@@ -241,12 +282,21 @@ async def test_reconnect_restores_each_owners_mission_with_primary_already_activ
     engine._mission_timers[PRIMARY] = primary
     engine._mission_timer = primary
     for owner, description in (("alice", PRIVATE), ("bob", "Bob patrol")):
-        await memory.save_session(chat.session_id(owner), SessionState(
-            conversation_id=owner, mission_description=description, mission_interval=15,
-        ))
+        await memory.save_session(
+            chat.session_id(owner),
+            SessionState(
+                conversation_id=owner,
+                mission_description=description,
+                mission_interval=15,
+            ),
+        )
     monkeypatch.setattr(chat, "memory", memory)
     monkeypatch.setattr(chat, "proactive", engine)
-    monkeypatch.setattr(chat, "affection", SimpleNamespace(get_state=AsyncMock(return_value=SimpleNamespace(level=4))))
+    monkeypatch.setattr(
+        chat,
+        "affection",
+        SimpleNamespace(get_state=AsyncMock(return_value=SimpleNamespace(level=4))),
+    )
     with patch.object(MissionTimer, "_tick_loop", AsyncMock()):
         try:
             await chat._initialize_session("alice")
@@ -272,7 +322,9 @@ async def test_background_mission_and_mood_remain_scoped(monkeypatch):
     engine._mission_timers[PRIMARY] = _timer("primary patrol")
     engine._mission_timer = engine._mission_timers[PRIMARY]
     engine.set_last_mood("composed", user_id=PRIMARY)
-    snapshot = SessionState(conversation_id="alice", turns=[{"role": "user", "content": PRIVATE}])
+    snapshot = SessionState(
+        conversation_id="alice", turns=[{"role": "user", "content": PRIVATE}]
+    )
     await memory.save_session(background.session_id("alice"), snapshot)
 
     @asynccontextmanager
@@ -285,7 +337,9 @@ async def test_background_mission_and_mood_remain_scoped(monkeypatch):
     monkeypatch.setattr(background, "get_conn_autocommit", connection)
     with patch.object(MissionTimer, "_tick_loop", AsyncMock()):
         try:
-            assert await background._apply_extracted_state(snapshot, "battle_ready", "alice")
+            assert await background._apply_extracted_state(
+                snapshot, "battle_ready", "alice"
+            )
             assert engine.get_mission_timer("alice").mission_description == PRIVATE
             assert engine._moods["alice"] == "battle_ready"
             assert engine._last_mood == "composed"

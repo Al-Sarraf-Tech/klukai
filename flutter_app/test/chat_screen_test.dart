@@ -68,7 +68,10 @@ class _RecordingPolicy extends ResumePolicy {
   final List<Duration> awayFor = [];
 
   @override
-  bool shouldReconnect({required bool connected, required Duration sinceLastFrame}) {
+  bool shouldReconnect({
+    required bool connected,
+    required Duration sinceLastFrame,
+  }) {
     awayFor.add(sinceLastFrame);
     return false;
   }
@@ -378,7 +381,10 @@ void main() {
       await tester.pump();
       expect(find.textContaining('VOICE LINK GARBLED'), findsOneWidget);
 
-      await tester.enterText(find.byType(TextField), 'typed while voice is down');
+      await tester.enterText(
+        find.byType(TextField),
+        'typed while voice is down',
+      );
       await tester.pump();
       await tester.tap(find.byIcon(Icons.send));
       await tester.pump();
@@ -391,7 +397,9 @@ void main() {
       fake.dispose();
     });
 
-    testWidgets('a cancelled transcript does not replace the draft', (tester) async {
+    testWidgets('a cancelled transcript does not replace the draft', (
+      tester,
+    ) async {
       final gate = Completer<http.Response>();
       final fake = await _pumpChat(
         tester,
@@ -542,19 +550,23 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
       final fake = FakeWebSocketService();
-      await tester.pumpWidget(MaterialApp(
-        home: ChatScreen(
-          serverUrl: 'http://localhost:0',
-          webSocketService: fake,
-          wardrobeService: wardrobe,
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            serverUrl: 'http://localhost:0',
+            webSocketService: fake,
+            wardrobeService: wardrobe,
+          ),
         ),
-      ));
+      );
       await tester.pump();
       await tester.pump();
       return (fake, wardrobe);
     }
 
-    testWidgets('shows where she is and what she is wearing, at 390px', (tester) async {
+    testWidgets('shows where she is and what she is wearing, at 390px', (
+      tester,
+    ) async {
       final (fake, wardrobe) = await pumpWithDay(tester, FakeWardrobeService());
       expect(find.text('Hangar \u00B7 tuning the suspension'), findsOneWidget);
       expect(find.byKey(const Key('her-day-outfit-chip')), findsOneWidget);
@@ -564,19 +576,30 @@ void main() {
     });
 
     testWidgets('an outfit frame swaps the chip and refetches', (tester) async {
-      final wardrobe = FakeWardrobeService(herDays: [
-        HerDay.fromJson(herDayJson()),
-        HerDay.fromJson(herDayJson()),
-        HerDay.fromJson(herDayJson(
-            outfit: outfitJson(
-                id: 'immaculate_service', name: 'Immaculate Service', source: 'commander'))),
-      ]);
+      final wardrobe = FakeWardrobeService(
+        herDays: [
+          HerDay.fromJson(herDayJson()),
+          HerDay.fromJson(herDayJson()),
+          HerDay.fromJson(
+            herDayJson(
+              outfit: outfitJson(
+                id: 'immaculate_service',
+                name: 'Immaculate Service',
+                source: 'commander',
+              ),
+            ),
+          ),
+        ],
+      );
       final (fake, _) = await pumpWithDay(tester, wardrobe);
       final before = wardrobe.herDayCalls;
       fake.emit({
         'type': 'outfit',
         'outfit': outfitJson(
-            id: 'immaculate_service', name: 'Immaculate Service', source: 'commander'),
+          id: 'immaculate_service',
+          name: 'Immaculate Service',
+          source: 'commander',
+        ),
       });
       await tester.pump();
       expect(find.text('Immaculate Service'), findsOneWidget);
@@ -584,9 +607,13 @@ void main() {
       fake.dispose();
     });
 
-    testWidgets('her-day failing hides the line and chat carries on', (tester) async {
+    testWidgets('her-day failing hides the line and chat carries on', (
+      tester,
+    ) async {
       final (fake, _) = await pumpWithDay(
-          tester, FakeWardrobeService(herDays: [WardrobeServiceException(503)]));
+        tester,
+        FakeWardrobeService(herDays: [WardrobeServiceException(503)]),
+      );
       expect(find.byKey(const Key('her-day-status')), findsNothing);
       expect(find.text('KLUKAI'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -601,36 +628,52 @@ void main() {
     ) async {
       web.window.localStorage.setItem('klukai_token', 'test-token');
       final fake = FakeWebSocketService();
-      await tester.pumpWidget(MaterialApp(
-        home: ChatScreen(
-          serverUrl: 'http://localhost:0',
-          webSocketService: fake,
-          wardrobeService: FakeWardrobeService(),
-          browser: browser,
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            serverUrl: 'http://localhost:0',
+            webSocketService: fake,
+            wardrobeService: FakeWardrobeService(),
+            browser: browser,
+          ),
         ),
-      ));
+      );
       await tester.pump();
       await tester.pump();
       return (fake, browser);
     }
 
-    testWidgets('Companion opens companion.html in a new window on desktop', (tester) async {
-      final (fake, browser) = await pumpWithBrowser(tester, FakeBrowserPlatform());
+    testWidgets('Companion opens companion.html in a new window on desktop', (
+      tester,
+    ) async {
+      final (fake, browser) = await pumpWithBrowser(
+        tester,
+        FakeBrowserPlatform(),
+      );
       await tester.tap(find.byKey(const Key('chat-header-companion')));
       expect(browser.opened, [('companion.html', true)]);
       fake.dispose();
     });
 
-    testWidgets('Companion navigates in place inside the iOS home-screen app', (tester) async {
+    testWidgets('Companion navigates in place inside the iOS home-screen app', (
+      tester,
+    ) async {
       final (fake, browser) = await pumpWithBrowser(
-          tester, FakeBrowserPlatform(isIos: true, isStandalone: true));
+        tester,
+        FakeBrowserPlatform(isIos: true, isStandalone: true),
+      );
       await tester.tap(find.byKey(const Key('chat-header-companion')));
       expect(browser.opened, [('companion.html', false)]);
       fake.dispose();
     });
 
-    testWidgets('resume with the link down redials immediately', (tester) async {
-      final (fake, browser) = await pumpWithBrowser(tester, FakeBrowserPlatform());
+    testWidgets('resume with the link down redials immediately', (
+      tester,
+    ) async {
+      final (fake, browser) = await pumpWithBrowser(
+        tester,
+        FakeBrowserPlatform(),
+      );
       fake.setConnected(false);
       await tester.pump();
       browser.resume.add(null);
@@ -639,8 +682,13 @@ void main() {
       fake.dispose();
     });
 
-    testWidgets('voice frames go through the unlocked voice channel', (tester) async {
-      final (fake, browser) = await pumpWithBrowser(tester, FakeBrowserPlatform());
+    testWidgets('voice frames go through the unlocked voice channel', (
+      tester,
+    ) async {
+      final (fake, browser) = await pumpWithBrowser(
+        tester,
+        FakeBrowserPlatform(),
+      );
       fake.emit({'type': 'voice_audio', 'audio': 'UklGRg=='});
       await tester.pump();
       expect(browser.voices, ['data:audio/wav;base64,UklGRg==']);
@@ -665,44 +713,57 @@ void main() {
       web.window.localStorage.setItem('klukai_token', 'test-token');
       final fake = FakeWebSocketService();
       final browser = FakeBrowserPlatform();
-      await tester.pumpWidget(MaterialApp(
-        home: ChatScreen(
-          serverUrl: 'http://localhost:0',
-          webSocketService: fake,
-          wardrobeService: FakeWardrobeService(),
-          browser: browser,
-          resumePolicy: policy,
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            serverUrl: 'http://localhost:0',
+            webSocketService: fake,
+            wardrobeService: FakeWardrobeService(),
+            browser: browser,
+            resumePolicy: policy,
+          ),
         ),
-      ));
+      );
       await tester.pump();
       await tester.pump();
       return (fake, browser);
     }
 
-    testWidgets('a blink of a hide after a quiet stretch reports the blink, not the quiet',
-        (tester) async {
+    testWidgets(
+      'a blink of a hide after a quiet stretch reports the blink, not the quiet',
+      (tester) async {
+        final policy = _RecordingPolicy();
+        final (fake, browser) = await pumpWithPolicy(tester, policy);
+
+        // Chat goes quiet for a while (real time: this is wall-clock)...
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 500)),
+        );
+        // ...then a one-blink tab switch and back.
+        await setLifecycle(tester, AppLifecycleState.hidden);
+        await setLifecycle(tester, AppLifecycleState.resumed);
+        browser.resume.add(null);
+        await tester.pump();
+
+        expect(policy.awayFor, hasLength(1));
+        // Measured from the hide, not from the last frame half a second ago.
+        expect(
+          policy.awayFor.single,
+          lessThan(const Duration(milliseconds: 500)),
+        );
+        expect(fake.reconnectNowCalls, 0);
+        fake.dispose();
+      },
+    );
+
+    testWidgets('a resume that follows no hide reports no time away', (
+      tester,
+    ) async {
       final policy = _RecordingPolicy();
       final (fake, browser) = await pumpWithPolicy(tester, policy);
-
-      // Chat goes quiet for a while (real time: this is wall-clock)...
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 500)));
-      // ...then a one-blink tab switch and back.
-      await setLifecycle(tester, AppLifecycleState.hidden);
-      await setLifecycle(tester, AppLifecycleState.resumed);
-      browser.resume.add(null);
-      await tester.pump();
-
-      expect(policy.awayFor, hasLength(1));
-      // Measured from the hide, not from the last frame half a second ago.
-      expect(policy.awayFor.single, lessThan(const Duration(milliseconds: 500)));
-      expect(fake.reconnectNowCalls, 0);
-      fake.dispose();
-    });
-
-    testWidgets('a resume that follows no hide reports no time away', (tester) async {
-      final policy = _RecordingPolicy();
-      final (fake, browser) = await pumpWithPolicy(tester, policy);
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
 
       browser.resume.add(null); // e.g. the network coming back
       await tester.pump();
@@ -712,15 +773,21 @@ void main() {
       fake.dispose();
     });
 
-    testWidgets('a long hide redials even though the socket still looks open', (tester) async {
+    testWidgets('a long hide redials even though the socket still looks open', (
+      tester,
+    ) async {
       // iOS freezes a backgrounded PWA and drops the socket without a close
       // event; `connected` stays true. Time away is what gives it up.
-      final (fake, browser) =
-          await pumpWithPolicy(tester, const ResumePolicy(staleAfter: Duration(milliseconds: 50)));
+      final (fake, browser) = await pumpWithPolicy(
+        tester,
+        const ResumePolicy(staleAfter: Duration(milliseconds: 50)),
+      );
       expect(fake.isConnected, isTrue);
 
       await setLifecycle(tester, AppLifecycleState.hidden);
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 120)));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 120)),
+      );
       await setLifecycle(tester, AppLifecycleState.resumed);
       browser.resume.add(null);
       await tester.pump();
@@ -730,11 +797,16 @@ void main() {
     });
   });
 
-  testWidgets('pretext-ready finalization retains selectable text and replay', (tester) async {
+  testWidgets('pretext-ready finalization retains selectable text and replay', (
+    tester,
+  ) async {
     _installPretextStub();
     addTearDown(_removePretextStub);
     final fake = await _pumpChat(tester);
-    fake.emit({'type': 'token', 'text': '> Hold position.\n\n3. Three\n4. Four'});
+    fake.emit({
+      'type': 'token',
+      'text': '> Hold position.\n\n3. Three\n4. Four',
+    });
     await tester.pump();
     fake.emit({'type': 'done'});
     await tester.pump();
@@ -753,160 +825,184 @@ void main() {
       await tester.pump(const Duration(seconds: 2));
     }
 
-    testWidgets('an image frame renders the picture, never the literal [IMAGE]', (tester) async {
-      final fake = await _pumpChat(tester);
-      fake.emit({'type': 'image', 'data': _pngB64});
-      await tester.pump();
+    testWidgets(
+      'an image frame renders the picture, never the literal [IMAGE]',
+      (tester) async {
+        final fake = await _pumpChat(tester);
+        fake.emit({'type': 'image', 'data': _pngB64});
+        await tester.pump();
 
-      expect(
-        find.descendant(of: find.byType(MessageBubble), matching: find.byType(Image)),
-        findsOneWidget,
-      );
-      expect(find.byIcon(Icons.download), findsOneWidget);
-      expect(find.text('[IMAGE]'), findsNothing);
-      await drainImageTimers(tester);
-      expect(tester.takeException(), isNull);
-      fake.dispose();
-    });
+        expect(
+          find.descendant(
+            of: find.byType(MessageBubble),
+            matching: find.byType(Image),
+          ),
+          findsOneWidget,
+        );
+        expect(find.byIcon(Icons.download), findsOneWidget);
+        expect(find.text('[IMAGE]'), findsNothing);
+        await drainImageTimers(tester);
+        expect(tester.takeException(), isNull);
+        fake.dispose();
+      },
+    );
 
-    testWidgets('with the canvas renderer ready, an image still goes through MessageBubble',
-        (tester) async {
-      // Finalized assistant text is drawn by CanvasMessageBubble once the
-      // pretext bridge is up — but that bubble only draws text (it showed the
-      // literal "[IMAGE]") and has no speaker. Routing must send images
-      // around it.
-      _installPretextStub();
-      addTearDown(_removePretextStub);
-      final fake = await _pumpChat(tester);
-      fake.emit({'type': 'image', 'data': _pngB64});
-      await tester.pump();
+    testWidgets(
+      'with the canvas renderer ready, an image still goes through MessageBubble',
+      (tester) async {
+        // Finalized assistant text is drawn by CanvasMessageBubble once the
+        // pretext bridge is up — but that bubble only draws text (it showed the
+        // literal "[IMAGE]") and has no speaker. Routing must send images
+        // around it.
+        _installPretextStub();
+        addTearDown(_removePretextStub);
+        final fake = await _pumpChat(tester);
+        fake.emit({'type': 'image', 'data': _pngB64});
+        await tester.pump();
 
-      expect(find.byType(CanvasMessageBubble), findsNothing);
-      expect(find.byType(MessageBubble), findsOneWidget);
-      expect(find.byIcon(Icons.download), findsOneWidget);
-      expect(find.text('[IMAGE]'), findsNothing);
-      await drainImageTimers(tester);
-      fake.dispose();
-    });
+        expect(find.byType(CanvasMessageBubble), findsNothing);
+        expect(find.byType(MessageBubble), findsOneWidget);
+        expect(find.byIcon(Icons.download), findsOneWidget);
+        expect(find.text('[IMAGE]'), findsNothing);
+        await drainImageTimers(tester);
+        fake.dispose();
+      },
+    );
   });
 
   group('ChatScreen — a reply cut off mid-stream', () {
     MessageBubble bubbleWith(WidgetTester tester, String content) =>
-        tester.widget<MessageBubble>(find.byWidgetPredicate(
-          (w) => w is MessageBubble && w.message.content == content,
-        ));
+        tester.widget<MessageBubble>(
+          find.byWidgetPredicate(
+            (w) => w is MessageBubble && w.message.content == content,
+          ),
+        );
 
     bool anyStreaming(WidgetTester tester) => tester
         .widgetList<MessageBubble>(find.byType(MessageBubble))
         .any((b) => b.message.isStreaming);
 
-    testWidgets('an error frame freezes the partial bubble and frees the composer', (
-      tester,
-    ) async {
-      final fake = await _pumpChat(tester);
-      TextField tf() => tester.widget<TextField>(find.byType(TextField));
+    testWidgets(
+      'an error frame freezes the partial bubble and frees the composer',
+      (tester) async {
+        final fake = await _pumpChat(tester);
+        TextField tf() => tester.widget<TextField>(find.byType(TextField));
 
-      fake.emit({'type': 'token', 'text': 'Orders rec'});
-      await tester.pump();
-      expect(tf().readOnly, isTrue);
-      expect(bubbleWith(tester, 'Orders rec').message.isStreaming, isTrue);
+        fake.emit({'type': 'token', 'text': 'Orders rec'});
+        await tester.pump();
+        expect(tf().readOnly, isTrue);
+        expect(bubbleWith(tester, 'Orders rec').message.isStreaming, isTrue);
 
-      const disrupted = 'Communications disrupted, Commander. Standby for reconnection.';
-      fake.emit({'type': 'error', 'message': disrupted});
-      await tester.pump();
+        const disrupted =
+            'Communications disrupted, Commander. Standby for reconnection.';
+        fake.emit({'type': 'error', 'message': disrupted});
+        await tester.pump();
 
-      // What arrived stays, frozen; her line follows as a bubble of its own.
-      expect(bubbleWith(tester, 'Orders rec').message.isStreaming, isFalse);
-      expect(find.text(disrupted), findsOneWidget);
-      expect(anyStreaming(tester), isFalse);
-      expect(tf().readOnly, isFalse);
+        // What arrived stays, frozen; her line follows as a bubble of its own.
+        expect(bubbleWith(tester, 'Orders rec').message.isStreaming, isFalse);
+        expect(find.text(disrupted), findsOneWidget);
+        expect(anyStreaming(tester), isFalse);
+        expect(tf().readOnly, isFalse);
 
-      // The next reply gets a new bubble rather than extending the dead one.
-      fake.emit({'type': 'token', 'text': 'Back online.'});
-      await tester.pump();
-      expect(find.text('Orders rec'), findsOneWidget);
-      expect(find.text('Back online.'), findsOneWidget);
-      fake.emit({'type': 'done'});
-      await tester.pump();
-      expect(tester.takeException(), isNull);
-      fake.dispose();
-    });
+        // The next reply gets a new bubble rather than extending the dead one.
+        fake.emit({'type': 'token', 'text': 'Back online.'});
+        await tester.pump();
+        expect(find.text('Orders rec'), findsOneWidget);
+        expect(find.text('Back online.'), findsOneWidget);
+        fake.emit({'type': 'done'});
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        fake.dispose();
+      },
+    );
 
-    testWidgets('a dropped link mid-reply freezes the bubble, clears the indicators, unlocks', (
-      tester,
-    ) async {
-      final fake = await _pumpChat(tester);
-      TextField tf() => tester.widget<TextField>(find.byType(TextField));
+    testWidgets(
+      'a dropped link mid-reply freezes the bubble, clears the indicators, unlocks',
+      (tester) async {
+        final fake = await _pumpChat(tester);
+        TextField tf() => tester.widget<TextField>(find.byType(TextField));
 
-      fake.emit({'type': 'tool_use', 'tool': 'web_search', 'status': 'calling'});
-      await tester.pump();
-      fake.emit({'type': 'token', 'text': 'Standing by'});
-      await tester.pump();
-      expect(find.byType(ToolStatusIndicator), findsOneWidget);
-      expect(tf().readOnly, isTrue);
+        fake.emit({
+          'type': 'tool_use',
+          'tool': 'web_search',
+          'status': 'calling',
+        });
+        await tester.pump();
+        fake.emit({'type': 'token', 'text': 'Standing by'});
+        await tester.pump();
+        expect(find.byType(ToolStatusIndicator), findsOneWidget);
+        expect(tf().readOnly, isTrue);
 
-      fake.setConnected(false);
-      await tester.pump();
+        fake.setConnected(false);
+        await tester.pump();
 
-      expect(find.text('LINK DOWN'), findsOneWidget);
-      expect(bubbleWith(tester, 'Standing by').message.isStreaming, isFalse);
-      expect(find.byType(ToolStatusIndicator), findsNothing);
-      expect(tf().readOnly, isFalse); // not locked for the 60s safety timeout
+        expect(find.text('LINK DOWN'), findsOneWidget);
+        expect(bubbleWith(tester, 'Standing by').message.isStreaming, isFalse);
+        expect(find.byType(ToolStatusIndicator), findsNothing);
+        expect(tf().readOnly, isFalse); // not locked for the 60s safety timeout
 
-      // Link back: the next reply is its own bubble, not appended to the dead one.
-      fake.setConnected(true);
-      await tester.pump();
-      fake.emit({'type': 'token', 'text': 'Link restored.'});
-      await tester.pump();
-      expect(find.text('Standing by'), findsOneWidget);
-      expect(find.text('Link restored.'), findsOneWidget);
-      fake.emit({'type': 'done'});
-      await tester.pump();
-      // Let the (failing) history refetch settle.
-      await tester.pump(const Duration(seconds: 1));
-      expect(tester.takeException(), isNull);
-      fake.dispose();
-    });
+        // Link back: the next reply is its own bubble, not appended to the dead one.
+        fake.setConnected(true);
+        await tester.pump();
+        fake.emit({'type': 'token', 'text': 'Link restored.'});
+        await tester.pump();
+        expect(find.text('Standing by'), findsOneWidget);
+        expect(find.text('Link restored.'), findsOneWidget);
+        fake.emit({'type': 'done'});
+        await tester.pump();
+        // Let the (failing) history refetch settle.
+        await tester.pump(const Duration(seconds: 1));
+        expect(tester.takeException(), isNull);
+        fake.dispose();
+      },
+    );
   });
 
   group('ChatScreen — status (thinking) frames', () {
-    testWidgets('an empty thinking frame clears the status instead of spinning forever', (
-      tester,
-    ) async {
-      final fake = await _pumpChat(tester);
+    testWidgets(
+      'an empty thinking frame clears the status instead of spinning forever',
+      (tester) async {
+        final fake = await _pumpChat(tester);
 
-      // Current frames carry `content`...
-      fake.emit({'type': 'thinking', 'content': 'checking the hangar'});
-      await tester.pump();
-      expect(find.text('CHECKING THE HANGAR'), findsOneWidget);
+        // Current frames carry `content`...
+        fake.emit({'type': 'thinking', 'content': 'checking the hangar'});
+        await tester.pump();
+        expect(find.text('CHECKING THE HANGAR'), findsOneWidget);
 
-      // ...and the backend clears its status with an empty one.
-      fake.emit({'type': 'thinking', 'content': ''});
-      await tester.pump();
-      expect(find.text('CHECKING THE HANGAR'), findsNothing);
-      expect(find.text('PROCESSING'), findsNothing);
+        // ...and the backend clears its status with an empty one.
+        fake.emit({'type': 'thinking', 'content': ''});
+        await tester.pump();
+        expect(find.text('CHECKING THE HANGAR'), findsNothing);
+        expect(find.text('PROCESSING'), findsNothing);
 
-      // Older frames carry `text`.
-      fake.emit({'type': 'thinking', 'text': 'loading the model'});
-      await tester.pump();
-      expect(find.text('LOADING THE MODEL'), findsOneWidget);
-      fake.emit({'type': 'thinking'});
-      await tester.pump();
-      expect(find.text('LOADING THE MODEL'), findsNothing);
-      expect(find.text('PROCESSING'), findsNothing);
-      fake.dispose();
-    });
+        // Older frames carry `text`.
+        fake.emit({'type': 'thinking', 'text': 'loading the model'});
+        await tester.pump();
+        expect(find.text('LOADING THE MODEL'), findsOneWidget);
+        fake.emit({'type': 'thinking'});
+        await tester.pump();
+        expect(find.text('LOADING THE MODEL'), findsNothing);
+        expect(find.text('PROCESSING'), findsNothing);
+        fake.dispose();
+      },
+    );
   });
 
   group('ChatScreen — done.text is her final line', () {
-    testWidgets('done.text replaces the raw stream; an empty one keeps it', (tester) async {
+    testWidgets('done.text replaces the raw stream; an empty one keeps it', (
+      tester,
+    ) async {
       final fake = await _pumpChat(tester);
 
       fake.emit({'type': 'token', 'text': '<think>weighing it</think>'});
       await tester.pump();
       fake.emit({'type': 'token', 'text': 'Understood.'});
       await tester.pump();
-      fake.emit({'type': 'done', 'model': 'venice', 'text': 'Understood, Commander.'});
+      fake.emit({
+        'type': 'done',
+        'model': 'venice',
+        'text': 'Understood, Commander.',
+      });
       await tester.pump();
       expect(find.text('Understood, Commander.'), findsOneWidget);
       expect(find.textContaining('<think>'), findsNothing);
@@ -921,31 +1017,32 @@ void main() {
   });
 
   group('ChatScreen — the first token owns the lock', () {
-    testWidgets('a reply arriving under a shorter lock is locked for the whole reply', (
-      tester,
-    ) async {
-      final fake = await _pumpChat(tester);
-      TextField tf() => tester.widget<TextField>(find.byType(TextField));
+    testWidgets(
+      'a reply arriving under a shorter lock is locked for the whole reply',
+      (tester) async {
+        final fake = await _pumpChat(tester);
+        TextField tf() => tester.widget<TextField>(find.byType(TextField));
 
-      // A proactive line locks for 1.5s...
-      fake.emit({'type': 'proactive', 'message': 'Commander.'});
-      await tester.pump();
-      expect(find.textContaining('INCOMING TRANSMISSION'), findsOneWidget);
+        // A proactive line locks for 1.5s...
+        fake.emit({'type': 'proactive', 'message': 'Commander.'});
+        await tester.pump();
+        expect(find.textContaining('INCOMING TRANSMISSION'), findsOneWidget);
 
-      // ...and her reply starts inside that window.
-      fake.emit({'type': 'token', 'text': 'Status: '});
-      await tester.pump();
-      expect(find.textContaining('RECEIVING TRANSMISSION'), findsOneWidget);
+        // ...and her reply starts inside that window.
+        fake.emit({'type': 'token', 'text': 'Status: '});
+        await tester.pump();
+        expect(find.textContaining('RECEIVING TRANSMISSION'), findsOneWidget);
 
-      // Past the proactive lock's 1.5s the composer is still hers.
-      await tester.pump(const Duration(milliseconds: 1600));
-      expect(tf().readOnly, isTrue);
-      expect(find.textContaining('RECEIVING TRANSMISSION'), findsOneWidget);
+        // Past the proactive lock's 1.5s the composer is still hers.
+        await tester.pump(const Duration(milliseconds: 1600));
+        expect(tf().readOnly, isTrue);
+        expect(find.textContaining('RECEIVING TRANSMISSION'), findsOneWidget);
 
-      fake.emit({'type': 'done'});
-      await tester.pump();
-      expect(tf().readOnly, isFalse);
-      fake.dispose();
-    });
+        fake.emit({'type': 'done'});
+        await tester.pump();
+        expect(tf().readOnly, isFalse);
+        fake.dispose();
+      },
+    );
   });
 }

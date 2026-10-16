@@ -17,6 +17,8 @@ earlier, into time he was going to spend typing anyway.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import asyncio
 import logging
@@ -95,7 +97,11 @@ async def warm_chat_model(force: bool = False) -> bool:
 
     async with _lock:
         now = time.monotonic()
-        if not force and _last_attempt and (now - _last_attempt) < _MIN_INTERVAL_SECONDS:
+        if (
+            not force
+            and _last_attempt
+            and (now - _last_attempt) < _MIN_INTERVAL_SECONDS
+        ):
             return False
         _last_attempt = now
 
@@ -152,10 +158,12 @@ async def _issue_warm_request(model: str) -> bool:
     return ok
 
 
-def warm_in_background() -> asyncio.Task | None:
+def warm_in_background() -> asyncio.Task[Any] | None:
     """Fire-and-forget warm-up. Never blocks the caller, never raises."""
+    coroutine = warm_chat_model()
     try:
-        return asyncio.create_task(warm_chat_model())
+        return asyncio.create_task(coroutine)
     except Exception as e:
+        coroutine.close()
         logger.debug("Could not schedule warm-up: %s", e)
         return None

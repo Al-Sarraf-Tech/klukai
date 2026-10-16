@@ -45,7 +45,9 @@ class CompanionState {
       // The reason belongs to the lock: it survives unrelated updates (a mood
       // or typing frame mid-reply used to drop it, flickering the composer
       // hint to "// STANDBY...") and is released together with the lock.
-      inputLockReason: locked ? (inputLockReason ?? this.inputLockReason) : null,
+      inputLockReason: locked
+          ? (inputLockReason ?? this.inputLockReason)
+          : null,
     );
   }
 }

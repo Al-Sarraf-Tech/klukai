@@ -7,28 +7,48 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from typing import Any
+from .circuit_breakers import get_breaker
 
 import psycopg
 from psycopg.pq import TransactionStatus
-from psycopg_pool import AsyncConnectionPool
+from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 logger = logging.getLogger(__name__)
+_DB_FAILURES = (psycopg.OperationalError, psycopg.InterfaceError, PoolTimeout)
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql://aichat:aichat@aichat-db:5432/aichat"
 )
 
-_pool: AsyncConnectionPool | None = None
+
+class ResilientConnectionPool(
+    AsyncConnectionPool[psycopg.AsyncConnection[tuple[Any, ...]]]
+):
+    """Protect pool users, including auth code using pool.connection directly."""
+
+    @asynccontextmanager
+    async def connection(
+        self, timeout: float | None = None
+    ) -> AsyncIterator[psycopg.AsyncConnection[tuple[Any, ...]]]:
+        async with get_breaker("postgres").protect(failures=_DB_FAILURES):
+            async with super().connection(timeout=timeout) as conn:
+                yield conn
+
+
+_pool: AsyncConnectionPool[psycopg.AsyncConnection[tuple[Any, ...]]] | None = None
 
 # Retry config
 MAX_RETRIES = 2
 RETRY_DELAY = 0.5  # seconds
 
 
-async def init_pool(min_size: int = 2, max_size: int = 10) -> None:  # pragma: no cover - integration (PG)
+async def init_pool(
+    min_size: int = 2, max_size: int = 10
+) -> None:  # pragma: no cover - integration (PG)
     """Create and open the shared connection pool."""
     global _pool
-    _pool = AsyncConnectionPool(
+    _pool = ResilientConnectionPool(
         conninfo=DATABASE_URL,
         min_size=min_size,
         max_size=max_size,
@@ -50,7 +70,7 @@ async def close_pool() -> None:  # pragma: no cover - integration (PG)
         logger.info("Database pool closed")
 
 
-def get_pool() -> AsyncConnectionPool:
+def get_pool() -> AsyncConnectionPool[psycopg.AsyncConnection[tuple[Any, ...]]]:
     """Get the shared pool. Raises if not initialized."""
     if _pool is None:
         raise RuntimeError("Database pool not initialized — call init_pool() first")
@@ -58,7 +78,7 @@ def get_pool() -> AsyncConnectionPool:
 
 
 @asynccontextmanager
-async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
+async def get_conn() -> AsyncIterator[psycopg.AsyncConnection[tuple[Any, ...]]]:
     """Get a connection with retry on acquisition failure.
 
     Usage:
@@ -71,29 +91,40 @@ async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
     conn = None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            conn = await pool.getconn()
+            conn = await get_breaker("postgres").call(pool.getconn)
             break
         except (psycopg.OperationalError, psycopg.InterfaceError) as e:
             last_err = e
             if attempt < MAX_RETRIES:
-                logger.warning("DB connection error (attempt %d/%d): %s — retrying in %ss",
-                               attempt + 1, MAX_RETRIES + 1, e, RETRY_DELAY * (attempt + 1))
+                logger.warning(
+                    "DB connection error (attempt %d/%d): %s — retrying in %ss",
+                    attempt + 1,
+                    MAX_RETRIES + 1,
+                    e,
+                    RETRY_DELAY * (attempt + 1),
+                )
                 await asyncio.sleep(RETRY_DELAY * (attempt + 1))
             else:
-                logger.error("DB connection failed after %d attempts: %s", MAX_RETRIES + 1, e)
+                logger.error(
+                    "DB connection failed after %d attempts: %s", MAX_RETRIES + 1, e
+                )
                 raise
 
     if conn is None:
         raise last_err or RuntimeError("Failed to acquire DB connection")
 
     try:
-        yield conn
+        async with get_breaker("postgres").protect(failures=_DB_FAILURES):
+            yield conn
     finally:
         # Connections are manual-commit: a read-only caller leaves the
         # session INTRANS. Roll back here so the pool never sees a dirty
         # connection (it would roll back itself and log a WARNING per use).
         try:
-            if not conn.closed and conn.info.transaction_status != TransactionStatus.IDLE:
+            if (
+                not conn.closed
+                and conn.info.transaction_status != TransactionStatus.IDLE
+            ):
                 await conn.rollback()
         except Exception:  # pragma: no cover - pool discards broken conns
             logger.debug("rollback before putconn failed", exc_info=True)
@@ -101,7 +132,9 @@ async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
 
 
 @asynccontextmanager
-async def get_conn_autocommit() -> AsyncIterator[psycopg.AsyncConnection]:
+async def get_conn_autocommit() -> AsyncIterator[
+    psycopg.AsyncConnection[tuple[Any, ...]]
+]:
     """Get a connection that auto-commits on successful exit.
 
     Usage:
@@ -118,7 +151,7 @@ async def get_conn_autocommit() -> AsyncIterator[psycopg.AsyncConnection]:
             raise
 
 
-async def check_health() -> dict:
+async def check_health() -> dict[str, Any]:
     """Check database connectivity. Returns status dict for health endpoint."""
     try:
         async with get_conn_autocommit() as conn:

@@ -13,11 +13,17 @@ logs and are sent only in the authenticated release body or the
 
 from __future__ import annotations
 
+from .dependencies import http_request
+from .runtime_tasks import complete
+from typing import Any
+
+
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 import os
 from typing import AsyncIterator
+from collections.abc import Awaitable
 
 import httpx
 
@@ -44,6 +50,11 @@ GPU_LEASE_CONNECT_TIMEOUT_SECONDS = 10.0
 # transport failure and retried while the first request still owns the lock.
 GPU_LEASE_ACQUIRE_READ_TIMEOUT_SECONDS = 150.0
 GPU_LEASE_RELEASE_READ_TIMEOUT_SECONDS = 90.0
+# Absolute wall-clock ceilings include slow response bodies and retry backoff.
+# A deadline is an unconfirmed release; the gateway retains its safety markers.
+GPU_LEASE_RELEASE_DEADLINE_SECONDS = 372.0
+GPU_LEASE_EVENT_DEADLINE_SECONDS = 1.0
+GPU_WORKLOAD_CLEANUP_DEADLINE_SECONDS = 65.0
 
 
 class GPULeaseError(RuntimeError):
@@ -95,8 +106,7 @@ def _request_timeout(read_seconds: float) -> httpx.Timeout:
     )
 
 
-
-async def _publish_lease_event(action: str, workload: str, **extra) -> None:
+async def _publish_lease_event(action: str, workload: str, **extra: Any) -> None:
     """Best-effort fan-out of GPU lease transitions onto companion Redis events.
 
     companion-events-bridge republishes them onto homelab.events as
@@ -105,14 +115,16 @@ async def _publish_lease_event(action: str, workload: str, **extra) -> None:
     """
     try:
         from . import events
-        await events.publish(
-            f"gpu_lease.{action}",
-            data=workload,
-            workload=workload,
-            domain="gpu_lease",
-            action=action,
-            **extra,
-        )
+
+        async with asyncio.timeout(GPU_LEASE_EVENT_DEADLINE_SECONDS):
+            await events.publish(
+                f"gpu_lease.{action}",
+                data=workload,
+                workload=workload,
+                domain="gpu_lease",
+                action=action,
+                **extra,
+            )
     except Exception:
         pass
 
@@ -125,7 +137,10 @@ async def acquire_gpu_lease(
     """Acquire the fixed-duration exclusive lease from the local LM gateway."""
     try:
         headers = lm_studio_auth_headers()
-        response = await client.post(
+        response = await http_request(
+            "gpu_gateway",
+            client,
+            "post",
             f"{_gateway_url()}{GPU_LEASE_ACQUIRE_PATH}",
             headers=headers,
             json={
@@ -160,11 +175,20 @@ async def acquire_gpu_lease(
         or ttl != GPU_LEASE_TTL_SECONDS
     ):
         raise GPULeaseError("GPU lease TTL did not match the fixed safety contract")
-    await _publish_lease_event("acquired", workload)
-    return GPULease(token=token, ttl_seconds=ttl)
+    lease = GPULease(token=token, ttl_seconds=ttl)
+    try:
+        await _publish_lease_event("acquired", workload)
+    except asyncio.CancelledError:
+        # The capability is known but has not transferred to the context yet.
+        # Retain ownership until its release attempt settles on cancellation.
+        await complete(
+            asyncio.create_task(release_gpu_lease(client, lease, workload=workload))
+        )
+        raise
+    return lease
 
 
-async def release_gpu_lease(
+async def _release_gpu_lease(
     client: httpx.AsyncClient,
     lease: GPULease,
     *,
@@ -175,7 +199,10 @@ async def release_gpu_lease(
     for attempt in range(GPU_LEASE_RELEASE_ATTEMPTS):
         try:
             headers = lm_studio_auth_headers()
-            response = await client.post(
+            response = await http_request(
+                "gpu_gateway",
+                client,
+                "post",
                 f"{_gateway_url()}{GPU_LEASE_RELEASE_PATH}",
                 headers=headers,
                 json={"lease_token": lease.token},
@@ -186,7 +213,6 @@ async def release_gpu_lease(
             last_error.__cause__ = exc
         else:
             if response.status_code in {200, 204}:
-                await _publish_lease_event("released", workload)
                 return
             last_error = _status_error("release", response)
             if response.status_code < 500:
@@ -196,6 +222,32 @@ async def release_gpu_lease(
             await asyncio.sleep(backoff[min(attempt, len(backoff) - 1)])
     assert last_error is not None
     raise last_error
+
+
+async def confirm_gpu_cleanup(operation: Awaitable[bool]) -> bool:
+    """A partial/slow cleanup response never confirms that GPU work was reaped."""
+    try:
+        async with asyncio.timeout(GPU_WORKLOAD_CLEANUP_DEADLINE_SECONDS):
+            return await operation
+    except TimeoutError:
+        return False
+
+
+async def release_gpu_lease(
+    client: httpx.AsyncClient,
+    lease: GPULease,
+    *,
+    workload: str = "unknown",
+) -> None:
+    """Bound the entire cleanup, retaining uncertainty on an expired release."""
+    try:
+        async with asyncio.timeout(GPU_LEASE_RELEASE_DEADLINE_SECONDS):
+            await _release_gpu_lease(client, lease, workload=workload)
+    except TimeoutError as exc:
+        raise GPULeaseError(
+            "GPU lease release deadline expired; release unconfirmed"
+        ) from exc
+    await _publish_lease_event("released", workload)
 
 
 @asynccontextmanager
@@ -221,17 +273,10 @@ async def gpu_lease(
     finally:
         try:
             if lease is not None:
-                release_task = asyncio.create_task(release_gpu_lease(http, lease, workload=workload))
-                try:
-                    await asyncio.shield(release_task)
-                except asyncio.CancelledError:
-                    # Client/request cancellation must not skip release. The
-                    # gateway expiry cleaner is the final backstop, but this
-                    # gives normal disconnects an immediate cleanup attempt.
-                    try:
-                        await release_task
-                    finally:
-                        raise
+                release_task = asyncio.create_task(
+                    release_gpu_lease(http, lease, workload=workload)
+                )
+                await complete(release_task)
         finally:
             if owned_client:
                 await http.aclose()

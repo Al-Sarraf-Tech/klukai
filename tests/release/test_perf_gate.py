@@ -1,0 +1,394 @@
+"""Adversarial performance evidence validation, independent of measured timings."""
+
+from __future__ import annotations
+import argparse
+import asyncio
+from copy import deepcopy
+from datetime import UTC, datetime
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+import httpx
+
+from tools.ci.perf_gate import compare
+from tools.ci.perf_measure import Sampler, contract
+from tools.ci.perf_resources import DisposableStack, inspect_image
+from tools.ci.perf_network import LoopbackProxy
+from tools.ci.perf_stack import execute
+
+ROOT = Path(__file__).resolve().parents[2]
+POLICY = ROOT / "docker/core/app/observability/slos.json"
+TARGETS = [
+    ("GET", "/health"),
+    ("GET", "/api/health/live"),
+    ("GET", "/api/health/ready"),
+    ("POST", "/api/auth/login"),
+    ("GET", "/api/auth/verify"),
+    ("GET", "/api/affection"),
+    ("GET", "/api/messages"),
+    ("GET", "/api/memories"),
+    ("POST", "/api/tts"),
+    ("GET", "/api/tts/jobs/{job_id}"),
+]
+
+
+def test_disposable_redis_uses_nonroot_without_setuid_capability(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("tools.ci.perf_resources.cpu_temperature", lambda: 40.0)
+    monkeypatch.setattr(
+        "tools.ci.perf_resources.docker",
+        lambda *args, **kwargs: calls.append(args) or "",
+    )
+    stack = DisposableStack(tmp_path, ROOT)
+    stack._create("redis", "sha256:" + "a" * 64)
+    assert "--user" in calls[0]
+    assert calls[0][calls[0].index("--user") + 1] != "0:0"
+
+
+def test_disposable_qdrant_snapshots_writable_only_on_tmpfs(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("tools.ci.perf_resources.cpu_temperature", lambda: 40.0)
+    monkeypatch.setattr(
+        "tools.ci.perf_resources.docker",
+        lambda *args, **kwargs: calls.append(args) or "",
+    )
+    DisposableStack(tmp_path, ROOT)._create("qdrant", "sha256:" + "a" * 64)
+    assert any(item.startswith("/qdrant/snapshots:rw,size=") for item in calls[0])
+    assert "--read-only" in calls[0]
+
+
+@pytest.mark.parametrize(
+    "route,body",
+    [
+        ("/api/auth/verify", {"user_id": "ricky"}),
+        ("/api/messages", {"messages": [{"content": "seed:ricky:0"}] * 50}),
+        ("/api/memories", [{"annotation": "seed:ricky:0"}] * 20),
+        ("/api/tts/jobs/{job_id}", {"status": "completed", "audio": "invalid"}),
+        ("/api/tts", {"status": "failed", "job_id": "test"}),
+        ("/api/health/ready", {"status": "degraded"}),
+    ],
+)
+def test_actual_contract_validation_rejects_wrong_owner_and_fake_work(route, body):
+    assert not contract(route, body)
+
+
+def report(role="baseline", millis=10.0):
+    revision = ("a" if role == "baseline" else "b") * 40
+    image = "sha256:" + ("a" if role == "baseline" else "b") * 64
+    return {
+        "schema": 1,
+        "role": role,
+        "run_id": "paired-evidence",
+        "image": {
+            "id": image,
+            "declared_revision": revision,
+            "image_revision": revision,
+            "verified": True,
+        },
+        "started_at": datetime.now(UTC).isoformat(),
+        "finished_at": datetime.now(UTC).isoformat(),
+        "provenance": {
+            key: hashlib.sha256(key.encode()).hexdigest()
+            for key in ("harness", "fixture", "seed", "host")
+        }
+        | {
+            "policy": hashlib.sha256(
+                json.dumps(
+                    json.loads(POLICY.read_text()),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+        },
+        "resources": {
+            "core": {"nano_cpus": 1400000000, "memory_bytes": 805306368},
+            "postgres": {"nano_cpus": 400000000, "memory_bytes": 402653184},
+            "redis": {"nano_cpus": 100000000, "memory_bytes": 100663296},
+            "qdrant": {"nano_cpus": 400000000, "memory_bytes": 402653184},
+            "fixture": {"nano_cpus": 200000000, "memory_bytes": 100663296},
+        },
+        "configuration": {
+            "samples": 100,
+            "rounds": 3,
+            "warmup": 10,
+            "concurrency": 1,
+            "seed_version": 1,
+        },
+        "cpu_temperature_max_c": 49.0,
+        "cleanup_verified": True,
+        "development_only": False,
+        "rounds": [
+            {
+                "round": index,
+                "actual_container": {
+                    "container": f"test-{role}-{index}",
+                    "image": image,
+                    "resources": {"nano_cpus": 1400000000, "memory_bytes": 805306368},
+                },
+                "routes": [
+                    {
+                        "method": method,
+                        "route": route,
+                        "warmup_count": 10,
+                        "samples": [
+                            {
+                                "status": 202
+                                if (method, route) == ("POST", "/api/tts")
+                                else 200,
+                                "elapsed_ms": millis,
+                                "contract_ok": True,
+                            }
+                            for _ in range(100)
+                        ],
+                    }
+                    for method, route in TARGETS
+                ],
+            }
+            for index in range(3)
+        ],
+    }
+
+
+def arguments():
+    return {
+        "policy": json.loads(POLICY.read_text()),
+        "baseline_image": "sha256:" + "a" * 64,
+        "candidate_image": "sha256:" + "b" * 64,
+        "baseline_revision": "a" * 40,
+        "candidate_revision": "b" * 40,
+    }
+
+
+def test_valid_evidence_compares_fresh_images_and_preserves_baseline():
+    baseline, candidate = report(), report("candidate", 11)
+    original = deepcopy(baseline)
+    result = compare(baseline, candidate, **arguments())
+    assert result["passed"] is True
+    assert result["max_p99_ratio"] == pytest.approx(1.1)
+    assert baseline == original
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "empty",
+        "nan",
+        "zero",
+        "401",
+        "404",
+        "duplicate",
+        "revision",
+        "warmup",
+        "missing_route",
+        "missing_round",
+        "stale",
+        "unclean",
+        "hot",
+        "unverified",
+    ],
+)
+def test_invalid_evidence_fails_closed(mutation):
+    candidate = report("candidate")
+    sample = candidate["rounds"][0]["routes"][0]["samples"][0]
+    if mutation == "empty":
+        candidate["rounds"][0]["routes"][0]["samples"] = []
+    elif mutation == "nan":
+        sample["elapsed_ms"] = float("nan")
+    elif mutation == "zero":
+        sample["elapsed_ms"] = 0
+    elif mutation in ("401", "404"):
+        sample["status"] = int(mutation)
+    elif mutation == "duplicate":
+        candidate["rounds"][0]["routes"].append(
+            deepcopy(candidate["rounds"][0]["routes"][0])
+        )
+    elif mutation == "revision":
+        candidate["image"]["image_revision"] = "c" * 40
+    elif mutation == "warmup":
+        candidate["configuration"]["warmup"] = 0
+    elif mutation == "missing_route":
+        candidate["rounds"][0]["routes"].pop()
+    elif mutation == "missing_round":
+        candidate["rounds"].pop()
+    elif mutation == "stale":
+        candidate["finished_at"] = "2000-01-01T00:00:00+00:00"
+    elif mutation == "unclean":
+        candidate["cleanup_verified"] = False
+    elif mutation == "hot":
+        candidate["cpu_temperature_max_c"] = 70.0
+    else:
+        candidate["image"]["verified"] = False
+    with pytest.raises(ValueError):
+        compare(report(), candidate, **arguments())
+
+
+@pytest.mark.parametrize(
+    "field", ["resources", "fixture", "seed", "policy", "host", "samples"]
+)
+def test_noncomparable_configuration_is_rejected(field):
+    candidate = report("candidate")
+    if field == "resources":
+        candidate["resources"]["core"]["nano_cpus"] = 1000000000
+    elif field == "samples":
+        candidate["configuration"]["samples"] = 101
+    else:
+        candidate["provenance"][field] = "f" * 64
+    with pytest.raises(ValueError):
+        compare(report(), candidate, **arguments())
+
+
+def test_more_than_twenty_percent_p99_regression_fails_even_below_absolute_slo():
+    result = compare(report(), report("candidate", 12.01), **arguments())
+    assert result["passed"] is False
+    assert any("regression" in failure for failure in result["failures"])
+
+
+def test_exact_twenty_percent_is_permitted():
+    assert compare(report(), report("candidate", 12), **arguments())["passed"] is True
+
+
+def test_canonical_absolute_slo_failure_cannot_hide_behind_fast_baseline():
+    baseline, candidate = report(millis=31), report("candidate", 31)
+    result = compare(baseline, candidate, **arguments())
+    assert result["passed"] is False
+    assert any("absolute" in failure for failure in result["failures"])
+
+
+def test_one_bad_round_cannot_be_hidden_by_other_rounds():
+    baseline, candidate = report(), report("candidate")
+    for sample in candidate["rounds"][1]["routes"][0]["samples"]:
+        sample["elapsed_ms"] = 20
+    assert compare(baseline, candidate, **arguments())["passed"] is False
+
+
+def test_development_reports_cannot_satisfy_ci():
+    candidate = report("candidate")
+    candidate["development_only"] = True
+    with pytest.raises(ValueError):
+        compare(report(), candidate, **arguments())
+
+
+@pytest.mark.parametrize("field", ["image", "resources", "missing"])
+def test_actual_container_binding_is_required(field):
+    candidate = report("candidate")
+    actual = candidate["rounds"][0]["actual_container"]
+    if field == "missing":
+        del candidate["rounds"][0]["actual_container"]
+    elif field == "image":
+        actual["image"] = "sha256:" + "e" * 64
+    else:
+        actual["resources"]["nano_cpus"] = 1
+    with pytest.raises(ValueError):
+        compare(report(), candidate, **arguments())
+
+
+@pytest.mark.asyncio
+async def test_sampler_never_counts_authenticated_body_with_401_as_success(monkeypatch):
+    async def noop(_cache):
+        return None
+
+    monkeypatch.setattr("tools.ci.perf_measure.reset_rate_limits", noop)
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(401, json={"user_id": "jalsarraf"})
+    )
+    async with httpx.AsyncClient(
+        base_url="http://owned-test.invalid", transport=transport
+    ) as client:
+        sampler = Sampler(client, None, "disposable", lambda: None)
+        row = await sampler.one("GET", "/api/auth/verify", 200)
+    assert row["status"] == 401 and row["contract_ok"] is False
+    assert row["elapsed_ms"] > 0
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["ANTHROPIC_API_KEY", "VOICE_API_TOKEN", "SEED_PASSWORD_JALSARRAF", "DATABASE_URL"],
+)
+def test_images_with_baked_credentials_are_refused(field, monkeypatch):
+    data = [
+        {
+            "Id": "sha256:" + "a" * 64,
+            "Os": "linux",
+            "Architecture": "amd64",
+            "Config": {"Env": [field + "=disposable-test-value"]},
+        }
+    ]
+    monkeypatch.setattr(
+        "tools.ci.perf_resources.docker", lambda *args: json.dumps(data)
+    )
+    with pytest.raises(ValueError):
+        inspect_image("sha256:" + "a" * 64)
+
+
+def test_cleanup_attempts_remove_even_if_log_capture_fails(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("tools.ci.perf_resources.cpu_temperature", lambda: 40.0)
+
+    def fake_docker(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "logs":
+            raise RuntimeError("log unavailable")
+        return ""
+
+    monkeypatch.setattr("tools.ci.perf_resources.docker", fake_docker)
+    stack = DisposableStack(tmp_path, ROOT)
+    stack.containers.append("owned-container")
+    with pytest.raises(RuntimeError):
+        stack.close()
+    assert ("rm", "-fv", "owned-container") in calls
+    assert json.loads((tmp_path / "cleanup.json").read_text())["verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_existing_baseline_directory_is_never_refreshed(tmp_path, monkeypatch):
+    original = b"retained immutable baseline\n"
+    (tmp_path / "baseline.json").write_bytes(original)
+
+    def image_info(image):
+        return {"id": image, "revision": ("a" if image.endswith("a") else "b") * 40}
+
+    monkeypatch.setattr("tools.ci.perf_stack.inspect_image", image_info)
+    args = argparse.Namespace(
+        **{key: value for key, value in arguments().items() if key != "policy"},
+        out=tmp_path,
+        samples=100,
+        rounds=3,
+        warmup=10,
+        concurrency=1,
+        development=False,
+    )
+    with pytest.raises(FileExistsError):
+        await execute(args)
+    assert (tmp_path / "baseline.json").read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_loopback_proxy_cancellation_closes_active_streams():
+    async def echo(reader, writer):
+        try:
+            while data := await reader.read(256):
+                writer.write(data)
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    upstream = await asyncio.start_server(echo, "127.0.0.1", 0)
+    proxy = LoopbackProxy("127.0.0.1", upstream.sockets[0].getsockname()[1])
+    await proxy.start()
+    port = int(proxy.url.rsplit(":", 1)[1])
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(b"probe")
+    await writer.drain()
+    assert await reader.readexactly(5) == b"probe"
+    await proxy.close()
+    assert not proxy.tasks
+    assert await reader.read() == b""
+    writer.close()
+    await writer.wait_closed()
+    upstream.close()
+    await upstream.wait_closed()
+    with pytest.raises(ConnectionRefusedError):
+        await asyncio.open_connection("127.0.0.1", port)

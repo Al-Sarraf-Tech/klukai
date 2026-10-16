@@ -49,10 +49,26 @@ class _ExitIconPainter extends CustomPainter {
       ..strokeWidth = s * 0.07;
 
     // U-shaped door frame: open on the left side (person enters from left)
-    canvas.drawLine(Offset(s * 0.70, s * 0.10), Offset(s * 0.70, s * 0.90), doorStroke); // left jamb
-    canvas.drawLine(Offset(s * 0.70, s * 0.10), Offset(s * 0.95, s * 0.10), doorStroke); // lintel
-    canvas.drawLine(Offset(s * 0.95, s * 0.10), Offset(s * 0.95, s * 0.90), doorStroke); // right jamb
-    canvas.drawLine(Offset(s * 0.70, s * 0.90), Offset(s * 0.95, s * 0.90), doorStroke); // threshold
+    canvas.drawLine(
+      Offset(s * 0.70, s * 0.10),
+      Offset(s * 0.70, s * 0.90),
+      doorStroke,
+    ); // left jamb
+    canvas.drawLine(
+      Offset(s * 0.70, s * 0.10),
+      Offset(s * 0.95, s * 0.10),
+      doorStroke,
+    ); // lintel
+    canvas.drawLine(
+      Offset(s * 0.95, s * 0.10),
+      Offset(s * 0.95, s * 0.90),
+      doorStroke,
+    ); // right jamb
+    canvas.drawLine(
+      Offset(s * 0.70, s * 0.90),
+      Offset(s * 0.95, s * 0.90),
+      doorStroke,
+    ); // threshold
 
     // ── Arrow pointing right into the door ──
     final arrow = Paint()
@@ -61,24 +77,56 @@ class _ExitIconPainter extends CustomPainter {
       ..strokeWidth = s * 0.07
       ..strokeCap = StrokeCap.round;
 
-    canvas.drawLine(Offset(s * 0.52, s * 0.50), Offset(s * 0.72, s * 0.50), arrow);
-    canvas.drawLine(Offset(s * 0.64, s * 0.38), Offset(s * 0.72, s * 0.50), arrow);
-    canvas.drawLine(Offset(s * 0.64, s * 0.62), Offset(s * 0.72, s * 0.50), arrow);
+    canvas.drawLine(
+      Offset(s * 0.52, s * 0.50),
+      Offset(s * 0.72, s * 0.50),
+      arrow,
+    );
+    canvas.drawLine(
+      Offset(s * 0.64, s * 0.38),
+      Offset(s * 0.72, s * 0.50),
+      arrow,
+    );
+    canvas.drawLine(
+      Offset(s * 0.64, s * 0.62),
+      Offset(s * 0.72, s * 0.50),
+      arrow,
+    );
 
     // ── Running person (facing RIGHT, strong forward lean) ──
     // Head — positioned forward (right) to show momentum
     canvas.drawCircle(Offset(s * 0.38, s * 0.18), s * 0.09, fill);
 
     // Torso — strong diagonal lean toward door (upper-left to lower-right)
-    canvas.drawLine(Offset(s * 0.35, s * 0.27), Offset(s * 0.28, s * 0.55), stroke);
+    canvas.drawLine(
+      Offset(s * 0.35, s * 0.27),
+      Offset(s * 0.28, s * 0.55),
+      stroke,
+    );
 
     // Arms — front arm reaches RIGHT toward door, back arm trails LEFT
-    canvas.drawLine(Offset(s * 0.33, s * 0.36), Offset(s * 0.48, s * 0.32), stroke); // front arm → door
-    canvas.drawLine(Offset(s * 0.33, s * 0.36), Offset(s * 0.18, s * 0.42), stroke); // back arm ← trailing
+    canvas.drawLine(
+      Offset(s * 0.33, s * 0.36),
+      Offset(s * 0.48, s * 0.32),
+      stroke,
+    ); // front arm → door
+    canvas.drawLine(
+      Offset(s * 0.33, s * 0.36),
+      Offset(s * 0.18, s * 0.42),
+      stroke,
+    ); // back arm ← trailing
 
     // Legs — front leg extends RIGHT, back leg pushes off LEFT
-    canvas.drawLine(Offset(s * 0.30, s * 0.55), Offset(s * 0.44, s * 0.78), stroke); // front leg → door
-    canvas.drawLine(Offset(s * 0.30, s * 0.55), Offset(s * 0.14, s * 0.75), stroke); // back leg ← push
+    canvas.drawLine(
+      Offset(s * 0.30, s * 0.55),
+      Offset(s * 0.44, s * 0.78),
+      stroke,
+    ); // front leg → door
+    canvas.drawLine(
+      Offset(s * 0.30, s * 0.55),
+      Offset(s * 0.14, s * 0.75),
+      stroke,
+    ); // back leg ← push
   }
 
   @override

@@ -7,11 +7,12 @@ import math
 import re
 import shutil
 import subprocess
-from datetime import datetime, timezone
+import sys
 from pathlib import Path
 from typing import Any
 
-from evidence import InvalidEvidence, load_bundle, timestamp
+from evidence import InvalidEvidence, load_bundle
+from runtime_scope import python_sources, runtime_sources
 
 
 def run(argv: list[str], cwd: Path, timeout: int = 300) -> str:
@@ -38,11 +39,10 @@ def python_checks(root: Path) -> str:
 
 def structure(root: Path, limit: int) -> str:
     offenders = []
-    for directory, suffix in (("docker/core/app", ".py"), ("flutter_app/lib", ".dart")):
-        for path in (root / directory).rglob(f"*{suffix}"):
-            count = len(path.read_text().splitlines())
-            if count >= limit:
-                offenders.append(f"{path.relative_to(root)}:{count}")
+    for path in runtime_sources(root):
+        count = len(path.read_text().splitlines())
+        if count >= limit:
+            offenders.append(f"{path.relative_to(root)}:{count}")
     if offenders:
         raise InvalidEvidence(
             "oversized application modules: " + ", ".join(sorted(offenders))
@@ -55,7 +55,10 @@ def structure(root: Path, limit: int) -> str:
 
 
 def complexity(root: Path, mean_limit: float, max_limit: int) -> str:
-    payload = json.loads(run(["radon", "cc", "docker/core/app", "-j"], root))
+    sources = [path.relative_to(root).as_posix() for path in python_sources(root)]
+    if not sources:
+        raise InvalidEvidence("no maintained Python runtime to measure")
+    payload = json.loads(run(["radon", "cc", *sources, "-j"], root))
     scores: list[float] = []
 
     def visit(block: dict[str, Any]) -> None:
@@ -117,44 +120,62 @@ def final_image(root: Path) -> str:
     return "actual final FROM and USER passed; artifact scan still required separately"
 
 
-def mutations(root: Path, revision: str, threshold: float, max_age: int) -> str:
-    data = json.loads((root / "docs/mutation-results.json").read_text())
-    if data.get("source_revision") != revision:
-        raise InvalidEvidence("mutation report does not bind this source revision")
-    timestamp(
-        data.get("observed_at"), now=datetime.now(timezone.utc), max_age_days=max_age
+def mutations(
+    root: Path,
+    revision: str,
+    threshold: float,
+    max_age: int,
+    evidence: Path | None = None,
+) -> str:
+    directory = evidence if evidence is not None else root / ".audit-evidence/TEST-3"
+    if not (directory / "mutation.json").is_file():
+        raise InvalidEvidence(
+            "missing executed mutation bundle; summary rows are not proof"
+        )
+    if not 0.8 <= threshold <= 1 or not 1 <= max_age <= 30:
+        raise InvalidEvidence(
+            "mutation policy cannot weaken the execution requirements"
+        )
+    # This validator checks the actual tool, source/tests, complete generated
+    # inventory, per-mutant pytest phase/exit records, timestamps and raw hashes.
+    raw = run(
+        [
+            sys.executable,
+            "-m",
+            "tools.ci.mutation",
+            "validate",
+            "--root",
+            str(root),
+            "--output",
+            str(directory),
+            "--revision",
+            revision,
+            "--threshold",
+            str(threshold),
+            "--max-age-days",
+            str(max_age),
+        ],
+        root,
     )
-    mutants = data.get("mutants")
-    if data.get("complete") is not True or not isinstance(mutants, list) or not mutants:
-        raise InvalidEvidence("mutation execution incomplete or empty")
-    required = {"app/affection.py", "app/audit_chain.py", "app/personality/speech.py"}
-    modules, ids = set(), set()
-    killed = 0
-    for item in mutants:
-        if not isinstance(item, dict) or item.get("status") not in (
-            "killed",
-            "survived",
-        ):
-            raise InvalidEvidence(
-                "mutation report includes unresolved/unexecuted cases"
-            )
-        identity, module = item.get("id"), item.get("module")
-        if (
-            not isinstance(identity, str)
-            or not identity
-            or identity in ids
-            or not isinstance(module, str)
-        ):
-            raise InvalidEvidence("invalid or duplicate mutant identity")
-        ids.add(identity)
-        modules.add(module)
-        killed += item["status"] == "killed"
-    if not required.issubset(modules):
-        raise InvalidEvidence("mutation report omits critical modules")
-    rate = killed / len(mutants)
-    if rate < threshold:
-        raise InvalidEvidence(f"mutation kill rate {rate:.2%} below {threshold:.0%}")
-    return f"{killed}/{len(mutants)} actual mutants killed ({rate:.2%})"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise InvalidEvidence("invalid mutation validator output") from exc
+    if not isinstance(data, dict) or data.get("development_only") is not False:
+        raise InvalidEvidence("mutation validator did not establish final execution")
+    killed, total, rate = data.get("killed"), data.get("total"), data.get("kill_rate")
+    if (
+        type(killed) is not int
+        or type(total) is not int
+        or not 0 <= killed <= total
+        or total < 1
+        or type(rate) not in (int, float)
+        or not math.isfinite(rate)
+        or rate != killed / total
+        or rate < threshold
+    ):
+        raise InvalidEvidence("invalid validated mutation score")
+    return f"{killed}/{total} execution-verified mutants killed ({rate:.2%})"
 
 
 def evaluate(
@@ -180,14 +201,20 @@ def evaluate(
                 revision,
                 limits["mutation_kill_rate"],
                 limits["evidence_max_age_days"],
+                evidence / "TEST-3",
             )
         case "secrets":
             run(["gitleaks", "git", "--no-banner", "--redact", "--log-opts=HEAD"], root)
             return "required secret scan passed"
         case "evidence":
-            payload = load_bundle(
+            load_bundle(
                 evidence, check["id"], revision, limits["evidence_max_age_days"]
             )
-            return f"{len(payload['assertions'])} assertions; {len(payload['commands'])} intact command outputs"
+            # Integrity is necessary but does not interpret a measurement or
+            # prove that the named assertions follow from command output.
+            raise InvalidEvidence(
+                f"{check['id']} needs a requirement-specific semantic verifier; "
+                "named true assertions and output hashes cannot certify it"
+            )
         case _:
             raise InvalidEvidence("unknown check kind")

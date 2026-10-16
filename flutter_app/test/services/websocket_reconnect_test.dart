@@ -45,7 +45,10 @@ class _Server {
   }
 }
 
-Future<void> _until(bool Function() cond, {Duration timeout = const Duration(seconds: 3)}) async {
+Future<void> _until(
+  bool Function() cond, {
+  Duration timeout = const Duration(seconds: 3),
+}) async {
   final end = DateTime.now().add(timeout);
   while (!cond()) {
     if (DateTime.now().isAfter(end)) fail('condition not met within $timeout');
@@ -60,10 +63,12 @@ void main() {
   setUp(() async {
     server = _Server();
     await server.start();
-    svc = WebSocketService(reconnectDelays: const [
-      Duration(milliseconds: 20),
-      Duration(milliseconds: 40),
-    ]);
+    svc = WebSocketService(
+      reconnectDelays: const [
+        Duration(milliseconds: 20),
+        Duration(milliseconds: 40),
+      ],
+    );
   });
 
   tearDown(() async {
@@ -80,49 +85,58 @@ void main() {
     await _until(() => svc.isConnected);
   });
 
-  test('reconnectNow redials at once and the replaced socket cannot kill it', () async {
-    svc.connect(server.url);
-    await _until(() => svc.isConnected);
+  test(
+    'reconnectNow redials at once and the replaced socket cannot kill it',
+    () async {
+      svc.connect(server.url);
+      await _until(() => svc.isConnected);
 
-    svc.reconnectNow();
-    await _until(() => server.sockets.length == 2 && svc.isConnected);
+      svc.reconnectNow();
+      await _until(() => server.sockets.length == 2 && svc.isConnected);
 
-    // The OLD socket closes late (iOS resume: its close arrives after the
-    // new dial). Before the fix this nulled out the new channel and dialed a
-    // third socket.
-    await server.sockets.first.close();
-    await Future<void>.delayed(const Duration(milliseconds: 150));
-    expect(server.sockets, hasLength(2));
-    expect(svc.isConnected, isTrue);
-    expect(svc.send({'type': 'typing'}), isTrue);
-  });
+      // The OLD socket closes late (iOS resume: its close arrives after the
+      // new dial). Before the fix this nulled out the new channel and dialed a
+      // third socket.
+      await server.sockets.first.close();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(server.sockets, hasLength(2));
+      expect(svc.isConnected, isTrue);
+      expect(svc.send({'type': 'typing'}), isTrue);
+    },
+  );
 
-  test('reconnectNow reports the link down until the new socket speaks', () async {
-    // The chat screen refetches history on the false→true edge and only offers
-    // the composer while connected. A redial that stayed silent about the gap
-    // left proactive lines sent during a freeze unseen, and the composer live
-    // on a channel that wasn't open yet.
-    final states = <bool>[];
-    svc.connectionState.listen(states.add);
-    svc.connect(server.url);
-    await _until(() => svc.isConnected);
+  test(
+    'reconnectNow reports the link down until the new socket speaks',
+    () async {
+      // The chat screen refetches history on the false→true edge and only offers
+      // the composer while connected. A redial that stayed silent about the gap
+      // left proactive lines sent during a freeze unseen, and the composer live
+      // on a channel that wasn't open yet.
+      final states = <bool>[];
+      svc.connectionState.listen(states.add);
+      svc.connect(server.url);
+      await _until(() => svc.isConnected);
 
-    svc.reconnectNow();
-    expect(svc.isConnected, isFalse); // nothing has spoken on the new channel
-    await _until(() => server.sockets.length == 2 && svc.isConnected);
-    expect(states, [true, false, true]);
-  });
+      svc.reconnectNow();
+      expect(svc.isConnected, isFalse); // nothing has spoken on the new channel
+      await _until(() => server.sockets.length == 2 && svc.isConnected);
+      expect(states, [true, false, true]);
+    },
+  );
 
-  test('a dropped link redials with backoff and reports state changes', () async {
-    final states = <bool>[];
-    svc.connectionState.listen(states.add);
-    svc.connect(server.url);
-    await _until(() => svc.isConnected);
+  test(
+    'a dropped link redials with backoff and reports state changes',
+    () async {
+      final states = <bool>[];
+      svc.connectionState.listen(states.add);
+      svc.connect(server.url);
+      await _until(() => svc.isConnected);
 
-    await server.sockets.first.close();
-    await _until(() => server.sockets.length == 2 && svc.isConnected);
-    expect(states, containsAllInOrder([true, false, true]));
-  });
+      await server.sockets.first.close();
+      await _until(() => server.sockets.length == 2 && svc.isConnected);
+      expect(states, containsAllInOrder([true, false, true]));
+    },
+  );
 
   test('reconnectNow is a no-op after an intentional disconnect', () async {
     svc.connect(server.url);

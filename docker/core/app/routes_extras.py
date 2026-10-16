@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
+from typing import Any
+
+
 import logging
 
-import httpx
+import httpx as httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -14,12 +16,14 @@ from .context import ws, memory, affection
 from .auth import is_admin
 from .passwords import PasswordWorkBusy
 from .db import get_pool
+from .routes_voice_input import register_voice_input
+from .runtime_tasks import ApplicationClosing, spawn
 
-from .routes import (
+from .routes import _run_mission
+
+from .api_schemas import (
     ChangePasswordRequest,
     CostumeRequest,
-    STTRequest,
-    _run_mission,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +42,7 @@ def _img_media_type(data: bytes) -> str:
 async def _get_user_id(request: Request) -> str | None:
     """Local mirror of routes.py:_get_user_id."""
     from .auth import get_user_from_token
+
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
@@ -46,24 +51,34 @@ async def _get_user_id(request: Request) -> str | None:
 
 def register_extras(app: FastAPI) -> None:
     """Register group-1 HTTP endpoints."""
+
     @app.post("/api/mission")
-    async def api_mission(request: Request):
+    async def api_mission(request: Request) -> Any:
         """Send Klukai on a mission. She returns with a report and a gift."""
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
 
         if ws.is_connected(user_id):
-            await ws.send_proactive(user_id, "Understood, Commander. Deploying for sortie. I will report back shortly.")
+            await ws.send_proactive(
+                user_id,
+                "Understood, Commander. Deploying for sortie. I will report back shortly.",
+            )
 
         aff_state = await affection.get_state(user_id)
-        asyncio.create_task(_run_mission(user_id, aff_state.level))
+        try:
+            spawn(_run_mission(user_id, aff_state.level))
+        except ApplicationClosing:
+            return JSONResponse({"error": "Service shutting down"}, status_code=503)
 
         try:
             from . import audit
+
             ip = request.client.host if request.client else None
             await audit.log(
-                audit.EVENT_MISSION_STARTED, user_id=user_id, ip_address=ip,
+                audit.EVENT_MISSION_STARTED,
+                user_id=user_id,
+                ip_address=ip,
                 request_id=getattr(request.state, "request_id", None),
             )
         except Exception:
@@ -74,7 +89,7 @@ def register_extras(app: FastAPI) -> None:
     # ── Milestones ─────────────────────────────────────────────────────────
 
     @app.get("/api/milestones")
-    async def api_milestones(request: Request):
+    async def api_milestones(request: Request) -> Any:
         """Get all recorded relationship milestones for the authenticated user."""
         user_id = await _get_user_id(request)
         if not user_id:
@@ -85,19 +100,20 @@ def register_extras(app: FastAPI) -> None:
     # ── Costume ────────────────────────────────────────────────────────────
 
     @app.get("/api/costume")
-    async def api_get_costume(request: Request):
+    async def api_get_costume(request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         # What she is wearing right now (Her Day: her pick, his granted
         # request, or block kit) — not merely his last selection.
         from . import her_day
+
         level = (await affection.get_state(user_id)).level
         now = await her_day.her_now(user_id, level)
         return {"costume": now.outfit.id}
 
     @app.get("/api/outfits")
-    async def api_get_outfits(request: Request):
+    async def api_get_outfits(request: Request) -> Any:
         """The wardrobe catalog with derived unlock state and today's outfit.
 
         Unlock is computed on read (affection_level >= unlock_level). Outfits
@@ -108,12 +124,17 @@ def register_extras(app: FastAPI) -> None:
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         from . import her_day, wardrobe
+
         level = (await affection.get_state(user_id)).level
         now = await her_day.her_now(user_id, level)
         outfits = [
             {
-                "id": o.id, "name": o.name, "blurb": o.blurb, "category": o.category,
-                "source": o.source, "unlock_level": o.unlock_level,
+                "id": o.id,
+                "name": o.name,
+                "blurb": o.blurb,
+                "category": o.category,
+                "source": o.source,
+                "unlock_level": o.unlock_level,
                 "unlocked": level >= o.unlock_level and not o.deny,
                 "current": o.id == now.outfit.id,
             }
@@ -121,45 +142,62 @@ def register_extras(app: FastAPI) -> None:
             if wardrobe.is_visible(o, level)
         ]
         today = wardrobe.outfit_payload(
-            now.outfit, reason=now.outfit_reason, source=now.outfit_source, level=level,
+            now.outfit,
+            reason=now.outfit_reason,
+            source=now.outfit_source,
+            level=level,
         )
         return {"outfits": outfits, "today": today}
 
     @app.post("/api/costume")
-    async def api_set_costume(req: CostumeRequest, request: Request):
+    async def api_set_costume(req: CostumeRequest, request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         from . import wardrobe
+
         aff = await affection.get_state(user_id)
         cat = wardrobe.catalog()
         oid = wardrobe.canonical_id(req.costume, cat)
         if not oid or not wardrobe.is_visible(cat[oid], aff.level):
             valid = [o.id for o in cat.values() if wardrobe.is_visible(o, aff.level)]
-            return JSONResponse({"error": f"Invalid. Choose from: {valid}"}, status_code=400)
+            return JSONResponse(
+                {"error": f"Invalid. Choose from: {valid}"}, status_code=400
+            )
         # Wardrobe gating: a costume can only be worn once its affection unlock
         # level is reached. Derived on read — no affection mutation here.
         unlock_level = cat[oid].unlock_level
         if aff.level < unlock_level:
             return JSONResponse(
-                {"error": f"'{oid}' is locked. Requires affection level {unlock_level} "
-                          f"(you are at {aff.level})."},
+                {
+                    "error": f"'{oid}' is locked. Requires affection level {unlock_level} "
+                    f"(you are at {aff.level})."
+                },
                 status_code=403,
             )
         # The same decision table as a chat request (UI mode: the unlock level
         # is the permission, no daily cap) — the onesie, the oath "on a day that
         # matters", the seasons and the hour hold here too.
         from . import her_day
-        now = await her_day.her_now(user_id, aff.level, mission=her_day.active_mission(user_id))
+
+        now = await her_day.her_now(
+            user_id, aff.level, mission=her_day.active_mission(user_id)
+        )
         row = await wardrobe.ensure_today(user_id, aff.level)
         outcome = wardrobe.decide_request(
-            cat[oid], aff.level, current_id=now.outfit.id, request_changes=0,
+            cat[oid],
+            aff.level,
+            current_id=now.outfit.id,
+            request_changes=0,
             occasions_today=await wardrobe.occasions_for(user_id, row.day),
-            hour=now.hour, deployed=now.override == "mission", ui=True,
+            hour=now.hour,
+            deployed=now.override == "mission",
+            ui=True,
         )
         if outcome.decision not in ("comply", "already"):
             return JSONResponse(
-                {"error": f"'{oid}' not now.", "decision": outcome.decision}, status_code=403,
+                {"error": f"'{oid}' not now.", "decision": outcome.decision},
+                status_code=403,
             )
         # His favourite (biases her own daily picks) + she wears it today.
         await memory.store_fact("costume", oid, user_id=user_id)
@@ -169,9 +207,12 @@ def register_extras(app: FastAPI) -> None:
             logger.warning("Could not set today's outfit: %s", e)
         try:
             from . import audit
+
             ip = request.client.host if request.client else None
             await audit.log(
-                audit.EVENT_COSTUME_CHANGED, user_id=user_id, ip_address=ip,
+                audit.EVENT_COSTUME_CHANGED,
+                user_id=user_id,
+                ip_address=ip,
                 request_id=getattr(request.state, "request_id", None),
                 metadata={"costume": oid},
             )
@@ -181,38 +222,14 @@ def register_extras(app: FastAPI) -> None:
 
     # ── STT proxy ──────────────────────────────────────────────────────────
 
-    @app.post("/api/stt")
-    async def api_stt(req: STTRequest, request: Request):
-        """Proxy STT request to companion-voice."""
-        user_id = await _get_user_id(request)
-        if not user_id:
-            return JSONResponse({"error": "Authentication required"}, status_code=401)
-        try:
-            from .helpers import voice_auth_headers
-            from .voice_client import stt_url
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(f"{stt_url()}/stt", json={"audio": req.audio}, headers=voice_auth_headers())
-                # The PWA treats any 200 as a transcript, so an upstream
-                # failure must not come back as a 200 — it would silently do
-                # nothing. Status and {"error": ...} bodies both become a 502.
-                if r.status_code != 200:
-                    logger.warning("STT upstream HTTP %s", r.status_code)
-                    return JSONResponse({"error": "Voice service unavailable"}, status_code=502)
-                body = r.json()
-        except Exception:
-            return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
-        if not isinstance(body, dict):
-            logger.warning("STT upstream returned a non-object body")
-            return JSONResponse({"error": "Transcription failed"}, status_code=502)
-        if "error" in body:
-            logger.warning("STT upstream error: %s", str(body["error"])[:200])
-            return JSONResponse({"error": "Transcription failed"}, status_code=502)
-        return body
+    register_voice_input(app, lambda request: _get_user_id(request))
 
     # ── Conversation history ───────────────────────────────────────────────
 
     @app.get("/api/messages")
-    async def get_messages(request: Request, limit: int = 50, before: str | None = None):
+    async def get_messages(
+        request: Request, limit: int = 50, before: str | None = None
+    ) -> Any:
         """Fetch recent messages from PostgreSQL, scoped to authenticated user."""
         user_id = await _get_user_id(request)
         if not user_id:
@@ -266,13 +283,17 @@ def register_extras(app: FastAPI) -> None:
         limit: int = 20,
         before: str | None = None,
         month: str | None = None,
-    ):
+    ) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         try:
             return await memory_archive.list_memories(
-                category=category, limit=limit, before=before, month=month, user_id=user_id
+                category=category,
+                limit=limit,
+                before=before,
+                month=month,
+                user_id=user_id,
             )
         except Exception as e:
             logger.error("Failed to list memories: %s", e)
@@ -281,7 +302,7 @@ def register_extras(app: FastAPI) -> None:
             return JSONResponse({"error": "Could not load memories"}, status_code=503)
 
     @app.get("/api/memories/categories")
-    async def api_memory_categories(request: Request):
+    async def api_memory_categories(request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
@@ -293,7 +314,7 @@ def register_extras(app: FastAPI) -> None:
             return JSONResponse({"error": "Could not load categories"}, status_code=503)
 
     @app.get("/api/memories/timeline")
-    async def api_memory_timeline(request: Request):
+    async def api_memory_timeline(request: Request) -> Any:
         """Get month/year groups with memory counts for the archive timeline."""
         user_id = await _get_user_id(request)
         if not user_id:
@@ -305,32 +326,42 @@ def register_extras(app: FastAPI) -> None:
             return JSONResponse({"error": "Could not load timeline"}, status_code=503)
 
     @app.post("/api/memories/backfill-annotations")
-    async def api_backfill_annotations(request: Request):
+    async def api_backfill_annotations(request: Request) -> Any:
         """Trigger annotation backfill for memories with NULL/empty annotations."""
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
 
-        async def _run_backfill():
+        async def _run_backfill() -> None:
             try:
                 result = await memory_archive.backfill_annotations(user_id=user_id)
                 logger.info("Annotation backfill finished for %s: %s", user_id, result)
             except Exception as e:
                 logger.error("Annotation backfill task failed: %s", e)
 
-        asyncio.create_task(_run_backfill())
-        return {"status": "started", "message": "Annotation backfill running in background."}
+        try:
+            spawn(_run_backfill())
+        except ApplicationClosing:
+            return JSONResponse({"error": "Service shutting down"}, status_code=503)
+        return {
+            "status": "started",
+            "message": "Annotation backfill running in background.",
+        }
 
     @app.get("/api/memories/{memory_id}/image")
-    async def api_memory_image(memory_id: str, request: Request):
+    async def api_memory_image(memory_id: str, request: Request) -> Any:
         from fastapi.responses import Response
+
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        data = await memory_archive.get_image_bytes(memory_id, thumbnail=False, user_id=user_id)
+        data = await memory_archive.get_image_bytes(
+            memory_id, thumbnail=False, user_id=user_id
+        )
         if data:
             return Response(
-                content=data, media_type=_img_media_type(data),
+                content=data,
+                media_type=_img_media_type(data),
                 # Images are immutable (content-hash filenames) — let the browser
                 # cache them so an album view fetches each once, not on every scroll.
                 headers={"Cache-Control": "private, max-age=604800, immutable"},
@@ -338,15 +369,19 @@ def register_extras(app: FastAPI) -> None:
         return JSONResponse({"error": "Not found"}, status_code=404)
 
     @app.get("/api/memories/{memory_id}/thumbnail")
-    async def api_memory_thumbnail(memory_id: str, request: Request):
+    async def api_memory_thumbnail(memory_id: str, request: Request) -> Any:
         from fastapi.responses import Response
+
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        data = await memory_archive.get_image_bytes(memory_id, thumbnail=True, user_id=user_id)
+        data = await memory_archive.get_image_bytes(
+            memory_id, thumbnail=True, user_id=user_id
+        )
         if data:
             return Response(
-                content=data, media_type=_img_media_type(data),
+                content=data,
+                media_type=_img_media_type(data),
                 # Images are immutable (content-hash filenames) — let the browser
                 # cache them so an album view fetches each once, not on every scroll.
                 headers={"Cache-Control": "private, max-age=604800, immutable"},
@@ -354,15 +389,17 @@ def register_extras(app: FastAPI) -> None:
         return JSONResponse({"error": "Not found"}, status_code=404)
 
     @app.post("/api/memories/{memory_id}/keep")
-    async def api_memory_keep(memory_id: str, request: Request):
+    async def api_memory_keep(memory_id: str, request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        ok = await memory_archive.update_kept(memory_id, kept=True, kept_by="commander", user_id=user_id)
+        ok = await memory_archive.update_kept(
+            memory_id, kept=True, kept_by="commander", user_id=user_id
+        )
         return {"ok": ok}
 
     @app.post("/api/memories/{memory_id}/discard")
-    async def api_memory_discard(memory_id: str, request: Request):
+    async def api_memory_discard(memory_id: str, request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
@@ -372,58 +409,76 @@ def register_extras(app: FastAPI) -> None:
     # ── Session info + password change ──────────────────────────────────────
 
     @app.get("/api/session/info")
-    async def api_session_info(request: Request):
+    async def api_session_info(request: Request) -> Any:
         """Return the current session's expiry + age metadata."""
         from . import error_codes as ec
+
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer "):
             return ec.auth_required()
         token = auth[7:]
         from .auth import get_session_info
+
         info = await get_session_info(token)
         if not info:
             return ec.err(ec.AUTH_INVALID, "Session not found", status_code=401)
         return info
 
     @app.post("/api/user/change-password")
-    async def api_change_password(req: ChangePasswordRequest, request: Request):
+    async def api_change_password(req: ChangePasswordRequest, request: Request) -> Any:
         """Change the authenticated user's password.
 
         Rate-limited via middleware (login bucket — shares brute-force protection).
         Invalidates all existing sessions on success.
         """
         from . import error_codes as ec
+
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
         from .auth import change_password
+
         try:
             ok = await change_password(user_id, req.old_password, req.new_password)
         except PasswordWorkBusy:
-            return JSONResponse({"error": "Authentication busy; retry shortly"},
-                                status_code=503, headers={"Retry-After": "1"})
+            return JSONResponse(
+                {"error": "Authentication busy; retry shortly"},
+                status_code=503,
+                headers={"Retry-After": "1"},
+            )
         if not ok:
-            return ec.err(ec.AUTH_INVALID, "Current password incorrect or new password too weak",
-                           status_code=400)
+            return ec.err(
+                ec.AUTH_INVALID,
+                "Current password incorrect or new password too weak",
+                status_code=400,
+            )
         return {"ok": True, "sessions_invalidated": True}
 
     # ── Admin: rate-limit reset ─────────────────────────────────────────────
 
     @app.post("/api/admin/rate-limit/reset")
-    async def api_admin_ratelimit_reset(request: Request, user_id_target: str, bucket: str):
+    async def api_admin_ratelimit_reset(
+        request: Request, user_id_target: str, bucket: str
+    ) -> Any:
         """Clear a (user_id, bucket) rate-limit counter. Admin only.
 
         Use for debugging or unstucking a user who hit a limit accidentally.
         """
         from . import error_codes as ec
+
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
         if not is_admin(user_id):
             return ec.admin_only()
         from .rate_limit import reset, LIMITS
+
         if bucket not in LIMITS and bucket != "default":
-            return ec.err(ec.INPUT_INVALID, f"Unknown bucket: {bucket}", status_code=400,
-                           extra={"known": list(LIMITS.keys())})
+            return ec.err(
+                ec.INPUT_INVALID,
+                f"Unknown bucket: {bucket}",
+                status_code=400,
+                extra={"known": list(LIMITS.keys())},
+            )
         await reset(user_id_target, bucket)
         return {"ok": True, "user_id": user_id_target, "bucket": bucket}

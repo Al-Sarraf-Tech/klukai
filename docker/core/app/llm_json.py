@@ -7,9 +7,15 @@ blocks, trailing commas, truncated strings. Returns clean dicts or defaults.
 
 from __future__ import annotations
 
+from .dependencies import http_request
+from typing import Any
+
+
 import json
 import logging
 import re
+
+from pydantic import JsonValue
 
 import httpx
 
@@ -18,14 +24,14 @@ from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
 logger = logging.getLogger(__name__)
 
 # Precompiled patterns — no per-call overhead
-_THINK_TAGS = re.compile(r'<\|?/?think\|?>', re.DOTALL)
-_THINK_BLOCKS = re.compile(r'<\|?think\|?>.*?<\|?/think\|?>', re.DOTALL)
-_MARKDOWN_JSON = re.compile(r'```(?:json)?\s*(.*?)```', re.DOTALL)
-_TRAILING_COMMA = re.compile(r',\s*([}\]])')
+_THINK_TAGS = re.compile(r"<\|?/?think\|?>", re.DOTALL)
+_THINK_BLOCKS = re.compile(r"<\|?think\|?>.*?<\|?/think\|?>", re.DOTALL)
+_MARKDOWN_JSON = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+_TRAILING_COMMA = re.compile(r",\s*([}\]])")
 _DECODER = json.JSONDecoder()
 
 
-def _first_object(text: str) -> dict | None:
+def _first_object(text: str) -> dict[str, Any] | None:
     """Return the first complete JSON object embedded anywhere in ``text``.
 
     Replaces a one-level regex that could not see past depth-2 nesting (it
@@ -46,7 +52,7 @@ def _first_object(text: str) -> dict | None:
     return None
 
 
-def extract_text(response: dict) -> str:
+def extract_text(response: dict[str, Any]) -> str:
     """Extract usable text from any LLM response, regardless of model quirks.
 
     Checks: content → reasoning_content → reasoning → all combined.
@@ -72,8 +78,14 @@ def extract_text(response: dict) -> str:
     return ""
 
 
-def parse_json(text: str) -> dict | None:
-    """Parse JSON from messy LLM output. Returns dict or None.
+def _parse_value(text: str) -> JsonValue:
+    """The standard JSON decoder guarantees the recursive JSON value domain."""
+    value: JsonValue = json.loads(text)
+    return value
+
+
+def parse_json(text: str) -> JsonValue:
+    """Parse any JSON value from messy LLM output, returning None on failure.
 
     Handles: markdown blocks, embedded JSON in prose, trailing commas,
     single quotes, truncated strings.
@@ -84,7 +96,7 @@ def parse_json(text: str) -> dict | None:
     # Try direct parse first (fast path)
     text = text.strip()
     try:
-        return json.loads(text)
+        return _parse_value(text)
     except json.JSONDecodeError:
         pass
 
@@ -92,7 +104,7 @@ def parse_json(text: str) -> dict | None:
     md_match = _MARKDOWN_JSON.search(text)
     if md_match:
         try:
-            return json.loads(md_match.group(1).strip())
+            return _parse_value(md_match.group(1).strip())
         except json.JSONDecodeError:
             text = md_match.group(1).strip()
 
@@ -103,11 +115,11 @@ def parse_json(text: str) -> dict | None:
         return found
 
     # Repair common issues, then look again
-    text = _TRAILING_COMMA.sub(r'\1', text)
+    text = _TRAILING_COMMA.sub(r"\1", text)
 
     # Try again
     try:
-        return json.loads(text)
+        return _parse_value(text)
     except json.JSONDecodeError:
         pass
     found = _first_object(text)
@@ -121,11 +133,11 @@ def parse_json(text: str) -> dict | None:
         if fixed.count('"') % 2 == 1:
             fixed += '"'
         # Close any unclosed brackets
-        opens = fixed.count('{') - fixed.count('}')
-        fixed += '}' * max(0, opens)
-        opens = fixed.count('[') - fixed.count(']')
-        fixed += ']' * max(0, opens)
-        return json.loads(fixed)
+        opens = fixed.count("{") - fixed.count("}")
+        fixed += "}" * max(0, opens)
+        opens = fixed.count("[") - fixed.count("]")
+        fixed += "]" * max(0, opens)
+        return _parse_value(fixed)
     except json.JSONDecodeError:
         return None
 
@@ -139,7 +151,7 @@ async def call_llm(  # pragma: no cover - integration (LM Studio HTTP)
     temperature: float = 0.1,
     system: str | None = None,
     client: httpx.AsyncClient | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Call LLM and return parsed JSON. Never raises — returns empty dict on failure.
 
     This is the ONE function all modules use for structured LLM output.
@@ -153,7 +165,10 @@ async def call_llm(  # pragma: no cover - integration (LM Studio HTTP)
     close_after = client is None
 
     try:
-        r = await http.post(
+        r = await http_request(
+            "lm_studio",
+            http,
+            "post",
             f"{url}/v1/chat/completions",
             headers=lm_studio_auth_headers(),
             json={
@@ -173,8 +188,10 @@ async def call_llm(  # pragma: no cover - integration (LM Studio HTTP)
             return {}
 
         result = parse_json(text)
-        if result is None:
-            logger.warning("Failed to parse JSON from LLM (model=%s): %s", model, text[:100])
+        if not isinstance(result, dict):
+            logger.warning(
+                "Failed to parse JSON from LLM (model=%s): %s", model, text[:100]
+            )
             return {}
 
         return result
@@ -213,7 +230,10 @@ async def call_llm_text(  # pragma: no cover - integration (LM Studio HTTP)
     close_after = client is None
 
     try:
-        r = await http.post(
+        r = await http_request(
+            "lm_studio",
+            http,
+            "post",
             f"{url}/v1/chat/completions",
             headers=lm_studio_auth_headers(),
             json={

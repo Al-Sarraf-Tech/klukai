@@ -11,6 +11,8 @@ endpoint just like any other kept memory.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import logging
 import uuid
@@ -49,20 +51,35 @@ async def save_dream(
                 "(id, filename, annotation, category, mood, affection_level, "
                 "kept, kept_by, conversation_id, user_id, prompt) "
                 "VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s)",
-                (memory_id, sentinel, dream_text.strip(), DREAM_CATEGORY,
-                 mood, affection_level, "klukai-dreamer",
-                 "reflection-on-return", user_id, "dream"),
+                (
+                    memory_id,
+                    sentinel,
+                    dream_text.strip(),
+                    DREAM_CATEGORY,
+                    mood,
+                    affection_level,
+                    "klukai-dreamer",
+                    "reflection-on-return",
+                    user_id,
+                    "dream",
+                ),
             )
             await conn.commit()
-        logger.info("Dream saved for %s: memory=%s len=%d",
-                     user_id, memory_id[:8], len(dream_text))
+        logger.info(
+            "Dream saved for %s: memory=%s len=%d",
+            user_id,
+            memory_id[:8],
+            len(dream_text),
+        )
         return memory_id
     except Exception as e:
         logger.warning("Dream save failed for %s: %s", user_id, e)
         return None
 
 
-async def list_dreams(user_id: str = "jalsarraf", limit: int = 20) -> list[dict]:
+async def list_dreams(
+    user_id: str = "jalsarraf", limit: int = 20
+) -> list[dict[str, Any]]:
     """Return the user's saved dreams ordered newest-first.
 
     Fails closed: a DB outage surfaces as a 503 (matching /api/messages)
@@ -72,14 +89,16 @@ async def list_dreams(user_id: str = "jalsarraf", limit: int = 20) -> list[dict]
     try:
         pool = get_pool()
         async with pool.connection() as conn:
-            rows = await (await conn.execute(
-                "SELECT id, annotation, mood, affection_level, filename, "
-                "created_at "
-                "FROM companion_memories "
-                "WHERE user_id = %s AND category = %s AND kept = TRUE "
-                "ORDER BY created_at DESC LIMIT %s",
-                (user_id, DREAM_CATEGORY, limit),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    "SELECT id, annotation, mood, affection_level, filename, "
+                    "created_at "
+                    "FROM companion_memories "
+                    "WHERE user_id = %s AND category = %s AND kept = TRUE "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (user_id, DREAM_CATEGORY, limit),
+                )
+            ).fetchall()
         return [
             {
                 "id": str(r[0]),
@@ -94,6 +113,7 @@ async def list_dreams(user_id: str = "jalsarraf", limit: int = 20) -> list[dict]
     except Exception as e:
         logger.error("list_dreams failed: %s", e)
         from fastapi import HTTPException
+
         raise HTTPException(status_code=503, detail="Could not load dreams") from e
 
 
@@ -102,11 +122,13 @@ async def count_dreams(user_id: str = "jalsarraf") -> int:
     try:
         pool = get_pool()
         async with pool.connection() as conn:
-            row = await (await conn.execute(
-                "SELECT COUNT(*) FROM companion_memories "
-                "WHERE user_id = %s AND category = %s AND kept = TRUE",
-                (user_id, DREAM_CATEGORY),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "SELECT COUNT(*) FROM companion_memories "
+                    "WHERE user_id = %s AND category = %s AND kept = TRUE",
+                    (user_id, DREAM_CATEGORY),
+                )
+            ).fetchone()
             return int(row[0]) if row else 0
     except Exception:
         return 0

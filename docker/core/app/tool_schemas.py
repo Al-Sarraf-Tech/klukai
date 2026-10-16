@@ -1,6 +1,8 @@
 """Convert MCP tool definitions to OpenAI-compatible tool-use format for LM Studio."""
 
 from __future__ import annotations
+from typing import Any
+
 
 import logging
 import time
@@ -10,10 +12,12 @@ from weakref import WeakKeyDictionary
 logger = logging.getLogger(__name__)
 
 SCHEMA_CACHE_SECONDS = 60.0
-_CACHED_SCHEMAS: WeakKeyDictionary = WeakKeyDictionary()
+_CACHED_SCHEMAS: WeakKeyDictionary[object, tuple[float, list[dict[str, Any]]]] = (
+    WeakKeyDictionary()
+)
 
 
-def mcp_to_openai(mcp_tool: dict) -> dict:
+def mcp_to_openai(mcp_tool: dict[str, Any]) -> dict[str, Any]:
     """Convert a single MCP tool definition to OpenAI function-calling format."""
     input_schema = deepcopy(mcp_tool.get("inputSchema", {}))
 
@@ -33,10 +37,16 @@ def mcp_to_openai(mcp_tool: dict) -> dict:
     }
 
 
-async def get_tool_schemas(mcp_client, force_refresh: bool = False) -> list[dict]:
+async def get_tool_schemas(
+    mcp_client: Any, force_refresh: bool = False
+) -> list[dict[str, Any]]:
     """Cache successful discovery per client briefly; empty catalogs retry."""
     cached = _CACHED_SCHEMAS.get(mcp_client)
-    if cached and not force_refresh and time.monotonic() - cached[0] < SCHEMA_CACHE_SECONDS:
+    if (
+        cached
+        and not force_refresh
+        and time.monotonic() - cached[0] < SCHEMA_CACHE_SECONDS
+    ):
         return cached[1]
 
     try:
@@ -68,7 +78,10 @@ BUILTIN_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "What to search for in memory"},
+                    "query": {
+                        "type": "string",
+                        "description": "What to search for in memory",
+                    },
                 },
                 "required": ["query"],
             },
@@ -85,5 +98,5 @@ BUILTIN_TOOLS = [
 ]
 
 
-def get_builtin_tools() -> list[dict]:
+def get_builtin_tools() -> list[dict[str, Any]]:
     return list(BUILTIN_TOOLS)

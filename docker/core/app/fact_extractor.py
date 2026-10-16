@@ -5,6 +5,8 @@ rock-solid JSON parsing with automatic reasoning field extraction.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import logging
 import os
@@ -18,21 +20,62 @@ EXTRACTION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
 # ── Valid moods (must match models.py Mood enum) ─────────────────────────
 
-VALID_MOODS = frozenset({
-    "composed", "focused", "prideful", "exasperated", "protective",
-    "quietly_pleased", "competitive", "tender", "longing", "battle_ready",
-    "flustered", "affectionate", "shy", "yearning", "devoted",
-    "passionate", "jealous", "possessive", "smitten", "infatuated",
-    "vigilant", "calculating", "hunting", "adrenaline",
-    "scared", "terrified", "panicked", "desperate", "relieved",
-    "content", "playful", "drowsy", "amused", "bored", "excited",
-    "melancholic", "haunted", "conflicted", "guilty", "determined",
-    "grieving", "furious",
-    "nostalgic", "curious", "irritated", "defiant", "vulnerable",
-    "grateful", "worried", "embarrassed",
-})
+VALID_MOODS = frozenset(
+    {
+        "composed",
+        "focused",
+        "prideful",
+        "exasperated",
+        "protective",
+        "quietly_pleased",
+        "competitive",
+        "tender",
+        "longing",
+        "battle_ready",
+        "flustered",
+        "affectionate",
+        "shy",
+        "yearning",
+        "devoted",
+        "passionate",
+        "jealous",
+        "possessive",
+        "smitten",
+        "infatuated",
+        "vigilant",
+        "calculating",
+        "hunting",
+        "adrenaline",
+        "scared",
+        "terrified",
+        "panicked",
+        "desperate",
+        "relieved",
+        "content",
+        "playful",
+        "drowsy",
+        "amused",
+        "bored",
+        "excited",
+        "melancholic",
+        "haunted",
+        "conflicted",
+        "guilty",
+        "determined",
+        "grieving",
+        "furious",
+        "nostalgic",
+        "curious",
+        "irritated",
+        "defiant",
+        "vulnerable",
+        "grateful",
+        "worried",
+        "embarrassed",
+    }
+)
 
-_DEFAULT_RESULT: dict = {
+_DEFAULT_RESULT: dict[str, Any] = {
     "facts": [],
     "mood": "composed",
     "topics": [],
@@ -165,12 +208,13 @@ Commander: {user_message}"""
 
 # ── Public API ───────────────────────────────────────────────────────────
 
+
 async def extract_facts(
     user_message: str,
     assistant_message: str,
     image_generated: bool = False,
     affection_level: int = 0,
-) -> dict:
+) -> dict[str, Any]:
     """Extract mood, facts, interaction classification in one LLM call.
 
     Returns dict with: mood, interaction, facts, topics, should_remember.
@@ -186,14 +230,18 @@ async def extract_facts(
 
     if image_generated:
         from .memory_archive import available_categories
+
         cats = ", ".join(available_categories(affection_level))
         prompt += IMAGE_CURATION_ADDENDUM.format(categories=cats)
 
     gate = get_lm_gate()
     async with gate:
         result = await call_llm(
-            LM_STUDIO_URL, EXTRACTION_MODEL, prompt,
-            max_tokens=2048, temperature=0.1,
+            LM_STUDIO_URL,
+            EXTRACTION_MODEL,
+            prompt,
+            max_tokens=2048,
+            temperature=0.1,
         )
 
     # parse_json hands back whatever the model emitted; a top-level list or
@@ -241,7 +289,7 @@ async def extract_facts(
     return out
 
 
-def _parse_events(raw: object) -> list[dict]:
+def _parse_events(raw: object) -> list[dict[str, Any]]:
     """Keep well-formed, high-confidence (>= 0.75) events from the extractor.
 
     Only the shape is checked here; whether ``when_hint`` resolves to a real
@@ -249,7 +297,7 @@ def _parse_events(raw: object) -> list[dict]:
     """
     if not isinstance(raw, list):
         return []
-    kept: list[dict] = []
+    kept: list[dict[str, Any]] = []
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -264,16 +312,20 @@ def _parse_events(raw: object) -> list[dict]:
             continue
         if confidence < 0.75:
             continue
-        kept.append({
-            "what": what.strip(),
-            "when_hint": when_hint.strip(),
-            "sensitivity": "sensitive" if item.get("sensitivity") == "sensitive" else "normal",
-            "confidence": confidence,
-        })
+        kept.append(
+            {
+                "what": what.strip(),
+                "when_hint": when_hint.strip(),
+                "sensitivity": "sensitive"
+                if item.get("sensitivity") == "sensitive"
+                else "normal",
+                "confidence": confidence,
+            }
+        )
     return kept
 
 
-async def extract_promises(user_message: str, affection_level: int) -> dict:
+async def extract_promises(user_message: str, affection_level: int) -> dict[str, Any]:
     """Detect his commitments ("I'll…") and his upcoming events, in ONE call.
 
     Returns ``{"promises": [{action, target, deadline_hint, confidence}, ...],
@@ -289,8 +341,11 @@ async def extract_promises(user_message: str, affection_level: int) -> dict:
     gate = get_lm_gate()
     async with gate:
         result = await call_llm(
-            LM_STUDIO_URL, EXTRACTION_MODEL, prompt,
-            max_tokens=640, temperature=0.1,
+            LM_STUDIO_URL,
+            EXTRACTION_MODEL,
+            prompt,
+            max_tokens=640,
+            temperature=0.1,
         )
 
     if not result or not isinstance(result, dict):
@@ -301,7 +356,7 @@ async def extract_promises(user_message: str, affection_level: int) -> dict:
     if not isinstance(raw, list):
         return {"promises": [], "events": events}
 
-    kept: list[dict] = []
+    kept: list[dict[str, Any]] = []
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -314,17 +369,21 @@ async def extract_promises(user_message: str, affection_level: int) -> dict:
             continue
         if confidence < 0.7:
             continue
-        kept.append({
-            "action": action.strip(),
-            "target": item.get("target"),
-            "deadline_hint": item.get("deadline_hint"),
-            "confidence": confidence,
-        })
+        kept.append(
+            {
+                "action": action.strip(),
+                "target": item.get("target"),
+                "deadline_hint": item.get("deadline_hint"),
+                "confidence": confidence,
+            }
+        )
 
     return {"promises": kept, "events": events}
 
 
-async def create_episode_summary(turns: list[dict], max_turns: int = 10) -> str | None:
+async def create_episode_summary(
+    turns: list[dict[str, Any]], max_turns: int = 10
+) -> str | None:
     """Summarize a conversation segment for episodic memory."""
     if len(turns) < 3:
         return None
@@ -338,9 +397,11 @@ async def create_episode_summary(turns: list[dict], max_turns: int = 10) -> str 
     gate = get_lm_gate()
     async with gate:
         text = await call_llm_text(
-            LM_STUDIO_URL, EXTRACTION_MODEL,
+            LM_STUDIO_URL,
+            EXTRACTION_MODEL,
             f"Write a 1-2 sentence Klukai journal entry about this interaction.\n\n{conversation}",
-            max_tokens=150, temperature=0.3,
+            max_tokens=150,
+            temperature=0.3,
         )
 
     return text or None
@@ -361,7 +422,9 @@ async def generate_mission_update(
         mission_desc=mission_desc,
         elapsed_minutes=elapsed_minutes,
         update_number=update_number,
-        event_line=f"MAJOR EVENT: {major_event}" if major_event else "Situation nominal.",
+        event_line=f"MAJOR EVENT: {major_event}"
+        if major_event
+        else "Situation nominal.",
         injury_line=("Active: " + ", ".join(active_events)) if active_events else "",
         affection_level=affection_level,
     )
@@ -369,8 +432,11 @@ async def generate_mission_update(
     gate = get_lm_gate()
     async with gate:
         text = await call_llm_text(
-            LM_STUDIO_URL, EXTRACTION_MODEL, prompt,
-            max_tokens=150, temperature=0.6,
+            LM_STUDIO_URL,
+            EXTRACTION_MODEL,
+            prompt,
+            max_tokens=150,
+            temperature=0.6,
         )
 
     # No canned substitute: with the GPU host powered off this ran every
@@ -380,7 +446,10 @@ async def generate_mission_update(
 
 
 async def generate_romance_message(
-    affection_level: int, mood: str, context_summary: str, time_of_day: str,
+    affection_level: int,
+    mood: str,
+    context_summary: str,
+    time_of_day: str,
 ) -> str:
     """Generate a context-aware evening romance message."""
     from .llm_router import get_lm_gate
@@ -395,14 +464,17 @@ async def generate_romance_message(
     gate = get_lm_gate()
     async with gate:
         text = await call_llm_text(
-            LM_STUDIO_URL, EXTRACTION_MODEL, prompt,
-            max_tokens=200, temperature=0.7,
+            LM_STUDIO_URL,
+            EXTRACTION_MODEL,
+            prompt,
+            max_tokens=200,
+            temperature=0.7,
         )
 
     return text or "...The evening is quiet. I was thinking about today."
 
 
-async def compact_turns(turns: list[dict]) -> str | None:
+async def compact_turns(turns: list[dict[str, Any]]) -> str | None:
     """Summarize conversation turns into a compact recap."""
     if len(turns) < 2:
         return None
@@ -417,9 +489,11 @@ async def compact_turns(turns: list[dict]) -> str | None:
     gate = get_lm_gate()
     async with gate:
         text = await call_llm_text(
-            LM_STUDIO_URL, EXTRACTION_MODEL,
+            LM_STUDIO_URL,
+            EXTRACTION_MODEL,
             COMPACTION_PROMPT.format(conversation=conversation),
-            max_tokens=200, temperature=0.2,
+            max_tokens=200,
+            temperature=0.2,
         )
 
     return text or None

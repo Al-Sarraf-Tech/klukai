@@ -7,7 +7,8 @@ library;
 
 String _str(Object? v, [String fallback = '']) => v is String ? v : fallback;
 bool _bool(Object? v, [bool fallback = false]) => v is bool ? v : fallback;
-int _int(Object? v, [int fallback = 0]) => v is int ? v : (v is num ? v.toInt() : fallback);
+int _int(Object? v, [int fallback = 0]) =>
+    v is int ? v : (v is num ? v.toInt() : fallback);
 double? _double(Object? v) => v is num ? v.toDouble() : null;
 Map<String, dynamic>? _map(Object? v) => v is Map<String, dynamic> ? v : null;
 List<Map<String, dynamic>> _maps(Object? v) =>
@@ -59,10 +60,10 @@ class OutfitInfo {
   /// The line under the outfit name on the TODAY card: her reason when she
   /// chose it, otherwise who did.
   String get sourceLine => switch (source) {
-        'commander' => 'Your request.',
-        'roster' => 'On duty kit.',
-        _ => reason,
-      };
+    'commander' => 'Your request.',
+    'roster' => 'On duty kit.',
+    _ => reason,
+  };
 }
 
 /// One entry in the wardrobe (`outfits[]` in /api/outfits).
@@ -116,10 +117,9 @@ class Wardrobe {
   factory Wardrobe.fromJson(Map<String, dynamic> json) {
     final today = _map(json['today']);
     return Wardrobe(
-      outfits: _maps(json['outfits'])
-          .map(WardrobeItem.fromJson)
-          .where((o) => o.id.isNotEmpty)
-          .toList(),
+      outfits: _maps(
+        json['outfits'],
+      ).map(WardrobeItem.fromJson).where((o) => o.id.isNotEmpty).toList(),
       today: today == null ? null : OutfitInfo.fromJson(today),
     );
   }
@@ -180,13 +180,13 @@ class ScheduleBlock {
   });
 
   factory ScheduleBlock.fromJson(Map<String, dynamic> json) => ScheduleBlock(
-        slot: _str(json['slot']),
-        start: _str(json['start']),
-        end: _str(json['end']),
-        location: _str(json['location']),
-        activity: _str(json['activity']),
-        current: _bool(json['current']),
-      );
+    slot: _str(json['slot']),
+    start: _str(json['start']),
+    end: _str(json['end']),
+    location: _str(json['location']),
+    activity: _str(json['activity']),
+    current: _bool(json['current']),
+  );
 
   /// `0500–0800`.
   String get timeRange => end.isEmpty ? start : '$start–$end';
@@ -202,9 +202,9 @@ class HerDayWeather {
   const HerDayWeather({this.tempC, this.condition = ''});
 
   factory HerDayWeather.fromJson(Map<String, dynamic> json) => HerDayWeather(
-        tempC: _double(json['temp_c']),
-        condition: _str(json['condition']),
-      );
+    tempC: _double(json['temp_c']),
+    condition: _str(json['condition']),
+  );
 
   /// `14°C · clear`.
   String get label {
@@ -245,15 +245,16 @@ class HerDay {
 
   /// The same day with a new outfit (the `outfit` WS frame).
   HerDay withOutfit(OutfitInfo next) => HerDay(
-        date: date,
-        outfit: next,
-        status: status,
-        schedule: schedule,
-        weather: weather,
-      );
+    date: date,
+    outfit: next,
+    status: status,
+    schedule: schedule,
+    weather: weather,
+  );
 
   /// Whether the header has anything to show.
-  bool get hasStatusLine => (status?.label.isNotEmpty ?? false) || outfit != null;
+  bool get hasStatusLine =>
+      (status?.label.isNotEmpty ?? false) || outfit != null;
 }
 
 /// One row of GET /api/wardrobe/log.
@@ -291,8 +292,18 @@ class WardrobeLogEntry {
     final parsed = DateTime.tryParse(day);
     if (parsed == null) return day;
     const months = [
-      'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-      'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
+      'JAN',
+      'FEB',
+      'MAR',
+      'APR',
+      'MAY',
+      'JUN',
+      'JUL',
+      'AUG',
+      'SEP',
+      'OCT',
+      'NOV',
+      'DEC',
     ];
     return '${months[parsed.month - 1]} ${parsed.day.toString().padLeft(2, '0')}';
   }

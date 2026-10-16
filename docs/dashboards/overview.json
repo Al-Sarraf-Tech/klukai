@@ -1,108 +1,996 @@
 {
-  "annotations": {
-    "list": [],
-    "description": "Klukai — operational overview. RED metrics per endpoint + dependency health + affection-level histogram.",
-    "title": "Klukai Overview"
+  "uid": "klukai-overview",
+  "title": "Klukai SLO Overview",
+  "description": "Generated from docker/core/app/observability/slos.json; SHA256 e8447adbef71f29dc2ba9af7353298bfa7deef8ac9dfb8a7a87055df49de83c0. Missing telemetry is not healthy.",
+  "schemaVersion": 38,
+  "version": 1,
+  "editable": false,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
   },
-  "editable": true,
-  "fiscalYearStartMonth": 0,
-  "graphTooltip": 1,
-  "id": null,
+  "annotations": {
+    "list": []
+  },
+  "tags": [
+    "klukai",
+    "canonical-slo"
+  ],
   "panels": [
     {
       "id": 1,
-      "title": "Service status",
-      "type": "stat",
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "title": "Scrape target availability",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "up{job=\"klukai-core\"}", "refId": "A"}
+        {
+          "refId": "A",
+          "expr": "up{job=\"klukai-core\"}"
+        }
       ],
       "fieldConfig": {
         "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "red", "value": null},
-              {"color": "green", "value": 1}
-            ]
-          },
-          "mappings": [
-            {"options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}, "type": "value"}
-          ]
+          "unit": "none",
+          "noValue": "NO DATA"
         }
       },
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0}
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      }
     },
     {
       "id": 2,
-      "title": "Request rate (RED — Rate)",
+      "title": "Circuit state: closed0 / probe1 / open2",
       "type": "timeseries",
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "sum by (route) (rate(http_requests_total{job=\"klukai-core\"}[5m]))", "refId": "A", "legendFormat": "{{route}}"}
+        {
+          "refId": "A",
+          "expr": "klukai_circuit_state{job=\"klukai-core\"}"
+        }
       ],
-      "gridPos": {"h": 8, "w": 12, "x": 6, "y": 0}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "NO DATA"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      }
     },
     {
       "id": 3,
-      "title": "Error rate (RED — Errors)",
+      "title": "GET /health p99",
       "type": "timeseries",
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
-          "expr": "sum by (route) (rate(http_requests_total{job=\"klukai-core\",status=~\"5..\"}[5m])) / sum by (route) (rate(http_requests_total{job=\"klukai-core\"}[5m]))",
           "refId": "A",
-          "legendFormat": "{{route}}"
+          "expr": "klukai:slo_p99_ms:5m{method=\"GET\",route=\"/health\"}"
         }
       ],
-      "fieldConfig": {"defaults": {"unit": "percentunit", "max": 0.05}},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#latency-breach"
+        }
+      ]
     },
     {
       "id": 4,
-      "title": "Latency p99 (RED — Duration)",
+      "title": "GET /health budget burn",
       "type": "timeseries",
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum by (route, le) (rate(http_request_duration_seconds_bucket{job=\"klukai-core\"}[5m])))",
           "refId": "A",
-          "legendFormat": "{{route}} p99"
+          "expr": "klukai:slo_burn_rate:5m{method=\"GET\",route=\"/health\"}"
         }
       ],
-      "fieldConfig": {"defaults": {"unit": "s"}},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#availability-burn"
+        }
+      ]
     },
     {
       "id": 5,
-      "title": "Circuit breaker state",
-      "type": "stat",
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "klukai_circuit_state", "refId": "A"}],
+      "title": "GET /api/health/live p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_p99_ms:5m{method=\"GET\",route=\"/api/health/live\"}"
+        }
+      ],
       "fieldConfig": {
         "defaults": {
-          "mappings": [
-            {"options": {"0": {"text": "closed", "color": "green"}, "1": {"text": "half-open", "color": "yellow"}, "2": {"text": "open", "color": "red"}}, "type": "value"}
-          ]
+          "unit": "ms",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          }
         }
       },
-      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 12}
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#latency-breach"
+        }
+      ]
     },
     {
       "id": 6,
-      "title": "Affection-level distribution",
-      "type": "bargauge",
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "klukai_affection_level", "refId": "A", "legendFormat": "level {{level}}"}],
-      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 12}
+      "title": "GET /api/health/live budget burn",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_burn_rate:5m{method=\"GET\",route=\"/api/health/live\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#availability-burn"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "GET /api/health/ready p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_p99_ms:5m{method=\"GET\",route=\"/api/health/ready\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 2500
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#latency-breach"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "GET /api/health/ready budget burn",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_burn_rate:5m{method=\"GET\",route=\"/api/health/ready\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#availability-burn"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "POST /api/auth/login p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_p99_ms:5m{method=\"POST\",route=\"/api/auth/login\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#latency-breach"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "POST /api/auth/login budget burn",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_burn_rate:5m{method=\"POST\",route=\"/api/auth/login\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#availability-burn"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "GET /api/auth/verify p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_p99_ms:5m{method=\"GET\",route=\"/api/auth/verify\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 150
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#latency-breach"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "GET /api/auth/verify budget burn",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_burn_rate:5m{method=\"GET\",route=\"/api/auth/verify\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#availability-burn"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "GET /api/affection p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_p99_ms:5m{method=\"GET\",route=\"/api/affection\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 150
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 48
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#latency-breach"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "GET /api/affection budget burn",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_burn_rate:5m{method=\"GET\",route=\"/api/affection\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 48
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#availability-burn"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "GET /api/messages p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_p99_ms:5m{method=\"GET\",route=\"/api/messages\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 56
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#latency-breach"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "GET /api/messages budget burn",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_burn_rate:5m{method=\"GET\",route=\"/api/messages\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 56
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#availability-burn"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "GET /api/memories p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_p99_ms:5m{method=\"GET\",route=\"/api/memories\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 64
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#latency-breach"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "GET /api/memories budget burn",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_burn_rate:5m{method=\"GET\",route=\"/api/memories\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 64
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#availability-burn"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "GET /api/tts/jobs/{job_id} p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_p99_ms:5m{method=\"GET\",route=\"/api/tts/jobs/{job_id}\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 250
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 72
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#latency-breach"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "GET /api/tts/jobs/{job_id} budget burn",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_burn_rate:5m{method=\"GET\",route=\"/api/tts/jobs/{job_id}\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 72
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#availability-burn"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "title": "POST /api/generate-image p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_p99_ms:5m{method=\"POST\",route=\"/api/generate-image\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 3000
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 80
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#latency-breach"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "title": "POST /api/generate-image budget burn",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "klukai:slo_burn_rate:5m{method=\"POST\",route=\"/api/generate-image\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 80
+      },
+      "links": [
+        {
+          "title": "Runbook",
+          "url": "https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#availability-burn"
+        }
+      ]
     }
-  ],
-  "refresh": "30s",
-  "schemaVersion": 38,
-  "tags": ["klukai", "overview", "S+"],
-  "templating": {"list": []},
-  "time": {"from": "now-6h", "to": "now"},
-  "title": "Klukai Overview",
-  "uid": "klukai-overview",
-  "version": 1
+  ]
 }

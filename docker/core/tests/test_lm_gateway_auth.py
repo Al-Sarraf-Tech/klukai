@@ -18,7 +18,7 @@ from app.llm_json import call_llm, call_llm_text
 _CORE_DIR = Path(__file__).resolve().parent.parent
 _GATEWAY_CALLERS = {
     "app/llm_json.py": 2,
-    "app/affection.py": 1,
+    "app/affection_classifier.py": 1,
     "app/memory_archive.py": 1,
     "seed_memories.py": 1,
     "reannotate_existing.py": 1,
@@ -72,17 +72,36 @@ def test_auth_header_reads_current_token_and_fails_closed(monkeypatch):
 
 
 @pytest.mark.parametrize(("relative_path", "expected_calls"), _GATEWAY_CALLERS.items())
-def test_every_direct_gateway_post_has_auth_and_fixed_ttl(relative_path, expected_calls):
-    """AST guard covers every direct POST; no synthetic warm-up is present."""
+def test_every_direct_gateway_post_has_auth_and_fixed_ttl(
+    relative_path, expected_calls
+):
+    """AST guard covers direct and breaker-protected POSTs; auth and TTL stay required."""
     tree = ast.parse((_CORE_DIR / relative_path).read_text())
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "post"
-        and any("chat/completions" in ast.unparse(arg) for arg in node.args)
-    ]
+    calls = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        direct_post = isinstance(node.func, ast.Attribute) and node.func.attr == "post"
+        protected_post = (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "http_request"
+            and len(node.args) >= 4
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "lm_studio"
+            and isinstance(node.args[2], ast.Constant)
+            and node.args[2].value == "post"
+        )
+        if (direct_post or protected_post) and any(
+            "chat/completions" in ast.unparse(arg) for arg in node.args
+        ):
+            calls.append(node)
+            if protected_post:
+                assert any(
+                    isinstance(import_node, ast.ImportFrom)
+                    and import_node.module == "dependencies"
+                    and any(alias.name == "http_request" for alias in import_node.names)
+                    for import_node in ast.walk(tree)
+                ), "The protected POST must resolve to the real dependency adapter"
     assert len(calls) == expected_calls
 
     for call in calls:
@@ -100,7 +119,9 @@ def test_every_direct_gateway_post_has_auth_and_fixed_ttl(relative_path, expecte
 
 
 @pytest.mark.asyncio
-async def test_llm_json_calls_are_authenticated_without_secret_logs(monkeypatch, caplog):
+async def test_llm_json_calls_are_authenticated_without_secret_logs(
+    monkeypatch, caplog
+):
     token = "sentinel-token-must-not-be-logged"
     monkeypatch.setenv("LM_STUDIO_TOKEN", token)
 
@@ -113,18 +134,22 @@ async def test_llm_json_calls_are_authenticated_without_secret_logs(monkeypatch,
     assert json_body["stream"] is False
 
     text_client = _client_with("Klukai's unchanged response.")
-    assert await call_llm_text(
-        "http://gateway", "model", "memory prompt", client=text_client
-    ) == "Klukai's unchanged response."
+    assert (
+        await call_llm_text(
+            "http://gateway", "model", "memory prompt", client=text_client
+        )
+        == "Klukai's unchanged response."
+    )
     text_body = _assert_authenticated_call(text_client, token)
     assert text_body["messages"] == [{"role": "user", "content": "memory prompt"}]
 
     failing_client = MagicMock()
     failing_client.post = AsyncMock(side_effect=RuntimeError(f"transport: {token}"))
     with caplog.at_level(logging.WARNING, logger="app.llm_json"):
-        assert await call_llm(
-            "http://gateway", "model", "prompt", client=failing_client
-        ) == {}
+        assert (
+            await call_llm("http://gateway", "model", "prompt", client=failing_client)
+            == {}
+        )
     assert token not in caplog.text
 
 
@@ -178,15 +203,18 @@ async def test_memory_backfill_request_is_authenticated(monkeypatch):
     update_conn = _RowsConnection()
     client = _client_with("The rooftop was ours that night.")
 
-    with patch(
-        "app.memory_archive.get_conn",
-        side_effect=lambda: _connection_context(select_conn),
-    ), patch(
-        "app.memory_archive.get_conn_autocommit",
-        side_effect=lambda: _connection_context(update_conn),
-    ), patch(
-        "app.memory_archive._get_http", return_value=client
-    ), patch("app.llm_router.get_lm_gate", return_value=_Gate()):
+    with (
+        patch(
+            "app.memory_archive.get_conn",
+            side_effect=lambda: _connection_context(select_conn),
+        ),
+        patch(
+            "app.memory_archive.get_conn_autocommit",
+            side_effect=lambda: _connection_context(update_conn),
+        ),
+        patch("app.memory_archive._get_http", return_value=client),
+        patch("app.llm_router.get_lm_gate", return_value=_Gate()),
+    ):
         assert await archive.backfill_annotations("alice") == {"total": 1, "updated": 1}
 
     body = _assert_authenticated_call(client, token)
@@ -259,10 +287,11 @@ async def test_subsystem_health_authenticates_model_probe(monkeypatch):
         if getattr(route, "path", None) == "/api/health/subsystems"
     )
 
-    with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), patch(
-        "app.db.check_health", new=AsyncMock(return_value={"status": "ok"})
-    ), patch("redis.asyncio.from_url", return_value=redis_client), patch(
-        "httpx.AsyncClient", return_value=http_context
+    with (
+        patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")),
+        patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})),
+        patch("redis.asyncio.from_url", return_value=redis_client),
+        patch("httpx.AsyncClient", return_value=http_context),
     ):
         result = await handler(MagicMock())
 
@@ -272,6 +301,8 @@ async def test_subsystem_health_authenticates_model_probe(monkeypatch):
         "models": ["model-a"],
     }
     model_probe = next(
-        call for call in http_client.get.await_args_list if call.args[0].endswith("/v1/models")
+        call
+        for call in http_client.get.await_args_list
+        if call.args[0].endswith("/v1/models")
     )
     assert model_probe.kwargs["headers"] == {"Authorization": f"Bearer {token}"}

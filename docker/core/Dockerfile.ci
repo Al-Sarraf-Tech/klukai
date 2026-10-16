@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+# CI uses the production CPython ABI; the heavy guest's Python is 3.12.
+ARG PYTHON_IMAGE=python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
+FROM ${PYTHON_IMAGE} AS wheels
+ARG CI_LOCK_SHA256
+ARG SOURCE_DATE_EPOCH=0
+ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+WORKDIR /build
+COPY requirements-build.txt requirements-ci.txt ./
+RUN python -c 'import hashlib, os; assert hashlib.sha256(open("requirements-ci.txt", "rb").read()).hexdigest() == os.environ["CI_LOCK_SHA256"]' && \
+    python -m pip install --require-hashes -r requirements-build.txt && \
+    python -m pip download --no-deps --no-build-isolation --require-hashes \
+      --dest /downloads -r requirements-ci.txt
+COPY package_runtime.py ./
+RUN --network=none python -m pip wheel --no-index --find-links=/downloads \
+      --no-deps --no-build-isolation --require-hashes -r requirements-ci.txt \
+      --wheel-dir=/wheels && \
+    python package_runtime.py wheels && \
+    python -m venv --without-pip /opt/ci && \
+    python -m pip --python /opt/ci/bin/python install --no-index \
+      --find-links=/wheels --no-deps --require-hashes --no-compile -r /runtime.lock
+
+FROM ${PYTHON_IMAGE} AS ci
+ARG VCS_REF=unverified
+ARG CI_LOCK_SHA256
+LABEL org.opencontainers.image.source="https://github.com/Al-Sarraf-Tech/klukai" \
+    org.opencontainers.image.revision="${VCS_REF}" \
+    cc.appnest.klukai.ci-lock-sha256="${CI_LOCK_SHA256}"
+ENV PATH="/opt/ci/bin:/usr/local/bin:/usr/bin:/bin" \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    HYPOTHESIS_STORAGE_DIRECTORY=/tmp/hypothesis \
+    HOME=/tmp/klukai-ci-home
+COPY --from=wheels /opt/ci /opt/ci
+COPY --from=wheels /wheel-materials.json /usr/share/klukai-ci/wheel-materials.json
+WORKDIR /repo
+USER 1000:1000
+ENTRYPOINT ["/opt/ci/bin/python"]
+CMD ["--version"]

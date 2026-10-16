@@ -40,7 +40,10 @@ def _personal_mode() -> bool:
     Read at every call (not cached) so tests can flip via monkeypatch.
     """
     return os.environ.get("KLUKAI_PERSONAL_MODE", "true").lower() in (
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     )
 
 
@@ -150,7 +153,7 @@ class Subscription:
 class QuotaExceeded(Exception):
     """Raised when a feature is used past its tier cap."""
 
-    def __init__(self, counter: str, tier: str, limit: int):
+    def __init__(self, counter: str, tier: str, limit: int) -> None:
         super().__init__(
             f"Quota exceeded: {counter} (tier={tier}, limit={limit}/period)"
         )
@@ -300,10 +303,10 @@ async def consume_quota(user_id: str, counter: str, amount: int = 1) -> int:
             new_count = int(row[0]) if row else amount
     except Exception as e:
         logger.warning("Quota consume failed: %s", e)
-        return max(limit - amount, 0)
+        return int(max(limit - amount, 0))
     if new_count > limit:
         raise QuotaExceeded(counter, sub.tier, limit)
-    return max(limit - new_count, 0)
+    return int(max(limit - new_count, 0))
 
 
 async def get_usage_summary(user_id: str) -> dict[str, Any]:
@@ -329,33 +332,10 @@ _STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 _STRIPE_TOLERANCE_SECONDS = 300  # 5min — Stripe's recommended
 
 
-
-
 # Event → handler dispatch
 
 
-
-
-
-
-
-
 # ── Stripe event handlers ───────────────────────────────────────────────────
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # Re-exports from billing_stripe.py — keep public surface stable.
@@ -370,6 +350,6 @@ from app.billing_stripe import (  # noqa: E402,F401
     _stripe_tier_from_price,
     _stripe_ts,
     _user_id_from_metadata,
-    handle_stripe_event,
-    verify_stripe_signature,
+    handle_stripe_event as handle_stripe_event,
+    verify_stripe_signature as verify_stripe_signature,
 )

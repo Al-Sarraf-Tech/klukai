@@ -32,7 +32,10 @@ void main() {
   });
 
   test('a transcript never replaces a typed draft', () {
-    expect(SpeechCapture.draftAfterTranscript('keep this draft', 'spoken line'), 'keep this draft');
+    expect(
+      SpeechCapture.draftAfterTranscript('keep this draft', 'spoken line'),
+      'keep this draft',
+    );
     expect(SpeechCapture.draftAfterTranscript('', '  spoken line  '), '');
     expect(SpeechCapture.voiceUtterance('  spoken line  '), 'spoken line');
   });

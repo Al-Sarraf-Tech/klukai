@@ -1,0 +1,23 @@
+# Install only after provisioning and verifying the encrypted store and pinned
+# active release overlay. See docs/runbooks/encrypted-credentials.md.
+[Unit]
+Description=Klukai verified release with encrypted credentials
+After=aichat.service
+Wants=aichat.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/jalsarraf/git/klukai
+UMask=0077
+LoadCredentialEncrypted=klukai-runtime:%h/.config/credstore.encrypted/klukai-runtime.cred
+RuntimeDirectory=klukai-secrets
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/bin/docker info --format {{.ServerVersion}}
+ExecStart=/usr/bin/python3 /home/jalsarraf/git/klukai/scripts/release/secret_store.py -- /usr/bin/docker compose --project-directory /home/jalsarraf/git/klukai --env-file /dev/null --file /home/jalsarraf/git/klukai/docker-compose.yml --file %h/.local/state/klukai/release/active.compose.yml up --detach --no-build
+ExecStop=/usr/bin/python3 /home/jalsarraf/git/klukai/scripts/release/secret_store.py -- /usr/bin/docker compose --project-directory /home/jalsarraf/git/klukai --env-file /dev/null --file /home/jalsarraf/git/klukai/docker-compose.yml --file %h/.local/state/klukai/release/active.compose.yml stop
+TimeoutStartSec=180
+TimeoutStopSec=720
+
+[Install]
+WantedBy=default.target

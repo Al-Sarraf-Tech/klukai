@@ -79,7 +79,9 @@ class LeaseStore:
         self.marker_path = marker_path
         self.ack_path = ack_path
         if marker_path.parent != ack_path.parent:
-            raise LeaseStateError("lease marker and acknowledgement must share a directory")
+            raise LeaseStateError(
+                "lease marker and acknowledgement must share a directory"
+            )
         if not marker_path.parent.is_dir():
             raise LeaseStateError(
                 f"GPU lease runtime directory is absent: {marker_path.parent}"
@@ -124,7 +126,10 @@ class LeaseStore:
         workload = document.get("workload")
         state = document.get("state", "active")
         ttl_seconds = document.get("ttl_seconds")
-        if not isinstance(lease_id, str) or _LEASE_ID_PATTERN.fullmatch(lease_id) is None:
+        if (
+            not isinstance(lease_id, str)
+            or _LEASE_ID_PATTERN.fullmatch(lease_id) is None
+        ):
             raise LeaseStateError("GPU lease marker lease_id is invalid")
         if (
             not isinstance(token_sha256, str)
@@ -144,7 +149,9 @@ class LeaseStore:
         if issued_at > now + 5:
             raise LeaseStateError("GPU lease marker claims a future issue time")
         if abs(expires_at - (issued_at + ttl_seconds)) > 0.001:
-            raise LeaseStateError("GPU lease marker expiry does not match its bounded TTL")
+            raise LeaseStateError(
+                "GPU lease marker expiry does not match its bounded TTL"
+            )
         return Lease(
             lease_id=lease_id,
             token_sha256=token_sha256,

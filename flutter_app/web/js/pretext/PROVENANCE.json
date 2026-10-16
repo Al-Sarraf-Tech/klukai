@@ -1,0 +1,63 @@
+{
+  "component": "@chenglou/pretext",
+  "license": "MIT",
+  "inventory_note": "Mixed inherited component with an exact upstream security backport; this does not relabel all files as release 0.0.5.",
+  "upstream_repository": "https://github.com/chenglou/pretext",
+  "backport": {
+    "release": "0.0.5",
+    "tarball": "https://registry.npmjs.org/@chenglou/pretext/-/pretext-0.0.5.tgz",
+    "integrity": "sha512-A8GZN10REdFGsyuiUgLV8jjPDDFMg5GmgxGWV0I3igxBOnzj+jgz2VMmVD7g+SFyoctfeqHFxbNatKSzVRWtRg==",
+    "archive_sha256": "345bd2374dd05fc2a14afc15d3c154e5e92c8a14b120814bf0c176bd79dcbe8b",
+    "file": "analysis.js",
+    "previous_sha256": "bc7da9e718d4e34f8c7500c7cbe67d2e6bf045a3d4075e34918769aafbf47dd2"
+  },
+  "inherited_release": {
+    "release": "0.0.4",
+    "tarball": "https://registry.npmjs.org/@chenglou/pretext/-/pretext-0.0.4.tgz",
+    "integrity": "sha512-FnPAFMid1/p1j2V2gRPUVBarGUIb2PhkkC9YNnTOfPtTDgHKh8siO8PP9pCxpFfYlcodWPJpE1UbSHGQqt8pQQ=="
+  },
+  "files": {
+    "analysis.js": {
+      "sha256": "12e6894f6463188fd5c548dcd44e6174f50eb677065504f1cfdde6652269c31f",
+      "upstream_version": "0.0.5",
+      "origin": "package/dist/analysis.js"
+    },
+    "bidi.js": {
+      "sha256": "e7d53cfc8c480a096fad8c6b00e800e4d99bc535d4ba76b6bbb7f3885441cbc8",
+      "upstream_version": "0.0.4",
+      "origin": "package/dist/bidi.js"
+    },
+    "inline-flow.js": {
+      "sha256": "3e8c5d2acda6c0d8ef5bce8e237e3afda88ed5b34e7c3266b7d24bab8a1814d4",
+      "upstream_version": null,
+      "origin": "Klukai inherited source at 2014bd5ee83a6f2623a20d13a932f3a5ab1f7070"
+    },
+    "layout.js": {
+      "sha256": "9cddc6fd60076b9c382501a6d7515852dca0823f0351c07a4b39ab9b1973d5f6",
+      "upstream_version": null,
+      "origin": "Klukai inherited source at 2014bd5ee83a6f2623a20d13a932f3a5ab1f7070"
+    },
+    "line-break.js": {
+      "sha256": "794dc3e36234c00ff9a5306b7d2ff2822419d400f9ca9629fab4373f96073654",
+      "upstream_version": "0.0.4",
+      "origin": "package/dist/line-break.js"
+    },
+    "measurement.js": {
+      "sha256": "9469a49b4cc51440f887550224800cb78a36486a649ae1fa591724e4451ac09e",
+      "upstream_version": "0.0.4",
+      "origin": "package/dist/measurement.js"
+    }
+  },
+  "vulnerability": {
+    "id": "GHSA-5478-66c3-rhxr",
+    "url": "https://github.com/chenglou/pretext/security/advisories/GHSA-5478-66c3-rhxr",
+    "status": "fixed_by_source_backport",
+    "scope": "The shipped analysis.js is byte-identical to the official patched 0.0.5 dist/analysis.js. It removes the vulnerable repeated full-string scan and uses deferred single-character-run metadata/materialization.",
+    "evidence": "tools/companion/test/pretext_security.test.mjs proves the old code exceeds the character-visit budget and the backport preserves complete text under the same bound. Actual Chrome bridge rendering is covered in tools/avatar/test/module-graph.test.mjs.",
+    "limitations": "Other files retain their recorded identities. This record addresses this specific advisory only; it is not an advisory-ignore rule or a package-wide certification."
+  },
+  "license_file": {
+    "path": "LICENSE",
+    "sha256": "e9355cb16457e81acd97dac2e50f2f8bbf2a9a464025f9c46db3680cf9598846"
+  }
+}

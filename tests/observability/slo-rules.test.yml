@@ -1,0 +1,131 @@
+# Independent synthetic behavior; expected annotations are reviewed when the canonical policy changes.
+rule_files:
+- ../../obs/prometheus/klukai-slo.rules.yml
+evaluation_interval: 30s
+tests:
+- name: healthy high-volume endpoint has no SLO page
+  interval: 1m
+  input_series:
+  - &id001
+    series: up{job="klukai-core"}
+    values: 1+0x140
+  - series: klukai_http_requests_total{job="klukai-core",method="GET",route="/health",status_class="2xx"}
+    values: 0+100x140
+  - series: klukai_http_requests_total{job="klukai-core",method="GET",route="/health",status_class="5xx"}
+    values: 0+0x140
+  alert_rule_test:
+  - eval_time: 65m
+    alertname: KlukaiSLOBudgetBurn
+    exp_alerts: []
+  - eval_time: 65m
+    alertname: KlukaiSLOLatency
+    exp_alerts: []
+  - eval_time: 65m
+    alertname: KlukaiTelemetryMissing
+    exp_alerts: []
+- name: availability burn fires with enough samples then clears after recovery
+  interval: 1m
+  input_series:
+  - *id001
+  - series: klukai_http_requests_total{job="klukai-core",method="GET",route="/health",status_class="2xx"}
+    values: 0+90x65 5850+100x75
+  - series: klukai_http_requests_total{job="klukai-core",method="GET",route="/health",status_class="5xx"}
+    values: 0+10x65 650+0x75
+  alert_rule_test:
+  - eval_time: 65m
+    alertname: KlukaiSLOBudgetBurn
+    exp_alerts:
+    - exp_labels:
+        severity: page
+        route: /health
+        method: GET
+      exp_annotations:
+        summary: GET /health burn_rate objective exceeded
+        description: Both 5m, 1h windows exceed the objective with at least 20 requests each. Availability 99.90000%; p99 30 ms. Missing samples never count as healthy.
+        runbook_url: https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#availability-burn
+  - eval_time: 130m
+    alertname: KlukaiSLOBudgetBurn
+    exp_alerts: []
+- name: errors without minimum samples do not page
+  interval: 1m
+  input_series:
+  - *id001
+  - series: klukai_http_requests_total{job="klukai-core",method="GET",route="/health",status_class="2xx"}
+    values: 0+0x140
+  - series: klukai_http_requests_total{job="klukai-core",method="GET",route="/health",status_class="5xx"}
+    values: 0+1x140
+  alert_rule_test:
+  - eval_time: 65m
+    alertname: KlukaiSLOBudgetBurn
+    exp_alerts: []
+  - eval_time: 65m
+    alertname: KlukaiTelemetryMissing
+    exp_alerts: []
+- name: absent input is missing telemetry never a healthy zero
+  interval: 1m
+  input_series: []
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: KlukaiTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        severity: page
+        job: klukai-core
+      exp_annotations:
+        summary: Klukai HTTP RED telemetry is absent
+        runbook_url: https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#telemetry-missing
+  - eval_time: 6m
+    alertname: KlukaiSLOBudgetBurn
+    exp_alerts: []
+  - eval_time: 6m
+    alertname: KlukaiSLOLatency
+    exp_alerts: []
+  promql_expr_test:
+  - expr: klukai:slo_burn_rate:5m{route="/health",method="GET"}
+    eval_time: 6m
+    exp_samples: []
+- name: latency histogram uses milliseconds and clears after recovery
+  interval: 1m
+  input_series:
+  - *id001
+  - series: klukai_http_requests_total{job="klukai-core",method="GET",route="/health",status_class="2xx"}
+    values: 0+100x140
+  - series: klukai_http_request_duration_ms_bucket{job="klukai-core",method="GET",route="/health",le="5"}
+    values: 0+0x65 0+100x75
+  - series: klukai_http_request_duration_ms_bucket{job="klukai-core",method="GET",route="/health",le="5000"}
+    values: 0+100x140
+  - series: klukai_http_request_duration_ms_bucket{job="klukai-core",method="GET",route="/health",le="+Inf"}
+    values: 0+100x140
+  alert_rule_test:
+  - eval_time: 65m
+    alertname: KlukaiSLOLatency
+    exp_alerts:
+    - exp_labels:
+        severity: page
+        route: /health
+        method: GET
+      exp_annotations:
+        summary: GET /health p99_ms objective exceeded
+        description: Both 5m, 1h windows exceed the objective with at least 20 requests each. Availability 99.90000%; p99 30 ms. Missing samples never count as healthy.
+        runbook_url: https://github.com/Al-Sarraf-Tech/klukai/blob/main/docs/runbooks/dependency-outage.md#latency-breach
+  - eval_time: 130m
+    alertname: KlukaiSLOLatency
+    exp_alerts: []
+- name: zero traffic is not synthesized as a healthy zero burn
+  interval: 1m
+  input_series:
+  - series: up{job="klukai-core"}
+    values: 1+0x70
+  - series: klukai_http_requests_total{job="klukai-core",method="GET",route="/health",status_class="2xx"}
+    values: 0+0x70
+  alert_rule_test:
+  - eval_time: 65m
+    alertname: KlukaiSLOBudgetBurn
+    exp_alerts: []
+  - eval_time: 65m
+    alertname: KlukaiTelemetryMissing
+    exp_alerts: []
+  promql_expr_test:
+  - expr: klukai:slo_burn_rate:5m{route="/health",method="GET"} == 0
+    eval_time: 65m
+    exp_samples: []

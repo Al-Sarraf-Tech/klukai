@@ -28,4 +28,5 @@ class StubBrowserPlatform implements BrowserPlatform {
 BrowserPlatform? _instance;
 
 /// The process-wide platform (one set of DOM listeners).
-BrowserPlatform defaultBrowserPlatform() => _instance ??= const StubBrowserPlatform();
+BrowserPlatform defaultBrowserPlatform() =>
+    _instance ??= const StubBrowserPlatform();

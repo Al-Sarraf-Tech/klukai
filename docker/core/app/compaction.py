@@ -6,6 +6,8 @@ stays small without losing the conversational arc.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import logging
 
@@ -18,9 +20,9 @@ def should_compact(message_count: int, threshold: int = 200) -> bool:
 
 
 def select_messages_for_compaction(
-    messages: list[dict],
+    messages: list[dict[str, Any]],
     keep_recent: int = 50,
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Split message list into (to_compact, to_keep).
 
     Keeps the N most recent messages as-is; everything older is candidate
@@ -32,7 +34,7 @@ def select_messages_for_compaction(
     return (list(messages[:-keep_recent]), list(messages[-keep_recent:]))
 
 
-def format_for_summary(messages: list[dict], limit_per_msg: int = 200) -> str:
+def format_for_summary(messages: list[dict[str, Any]], limit_per_msg: int = 200) -> str:
     """Render messages as a compact LLM-friendly transcript."""
     lines = []
     for m in messages:

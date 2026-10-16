@@ -23,7 +23,7 @@ class ThreadService {
 
   /// [client] is injectable for tests; defaults to a real HTTP client.
   ThreadService({required this.serverUrl, http.Client? client})
-      : _client = client ?? http.Client();
+    : _client = client ?? http.Client();
 
   Map<String, String> get _authHeaders {
     var token = '';
@@ -37,12 +37,16 @@ class ThreadService {
   }
 
   Future<ThreadView> fetchThread() async {
-    final response =
-        await _client.get(Uri.parse('$serverUrl/api/thread'), headers: _authHeaders);
+    final response = await _client.get(
+      Uri.parse('$serverUrl/api/thread'),
+      headers: _authHeaders,
+    );
     if (response.statusCode != 200) {
       throw ThreadServiceException(response.statusCode);
     }
-    return ThreadView.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    return ThreadView.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
   }
 
   /// Records read receipts; returns how many entries were newly read.

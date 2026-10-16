@@ -1,4 +1,5 @@
 """Tests for Her POV memory portraits."""
+
 from __future__ import annotations
 
 import asyncio
@@ -22,12 +23,40 @@ def test_is_trivial():
 @pytest.mark.asyncio
 async def test_pick_exchange_pairs_user_assistant():
     rows_chrono = [
-        ("1", "user", "I brought coffee for once today commander.", "composed", "", None),
-        ("2", "assistant", "...I noticed. Don't expect gratitude out loud.", "quietly_pleased", "m", None),
+        (
+            "1",
+            "user",
+            "I brought coffee for once today commander.",
+            "composed",
+            "",
+            None,
+        ),
+        (
+            "2",
+            "assistant",
+            "...I noticed. Don't expect gratitude out loud.",
+            "quietly_pleased",
+            "m",
+            None,
+        ),
         ("3", "user", "ok", "composed", "", None),
         ("4", "assistant", "Mm.", "composed", "m", None),
-        ("5", "user", "Remember when we outran the storm on the bike?", "composed", "", None),
-        ("6", "assistant", "I remember holding the throttle. You held on without being told.", "tender", "m", None),
+        (
+            "5",
+            "user",
+            "Remember when we outran the storm on the bike?",
+            "composed",
+            "",
+            None,
+        ),
+        (
+            "6",
+            "assistant",
+            "I remember holding the throttle. You held on without being told.",
+            "tender",
+            "m",
+            None,
+        ),
     ]
     desc = list(reversed(rows_chrono))
 
@@ -236,7 +265,8 @@ def _ws_frames(ws, frame_type="her_pov"):
     return [
         c.args[1]
         for c in ws.send.call_args_list
-        if len(c.args) > 1 and isinstance(c.args[1], dict)
+        if len(c.args) > 1
+        and isinstance(c.args[1], dict)
         and c.args[1].get("type") == frame_type
     ]
 
@@ -247,7 +277,9 @@ def _ws_frames(ws, frame_type="her_pov"):
 
 
 class TestRunHerPovHappyPath:
-    async def test_agy_scene_preserves_user_without_sending_exchange_context(self, clean_jobs, pipeline, monkeypatch):
+    async def test_agy_scene_preserves_user_without_sending_exchange_context(
+        self, clean_jobs, pipeline, monkeypatch
+    ):
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
         with patch.object(hp, "_persist_job", AsyncMock()):
             await hp.run_her_pov("claude", "job-agy")
@@ -256,7 +288,9 @@ class TestRunHerPovHappyPath:
         assert pipeline.generate_image.await_args.kwargs["include_commander"] is False
         assert (await hp.get_job("job-agy"))["status"] == "done"
 
-    async def test_owner_couple_scene_selects_owner_reference(self, clean_jobs, pipeline):
+    async def test_owner_couple_scene_selects_owner_reference(
+        self, clean_jobs, pipeline
+    ):
         await hp.run_her_pov("jalsarraf", "job-owner")
         assert pipeline.generate_image.await_args.kwargs["user_id"] == "jalsarraf"
         assert pipeline.generate_image.await_args.kwargs["include_commander"] is True
@@ -304,7 +338,11 @@ class TestRunHerPovHappyPath:
 
         curation = pipeline.save_image.await_args.kwargs["curation"]
         assert curation["keep"] is True
-        assert curation["image_tags"] == ["her_pov", "from_her_side", "commander_request"]
+        assert curation["image_tags"] == [
+            "her_pov",
+            "from_her_side",
+            "commander_request",
+        ]
         assert curation["annotation"] == pipeline.pov["annotation"]
 
     @pytest.mark.asyncio
@@ -312,7 +350,9 @@ class TestRunHerPovHappyPath:
         await hp.run_her_pov("claude", "job-1")
 
         assert pipeline.save_image.await_args.kwargs["user_id"] == "claude"
-        assert pipeline.save_image.await_args.kwargs["conversation_id"] == "her_pov:job-1"
+        assert (
+            pipeline.save_image.await_args.kwargs["conversation_id"] == "her_pov:job-1"
+        )
 
     @pytest.mark.asyncio
     async def test_releases_the_active_user_slot(self, clean_jobs, pipeline):
@@ -339,7 +379,9 @@ class TestRunHerPovAffection:
             (0, "Quiet Hours"),
         ],
     )
-    async def test_category_follows_affection(self, clean_jobs, pipeline, level, category):
+    async def test_category_follows_affection(
+        self, clean_jobs, pipeline, level, category
+    ):
         pipeline.aff_state.level = level
         await hp.run_her_pov("claude", "job-1")
 
@@ -372,7 +414,9 @@ class TestRunHerPovCostume:
         await hp.run_her_pov("claude", "job-1")
 
         assert pipeline.build_prompt.call_args.kwargs["costume"] == "winter_patrol"
-        pipeline.render_costume.assert_awaited_once_with("claude", pipeline.aff_state.level)
+        pipeline.render_costume.assert_awaited_once_with(
+            "claude", pipeline.aff_state.level
+        )
 
     @pytest.mark.asyncio
     async def test_no_wearable_outfit_falls_back(self, clean_jobs, pipeline):
@@ -393,16 +437,23 @@ class TestRunHerPovTimeOfDay:
     @pytest.mark.parametrize(
         "hour,tod",
         [
-            (5, "morning"), (9, "morning"), (11, "morning"),
-            (12, "afternoon"), (16, "afternoon"),
-            (17, "evening"), (20, "evening"),
-            (21, "night"), (3, "night"), (0, "night"),
+            (5, "morning"),
+            (9, "morning"),
+            (11, "morning"),
+            (12, "afternoon"),
+            (16, "afternoon"),
+            (17, "evening"),
+            (20, "evening"),
+            (21, "night"),
+            (3, "night"),
+            (0, "night"),
         ],
     )
     async def test_time_of_day_buckets(self, clean_jobs, pipeline, hour, tod):
         """Buckets follow the Commander's wall clock, not the container's UTC."""
-        with patch("app.proactive.state.now_local",
-                   return_value=datetime(2026, 8, 6, hour)):
+        with patch(
+            "app.proactive.state.now_local", return_value=datetime(2026, 8, 6, hour)
+        ):
             await hp.run_her_pov("claude", "job-1")
 
         assert pipeline.build_prompt.call_args.kwargs["time_of_day"] == tod
@@ -411,8 +462,9 @@ class TestRunHerPovTimeOfDay:
     async def test_uses_local_clock_not_utc(self, clean_jobs, pipeline):
         """Regression: `datetime.now()` in a UTC container baked 1am lighting
         into a portrait the Commander asked for at 19:00 local."""
-        with patch("app.proactive.state.now_local",
-                   return_value=datetime(2026, 8, 6, 19, 0)):
+        with patch(
+            "app.proactive.state.now_local", return_value=datetime(2026, 8, 6, 19, 0)
+        ):
             with patch.object(hp, "datetime") as naive_utc:
                 naive_utc.now.return_value = datetime(2026, 8, 7, 0, 0)
                 await hp.run_her_pov("claude", "job-1")
@@ -654,9 +706,11 @@ class TestStartHerPov:
     async def test_failed_scheduling_releases_the_claim(self, clean_jobs):
         """A stranded claim would lock the user out of the feature until
         the worker restarted."""
+
         def reject_task(coro):
             coro.close()  # The injected scheduler failure must release its coroutine.
             raise RuntimeError("no running loop")
+
         with patch.object(hp.asyncio, "create_task", side_effect=reject_task):
             with patch("app.context.ws") as mock_ws:
                 mock_ws.track_task = MagicMock()
@@ -748,38 +802,71 @@ class TestPickExchange:
 
     @pytest.mark.asyncio
     async def test_unanswered_user_message_is_not_a_candidate(self):
-        rows = list(reversed([("u0", "user", "Tell me about the storm run.",
-                               "composed", "", None)]))
+        rows = list(
+            reversed(
+                [("u0", "user", "Tell me about the storm run.", "composed", "", None)]
+            )
+        )
         with _patch_conn(rows):
             assert await hp.pick_exchange("u1") is None
 
     @pytest.mark.asyncio
     async def test_assistant_without_preceding_user_is_skipped(self):
-        rows = list(reversed([
-            ("a0", "assistant", "I was thinking about the hangar again.",
-             "tender", "venice", None),
-        ]))
+        rows = list(
+            reversed(
+                [
+                    (
+                        "a0",
+                        "assistant",
+                        "I was thinking about the hangar again.",
+                        "tender",
+                        "venice",
+                        None,
+                    ),
+                ]
+            )
+        )
         with _patch_conn(rows):
             assert await hp.pick_exchange("u1") is None
 
     @pytest.mark.asyncio
     async def test_empty_assistant_reply_is_skipped(self):
-        rows = list(reversed([
-            ("u0", "user", "Do you remember the storm run?", "composed", "", None),
-            ("a0", "assistant", "   ", "tender", "venice", None),
-        ]))
+        rows = list(
+            reversed(
+                [
+                    (
+                        "u0",
+                        "user",
+                        "Do you remember the storm run?",
+                        "composed",
+                        "",
+                        None,
+                    ),
+                    ("a0", "assistant", "   ", "tender", "venice", None),
+                ]
+            )
+        )
         with _patch_conn(rows):
             assert await hp.pick_exchange("u1") is None
 
     @pytest.mark.asyncio
     async def test_trivial_user_with_substantive_reply_is_kept(self):
         """Only *both* sides being trivial disqualifies a moment."""
-        rows = list(reversed([
-            ("u0", "user", "ok", "composed", "", None),
-            ("a0", "assistant",
-             "You say that, but you stayed on comms the whole night anyway.",
-             "tender", "venice", None),
-        ]))
+        rows = list(
+            reversed(
+                [
+                    ("u0", "user", "ok", "composed", "", None),
+                    (
+                        "a0",
+                        "assistant",
+                        "You say that, but you stayed on comms the whole night anyway.",
+                        "tender",
+                        "venice",
+                        None,
+                    ),
+                ]
+            )
+        )
         with _patch_conn(rows):
             picked = await hp.pick_exchange("u1")
         assert picked is not None
@@ -787,10 +874,14 @@ class TestPickExchange:
 
     @pytest.mark.asyncio
     async def test_long_content_is_truncated(self):
-        rows = list(reversed([
-            ("u0", "user", "C" * 2000, "composed", "", None),
-            ("a0", "assistant", "K" * 3000, "tender", "venice", None),
-        ]))
+        rows = list(
+            reversed(
+                [
+                    ("u0", "user", "C" * 2000, "composed", "", None),
+                    ("a0", "assistant", "K" * 3000, "tender", "venice", None),
+                ]
+            )
+        )
         with _patch_conn(rows):
             picked = await hp.pick_exchange("u1")
         assert len(picked["user_content"]) == 800
@@ -799,21 +890,49 @@ class TestPickExchange:
     @pytest.mark.asyncio
     async def test_created_at_is_serialised(self):
         when = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
-        rows = list(reversed([
-            ("u0", "user", "Do you remember the storm run?", "composed", "", when),
-            ("a0", "assistant", "I remember holding the throttle.",
-             "tender", "venice", when),
-        ]))
+        rows = list(
+            reversed(
+                [
+                    (
+                        "u0",
+                        "user",
+                        "Do you remember the storm run?",
+                        "composed",
+                        "",
+                        when,
+                    ),
+                    (
+                        "a0",
+                        "assistant",
+                        "I remember holding the throttle.",
+                        "tender",
+                        "venice",
+                        when,
+                    ),
+                ]
+            )
+        )
         with _patch_conn(rows):
             picked = await hp.pick_exchange("u1")
         assert picked["created_at"] == when.isoformat()
 
     @pytest.mark.asyncio
     async def test_missing_mood_defaults_to_composed(self):
-        rows = list(reversed([
-            ("u0", "user", "Do you remember the storm run?", None, "", None),
-            ("a0", "assistant", "I remember holding the throttle.", None, "venice", None),
-        ]))
+        rows = list(
+            reversed(
+                [
+                    ("u0", "user", "Do you remember the storm run?", None, "", None),
+                    (
+                        "a0",
+                        "assistant",
+                        "I remember holding the throttle.",
+                        None,
+                        "venice",
+                        None,
+                    ),
+                ]
+            )
+        )
         with _patch_conn(rows):
             picked = await hp.pick_exchange("u1")
         assert picked["mood"] == "composed"
@@ -824,8 +943,10 @@ class TestPickExchange:
         rows = _rows([(short_u, "A" * 100), (long_u, "A" * 100)])
         with _patch_conn(rows):
             # deterministic: take the top-scored candidate
-            with patch("app.memory_her_pov.random.choices",
-                       side_effect=lambda pool, weights, k: [pool[0]]):
+            with patch(
+                "app.her_pov_story.random.choices",
+                side_effect=lambda pool, weights, k: [pool[0]],
+            ):
                 picked = await hp.pick_exchange("u1")
         assert picked["user_content"] == long_u
 
@@ -847,8 +968,10 @@ class TestComposePov:
     @pytest.mark.asyncio
     async def test_llm_exception_falls_back(self):
         with patch("app.llm_router.get_lm_gate", return_value=_Gate()):
-            with patch("app.llm_json.call_llm",
-                       AsyncMock(side_effect=RuntimeError("gateway down"))):
+            with patch(
+                "app.llm_json.call_llm",
+                AsyncMock(side_effect=RuntimeError("gateway down")),
+            ):
                 pov = await hp.compose_pov(self._exchange(), affection_level=5)
         assert len(pov["annotation"]) >= 8
         assert pov["title"] == "From my side"
@@ -857,8 +980,9 @@ class TestComposePov:
     @pytest.mark.asyncio
     async def test_non_dict_llm_response_falls_back(self):
         with patch("app.llm_router.get_lm_gate", return_value=_Gate()):
-            with patch("app.llm_json.call_llm",
-                       AsyncMock(return_value=["not", "a", "dict"])):
+            with patch(
+                "app.llm_json.call_llm", AsyncMock(return_value=["not", "a", "dict"])
+            ):
                 pov = await hp.compose_pov(self._exchange(), affection_level=5)
         assert pov["title"] == "From my side"
 
@@ -968,7 +1092,9 @@ def _patch_rail(conn):
 
 class TestClaimActiveFromDb:
     @pytest.mark.asyncio
-    async def test_retires_stale_rows_before_looking_for_an_active_one(self, clean_jobs):
+    async def test_retires_stale_rows_before_looking_for_an_active_one(
+        self, clean_jobs
+    ):
         """Regression: a lost hand-off left a 'queued' row forever, so every
         later tap answered reused=True and the partial unique index refused a
         fresh insert. Rows that stopped moving are failed first."""
@@ -993,7 +1119,9 @@ class TestClaimActiveFromDb:
 
     @pytest.mark.asyncio
     async def test_live_row_is_still_reused(self, clean_jobs):
-        conn = _RailConn(results=[[], [("22222222-2222-2222-2222-222222222222", "drawing")]])
+        conn = _RailConn(
+            results=[[], [("22222222-2222-2222-2222-222222222222", "drawing")]]
+        )
         p = _patch_rail(conn)
         with p[0], p[1], p[2]:
             out = await hp._claim_active_from_db("claude")
@@ -1070,10 +1198,14 @@ class TestEnqueueJob:
     ):
         """A missing hint must not start a second, inline execution path."""
         monkeypatch.setenv("HER_POV_EXECUTION", "queue")
-        inline = AsyncMock(return_value={"job_id": "x", "status": "queued", "reused": False})
-        with patch("app.job_handoff.reconcile_once", AsyncMock(return_value=1)), \
-             patch.object(hp, "_persist_job", AsyncMock()), \
-             patch.object(hp, "_start_inline", inline):
+        inline = AsyncMock(
+            return_value={"job_id": "x", "status": "queued", "reused": False}
+        )
+        with (
+            patch("app.job_handoff.reconcile_once", AsyncMock(return_value=1)),
+            patch.object(hp, "_persist_job", AsyncMock()),
+            patch.object(hp, "_start_inline", inline),
+        ):
             out = await hp.start_her_pov("claude")
         inline.assert_not_awaited()
         assert out["status"] == "queued" and out["reused"] is False
@@ -1084,9 +1216,11 @@ class TestEnqueueJob:
     ):
         monkeypatch.setenv("HER_POV_EXECUTION", "queue")
         inline = AsyncMock()
-        with patch("app.job_handoff.reconcile_once", AsyncMock(return_value=1)), \
-             patch.object(hp, "_persist_job", AsyncMock()), \
-             patch.object(hp, "_start_inline", inline):
+        with (
+            patch("app.job_handoff.reconcile_once", AsyncMock(return_value=1)),
+            patch.object(hp, "_persist_job", AsyncMock()),
+            patch.object(hp, "_start_inline", inline),
+        ):
             out = await hp.start_her_pov("claude")
         inline.assert_not_awaited()
         assert out["status"] == "queued" and out["reused"] is False
@@ -1175,8 +1309,10 @@ class TestStartHerPovDurableRail:
     async def test_db_claimed_job_is_returned_before_any_new_work(self, clean_jobs):
         """A live row in Postgres wins over the in-process board (worker restart)."""
         existing = {"job_id": "db-job", "status": "drawing", "reused": True}
-        with patch.object(hp, "_claim_active_from_db", AsyncMock(return_value=existing)), \
-             patch.object(hp, "_start_inline", AsyncMock()) as inline:
+        with (
+            patch.object(hp, "_claim_active_from_db", AsyncMock(return_value=existing)),
+            patch.object(hp, "_start_inline", AsyncMock()) as inline,
+        ):
             out = await hp.start_her_pov("claude")
         assert out == existing
         inline.assert_not_awaited()
@@ -1184,7 +1320,9 @@ class TestStartHerPovDurableRail:
 
     @pytest.mark.asyncio
     async def test_failed_job_insert_releases_the_claim(self, clean_jobs):
-        with patch.object(hp, "_persist_job", AsyncMock(side_effect=RuntimeError("db"))):
+        with patch.object(
+            hp, "_persist_job", AsyncMock(side_effect=RuntimeError("db"))
+        ):
             with pytest.raises(RuntimeError):
                 await hp.start_her_pov("claude")
         assert "claude" not in hp._ACTIVE_JOB_BY_USER
@@ -1200,12 +1338,19 @@ class TestJobPersistence:
         conn = _RailConn()
         p = _patch_rail(conn)
         with p[0], p[1], p[2]:
-            await hp._persist_job(self._JOB, {
-                "user_id": "claude", "status": "done", "phase": "done",
-                "message": "Kept.", "memory_id": "mem-1", "has_image": True,
-                "exchange_preview": {"user": "u", "assistant": "a"},
-                "created_at": "2026-08-06T00:00:00+00:00",
-            })
+            await hp._persist_job(
+                self._JOB,
+                {
+                    "user_id": "claude",
+                    "status": "done",
+                    "phase": "done",
+                    "message": "Kept.",
+                    "memory_id": "mem-1",
+                    "has_image": True,
+                    "exchange_preview": {"user": "u", "assistant": "a"},
+                    "created_at": "2026-08-06T00:00:00+00:00",
+                },
+            )
         sql, params = conn.calls[0]
         assert "INSERT INTO companion_her_pov_jobs" in sql
         assert "ON CONFLICT (id) DO UPDATE" in sql
@@ -1237,9 +1382,20 @@ class TestJobPersistence:
     async def test_load_maps_the_row_and_parses_a_string_preview(self, clean_jobs):
         when = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
         row = (
-            self._JOB, "claude", "done", "done", "Kept.", None, "Hangar Wait",
-            "I kept this one.", "tender", "mem-1", True,
-            '{"user": "u", "assistant": "a"}', when, when,
+            self._JOB,
+            "claude",
+            "done",
+            "done",
+            "Kept.",
+            None,
+            "Hangar Wait",
+            "I kept this one.",
+            "tender",
+            "mem-1",
+            True,
+            '{"user": "u", "assistant": "a"}',
+            when,
+            when,
         )
         conn = _RailConn(results=[[row]])
         p = _patch_rail(conn)
@@ -1252,8 +1408,22 @@ class TestJobPersistence:
 
     @pytest.mark.asyncio
     async def test_load_keeps_an_unparseable_preview_verbatim(self, clean_jobs):
-        row = (self._JOB, "claude", "queued", "queued", None, None, None, None,
-               None, None, False, "not json", None, None)
+        row = (
+            self._JOB,
+            "claude",
+            "queued",
+            "queued",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            False,
+            "not json",
+            None,
+            None,
+        )
         conn = _RailConn(results=[[row]])
         p = _patch_rail(conn)
         with p[0], p[1], p[2]:
@@ -1280,8 +1450,22 @@ class TestJobPersistence:
     @pytest.mark.asyncio
     async def test_get_job_falls_through_to_postgres(self, clean_jobs):
         """After a worker restart the board is empty; the row is the truth."""
-        row = (self._JOB, "claude", "drawing", "drawing", None, None, None, None,
-               None, None, False, None, None, None)
+        row = (
+            self._JOB,
+            "claude",
+            "drawing",
+            "drawing",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            False,
+            None,
+            None,
+            None,
+        )
         conn = _RailConn(results=[[row]])
         p = _patch_rail(conn)
         with p[0], p[1], p[2]:

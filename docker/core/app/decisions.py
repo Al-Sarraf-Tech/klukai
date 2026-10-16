@@ -39,14 +39,32 @@ from .proactive.state import LOCAL_TZ
 if TYPE_CHECKING:
     from .proactive.engine import ProactiveEngine
 
+from .decision_answers import (
+    _WORDS as _WORDS,
+    _FILLERS as _FILLERS,
+    _NEGATIONS as _NEGATIONS,
+    _ORDINALS as _ORDINALS,
+    _DIGITS as _DIGITS,
+    _CUE_LETTER as _CUE_LETTER,
+    _VERB_LETTER as _VERB_LETTER,
+    _LEAD_LETTER as _LEAD_LETTER,
+    _UPPER_LETTER as _UPPER_LETTER,
+    _ORDINAL_PHRASE as _ORDINAL_PHRASE,
+    _DIGIT_CUE as _DIGIT_CUE,
+    _negated as _negated,
+    _explicit_keys as _explicit_keys,
+    parse_decision_answer as parse_decision_answer,
+    KEYWORD_MAX_LEN as KEYWORD_MAX_LEN,
+)
+
 logger = logging.getLogger(__name__)
 
 PRIMARY_USER = "jalsarraf"  # scheduled jobs are single-user (see engine BOUNDARY note)
 
 TIER_MIN = {"operational": 0, "personal": 3, "matters": 6}
 DECISIONS_MIN_LEVEL = 2
-ASK_CHANCE = 0.4              # per 14:40 slot, before the weekly cap
-MAX_ASKS_PER_WEEK = 2         # rolling 7 local days, today included
+ASK_CHANCE = 0.4  # per 14:40 slot, before the weekly cap
+MAX_ASKS_PER_WEEK = 2  # rolling 7 local days, today included
 REUSE_COOLDOWN_DAYS = 30
 
 PENDING_FACT = "decision:pending"
@@ -56,22 +74,21 @@ HER_PREFIX = "her:"
 PENDING_TTL = 24 * 3600
 LAST_TTL = 40 * 86400
 OUTFIT_TOMORROW_TTL = 172800
-PENDING_CLEAR_TTL = 60        # no delete API: overwrite with "" and let it lapse
+PENDING_CLEAR_TTL = 60  # no delete API: overwrite with "" and let it lapse
 
 CONSEQUENCE_MIN = timedelta(hours=12)
 CONSEQUENCE_MAX = timedelta(hours=36)
-DELIVERY_FROM = time(9, 0)    # the "message" deferred kind ignores quiet hours,
+DELIVERY_FROM = time(9, 0)  # the "message" deferred kind ignores quiet hours,
 DELIVERY_UNTIL = time(21, 0)  # so the delay itself lands inside the day
 
 HER_BLOCK_MIN_LEVEL = 3
 HER_BLOCK_MAX = 4
 HER_VALUE_MAX = 160
-KEYWORD_MAX_LEN = 160         # keyword answers only count in short messages
 
 _CACHE_TTL = 300.0
 _HER_CACHE_TTL = 600.0
-_pending_cache: dict[str, tuple[float, dict | None]] = {}
-_her_cache: dict[str, tuple[float, list[dict]]] = {}
+_pending_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+_her_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
 _HER_KEY = re.compile(r"her:[a-z0-9_]+")
 
@@ -87,7 +104,7 @@ def _local_today(now: datetime) -> date:
 # ── Templates ────────────────────────────────────────────────────────────────
 
 
-def _option(raw: Any) -> dict | None:
+def _option(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     label = str(raw.get("label") or "").strip()
@@ -107,13 +124,13 @@ def _option(raw: Any) -> dict | None:
     return out
 
 
-def load_templates(p: dict) -> list[dict]:
+def load_templates(p: dict[str, Any]) -> list[dict[str, Any]]:
     """Validated, normalised templates from ``command_decisions.templates``."""
     section = p.get("command_decisions")
     raw = section.get("templates") if isinstance(section, dict) else None
     if not isinstance(raw, list):
         return []
-    out: list[dict] = []
+    out: list[dict[str, Any]] = []
     for t in raw:
         if not isinstance(t, dict):
             continue
@@ -129,119 +146,32 @@ def load_templates(p: dict) -> list[dict]:
             continue
         if not 2 <= len(options) <= 3 or any(o is None for o in options):
             continue
-        out.append({"id": tid, "tier": tier, "min_level": min_level, "ask": ask,
-                    "options": options})
+        out.append(
+            {
+                "id": tid,
+                "tier": tier,
+                "min_level": min_level,
+                "ask": ask,
+                "options": options,
+            }
+        )
     return out
 
 
-def eligible_level(t: dict) -> int:
+def eligible_level(t: dict[str, Any]) -> int:
     """Lowest affection level at which a template may be asked."""
     return max(int(t["min_level"]), TIER_MIN[t["tier"]], DECISIONS_MIN_LEVEL)
 
 
-def render_ask(t: dict) -> str:
+def render_ask(t: dict[str, Any]) -> str:
     """Her line, with ``{options}`` rendered as "A: label. B: label."."""
     opts = " ".join(f"{o['key']}: {o['label']}." for o in t["options"])
     if "{options}" in t["ask"]:
-        return t["ask"].replace("{options}", opts)
+        return str(t["ask"]).replace("{options}", opts)
     return f"{t['ask']} {opts}"
 
 
 # ── Answer parsing ───────────────────────────────────────────────────────────
-
-_WORDS = re.compile(r"[a-z0-9#']+")
-_FILLERS = frozenset({
-    "ok", "okay", "hmm", "hm", "um", "uh", "well", "then", "please", "definitely",
-    "obviously", "sure", "yeah", "yes", "i", "guess", "think", "go", "going", "with",
-    "the", "option", "choice", "letter", "lets", "let's", "i'll", "ill", "i'd", "id",
-    "say", "pick", "take", "choose", "answer", "my", "is",
-})
-_NEGATIONS = frozenset({"not", "no", "never", "don't", "dont", "nah", "without"})
-_ORDINALS = {"first": 0, "second": 1, "third": 2, "last": -1, "former": 0, "latter": -1}
-_DIGITS = {"1": 0, "2": 1, "3": 2}
-
-_CUE_LETTER = re.compile(r"\b(?:option|choice|answer)\s*[:#]?\s*([abc])\b")
-_VERB_LETTER = re.compile(
-    r"\b(?:go(?:ing)?\s+with|pick|take|choose|chose|say|vote(?:\s+for)?|prefer)\s+([abc])\b"
-    r"(?=\s*(?:$|[.!,;)]|\s+(?:please|then|for\s+sure|definitely|obviously|i\s+think)))"
-)
-_LEAD_LETTER = re.compile(r"^\s*([abc])\s*(?:[.!,:;)\-]|$)")
-_UPPER_LETTER = re.compile(r"(?<![A-Za-z'])([BC])(?![A-Za-z'\-])")
-_ORDINAL_PHRASE = re.compile(r"\b(first|second|third|last)\s+(?:one|option|choice)\b"
-                             r"|\bthe\s+(former|latter)\b")
-_DIGIT_CUE = re.compile(r"(?:\b(?:option|choice|number)|#)\s*([123])\b")
-
-
-def _negated(text: str, start: int) -> bool:
-    """A negation in the same clause, within 3 words before ``start``."""
-    clause = re.split(r"[.,;!?]", text[:start])[-1]
-    return any(w in _NEGATIONS for w in _WORDS.findall(clause)[-3:])
-
-
-def _explicit_keys(text: str, original: str, keys: list[str]) -> set[str]:
-    """Keys named by letter, ordinal or number."""
-    found: list[tuple[str, int]] = []   # (key, match start)
-
-    def by_index(i: int) -> str | None:
-        return keys[i] if -len(keys) <= i < len(keys) else None
-
-    core = [w for w in _WORDS.findall(text) if w not in _FILLERS]
-    if len(core) == 1:
-        w = core[0]
-        if w.upper() in keys:
-            found.append((w.upper(), 0))
-        elif w in _ORDINALS or w in _DIGITS:
-            k = by_index(_ORDINALS[w] if w in _ORDINALS else _DIGITS[w])
-            if k:
-                found.append((k, 0))
-    for rx in (_CUE_LETTER, _VERB_LETTER, _LEAD_LETTER):
-        found += [(m.group(1).upper(), m.start()) for m in rx.finditer(text)]
-    found += [(m.group(1), m.start()) for m in _UPPER_LETTER.finditer(original)]
-    for m in _ORDINAL_PHRASE.finditer(text):
-        k = by_index(_ORDINALS[m.group(1) or m.group(2)])
-        if k:
-            found.append((k, m.start()))
-    for m in _DIGIT_CUE.finditer(text):
-        k = by_index(_DIGITS[m.group(1)])
-        if k:
-            found.append((k, m.start()))
-    return {k for k, start in found if k in keys and not _negated(text, start)}
-
-
-def parse_decision_answer(message: str, options: list[dict]) -> str | None:
-    """Which option ``message`` picks: its key, or None if none/ambiguous.
-
-    Letters ("B", "option b", "go with a"), ordinals ("the second one", "the
-    latter") and numbers ("#2") win outright. Otherwise option keywords and
-    labels are scored, ignoring negated hits ("not the loud one"), in
-    messages up to ~160 characters. Questions never resolve.
-    """
-    if not isinstance(message, str) or not options:
-        return None
-    original = message.strip().replace("’", "'")
-    text = original.lower()
-    if not text or text.endswith("?"):
-        return None
-    keys = [str(o.get("key", "")).upper() for o in options]
-
-    explicit = _explicit_keys(text, original, keys)
-    if explicit:
-        return explicit.pop() if len(explicit) == 1 else None
-    if len(text) > KEYWORD_MAX_LEN:
-        return None
-
-    scores: dict[str, int] = {}
-    for key, opt in zip(keys, options, strict=True):
-        phrases = {*(opt.get("keywords") or []), str(opt.get("label", "")).lower()}
-        hits = 0
-        for phrase in filter(None, phrases):
-            m = re.search(r"\b" + re.escape(phrase) + r"\b", text)
-            if m and not _negated(text, m.start()):
-                hits += 1
-        scores[key] = hits
-    best = max(scores.values())
-    winners = [k for k, v in scores.items() if v == best]
-    return winners[0] if best > 0 and len(winners) == 1 else None
 
 
 # ── Consequence timing ───────────────────────────────────────────────────────
@@ -275,11 +205,11 @@ def pick_consequence_delay(now: datetime, roll: float) -> float:
 # ── Blocks ───────────────────────────────────────────────────────────────────
 
 
-def build_decision_block(pending: dict, key: str) -> str:
+def build_decision_block(pending: dict[str, Any], key: str) -> str:
     """One-shot block: he answered her question; acknowledge and comply."""
     opt = next(o for o in pending["options"] if o.get("key") == key)
     lines = [
-        f"COMMAND DECISION: Earlier you asked him: \"{pending.get('ask', '')}\" "
+        f'COMMAND DECISION: Earlier you asked him: "{pending.get("ask", "")}" '
         f"He chose {key}: {opt['label']}.",
         "Acknowledge his call in character, in one sentence at most, then answer "
         "the rest of what he said. Don't announce what happens next; it will "
@@ -288,12 +218,12 @@ def build_decision_block(pending: dict, key: str) -> str:
     if opt.get("disagree"):
         lines.append(
             "It's not the call you would have made. Let that show for a beat, then "
-            "comply without arguing: \"...Fine. You're the Commander.\""
+            'comply without arguing: "...Fine. You\'re the Commander."'
         )
     return "\n".join(lines)
 
 
-def build_her_world_block(entries: list[dict]) -> str:
+def build_her_world_block(entries: list[dict[str, Any]]) -> str:
     """The last HER_BLOCK_MAX non-empty ``her:*`` details, in store order."""
     lines: list[str] = []
     for e in entries:
@@ -315,20 +245,24 @@ def build_her_world_block(entries: list[dict]) -> str:
 # ── Fact helpers (all fail-soft) ─────────────────────────────────────────────
 
 
-def _asked_at(data: dict) -> datetime:
+def _asked_at(data: dict[str, Any]) -> datetime:
     asked = datetime.fromisoformat(str(data["asked_at"]))
     return asked if asked.tzinfo else asked.replace(tzinfo=timezone.utc)
 
 
-def _parse_pending(raw: Any) -> dict | None:
+def _parse_pending(raw: Any) -> dict[str, Any] | None:
     """A well-formed pending decision from the stored JSON, else None."""
     try:
         data = json.loads(raw) if raw else None
         if not isinstance(data, dict) or not data.get("id"):
             return None
         options = data.get("options")
-        if not isinstance(options, list) or not options or not all(
-            isinstance(o, dict) and o.get("key") and o.get("label") for o in options
+        if (
+            not isinstance(options, list)
+            or not options
+            or not all(
+                isinstance(o, dict) and o.get("key") and o.get("label") for o in options
+            )
         ):
             return None
         _asked_at(data)
@@ -337,7 +271,9 @@ def _parse_pending(raw: Any) -> dict | None:
     return data
 
 
-async def _load_pending(memory: Any, user_id: str, now: datetime) -> dict | None:
+async def _load_pending(
+    memory: Any, user_id: str, now: datetime
+) -> dict[str, Any] | None:
     """The live pending decision (cached 5 min; expiry re-checked every read)."""
     cached = _pending_cache.get(user_id)
     if cached and _time.monotonic() - cached[0] < _CACHE_TTL:
@@ -374,8 +310,12 @@ async def _history(memory: Any, user_id: str) -> dict[str, date]:
     return out
 
 
-async def _store(memory: Any, key: str, value: str, user_id: str, ttl: int | None = None) -> None:
-    kwargs: dict[str, Any] = {"user_id": user_id} if ttl is None else {"ttl": ttl, "user_id": user_id}
+async def _store(
+    memory: Any, key: str, value: str, user_id: str, ttl: int | None = None
+) -> None:
+    kwargs: dict[str, Any] = (
+        {"user_id": user_id} if ttl is None else {"ttl": ttl, "user_id": user_id}
+    )
     try:
         await memory.store_fact(key, value, **kwargs)
     except Exception as e:
@@ -390,9 +330,13 @@ async def apply_effect(memory: Any, user_id: str, effect: Any, now: datetime) ->
     fact = effect.get("fact")
     if isinstance(outfit, str) and outfit.strip():
         tomorrow = _local_today(now) + timedelta(days=1)
-        await _store(memory, OUTFIT_TOMORROW_FACT,
-                     json.dumps({"date": tomorrow.isoformat(), "outfit_id": outfit.strip()}),
-                     user_id, ttl=OUTFIT_TOMORROW_TTL)
+        await _store(
+            memory,
+            OUTFIT_TOMORROW_FACT,
+            json.dumps({"date": tomorrow.isoformat(), "outfit_id": outfit.strip()}),
+            user_id,
+            ttl=OUTFIT_TOMORROW_TTL,
+        )
     elif isinstance(fact, dict) and _HER_KEY.fullmatch(str(fact.get("key", ""))):
         await _store(memory, str(fact["key"]), str(fact.get("value", "")), user_id)
         _her_cache.pop(user_id, None)
@@ -422,7 +366,8 @@ async def maybe_ask(engine: ProactiveEngine, user_id: str) -> bool:
     if sum(1 for d in history.values() if (today - d).days < 7) >= MAX_ASKS_PER_WEEK:
         return False
     eligible = [
-        t for t in load_templates(load_personality())
+        t
+        for t in load_templates(load_personality())
         if eligible_level(t) <= level
         and (today - history.get(t["id"], date.min)).days >= REUSE_COOLDOWN_DAYS
     ]
@@ -432,12 +377,21 @@ async def maybe_ask(engine: ProactiveEngine, user_id: str) -> bool:
     t = random.choice(eligible)
     if not await engine._deliver(render_ask(t)):
         return False
-    pending = {"id": t["id"], "ask": render_ask(t), "options": t["options"],
-               "asked_at": now.isoformat()}
+    pending = {
+        "id": t["id"],
+        "ask": render_ask(t),
+        "options": t["options"],
+        "asked_at": now.isoformat(),
+    }
     _pending_cache[user_id] = (_time.monotonic(), pending)
     await _store(memory, PENDING_FACT, json.dumps(pending), user_id, ttl=PENDING_TTL)
-    await _store(memory, LAST_FACT + t["id"],
-                 json.dumps({"date": today.isoformat(), "choice": None}), user_id, ttl=LAST_TTL)
+    await _store(
+        memory,
+        LAST_FACT + t["id"],
+        json.dumps({"date": today.isoformat(), "choice": None}),
+        user_id,
+        ttl=LAST_TTL,
+    )
     logger.info("Command decision asked: %s", t["id"])
     return True
 
@@ -468,12 +422,17 @@ async def _resolve(user_id: str, content: str, memory: Any) -> str:
     opt = next(o for o in pending["options"] if o.get("key") == key)
 
     await _store(memory, PENDING_FACT, "", user_id, ttl=PENDING_CLEAR_TTL)
-    await _store(memory, LAST_FACT + str(pending["id"]),
-                 json.dumps({"date": _local_today(now).isoformat(), "choice": key}),
-                 user_id, ttl=LAST_TTL)
+    await _store(
+        memory,
+        LAST_FACT + str(pending["id"]),
+        json.dumps({"date": _local_today(now).isoformat(), "choice": key}),
+        user_id,
+        ttl=LAST_TTL,
+    )
     await apply_effect(memory, user_id, opt.get("effect"), now)
     try:
         from . import deferred
+
         await deferred.schedule(
             {"kind": "message", "text": str(opt["consequence"])},
             user_id=user_id,
@@ -485,7 +444,9 @@ async def _resolve(user_id: str, content: str, memory: Any) -> str:
     return build_decision_block(pending, key)
 
 
-async def her_world_prompt_block(user_id: str, affection_level: int, memory: Any) -> str:
+async def her_world_prompt_block(
+    user_id: str, affection_level: int, memory: Any
+) -> str:
     """Per-message HER WORLD block at affection 3+ (cached for 10 minutes)."""
     if affection_level < HER_BLOCK_MIN_LEVEL:
         return ""
@@ -494,7 +455,9 @@ async def her_world_prompt_block(user_id: str, affection_level: int, memory: Any
         entries = cached[1]
     else:
         try:
-            entries = list(await memory.recall_facts_by_pattern(f"{HER_PREFIX}%", user_id=user_id))
+            entries = list(
+                await memory.recall_facts_by_pattern(f"{HER_PREFIX}%", user_id=user_id)
+            )
         except Exception as e:
             logger.debug("her:* recall failed: %s", e)
             entries = []

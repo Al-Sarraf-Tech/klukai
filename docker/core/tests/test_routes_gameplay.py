@@ -10,6 +10,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.task_fakes import discard_task
+
 import pytest
 from fastapi import FastAPI
 
@@ -37,6 +39,7 @@ def _mk_unauth_request() -> MagicMock:
 
 def _app_with_routes() -> FastAPI:
     from app.routes import register_routes
+
     app = FastAPI()
     register_routes(app)
     return app
@@ -44,15 +47,20 @@ def _app_with_routes() -> FastAPI:
 
 def _find_route(app: FastAPI, path: str, method: str):
     for route in app.routes:
-        if getattr(route, "path", None) == path and method in getattr(route, "methods", set()):
+        if getattr(route, "path", None) == path and method in getattr(
+            route, "methods", set()
+        ):
             return route.endpoint
     raise AssertionError(f"route not found: {method} {path}")
 
 
 def _mk_aff_state(score: int = 500, level: int = 5):
     return SimpleNamespace(
-        score=score, level=level, level_name="Trusted",
-        consecutive_days=7, total_interactions=100,
+        score=score,
+        level=level,
+        level_name="Trusted",
+        consecutive_days=7,
+        total_interactions=100,
         first_interaction=None,
     )
 
@@ -71,6 +79,7 @@ class TestGiftRoute:
     @pytest.mark.asyncio
     async def test_requires_auth(self):
         from app.routes import GiftRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/gift", "POST")
         with patch("app.routes._get_user_id", new=AsyncMock(return_value=None)):
@@ -80,6 +89,7 @@ class TestGiftRoute:
     @pytest.mark.asyncio
     async def test_loved_gift_gives_max_bonus(self):
         from app.routes import GiftRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/gift", "POST")
 
@@ -91,11 +101,13 @@ class TestGiftRoute:
         ws_mock = MagicMock()
         ws_mock.is_connected = MagicMock(return_value=False)
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.affection.get_state", new=AsyncMock(return_value=state)), \
-             patch("app.routes.affection._save_state", new=AsyncMock()), \
-             patch("app.routes.load_personality", return_value=personality), \
-             patch("app.routes.ws", ws_mock):
+        with (
+            patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")),
+            patch("app.routes.affection.get_state", new=AsyncMock(return_value=state)),
+            patch("app.routes.affection._save_state", new=AsyncMock()),
+            patch("app.routes.load_personality", return_value=personality),
+            patch("app.routes.ws", ws_mock),
+        ):
             result = await handler(
                 GiftRequest(gift="motorcycle gear"),
                 _mk_request(),
@@ -109,6 +121,7 @@ class TestGiftRoute:
     @pytest.mark.asyncio
     async def test_disliked_gift_decrements_score(self):
         from app.routes import GiftRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/gift", "POST")
 
@@ -120,11 +133,13 @@ class TestGiftRoute:
         ws_mock = MagicMock()
         ws_mock.is_connected = MagicMock(return_value=False)
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.affection.get_state", new=AsyncMock(return_value=state)), \
-             patch("app.routes.affection._save_state", new=AsyncMock()), \
-             patch("app.routes.load_personality", return_value=personality), \
-             patch("app.routes.ws", ws_mock):
+        with (
+            patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")),
+            patch("app.routes.affection.get_state", new=AsyncMock(return_value=state)),
+            patch("app.routes.affection._save_state", new=AsyncMock()),
+            patch("app.routes.load_personality", return_value=personality),
+            patch("app.routes.ws", ws_mock),
+        ):
             result = await handler(GiftRequest(gift="garbage"), _mk_request())
 
         assert result["tier"] == "disliked"
@@ -134,6 +149,7 @@ class TestGiftRoute:
     @pytest.mark.asyncio
     async def test_score_clamped_to_zero_floor(self):
         from app.routes import GiftRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/gift", "POST")
 
@@ -145,11 +161,13 @@ class TestGiftRoute:
         ws_mock = MagicMock()
         ws_mock.is_connected = MagicMock(return_value=False)
 
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.affection.get_state", new=AsyncMock(return_value=state)), \
-             patch("app.routes.affection._save_state", new=AsyncMock()), \
-             patch("app.routes.load_personality", return_value=personality), \
-             patch("app.routes.ws", ws_mock):
+        with (
+            patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")),
+            patch("app.routes.affection.get_state", new=AsyncMock(return_value=state)),
+            patch("app.routes.affection._save_state", new=AsyncMock()),
+            patch("app.routes.load_personality", return_value=personality),
+            patch("app.routes.ws", ws_mock),
+        ):
             result = await handler(GiftRequest(gift="garbage"), _mk_request())
 
         assert result["new_score"] == 0  # Clamped
@@ -182,11 +200,17 @@ class TestMissionRoute:
         ws_mock = MagicMock()
         ws_mock.is_connected = MagicMock(return_value=False)
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state())), \
-             patch("app.routes_extras.asyncio.create_task"), \
-             patch("app.routes_extras.ws", ws_mock):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state()),
+            ),
+            patch("app.routes_extras.spawn", side_effect=discard_task),
+            patch("app.routes_extras.ws", ws_mock),
+        ):
             result = await handler(_mk_request())
 
         assert result == {"status": "deployed"}
@@ -216,9 +240,15 @@ class TestMilestonesRoute:
         app = _app_with_routes()
         handler = _find_route(app, "/api/milestones", "GET")
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory.get_milestones",
-                   new=AsyncMock(return_value=[{"event": "first_meeting"}])):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.memory.get_milestones",
+                new=AsyncMock(return_value=[{"event": "first_meeting"}]),
+            ),
+        ):
             result = await handler(_mk_request())
 
         assert result == {"milestones": [{"event": "first_meeting"}]}
@@ -248,7 +278,9 @@ class TestCostumeGetRoute:
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "GET")
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch(
+            "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+        ):
             result = await handler(_mk_request())
         assert "costume" in result
 
@@ -262,19 +294,25 @@ class TestCostumeSetRoute:
     @pytest.mark.asyncio
     async def test_requires_auth(self):
         from app.routes import CostumeRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "POST")
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
-            resp = await handler(CostumeRequest(costume="blazing_star"), _mk_unauth_request())
+            resp = await handler(
+                CostumeRequest(costume="blazing_star"), _mk_unauth_request()
+            )
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
     async def test_rejects_invalid_costume(self):
         from app.routes import CostumeRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "POST")
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch(
+            "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+        ):
             resp = await handler(CostumeRequest(costume="bogus"), _mk_request())
         assert resp.status_code == 400
 
@@ -282,37 +320,64 @@ class TestCostumeSetRoute:
     async def test_accepts_unlocked_costume(self):
         # astral_luminous unlocks at affection level 4; a level-9 Commander can wear it.
         from app.routes import CostumeRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "POST")
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=SimpleNamespace(level=9))):
-            result = await handler(CostumeRequest(costume="astral_luminous"), _mk_request())
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=SimpleNamespace(level=9)),
+            ),
+        ):
+            result = await handler(
+                CostumeRequest(costume="astral_luminous"), _mk_request()
+            )
         assert result == {"costume": "astral_luminous"}
 
     @pytest.mark.asyncio
     async def test_rejects_locked_costume(self):
         # A costume gated above the Commander's current affection level is refused.
         from app.routes import CostumeRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "POST")
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=SimpleNamespace(level=0))):
-            resp = await handler(CostumeRequest(costume="astral_luminous"), _mk_request())
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=SimpleNamespace(level=0)),
+            ),
+        ):
+            resp = await handler(
+                CostumeRequest(costume="astral_luminous"), _mk_request()
+            )
         assert resp.status_code == 403
 
     @pytest.mark.asyncio
     async def test_accepts_level_zero_costume_without_unlock(self):
         # blazing_star is unlock-level 0 — always wearable.
         from app.routes import CostumeRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "POST")
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=SimpleNamespace(level=0))):
-            result = await handler(CostumeRequest(costume="blazing_star"), _mk_request())
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=SimpleNamespace(level=0)),
+            ),
+        ):
+            result = await handler(
+                CostumeRequest(costume="blazing_star"), _mk_request()
+            )
         assert result == {"costume": "blazing_star"}

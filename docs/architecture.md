@@ -1,6 +1,6 @@
 # Klukai Architecture
 
-> Companion PWA + FastAPI core on a two-host private mesh. Provider configuration below reflects the owner's October 14, 2026 deployment. Reliability work on the elite-refactor branch is tracked separately in `handoff/2026-10-14-elite-refactor-progress.md`; planned behavior is not deployment evidence. Per-decision history lives in `docs/adr/`.
+> Companion PWA + FastAPI core on a two-host private mesh. Provider configuration below reflects the owner's October 14, 2026 deployment. The recorded October 15 hardening rollout uses source `a56979d`. Module and lifetime changes in the active S-tier uplift remain subject to the [acceptance ledger](superpowers/specs/2026-10-15-s-tier-completion.md); source and tests are not deployment evidence. Earlier refactor history is in `handoff/2026-10-14-elite-refactor-progress.md`. Per-decision history lives in `docs/adr/`.
 
 **Redaction:** mesh IPs, MagicDNS names, and secret values are omitted. Use host roles **core host** and **GPU host**.
 
@@ -44,17 +44,57 @@ Single FastAPI process. Important modules:
 
 | Module | Role |
 |---|---|
-| `chat.py` / `chat_handlers.py` | Authenticated multi-device WebSocket conversation pipeline |
-| `llm_router.py` | Authorized Sonnet interactive primary; Dominus local secondary |
-| `memory_her_pov.py` | Her POV pipeline + durable job board |
+| `chat.py` / `chat_handlers.py` | Authenticated multi-device WebSocket admission and conversation coordination |
+| `chat_prompt.py` / `chat_reply.py` / `chat_followups.py` | Prompt preparation, agent/direct reply presentation and follow-up memory work |
+| `llm_router.py` / `llm_completions.py` / `llm_intent.py` | Provider selection, transport/streaming and intent classification; Sonnet primary, Dominus secondary |
+| `memory_her_pov.py` / `her_pov_*.py` | Durable job board, pipeline, storage and story preparation |
 | `deferred.py` | One-shot future tasks (Postgres + bridge timer) |
 | `proactive/` | Cron engine + durability catch-up |
 | `memory*.py` | Three-tier memory + archive |
 | `image_provider.py` / `agy_image_provider.py` | Provider policy and private account-worker client; production selects `agy` |
-| `image_gen.py` | Local Comfy implementation retained for explicit local deployments/rollback |
+| `image_gen.py` / `image_*.py` | Local Comfy facade, workflows, rendering and lease ownership retained for explicit local deployments/rollback |
+| `runtime_tasks.py` / `ws_manager.py` | Application background-work ownership, admission and cancellation-safe shutdown |
+| `shared_http.py` / `observability/health_cache.py` | Lazy HTTP close contract and lifetime-owned readiness clients |
+| `dependencies.py` / `circuit_breakers.py` | Exercised dependency boundaries and breaker transitions |
 | `events.py` | Redis publish (`companion:events`) |
 | `warmup.py` | Compatibility hooks; load-on-demand policy disables periodic/model prewarming |
-| `migrations.py` | Refactor branch: checksum ledger, advisory-locked transactional startup; see migration runbook |
+| `migrations.py` | Checksum ledger and advisory-locked transactional startup; see migration runbook |
+
+### Application lifetime in the uplift
+
+There is one FastAPI process and one application lifetime. Its supervisor owns
+background wardrobe, HTTP/backfill, push and portrait work. WebSocket ownership
+retains its ordinary and durable task buckets. Existing voice, proactive and
+job-handoff components remain the single owners of their children.
+
+Shutdown stops admission, closes producer owners concurrently, then waits for
+every producer before unwinding shared HTTP/Redis/router resources and finally
+the database pool. A five-second drain precedes cancellation; cancellation joins
+asynchronous finalizers and retained native writes/push dispatches. Repeated
+cancellation cannot abandon a transport close or a native thread. Partial
+startup uses the same resource unwind, and cleanup exceptions retain their
+normal context chain. Native/driver completion still requires cooperation;
+[declared cleanup deadlines and service allowances](runbooks/encrypted-credentials.md#shutdown-budget)
+document that limit.
+
+Accepted or uncertain account-image work keeps its original durable journal,
+request ID and prompt. Application shutdown does not reset acceptance or submit
+a replacement. A later lifetime recovers the same request. Ordinary browser
+disconnection can leave accepted work running; application shutdown still owns
+its completion. The Her POV UI separately stops its polling on disposal and
+rejects stale job responses without cancelling or resubmitting server work.
+
+The container healthcheck uses `/api/health/live`; required-backend loss must not
+cause an autoheal restart loop. Deployment checks `/api/health/ready` separately.
+Readiness reuses lifetime-owned clients while executing fresh dependency checks.
+PostgreSQL/auth and Redis/session failures fail closed; optional memory/provider
+loss degrades without changing the owner's provider/fallback policy.
+
+Per-route RED metrics use bounded route templates. Private `/internal/metrics`
+requires its dedicated token file, and sampled traces redact credentials and
+correlate requests. `observability/slos.json` drives generated SLO documentation,
+rules and dashboard budgets. Actual collector ingestion, alert routing and
+retention remain separate live release checks.
 
 ### Production provider policy
 

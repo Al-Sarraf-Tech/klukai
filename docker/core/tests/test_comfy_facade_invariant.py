@@ -37,12 +37,12 @@ def test_offline_loaders_reuse_the_protected_production_path() -> None:
 
 def test_only_protected_module_contains_comfy_job_endpoints() -> None:
     """A new core loader must not silently grow outside the leased module."""
-    allowed = CORE / "app" / "image_gen.py"
+    allowed = {CORE / "app" / name for name in ("image_gen.py", "image_comfy.py")}
     endpoints = ("/prompt", "/history", "/view", "/free", "/interrupt", "/upload/image")
 
     offenders: list[str] = []
     for source_path in sorted((CORE / "app").rglob("*.py")):
-        if source_path == allowed:
+        if source_path in allowed:
             continue
         source = source_path.read_text()
         if any(endpoint in source for endpoint in endpoints):
@@ -52,7 +52,9 @@ def test_only_protected_module_contains_comfy_job_endpoints() -> None:
 
 
 def test_every_protected_comfy_call_uses_lease_header_helper() -> None:
-    source = (CORE / "app" / "image_gen.py").read_text()
+    source = "\n".join(
+        (CORE / "app" / name).read_text() for name in ("image_gen.py", "image_comfy.py")
+    )
 
     # queue, interrupt, free, prompt, history, view, and the img2img source
     # upload each attach both the gateway bearer credential and the active

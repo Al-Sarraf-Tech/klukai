@@ -6,16 +6,16 @@ loop live in chat.py, registered via ``register_websocket(app)``.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import asyncio
 import logging
-import os
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from pydantic import BaseModel, Field, field_validator
 
 from . import memory_archive
 from .context import ws, router, affection
@@ -27,76 +27,29 @@ from .helpers import (
 )
 from .image_gen import generate_image
 from .llm_router import FAILURE_SENTINEL
-from .lm_gateway import lm_studio_auth_headers
 from .models import SessionState
+from .routes_health import register_health_routes
 from .personality import load_personality
 from .push import add_subscription, get_vapid_public_key
-from .passwords import MAX_PASSWORD_BYTES, PasswordWorkBusy
+from .passwords import PasswordWorkBusy
 from .voice_client import voice_url as _voice_url
 
 
 # ── Request models ────────────────────────────────────────────────────────
 
 
-class LoginRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=128)
-    password: str = Field(min_length=1, max_length=128)
-
-
-class TTSRequest(BaseModel):
-    text: str = Field(min_length=1)
-    language: str = "en"
-
-
-class STTRequest(BaseModel):
-    # Same ceiling as the voice service's own STTRequest (~6 MB of audio once
-    # decoded): refuse at validation rather than proxy a multi-MB body to it.
-    audio: str = Field(min_length=1, max_length=8_000_000)
-
-
-class ImageGenRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=2000)
-    request_id: str | None = Field(default=None, max_length=36)
-
-
-class GiftRequest(BaseModel):
-    gift: str = Field(min_length=1)
-
-
-class CostumeRequest(BaseModel):
-    costume: str
-
-
-class PushSubscription(BaseModel):
-    endpoint: str
-    keys: dict
-
-
-class ChangePasswordRequest(BaseModel):
-    old_password: str = Field(min_length=1)
-    new_password: str = Field(min_length=8, max_length=128)
-
-    @field_validator("new_password")
-    @classmethod
-    def bcrypt_byte_limit(cls, value: str) -> str:
-        if len(value.encode()) > MAX_PASSWORD_BYTES:
-            raise ValueError("Password must be at most 72 UTF-8 bytes")
-        return value
-
-
-class TributeRequest(BaseModel):
-    """Body for POST /api/tribute — Commander's heartfelt message to Klukai."""
-
-    text: str = Field(min_length=20, max_length=1000)
-    make_crown_jewel: bool = True
-
-
-class AccountDeactivateRequest(BaseModel):
-    """Body for POST /api/account/deactivate — soft delete. SACRED chat
-    data is preserved per CLAUDE.md absolute rule."""
-
-    confirm: str = Field(pattern=r"^DEACTIVATE$")
-
+from .api_schemas import (
+    LoginRequest as LoginRequest,
+    TTSRequest as TTSRequest,
+    STTRequest as STTRequest,
+    ImageGenRequest as ImageGenRequest,
+    GiftRequest as GiftRequest,
+    CostumeRequest as CostumeRequest,
+    PushSubscription as PushSubscription,
+    ChangePasswordRequest as ChangePasswordRequest,
+    TributeRequest as TributeRequest,
+    AccountDeactivateRequest as AccountDeactivateRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +80,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Authentication ─────────────────────────────────────────────────────
 
     @app.post("/api/auth/login")
-    async def login(req: LoginRequest, request: Request):
+    async def login(req: LoginRequest, request: Request) -> Any:
         from .auth import authenticate, check_ip_banned
 
         ip = client_ip(request)
@@ -136,216 +89,34 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         try:
             token = await authenticate(req.username, req.password, ip)
         except PasswordWorkBusy:
-            return JSONResponse({"error": "Authentication busy; retry shortly"},
-                                status_code=503, headers={"Retry-After": "1"})
+            return JSONResponse(
+                {"error": "Authentication busy; retry shortly"},
+                status_code=503,
+                headers={"Retry-After": "1"},
+            )
         if token:
             return {"token": token, "user_id": req.username}
         return JSONResponse({"error": "Invalid credentials"}, status_code=401)
 
     @app.get("/api/auth/verify")
-    async def verify_token(request: Request):
+    async def verify_token(request: Request) -> Any:
         user_id = await _get_user_id(request)
         if user_id:
             return {"user_id": user_id}
         return JSONResponse({"error": "Invalid token"}, status_code=401)
 
-    # ── Health ──────────────────────────────────────────────────────────────
-
-    @app.get("/health")
-    async def health():
-        """Cached health probe. Sub-ms on cache hit, ~PG+Redis+Qdrant RTT on miss.
-
-        See app/observability/health_cache.py for TTL + refresh semantics.
-        SLO: p99 ≤ 30ms (per docs/slos.md).
-        """
-        from .observability.health_cache import get_cached_health
-
-        return await get_cached_health()
-
-    @app.get("/api/health/live")
-    async def health_live():
-        """Liveness probe — process-only, no backend pings.
-
-        Returns 200 unless the process itself is broken. K8s-friendly
-        liveness convention: liveness failures cause restart, so we
-        intentionally don't fail on a backend outage here.
-        """
-        from .observability.health_cache import get_live_health
-
-        return get_live_health()
-
-    @app.get("/api/health/ready")
-    async def health_ready():
-        """Readiness probe — full uncached deep check.
-
-        Forces cache refresh; reports unhealthy if any required backend
-        is down. K8s-friendly readiness convention: readiness failures
-        remove the pod from service rotation without restarting it.
-        """
-        from .observability.health_cache import get_fresh_health
-
-        result = await get_fresh_health()
-        # 503 if backends are down so load balancers / Cloudflare can
-        # short-circuit traffic instead of forwarding to a broken core.
-        if result.get("status") == "unhealthy":
-            from fastapi.responses import JSONResponse
-
-            return JSONResponse(content=result, status_code=503)
-        return result
-
-    # ── Subsystem health (S+ feature: loud failure detection) ───────────
-
-    @app.get("/api/health/subsystems")
-    async def subsystem_health(request: Request):
-        """Deep health check of all external subsystems.
-
-        Returns per-subsystem status so the UI can show degradation clearly
-        instead of failures being silent.
-        """
-        user_id = await _get_user_id(request)
-        if not user_id:
-            return JSONResponse({"error": "Authentication required"}, status_code=401)
-
-        import httpx as _hx
-
-        results = {}
-
-        # Database
-        try:
-            from .db import check_health as db_health
-
-            db = await db_health()
-            results["database"] = {
-                "status": "ok" if db.get("status") == "ok" else "down",
-                **db,
-            }
-        except Exception:
-            results["database"] = {"status": "down"}
-
-        # Redis
-        try:
-            from .memory import REDIS_URL
-            import redis.asyncio as aioredis
-
-            r = aioredis.from_url(REDIS_URL, decode_responses=True)
-            await r.ping()
-            await r.aclose()
-            results["redis"] = {"status": "ok"}
-        except Exception:
-            results["redis"] = {"status": "down"}
-
-        # Qdrant
-        try:
-            from .memory import QDRANT_URL
-
-            async with _hx.AsyncClient(timeout=3.0) as c:
-                resp = await c.get(f"{QDRANT_URL}/healthz")
-                results["qdrant"] = {
-                    "status": "ok" if resp.status_code == 200 else "degraded"
-                }
-        except Exception:
-            results["qdrant"] = {"status": "down"}
-
-        # LM Studio
-        try:
-            lm_url = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
-            async with _hx.AsyncClient(timeout=5.0) as c:
-                resp = await c.get(
-                    f"{lm_url}/v1/models",
-                    headers=lm_studio_auth_headers(),
-                )
-                models = [m["id"] for m in resp.json().get("data", [])]
-                results["lm_studio"] = {
-                    "status": "ok",
-                    "models_loaded": len(models),
-                    "models": models,
-                }
-        except Exception:
-            results["lm_studio"] = {"status": "down"}
-
-        # Report the selected renderer without waking an unused GPU service.
-        from .image_provider import cloud_images_ready, selected_provider
-        image_provider = selected_provider()
-        if image_provider == "agy":
-            from .agy_image_provider import agy_images_ready
-            ready = await agy_images_ready()
-            results["images"] = {
-                "provider": "agy", "status": "ok" if ready else "down",
-                "source": "host_worker", "google_auth": "not_checked",
-            }
-        elif image_provider == "comfyui":
-            # The gateway health document is safe without a GPU lease; never
-            # query the protected facade from a health probe.
-            try:
-                lm_url = os.environ.get(
-                    "LM_STUDIO_URL", "http://100.107.121.5:1234"
-                ).rstrip("/")
-                async with _hx.AsyncClient(
-                    timeout=5.0, trust_env=False, follow_redirects=False
-                ) as c:
-                    resp = await c.get(f"{lm_url}/health")
-                    resp.raise_for_status()
-                    gateway_health = resp.json()
-                    comfy_status = gateway_health.get("comfyui_status", "unavailable")
-                    results["comfyui"] = {
-                        "status": "ok" if comfy_status == "ok" else "down",
-                        "source": "gpu_gateway",
-                    }
-            except Exception:
-                results["comfyui"] = {"status": "down"}
-            results["images"] = {"provider": "comfyui", **results["comfyui"]}
-        elif image_provider == "openai":
-            ready = await asyncio.to_thread(cloud_images_ready)
-            results["images"] = {
-                "provider": "openai", "status": "ok" if ready else "down",
-                "source": "configuration", "provider_auth": "not_checked",
-            }
-        else:
-            results["images"] = {"provider": image_provider, "status": "disabled"}
-
-        # Embedding service
-        try:
-            from .memory import INFERENCE_URL
-
-            async with _hx.AsyncClient(timeout=5.0) as c:
-                resp = await c.get(f"{INFERENCE_URL}/health")
-                results["embeddings"] = {
-                    "status": "ok" if resp.status_code == 200 else "degraded"
-                }
-        except Exception:
-            results["embeddings"] = {"status": "down"}
-
-        # Voice service
-        try:
-            async with _hx.AsyncClient(timeout=5.0) as c:
-                resp = await c.get(f"{_voice_url()}/health")
-                results["voice"] = {
-                    "status": "ok" if resp.status_code == 200 else "degraded"
-                }
-        except Exception:
-            results["voice"] = {"status": "down"}
-
-        # Overall
-        statuses = [v["status"] for v in results.values()]
-        if all(s == "ok" for s in statuses):
-            overall = "ok"
-        elif results["database"]["status"] == "down":
-            overall = "critical"
-        elif any(s == "down" for s in statuses):
-            overall = "degraded"
-        else:
-            overall = "ok"
-
-        return {"status": overall, "subsystems": results}
+    register_health_routes(
+        app, lambda request: _get_user_id(request), lambda: _voice_url()
+    )
 
     # ── Push subscription ──────────────────────────────────────────────────
 
     @app.get("/api/vapid-key")
-    async def vapid_key():
+    async def vapid_key() -> Any:
         return {"key": get_vapid_public_key()}
 
     @app.post("/api/push/subscribe")
-    async def push_subscribe(sub: PushSubscription, request: Request):
+    async def push_subscribe(sub: PushSubscription, request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Not authenticated"}, status_code=401)
@@ -355,7 +126,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Affection state ────────────────────────────────────────────────────
 
     @app.get("/api/affection")
-    async def get_affection(request: Request):
+    async def get_affection(request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
@@ -365,7 +136,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── TTS proxy ──────────────────────────────────────────────────────────
 
     @app.post("/api/tts")
-    async def api_tts(req: TTSRequest, request: Request):
+    async def api_tts(req: TTSRequest, request: Request) -> Any:
         """Proxy TTS request to companion-voice and return base64 audio."""
         user_id = await _get_user_id(request)
         if not user_id:
@@ -376,14 +147,28 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             return JSONResponse({"error": "No speakable text"}, status_code=400)
         if async_voice_jobs_enabled():
             if len(tts_text) > 500:
-                return JSONResponse({"error": "Split speech into chunks of at most 500 characters"}, status_code=400)
+                return JSONResponse(
+                    {"error": "Split speech into chunks of at most 500 characters"},
+                    status_code=400,
+                )
             if local_voice_enabled() and req.language != "en":
-                return JSONResponse({"error": "This voice currently supports English text"}, status_code=400)
+                return JSONResponse(
+                    {"error": "This voice currently supports English text"},
+                    status_code=400,
+                )
             try:
-                job = app.state.voice_jobs.submit(user_id, {"text": tts_text, "language": req.language})
-                return JSONResponse(job, status_code=202, headers={"Cache-Control": "no-store"})
+                job = app.state.voice_jobs.submit(
+                    user_id, {"text": tts_text, "language": req.language}
+                )
+                return JSONResponse(
+                    job, status_code=202, headers={"Cache-Control": "no-store"}
+                )
             except VoiceQueueFull:
-                return JSONResponse({"error": "Voice queue is full"}, status_code=429, headers={"Retry-After": "5"})
+                return JSONResponse(
+                    {"error": "Voice queue is full"},
+                    status_code=429,
+                    headers={"Retry-After": "5"},
+                )
         try:
             from .voice_client import post_leased_tts
 
@@ -418,7 +203,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
 
     @app.get("/api/tts/jobs/{job_id}")
-    async def api_tts_job(job_id: str, request: Request):
+    async def api_tts_job(job_id: str, request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
@@ -429,7 +214,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             return JSONResponse({"error": "Voice job not found"}, status_code=404)
 
     @app.delete("/api/tts/jobs/{job_id}")
-    async def api_tts_cancel(job_id: str, request: Request):
+    async def api_tts_cancel(job_id: str, request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
@@ -442,38 +227,53 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Image generation ───────────────────────────────────────────────────
 
     @app.post("/api/generate-image")
-    async def api_generate_image(req: ImageGenRequest, request: Request):
+    async def api_generate_image(req: ImageGenRequest, request: Request) -> Any:
         """Generate an authenticated image and save to this user's archive."""
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         from .agy_image_provider import uses_agy_images
         from .image_provider import selected_provider
+
         if selected_provider() == "agy" or uses_agy_images(user_id):
             from .account_images import complete_archive, fulfill_account_image
             from .image_gen import is_couple_scene, is_landscape
+
             width, height = (1216, 832) if is_landscape(req.prompt) else (832, 1216)
             aff_state = await affection.get_state(user_id)
             try:
                 outcome = await fulfill_account_image(
-                    user_id, req.prompt, width=width, height=height,
+                    user_id,
+                    req.prompt,
+                    width=width,
+                    height=height,
                     include_commander=is_couple_scene(req.prompt),
                     request_id=req.request_id,
-                    archive_context={"conversation_id": "api", "mood": "composed",
-                                     "affection_level": aff_state.level},
+                    archive_context={
+                        "conversation_id": "api",
+                        "mood": "composed",
+                        "affection_level": aff_state.level,
+                    },
                 )
             except ValueError:
                 return JSONResponse({"error": "Invalid image request"}, status_code=400)
             if outcome.get("needs_archive"):
                 metadata = outcome["archive_metadata"]
                 mem_id = await memory_archive.save_image(
-                    outcome["image"], metadata["prompt"], metadata["conversation_id"],
-                    mood=metadata["mood"], affection_level=metadata["affection_level"],
-                    user_id=user_id, memory_id=outcome["request_id"],
+                    outcome["image"],
+                    metadata["prompt"],
+                    metadata["conversation_id"],
+                    mood=metadata["mood"],
+                    affection_level=metadata["affection_level"],
+                    user_id=user_id,
+                    memory_id=outcome["request_id"],
                 )
-                outcome = await complete_archive(outcome["request_id"], mem_id, outcome["image"], user_id)
+                outcome = await complete_archive(
+                    outcome["request_id"], mem_id, outcome["image"], user_id
+                )
             if outcome.get("image"):
                 import base64
+
                 body = {
                     "image": base64.b64encode(outcome["image"]).decode(),
                     "format": "png",
@@ -484,8 +284,13 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                 if outcome.get("archived") and outcome.get("memory_id"):
                     body["memory_id"] = outcome["memory_id"]
                 return body
-            status = (429 if outcome.get("phase") == "busy" else
-                      409 if outcome.get("phase") in {"conflict", "refused", "pending", "unknown"} else 500)
+            status = (
+                429
+                if outcome.get("phase") == "busy"
+                else 409
+                if outcome.get("phase") in {"conflict", "refused", "pending", "unknown"}
+                else 500
+            )
             return JSONResponse(
                 {
                     "error": "Generation failed",
@@ -521,7 +326,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     # ── Gift system ────────────────────────────────────────────────────────
 
     @app.post("/api/gift")
-    async def api_gift(req: GiftRequest, request: Request):
+    async def api_gift(req: GiftRequest, request: Request) -> Any:
         """Send a gift to Klukai. Returns her reaction and affection change."""
         user_id = await _get_user_id(request)
         if not user_id:

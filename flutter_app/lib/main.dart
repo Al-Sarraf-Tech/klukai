@@ -33,7 +33,8 @@ class KlukaiApp extends StatelessWidget {
         ),
         fontFamily: 'Inter',
       ),
-      builder: (context, child) => SafeAreaShim(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) =>
+          SafeAreaShim(child: child ?? const SizedBox.shrink()),
       home: ChatScreen(serverUrl: serverUrl),
     );
   }

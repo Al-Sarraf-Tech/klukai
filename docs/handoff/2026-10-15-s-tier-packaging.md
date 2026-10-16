@@ -31,11 +31,12 @@ Klukai uses the supported pure Python UUID parsing, random UUID4 and determinist
 UUID5 paths. Fixed-vector probes check those paths. Compression, SQLite,
 PostgreSQL bindings, TLS trust, Pillow and uvloop remain exercised in the image.
 
-The Python healthcheck calls `/api/health/ready`, accepts usable optional-provider
-degradation and rejects required-backend failures. Review its interaction with
-the existing autoheal label before rollout: a dependency outage should not
-cause an indefinite application restart loop. Deployment must independently
-verify readiness and the SLO budget.
+The Python healthcheck defaults to `/api/health/live` for the existing autoheal
+label. A required-backend outage must not cause an indefinite application
+restart loop. Its explicit `--readiness` mode checks `/api/health/ready`, accepts
+usable optional-provider degradation and rejects required-backend failures.
+Deployment must independently verify readiness and the SLO budget. A regression
+test exercises healthy liveness and failed readiness during the same outage.
 
 ## Observed development evidence
 
@@ -44,8 +45,12 @@ On Amarillo, the disposable packaging probe image was
 It was built from an intermediate, uncommitted worktree with the deliberately
 unverified revision label, so it must not be deployed as a reviewed release.
 
-- Three actual-image tests passed, including native functionality, non-root UID,
-  absent shell/installers and the executable Python healthcheck.
+- Three actual-image tests passed for native functionality, non-root UID and
+  absent shell/installers. The original healthcheck test inspected command
+  metadata only; it did not execute that command. Subsequent real command probes
+  reject this old development image because its default still checks readiness.
+  The updated source defaults to liveness, but needs a new artifact and passing
+  command probes before release.
 - Application import passed under read-only, no-new-privileges, no-capabilities
   settings, with networking disabled and no provider credentials.
 - Trivy found zero HIGH/CRITICAL vulnerabilities without ignoring unfixed
@@ -66,6 +71,23 @@ Complete private logs are under
 `~/.local/state/klukai/s-uplift-20261015/`. They are development observations,
 not final-revision CI evidence. The final build must repeat the image checks and
 bind SBOM, scans, license review, signatures and provenance to one artifact.
+
+The later full core development run passed 5,390 tests with 57 skips and one
+explicit performance deselection under warnings-as-errors. Statement coverage
+was 97.96% and branch coverage 95.28%, across all 160 runtime modules then
+present. This precedes the reviewed cancellation fixes and the application
+shutdown-ownership changes, so it is not final-source proof. Independent reviews
+have resolved the gateway error-response lock leak, notifier finalizer
+interruption, module-graph import-scanning gap and stale Her POV polling races.
+Shutdown ownership and the full final rerun remain integration requirements.
+
+An actual Python 3.14.8 CI tool image was built on the existing persistent heavy
+guest. Its executed probe matched all 131 packages in the complete hash lock,
+and its private probe container was removed. Its revision label is explicitly
+unverified. This proves toolchain capability, not a successful GitHub workflow.
+The frontend runner's invalid `--platform vm` invocation has been replaced with
+Flutter's default tester invocation; Chrome retains its explicit platform.
+Full clean-source runner execution and final PWA artifact binding remain open.
 
 ## Secret-store capability probe
 

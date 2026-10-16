@@ -5,21 +5,29 @@ from __future__ import annotations
 import asyncio
 import base64
 import gc
-import hashlib
 import hmac
-import json
 import logging
-import math
 import os
-import re
 import tempfile
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+
+from .audio import (
+    transcribe_sync as _transcribe_sync,
+    unlink_quietly as _unlink_quietly,
+)
+from .lease_validation import require_xtts_gpu_lease
+from .requests import (
+    TTSRequest as TTSRequest,
+    STTRequest as STTRequest,
+    MAX_STT_AUDIO_B64 as MAX_STT_AUDIO_B64,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,9 +41,7 @@ MODEL_DIR = Path("/app/models")
 WHISPER_MODEL_DIR = Path(
     os.environ.get("WHISPER_MODEL_DIR", str(MODEL_DIR / "whisper-base-en"))
 )
-XTTS_MODEL_DIR = Path(
-    os.environ.get("XTTS_MODEL_DIR", str(MODEL_DIR / "xtts-v2"))
-)
+XTTS_MODEL_DIR = Path(os.environ.get("XTTS_MODEL_DIR", str(MODEL_DIR / "xtts-v2")))
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "xtts")
 
 
@@ -68,11 +74,6 @@ GPU_LEASE_MARKER = Path(
     os.environ.get("GPU_LEASE_MARKER", "/run/dominus-gpu/non-llm-lease.json")
 )
 GPU_LEASE_HEADER = "X-GPU-Lease-Token"
-GPU_LEASE_VERSION = 1
-GPU_LEASE_MAX_SECONDS = 600
-GPU_LEASE_WORKLOAD = "companion-voice"
-_LEASE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
-_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 def require_token(authorization: str | None = Header(default=None)) -> None:
@@ -80,82 +81,17 @@ def require_token(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=503, detail="voice API token is not configured")
     expected = f"Bearer {VOICE_API_TOKEN}"
     if not authorization or not hmac.compare_digest(authorization, expected):
-        raise HTTPException(status_code=401, detail="invalid or missing voice API token")
-
-
-def _lease_number(value: object) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("lease timestamp is not numeric")
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError("lease timestamp is not finite")
-    return result
+        raise HTTPException(
+            status_code=401, detail="invalid or missing voice API token"
+        )
 
 
 def _require_xtts_gpu_lease(token: str | None, now: float | None = None) -> None:
-    """Validate the opaque capability against the shared gateway marker."""
-
-    if token is None or not token or len(token) > 256:
-        raise HTTPException(status_code=403, detail="matching GPU lease token required")
-    if GPU_LEASE_MARKER.is_symlink():
-        raise HTTPException(status_code=503, detail="GPU lease state is invalid")
-    try:
-        document = json.loads(GPU_LEASE_MARKER.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=503, detail="active companion voice GPU lease required"
-        ) from exc
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=503, detail="GPU lease state is invalid") from exc
-
-    current = time.time() if now is None else now
-    try:
-        if not isinstance(document, dict):
-            raise ValueError("lease marker is not an object")
-        if document.get("version") != GPU_LEASE_VERSION:
-            raise ValueError("lease version is unsupported")
-        lease_id = document.get("lease_id")
-        digest = document.get("token_sha256")
-        ttl_seconds = document.get("ttl_seconds")
-        if (
-            not isinstance(lease_id, str)
-            or _LEASE_ID_PATTERN.fullmatch(lease_id) is None
-        ):
-            raise ValueError("lease id is invalid")
-        if not isinstance(digest, str) or _SHA256_PATTERN.fullmatch(digest) is None:
-            raise ValueError("lease token digest is invalid")
-        if (
-            isinstance(ttl_seconds, bool)
-            or not isinstance(ttl_seconds, int)
-            or not 1 <= ttl_seconds <= GPU_LEASE_MAX_SECONDS
-        ):
-            raise ValueError("lease TTL is invalid")
-        issued_at = _lease_number(document.get("issued_at_epoch_seconds"))
-        expires_at = _lease_number(document.get("expires_at_epoch_seconds"))
-        if issued_at > current + 5:
-            raise ValueError("lease issue time is in the future")
-        if abs(expires_at - (issued_at + ttl_seconds)) > 0.001:
-            raise ValueError("lease expiry does not match its TTL")
-        if document.get("workload") != GPU_LEASE_WORKLOAD:
-            raise HTTPException(
-                status_code=403, detail="GPU lease belongs to another workload"
-            )
-        if document.get("state", "active") != "active" or expires_at <= current:
-            raise HTTPException(
-                status_code=503, detail="companion voice GPU lease is not active"
-            )
-    except HTTPException:
-        raise
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=503, detail="GPU lease state is invalid") from exc
-
-    supplied = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    if not hmac.compare_digest(supplied, digest):
-        raise HTTPException(status_code=403, detail="GPU lease token is invalid")
+    require_xtts_gpu_lease(token, GPU_LEASE_MARKER, now)
 
 
-_tts_model = None
-_whisper_model = None
+_tts_model: Any = None
+_whisper_model: Any = None
 _tts_ready = False
 _last_tts_use = 0.0
 _last_whisper_use = 0.0
@@ -163,7 +99,7 @@ _tts_access_lock = asyncio.Lock()
 _whisper_access_lock = asyncio.Lock()
 
 
-def _load_xtts():
+def _load_xtts() -> Any:
     global _tts_model, _tts_ready
     if _tts_model is not None:
         return _tts_model
@@ -172,16 +108,20 @@ def _load_xtts():
         # XTTS checkpoints use pickle serialization — override weights_only default
         # This is safe: we're loading the official Coqui XTTS v2 model from HuggingFace
         import torch
+
         _orig_load = torch.load
-        def _patched_load(*a, **kw):
+
+        def _patched_load(*a: Any, **kw: Any) -> Any:
             kw["weights_only"] = False
             return _orig_load(*a, **kw)
+
         # Scope the unsafe-pickle override to ONLY the trusted XTTS checkpoint
         # load, then restore torch's safe default so weights_only=False can't
         # silently apply to any later (potentially untrusted) torch.load call.
         torch.load = _patched_load
         try:
             from TTS.api import TTS
+
             logger.info("Loading XTTS v2 model...")
             required_files = (
                 "config.json",
@@ -242,7 +182,7 @@ def _unload_xtts() -> bool:
                 model.to("cpu")
             elif getattr(model, "synthesizer", None) is not None:
                 tts_model = getattr(model.synthesizer, "tts_model", None)
-                if hasattr(tts_model, "to"):
+                if tts_model is not None and hasattr(tts_model, "to"):
                     tts_model.to("cpu")
         except Exception as exc:
             # Retain the reference so a retry or operator restart can still
@@ -273,15 +213,21 @@ def _unload_xtts() -> bool:
     return True
 
 
-def _load_whisper():
+def _load_whisper() -> Any:
     global _whisper_model
     if _whisper_model is not None:
         return _whisper_model
     try:
         from faster_whisper import WhisperModel
+
         whisper_dir = MODEL_DIR / "whisper"
         whisper_dir.mkdir(parents=True, exist_ok=True)
-        required_files = ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt")
+        required_files = (
+            "config.json",
+            "model.bin",
+            "tokenizer.json",
+            "vocabulary.txt",
+        )
         missing = [
             filename
             for filename in required_files
@@ -353,7 +299,7 @@ async def _idle_unloader() -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Health probes and container restarts must not consume GPU memory. The
     # first real TTS/STT request loads its model from the pinned snapshot.
     idle_task = asyncio.create_task(_idle_unloader())
@@ -380,7 +326,7 @@ app = FastAPI(title="Companion Voice", version="0.2.0", lifespan=lifespan)
 
 
 @app.get("/health")
-async def health():
+async def health() -> dict[str, str | bool | float]:
     return {
         "status": "ok",
         "service": "companion-voice",
@@ -393,14 +339,16 @@ async def health():
 
 
 @app.post("/unload", dependencies=[Depends(require_token)])
-async def unload_models():
+async def unload_models() -> dict[str, str | bool]:
     """Explicitly release all resident voice models for the shared guard."""
     async with _tts_access_lock:
         tts_unloaded = await asyncio.to_thread(_unload_xtts)
     async with _whisper_access_lock:
         whisper_unloaded = await asyncio.to_thread(_unload_whisper)
     if not tts_unloaded or _tts_model is not None or _tts_ready:
-        raise HTTPException(status_code=503, detail="XTTS unload could not be confirmed")
+        raise HTTPException(
+            status_code=503, detail="XTTS unload could not be confirmed"
+        )
     return {
         "status": "ok",
         "tts_unloaded": tts_unloaded,
@@ -410,16 +358,11 @@ async def unload_models():
     }
 
 
-class TTSRequest(BaseModel):
-    text: str
-    language: str = "en"
-
-
 @app.post("/tts", dependencies=[Depends(require_token)])
 async def text_to_speech(
     req: TTSRequest,
     x_gpu_lease_token: str | None = Header(default=None, alias=GPU_LEASE_HEADER),
-):
+) -> Response:
     """Convert text to speech using XTTS v2 voice cloning."""
     global _last_tts_use
     ref = Path(REFERENCE_WAV)
@@ -476,40 +419,8 @@ async def text_to_speech(
                     pass
 
 
-# ~6 MB decoded is several minutes of Opus: far past any push-to-talk clip,
-# and small enough that one request cannot pin the host decoding it.
-MAX_STT_AUDIO_B64 = 8_000_000
-
-
-class STTRequest(BaseModel):
-    # A larger body is rejected at validation instead of being base64-decoded
-    # into memory under the access lock; an empty one never loads Whisper.
-    audio: str = Field(min_length=1, max_length=MAX_STT_AUDIO_B64)
-
-
-def _transcribe_sync(model, path: str):
-    """Run faster-whisper to completion on the calling (worker) thread.
-
-    ``transcribe()`` only prepares a lazy generator; the actual decoding runs
-    while the segments are consumed. Joining them here keeps that CPU-bound
-    work inside the ``asyncio.to_thread`` worker. Joining on the event loop
-    froze /health and /tts for the length of the clip.
-    """
-    segments, info = model.transcribe(path, beam_size=5)
-    text = " ".join(s.text for s in segments).strip()
-    return text, info
-
-
-def _unlink_quietly(path: str) -> None:
-    if path:
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
-
-
 @app.post("/stt", dependencies=[Depends(require_token)])
-async def speech_to_text(req: STTRequest):
+async def speech_to_text(req: STTRequest) -> dict[str, Any]:
     """Convert speech to text using faster-whisper."""
     global _last_whisper_use
     async with _whisper_access_lock:
@@ -538,8 +449,11 @@ async def speech_to_text(req: STTRequest):
             _unlink_quietly(tmp_path)
 
 
+_AUDIO_UPLOAD = File(...)
+
+
 @app.post("/stt/upload", dependencies=[Depends(require_token)])
-async def stt_upload(audio: UploadFile = File(...)):
+async def stt_upload(audio: UploadFile = _AUDIO_UPLOAD) -> dict[str, Any]:
     """STT from file upload."""
     global _last_whisper_use
     async with _whisper_access_lock:

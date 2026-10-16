@@ -1,6 +1,8 @@
 """Split route handlers — group 3 from app/routes.py (S+ Phase 2 §6.1)."""
 
 from __future__ import annotations
+from typing import Any
+
 
 import logging
 import secrets
@@ -10,8 +12,10 @@ from fastapi.responses import JSONResponse
 
 from .context import affection
 from .db import get_pool
+from .routes_billing import register_billing_routes
+from .routes_entry import register_entry_routes
 
-from .routes import (
+from .api_schemas import (
     AccountDeactivateRequest,
 )
 
@@ -21,6 +25,7 @@ logger = logging.getLogger(__name__)
 async def _get_user_id(request: Request) -> str | None:
     """Local mirror of routes.py:_get_user_id."""
     from .auth import get_user_from_token
+
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
@@ -29,8 +34,9 @@ async def _get_user_id(request: Request) -> str | None:
 
 def register_extras3(app: FastAPI) -> None:
     """Register group-3 HTTP endpoints."""
+
     @app.get("/api/user/stats")
-    async def api_user_stats(request: Request):
+    async def api_user_stats(request: Request) -> Any:
         """Aggregate per-user stats for 'Your Journey' dashboard.
 
         Counts messages, distinct-day activity, memories kept, gifts given,
@@ -42,37 +48,52 @@ def register_extras3(app: FastAPI) -> None:
         try:
             pool = get_pool()
             async with pool.connection() as conn:
-                msg = await (await conn.execute(
-                    "SELECT COUNT(*), COUNT(DISTINCT DATE(created_at)), MIN(created_at), MAX(created_at) "
-                    "FROM companion_messages WHERE user_id = %s",
-                    (user_id,),
-                )).fetchone()
-                total_messages, days_active, first_msg, last_msg = (msg or (0, 0, None, None))
+                msg = await (
+                    await conn.execute(
+                        "SELECT COUNT(*), COUNT(DISTINCT DATE(created_at)), MIN(created_at), MAX(created_at) "
+                        "FROM companion_messages WHERE user_id = %s",
+                        (user_id,),
+                    )
+                ).fetchone()
+                total_messages, days_active, first_msg, last_msg = msg or (
+                    0,
+                    0,
+                    None,
+                    None,
+                )
 
-                user_msg = await (await conn.execute(
-                    "SELECT COUNT(*) FROM companion_messages WHERE user_id = %s AND role = 'user'",
-                    (user_id,),
-                )).fetchone()
+                user_msg = await (
+                    await conn.execute(
+                        "SELECT COUNT(*) FROM companion_messages WHERE user_id = %s AND role = 'user'",
+                        (user_id,),
+                    )
+                ).fetchone()
                 user_message_count = (user_msg or (0,))[0]
 
-                mem = await (await conn.execute(
-                    "SELECT COUNT(*), COUNT(*) FILTER (WHERE kept = true), "
-                    "COUNT(*) FILTER (WHERE filename IS NOT NULL) "
-                    "FROM companion_memories WHERE user_id = %s",
-                    (user_id,),
-                )).fetchone()
-                total_memories, memories_kept, memories_with_image = (mem or (0, 0, 0))
+                mem = await (
+                    await conn.execute(
+                        "SELECT COUNT(*), COUNT(*) FILTER (WHERE kept = true), "
+                        "COUNT(*) FILTER (WHERE filename IS NOT NULL) "
+                        "FROM companion_memories WHERE user_id = %s",
+                        (user_id,),
+                    )
+                ).fetchone()
+                total_memories, memories_kept, memories_with_image = mem or (0, 0, 0)
 
-                gift = await (await conn.execute(
-                    "SELECT COUNT(*) FROM companion_gifts WHERE user_id = %s",
-                    (user_id,),
-                )).fetchone()
+                gift = await (
+                    await conn.execute(
+                        "SELECT COUNT(*) FROM companion_gifts WHERE user_id = %s",
+                        (user_id,),
+                    )
+                ).fetchone()
                 gift_count = (gift or (0,))[0]
 
-                first = await (await conn.execute(
-                    "SELECT COUNT(*) FROM companion_firsts WHERE user_id = %s",
-                    (user_id,),
-                )).fetchone()
+                first = await (
+                    await conn.execute(
+                        "SELECT COUNT(*) FROM companion_firsts WHERE user_id = %s",
+                        (user_id,),
+                    )
+                ).fetchone()
                 firsts_count = (first or (0,))[0]
 
             aff = await affection.get_state(user_id)
@@ -106,7 +127,9 @@ def register_extras3(app: FastAPI) -> None:
     # ── Conversation export (user data portability) ────────────────────────
 
     @app.get("/api/user/export")
-    async def api_user_export(request: Request, include_memories: bool = True, include_messages: bool = True):
+    async def api_user_export(
+        request: Request, include_memories: bool = True, include_messages: bool = True
+    ) -> Any:
         """Export the user's data as a single JSON bundle.
 
         Respects scoping: only the authenticated user's own data is included.
@@ -116,8 +139,9 @@ def register_extras3(app: FastAPI) -> None:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         try:
             pool = get_pool()
-            export: dict = {"user_id": user_id, "exported_at": None}
+            export: dict[str, Any] = {"user_id": user_id, "exported_at": None}
             from datetime import datetime, timezone
+
             export["exported_at"] = datetime.now(timezone.utc).isoformat()
 
             async with pool.connection() as conn:
@@ -146,7 +170,11 @@ def register_extras3(app: FastAPI) -> None:
                     (user_id,),
                 )
                 export["milestones"] = [
-                    {"event_type": r[0], "event_date": r[1].isoformat() if r[1] else None, "metadata": r[2]}
+                    {
+                        "event_type": r[0],
+                        "event_date": r[1].isoformat() if r[1] else None,
+                        "metadata": r[2],
+                    }
                     for r in await rows.fetchall()
                 ]
 
@@ -156,8 +184,12 @@ def register_extras3(app: FastAPI) -> None:
                     (user_id,),
                 )
                 export["gifts"] = [
-                    {"item": r[0], "description": r[1], "sentiment": r[2],
-                     "given_date": r[3].isoformat() if r[3] else None}
+                    {
+                        "item": r[0],
+                        "description": r[1],
+                        "sentiment": r[2],
+                        "given_date": r[3].isoformat() if r[3] else None,
+                    }
                     for r in await rows.fetchall()
                 ]
 
@@ -167,8 +199,12 @@ def register_extras3(app: FastAPI) -> None:
                     (user_id,),
                 )
                 export["wardrobe_history"] = [
-                    {"day": r[0].isoformat() if r[0] else None, "outfit": r[3] or r[1],
-                     "reason": r[2], "requested": r[3] is not None}
+                    {
+                        "day": r[0].isoformat() if r[0] else None,
+                        "outfit": r[3] or r[1],
+                        "reason": r[2],
+                        "requested": r[3] is not None,
+                    }
                     for r in await rows.fetchall()
                 ]
 
@@ -197,12 +233,15 @@ def register_extras3(app: FastAPI) -> None:
                 "level_name": aff.level_name,
                 "consecutive_days": aff.consecutive_days,
                 "total_interactions": aff.total_interactions,
-                "first_interaction": aff.first_interaction.isoformat() if aff.first_interaction else None,
+                "first_interaction": aff.first_interaction.isoformat()
+                if aff.first_interaction
+                else None,
             }
 
             # Audit the export
             try:
                 from . import audit
+
                 ip = request.client.host if request.client else None
                 await audit.log(
                     audit.EVENT_EXPORT_REQUESTED,
@@ -235,63 +274,14 @@ def register_extras3(app: FastAPI) -> None:
     #   2. restore checkout + portal endpoints (see ADR-0017 history)
     #   3. configure STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET, price IDs
 
-    @app.get("/api/billing/tiers")
-    async def billing_tiers():
-        """Static tier feature matrix. Public — no monetization tied to it."""
-        from .billing import TIER_FEATURES
-        return {"features": TIER_FEATURES, "mode": "personal"}
-
-    @app.get("/api/billing/subscription")
-    async def get_my_subscription(request: Request):
-        from .billing import get_subscription
-        user_id = await _get_user_id(request)
-        if not user_id:
-            return JSONResponse({"error": "Unauthorized"}, status_code=401)
-        sub = await get_subscription(user_id)
-        return {
-            "tier": sub.tier,
-            "status": sub.status,
-            "is_active": sub.is_active,
-            "period_start": sub.period_start.isoformat() if sub.period_start else None,
-            "period_end": sub.period_end.isoformat() if sub.period_end else None,
-            "features": sub.features,
-        }
-
-    @app.get("/api/billing/usage")
-    async def get_my_usage(request: Request):
-        from .billing import get_usage_summary
-        user_id = await _get_user_id(request)
-        if not user_id:
-            return JSONResponse({"error": "Unauthorized"}, status_code=401)
-        return await get_usage_summary(user_id)
-
-    @app.post("/api/billing/webhook")
-    async def stripe_webhook(request: Request):
-        """Stripe webhook receiver. Kept for future use — verifies signature
-        and records the event, but with no STRIPE_WEBHOOK_SECRET configured
-        all calls return 400 (signature invalid). Safe no-op in personal mode.
-        """
-        from .billing import handle_stripe_event, verify_stripe_signature
-        body = await request.body()
-        sig = request.headers.get("Stripe-Signature", "")
-        if not verify_stripe_signature(body, sig):
-            return JSONResponse({"error": "Invalid signature"}, status_code=400)
-        try:
-            import json
-            event = json.loads(body)
-        except Exception:
-            return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-        result = await handle_stripe_event(event)
-        if not result.get("ok"):
-            # 500 → Stripe retries with backoff; a 200 here would silently
-            # drop the event forever even though the handler failed.
-            return JSONResponse(result, status_code=500)
-        return result
+    register_billing_routes(app, lambda request: _get_user_id(request))
 
     # ── Account self-service ───────────────────────────────────────────────
 
     @app.post("/api/account/deactivate")
-    async def deactivate_account(req: AccountDeactivateRequest, request: Request):
+    async def deactivate_account(
+        req: AccountDeactivateRequest, request: Request
+    ) -> Any:
         """Soft-delete user account. ABSOLUTE: chat memories, episodes,
         affection, Qdrant vectors are NEVER touched (CLAUDE.md SACRED rule).
 
@@ -307,6 +297,7 @@ def register_extras3(app: FastAPI) -> None:
             return JSONResponse({"error": "Unauthorized"}, status_code=401)
         try:
             from .db import get_conn_autocommit
+
             async with get_conn_autocommit() as conn:
                 # deactivated_at column is created by migration 130 — no DDL in
                 # the request path (it took an ACCESS EXCLUSIVE lock per call).
@@ -322,9 +313,11 @@ def register_extras3(app: FastAPI) -> None:
                     (user_id,),
                 )
             from .context import ws
+
             await ws.revoke_user(user_id)
             try:
                 from . import audit
+
                 await audit.log(
                     event_type="account.deactivated",
                     user_id=user_id,
@@ -344,16 +337,17 @@ def register_extras3(app: FastAPI) -> None:
     # ── Promises / accountability ───────────────────────────────────────────
 
     @app.get("/api/promises")
-    async def api_promises(request: Request):
+    async def api_promises(request: Request) -> Any:
         """List the Commander's still-open promises (newest first)."""
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         from . import promises
+
         return {"promises": await promises.open_promises(user_id)}
 
     @app.post("/api/promises/{promise_id}/resolve")
-    async def api_resolve_promise(promise_id: str, request: Request):
+    async def api_resolve_promise(promise_id: str, request: Request) -> Any:
         """Close a promise with a sentiment ('confirmed'|'failed'|'deferred')."""
         user_id = await _get_user_id(request)
         if not user_id:
@@ -369,6 +363,7 @@ def register_extras3(app: FastAPI) -> None:
                 status_code=400,
             )
         from . import promises
+
         ok = await promises.resolve_promise(
             promise_id, sentiment, (body or {}).get("response_text"), user_id=user_id
         )
@@ -376,48 +371,12 @@ def register_extras3(app: FastAPI) -> None:
 
     # ── Root redirect ──────────────────────────────────────────────────────
 
-    @app.get("/flutter_service_worker.js")
-    async def root_service_worker():
-        """Serve self-destructing SW at root scope to kill the old cached SW.
-
-        The Flutter app used to be served at / with a SW at / scope. Now it's
-        at /app/ with a SW at /app/ scope. Browsers that still have the old SW
-        cached will check /flutter_service_worker.js for updates. This serves
-        a version that immediately unregisters itself and clears all caches.
-        """
-        from fastapi.responses import Response
-        sw_code = (
-            "self.addEventListener('install', () => self.skipWaiting());\n"
-            "self.addEventListener('activate', (e) => {\n"
-            "  e.waitUntil(caches.keys()"
-            ".then(ns => Promise.all(ns.map(n => caches.delete(n))))"
-            ".then(() => self.registration.unregister())"
-            ".then(() => self.clients.matchAll({type:'window'}))"
-            ".then(cs => cs.forEach(c => c.navigate(c.url))));\n"
-            "});\n"
-        )
-        return Response(
-            content=sw_code,
-            media_type="application/javascript",
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-        )
-
-    @app.get("/")
-    async def root():
-        """Serve login page or redirect to app."""
-        from pathlib import Path
-        from fastapi.responses import FileResponse
-
-        login_path = Path("/app/static/login.html")
-        if login_path.exists():
-            return FileResponse(login_path, media_type="text/html")
-        return {"status": "companion-core running", "auth": "login page not deployed"}
-
+    register_entry_routes(app)
 
     # ── Her POV: she picks a moment and draws it ────────────────────────────
 
     @app.post("/api/memories/her-pov")
-    async def api_her_pov_start(request: Request):
+    async def api_her_pov_start(request: Request) -> Any:
         """Start a Her POV memory job: she picks any real exchange and draws it.
 
         Returns 202 with job_id. Progress streams over WS (type=her_pov) and
@@ -427,16 +386,18 @@ def register_extras3(app: FastAPI) -> None:
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         from . import memory_her_pov
+
         result = await memory_her_pov.start_her_pov(user_id)
         return JSONResponse(result, status_code=202)
 
     @app.get("/api/memories/her-pov/{job_id}")
-    async def api_her_pov_status(job_id: str, request: Request):
+    async def api_her_pov_status(job_id: str, request: Request) -> Any:
         """Poll status of a Her POV job (no image payload)."""
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         from . import memory_her_pov
+
         job = await memory_her_pov.get_job(job_id)
         if not job or job.get("user_id") != user_id:
             return JSONResponse({"error": "Not found"}, status_code=404)
@@ -444,20 +405,28 @@ def register_extras3(app: FastAPI) -> None:
         safe = {
             k: job[k]
             for k in (
-                "id", "status", "phase", "message", "error", "memory_id",
-                "title", "annotation", "mood", "exchange_preview",
-                "created_at", "updated_at", "has_image",
+                "id",
+                "status",
+                "phase",
+                "message",
+                "error",
+                "memory_id",
+                "title",
+                "annotation",
+                "mood",
+                "exchange_preview",
+                "created_at",
+                "updated_at",
+                "has_image",
             )
             if k in job
         }
         return safe
 
-
-
     # ── Deferred tasks: internal delivery hook ─────────────────────────────
 
     @app.post("/internal/deferred/fire")
-    async def api_deferred_fire(request: Request):
+    async def api_deferred_fire(request: Request) -> Any:
         """Deliver a deferred task whose timer expired.
 
         Called by the events bridge, which owns the AMQP side of the delay rail.
@@ -483,13 +452,14 @@ def register_extras3(app: FastAPI) -> None:
             return JSONResponse({"error": "task_id required"}, status_code=400)
 
         from . import deferred
+
         fired = await deferred.fire(task_id)
         # 200 either way: "already delivered" is a success from the bridge's
         # point of view, and must not make it redeliver forever.
         return {"task_id": task_id, "fired": fired}
 
     @app.post("/internal/jobs/her-pov/run")
-    async def api_her_pov_run(request: Request):
+    async def api_her_pov_run(request: Request) -> Any:
         """Run a durable Her POV job to completion.
 
         Called by the events-bridge while it holds the unacked queue message
@@ -513,5 +483,6 @@ def register_extras3(app: FastAPI) -> None:
             return JSONResponse({"error": "job_id required"}, status_code=400)
 
         from . import memory_her_pov
+
         ok = await memory_her_pov.run_job_from_queue(job_id)
         return {"job_id": job_id, "ok": ok}

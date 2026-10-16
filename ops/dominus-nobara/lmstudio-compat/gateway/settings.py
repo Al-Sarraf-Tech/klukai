@@ -63,9 +63,9 @@ class Settings:
         companion_voice_token_file = os.getenv(
             "COMPANION_VOICE_BEARER_TOKEN_FILE"
         ) or os.getenv("VOICE_API_TOKEN_FILE")
-        companion_voice_token = os.getenv(
-            "COMPANION_VOICE_BEARER_TOKEN"
-        ) or os.getenv("VOICE_API_TOKEN")
+        companion_voice_token = os.getenv("COMPANION_VOICE_BEARER_TOKEN") or os.getenv(
+            "VOICE_API_TOKEN"
+        )
         resolved_gateway_token = _read_secret(gateway_token_file, gateway_token)
         if resolved_gateway_token is None:
             raise ValueError(
@@ -92,9 +92,7 @@ class Settings:
                 os.getenv("GAME_ACTIVE_MARKER", "/run/dominus/game-active")
             ),
             gpu_lease_marker_path=Path(
-                os.getenv(
-                    "GPU_LEASE_MARKER", "/run/dominus/non-llm-lease.json"
-                )
+                os.getenv("GPU_LEASE_MARKER", "/run/dominus/non-llm-lease.json")
             ),
             gpu_lease_ack_path=Path(
                 os.getenv(

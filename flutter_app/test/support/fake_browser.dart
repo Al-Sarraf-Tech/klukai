@@ -31,7 +31,8 @@ class FakeBrowserPlatform implements BrowserPlatform {
   Stream<void> get onResume => resume.stream;
 
   @override
-  void openUrl(String url, {required bool newWindow}) => opened.add((url, newWindow));
+  void openUrl(String url, {required bool newWindow}) =>
+      opened.add((url, newWindow));
 
   @override
   Future<bool> playVoice(String url) async {

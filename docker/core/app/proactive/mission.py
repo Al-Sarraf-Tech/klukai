@@ -6,6 +6,7 @@ loop) and ``MissionMixin`` which holds the engine's mission lifecycle methods.
 
 from __future__ import annotations
 
+
 import asyncio
 import logging
 import random
@@ -13,9 +14,9 @@ import time
 from datetime import timedelta
 from functools import partial
 
-from . import state
+from .mission_timer import MissionTimer as MissionTimer
 from .base import _EngineBase
-from .state import MAJOR_EVENTS, now_local
+from .state import now_local
 from .templates import (
     MISSION_REPORTS,
     _content_list,
@@ -90,7 +91,13 @@ _MISSION_EVENT_TEMPLATES_FALLBACK: list[str | None] = [
     "{member_b} requesting fire support at grid reference",
     "Mechty fell asleep on watch — I've handled it",
     "Belka is panicking again — I told her to focus",
-    None, None, None, None, None, None, None,  # 70% chance of no major event
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,  # 70% chance of no major event
 ]
 
 
@@ -132,149 +139,15 @@ def _mission_event_templates() -> list[str | None]:
     element, so the no-event sentinels are never silently dropped.
     """
     from .templates import _raw_content
+
     raw = _raw_content("mission_event_templates")
-    if isinstance(raw, list) and raw and all(
-        x is None or isinstance(x, str) for x in raw
+    if (
+        isinstance(raw, list)
+        and raw
+        and all(x is None or isinstance(x, str) for x in raw)
     ):
         return list(raw)
     return _MISSION_EVENT_TEMPLATES_FALLBACK
-
-
-class MissionTimer:
-    """Tracks an active mission with periodic field radio updates.
-
-    The timer fires at randomized intervals (base ±30%), with a 10% chance
-    of a major event that fires early. Injuries persist across updates.
-    No one ever dies — sacred rule.
-    """
-
-    def __init__(self) -> None:
-        self.mission_description: str = ""
-        self.base_interval_minutes: int = 30
-        self.started_at: float = 0.0
-        self.last_update: float = 0.0
-        self.update_count: int = 0
-        self.active_events: list[str] = []
-        self.active: bool = False
-        self._task: asyncio.Task | None = None
-        self._callback = None
-        self._affection_level: int = 0
-
-    def start(
-        self,
-        description: str,
-        interval_minutes: int = 30,
-        callback=None,
-        affection_level: int = 0,
-    ) -> None:
-        """Begin the mission timer as an asyncio.Task."""
-        self.mission_description = description
-        self.base_interval_minutes = max(5, interval_minutes)  # Floor at 5 min
-        self.started_at = time.monotonic()
-        self.last_update = self.started_at
-        self.update_count = 0
-        self.active_events = []
-        self.active = True
-        self._callback = callback
-        self._affection_level = affection_level
-        self._task = asyncio.create_task(self._tick_loop())
-        state._active_mission_timer = self
-        logger.info(
-            "Mission timer started: '%s' every %d min",
-            description[:60], interval_minutes,
-        )
-
-    def stop(self) -> None:
-        """Cancel the mission timer."""
-        self.active = False
-        if self._task and not self._task.done():
-            self._task.cancel()
-        state._active_mission_timer = None
-        logger.info("Mission timer stopped after %d updates", self.update_count)
-
-    async def _tick_loop(self) -> None:
-        """Main timer loop — fires updates at randomized intervals."""
-        try:
-            while self.active:
-                # Randomize interval ±30% of base
-                base_seconds = self.base_interval_minutes * 60
-                jitter = random.uniform(0.7, 1.3)
-                wait_seconds = base_seconds * jitter
-
-                # 10% chance of major event — fires early (50-70% of remaining)
-                major_event: str | None = None
-                if random.random() < 0.10 and self.update_count > 0:
-                    major_event = random.choice(MAJOR_EVENTS)
-                    wait_seconds *= random.uniform(0.50, 0.70)
-                    logger.info("Major event queued: %s (early fire)", major_event)
-
-                await asyncio.sleep(wait_seconds)
-
-                if not self.active:
-                    break
-
-                self.update_count += 1
-                self.last_update = time.monotonic()
-                elapsed_minutes = int((self.last_update - self.started_at) / 60)
-
-                # If major event involves injury, track it persistently
-                if major_event:
-                    if major_event == "klukai_injured" and "klukai_injured" not in self.active_events:
-                        self.active_events.append("klukai_injured")
-                    elif major_event == "squad_injured" and "squad_injured" not in self.active_events:
-                        self.active_events.append("squad_injured")
-                    elif major_event == "medical_emergency" and "medical_emergency" not in self.active_events:
-                        self.active_events.append("medical_emergency")
-
-                # Chance to resolve older injuries (30% per tick after 2 updates)
-                if self.update_count > 2:
-                    resolved = []
-                    for evt in self.active_events:
-                        if random.random() < 0.30:
-                            resolved.append(evt)
-                    for evt in resolved:
-                        self.active_events.remove(evt)
-                        logger.info("Mission event resolved: %s", evt)
-
-                # Generate and deliver update
-                await self._fire_update(elapsed_minutes, major_event)
-
-        except asyncio.CancelledError:
-            logger.info("Mission timer task cancelled")
-        except Exception as e:
-            logger.error("Mission timer tick failed: %s", e)
-            self.active = False
-
-    async def _fire_update(self, elapsed_minutes: int, major_event: str | None) -> None:
-        """Generate an LLM update and deliver it via callback."""
-        from ..fact_extractor import generate_mission_update
-
-        try:
-            text = await generate_mission_update(
-                mission_desc=self.mission_description,
-                elapsed_minutes=elapsed_minutes,
-                update_number=self.update_count,
-                major_event=major_event,
-                active_events=list(self.active_events),
-                affection_level=self._affection_level,
-            )
-
-            # The GPU host is routinely powered off, and there is no cloud
-            # fallback: the generator then hands back empty text. Skip the tick
-            # rather than write a canned "static" line into his history — the
-            # next update fires on schedule regardless.
-            if not text:
-                logger.info("Mission update #%d skipped: LLM unavailable", self.update_count)
-                return
-
-            if self._callback:
-                await self._callback(text)
-                logger.info(
-                    "Mission update #%d delivered (%d min elapsed, event=%s)",
-                    self.update_count, elapsed_minutes, major_event or "none",
-                )
-        except Exception as e:
-            logger.error("Mission update delivery failed: %s", e)
 
 
 class MissionMixin(_EngineBase):
@@ -287,8 +160,9 @@ class MissionMixin(_EngineBase):
         timer = self._mission_timers.get(user_id)
         return timer if timer and timer.active else None
 
-    def start_mission(self, description: str, interval_minutes: int = 30,
-                       user_id: str = "jalsarraf") -> None:
+    def start_mission(
+        self, description: str, interval_minutes: int = 30, user_id: str = "jalsarraf"
+    ) -> None:
         """Start a per-user mission timer with periodic LLM-generated field reports."""
         if self._closing:
             return
@@ -300,8 +174,11 @@ class MissionMixin(_EngineBase):
         timer.start(
             description=description,
             interval_minutes=interval_minutes,
-            callback=(partial(self._on_message_callback, user_id=user_id)
-                      if self._on_message_callback else None),
+            callback=(
+                partial(self._on_message_callback, user_id=user_id)
+                if self._on_message_callback
+                else None
+            ),
             affection_level=self._affection_levels.get(user_id, 0),
         )
         if timer._task is not None:
@@ -310,7 +187,9 @@ class MissionMixin(_EngineBase):
         if user_id == "jalsarraf":
             self._mission_timer = timer  # Primary-owner scheduled context only
 
-    def stop_mission(self, user_id: str = "jalsarraf", trigger_aftermath: bool = True) -> None:
+    def stop_mission(
+        self, user_id: str = "jalsarraf", trigger_aftermath: bool = True
+    ) -> None:
         """Stop the active mission timer for a user. Triggers aftermath image + decompression."""
         timer = self._mission_timers.get(user_id)
         if timer and timer.active:
@@ -321,7 +200,9 @@ class MissionMixin(_EngineBase):
                     self.trigger_mission_aftermath_image(user_id, timer=timer_snapshot)
                 )
                 self._spawn(
-                    self._decompression_message(user_id, had_injury, timer_snapshot.update_count)
+                    self._decompression_message(
+                        user_id, had_injury, timer_snapshot.update_count
+                    )
                 )
             self._spawn(self._set_post_mission_physical(user_id, had_injury))
             timer.stop()
@@ -333,6 +214,7 @@ class MissionMixin(_EngineBase):
         """Set physical state after mission ends."""
         try:
             from ..context import physical
+
             await physical.on_mission_end(user_id, had_injury=had_injury)
         except Exception as e:
             logger.debug("Post-mission physical state update failed: %s", e)
@@ -374,7 +256,11 @@ class MissionMixin(_EngineBase):
         self._proactive_count_today += 1
         self._last_proactive_answered = False
         await self._on_message_callback(message, user_id=user_id)
-        logger.info("Decompression message delivered (injury=%s, updates=%d)", had_injury, update_count)
+        logger.info(
+            "Decompression message delivered (injury=%s, updates=%d)",
+            had_injury,
+            update_count,
+        )
 
     @property
     def mission_active(self) -> bool:
@@ -396,11 +282,15 @@ class MissionMixin(_EngineBase):
         now = now_local()
 
         # Guard: 15-min gap between mission events
-        if self._last_random_event and (now - self._last_random_event) < timedelta(minutes=15):
+        if self._last_random_event and (now - self._last_random_event) < timedelta(
+            minutes=15
+        ):
             return
 
         # Guard: don't interrupt active typing (2 min cooldown)
-        if self._last_message_time and (now - self._last_message_time) < timedelta(minutes=2):
+        if self._last_message_time and (now - self._last_message_time) < timedelta(
+            minutes=2
+        ):
             return
 
         # Guard: check mute
@@ -427,12 +317,17 @@ class MissionMixin(_EngineBase):
             member_b = random.choice(squad_b)
             major_events = [
                 tmpl.format(member_a=member_a, member_b=member_b)
-                if tmpl is not None else None
+                if tmpl is not None
+                else None
                 for tmpl in _mission_event_templates()
             ]
             major_event = random.choice(major_events)
 
-            elapsed = int((time.monotonic() - timer.started_at) / 60) if timer.started_at else timer.update_count * 30
+            elapsed = (
+                int((time.monotonic() - timer.started_at) / 60)
+                if timer.started_at
+                else timer.update_count * 30
+            )
 
             message = await generate_mission_update(
                 mission_desc=timer.mission_description,
@@ -474,7 +369,11 @@ class MissionMixin(_EngineBase):
 
             # Determine scene type based on final state
             if timer.active_events:
-                scene_type = "injury" if any("injured" in e for e in timer.active_events) else "extraction"
+                scene_type = (
+                    "injury"
+                    if any("injured" in e for e in timer.active_events)
+                    else "extraction"
+                )
             else:
                 scene_type = "victory"
 
@@ -490,14 +389,18 @@ class MissionMixin(_EngineBase):
             await self._on_message_callback(caption, user_id=user_id)
 
             # Generate and send the aftermath image in background
-            async def _gen_aftermath():
+            async def _gen_aftermath() -> None:
                 try:
                     await asyncio.sleep(2)  # Let caption deliver first
-                    img_bytes = await generate_image(prompt, width=1216, height=832, user_id=user_id)
+                    img_bytes = await generate_image(
+                        prompt, width=1216, height=832, user_id=user_id
+                    )
                     if img_bytes:
                         import base64 as b64
+
                         # Import ws from context to send image
                         from ..context import ws
+
                         img_b64 = b64.b64encode(img_bytes).decode()
                         await ws.send(user_id, {"type": "image", "data": img_b64})
                         logger.info("Mission aftermath image sent (%s)", scene_type)

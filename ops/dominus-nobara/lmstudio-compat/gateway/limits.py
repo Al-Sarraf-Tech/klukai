@@ -1,0 +1,28 @@
+"""Explicit gateway coordination and cleanup policy values."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class Limits:
+    MODEL_IDLE_TTL_SECONDS: int
+    NATIVE_VLLM_ACK_TIMEOUT_SECONDS: float
+    LEASE_ACQUIRE_COORDINATION_WAIT_SECONDS: float
+    LEASE_RELEASE_COORDINATION_WAIT_SECONDS: float
+    LEASE_ROUTER_REQUEST_SECONDS: float
+    LEASE_ROUTER_QUIESCE_SECONDS: float
+    ROUTER_UNLOAD_DRAIN_SECONDS: float
+    ROUTER_UNLOAD_POLL_SECONDS: float
+    LEASE_EXPIRY_POLL_SECONDS: float
+    LEASE_CLEANUP_RETRY_SECONDS: float
+    COMFY_QUEUE_DRAIN_SECONDS: float
+    COMFY_QUEUE_POLL_SECONDS: float
+    COMFY_CLEANUP_REQUEST_SECONDS: float
+    VOICE_CLEANUP_REQUEST_SECONDS: float
+    GPU_WORKLOAD_CLEANUP_SECONDS: float
+    COMFY_PROXY_REQUEST_SECONDS: float
+    MAX_RESIDENT_ROUTER_MODELS: int
+    INFERENCE_COORDINATION_WAIT_SECONDS: float
+    MAX_REQUEST_BODY_BYTES: int

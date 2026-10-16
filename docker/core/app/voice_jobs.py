@@ -36,7 +36,7 @@ class _Job:
     status: str = "queued"
     finished: float | None = None
     audio: str | None = None
-    task: asyncio.Task | None = None
+    task: asyncio.Task[Any] | None = None
 
 
 async def _synthesize(payload: dict[str, Any]) -> str:
@@ -50,10 +50,14 @@ async def _synthesize(payload: dict[str, Any]) -> str:
 
 class VoiceJobs:
     def __init__(
-        self, *, synthesize: Callable[[dict[str, Any]], Coroutine[Any, Any, str]] = _synthesize,
-        deadline: float = LOCAL_TTS_DEADLINE, max_outstanding: int = 8,
-        terminal_ttl: float = 300.0, max_result_bytes: int = 8 * 1024 * 1024,
-    ):
+        self,
+        *,
+        synthesize: Callable[[dict[str, Any]], Coroutine[Any, Any, str]] = _synthesize,
+        deadline: float = LOCAL_TTS_DEADLINE,
+        max_outstanding: int = 8,
+        terminal_ttl: float = 300.0,
+        max_result_bytes: int = 8 * 1024 * 1024,
+    ) -> None:
         self._synthesize = synthesize
         self._deadline = deadline
         self._max_outstanding = max_outstanding
@@ -61,7 +65,7 @@ class VoiceJobs:
         self._max_result_bytes = max_result_bytes
         self._jobs: dict[str, _Job] = {}
         self._queue: asyncio.Queue[_Job] = asyncio.Queue(maxsize=max_outstanding)
-        self._worker: asyncio.Task | None = None
+        self._worker: asyncio.Task[Any] | None = None
         self._closed = False
 
     def _prune(self) -> None:
@@ -73,7 +77,11 @@ class VoiceJobs:
         stored_bytes = sum(len(j.audio or "") for j in terminal)
         retained = len(terminal)
         for job in terminal:
-            if now - (job.finished or job.created) > self._terminal_ttl or retained > 32 or stored_bytes > 32 * 1024 * 1024:
+            if (
+                now - (job.finished or job.created) > self._terminal_ttl
+                or retained > 32
+                or stored_bytes > 32 * 1024 * 1024
+            ):
                 self._jobs.pop(job.job_id, None)
                 stored_bytes -= len(job.audio or "")
                 retained -= 1
@@ -81,7 +89,11 @@ class VoiceJobs:
     def submit(self, owner: str, payload: dict[str, Any]) -> dict[str, str]:
         self._prune()
         active = [j for j in self._jobs.values() if j.status not in _TERMINAL]
-        if self._closed or len(active) >= self._max_outstanding or sum(j.owner == owner for j in active) >= 2:
+        if (
+            self._closed
+            or len(active) >= self._max_outstanding
+            or sum(j.owner == owner for j in active) >= 2
+        ):
             raise VoiceQueueFull()
         job = _Job(owner=owner, payload=payload)
         try:
@@ -151,7 +163,11 @@ class VoiceJobs:
                 job.status = "running"
                 job.task = asyncio.create_task(self._synthesize(job.payload))
                 audio = await asyncio.wait_for(job.task, timeout=remaining)
-                if not isinstance(audio, str) or not audio or len(audio) > self._max_result_bytes:
+                if (
+                    not isinstance(audio, str)
+                    or not audio
+                    or len(audio) > self._max_result_bytes
+                ):
                     raise ValueError("Invalid or oversized voice result")
                 job.audio, job.status = audio, "completed"
             except asyncio.CancelledError:

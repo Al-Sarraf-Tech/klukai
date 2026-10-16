@@ -135,7 +135,11 @@ async def schedule(
     await _arm_timer(task_id, delay)
     logger.info(
         "Deferred task %s scheduled for %s (in %.0fs) user=%s kind=%s",
-        task_id, due_at.isoformat(), delay, user_id, action.get("kind"),
+        task_id,
+        due_at.isoformat(),
+        delay,
+        user_id,
+        action.get("kind"),
     )
     return task_id
 
@@ -194,14 +198,16 @@ async def claim(task_id: str) -> dict[str, Any] | None:
         from .db import get_conn_autocommit
 
         async with get_conn_autocommit() as conn:
-            row = await (await conn.execute(
-                "UPDATE companion_scheduled "
-                "SET status = 'delivered', delivered_at = NOW(), "
-                "    attempts = attempts + 1 "
-                "WHERE id = %s AND status = 'pending' "
-                "RETURNING user_id, action",
-                (task_id,),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "UPDATE companion_scheduled "
+                    "SET status = 'delivered', delivered_at = NOW(), "
+                    "    attempts = attempts + 1 "
+                    "WHERE id = %s AND status = 'pending' "
+                    "RETURNING user_id, action",
+                    (task_id,),
+                )
+            ).fetchone()
         if not row:
             return None
         action = row[1]
@@ -257,14 +263,17 @@ async def dispatch(user_id: str, action: dict[str, Any]) -> None:
         if not text:
             return
         from .context import ws
+
         await ws.send_proactive(user_id, text)
         return
     if kind == "her_pov":
         from . import memory_her_pov
+
         await memory_her_pov.start_her_pov(user_id)
         return
     if kind == "op_brief":
         from . import op_brief
+
         await op_brief.deliver(user_id, action)
         return
     logger.warning("Unknown deferred action kind %r for user %s", kind, user_id)
@@ -283,12 +292,14 @@ async def sweep(limit: int = 50) -> int:
         from .db import get_conn
 
         async with get_conn() as conn:
-            rows = await (await conn.execute(
-                "SELECT id FROM companion_scheduled "
-                "WHERE status = 'pending' AND due_at <= NOW() "
-                "ORDER BY due_at ASC LIMIT %s",
-                (limit,),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    "SELECT id FROM companion_scheduled "
+                    "WHERE status = 'pending' AND due_at <= NOW() "
+                    "ORDER BY due_at ASC LIMIT %s",
+                    (limit,),
+                )
+            ).fetchall()
     except Exception as e:
         logger.warning("Deferred sweep query failed: %s", e)
         return 0
@@ -309,15 +320,19 @@ async def pending_count(user_id: str | None = None) -> int:
 
         async with get_conn() as conn:
             if user_id:
-                row = await (await conn.execute(
-                    "SELECT COUNT(*) FROM companion_scheduled "
-                    "WHERE status = 'pending' AND user_id = %s",
-                    (user_id,),
-                )).fetchone()
+                row = await (
+                    await conn.execute(
+                        "SELECT COUNT(*) FROM companion_scheduled "
+                        "WHERE status = 'pending' AND user_id = %s",
+                        (user_id,),
+                    )
+                ).fetchone()
             else:
-                row = await (await conn.execute(
-                    "SELECT COUNT(*) FROM companion_scheduled WHERE status = 'pending'"
-                )).fetchone()
+                row = await (
+                    await conn.execute(
+                        "SELECT COUNT(*) FROM companion_scheduled WHERE status = 'pending'"
+                    )
+                ).fetchone()
         return int(row[0]) if row else 0
     except Exception as e:
         logger.debug("pending_count failed: %s", e)

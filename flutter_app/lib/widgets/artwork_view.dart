@@ -77,7 +77,11 @@ class _ArtworkViewState extends State<ArtworkView> {
   (String, String)? get _format {
     final b = _bytes;
     if (b == null) return null;
-    if (b.length >= 8 && b[0] == 137 && b[1] == 80 && b[2] == 78 && b[3] == 71) {
+    if (b.length >= 8 &&
+        b[0] == 137 &&
+        b[1] == 80 &&
+        b[2] == 78 &&
+        b[3] == 71) {
       return ('image/png', 'png');
     }
     if (b.length >= 3 && b[0] == 255 && b[1] == 216 && b[2] == 255) {

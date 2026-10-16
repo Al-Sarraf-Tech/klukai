@@ -142,7 +142,9 @@ class WebSocketService {
 
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
-    final delays = reconnectDelays.isEmpty ? const [Duration(seconds: 3)] : reconnectDelays;
+    final delays = reconnectDelays.isEmpty
+        ? const [Duration(seconds: 3)]
+        : reconnectDelays;
     final delay = delays[_attempt.clamp(0, delays.length - 1)];
     _attempt++;
     _reconnectTimer = Timer(delay, () {

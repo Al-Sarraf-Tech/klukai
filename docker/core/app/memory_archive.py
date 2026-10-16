@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .dependencies import http_request
+from typing import Any
+
+
 import logging
 import os
 import re
@@ -13,6 +17,7 @@ from PIL import Image
 
 from .db import get_conn, get_conn_autocommit
 from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
+from .shared_http import client as http_client, close as close_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +30,15 @@ _http: httpx.AsyncClient | None = None
 
 def _get_http() -> httpx.AsyncClient:
     global _http
-    if _http is None or _http.is_closed:
-        _http = httpx.AsyncClient(timeout=60.0)
+    _http = http_client(_http, timeout=60.0)
     return _http
+
+
+async def close() -> None:
+    global _http
+    client, _http = _http, None
+    await close_http_client(client)
+
 
 IMAGES_DIR = Path(os.environ.get("IMAGES_DIR", "/images"))
 
@@ -84,8 +95,15 @@ def annotation_quality_score(text: str) -> float:
     if lower.startswith("whisper"):
         score -= 0.4
     # Generic romantic vocabulary (sign of tag-based annotation)
-    generic_words = ["intertwined", "sanctuary", "souls entwined", "hearts beat as one",
-                     "glow of dawn", "moonlit sheets", "neon lights"]
+    generic_words = [
+        "intertwined",
+        "sanctuary",
+        "souls entwined",
+        "hearts beat as one",
+        "glow of dawn",
+        "moonlit sheets",
+        "neon lights",
+    ]
     for word in generic_words:
         if word in lower:
             score -= 0.15
@@ -96,9 +114,24 @@ def annotation_quality_score(text: str) -> float:
     if len(text) > 350:
         score -= 0.2
     # Bonus: specific details (places, actions, sensory words)
-    specific_markers = ["office", "bed", "motorcycle", "café", "rooftop", "morning",
-                        "collar", "rifle", "coffee", "rain", "briefing", "0300",
-                        "shoulder", "hand", "scar", "laugh"]
+    specific_markers = [
+        "office",
+        "bed",
+        "motorcycle",
+        "café",
+        "rooftop",
+        "morning",
+        "collar",
+        "rifle",
+        "coffee",
+        "rain",
+        "briefing",
+        "0300",
+        "shoulder",
+        "hand",
+        "scar",
+        "laugh",
+    ]
     specifics = sum(1 for m in specific_markers if m in lower)
     score += min(0.2, specifics * 0.05)
     return max(0.0, min(1.0, score))
@@ -116,12 +149,14 @@ async def _is_duplicate_annotation(
         return False
     try:
         async with get_conn() as conn:
-            rows = await (await conn.execute(
-                "SELECT annotation FROM companion_memories "
-                "WHERE kept = true AND annotation IS NOT NULL AND user_id = %s "
-                "ORDER BY created_at DESC LIMIT 30",
-                (user_id,),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    "SELECT annotation FROM companion_memories "
+                    "WHERE kept = true AND annotation IS NOT NULL AND user_id = %s "
+                    "ORDER BY created_at DESC LIMIT 30",
+                    (user_id,),
+                )
+            ).fetchall()
 
         target_words = set(annotation.lower().split())
         if len(target_words) < 3:
@@ -135,7 +170,11 @@ async def _is_duplicate_annotation(
             overlap = len(target_words & existing_words)
             ratio = overlap / max(len(target_words), len(existing_words))
             if ratio > threshold:
-                logger.debug("Duplicate detected (%.0f%% overlap): %s", ratio * 100, annotation[:50])
+                logger.debug(
+                    "Duplicate detected (%.0f%% overlap): %s",
+                    ratio * 100,
+                    annotation[:50],
+                )
                 return True
     except Exception as e:
         logger.debug("Dedup check failed: %s", e)
@@ -145,10 +184,12 @@ async def _is_duplicate_annotation(
 async def _memory_owner(memory_id: str) -> str | None:
     try:
         async with get_conn_autocommit() as conn:
-            row = await (await conn.execute(
-                "SELECT user_id FROM companion_memories WHERE id = %s",
-                (memory_id,),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "SELECT user_id FROM companion_memories WHERE id = %s",
+                    (memory_id,),
+                )
+            ).fetchone()
     except Exception as exc:
         logger.debug("memory owner lookup failed: %s", exc)
         return None
@@ -163,7 +204,7 @@ async def save_image(
     conversation_id: str,
     mood: str = "composed",
     affection_level: int = 0,
-    curation: dict | None = None,
+    curation: dict[str, Any] | None = None,
     user_id: str = "jalsarraf",
     memory_id: str | None = None,
 ) -> str | None:
@@ -185,8 +226,8 @@ async def save_image(
             return None
     else:
         memory_id = str(uuid.uuid4())
-    png_filename = f"{memory_id}.png"          # lossless original (archive)
-    filename = f"{memory_id}.webp"             # served full image (full-res WebP)
+    png_filename = f"{memory_id}.png"  # lossless original (archive)
+    filename = f"{memory_id}.webp"  # served full image (full-res WebP)
     thumb_filename = f"{memory_id}_thumb.webp"
     # Paths live outside the try so the failure path can clean up whatever
     # was already written: the files land on the volume before the INSERT,
@@ -200,6 +241,7 @@ async def save_image(
         # dimensions is visually identical and ~8x smaller, so it opens fast.
         png_path.write_bytes(image_bytes)
         from io import BytesIO
+
         with Image.open(BytesIO(image_bytes)) as _full:
             _full.convert("RGB").save(img_path, "WEBP", quality=95, method=6)
 
@@ -228,7 +270,8 @@ async def save_image(
             logger.warning(
                 "Memory %s saved without annotation (prompt=%s). "
                 "Using default placeholder.",
-                memory_id, prompt[:80],
+                memory_id,
+                prompt[:80],
             )
             annotation = "Uncaptioned moment."
 
@@ -248,15 +291,28 @@ async def save_image(
                 "mood, affection_level, kept, kept_by, category, conversation_id, user_id) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
-                    memory_id, filename, thumb_filename, prompt, annotation,
-                    scene_tags, mood, affection_level, kept, kept_by,
-                    category, conversation_id, user_id,
+                    memory_id,
+                    filename,
+                    thumb_filename,
+                    prompt,
+                    annotation,
+                    scene_tags,
+                    mood,
+                    affection_level,
+                    kept,
+                    kept_by,
+                    category,
+                    conversation_id,
+                    user_id,
                 ),
             )
 
         logger.info(
             "Memory saved: %s (kept=%s, category=%s, tags=%s)",
-            memory_id, kept, category, scene_tags,
+            memory_id,
+            kept,
+            category,
+            scene_tags,
         )
         return memory_id
 
@@ -287,26 +343,10 @@ def _generate_thumbnail(src: Path, dst: Path, width: int = 320) -> None:
         with Image.open(src) as img:
             ratio = width / img.width
             height = int(img.height * ratio)
-            thumb = img.convert("RGB").resize((width, height), Image.LANCZOS)
+            thumb = img.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
             thumb.save(dst, "WEBP", quality=80, method=6)
     except Exception as e:
         logger.warning("Thumbnail generation failed: %s", e)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ── Annotation backfill ──────────────────────────────────────────────────────
@@ -326,7 +366,7 @@ Write ONLY the caption. Nothing else.
 """
 
 
-async def backfill_annotations(user_id: str = "jalsarraf") -> dict:
+async def backfill_annotations(user_id: str = "jalsarraf") -> dict[str, Any]:
     """Find memory archive entries with NULL/empty annotation and generate one.
 
     Scoped to a specific user. Uses dolphin through the LM Studio gate.
@@ -338,13 +378,15 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict:
 
     try:
         async with get_conn() as conn:
-            rows = await (await conn.execute(
-                "SELECT id, prompt, category, scene_tags "
-                "FROM companion_memories "
-                "WHERE (annotation IS NULL OR annotation = '') AND user_id = %s "
-                "ORDER BY created_at ASC",
-                (user_id,),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    "SELECT id, prompt, category, scene_tags "
+                    "FROM companion_memories "
+                    "WHERE (annotation IS NULL OR annotation = '') AND user_id = %s "
+                    "ORDER BY created_at ASC",
+                    (user_id,),
+                )
+            ).fetchall()
     except Exception as e:
         logger.error("Backfill: failed to query unannotated memories: %s", e)
         return {"total": 0, "updated": 0, "error": str(e)}
@@ -371,7 +413,10 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict:
         try:
             async with gate:
                 client = _get_http()
-                r = await client.post(
+                r = await http_request(
+                    "lm_studio",
+                    client,
+                    "post",
                     f"{LM_STUDIO_URL}/v1/chat/completions",
                     headers=lm_studio_auth_headers(),
                     json={
@@ -388,14 +433,14 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict:
 
             # Strip thinking tags if present
             content = re.sub(
-                r'<\|?think\|?>.*?<\|?/think\|?>', '', content, flags=re.DOTALL
+                r"<\|?think\|?>.*?<\|?/think\|?>", "", content, flags=re.DOTALL
             ).strip()
             content = re.sub(
-                r'<think>.*?</think>', '', content, flags=re.DOTALL
+                r"<think>.*?</think>", "", content, flags=re.DOTALL
             ).strip()
 
             # Clean up quotes / markdown prefixes
-            annotation = content.strip('"').strip("'").strip('`')
+            annotation = content.strip('"').strip("'").strip("`")
             if not annotation:
                 annotation = "Uncaptioned moment."
 
@@ -408,7 +453,10 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict:
             updated += 1
             logger.info(
                 "Backfill %d/%d: %s -> %s",
-                updated, total, mem_id, annotation[:60],
+                updated,
+                total,
+                mem_id,
+                annotation[:60],
             )
 
         except Exception as e:
@@ -416,6 +464,7 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict:
 
     logger.info("Backfill complete: %d/%d updated.", updated, total)
     return {"total": total, "updated": updated}
+
 
 # Re-exports — query functions moved to memory_archive_query.py for file-size hygiene.
 from app.memory_archive_query import (  # noqa: E402

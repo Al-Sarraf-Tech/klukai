@@ -9,21 +9,40 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import TypedDict
 
 from .db import get_conn, get_conn_autocommit
 
 logger = logging.getLogger(__name__)
 
+
 # ── Physical states and their natural decay times ───────────────────────
-STATES = {
-    "normal":    {"decay_hours": None, "description": ""},
-    "sore":      {"decay_hours": 4,    "description": "muscles ache from recent combat"},
-    "exhausted": {"decay_hours": 6,    "description": "drained after prolonged deployment"},
-    "cold":      {"decay_hours": 2,    "description": "chilled — late watch, no warmth nearby"},
-    "warm":      {"decay_hours": 2,    "description": "comfortable warmth — close to the Commander or by a heat source"},
-    "relaxed":   {"decay_hours": 3,    "description": "at ease after a long conversation or quiet time"},
-    "wounded":   {"decay_hours": 8,    "description": "field-dressed injury still tender"},
-    "energized": {"decay_hours": 3,    "description": "sharp and ready after rest or a good morning"},
+class PhysicalStateSpec(TypedDict):
+    decay_hours: int | None
+    description: str
+
+
+STATES: dict[str, PhysicalStateSpec] = {
+    "normal": {"decay_hours": None, "description": ""},
+    "sore": {"decay_hours": 4, "description": "muscles ache from recent combat"},
+    "exhausted": {
+        "decay_hours": 6,
+        "description": "drained after prolonged deployment",
+    },
+    "cold": {"decay_hours": 2, "description": "chilled — late watch, no warmth nearby"},
+    "warm": {
+        "decay_hours": 2,
+        "description": "comfortable warmth — close to the Commander or by a heat source",
+    },
+    "relaxed": {
+        "decay_hours": 3,
+        "description": "at ease after a long conversation or quiet time",
+    },
+    "wounded": {"decay_hours": 8, "description": "field-dressed injury still tender"},
+    "energized": {
+        "decay_hours": 3,
+        "description": "sharp and ready after rest or a good morning",
+    },
 }
 
 
@@ -66,7 +85,9 @@ class PhysicalStateTracker:
 
         # Auto-decay if time exceeded
         if should_decay(state, since):
-            logger.info("Physical state decayed: %s -> normal (was set %s)", state, since)
+            logger.info(
+                "Physical state decayed: %s -> normal (was set %s)", state, since
+            )
             await self.set_state(user_id, "normal")
             return "normal", ""
 
@@ -100,12 +121,16 @@ class PhysicalStateTracker:
         except Exception as e:
             logger.warning("Failed to persist physical state for %s: %s", user_id, e)
 
-        logger.info("Physical state set: %s -> %s for user %s", state, detail or "", user_id)
+        logger.info(
+            "Physical state set: %s -> %s for user %s", state, detail or "", user_id
+        )
 
     async def on_mission_end(self, user_id: str, had_injury: bool = False) -> None:
         """Transition physical state after a mission ends."""
         if had_injury:
-            await self.set_state(user_id, "wounded", "field-dressed wound from the last mission")
+            await self.set_state(
+                user_id, "wounded", "field-dressed wound from the last mission"
+            )
         else:
             await self.set_state(user_id, "sore", "muscles aching after the operation")
 
@@ -120,28 +145,38 @@ class PhysicalStateTracker:
             return  # Don't override active states
 
         if 0 <= hour < 6:
-            await self.set_state(user_id, "cold", "the late watch is cold without company")
+            await self.set_state(
+                user_id, "cold", "the late watch is cold without company"
+            )
         elif 6 <= hour < 9:
-            await self.set_state(user_id, "energized", "fresh after rest, ready for the day")
+            await self.set_state(
+                user_id, "energized", "fresh after rest, ready for the day"
+            )
 
     async def on_long_conversation(self, user_id: str) -> None:
         """Set relaxed state after a long conversation (10+ turns)."""
         state, _, _ = await self._load(user_id)
         if state in ("normal", "cold"):
-            await self.set_state(user_id, "relaxed", "at ease — the conversation was good")
+            await self.set_state(
+                user_id, "relaxed", "at ease — the conversation was good"
+            )
 
-    async def _load(self, user_id: str) -> tuple[str, datetime, str | None]:  # pragma: no cover - integration (DB)
+    async def _load(
+        self, user_id: str
+    ) -> tuple[str, datetime, str | None]:  # pragma: no cover - integration (DB)
         """Load physical state from cache or DB."""
         if user_id in self._cache:
             return self._cache[user_id]
 
         try:
             async with get_conn() as conn:
-                row = await (await conn.execute(
-                    "SELECT physical_state, physical_state_since, physical_detail "
-                    "FROM companion_persistent_state WHERE user_id = %s",
-                    (user_id,),
-                )).fetchone()
+                row = await (
+                    await conn.execute(
+                        "SELECT physical_state, physical_state_since, physical_detail "
+                        "FROM companion_persistent_state WHERE user_id = %s",
+                        (user_id,),
+                    )
+                ).fetchone()
                 if row and row[0]:
                     state = row[0]
                     since = row[1] or datetime.now()

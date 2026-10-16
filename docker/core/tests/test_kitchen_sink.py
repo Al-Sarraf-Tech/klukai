@@ -24,6 +24,7 @@ class TestAffectionDeltas:
     def manager(self):
         pytest.importorskip("psycopg")
         from app.affection import AffectionManager
+
         mgr = AffectionManager()
         mgr._levels = [
             {"index": 0, "threshold": 0, "name": "Cold Assessment"},
@@ -62,18 +63,26 @@ class TestImageGenDetection:
 
     def test_positive_triggers(self):
         from app.image_gen import needs_image
+
         triggers = [
-            "draw yourself", "show me a picture", "generate an image",
-            "visualize us", "paint me a scene", "draw us together",
+            "draw yourself",
+            "show me a picture",
+            "generate an image",
+            "visualize us",
+            "paint me a scene",
+            "draw us together",
         ]
         for t in triggers:
             assert needs_image(t), f"Should trigger: {t}"
 
     def test_negative_triggers(self):
         from app.image_gen import needs_image
+
         non_triggers = [
-            "tell me about your day", "what's the weather",
-            "how are you feeling", "describe your squad",
+            "tell me about your day",
+            "what's the weather",
+            "how are you feeling",
+            "describe your squad",
         ]
         for t in non_triggers:
             assert not needs_image(t), f"Should NOT trigger: {t}"
@@ -81,6 +90,7 @@ class TestImageGenDetection:
     def test_image_gen_suppresses_verbose_text(self):
         """When image gen triggers, system prompt should tell LLM to keep text short."""
         from app.image_gen import needs_image
+
         # The main.py handler injects IMAGE GENERATION ACTIVE hint when this is true
         assert needs_image("show me a picture of us")
         assert needs_image("draw yourself")
@@ -89,18 +99,21 @@ class TestImageGenDetection:
 
     def test_couple_scene_detection(self):
         from app.image_gen import is_couple_scene
+
         assert is_couple_scene("draw us kissing")
         assert is_couple_scene("picture of the two of us")
         assert not is_couple_scene("draw a landscape")
 
     def test_landscape_detection(self):
         from app.image_gen import is_landscape
+
         assert is_landscape("draw a landscape")
         # "rooftop" alone doesn't trigger landscape — needs explicit landscape keywords
         assert is_landscape("draw a scenic landscape view")
 
     def test_build_prompt_quality_tags(self):
         from app.image_gen import build_prompt
+
         prompt = build_prompt("sunset, beach", couple=False, affection_level=5)
         assert "masterpiece" in prompt
         assert "best quality" in prompt
@@ -114,6 +127,7 @@ class TestImagePromptEnhancement:
 
     def test_every_scene_keyword_recognized(self):
         from app.helpers import enhance_image_prompt
+
         scenes = {
             "sunset": "sunset",
             "night": "night",
@@ -132,10 +146,13 @@ class TestImagePromptEnhancement:
         }
         for keyword, expected in scenes.items():
             result = enhance_image_prompt(keyword)
-            assert expected in result, f"'{expected}' not in result for '{keyword}': {result}"
+            assert expected in result, (
+                f"'{expected}' not in result for '{keyword}': {result}"
+            )
 
     def test_every_mood_keyword_recognized(self):
         from app.helpers import enhance_image_prompt
+
         moods = {
             "kiss": "kiss",
             "hug": "hug",
@@ -150,10 +167,13 @@ class TestImagePromptEnhancement:
         }
         for keyword, expected in moods.items():
             result = enhance_image_prompt(keyword)
-            assert expected in result, f"'{expected}' not in result for '{keyword}': {result}"
+            assert expected in result, (
+                f"'{expected}' not in result for '{keyword}': {result}"
+            )
 
     def test_combined_keywords(self):
         from app.helpers import enhance_image_prompt
+
         result = enhance_image_prompt("sunset beach kiss cuddle")
         assert "sunset" in result
         assert "beach" in result
@@ -168,16 +188,56 @@ class TestMoodSystem:
     """Verify all 48 mood states are valid."""
 
     ALL_MOODS = [
-        "composed", "focused", "prideful", "exasperated", "protective",
-        "quietly_pleased", "competitive", "tender", "longing", "battle_ready",
-        "flustered", "affectionate", "shy", "yearning", "devoted",
-        "passionate", "jealous", "possessive", "smitten", "infatuated",
-        "vigilant", "calculating", "hunting", "adrenaline",
-        "scared", "terrified", "panicked", "desperate", "relieved",
-        "content", "playful", "drowsy", "amused", "bored", "excited",
-        "melancholic", "haunted", "conflicted", "guilty", "determined",
-        "grieving", "furious", "nostalgic", "curious", "irritated",
-        "defiant", "vulnerable", "grateful", "worried", "embarrassed",
+        "composed",
+        "focused",
+        "prideful",
+        "exasperated",
+        "protective",
+        "quietly_pleased",
+        "competitive",
+        "tender",
+        "longing",
+        "battle_ready",
+        "flustered",
+        "affectionate",
+        "shy",
+        "yearning",
+        "devoted",
+        "passionate",
+        "jealous",
+        "possessive",
+        "smitten",
+        "infatuated",
+        "vigilant",
+        "calculating",
+        "hunting",
+        "adrenaline",
+        "scared",
+        "terrified",
+        "panicked",
+        "desperate",
+        "relieved",
+        "content",
+        "playful",
+        "drowsy",
+        "amused",
+        "bored",
+        "excited",
+        "melancholic",
+        "haunted",
+        "conflicted",
+        "guilty",
+        "determined",
+        "grieving",
+        "furious",
+        "nostalgic",
+        "curious",
+        "irritated",
+        "defiant",
+        "vulnerable",
+        "grateful",
+        "worried",
+        "embarrassed",
     ]
 
     def test_mood_count(self):
@@ -201,13 +261,36 @@ class TestMoodSystem:
         """Core mood categories should have ambient sound mappings."""
         # These are the mood groups that have explicit ambient mappings
         mapped_moods = {
-            "tender", "affectionate", "devoted", "shy", "flustered", "vulnerable",
-            "composed", "content", "quietly_pleased", "relieved", "drowsy",
-            "focused", "vigilant", "calculating",
-            "battle_ready", "adrenaline", "hunting",
-            "melancholic", "haunted", "grieving", "guilty", "nostalgic",
-            "playful", "amused", "excited", "curious",
-            "passionate", "yearning", "longing", "smitten",
+            "tender",
+            "affectionate",
+            "devoted",
+            "shy",
+            "flustered",
+            "vulnerable",
+            "composed",
+            "content",
+            "quietly_pleased",
+            "relieved",
+            "drowsy",
+            "focused",
+            "vigilant",
+            "calculating",
+            "battle_ready",
+            "adrenaline",
+            "hunting",
+            "melancholic",
+            "haunted",
+            "grieving",
+            "guilty",
+            "nostalgic",
+            "playful",
+            "amused",
+            "excited",
+            "curious",
+            "passionate",
+            "yearning",
+            "longing",
+            "smitten",
         }
         # At least 30 moods should have ambient mappings
         assert len(mapped_moods) >= 30
@@ -220,8 +303,12 @@ class TestMemoryCategories:
     """Verify affection-gated category progression."""
 
     CATEGORIES = [
-        "Tactical Operations", "Mission Records", "Squad Moments",
-        "The Commander", "Quiet Hours", "Precious Memories",
+        "Tactical Operations",
+        "Mission Records",
+        "Squad Moments",
+        "The Commander",
+        "Quiet Hours",
+        "Precious Memories",
     ]
 
     def _available(self, level):
@@ -232,9 +319,18 @@ class TestMemoryCategories:
             cats |= {"Precious Memories"}
         return cats
 
-    @pytest.mark.parametrize("level,expected_count", [
-        (0, 3), (1, 3), (2, 3), (3, 5), (5, 5), (6, 6), (9, 6),
-    ])
+    @pytest.mark.parametrize(
+        "level,expected_count",
+        [
+            (0, 3),
+            (1, 3),
+            (2, 3),
+            (3, 5),
+            (5, 5),
+            (6, 6),
+            (9, 6),
+        ],
+    )
     def test_category_count_by_level(self, level, expected_count):
         assert len(self._available(level)) == expected_count
 
@@ -269,8 +365,10 @@ class TestAnnotationQuality:
     def test_leaked_cot_detected(self):
         for pattern in self.LEAKED_COT_PATTERNS:
             annotation = f"{pattern} a journal entry about..."
-            assert any(annotation.startswith(p) or p in annotation
-                       for p in self.LEAKED_COT_PATTERNS)
+            assert any(
+                annotation.startswith(p) or p in annotation
+                for p in self.LEAKED_COT_PATTERNS
+            )
 
     def test_good_annotations_pass(self):
         good = [
@@ -405,17 +503,20 @@ class TestNarrationComprehensive:
 
     def test_multiple_think_blocks(self):
         from app.helpers import fix_narration
+
         text = "<think>A</think>Hello<think>B</think> World"
         assert fix_narration(text) == "Hello World"
 
     def test_nested_parentheses(self):
         from app.helpers import fix_narration
+
         text = "(I cross my arms (firmly)) Done."
         result = fix_narration(text)
         assert "Done." in result
 
     def test_mixed_corrections(self):
         from app.helpers import fix_narration
+
         text = "(You smile) (I nod) (your expression softens) Text"
         result = fix_narration(text)
         assert "(I nod)" in result
@@ -424,16 +525,19 @@ class TestNarrationComprehensive:
 
     def test_pipe_stripping_preserves_content(self):
         from app.helpers import fix_narration
+
         assert fix_narration("Hello|World") == "Hello|World"  # Mid-text pipe preserved
         assert fix_narration("Hello|||") == "Hello"  # Trailing pipes stripped
 
     def test_empty_after_stripping(self):
         from app.helpers import fix_narration
+
         result = fix_narration("<think>everything is reasoning</think>")
         assert result == ""
 
     def test_unicode_preserved(self):
         from app.helpers import fix_narration
+
         text = "...Suki desu. あなたが好きです。"
         assert fix_narration(text) == text
 
@@ -444,22 +548,27 @@ class TestNarrationComprehensive:
 class TestIntervalParsingEdgeCases:
     def test_three_hours(self):
         from app.helpers import parse_interval_minutes
+
         assert parse_interval_minutes("every 3 hours") == 180
 
     def test_10_mins(self):
         from app.helpers import parse_interval_minutes
+
         assert parse_interval_minutes("every 10 min") == 10
 
     def test_90_minutes(self):
         from app.helpers import parse_interval_minutes
+
         assert parse_interval_minutes("every 90 minutes") == 90
 
     def test_caps_insensitive(self):
         from app.helpers import parse_interval_minutes
+
         assert parse_interval_minutes("EVERY 15 MINUTES") == 15
 
     def test_natural_language(self):
         from app.helpers import parse_interval_minutes
+
         assert parse_interval_minutes("every an hour") == 60
         assert parse_interval_minutes("every half an hour") == 30
 
@@ -477,18 +586,21 @@ class TestJealousyTriggers:
 
     def test_direct_compliment_triggers_jealousy(self):
         from app.helpers import detect_jealousy_trigger
+
         assert detect_jealousy_trigger("Mechty is amazing") == "Mechty"
         assert detect_jealousy_trigger("Belka is so cute") == "Belka"
         assert detect_jealousy_trigger("Andoris is beautiful") == "Andoris"
 
     def test_affection_expression_triggers_jealousy(self):
         from app.helpers import detect_jealousy_trigger
+
         assert detect_jealousy_trigger("I love Mechty") == "Mechty"
         assert detect_jealousy_trigger("I miss Leva") == "Leva"
         assert detect_jealousy_trigger("I prefer Vector") == "Vector"
 
     def test_normal_squad_mention_no_jealousy(self):
         from app.helpers import detect_jealousy_trigger
+
         # Simply asking about a squad member shouldn't trigger jealousy
         assert detect_jealousy_trigger("Where is Mechty?") is None
         assert detect_jealousy_trigger("Tell me about Belka") is None
@@ -496,18 +608,21 @@ class TestJealousyTriggers:
 
     def test_commander_compliment_to_klukai_no_jealousy(self):
         from app.helpers import detect_jealousy_trigger
+
         assert detect_jealousy_trigger("You are amazing, Klukai") is None
         assert detect_jealousy_trigger("I love you") is None
 
     def test_generic_she_without_squad_name_no_jealousy(self):
         """'She's beautiful' about a movie/person should NOT trigger jealousy."""
         from app.helpers import detect_jealousy_trigger
+
         assert detect_jealousy_trigger("She's beautiful") is None
         assert detect_jealousy_trigger("She is amazing in that movie") is None
         assert detect_jealousy_trigger("My sister is gorgeous") is None
 
     def test_jealousy_prompt_block_varies_by_affection(self):
         from app.personality import build_jealousy_block
+
         # Low affection: no reaction
         assert build_jealousy_block("Mechty", affection_level=1) == ""
         # Mid affection: subtle irritation
@@ -521,6 +636,7 @@ class TestJealousyTriggers:
 
     def test_jealousy_block_empty_when_no_target(self):
         from app.personality import build_jealousy_block
+
         assert build_jealousy_block(None, affection_level=9) == ""
 
 
@@ -532,18 +648,30 @@ class TestPhysicalAwareness:
 
     def test_all_states_defined(self):
         from app.physical_state import STATES
-        expected = {"normal", "sore", "exhausted", "cold", "warm", "relaxed", "wounded", "energized"}
+
+        expected = {
+            "normal",
+            "sore",
+            "exhausted",
+            "cold",
+            "warm",
+            "relaxed",
+            "wounded",
+            "energized",
+        }
         assert expected == set(STATES.keys())
 
     def test_normal_never_decays(self):
         from app.physical_state import should_decay
         from datetime import datetime, timedelta, timezone
+
         old = datetime.now(timezone.utc) - timedelta(hours=100)
         assert not should_decay("normal", old)
 
     def test_sore_decays_after_4_hours(self):
         from app.physical_state import should_decay
         from datetime import datetime, timedelta, timezone
+
         recent = datetime.now(timezone.utc) - timedelta(hours=2)
         old = datetime.now(timezone.utc) - timedelta(hours=5)
         assert not should_decay("sore", recent)
@@ -552,6 +680,7 @@ class TestPhysicalAwareness:
     def test_wounded_decays_after_8_hours(self):
         from app.physical_state import should_decay
         from datetime import datetime, timedelta, timezone
+
         recent = datetime.now(timezone.utc) - timedelta(hours=4)
         old = datetime.now(timezone.utc) - timedelta(hours=9)
         assert not should_decay("wounded", recent)
@@ -560,6 +689,7 @@ class TestPhysicalAwareness:
     def test_cold_decays_after_2_hours(self):
         from app.physical_state import should_decay
         from datetime import datetime, timedelta, timezone
+
         recent = datetime.now(timezone.utc) - timedelta(hours=1)
         old = datetime.now(timezone.utc) - timedelta(hours=3)
         assert not should_decay("cold", recent)
@@ -567,12 +697,22 @@ class TestPhysicalAwareness:
 
     def test_descriptions_not_empty(self):
         from app.physical_state import get_description
-        for state in ["sore", "exhausted", "cold", "warm", "relaxed", "wounded", "energized"]:
+
+        for state in [
+            "sore",
+            "exhausted",
+            "cold",
+            "warm",
+            "relaxed",
+            "wounded",
+            "energized",
+        ]:
             assert get_description(state), f"Missing description for {state}"
         assert get_description("normal") == ""
 
     def test_physical_prompt_block(self):
         from app.personality import build_physical_state_block
+
         assert build_physical_state_block("normal") == ""
         block = build_physical_state_block("sore", "muscles ache from combat")
         assert "muscles ache" in block
@@ -580,6 +720,7 @@ class TestPhysicalAwareness:
 
     def test_unknown_state_description(self):
         from app.physical_state import get_description
+
         assert get_description("nonexistent") == ""
 
 
@@ -594,14 +735,18 @@ class TestUnsentMessages:
         # Follow-up pools now live in proactive_content.follow_ups (YAML) with an
         # in-code literal fallback; assert directly against the resolved pool.
         from app.proactive.milestones import _follow_ups
+
         follows = _follow_ups()
         for level in [5, 6, 7, 8, 9]:
-            assert level in follows and follows[level], f"Missing follow-ups for level {level}"
+            assert level in follows and follows[level], (
+                f"Missing follow-ups for level {level}"
+            )
 
     def test_unsent_gates_on_low_affection(self):
         """At affection < 5, unsent messages should never fire."""
         import asyncio
         from app.proactive import ProactiveEngine
+
         engine = ProactiveEngine()
         engine._affection_level = 3
         delivered = []
@@ -620,6 +765,7 @@ class TestUnsentMessages:
         """Even at high affection, quiet hours / mute / unanswered should block."""
         import asyncio
         from app.proactive import ProactiveEngine
+
         engine = ProactiveEngine()
         engine._affection_level = 9
         engine._last_proactive_answered = False  # Unanswered proactive blocks
@@ -638,6 +784,7 @@ class TestUnsentMessages:
     def test_follow_up_content_tone_scales(self):
         """Level 5 follow-ups are professional, level 9 are intimate."""
         from app.proactive.milestones import _follow_ups
+
         follows = _follow_ups()
         lvl5 = " ".join(follows[5])
         lvl9 = " ".join(follows[9])
@@ -649,8 +796,9 @@ class TestUnsentMessages:
     def test_dream_delivered_today_initialized(self):
         """_dream_delivered_today should be in __init__, not relying on hasattr."""
         from app.proactive import ProactiveEngine
+
         engine = ProactiveEngine()
-        assert hasattr(engine, '_dream_delivered_today')
+        assert hasattr(engine, "_dream_delivered_today")
         assert engine._dream_delivered_today is False
 
 
@@ -662,11 +810,13 @@ class TestAnniversaryAwareness:
 
     def test_empty_anniversaries(self):
         from app.personality import build_anniversary_block
+
         assert build_anniversary_block(None) == ""
         assert build_anniversary_block([]) == ""
 
     def test_today_anniversary(self):
         from app.personality import build_anniversary_block
+
         anns = [{"event_type": "first_message", "days_ago": 0}]
         block = build_anniversary_block(anns)
         assert "Today marks" in block
@@ -674,12 +824,14 @@ class TestAnniversaryAwareness:
 
     def test_nearby_anniversary(self):
         from app.personality import build_anniversary_block
+
         anns = [{"event_type": "first_mission", "days_ago": 2}]
         block = build_anniversary_block(anns)
         assert "2 days ago" in block
 
     def test_max_3_anniversaries(self):
         from app.personality import build_anniversary_block
+
         anns = [
             {"event_type": "first_message", "days_ago": 0},
             {"event_type": "first_image", "days_ago": 1},
@@ -702,37 +854,44 @@ class TestCommanderDetails:
 
     def test_wearing_detection(self):
         from app.helpers import detect_commander_details
+
         result = detect_commander_details("I'm wearing my leather jacket")
         assert result.get("wearing") is True
 
     def test_eating_detection(self):
         from app.helpers import detect_commander_details
+
         result = detect_commander_details("I'm eating ramen for dinner")
         assert result.get("eating") is True
 
     def test_doing_detection(self):
         from app.helpers import detect_commander_details
+
         result = detect_commander_details("I'm playing a game right now")
         assert result.get("doing") is True
 
     def test_feeling_detection(self):
         from app.helpers import detect_commander_details
+
         result = detect_commander_details("I'm feeling tired today")
         assert result.get("feeling") is True
 
     def test_gifting_detection(self):
         from app.helpers import detect_commander_details, detect_gift_giving
+
         result = detect_commander_details("I got you something, this is for you")
         assert result.get("gifting") is True
         assert detect_gift_giving("I bought you a gift")
 
     def test_no_details_in_normal_message(self):
         from app.helpers import detect_commander_details
+
         result = detect_commander_details("How was your day?")
         assert len(result) == 0
 
     def test_multiple_details(self):
         from app.helpers import detect_commander_details
+
         result = detect_commander_details("I'm wearing a suit and I'm feeling great")
         assert result.get("wearing") is True
         assert result.get("feeling") is True
@@ -746,16 +905,19 @@ class TestComfortObjects:
 
     def test_empty_gifts(self):
         from app.personality import build_comfort_objects_block
+
         assert build_comfort_objects_block(None) == ""
         assert build_comfort_objects_block([]) == ""
 
     def test_low_affection_no_display(self):
         from app.personality import build_comfort_objects_block
+
         gifts = [{"item": "Klukadile plush"}]
         assert build_comfort_objects_block(gifts, affection_level=2) == ""
 
     def test_mid_affection_practical(self):
         from app.personality import build_comfort_objects_block
+
         gifts = [{"item": "Klukadile plush"}, {"item": "leather jacket"}]
         block = build_comfort_objects_block(gifts, affection_level=4)
         assert "Klukadile plush" in block
@@ -764,12 +926,14 @@ class TestComfortObjects:
 
     def test_high_affection_sentimental(self):
         from app.personality import build_comfort_objects_block
+
         gifts = [{"item": "Klukadile plush"}]
         block = build_comfort_objects_block(gifts, affection_level=7)
         assert "close" in block.lower() or "comfort" in block.lower()
 
     def test_max_5_items(self):
         from app.personality import build_comfort_objects_block
+
         gifts = [{"item": f"item_{i}"} for i in range(10)]
         block = build_comfort_objects_block(gifts, affection_level=5)
         # Should only list 5 items
@@ -784,12 +948,14 @@ class TestMissionAftermathImages:
 
     def test_victory_scene_prompt(self):
         from app.image_gen import build_mission_prompt
+
         prompt = build_mission_prompt(scene_type="victory")
         assert "masterpiece" in prompt
         assert "Klukai" in prompt
 
     def test_injury_scene_adds_bandage_tags(self):
         from app.image_gen import build_mission_prompt
+
         prompt = build_mission_prompt(
             scene_type="combat",
             injuries=["klukai_injured"],
@@ -798,11 +964,13 @@ class TestMissionAftermathImages:
 
     def test_extraction_scene_prompt(self):
         from app.image_gen import build_mission_prompt
+
         prompt = build_mission_prompt(scene_type="extraction")
         assert "extraction" in prompt or "helicopter" in prompt
 
     def test_squad_members_in_mission_prompt(self):
         from app.image_gen import build_mission_prompt
+
         prompt = build_mission_prompt(
             scene_type="victory",
             squad_members=["mechty", "belka"],
@@ -813,8 +981,9 @@ class TestMissionAftermathImages:
     def test_aftermath_method_exists(self):
         """Ensure the ProactiveEngine has the aftermath trigger method."""
         from app.proactive import ProactiveEngine
+
         engine = ProactiveEngine()
-        assert hasattr(engine, 'trigger_mission_aftermath_image')
+        assert hasattr(engine, "trigger_mission_aftermath_image")
 
 
 # ── Feature 8: Heartbeat Spike Alerts ─────────────────────────────────────────
@@ -824,9 +993,14 @@ class TestHeartbeatSpikeAlerts:
     """Test heartbeat spike detection and WS message format."""
 
     HIGH_INTENSITY_MOODS = {
-        "passionate": 165, "terrified": 175, "panicked": 180,
-        "desperate": 170, "furious": 160, "adrenaline": 155,
-        "yearning": 150, "infatuated": 152,
+        "passionate": 165,
+        "terrified": 175,
+        "panicked": 180,
+        "desperate": 170,
+        "furious": 160,
+        "adrenaline": 155,
+        "yearning": 150,
+        "infatuated": 152,
     }
 
     def test_high_intensity_moods_have_bpm(self):
@@ -842,36 +1016,50 @@ class TestHeartbeatSpikeAlerts:
 
     def test_ws_manager_has_heartbeat_spike_method(self):
         from app.ws_manager import WSManager
+
         mgr = WSManager()
-        assert hasattr(mgr, 'send_heartbeat_spike')
+        assert hasattr(mgr, "send_heartbeat_spike")
 
     def test_spike_requires_high_intensity(self):
-        """The spike gate in background.py fires only at intensity >= 7."""
+        """The spike gate in memory_extraction.py fires only at intensity >= 7."""
         import inspect
 
-        from app import background
-        src = inspect.getsource(background)
+        from app import memory_extraction
+
+        src = inspect.getsource(memory_extraction)
         # The real gate combines the mood-map membership with the >= 7 floor.
         assert "if mood in HIGH_INTENSITY_MOODS and intensity >= 7:" in src
 
     def test_spike_map_matches_source(self):
-        """This test's BPM map must mirror the literal one in background.py.
+        """This test's BPM map must mirror the literal one in memory_extraction.py.
 
         Guards against drift: if someone retunes a BPM in the source, this
         test (which other assertions in the class rely on) must be updated too.
         """
         import inspect
 
-        from app import background
-        src = inspect.getsource(background)
+        from app import memory_extraction
+
+        src = inspect.getsource(memory_extraction)
         for mood, bpm in self.HIGH_INTENSITY_MOODS.items():
-            assert f'"{mood}": {bpm}' in src, f"{mood}:{bpm} not in background.py spike map"
+            assert f'"{mood}": {bpm}' in src, (
+                f"{mood}:{bpm} not in memory_extraction.py spike map"
+            )
 
     def test_bpm_ordering_by_danger(self):
         """More dangerous moods should have higher BPM."""
-        assert self.HIGH_INTENSITY_MOODS["panicked"] > self.HIGH_INTENSITY_MOODS["passionate"]
-        assert self.HIGH_INTENSITY_MOODS["terrified"] > self.HIGH_INTENSITY_MOODS["furious"]
-        assert self.HIGH_INTENSITY_MOODS["desperate"] > self.HIGH_INTENSITY_MOODS["adrenaline"]
+        assert (
+            self.HIGH_INTENSITY_MOODS["panicked"]
+            > self.HIGH_INTENSITY_MOODS["passionate"]
+        )
+        assert (
+            self.HIGH_INTENSITY_MOODS["terrified"]
+            > self.HIGH_INTENSITY_MOODS["furious"]
+        )
+        assert (
+            self.HIGH_INTENSITY_MOODS["desperate"]
+            > self.HIGH_INTENSITY_MOODS["adrenaline"]
+        )
 
 
 # ── Cross-Feature Integration ─────────────────────────────────────────────────
@@ -883,6 +1071,7 @@ class TestNewFeatureIntegration:
     def test_assemble_prompt_accepts_new_params(self, personality_config_path):
         """assemble_system_prompt should accept all new keyword args without error."""
         from app.personality import assemble_system_prompt, reload_personality
+
         reload_personality(personality_config_path)
 
         # Call with all new params — should not raise
@@ -906,6 +1095,7 @@ class TestNewFeatureIntegration:
     def test_assemble_prompt_no_new_params_still_works(self, personality_config_path):
         """Backward compatibility: old-style calls should still work."""
         from app.personality import assemble_system_prompt, reload_personality
+
         reload_personality(personality_config_path)
 
         prompt = assemble_system_prompt(
@@ -919,6 +1109,7 @@ class TestNewFeatureIntegration:
 
     def test_physical_state_tracker_importable(self):
         from app.physical_state import PhysicalStateTracker
+
         tracker = PhysicalStateTracker()
         # A fresh tracker starts with an empty per-user cache.
         assert tracker._cache == {}
@@ -926,6 +1117,7 @@ class TestNewFeatureIntegration:
     def test_context_has_physical(self):
         from app.context import physical
         from app.physical_state import PhysicalStateTracker
+
         # The shared context.physical is a real PhysicalStateTracker instance.
         assert isinstance(physical, PhysicalStateTracker)
 
@@ -939,34 +1131,42 @@ class TestCachingBehavior:
     def test_anniversary_cache_structure(self):
         """ProactiveEngine should support _ann_cache attribute."""
         from app.proactive import ProactiveEngine
+
         engine = ProactiveEngine()
         # Cache doesn't exist until first call — that's fine
-        assert not hasattr(engine, '_ann_cache') or isinstance(engine._ann_cache, dict)
+        assert not hasattr(engine, "_ann_cache") or isinstance(engine._ann_cache, dict)
 
     def test_gifts_cache_structure(self):
         """ProactiveEngine should support _gifts_cache attribute."""
         from app.proactive import ProactiveEngine
+
         engine = ProactiveEngine()
-        assert not hasattr(engine, '_gifts_cache') or isinstance(engine._gifts_cache, dict)
+        assert not hasattr(engine, "_gifts_cache") or isinstance(
+            engine._gifts_cache, dict
+        )
 
     def test_proactive_has_record_first(self):
         """record_first should exist and accept event_type."""
         from app.proactive import ProactiveEngine
+
         engine = ProactiveEngine()
-        assert hasattr(engine, 'record_first')
+        assert hasattr(engine, "record_first")
         import inspect
+
         sig = inspect.signature(engine.record_first)
-        assert 'event_type' in sig.parameters
+        assert "event_type" in sig.parameters
 
     def test_proactive_has_store_gift(self):
         """store_gift should exist and accept item + description."""
         from app.proactive import ProactiveEngine
+
         engine = ProactiveEngine()
-        assert hasattr(engine, 'store_gift')
+        assert hasattr(engine, "store_gift")
         import inspect
+
         sig = inspect.signature(engine.store_gift)
-        assert 'item' in sig.parameters
-        assert 'description' in sig.parameters
+        assert "item" in sig.parameters
+        assert "description" in sig.parameters
 
 
 class TestPhysicalStateTracker:
@@ -974,6 +1174,7 @@ class TestPhysicalStateTracker:
 
     def test_tracker_init_empty(self):
         from app.physical_state import PhysicalStateTracker
+
         tracker = PhysicalStateTracker()
         assert tracker._cache == {}
 
@@ -981,32 +1182,43 @@ class TestPhysicalStateTracker:
         """Every non-normal state should eventually decay."""
         from app.physical_state import STATES, should_decay
         from datetime import datetime, timedelta, timezone
+
         very_old = datetime.now(timezone.utc) - timedelta(hours=100)
         for state, info in STATES.items():
             if state == "normal":
                 assert not should_decay(state, very_old)
             else:
-                assert should_decay(state, very_old), f"{state} should decay after 100 hours"
+                assert should_decay(state, very_old), (
+                    f"{state} should decay after 100 hours"
+                )
 
     def test_decay_respects_time(self):
         """States should NOT decay before their decay_hours."""
         from app.physical_state import STATES, should_decay
         from datetime import datetime, timedelta, timezone
+
         for state, info in STATES.items():
             if info["decay_hours"] is None:
                 continue
             # Half the decay time — should NOT decay
             half = datetime.now(timezone.utc) - timedelta(hours=info["decay_hours"] / 2)
-            assert not should_decay(state, half), f"{state} should not decay at half-life"
+            assert not should_decay(state, half), (
+                f"{state} should not decay at half-life"
+            )
 
 
 class TestHeartbeatSpikeIntegration:
     """Test heartbeat spike mood-to-BPM mapping and threshold logic."""
 
     HIGH_INTENSITY_MOODS = {
-        "passionate": 165, "terrified": 175, "panicked": 180,
-        "desperate": 170, "furious": 160, "adrenaline": 155,
-        "yearning": 150, "infatuated": 152,
+        "passionate": 165,
+        "terrified": 175,
+        "panicked": 180,
+        "desperate": 170,
+        "furious": 160,
+        "adrenaline": 155,
+        "yearning": 150,
+        "infatuated": 152,
     }
 
     def test_spike_bpm_all_above_150(self):
@@ -1017,6 +1229,7 @@ class TestHeartbeatSpikeIntegration:
     def test_spike_moods_are_valid_mood_enum_members(self):
         """All spike moods must exist in the Mood enum."""
         from app.models import Mood
+
         valid = {m.value for m in Mood}
         for mood in self.HIGH_INTENSITY_MOODS:
             assert mood in valid, f"Spike mood '{mood}' not in Mood enum"
@@ -1025,9 +1238,11 @@ class TestHeartbeatSpikeIntegration:
         """Verify the WS message structure matches Flutter expectations."""
         # The WS message should be: {"type": "heartbeat_spike", "bpm": int, "mood": str}
         from app.ws_manager import WSManager
+
         mgr = WSManager()
         # Check that the method signature matches
         import inspect
+
         sig = inspect.signature(mgr.send_heartbeat_spike)
         params = list(sig.parameters.keys())
         assert "user_id" in params
@@ -1037,9 +1252,20 @@ class TestHeartbeatSpikeIntegration:
     def test_non_spike_moods_excluded(self):
         """Calm/warm moods should never appear in the spike map."""
         excluded = {
-            "composed", "content", "drowsy", "bored", "relieved",
-            "quietly_pleased", "tender", "affectionate", "grateful",
-            "amused", "playful", "nostalgic", "curious", "shy",
+            "composed",
+            "content",
+            "drowsy",
+            "bored",
+            "relieved",
+            "quietly_pleased",
+            "tender",
+            "affectionate",
+            "grateful",
+            "amused",
+            "playful",
+            "nostalgic",
+            "curious",
+            "shy",
         }
         for mood in excluded:
             assert mood not in self.HIGH_INTENSITY_MOODS, f"{mood} should not spike"
@@ -1051,9 +1277,11 @@ class TestMultiUserIsolation:
     def test_fact_keys_are_user_scoped(self):
         """Relationship facts must include user_id in the key to prevent cross-user leaks."""
         from app.memory import MemoryManager
+
         mgr = MemoryManager()
         # Verify the method signatures accept user_id
         import inspect
+
         sig = inspect.signature(mgr.store_fact)
         assert "user_id" in sig.parameters
         sig = inspect.signature(mgr.recall_fact)
@@ -1066,8 +1294,10 @@ class TestMultiUserIsolation:
     def test_milestone_keys_are_user_scoped(self):
         """Milestones must include user_id to prevent one user blocking another's firsts."""
         from app.memory import MemoryManager
+
         mgr = MemoryManager()
         import inspect
+
         sig = inspect.signature(mgr.record_milestone)
         assert "user_id" in sig.parameters
         sig = inspect.signature(mgr.get_milestones)
@@ -1077,6 +1307,7 @@ class TestMultiUserIsolation:
         """Episodes stored in Qdrant must include user_id in payload."""
         from app.memory import MemoryManager
         import inspect
+
         sig = inspect.signature(MemoryManager.store_episode)
         assert "user_id" in sig.parameters
 
@@ -1084,6 +1315,7 @@ class TestMultiUserIsolation:
         """Episode recall must filter by user_id to prevent cross-user memory bleed."""
         from app.memory import MemoryManager
         import inspect
+
         sig = inspect.signature(MemoryManager.recall_episodes)
         assert "user_id" in sig.parameters
 
@@ -1091,6 +1323,7 @@ class TestMultiUserIsolation:
         """Exchanges stored in Qdrant must include user_id in payload."""
         from app.memory import MemoryManager
         import inspect
+
         sig = inspect.signature(MemoryManager.store_exchange)
         assert "user_id" in sig.parameters
 
@@ -1098,6 +1331,7 @@ class TestMultiUserIsolation:
         """Exchange recall must filter by user_id."""
         from app.memory import MemoryManager
         import inspect
+
         sig = inspect.signature(MemoryManager.recall_exchanges)
         assert "user_id" in sig.parameters
 
@@ -1105,6 +1339,7 @@ class TestMultiUserIsolation:
         """recall_for_prompt must accept and forward user_id to all sub-calls."""
         from app.memory import MemoryManager
         import inspect
+
         sig = inspect.signature(MemoryManager.recall_for_prompt)
         assert "user_id" in sig.parameters
 
@@ -1112,6 +1347,7 @@ class TestMultiUserIsolation:
         """get_memory_nudge must accept user_id."""
         from app.memory import MemoryManager
         import inspect
+
         sig = inspect.signature(MemoryManager.get_memory_nudge)
         assert "user_id" in sig.parameters
 
@@ -1119,6 +1355,7 @@ class TestMultiUserIsolation:
         """get_image_bytes must accept user_id for ownership check."""
         from app.memory_archive import get_image_bytes
         import inspect
+
         sig = inspect.signature(get_image_bytes)
         assert "user_id" in sig.parameters
 
@@ -1126,6 +1363,7 @@ class TestMultiUserIsolation:
         """update_kept must accept user_id for ownership check."""
         from app.memory_archive import update_kept
         import inspect
+
         sig = inspect.signature(update_kept)
         assert "user_id" in sig.parameters
 
@@ -1133,6 +1371,7 @@ class TestMultiUserIsolation:
         """update_curation must accept user_id for ownership check."""
         from app.memory_archive import update_curation
         import inspect
+
         sig = inspect.signature(update_curation)
         assert "user_id" in sig.parameters
 
@@ -1140,6 +1379,7 @@ class TestMultiUserIsolation:
         """backfill_annotations must accept user_id to scope the query."""
         from app.memory_archive import backfill_annotations
         import inspect
+
         sig = inspect.signature(backfill_annotations)
         assert "user_id" in sig.parameters
 
@@ -1166,12 +1406,16 @@ class TestAuthSecurity:
     def test_no_plaintext_passwords_in_source(self):
         """_SEED_USERS must not contain a 'password' field."""
         from app.auth import _SEED_USERS
+
         for user in _SEED_USERS:
-            assert "password" not in user, f"User {user['id']} has plaintext password in source!"
+            assert "password" not in user, (
+                f"User {user['id']} has plaintext password in source!"
+            )
 
     def test_seed_users_have_required_fields(self):
         """Each seed user must have id, username, display_name."""
         from app.auth import _SEED_USERS
+
         for user in _SEED_USERS:
             assert "id" in user
             assert "username" in user
@@ -1186,10 +1430,12 @@ class TestAuthSecurity:
         handler and that the scale constant stays at 1000.
         """
         from app.affection import MAX_SCORE
+
         assert MAX_SCORE == 1000
 
         import inspect
         from app.routes import register_routes
+
         src = inspect.getsource(register_routes)
         assert "min(100," not in src, (
             "reward handlers must not cap affection at 100 — use add_score "
@@ -1203,6 +1449,7 @@ class TestLeapYearSafety:
     def test_feb29_replace_in_non_leap_year(self):
         """date.replace(year=non_leap) should not crash on Feb 29."""
         from datetime import date
+
         feb29 = date(2024, 2, 29)  # 2024 is a leap year
         try:
             # This would crash without our fix:
@@ -1214,6 +1461,7 @@ class TestLeapYearSafety:
     def test_feb28_fallback_logic(self):
         """Our anniversary code uses Feb 28 as fallback for Feb 29."""
         from datetime import date
+
         feb29 = date(2024, 2, 29)
         try:
             result = feb29.replace(year=2025)
@@ -1231,6 +1479,7 @@ class TestMoodCategories:
     def test_all_moods_have_category(self):
         from app.models import Mood
         from app.personality import MOOD_CATEGORIES
+
         all_moods = {m.value for m in Mood}
         categorized = set(MOOD_CATEGORIES.keys())
         missing = all_moods - categorized
@@ -1240,12 +1489,14 @@ class TestMoodCategories:
         """No stale entries in MOOD_CATEGORIES that don't match the enum."""
         from app.models import Mood
         from app.personality import MOOD_CATEGORIES
+
         all_moods = {m.value for m in Mood}
         extra = set(MOOD_CATEGORIES.keys()) - all_moods
         assert not extra, f"Extra moods in MOOD_CATEGORIES not in enum: {extra}"
 
     def test_valid_category_names(self):
         from app.personality import MOOD_CATEGORIES, CATEGORY_BLEED_RULES
+
         valid = set(CATEGORY_BLEED_RULES.keys())
         for mood, cat in MOOD_CATEGORIES.items():
             assert cat in valid, f"Mood '{mood}' maps to unknown category '{cat}'"
@@ -1254,6 +1505,7 @@ class TestMoodCategories:
         """Each category should have at least 3 moods — no orphan categories."""
         from app.personality import MOOD_CATEGORIES
         from collections import Counter
+
         counts = Counter(MOOD_CATEGORIES.values())
         for cat, count in counts.items():
             assert count >= 3, f"Category '{cat}' only has {count} moods"
@@ -1261,6 +1513,7 @@ class TestMoodCategories:
     def test_mood_count_is_50(self):
         from app.models import Mood
         from app.personality import MOOD_CATEGORIES
+
         assert len(Mood) == 50
         assert len(MOOD_CATEGORIES) == 50
 
@@ -1271,6 +1524,7 @@ class TestMoodSpecificBleed:
     def test_all_moods_have_specific_bleed(self):
         from app.models import Mood
         from app.personality import MOOD_SPECIFIC_BLEED
+
         all_moods = {m.value for m in Mood}
         missing = all_moods - set(MOOD_SPECIFIC_BLEED.keys())
         assert not missing, f"Moods missing specific bleed: {missing}"
@@ -1278,6 +1532,7 @@ class TestMoodSpecificBleed:
     def test_no_extra_specific_bleed(self):
         from app.models import Mood
         from app.personality import MOOD_SPECIFIC_BLEED
+
         all_moods = {m.value for m in Mood}
         extra = set(MOOD_SPECIFIC_BLEED.keys()) - all_moods
         assert not extra, f"Extra moods in MOOD_SPECIFIC_BLEED: {extra}"
@@ -1285,12 +1540,14 @@ class TestMoodSpecificBleed:
     def test_bleed_descriptions_non_trivial(self):
         """Each bleed description should be meaningful (> 20 chars)."""
         from app.personality import MOOD_SPECIFIC_BLEED
+
         for mood, desc in MOOD_SPECIFIC_BLEED.items():
             assert len(desc) > 20, f"'{mood}' bleed too short ({len(desc)} chars)"
 
     def test_bleed_descriptions_unique(self):
         """No two moods should share the exact same bleed text."""
         from app.personality import MOOD_SPECIFIC_BLEED
+
         seen: dict[str, str] = {}
         for mood, desc in MOOD_SPECIFIC_BLEED.items():
             if desc in seen:
@@ -1300,15 +1557,47 @@ class TestMoodSpecificBleed:
     def test_romantic_moods_mention_emotional_markers(self):
         """Romantic mood bleed should reference emotional/physical markers."""
         from app.personality import MOOD_CATEGORIES, MOOD_SPECIFIC_BLEED
+
         romantic_moods = [m for m, c in MOOD_CATEGORIES.items() if c == "romantic"]
         # Includes softness + possessive/jealous markers — all romantic flavors
-        emotional_keywords = {"soft", "warm", "guard", "paus", "breath", "lean",
-                              "reach", "quiet", "whisper", "touch", "closer", "raw",
-                              "trail", "slow", "ach", "stammer", "fidget", "blush",
-                              "burn", "obsess", "smile", "mumbl", "vulner",
-                              "cold", "clip", "point", "mine", "territor",
-                              "possessiv", "compar", "low voice", "declar",
-                              "look", "higher", "retreat", "subject"}
+        emotional_keywords = {
+            "soft",
+            "warm",
+            "guard",
+            "paus",
+            "breath",
+            "lean",
+            "reach",
+            "quiet",
+            "whisper",
+            "touch",
+            "closer",
+            "raw",
+            "trail",
+            "slow",
+            "ach",
+            "stammer",
+            "fidget",
+            "blush",
+            "burn",
+            "obsess",
+            "smile",
+            "mumbl",
+            "vulner",
+            "cold",
+            "clip",
+            "point",
+            "mine",
+            "territor",
+            "possessiv",
+            "compar",
+            "low voice",
+            "declar",
+            "look",
+            "higher",
+            "retreat",
+            "subject",
+        }
         for mood in romantic_moods:
             desc = MOOD_SPECIFIC_BLEED[mood].lower()
             found = any(kw in desc for kw in emotional_keywords)
@@ -1317,10 +1606,25 @@ class TestMoodSpecificBleed:
     def test_combat_moods_mention_tactical(self):
         """Combat mood bleed should reference weapons, precision, or radio."""
         from app.personality import MOOD_CATEGORIES, MOOD_SPECIFIC_BLEED
+
         combat_moods = [m for m, c in MOOD_CATEGORIES.items() if c == "combat"]
-        tactical_keywords = {"weapon", "radio", "crisp", "short", "burst",
-                             "scan", "still", "whisper", "predator", "fast",
-                             "fragment", "sharp", "method", "cold", "logic"}
+        tactical_keywords = {
+            "weapon",
+            "radio",
+            "crisp",
+            "short",
+            "burst",
+            "scan",
+            "still",
+            "whisper",
+            "predator",
+            "fast",
+            "fragment",
+            "sharp",
+            "method",
+            "cold",
+            "logic",
+        }
         for mood in combat_moods:
             desc = MOOD_SPECIFIC_BLEED[mood].lower()
             found = any(kw in desc for kw in tactical_keywords)
@@ -1329,10 +1633,22 @@ class TestMoodSpecificBleed:
     def test_stress_moods_mention_physical_response(self):
         """Stress mood bleed should reference breathing, grip, or composure."""
         from app.personality import MOOD_CATEGORIES, MOOD_SPECIFIC_BLEED
+
         stress_moods = [m for m, c in MOOD_CATEGORIES.items() if c == "stress"]
-        stress_keywords = {"breath", "grip", "crack", "voice", "compos",
-                           "fragment", "exhale", "tension", "ragged", "urgent",
-                           "reckless", "repeat"}
+        stress_keywords = {
+            "breath",
+            "grip",
+            "crack",
+            "voice",
+            "compos",
+            "fragment",
+            "exhale",
+            "tension",
+            "ragged",
+            "urgent",
+            "reckless",
+            "repeat",
+        }
         for mood in stress_moods:
             desc = MOOD_SPECIFIC_BLEED[mood].lower()
             found = any(kw in desc for kw in stress_keywords)
@@ -1344,52 +1660,73 @@ class TestBuildMoodBleedBlock:
 
     def test_returns_string(self):
         from app.personality import build_mood_bleed_block
+
         # 'composed' is an OPERATIONAL-category mood; its block names that category.
         result = build_mood_bleed_block("composed")
         assert "MOOD BLEED — OPERATIONAL" in result
 
     def test_contains_category_rule(self):
         from app.personality import build_mood_bleed_block
+
         result = build_mood_bleed_block("composed")
         assert "MOOD BLEED" in result
 
     def test_contains_mood_coloring(self):
         from app.personality import build_mood_bleed_block
+
         result = build_mood_bleed_block("passionate")
         assert "MOOD COLORING" in result
         assert "PASSIONATE" in result
 
     def test_unknown_mood_falls_back_to_core(self):
         from app.personality import build_mood_bleed_block
+
         result = build_mood_bleed_block("nonexistent_mood")
         assert "OPERATIONAL" in result
 
-    @pytest.mark.parametrize("mood,expected_category", [
-        ("composed", "OPERATIONAL"),
-        ("passionate", "EMOTIONAL"),
-        ("battle_ready", "TACTICAL"),
-        ("panicked", "STRESS RESPONSE"),
-        ("playful", "OFF-DUTY"),
-        ("haunted", "HEAVY"),
-    ])
+    @pytest.mark.parametrize(
+        "mood,expected_category",
+        [
+            ("composed", "OPERATIONAL"),
+            ("passionate", "EMOTIONAL"),
+            ("battle_ready", "TACTICAL"),
+            ("panicked", "STRESS RESPONSE"),
+            ("playful", "OFF-DUTY"),
+            ("haunted", "HEAVY"),
+        ],
+    )
     def test_mood_to_category_mapping(self, mood, expected_category):
         from app.personality import build_mood_bleed_block
+
         result = build_mood_bleed_block(mood)
-        assert expected_category in result, f"Expected '{expected_category}' in bleed for '{mood}'"
+        assert expected_category in result, (
+            f"Expected '{expected_category}' in bleed for '{mood}'"
+        )
 
     def test_all_50_moods_produce_output(self):
         from app.models import Mood
         from app.personality import build_mood_bleed_block
+
         for mood in Mood:
             result = build_mood_bleed_block(mood.value)
-            assert len(result) > 50, f"Mood '{mood.value}' produced trivially short output"
+            assert len(result) > 50, (
+                f"Mood '{mood.value}' produced trivially short output"
+            )
 
     def test_different_moods_produce_different_output(self):
         """No two moods in different categories should produce identical output."""
         from app.personality import build_mood_bleed_block
+
         outputs: dict[str, str] = {}
         # Test a representative from each category
-        for mood in ["composed", "passionate", "battle_ready", "panicked", "playful", "haunted"]:
+        for mood in [
+            "composed",
+            "passionate",
+            "battle_ready",
+            "panicked",
+            "playful",
+            "haunted",
+        ]:
             result = build_mood_bleed_block(mood)
             for prev_mood, prev_result in outputs.items():
                 assert result != prev_result, f"'{mood}' identical to '{prev_mood}'"
@@ -1401,16 +1738,24 @@ class TestMoodBleedInSystemPrompt:
 
     def test_mood_bleed_present_in_assembled_prompt(self, personality_config_path):
         from app.personality import assemble_system_prompt, reload_personality
+
         reload_personality(personality_config_path)
-        prompt = assemble_system_prompt(mood="furious", personality_path=personality_config_path)
+        prompt = assemble_system_prompt(
+            mood="furious", personality_path=personality_config_path
+        )
         assert "MOOD BLEED" in prompt
         assert "MOOD COLORING" in prompt
 
     def test_mood_bleed_changes_with_mood(self, personality_config_path):
         from app.personality import assemble_system_prompt, reload_personality
+
         reload_personality(personality_config_path)
-        p1 = assemble_system_prompt(mood="composed", personality_path=personality_config_path)
-        p2 = assemble_system_prompt(mood="passionate", personality_path=personality_config_path)
+        p1 = assemble_system_prompt(
+            mood="composed", personality_path=personality_config_path
+        )
+        p2 = assemble_system_prompt(
+            mood="passionate", personality_path=personality_config_path
+        )
         # Both should have mood bleed but with different category headers
         assert "MOOD BLEED — OPERATIONAL" in p1
         assert "MOOD BLEED — EMOTIONAL" in p2
@@ -1419,6 +1764,7 @@ class TestMoodBleedInSystemPrompt:
     def test_all_six_categories_appear(self, personality_config_path):
         """Test one mood from each category produces the right header."""
         from app.personality import assemble_system_prompt, reload_personality
+
         reload_personality(personality_config_path)
         checks = {
             "composed": "OPERATIONAL",
@@ -1429,12 +1775,15 @@ class TestMoodBleedInSystemPrompt:
             "melancholic": "HEAVY",
         }
         for mood, expected in checks.items():
-            prompt = assemble_system_prompt(mood=mood, personality_path=personality_config_path)
+            prompt = assemble_system_prompt(
+                mood=mood, personality_path=personality_config_path
+            )
             assert expected in prompt, f"Mood '{mood}' missing '{expected}' in prompt"
 
     def test_backward_compat_default_mood(self, personality_config_path):
         """Default mood 'composed' should still produce valid prompt with bleed."""
         from app.personality import assemble_system_prompt, reload_personality
+
         reload_personality(personality_config_path)
         prompt = assemble_system_prompt(personality_path=personality_config_path)
         assert "MOOD BLEED" in prompt
@@ -1446,21 +1795,27 @@ class TestCategoryBleedRules:
 
     def test_all_categories_defined(self):
         from app.personality import CATEGORY_BLEED_RULES
+
         expected = {"core", "romantic", "combat", "stress", "casual", "dark"}
         assert set(CATEGORY_BLEED_RULES.keys()) == expected
 
     def test_rules_are_non_trivial(self):
         from app.personality import CATEGORY_BLEED_RULES
+
         for cat, rule in CATEGORY_BLEED_RULES.items():
-            assert len(rule) > 80, f"Category '{cat}' rule too short ({len(rule)} chars)"
+            assert len(rule) > 80, (
+                f"Category '{cat}' rule too short ({len(rule)} chars)"
+            )
 
     def test_rules_contain_mood_bleed_header(self):
         from app.personality import CATEGORY_BLEED_RULES
+
         for cat, rule in CATEGORY_BLEED_RULES.items():
             assert "MOOD BLEED" in rule, f"Category '{cat}' missing MOOD BLEED header"
 
     def test_rules_are_unique(self):
         from app.personality import CATEGORY_BLEED_RULES
+
         rules = list(CATEGORY_BLEED_RULES.values())
         assert len(rules) == len(set(rules)), "Duplicate category rules found"
 
@@ -1474,12 +1829,14 @@ class TestInputLockModel:
     def test_mood_bleed_block_does_not_crash_on_empty(self):
         """build_mood_bleed_block('') should still return something."""
         from app.personality import build_mood_bleed_block
+
         result = build_mood_bleed_block("")
         assert len(result) > 0
 
     def test_mood_bleed_block_handles_none_gracefully(self):
         """Passing None should not crash — falls back to core."""
         from app.personality import build_mood_bleed_block
+
         # Python: None is not a valid string but the function should handle it
         try:
             result = build_mood_bleed_block(None)  # type: ignore

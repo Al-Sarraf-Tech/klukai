@@ -9,10 +9,15 @@ the caller simply keeps the current mood. Mirrors the lazy httpx singleton in
 
 from __future__ import annotations
 
+from typing import Any
+
 import logging
 import os
 
 import httpx
+
+from .dependencies import http_request, json_object
+from .shared_http import client as http_client, close as close_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -26,21 +31,34 @@ DEFAULT_LONGITUDE = -87.6298
 # WMO weather interpretation codes → coarse condition buckets.
 # https://open-meteo.com/en/docs — code ranges grouped into 7 classes.
 _WMO_CONDITION: dict[int, str] = {
-    0: "clear",   # clear sky
-    1: "clear",   # mainly clear
+    0: "clear",  # clear sky
+    1: "clear",  # mainly clear
     2: "cloudy",  # partly cloudy
     3: "cloudy",  # overcast
     45: "fog",
-    48: "fog",    # depositing rime fog
-    51: "drizzle", 53: "drizzle", 55: "drizzle",
-    56: "drizzle", 57: "drizzle",  # freezing drizzle
-    61: "rain", 63: "rain", 65: "rain",
-    66: "rain", 67: "rain",  # freezing rain
-    80: "rain", 81: "rain", 82: "rain",  # rain showers
-    71: "snow", 73: "snow", 75: "snow", 77: "snow",  # snow + grains
-    85: "snow", 86: "snow",  # snow showers
+    48: "fog",  # depositing rime fog
+    51: "drizzle",
+    53: "drizzle",
+    55: "drizzle",
+    56: "drizzle",
+    57: "drizzle",  # freezing drizzle
+    61: "rain",
+    63: "rain",
+    65: "rain",
+    66: "rain",
+    67: "rain",  # freezing rain
+    80: "rain",
+    81: "rain",
+    82: "rain",  # rain showers
+    71: "snow",
+    73: "snow",
+    75: "snow",
+    77: "snow",  # snow + grains
+    85: "snow",
+    86: "snow",  # snow showers
     95: "storm",  # thunderstorm
-    96: "storm", 99: "storm",  # thunderstorm with hail
+    96: "storm",
+    99: "storm",  # thunderstorm with hail
 }
 
 _http: httpx.AsyncClient | None = None
@@ -53,9 +71,14 @@ def _get_http() -> httpx.AsyncClient:
     was closed.
     """
     global _http
-    if _http is None or _http.is_closed:
-        _http = httpx.AsyncClient(timeout=10.0)
+    _http = http_client(_http, timeout=10.0)
     return _http
+
+
+async def close() -> None:
+    global _http
+    client, _http = _http, None
+    await close_http_client(client)
 
 
 def commander_coords() -> tuple[float, float]:
@@ -89,7 +112,7 @@ def _code_to_condition(code: int) -> str:
 
 async def fetch_weather(
     lat: float | None = None, lon: float | None = None
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Fetch current weather from Open-Meteo. FAIL-SOFT: returns None on any error.
 
     Args:
@@ -108,7 +131,10 @@ async def fetch_weather(
 
     try:
         client = _get_http()
-        resp = await client.get(
+        resp = await http_request(
+            "weather",
+            client,
+            "get",
             OPEN_METEO_URL,
             params={
                 "latitude": lat,
@@ -117,13 +143,17 @@ async def fetch_weather(
             },
         )
         if resp.status_code != 200:
-            logger.warning("Open-Meteo returned HTTP %s — skipping weather", resp.status_code)
+            logger.warning(
+                "Open-Meteo returned HTTP %s — skipping weather", resp.status_code
+            )
             return None
 
-        data = resp.json()
+        data = json_object(resp.json())
         current = data.get("current")
         if not isinstance(current, dict):
-            logger.warning("Open-Meteo payload missing 'current' block — skipping weather")
+            logger.warning(
+                "Open-Meteo payload missing 'current' block — skipping weather"
+            )
             return None
 
         code = int(current.get("weather_code", 0))

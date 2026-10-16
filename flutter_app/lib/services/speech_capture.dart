@@ -2,13 +2,7 @@
 ///
 /// Text chat is never blocked by a voice phase. A transcript is a separate
 /// utterance and must not replace a typed draft.
-enum SpeechPhase {
-  idle,
-  requestingPermission,
-  recording,
-  transcribing,
-  error,
-}
+enum SpeechPhase { idle, requestingPermission, recording, transcribing, error }
 
 class SpeechCapture {
   SpeechPhase phase = SpeechPhase.idle;

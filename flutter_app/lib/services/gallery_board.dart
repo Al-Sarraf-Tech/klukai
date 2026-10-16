@@ -14,11 +14,8 @@ class GalleryBoard {
     this.hasGood = false,
   });
 
-  GalleryBoard loading() => GalleryBoard(
-        phase: GalleryPhase.loading,
-        items: items,
-        hasGood: hasGood,
-      );
+  GalleryBoard loading() =>
+      GalleryBoard(phase: GalleryPhase.loading, items: items, hasGood: hasGood);
 
   static bool isHerSide(Memory memory) {
     final tags = memory.sceneTags.map((tag) => tag.toLowerCase());
@@ -40,7 +37,11 @@ class GalleryBoard {
       if (items.isEmpty) {
         return const GalleryBoard(phase: GalleryPhase.empty);
       }
-      return GalleryBoard(phase: GalleryPhase.ready, items: items, hasGood: true);
+      return GalleryBoard(
+        phase: GalleryPhase.ready,
+        items: items,
+        hasGood: true,
+      );
     } catch (error) {
       if (_authExpired(error)) rethrow;
       return GalleryBoard(

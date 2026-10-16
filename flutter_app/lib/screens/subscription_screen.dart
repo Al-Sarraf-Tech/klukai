@@ -65,7 +65,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       setState(() => _phase = _StatusPhase.loading);
     }
     try {
-      final tiersResp = await _client.get(Uri.parse('${widget.serverUrl}/api/billing/tiers'));
+      final tiersResp = await _client.get(
+        Uri.parse('${widget.serverUrl}/api/billing/tiers'),
+      );
       if (!mounted) return;
       if (_expired(tiersResp.statusCode)) {
         setState(() => _phase = _StatusPhase.error);
@@ -194,7 +196,10 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         key: key,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(message, style: const TextStyle(color: Colors.white, fontSize: 16)),
+          Text(
+            message,
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+          ),
           if (retry)
             TextButton(
               key: const Key('subscription-retry'),
@@ -254,18 +259,29 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         children: [
           Row(
             children: [
-              const Icon(Icons.workspace_premium, color: Color(0xFFFFD700), size: 28),
+              const Icon(
+                Icons.workspace_premium,
+                color: Color(0xFFFFD700),
+                size: 28,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(currentTier.toUpperCase(),
-                      style: const TextStyle(color: Color(0xFFFFD700),
-                        fontSize: 20, fontWeight: FontWeight.bold,
-                        letterSpacing: 1.2)),
-                    const Text('Personal mode — all features unlocked',
-                      style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    Text(
+                      currentTier.toUpperCase(),
+                      style: const TextStyle(
+                        color: Color(0xFFFFD700),
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    const Text(
+                      'Personal mode — all features unlocked',
+                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
                   ],
                 ),
               ),
@@ -282,9 +298,14 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     return [
       const Padding(
         padding: EdgeInsets.only(left: 4, bottom: 8),
-        child: Text('Usage today',
-          style: TextStyle(color: Colors.white,
-            fontSize: 16, fontWeight: FontWeight.bold)),
+        child: Text(
+          'Usage today',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
       ),
       Container(
         padding: const EdgeInsets.all(12),
@@ -300,7 +321,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
             final limit = e.value['limit'];
             final label = _humanize(e.key);
             final right = limit == null ? '$used' : '$used / $limit';
-            final progress = limit == null ? null : (used / (limit as num)).clamp(0, 1).toDouble();
+            final progress = limit == null
+                ? null
+                : (used / (limit as num)).clamp(0, 1).toDouble();
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: Column(
@@ -309,21 +332,27 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(label, style: const TextStyle(color: Colors.white70)),
+                      Text(
+                        label,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
                       Text(right, style: const TextStyle(color: Colors.white)),
                     ],
                   ),
-                  if (progress != null) Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: LinearProgressIndicator(
-                      value: progress,
-                      backgroundColor: const Color(0xFF1A2138),
-                      valueColor: AlwaysStoppedAnimation(
-                        progress > 0.8 ? const Color(0xFFFF6B6B) : const Color(0xFF7DD3FC),
+                  if (progress != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        backgroundColor: const Color(0xFF1A2138),
+                        valueColor: AlwaysStoppedAnimation(
+                          progress > 0.8
+                              ? const Color(0xFFFF6B6B)
+                              : const Color(0xFF7DD3FC),
+                        ),
+                        minHeight: 4,
                       ),
-                      minHeight: 4,
                     ),
-                  ),
                 ],
               ),
             );
@@ -334,17 +363,28 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   }
 
   String _humanize(String key) {
-    return key.replaceAll('_', ' ')
-      .replaceFirstMapped(RegExp(r'^[a-z]'), (m) => m.group(0)!.toUpperCase());
+    return key
+        .replaceAll('_', ' ')
+        .replaceFirstMapped(
+          RegExp(r'^[a-z]'),
+          (m) => m.group(0)!.toUpperCase(),
+        );
   }
 
   Widget _buildFeatureBlock() {
-    final features = (_tiersInfo?['features']?['elite'] as Map<String, dynamic>?) ?? {};
+    final features =
+        (_tiersInfo?['features']?['elite'] as Map<String, dynamic>?) ?? {};
     final enabled = <String>[];
     features.forEach((k, v) {
-      if (v == true) enabled.add(_humanize(k.replaceAll('_enabled', '').replaceAll('_per_day', '')));
+      if (v == true) {
+        enabled.add(
+          _humanize(k.replaceAll('_enabled', '').replaceAll('_per_day', '')),
+        );
+      }
       if (v is num) enabled.add('${_humanize(k)}: ${v == 0 ? "off" : v}');
-      if (v == null) enabled.add('${_humanize(k.replaceAll('_per_day', ''))}: unlimited');
+      if (v == null) {
+        enabled.add('${_humanize(k.replaceAll('_per_day', ''))}: unlimited');
+      }
     });
     return Container(
       padding: const EdgeInsets.all(16),
@@ -356,9 +396,14 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Features active',
-            style: TextStyle(color: Colors.white,
-              fontSize: 16, fontWeight: FontWeight.bold)),
+          const Text(
+            'Features active',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           const SizedBox(height: 12),
           for (final feat in enabled)
             Padding(
@@ -367,8 +412,12 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                 children: [
                   const Icon(Icons.check, color: Color(0xFF7DD3FC), size: 16),
                   const SizedBox(width: 8),
-                  Expanded(child: Text(feat,
-                    style: const TextStyle(color: Colors.white))),
+                  Expanded(
+                    child: Text(
+                      feat,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -392,9 +441,13 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
             children: [
               Icon(Icons.lock, color: Color(0xFFFFD700), size: 18),
               SizedBox(width: 8),
-              Text('Memory promise',
-                style: TextStyle(color: Color(0xFFFFD700),
-                  fontWeight: FontWeight.bold)),
+              Text(
+                'Memory promise',
+                style: TextStyle(
+                  color: Color(0xFFFFD700),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ],
           ),
           SizedBox(height: 6),

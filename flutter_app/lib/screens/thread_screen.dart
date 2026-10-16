@@ -28,8 +28,18 @@ class ThreadScreen extends StatefulWidget {
 
 class _ThreadScreenState extends State<ThreadScreen> {
   static const _months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
 
   late final ThreadService _service;
@@ -41,7 +51,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
   @override
   void initState() {
     super.initState();
-    _service = widget.threadService ?? ThreadService(serverUrl: widget.serverUrl);
+    _service =
+        widget.threadService ?? ThreadService(serverUrl: widget.serverUrl);
     _load();
   }
 
@@ -63,7 +74,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
         _view = view;
         _loading = false;
       });
-      final unread = view.entries.where((e) => !e.isRead).map((e) => e.stamp).toList();
+      final unread = view.entries
+          .where((e) => !e.isRead)
+          .map((e) => e.stamp)
+          .toList();
       if (!view.sealed && unread.isNotEmpty) {
         _markReadTimer = Timer(widget.markReadDelay, () => _markRead(unread));
       }
@@ -169,7 +183,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
   Widget _body() {
     if (_loading) {
       return const Center(
-        child: CircularProgressIndicator(color: GFL2Colors.primary, strokeWidth: 2),
+        child: CircularProgressIndicator(
+          color: GFL2Colors.primary,
+          strokeWidth: 2,
+        ),
       );
     }
     final view = _view;
@@ -213,8 +230,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lock_outline_rounded,
-                color: GFL2Colors.affinity.withValues(alpha: 0.7), size: 30),
+            Icon(
+              Icons.lock_outline_rounded,
+              color: GFL2Colors.affinity.withValues(alpha: 0.7),
+              size: 30,
+            ),
             const SizedBox(height: 18),
             Text(
               view.message ?? '',
@@ -274,7 +294,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
               decoration: BoxDecoration(
                 color: GFL2Colors.surface.withValues(alpha: 0.92),
-                border: Border.all(color: GFL2Colors.border.withValues(alpha: 0.8)),
+                border: Border.all(
+                  color: GFL2Colors.border.withValues(alpha: 0.8),
+                ),
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(4),
                   topRight: Radius.circular(14),
@@ -299,9 +321,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
               key: ValueKey(read),
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(read ? Icons.done_all_rounded : Icons.done_rounded,
-                    size: 13,
-                    color: read ? GFL2Colors.primary : GFL2Colors.textDim),
+                Icon(
+                  read ? Icons.done_all_rounded : Icons.done_rounded,
+                  size: 13,
+                  color: read ? GFL2Colors.primary : GFL2Colors.textDim,
+                ),
                 const SizedBox(width: 4),
                 Text(
                   _receipt(e),
@@ -324,8 +348,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
       padding: const EdgeInsets.only(bottom: 22),
       child: Row(
         children: [
-          Icon(Icons.lock_outline_rounded,
-              size: 14, color: GFL2Colors.affinity.withValues(alpha: 0.6)),
+          Icon(
+            Icons.lock_outline_rounded,
+            size: 14,
+            color: GFL2Colors.affinity.withValues(alpha: 0.6),
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -354,7 +381,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             decoration: BoxDecoration(
               color: GFL2Colors.primary.withValues(alpha: 0.16),
-              border: Border.all(color: GFL2Colors.primary.withValues(alpha: 0.55)),
+              border: Border.all(
+                color: GFL2Colors.primary.withValues(alpha: 0.55),
+              ),
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(14),
                 topRight: Radius.circular(4),
@@ -375,7 +404,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
           const Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.done_all_rounded, size: 13, color: GFL2Colors.affinity),
+              Icon(
+                Icons.done_all_rounded,
+                size: 13,
+                color: GFL2Colors.affinity,
+              ),
               SizedBox(width: 4),
               Text(
                 'Read · instantly',

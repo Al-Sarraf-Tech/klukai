@@ -12,10 +12,10 @@ class ThreadEntry {
       ThreadEntry(stamp: stamp, text: text, readAt: readAt ?? at);
 
   factory ThreadEntry.fromJson(Map<String, dynamic> json) => ThreadEntry(
-        stamp: json['stamp'] as String? ?? '',
-        text: json['text'] as String? ?? '',
-        readAt: DateTime.tryParse(json['read_at'] as String? ?? '')?.toLocal(),
-      );
+    stamp: json['stamp'] as String? ?? '',
+    text: json['text'] as String? ?? '',
+    readAt: DateTime.tryParse(json['read_at'] as String? ?? '')?.toLocal(),
+  );
 }
 
 class ThreadReply {
@@ -25,9 +25,9 @@ class ThreadReply {
   const ThreadReply({required this.stamp, required this.text});
 
   factory ThreadReply.fromJson(Map<String, dynamic> json) => ThreadReply(
-        stamp: json['stamp'] as String? ?? '',
-        text: json['text'] as String? ?? '',
-      );
+    stamp: json['stamp'] as String? ?? '',
+    text: json['text'] as String? ?? '',
+  );
 }
 
 class ThreadView {

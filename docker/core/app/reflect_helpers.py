@@ -12,11 +12,13 @@ from .context import (
     ws,
 )
 from .proactive.state import now_local
+from .affection import AffectionState
 
 logger = logging.getLogger(__name__)
 
 REFLECTION_MIN_HOURS_AWAY = 8
 REFLECTION_MAX_HOURS_AWAY = 72
+
 
 async def _maybe_oath_on_connect(user_id: str) -> None:
     """On connect, if the Commander is already at the level-9 "Oath Fulfilled"
@@ -27,6 +29,7 @@ async def _maybe_oath_on_connect(user_id: str) -> None:
         if (await affection.get_state(user_id)).level < 9:
             return
         from .background import maybe_deliver_oath
+
         await maybe_deliver_oath(user_id)
     except Exception as e:
         logger.debug("Oath-on-connect skipped: %s", e)
@@ -51,30 +54,36 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
             # persisted to history too, and counting them would measure the gap
             # since *she* last spoke rather than since the Commander did —
             # shrinking hours_away and suppressing the return greeting entirely.
-            row = await (await conn.execute(
-                "SELECT MAX(created_at) FROM companion_messages "
-                "WHERE user_id = %s AND COALESCE(model, '') <> 'proactive'",
-                (user_id,),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "SELECT MAX(created_at) FROM companion_messages "
+                    "WHERE user_id = %s AND COALESCE(model, '') <> 'proactive'",
+                    (user_id,),
+                )
+            ).fetchone()
             if not row or not row[0]:
                 return  # Brand new user — let them lead
             last_at = row[0]
 
             # Last 6 exchanges for context
-            rows = await (await conn.execute(
-                "SELECT role, content FROM companion_messages "
-                "WHERE user_id = %s ORDER BY created_at DESC LIMIT 6",
-                (user_id,),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    "SELECT role, content FROM companion_messages "
+                    "WHERE user_id = %s ORDER BY created_at DESC LIMIT 6",
+                    (user_id,),
+                )
+            ).fetchall()
             recent_excerpts = [(r[0], r[1][:250]) for r in reversed(rows)]
 
             # Prior mood — carry her last emotional register into the new
             # session instead of resetting to neutral.
             try:
-                mrow = await (await conn.execute(
-                    "SELECT mood FROM companion_persistent_state WHERE user_id = %s",
-                    (user_id,),
-                )).fetchone()
+                mrow = await (
+                    await conn.execute(
+                        "SELECT mood FROM companion_persistent_state WHERE user_id = %s",
+                        (user_id,),
+                    )
+                ).fetchone()
                 if mrow and mrow[0]:
                     prior_mood = mrow[0]
             except Exception as me:
@@ -91,6 +100,7 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
             classify_return_greeting,
             compose_return_emotion,
         )
+
         # The Commander's wall-clock hour (America/Chicago) — the server runs UTC.
         local_hour = now_local().hour
         kind = classify_return_greeting(
@@ -106,10 +116,14 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
 
         # Small delay so the UI settles before the greeting arrives
         import asyncio
+
         await asyncio.sleep(3)
 
-        excerpt_text = "\n".join(f"{role}: {content}" for role, content in recent_excerpts)
+        excerpt_text = "\n".join(
+            f"{role}: {content}" for role, content in recent_excerpts
+        )
         from .personality import load_personality, build_character_preamble
+
         p = load_personality()
         aff_state = await affection.get_state(user_id)
         system_prompt = build_character_preamble(p, aff_state.level)
@@ -145,6 +159,7 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
 
         import os
         from .models import LLMConfig
+
         config = LLMConfig(
             provider="lmstudio",
             model="cognitivecomputations_dolphin-mistral-24b-venice-edition",
@@ -153,8 +168,11 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
             max_tokens=180,
         )
         from .creative_text import complete_creative_text, uses_cloud_text
+
         if kind == "dream" and uses_cloud_text():
-            greeting = await complete_creative_text(system_prompt, user_prompt, max_tokens=1024)
+            greeting = await complete_creative_text(
+                system_prompt, user_prompt, max_tokens=1024
+            )
         else:
             resp = await router.complete_local(
                 system_prompt=system_prompt,
@@ -170,55 +188,77 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
         if not greeting or len(greeting) < 10:
             return
 
-        # If this was a dream, persist it as a memory archive entry
-        if kind == "dream":
-            try:
-                from . import dreams
-                mood_now = prior_mood or getattr(aff_state, "mood", "tender")
-                await dreams.save_dream(
-                    dream_text=greeting,
-                    user_id=user_id,
-                    affection_level=aff_state.level,
-                    mood=mood_now,
-                )
-            except Exception as e:
-                logger.warning("Dream save skipped: %s", e)
+        await _deliver_return_greeting(
+            user_id, greeting, prior_mood, aff_state, hours_away, kind
+        )
+    except Exception as e:
+        logger.warning("Reflection-on-return failed: %s", e)
 
-        # Deliver via WS if still connected
-        if ws.is_connected(user_id):
-            # Voice letter: try to synthesize the greeting as a JP voice note she
-            # "left" while he was away. On success, send a voice_letter payload so
-            # the client can play the audio; on failure (voice service down, disk,
-            # DB) save_voice_note returns None and we fall back to the unchanged
-            # plain-text proactive path below. Wrapped so a voice-path error can
-            # never suppress the text greeting.
+
+async def _deliver_return_greeting(
+    user_id: str,
+    greeting: str,
+    prior_mood: str | None,
+    aff_state: AffectionState,
+    hours_away: float,
+    kind: str,
+) -> None:
+    # If this was a dream, persist it as a memory archive entry
+    if kind == "dream":
+        try:
+            from . import dreams
+
+            mood_now = str(prior_mood or getattr(aff_state, "mood", None) or "tender")
+            await dreams.save_dream(
+                dream_text=greeting,
+                user_id=user_id,
+                affection_level=aff_state.level,
+                mood=mood_now,
+            )
+        except Exception as e:
+            logger.warning("Dream save skipped: %s", e)
+
+    # Deliver via WS if still connected
+    if ws.is_connected(user_id):
+        # Voice letter: try to synthesize the greeting as a JP voice note she
+        # "left" while he was away. On success, send a voice_letter payload so
+        # the client can play the audio; on failure (voice service down, disk,
+        # DB) save_voice_note returns None and we fall back to the unchanged
+        # plain-text proactive path below. Wrapped so a voice-path error can
+        # never suppress the text greeting.
+        voice_id = None
+        try:
+            from .voice_archive import save_voice_note
+
+            voice_mood = prior_mood or getattr(aff_state, "mood", None)
+            voice_id = await save_voice_note(
+                greeting,
+                user_id=user_id,
+                kind="reflection",
+                mood=voice_mood,
+                affection_level=aff_state.level,
+            )
+        except Exception as ve:
+            logger.warning("Voice letter attempt failed for %s: %s", user_id, ve)
             voice_id = None
-            try:
-                from .voice_archive import save_voice_note
-                mood_now = prior_mood or getattr(aff_state, "mood", None)
-                voice_id = await save_voice_note(
-                    greeting,
-                    user_id=user_id,
-                    kind="reflection",
-                    mood=mood_now,
-                    affection_level=aff_state.level,
-                )
-            except Exception as ve:
-                logger.warning("Voice letter attempt failed for %s: %s", user_id, ve)
-                voice_id = None
 
-            if voice_id:
-                await ws.send(user_id, {
+        if voice_id:
+            await ws.send(
+                user_id,
+                {
                     "type": "voice_letter",
                     "voice_id": voice_id,
                     "message": greeting,
-                })
-            else:
-                # Fallback — existing text path, unchanged.
-                await ws.send_proactive(user_id, greeting)
-            logger.info(
-                "Reflection-on-return sent to %s (away %dh kind=%s voice=%s): %s",
-                user_id, int(hours_away), kind, bool(voice_id), greeting[:60]
+                },
             )
-    except Exception as e:
-        logger.warning("Reflection-on-return failed: %s", e)
+        else:
+            # Fallback — existing text path, unchanged.
+            await ws.send_proactive(user_id, greeting)
+        logger.info(
+            "Reflection-on-return sent to %s (away %dh kind=%s voice=%s): %s",
+            user_id,
+            int(hours_away),
+            kind,
+            bool(voice_id),
+            greeting[:60],
+        )

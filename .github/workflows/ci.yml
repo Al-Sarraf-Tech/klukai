@@ -304,3 +304,29 @@ jobs:
           test -s /tmp/perf-current.json
           python3 ../../tools/load-test/perf_compare.py \
             ../../docs/perf-baseline.json /tmp/perf-current.json --threshold 1.20
+
+  frontend:
+    name: Frontend validation and immutable PWA evidence
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # Verified existing heavy-guest capacity, runner-owned and mode 0700.
+      # Each run requires a fresh directory; missing storage fails the job.
+      KLUKAI_CI_ARTIFACT_ROOT: /opt/klukai-ci/artifacts
+      # Owner snapshot verified on the existing guest; this is not an official
+      # Flutter release archive. Exact source/tool identities enter evidence.
+      FLUTTER: /opt/klukai-ci/toolchains/b838d34bba223857b3cab6b924de31a9ddee0c1f7c81df7611f3a0cb883a17c7/flutter/bin/flutter
+      KLUKAI_CHROME_BINARY: /opt/klukai-ci/toolchains/b838d34bba223857b3cab6b924de31a9ddee0c1f7c81df7611f3a0cb883a17c7/chrome/chrome
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Require private evidence storage and run all frontend gates
+        shell: bash
+        run: |
+          : "${KLUKAI_CI_ARTIFACT_ROOT:?Configure private storage on the existing heavy runner}"
+          export KLUKAI_CI_OUTPUT="${KLUKAI_CI_ARTIFACT_ROOT%/}/${GITHUB_SHA}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/frontend"
+          scripts/ci/frontend.sh

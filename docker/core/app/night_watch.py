@@ -23,10 +23,10 @@ from .proactive.state import now_local
 
 logger = logging.getLogger(__name__)
 
-WATCH_FROM = time(0, 30)       # the block shows 00:30 ...
-WATCH_UNTIL = time(4, 30)      # ... until 04:29
-LATE_FROM = time(1, 0)         # a message from 01:00 marks a late night
-NIGHT_ENDS = time(5, 0)        # the night of date D is 00:00-04:59 on D
+WATCH_FROM = time(0, 30)  # the block shows 00:30 ...
+WATCH_UNTIL = time(4, 30)  # ... until 04:29
+LATE_FROM = time(1, 0)  # a message from 01:00 marks a late night
+NIGHT_ENDS = time(5, 0)  # the night of date D is 00:00-04:59 on D
 NO_QUESTIONS_FROM = time(1, 30)
 
 LATE_NIGHTS_FACT = "late_nights"
@@ -116,7 +116,9 @@ def count_recent_late_nights(nights: list[date], tonight: date) -> int:
 async def record_and_load(memory: Any, user_id: str, now: datetime) -> list[date]:
     """Load his late nights, adding tonight if it is past 01:00. Fail-soft."""
     try:
-        nights = parse_nights(await memory.recall_fact(LATE_NIGHTS_FACT, user_id=user_id))
+        nights = parse_nights(
+            await memory.recall_fact(LATE_NIGHTS_FACT, user_id=user_id)
+        )
     except Exception as e:
         logger.debug("late_nights recall failed: %s", e)
         nights = []
@@ -126,8 +128,10 @@ async def record_and_load(memory: Any, user_id: str, now: datetime) -> list[date
     nights = sorted([*nights, tonight])[-KEEP_NIGHTS:]
     try:
         await memory.store_fact(
-            LATE_NIGHTS_FACT, json.dumps([n.isoformat() for n in nights]),
-            ttl=LATE_NIGHTS_TTL, user_id=user_id,
+            LATE_NIGHTS_FACT,
+            json.dumps([n.isoformat() for n in nights]),
+            ttl=LATE_NIGHTS_TTL,
+            user_id=user_id,
         )
     except Exception as e:
         logger.debug("late_nights store failed: %s", e)
@@ -137,19 +141,19 @@ async def record_and_load(memory: Any, user_id: str, now: datetime) -> list[date
 # ── Block ────────────────────────────────────────────────────────────────────
 
 
-def _cfg(p: dict) -> dict:
+def _cfg(p: dict[str, Any]) -> dict[str, Any]:
     raw = p.get("insomnia")
     return raw if isinstance(raw, dict) else {}
 
 
-def _text(cfg: dict, key: str) -> str:
+def _text(cfg: dict[str, Any], key: str) -> str:
     value = cfg.get(key)
     if isinstance(value, str) and value.strip():
         return value.strip()
     return str(INSOMNIA_FALLBACK[key])
 
 
-def _tier(cfg: dict, level: int) -> str:
+def _tier(cfg: dict[str, Any], level: int) -> str:
     tiers: dict[int, str] = {}
     raw = cfg.get("tiers")
     if isinstance(raw, dict):
@@ -167,7 +171,11 @@ def _tier(cfg: dict, level: int) -> str:
 
 
 def build_night_watch_block(
-    p: dict, now: datetime, affection_level: int, late_nights: int, thread_ok: bool,
+    p: dict[str, Any],
+    now: datetime,
+    affection_level: int,
+    late_nights: int,
+    thread_ok: bool,
     activity: str | None = None,
 ) -> str:
     """The NIGHT WATCH block for a message at ``now`` (inside the watch).
@@ -188,7 +196,7 @@ def build_night_watch_block(
         f"NIGHT WATCH ({now.strftime('%H%M')} hours; you were already awake):",
         _text(cfg, "canon"),
         f"Right now you are {activity}. If it fits, say so plainly: "
-        f"\"{_text(cfg, 'awake_line')}\" Never admit why you are awake.",
+        f'"{_text(cfg, "awake_line")}" Never admit why you are awake.',
         "Be quieter and shorter than by day. You are PROTECTIVE, not engaging: "
         "no new topics, nothing that keeps him up.",
         f"Register: {_tier(cfg, affection_level)}",
@@ -198,7 +206,7 @@ def build_night_watch_block(
     if thread_ok:
         lines.append(
             "Once tonight, if the moment allows, you may connect the hour to the "
-            f"thread: \"{_text(cfg, 'thread_line')}\" Once only."
+            f'thread: "{_text(cfg, "thread_line")}" Once only.'
         )
     if late_nights >= BED_ORDER_MIN_NIGHTS:
         order = cfg.get("bed_order")
@@ -207,17 +215,25 @@ def build_night_watch_block(
 
         def _o(key: str) -> str:
             value = order.get(key)
-            return value.strip() if isinstance(value, str) and value.strip() else fallback[key]
+            return (
+                value.strip()
+                if isinstance(value, str) and value.strip()
+                else fallback[key]
+            )
 
         lines.append(_o("guidance").format(nights=late_nights))
-        lines.append(f"In this key (never verbatim): \"{_o('line')}\"")
+        lines.append(f'In this key (never verbatim): "{_o("line")}"')
         lines.append(_o("distress"))
     return "\n".join(lines)
 
 
 async def night_watch_prompt_block(
-    user_id: str, p: dict, affection_level: int, memory: Any,
-    now: datetime | None = None, activity: str | None = None,
+    user_id: str,
+    p: dict[str, Any],
+    affection_level: int,
+    memory: Any,
+    now: datetime | None = None,
+    activity: str | None = None,
 ) -> str:
     """Per-message entry point. Records tonight if late; returns the block
     inside the watch, otherwise ``""``. Never raises."""
@@ -234,7 +250,11 @@ async def night_watch_prompt_block(
             and _thread_ref_nights.get(user_id) != tonight
         )
         block = build_night_watch_block(
-            p, now, affection_level, count_recent_late_nights(nights, tonight), thread_ok,
+            p,
+            now,
+            affection_level,
+            count_recent_late_nights(nights, tonight),
+            thread_ok,
             activity=activity,
         )
         if thread_ok:

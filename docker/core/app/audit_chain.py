@@ -40,23 +40,28 @@ def compute_row_hash(
     user_id: str | None,
     ip_address: str | None,
     request_id: str | None,
-    metadata: dict | None,
+    metadata: dict[str, Any] | None,
     created_at: str,
     prev_hash: str | None,
 ) -> str:
     """Compute HMAC-SHA256 over canonical row representation + prev_hash."""
-    payload = json.dumps({
-        "id": row_id,
-        "event_type": event_type,
-        "user_id": user_id,
-        "ip_address": ip_address,
-        "request_id": request_id,
-        "metadata": metadata,
-        "created_at": created_at,
-        "prev": prev_hash or "",
-    }, sort_keys=True, default=str)
-    return hmac.new(_chain_secret(), payload.encode("utf-8"),
-                    hashlib.sha256).hexdigest()
+    payload = json.dumps(
+        {
+            "id": row_id,
+            "event_type": event_type,
+            "user_id": user_id,
+            "ip_address": ip_address,
+            "request_id": request_id,
+            "metadata": metadata,
+            "created_at": created_at,
+            "prev": prev_hash or "",
+        },
+        sort_keys=True,
+        default=str,
+    )
+    return hmac.new(
+        _chain_secret(), payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
 
 
 def verify_chain(

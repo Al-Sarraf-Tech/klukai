@@ -24,7 +24,11 @@ void main() {
               'status': 'open',
               'message': null,
               'entries': [
-                {'stamp': '0200 hours, March 2065', 'text': 'first', 'read_at': null},
+                {
+                  'stamp': '0200 hours, March 2065',
+                  'text': 'first',
+                  'read_at': null,
+                },
                 {
                   'stamp': '0200 hours, April 2065',
                   'text': 'second',
@@ -32,7 +36,10 @@ void main() {
                 },
               ],
               'held_back': 3,
-              'reply': {'stamp': 'November 2074, Yellow Zone', 'text': "I'm here."},
+              'reply': {
+                'stamp': 'November 2074, Yellow Zone',
+                'text': "I'm here.",
+              },
             }),
             200,
           );
@@ -50,16 +57,18 @@ void main() {
     test('parses a sealed thread', () async {
       final svc = ThreadService(
         serverUrl: 'https://klukai.example.cc',
-        client: MockClient((_) async => http.Response(
-              jsonEncode({
-                'status': 'sealed',
-                'message': 'Not yet.',
-                'entries': [],
-                'held_back': 0,
-                'reply': null,
-              }),
-              200,
-            )),
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'status': 'sealed',
+              'message': 'Not yet.',
+              'entries': [],
+              'held_back': 0,
+              'reply': null,
+            }),
+            200,
+          ),
+        ),
       );
       final view = await svc.fetchThread();
       expect(view.sealed, isTrue);
@@ -89,7 +98,13 @@ void main() {
       );
       expect(
         () => svc.fetchThread(),
-        throwsA(isA<ThreadServiceException>().having((e) => e.isAuthExpired, 'auth', isTrue)),
+        throwsA(
+          isA<ThreadServiceException>().having(
+            (e) => e.isAuthExpired,
+            'auth',
+            isTrue,
+          ),
+        ),
       );
       expect(() => svc.markRead(['a']), throwsA(isA<ThreadServiceException>()));
     });

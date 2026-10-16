@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "window_days": 30,
+  "rollback": {
+    "minimum_requests": 20,
+    "consecutive_breaches": 3,
+    "poll_seconds": 10
+  },
+  "endpoints": [
+    {
+      "method": "GET",
+      "route": "/health",
+      "availability": 0.999,
+      "p99_ms": 30,
+      "runbook": "dependency-outage"
+    },
+    {
+      "method": "GET",
+      "route": "/api/health/live",
+      "availability": 0.999,
+      "p99_ms": 30,
+      "runbook": "dependency-outage"
+    },
+    {
+      "method": "GET",
+      "route": "/api/health/ready",
+      "availability": 0.999,
+      "p99_ms": 2500,
+      "runbook": "dependency-outage"
+    },
+    {
+      "method": "POST",
+      "route": "/api/auth/login",
+      "availability": 0.999,
+      "p99_ms": 500,
+      "runbook": "dependency-outage"
+    },
+    {
+      "method": "GET",
+      "route": "/api/auth/verify",
+      "availability": 0.999,
+      "p99_ms": 150,
+      "runbook": "dependency-outage"
+    },
+    {
+      "method": "GET",
+      "route": "/api/affection",
+      "availability": 0.999,
+      "p99_ms": 150,
+      "runbook": "dependency-outage"
+    },
+    {
+      "method": "GET",
+      "route": "/api/messages",
+      "availability": 0.999,
+      "p99_ms": 300,
+      "runbook": "dependency-outage"
+    },
+    {
+      "method": "GET",
+      "route": "/api/memories",
+      "availability": 0.999,
+      "p99_ms": 300,
+      "runbook": "dependency-outage"
+    },
+    {
+      "method": "GET",
+      "route": "/api/tts/jobs/{job_id}",
+      "availability": 0.995,
+      "p99_ms": 250,
+      "runbook": "dependency-outage"
+    },
+    {
+      "method": "POST",
+      "route": "/api/generate-image",
+      "availability": 0.995,
+      "p99_ms": 3000,
+      "runbook": "dependency-outage"
+    }
+  ]
+}

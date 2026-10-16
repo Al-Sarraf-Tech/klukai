@@ -123,6 +123,201 @@ class Model:
         return result
 
 
+def _model_identity(
+    entry: dict[str, Any],
+    runtime: dict[str, Any],
+    metadata: dict[str, Any],
+    using_artifact_fallback: bool,
+) -> tuple[str, tuple[str, ...], str]:
+    entry_aliases = _as_aliases(entry.get("aliases", entry.get("alias")))
+    runtime_aliases = _as_aliases(runtime.get("aliases", runtime.get("alias")))
+    all_aliases = tuple(dict.fromkeys((*entry_aliases, *runtime_aliases)))
+
+    if using_artifact_fallback:
+        # Artifact ids are immutable transfer-inventory keys, not the
+        # historical IDs clients used with LM Studio. The first runtime
+        # alias is the API and llama-router preset name.
+        model_id_value = _first(runtime, "model_id", "api_id", "key", "name")
+        if model_id_value is None and runtime_aliases:
+            model_id_value = runtime_aliases[0]
+        if model_id_value is None:
+            model_id_value = _first(entry, "model_id", "id", "key", "name")
+    else:
+        model_id_value = _first(metadata, "model_id", "id", "key", "name")
+    if not isinstance(model_id_value, str) or not model_id_value.strip():
+        raise CatalogError("every model must have a non-empty id")
+    model_id = model_id_value.strip()
+
+    aliases = tuple(alias for alias in all_aliases if alias != model_id)
+    router_id_value = _first(
+        metadata, "router_id", "llama_id", "preset", default=model_id
+    )
+    if not isinstance(router_id_value, str) or not router_id_value.strip():
+        raise CatalogError(f"model {model_id!r} has an invalid router id")
+    router_id = router_id_value.strip()
+
+    return model_id, aliases, router_id
+
+
+def _model_size(
+    metadata: dict[str, Any], artifact_by_id: dict[str, Any], model_id: str
+) -> int:
+    artifact_ids = metadata.get("artifact_ids", [])
+    if isinstance(artifact_ids, str):
+        artifact_ids = [artifact_ids]
+    if not isinstance(artifact_ids, list):
+        raise CatalogError(f"model {model_id!r} artifact_ids must be an array")
+    related_artifacts = [
+        artifact_by_id[str(artifact_id)]
+        for artifact_id in artifact_ids
+        if str(artifact_id) in artifact_by_id
+    ]
+    explicit_size = _first(metadata, "size_bytes", "bytes")
+    if explicit_size is None:
+        explicit_size = sum(
+            int(item.get("bytes", item.get("size_bytes", 0)) or 0)
+            for item in related_artifacts
+        )
+    try:
+        size_bytes = max(0, int(explicit_size or 0))
+    except (TypeError, ValueError) as exc:
+        raise CatalogError(f"model {model_id!r} has invalid bytes") from exc
+
+    return size_bytes
+
+
+def _model_contexts(metadata: dict[str, Any], model_id: str) -> tuple[int, int | None]:
+    context_value = _first(
+        metadata,
+        "max_context_length",
+        "context_length",
+        "context",
+        default=0,
+    )
+    try:
+        max_context_length = max(0, int(context_value or 0))
+    except (TypeError, ValueError) as exc:
+        raise CatalogError(
+            f"model {model_id!r} has invalid max_context_length"
+        ) from exc
+
+    loaded_context_value = _first(
+        metadata,
+        "loaded_context_length",
+        "preset_context_length",
+        "load_context_length",
+    )
+    try:
+        loaded_context_length = (
+            max(0, int(loaded_context_value))
+            if loaded_context_value is not None
+            else None
+        )
+    except (TypeError, ValueError) as exc:
+        raise CatalogError(
+            f"model {model_id!r} has invalid loaded_context_length"
+        ) from exc
+
+    return max_context_length, loaded_context_length
+
+
+def _model_from_entry(
+    entry: object,
+    artifact_by_id: dict[str, Any],
+    using_artifact_fallback: bool,
+) -> Model | None:
+    if not isinstance(entry, dict):
+        raise CatalogError("every model must be a JSON object")
+    if entry.get("enabled") is False:
+        return None
+
+    runtime = entry.get("runtime", {})
+    if runtime is None:
+        runtime = {}
+    if not isinstance(runtime, dict):
+        raise CatalogError("artifact runtime metadata must be a JSON object")
+    metadata = {**entry, **runtime}
+
+    artifact_kind = str(
+        _first(entry, "role", "kind", "artifact_type", default="")
+    ).lower()
+    if (
+        using_artifact_fallback
+        and artifact_kind
+        and artifact_kind
+        not in {
+            "llm",
+            "vlm",
+            "embedding",
+            "embeddings",
+        }
+    ):
+        return None
+
+    model_id, aliases, router_id = _model_identity(
+        entry, runtime, metadata, using_artifact_fallback
+    )
+
+    size_bytes = _model_size(metadata, artifact_by_id, model_id)
+
+    max_context_length, loaded_context_length = _model_contexts(metadata, model_id)
+
+    default_model_type = (
+        artifact_kind if artifact_kind in {"vlm", "embedding", "embeddings"} else "llm"
+    )
+    model_type = str(
+        _first(metadata, "type", "model_type", default=default_model_type)
+    ).lower()
+    if model_type not in {"llm", "vlm", "embedding", "embeddings"}:
+        raise CatalogError(f"model {model_id!r} has invalid type {model_type!r}")
+
+    capabilities = metadata.get("capabilities", {})
+    if not isinstance(capabilities, (dict, list)):
+        raise CatalogError(
+            f"model {model_id!r} capabilities must be an object or array"
+        )
+    if isinstance(capabilities, list) and not all(
+        isinstance(item, str) for item in capabilities
+    ):
+        raise CatalogError(f"model {model_id!r} capabilities must contain strings")
+
+    publisher = str(
+        metadata.get("publisher")
+        or (model_id.split("/", 1)[0] if "/" in model_id else "local")
+    )
+    display_name = str(metadata.get("display_name") or model_id.rsplit("/", 1)[-1])
+    architecture_value = _first(metadata, "architecture", "arch")
+    architecture = str(architecture_value) if architecture_value is not None else None
+    params_value = metadata.get("params_string")
+
+    return Model(
+        id=model_id,
+        aliases=aliases,
+        router_id=router_id,
+        type=model_type,
+        quantization=_quantization_name(
+            _first(metadata, "quantization", "quant", default="unknown")
+        ),
+        max_context_length=max_context_length,
+        loaded_context_length=loaded_context_length,
+        publisher=publisher,
+        architecture=architecture,
+        compatibility_type=str(
+            _first(
+                metadata,
+                "compatibility_type",
+                "format",
+                default="gguf",
+            )
+        ),
+        size_bytes=size_bytes,
+        display_name=display_name,
+        params_string=str(params_value) if params_value is not None else None,
+        capabilities=capabilities,
+        state_hint=_normalized_state(metadata.get("state", "not-loaded")),
+    )
+
+
 class Catalog:
     """Validated model catalog plus alias and llama-router mappings."""
 
@@ -178,181 +373,9 @@ class Catalog:
 
         models: list[Model] = []
         for entry in entries:
-            if not isinstance(entry, dict):
-                raise CatalogError("every model must be a JSON object")
-            if entry.get("enabled") is False:
-                continue
-
-            runtime = entry.get("runtime", {})
-            if runtime is None:
-                runtime = {}
-            if not isinstance(runtime, dict):
-                raise CatalogError("artifact runtime metadata must be a JSON object")
-            metadata = {**entry, **runtime}
-
-            artifact_kind = str(
-                _first(entry, "role", "kind", "artifact_type", default="")
-            ).lower()
-            if (
-                using_artifact_fallback
-                and artifact_kind
-                and artifact_kind
-                not in {
-                    "llm",
-                    "vlm",
-                    "embedding",
-                    "embeddings",
-                }
-            ):
-                continue
-
-            entry_aliases = _as_aliases(entry.get("aliases", entry.get("alias")))
-            runtime_aliases = _as_aliases(runtime.get("aliases", runtime.get("alias")))
-            all_aliases = tuple(dict.fromkeys((*entry_aliases, *runtime_aliases)))
-
-            if using_artifact_fallback:
-                # Artifact ids are immutable transfer-inventory keys, not the
-                # historical IDs clients used with LM Studio. The first runtime
-                # alias is the API and llama-router preset name.
-                model_id_value = _first(runtime, "model_id", "api_id", "key", "name")
-                if model_id_value is None and runtime_aliases:
-                    model_id_value = runtime_aliases[0]
-                if model_id_value is None:
-                    model_id_value = _first(entry, "model_id", "id", "key", "name")
-            else:
-                model_id_value = _first(metadata, "model_id", "id", "key", "name")
-            if not isinstance(model_id_value, str) or not model_id_value.strip():
-                raise CatalogError("every model must have a non-empty id")
-            model_id = model_id_value.strip()
-
-            aliases = tuple(alias for alias in all_aliases if alias != model_id)
-            router_id_value = _first(
-                metadata, "router_id", "llama_id", "preset", default=model_id
-            )
-            if not isinstance(router_id_value, str) or not router_id_value.strip():
-                raise CatalogError(f"model {model_id!r} has an invalid router id")
-            router_id = router_id_value.strip()
-
-            artifact_ids = metadata.get("artifact_ids", [])
-            if isinstance(artifact_ids, str):
-                artifact_ids = [artifact_ids]
-            if not isinstance(artifact_ids, list):
-                raise CatalogError(f"model {model_id!r} artifact_ids must be an array")
-            related_artifacts = [
-                artifact_by_id[str(artifact_id)]
-                for artifact_id in artifact_ids
-                if str(artifact_id) in artifact_by_id
-            ]
-            explicit_size = _first(metadata, "size_bytes", "bytes")
-            if explicit_size is None:
-                explicit_size = sum(
-                    int(item.get("bytes", item.get("size_bytes", 0)) or 0)
-                    for item in related_artifacts
-                )
-            try:
-                size_bytes = max(0, int(explicit_size or 0))
-            except (TypeError, ValueError) as exc:
-                raise CatalogError(f"model {model_id!r} has invalid bytes") from exc
-
-            context_value = _first(
-                metadata,
-                "max_context_length",
-                "context_length",
-                "context",
-                default=0,
-            )
-            try:
-                max_context_length = max(0, int(context_value or 0))
-            except (TypeError, ValueError) as exc:
-                raise CatalogError(
-                    f"model {model_id!r} has invalid max_context_length"
-                ) from exc
-
-            loaded_context_value = _first(
-                metadata,
-                "loaded_context_length",
-                "preset_context_length",
-                "load_context_length",
-            )
-            try:
-                loaded_context_length = (
-                    max(0, int(loaded_context_value))
-                    if loaded_context_value is not None
-                    else None
-                )
-            except (TypeError, ValueError) as exc:
-                raise CatalogError(
-                    f"model {model_id!r} has invalid loaded_context_length"
-                ) from exc
-
-            default_model_type = (
-                artifact_kind
-                if artifact_kind in {"vlm", "embedding", "embeddings"}
-                else "llm"
-            )
-            model_type = str(
-                _first(metadata, "type", "model_type", default=default_model_type)
-            ).lower()
-            if model_type not in {"llm", "vlm", "embedding", "embeddings"}:
-                raise CatalogError(
-                    f"model {model_id!r} has invalid type {model_type!r}"
-                )
-
-            capabilities = metadata.get("capabilities", {})
-            if not isinstance(capabilities, (dict, list)):
-                raise CatalogError(
-                    f"model {model_id!r} capabilities must be an object or array"
-                )
-            if isinstance(capabilities, list) and not all(
-                isinstance(item, str) for item in capabilities
-            ):
-                raise CatalogError(
-                    f"model {model_id!r} capabilities must contain strings"
-                )
-
-            publisher = str(
-                metadata.get("publisher")
-                or (model_id.split("/", 1)[0] if "/" in model_id else "local")
-            )
-            display_name = str(
-                metadata.get("display_name") or model_id.rsplit("/", 1)[-1]
-            )
-            architecture_value = _first(metadata, "architecture", "arch")
-            architecture = (
-                str(architecture_value) if architecture_value is not None else None
-            )
-            params_value = metadata.get("params_string")
-
-            models.append(
-                Model(
-                    id=model_id,
-                    aliases=aliases,
-                    router_id=router_id,
-                    type=model_type,
-                    quantization=_quantization_name(
-                        _first(metadata, "quantization", "quant", default="unknown")
-                    ),
-                    max_context_length=max_context_length,
-                    loaded_context_length=loaded_context_length,
-                    publisher=publisher,
-                    architecture=architecture,
-                    compatibility_type=str(
-                        _first(
-                            metadata,
-                            "compatibility_type",
-                            "format",
-                            default="gguf",
-                        )
-                    ),
-                    size_bytes=size_bytes,
-                    display_name=display_name,
-                    params_string=str(params_value)
-                    if params_value is not None
-                    else None,
-                    capabilities=capabilities,
-                    state_hint=_normalized_state(metadata.get("state", "not-loaded")),
-                )
-            )
+            model = _model_from_entry(entry, artifact_by_id, using_artifact_fallback)
+            if model is not None:
+                models.append(model)
 
         if not models:
             raise CatalogError("model catalog contains no models")

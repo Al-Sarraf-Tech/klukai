@@ -12,13 +12,17 @@ old hardcoded constants and the public ``*_MESSAGES`` names stay importable.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-def _int_keyed(d: dict, fallback: dict[int, list[str]]) -> dict[int, list[str]]:
+def _int_keyed(
+    d: dict[str, Any], fallback: dict[int, list[str]]
+) -> dict[int, list[str]]:
     """Coerce a YAML affection->lines mapping to ``{int: [str, ...]}``.
 
     YAML loads integer keys as ints already, but tolerate string keys too so a
@@ -39,15 +43,18 @@ def _int_keyed(d: dict, fallback: dict[int, list[str]]) -> dict[int, list[str]]:
     return out
 
 
-def _raw_content(key: str):
+def _raw_content(key: str) -> Any:
     """Return the raw ``proactive_content.<key>`` value from YAML, or None.
 
     Swallows loader errors (returns None) so callers always fall back cleanly.
     """
     try:
         from ..personality import load_personality
+
         return load_personality().get("proactive_content", {}).get(key)
-    except Exception as e:  # pragma: no cover - defensive; config always present in tests
+    except (
+        Exception
+    ) as e:  # pragma: no cover - defensive; config always present in tests
         logger.debug("proactive_content[%s] load failed, using fallback: %s", key, e)
         return None
 
@@ -358,9 +365,7 @@ MORNING_MESSAGES: dict[int, list[str]] = _content(
 EVENING_MESSAGES: dict[int, list[str]] = _content(
     "evening_messages", _EVENING_MESSAGES_FALLBACK
 )
-IDLE_MESSAGES: dict[int, list[str]] = _content(
-    "idle_messages", _IDLE_MESSAGES_FALLBACK
-)
+IDLE_MESSAGES: dict[int, list[str]] = _content("idle_messages", _IDLE_MESSAGES_FALLBACK)
 MISSION_REPORTS: dict[int, list[str]] = _content(
     "mission_reports", _MISSION_REPORTS_FALLBACK
 )
@@ -370,3 +375,40 @@ ROMANCE_MESSAGES: dict[int, list[str]] = _content(
 QUIET_DAY_MESSAGES: dict[int, list[str]] = _content(
     "quiet_day_messages", _QUIET_DAY_MESSAGES_FALLBACK
 )
+
+
+_TAP_LINES_FALLBACK: dict[int, list[str]] = {
+    0: [
+        "Hm? Need something, Commander?",
+        "Right here.",
+        "You have my attention.",
+        "Status nominal. What do you need?",
+    ],
+    1: [
+        "I'm listening, Commander.",
+        "Something on your mind?",
+        "Ready for orders.",
+        "All systems green. Go ahead.",
+    ],
+    2: [
+        "Hey. What's up?",
+        "I was just thinking about the last op.",
+        "Commander. Good timing.",
+        "Need me for something?",
+    ],
+    3: [
+        "There you are. I was wondering when you'd check in.",
+        "Missed you. ...Operationally speaking.",
+        "Hey, Commander. Everything okay?",
+    ],
+    4: [
+        "...You always know when I need company.",
+        "Hey. I'm glad you're here.",
+        "Commander... hi.",
+    ],
+}
+
+
+def _tap_lines() -> dict[int, list[str]]:
+    """Affection-keyed tap lines from YAML, falling back to the literal."""
+    return _content("tap_lines", _TAP_LINES_FALLBACK)

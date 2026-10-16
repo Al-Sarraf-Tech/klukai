@@ -40,8 +40,8 @@ class _EngineBase:
     _affection_levels: dict[str, int]
     _mission_timers: dict[str, MissionTimer]
     _closing: bool
-    _spawn: Callable[[Coroutine[Any, Any, Any]], asyncio.Task | None]
-    _track_task: Callable[[asyncio.Task], asyncio.Task]
+    _spawn: Callable[[Coroutine[Any, Any, Any]], asyncio.Task[Any] | None]
+    _track_task: Callable[[asyncio.Task[Any]], asyncio.Task[Any]]
 
     # ── Shared scalar / legacy-compat state ───────────────────────────────
     _muted_until: datetime | None

@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
-import json
+from typing import Any
+
+
 import logging
 import os
-from datetime import date, datetime
+from datetime import date as date, datetime
 
 import httpx
-from pydantic import BaseModel
 
 from .db import get_conn, get_conn_autocommit
+from .affection_classifier import (
+    classify_interaction,
+    CLASSIFICATION_PROMPT as CLASSIFICATION_PROMPT,
+)
 from .events import publish as publish_event
-from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
 from .personality import load_personality
 from .proactive.state import now_local
+
+from .affection_types import (
+    compute_level,
+    AffectionState as AffectionState,
+    AffectionChange as AffectionChange,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,53 +33,10 @@ logger = logging.getLogger(__name__)
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
 CLASSIFICATION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
-DAILY_POINTS_CAP = 8  # fallback only; config affection.scoring.daily_points_cap is authoritative
+DAILY_POINTS_CAP = (
+    8  # fallback only; config affection.scoring.daily_points_cap is authoritative
+)
 MAX_SCORE = 1000
-
-CLASSIFICATION_PROMPT = """\
-Classify ONLY the Commander's message below. Ignore Klukai's response tone entirely.
-The Commander is talking to a cold military character — direct or casual language is NORMAL.
-
-Choose ONE type and rate intensity (1-10):
-- "greeting": Hello, goodbye, check-in, how are you (intensity 1-3)
-- "genuine_interest": Asking about Klukai, her missions, squad, wellbeing, history (intensity 1-5)
-- "personal_sharing": Commander sharing personal details or feelings (intensity 1-5)
-- "compliment": Praise, admiration, appreciation of Klukai (intensity 3-8)
-- "mission_discussion": Tactical, operational, strategic, or factual conversation (intensity 1-5)
-- "remembering": Recalling something from a previous conversation (intensity 3-5)
-- "rude": ONLY explicit insults, slurs, "shut up", "you're useless", "I don't need you" (intensity 5-10)
-- "inappropriate": ONLY sexually explicit, objectifying, or degrading content (intensity 5-10)
-- "ignoring_advice": ONLY explicitly saying "no I won't do that" to Klukai's direct counsel (intensity 3-5)
-- "neutral": Normal conversation, questions, small talk (intensity 1-3)
-
-IMPORTANT: When in doubt, classify as "neutral" or "genuine_interest". Short messages, questions,
-and casual conversation are NEVER "rude". Only classify as "rude" if the Commander is clearly hostile.
-
-Return ONLY valid JSON: {{"type": "...", "intensity": N}}
-
-Commander's message: {user_message}
-"""
-
-
-class AffectionState(BaseModel):
-    score: int = 0
-    level: int = 0
-    level_name: str = "Cold Assessment"
-    last_interaction_date: date | None = None
-    consecutive_days: int = 0
-    daily_points_earned: int = 0
-    total_interactions: int = 0
-    first_interaction: datetime | None = None
-
-
-class AffectionChange(BaseModel):
-    delta: int
-    reason: str
-    new_score: int
-    new_level: int
-    new_level_name: str
-    level_changed: bool
-    level_direction: str = ""  # "up" or "down" or ""
 
 
 class AffectionManager:
@@ -82,7 +49,7 @@ class AffectionManager:
     def __init__(self) -> None:
         self._states: dict[str, AffectionState] = {}
         self._http: httpx.AsyncClient | None = None
-        self._levels: list[dict] = []
+        self._levels: list[dict[str, Any]] = []
 
     @property
     def _state(self) -> AffectionState | None:
@@ -132,12 +99,19 @@ class AffectionManager:
                         if new_score < cached.score - 50:
                             logger.warning(
                                 "Affection score anomaly for %s: DB=%d, memory=%d — keeping higher value",
-                                user_id, new_score, cached.score,
+                                user_id,
+                                new_score,
+                                cached.score,
                             )
                             await conn.execute(
                                 "UPDATE companion_affection SET score=%s, level=%s, level_name=%s "
                                 "WHERE user_id=%s",
-                                (cached.score, cached.level, cached.level_name, user_id),
+                                (
+                                    cached.score,
+                                    cached.level,
+                                    cached.level_name,
+                                    user_id,
+                                ),
                             )
                             # get_conn() is a manual-commit connection — without
                             # this the restore silently rolls back and the
@@ -155,7 +129,12 @@ class AffectionManager:
                         total_interactions=row[6],
                         first_interaction=row[7],
                     )
-                    logger.debug("Affection loaded for %s: score=%d lv%d", user_id, new_score, row[1])
+                    logger.debug(
+                        "Affection loaded for %s: score=%d lv%d",
+                        user_id,
+                        new_score,
+                        row[1],
+                    )
                 else:
                     self._states[user_id] = AffectionState()
         except Exception as e:
@@ -188,14 +167,7 @@ class AffectionManager:
         return self._states.get(user_id, AffectionState())
 
     def _compute_level(self, score: int) -> tuple[int, str]:
-        """Map score to level index and name."""
-        result_level = 0
-        result_name = "Cold Assessment"
-        for lv in self._levels:
-            if score >= lv.get("threshold", 0):
-                result_level = lv.get("index", 0)
-                result_name = lv.get("name", "Unknown")
-        return result_level, result_name
+        return compute_level(self._levels, score)
 
     async def add_score(
         self, points: int, user_id: str = "jalsarraf"
@@ -252,9 +224,15 @@ class AffectionManager:
 
         # Reset daily counter if new day
         if state.last_interaction_date != today:
-            if state.last_interaction_date and (today - state.last_interaction_date).days == 1:
+            if (
+                state.last_interaction_date
+                and (today - state.last_interaction_date).days == 1
+            ):
                 state.consecutive_days += 1
-            elif state.last_interaction_date and (today - state.last_interaction_date).days > 1:
+            elif (
+                state.last_interaction_date
+                and (today - state.last_interaction_date).days > 1
+            ):
                 state.consecutive_days = 1
             else:
                 state.consecutive_days = 1
@@ -290,9 +268,17 @@ class AffectionManager:
             state.daily_points_earned += delta
 
         # Apply daily consistency bonus (once per new day)
-        if state.consecutive_days > 1 and state.daily_points_earned == delta and delta > 0:
+        if (
+            state.consecutive_days > 1
+            and state.daily_points_earned == delta
+            and delta > 0
+        ):
             p = load_personality()
-            bonus = p.get("affection", {}).get("scoring", {}).get("daily_consistency_bonus", 3)
+            bonus = (
+                p.get("affection", {})
+                .get("scoring", {})
+                .get("daily_consistency_bonus", 3)
+            )
             delta += bonus
             state.daily_points_earned += bonus
 
@@ -309,7 +295,9 @@ class AffectionManager:
             await publish_event(
                 "affection_change",
                 f"{state.level_name} (level {state.level})",
-                delta=delta, level=state.level, direction=level_direction,
+                delta=delta,
+                level=state.level,
+                direction=level_direction,
             )
 
         # Persist
@@ -317,7 +305,15 @@ class AffectionManager:
 
         # Log the change
         if delta != 0:
-            await self._log_change(delta, interaction_type, old_score, state.score, old_level, state.level, user_id)
+            await self._log_change(
+                delta,
+                interaction_type,
+                old_score,
+                state.score,
+                old_level,
+                state.level,
+                user_id,
+            )
 
         self._states[user_id] = state
 
@@ -334,43 +330,13 @@ class AffectionManager:
     async def _classify_interaction(
         self, user_message: str, assistant_message: str
     ) -> tuple[str, int]:
-        """Use LLM to classify the Commander's message type and intensity."""
-        prompt = CLASSIFICATION_PROMPT.format(
-            user_message=user_message[:500],
+        return await classify_interaction(
+            self._http,
+            user_message,
+            url=LM_STUDIO_URL,
+            model=CLASSIFICATION_MODEL,
+            prompt_template=CLASSIFICATION_PROMPT,
         )
-
-        try:
-            from .llm_router import get_lm_gate
-
-            gate = get_lm_gate()
-            async with gate:  # Waits for main chat to finish streaming
-                r = await self._http.post(
-                    f"{LM_STUDIO_URL}/v1/chat/completions",
-                    headers=lm_studio_auth_headers(),
-                    json={
-                        "model": CLASSIFICATION_MODEL,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 100,
-                        "temperature": 0.1,
-                        "stream": False,
-                        "ttl": LM_TTL_SECONDS,
-                    },
-                )
-                r.raise_for_status()
-                content = r.json()["choices"][0]["message"]["content"].strip()
-
-            # Handle markdown code blocks
-            if content.startswith("```"):
-                content = content.split("\n", 1)[1]
-                content = content.rsplit("```", 1)[0]
-
-            result = json.loads(content)
-            itype = result.get("type", "neutral")
-            intensity = max(1, min(10, int(result.get("intensity", 5))))
-            return itype, intensity
-        except Exception as e:
-            logger.warning("Interaction classification failed (%s)", type(e).__name__)
-            return "neutral", 5
 
     def _calculate_delta(self, interaction_type: str, intensity: int) -> int:
         """Calculate affection point delta from interaction type and intensity."""
@@ -422,7 +388,9 @@ class AffectionManager:
             return
 
         p = load_personality()
-        decay_per_day = p.get("affection", {}).get("scoring", {}).get("absence_decay_per_day", -1)
+        decay_per_day = (
+            p.get("affection", {}).get("scoring", {}).get("absence_decay_per_day", -1)
+        )
         total_decay = decay_per_day * (days_absent - 1)  # Don't count today
 
         if total_decay == 0:
@@ -436,24 +404,38 @@ class AffectionManager:
         old_level = state.level
         state.score = max(0, state.score + total_decay)
         state.level, state.level_name = self._compute_level(state.score)
-        logger.info("Absence decay: %d points for %d days (capped), score %d→%d", total_decay, days_absent - 1, old_score, state.score)
+        logger.info(
+            "Absence decay: %d points for %d days (capped), score %d→%d",
+            total_decay,
+            days_absent - 1,
+            old_score,
+            state.score,
+        )
 
         await self._save_state(state, user_id)
         if total_decay != 0:
             await self._log_change(
                 total_decay,
                 f"absence_decay ({days_absent - 1} days)",
-                old_score, state.score, old_level, state.level,
+                old_score,
+                state.score,
+                old_level,
+                state.level,
                 user_id,
             )
 
         self._states[user_id] = state
         logger.info(
             "Applied absence decay: %d points for %d days absent (score: %d -> %d)",
-            total_decay, days_absent - 1, old_score, state.score,
+            total_decay,
+            days_absent - 1,
+            old_score,
+            state.score,
         )
 
-    async def _save_state(self, state: AffectionState, user_id: str = "jalsarraf") -> None:
+    async def _save_state(
+        self, state: AffectionState, user_id: str = "jalsarraf"
+    ) -> None:
         """Persist affection state to PostgreSQL for a specific user."""
         try:
             async with get_conn_autocommit() as conn:
@@ -465,9 +447,13 @@ class AffectionManager:
                     "first_interaction = %s, updated_at = NOW() "
                     "WHERE user_id = %s",
                     (
-                        state.score, state.level, state.level_name,
-                        state.last_interaction_date, state.consecutive_days,
-                        state.daily_points_earned, state.total_interactions,
+                        state.score,
+                        state.level,
+                        state.level_name,
+                        state.last_interaction_date,
+                        state.consecutive_days,
+                        state.daily_points_earned,
+                        state.total_interactions,
                         state.first_interaction,
                         user_id,
                     ),
@@ -477,9 +463,13 @@ class AffectionManager:
             logger.error("Failed to save affection state for %s: %s", user_id, e)
 
     async def _log_change(
-        self, delta: int, reason: str,
-        old_score: int, new_score: int,
-        old_level: int, new_level: int,
+        self,
+        delta: int,
+        reason: str,
+        old_score: int,
+        new_score: int,
+        old_level: int,
+        new_level: int,
         user_id: str = "jalsarraf",
     ) -> None:
         """Log an affection change for audit trail."""
@@ -489,7 +479,15 @@ class AffectionManager:
                     "INSERT INTO companion_affection_log "
                     "(delta, reason, old_score, new_score, old_level, new_level, user_id) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (delta, reason, old_score, new_score, old_level, new_level, user_id),
+                    (
+                        delta,
+                        reason,
+                        old_score,
+                        new_score,
+                        old_level,
+                        new_level,
+                        user_id,
+                    ),
                 )
                 await conn.commit()
         except Exception as e:

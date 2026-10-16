@@ -80,8 +80,7 @@ def build_tool_block(tools_available: bool = False) -> str:
     framing = p.get("utility_framing", {})
 
     frame_lines = "\n".join(
-        f"  - {action}: frame as \"{label}\""
-        for action, label in framing.items()
+        f'  - {action}: frame as "{label}"' for action, label in framing.items()
     )
 
     return (

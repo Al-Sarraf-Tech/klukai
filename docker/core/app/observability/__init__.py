@@ -15,6 +15,7 @@ import json
 import logging
 import time
 from contextlib import contextmanager
+from collections.abc import Iterator
 from typing import Any
 
 
@@ -35,9 +36,16 @@ def structured_log(
     Falls back to plain logger.log if JSON serialization fails, so a bad
     field never drops the log line.
     """
+    from .correlation import request_id_context
+    from .redaction import redact_credentials
+
+    request_id = request_id_context.get()
+    if request_id:
+        fields["request_id"] = request_id
     # Auto-inject trace_id when an OTel span is active (Phase 3.2)
     try:
         from .tracing import get_current_trace_id
+
         trace_id = get_current_trace_id()
         if trace_id and "trace_id" not in fields:
             fields["trace_id"] = trace_id
@@ -46,14 +54,20 @@ def structured_log(
 
     try:
         payload = json.dumps({"event": event, **fields}, default=str)
-        logger.log(level, payload)
+        logger.log(level, redact_credentials(payload))
     except Exception:
-        logger.log(level, "event=%s fields=%r", event, fields)
+        logger.log(
+            level,
+            "event=%s fields=%s",
+            redact_credentials(event),
+            redact_credentials(str(fields)),
+        )
 
 
 @contextmanager
-def slow_query_timer(logger: logging.Logger, name: str,
-                     threshold_ms: float = 500.0):
+def slow_query_timer(
+    logger: logging.Logger, name: str, threshold_ms: float = 500.0
+) -> Iterator[None]:
     """Log a warning if the wrapped block exceeds threshold_ms.
 
     Usage:
@@ -67,13 +81,17 @@ def slow_query_timer(logger: logging.Logger, name: str,
         elapsed_ms = (time.monotonic() - start) * 1000
         if elapsed_ms > threshold_ms:
             structured_log(
-                logger, logging.WARNING, "slow_query",
-                name=name, elapsed_ms=round(elapsed_ms, 1),
+                logger,
+                logging.WARNING,
+                "slow_query",
+                name=name,
+                elapsed_ms=round(elapsed_ms, 1),
                 threshold_ms=threshold_ms,
             )
             # Also bump a metric so /api/metrics can show slow query counts
             try:
                 from .. import metrics
+
                 metrics.incr("slow_queries_total", query=name)
                 metrics.observe_latency("slow_query_ms", elapsed_ms, query=name)
             except Exception:
@@ -94,9 +112,14 @@ def record_llm_usage(
     """
     try:
         from .. import metrics
+
         metrics.incr("llm_requests_total", model=model, route=route)
-        metrics.incr("llm_tokens_in_total", model=model, route=route, by=max(0, tokens_in))
-        metrics.incr("llm_tokens_out_total", model=model, route=route, by=max(0, tokens_out))
+        metrics.incr(
+            "llm_tokens_in_total", model=model, route=route, by=max(0, tokens_in)
+        )
+        metrics.incr(
+            "llm_tokens_out_total", model=model, route=route, by=max(0, tokens_out)
+        )
         metrics.observe_latency("llm_latency_ms", latency_ms, model=model, route=route)
     except Exception:
         pass  # metrics is best-effort

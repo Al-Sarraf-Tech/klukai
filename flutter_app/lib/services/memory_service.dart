@@ -24,7 +24,7 @@ class MemoryService {
 
   /// [client] is injectable for tests; defaults to a real HTTP client.
   MemoryService({required this.serverUrl, http.Client? client})
-      : _client = client ?? http.Client();
+    : _client = client ?? http.Client();
 
   Map<String, String> get _authHeaders {
     String token = '';
@@ -48,7 +48,9 @@ class MemoryService {
     if (before != null) params['before'] = before;
     if (month != null) params['month'] = month;
 
-    final uri = Uri.parse('$serverUrl/api/memories').replace(queryParameters: params);
+    final uri = Uri.parse(
+      '$serverUrl/api/memories',
+    ).replace(queryParameters: params);
     final response = await _client.get(uri, headers: _authHeaders);
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as List;
@@ -77,7 +79,9 @@ class MemoryService {
       return data.map((c) => MemoryCategory.fromJson(c)).toList();
     }
     throw MemoryServiceException(
-        response.statusCode, '/api/memories/categories');
+      response.statusCode,
+      '/api/memories/categories',
+    );
   }
 
   Future<bool> keepMemory(String id) async {

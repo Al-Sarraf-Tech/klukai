@@ -19,9 +19,16 @@ class TimelineScreen extends StatelessWidget {
           icon: const Icon(Icons.arrow_back, color: GFL2Colors.textPrimary),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text('RELATIONSHIP TIMELINE',
-            style: TextStyle(color: GFL2Colors.primary, fontSize: 13,
-                fontWeight: FontWeight.w700, letterSpacing: 1.5, fontFamily: 'monospace')),
+        title: const Text(
+          'RELATIONSHIP TIMELINE',
+          style: TextStyle(
+            color: GFL2Colors.primary,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.5,
+            fontFamily: 'monospace',
+          ),
+        ),
         centerTitle: true,
       ),
       body: entries.isEmpty
@@ -29,14 +36,28 @@ class TimelineScreen extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.timeline, size: 48, color: GFL2Colors.textDim.withValues(alpha: 0.2)),
+                  Icon(
+                    Icons.timeline,
+                    size: 48,
+                    color: GFL2Colors.textDim.withValues(alpha: 0.2),
+                  ),
                   const SizedBox(height: 12),
-                  Text('No milestones recorded yet.',
-                      style: TextStyle(color: GFL2Colors.textDim.withValues(alpha: 0.4), fontSize: 13,
-                          fontStyle: FontStyle.italic)),
+                  Text(
+                    'No milestones recorded yet.',
+                    style: TextStyle(
+                      color: GFL2Colors.textDim.withValues(alpha: 0.4),
+                      fontSize: 13,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
                   const SizedBox(height: 4),
-                  Text('Keep talking to Klukai.',
-                      style: TextStyle(color: GFL2Colors.textDim.withValues(alpha: 0.3), fontSize: 11)),
+                  Text(
+                    'Keep talking to Klukai.',
+                    style: TextStyle(
+                      color: GFL2Colors.textDim.withValues(alpha: 0.3),
+                      fontSize: 11,
+                    ),
+                  ),
                 ],
               ),
             )
@@ -45,13 +66,23 @@ class TimelineScreen extends StatelessWidget {
               itemCount: entries.length,
               itemBuilder: (context, index) {
                 final entry = entries[index];
-                return _buildTimelineEntry(entry.key, entry.value, index == 0, index == entries.length - 1);
+                return _buildTimelineEntry(
+                  entry.key,
+                  entry.value,
+                  index == 0,
+                  index == entries.length - 1,
+                );
               },
             ),
     );
   }
 
-  Widget _buildTimelineEntry(String key, String dateStr, bool isFirst, bool isLast) {
+  Widget _buildTimelineEntry(
+    String key,
+    String dateStr,
+    bool isFirst,
+    bool isLast,
+  ) {
     final label = _formatMilestoneKey(key);
     final date = _formatDate(dateStr);
 
@@ -65,16 +96,32 @@ class TimelineScreen extends StatelessWidget {
             child: Column(
               children: [
                 if (!isFirst)
-                  Container(width: 1, height: 12, color: GFL2Colors.primary.withValues(alpha: 0.3)),
+                  Container(
+                    width: 1,
+                    height: 12,
+                    color: GFL2Colors.primary.withValues(alpha: 0.3),
+                  ),
                 Container(
-                  width: 10, height: 10,
+                  width: 10,
+                  height: 10,
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle, color: GFL2Colors.primary,
-                    boxShadow: [BoxShadow(color: GFL2Colors.primary.withValues(alpha: 0.4), blurRadius: 6)],
+                    shape: BoxShape.circle,
+                    color: GFL2Colors.primary,
+                    boxShadow: [
+                      BoxShadow(
+                        color: GFL2Colors.primary.withValues(alpha: 0.4),
+                        blurRadius: 6,
+                      ),
+                    ],
                   ),
                 ),
                 if (!isLast)
-                  Expanded(child: Container(width: 1, color: GFL2Colors.primary.withValues(alpha: 0.3))),
+                  Expanded(
+                    child: Container(
+                      width: 1,
+                      color: GFL2Colors.primary.withValues(alpha: 0.3),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -85,17 +132,36 @@ class TimelineScreen extends StatelessWidget {
               margin: const EdgeInsets.only(bottom: 16),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: GFL2Colors.surface, borderRadius: BorderRadius.circular(4),
-                border: Border(left: BorderSide(color: GFL2Colors.primary.withValues(alpha: 0.3), width: 2)),
+                color: GFL2Colors.surface,
+                borderRadius: BorderRadius.circular(4),
+                border: Border(
+                  left: BorderSide(
+                    color: GFL2Colors.primary.withValues(alpha: 0.3),
+                    width: 2,
+                  ),
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(label, style: const TextStyle(color: GFL2Colors.textPrimary, fontSize: 12,
-                      fontWeight: FontWeight.w700, fontFamily: 'monospace')),
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: GFL2Colors.textPrimary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
                   const SizedBox(height: 4),
-                  Text(date, style: TextStyle(color: GFL2Colors.textDim.withValues(alpha: 0.5),
-                      fontSize: 10, fontFamily: 'monospace')),
+                  Text(
+                    date,
+                    style: TextStyle(
+                      color: GFL2Colors.textDim.withValues(alpha: 0.5),
+                      fontSize: 10,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -113,7 +179,8 @@ class TimelineScreen extends StatelessWidget {
       'affection_level_4' => 'BONDED: "I am all you need"',
       'first_conversation' => 'FIRST CONTACT: Neural link established',
       'first_compliment' => 'FIRST PRAISE: Commander showed appreciation',
-      'first_personal_share' => 'PERSONAL INTEL: Commander shared something private',
+      'first_personal_share' =>
+        'PERSONAL INTEL: Commander shared something private',
       _ => key.replaceAll('_', ' ').toUpperCase(),
     };
   }

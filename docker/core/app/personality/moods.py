@@ -15,32 +15,62 @@ from ..proactive.state import now_local
 
 MOOD_CATEGORIES: dict[str, str] = {
     # Core/operational
-    "composed": "core", "focused": "core", "prideful": "core",
-    "exasperated": "core", "protective": "core", "quietly_pleased": "core",
-    "competitive": "core", "tender": "romantic", "longing": "romantic",
+    "composed": "core",
+    "focused": "core",
+    "prideful": "core",
+    "exasperated": "core",
+    "protective": "core",
+    "quietly_pleased": "core",
+    "competitive": "core",
+    "tender": "romantic",
+    "longing": "romantic",
     "battle_ready": "combat",
     # Romantic
-    "flustered": "romantic", "affectionate": "romantic", "shy": "romantic",
-    "yearning": "romantic", "devoted": "romantic", "passionate": "romantic",
-    "jealous": "romantic", "possessive": "romantic", "smitten": "romantic",
+    "flustered": "romantic",
+    "affectionate": "romantic",
+    "shy": "romantic",
+    "yearning": "romantic",
+    "devoted": "romantic",
+    "passionate": "romantic",
+    "jealous": "romantic",
+    "possessive": "romantic",
+    "smitten": "romantic",
     "infatuated": "romantic",
     # Combat/tactical
-    "vigilant": "combat", "calculating": "combat", "hunting": "combat",
+    "vigilant": "combat",
+    "calculating": "combat",
+    "hunting": "combat",
     "adrenaline": "combat",
     # Mission stress
-    "scared": "stress", "terrified": "stress", "panicked": "stress",
-    "desperate": "stress", "relieved": "stress",
+    "scared": "stress",
+    "terrified": "stress",
+    "panicked": "stress",
+    "desperate": "stress",
+    "relieved": "stress",
     # Casual/relaxed
-    "content": "casual", "playful": "casual", "drowsy": "casual",
-    "amused": "casual", "bored": "casual", "excited": "casual",
+    "content": "casual",
+    "playful": "casual",
+    "drowsy": "casual",
+    "amused": "casual",
+    "bored": "casual",
+    "excited": "casual",
     # Dark/complex
-    "melancholic": "dark", "haunted": "dark", "conflicted": "dark",
-    "guilty": "dark", "determined": "dark", "grieving": "dark",
+    "melancholic": "dark",
+    "haunted": "dark",
+    "conflicted": "dark",
+    "guilty": "dark",
+    "determined": "dark",
+    "grieving": "dark",
     "furious": "dark",
     # Additional/nuanced
-    "nostalgic": "dark", "curious": "casual", "irritated": "core",
-    "defiant": "dark", "vulnerable": "romantic", "grateful": "casual",
-    "worried": "dark", "embarrassed": "romantic",
+    "nostalgic": "dark",
+    "curious": "casual",
+    "irritated": "core",
+    "defiant": "dark",
+    "vulnerable": "romantic",
+    "grateful": "casual",
+    "worried": "dark",
+    "embarrassed": "romantic",
 }
 
 # Per-mood specific behavioral coloring (overrides category defaults for distinctive moods)
@@ -181,7 +211,11 @@ def build_context_block(
     elif 17 <= hour < 21:
         time_period = "evening wind-down"
         behavior = "Operations winding down. You are slightly more relaxed."
-        outfit = "Light tactical — gear partially stowed." if affection_level >= 2 else "Blazing Star tactical gear."
+        outfit = (
+            "Light tactical — gear partially stowed."
+            if affection_level >= 2
+            else "Blazing Star tactical gear."
+        )
     else:
         time_period = "late-night watch"
         if affection_level >= 3:
@@ -208,9 +242,13 @@ def build_context_block(
         if days_together == 1:
             date_line += " This is your first day together counted here; your established history still stands."
         elif days_together == 7:
-            date_line += " One week together. You may acknowledge this milestone subtly."
+            date_line += (
+                " One week together. You may acknowledge this milestone subtly."
+            )
         elif days_together == 30:
-            date_line += " One month together. A significant milestone. Reference it naturally."
+            date_line += (
+                " One month together. A significant milestone. Reference it naturally."
+            )
         elif days_together % 30 == 0:
             months = days_together // 30
             date_line += f" {months} months together. You may reference this warmly at high affection."

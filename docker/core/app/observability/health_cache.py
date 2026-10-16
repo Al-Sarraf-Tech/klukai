@@ -37,11 +37,18 @@ import asyncio
 import logging
 import os
 import time
+from contextlib import AsyncExitStack, asynccontextmanager
 from .. import __version__
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+import redis.asyncio as aioredis
+from ..dependencies import http_request, json_object
+from ..circuit_breakers import get_breaker
+from collections.abc import Awaitable, Callable
+from typing import cast
+from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -74,21 +81,77 @@ _refresh_locks: dict[str, asyncio.Lock] = {
 }
 
 
+@dataclass
+class _ProbeClients:
+    http: httpx.AsyncClient
+    redis: aioredis.Redis
+
+
+_clients: _ProbeClients | None = None
+_running = False
+
+
+@asynccontextmanager
+async def running() -> AsyncIterator[None]:
+    """Own pooled probe transports for one application lifespan.
+
+    Each readiness request still pings every dependency. Only transports are
+    reused: rebuilding HTTP TLS roots and Redis metadata per ping is needless
+    CPU work. TLS verification and environment trust roots retain their defaults.
+    Standalone callers without a lifespan retain temporary, promptly closed clients.
+    """
+    global _clients, _running
+    if _running:
+        raise RuntimeError("Health probe clients already have a lifespan owner")
+    _running = True
+    try:
+        from ..memory import REDIS_URL
+
+        async with AsyncExitStack() as cleanup:
+            client = httpx.AsyncClient(
+                timeout=PING_TIMEOUT_SECONDS,
+                limits=httpx.Limits(max_connections=3, max_keepalive_connections=3),
+            )
+            cleanup.push_async_callback(client.aclose)
+            factory: Callable[..., aioredis.Redis] = aioredis.from_url
+            cache = factory(
+                REDIS_URL,
+                decode_responses=True,
+                max_connections=3,
+                socket_timeout=PING_TIMEOUT_SECONDS,
+                socket_connect_timeout=PING_TIMEOUT_SECONDS,
+            )
+            cleanup.push_async_callback(cache.aclose)
+            _clients = _ProbeClients(client, cache)
+            try:
+                yield
+            finally:
+                _clients = None
+                clear_cache()
+    finally:
+        _running = False
+
+
 # ── Per-subsystem fresh-check implementations ───────────────────────────────
 
 
 async def _check_database_fresh() -> dict[str, Any]:
     from ..db import check_health as db_health
+
     return await db_health()
 
 
 async def _check_redis_fresh() -> dict[str, Any]:
     try:
         from ..memory import REDIS_URL
-        import redis.asyncio as aioredis
-        r = aioredis.from_url(REDIS_URL, decode_responses=True)
+
+        if _clients is not None:
+            await _ping_redis(_clients.redis)
+            return {"status": "ok"}
+        factory: Callable[..., aioredis.Redis] = aioredis.from_url
+        r = factory(REDIS_URL, decode_responses=True)
         try:
-            await asyncio.wait_for(r.ping(), timeout=PING_TIMEOUT_SECONDS)
+            await _ping_redis(r)
             return {"status": "ok"}
         finally:
             await r.aclose()
@@ -97,11 +160,24 @@ async def _check_redis_fresh() -> dict[str, Any]:
         return {"status": "down"}
 
 
+async def _ping_redis(client: aioredis.Redis) -> None:
+    await asyncio.wait_for(
+        get_breaker("redis").call(cast(Callable[[], Awaitable[bool]], client.ping)),
+        timeout=PING_TIMEOUT_SECONDS,
+    )
+
+
 async def _check_qdrant_fresh() -> dict[str, Any]:
     try:
         from ..memory import QDRANT_URL
+
+        if _clients is not None:
+            resp = await http_request(
+                "qdrant", _clients.http, "get", f"{QDRANT_URL}/healthz"
+            )
+            return {"status": "ok"} if resp.status_code == 200 else {"status": "down"}
         async with httpx.AsyncClient(timeout=PING_TIMEOUT_SECONDS) as client:
-            resp = await client.get(f"{QDRANT_URL}/healthz")
+            resp = await http_request("qdrant", client, "get", f"{QDRANT_URL}/healthz")
             return {"status": "ok"} if resp.status_code == 200 else {"status": "down"}
     except Exception as e:
         logger.warning("qdrant health probe failed: %s", e)
@@ -133,9 +209,10 @@ async def _get_or_refresh(subsystem: str) -> dict[str, Any]:
         # Dynamic lookup so test-time `patch.object(health_cache, "_check_X_fresh", ...)`
         # actually swaps the function being called.
         import sys
+
         module = sys.modules[__name__]
         fresh_fn = getattr(module, _FRESH_CHECKS[subsystem])
-        fresh = await fresh_fn()
+        fresh = json_object(await fresh_fn())
         _cache[subsystem] = _CacheEntry(status=fresh, captured_at=time.monotonic())
         return fresh
 
@@ -184,7 +261,12 @@ async def get_fresh_health() -> dict[str, Any]:
     """
     # Invalidate then read; the underlying _get_or_refresh path will refresh.
     _cache.clear()
-    return await get_cached_health()
+    result = await get_cached_health()
+    # Sessions cannot be admitted without Redis, even though cached /health
+    # keeps its historical optional-subsystem degradation description.
+    if result.get("redis") != "ok":
+        result["status"] = "unhealthy"
+    return result
 
 
 def get_live_health() -> dict[str, Any]:

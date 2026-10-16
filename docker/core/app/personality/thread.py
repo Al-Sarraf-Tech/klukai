@@ -7,22 +7,26 @@ much of it she will show him at a given affection level.
 """
 
 from __future__ import annotations
+from typing import Any
 
 
-def unlocked_entries(p: dict, affection_level: int) -> list[dict]:
+def unlocked_entries(p: dict[str, Any], affection_level: int) -> list[dict[str, Any]]:
     """Thread entries she is willing to show at this affection level."""
     return _unlocked_entries(p.get("ten_year_thread", {}), affection_level)
 
 
-def _unlocked_entries(cfg: dict, affection_level: int) -> list[dict]:
+def _unlocked_entries(
+    cfg: dict[str, Any], affection_level: int
+) -> list[dict[str, Any]]:
     share_at = cfg.get("share_from_level", 6)
     return [
-        e for e in cfg.get("entries", [])
+        e
+        for e in cfg.get("entries", [])
         if e.get("text") and affection_level >= e.get("min_affection", share_at)
     ]
 
 
-def _pick_entries(entries: list[dict], seed: int) -> list[dict]:
+def _pick_entries(entries: list[dict[str, Any]], seed: int) -> list[dict[str, Any]]:
     """Two entries from different years of the decade, varying with ``seed`` so
     a repeated question surfaces different messages. Returned in thread order."""
     if len(entries) <= 2:
@@ -32,7 +36,7 @@ def _pick_entries(entries: list[dict], seed: int) -> list[dict]:
     return [entries[i] for i in sorted((first, second))]
 
 
-def build_thread_block(p: dict, affection_level: int, seed: int = 0) -> str:
+def build_thread_block(p: dict[str, Any], affection_level: int, seed: int = 0) -> str:
     """Per-message block for when the Commander asks about the messages.
 
     Below ``acknowledge_from_level`` she deflects; below ``share_from_level``
@@ -51,7 +55,10 @@ def build_thread_block(p: dict, affection_level: int, seed: int = 0) -> str:
         "Preserve their emotional intent; explain this distinction if asked about provenance."
     )
     if affection_level < cfg.get("acknowledge_from_level", 3):
-        return head + " You are not ready to discuss them with him. Deflect coolly; confirm nothing."
+        return (
+            head
+            + " You are not ready to discuss them with him. Deflect coolly; confirm nothing."
+        )
 
     unlocked = _unlocked_entries(cfg, affection_level)
     if affection_level < cfg.get("share_from_level", 6) or not unlocked:
@@ -65,7 +72,10 @@ def build_thread_block(p: dict, affection_level: int, seed: int = 0) -> str:
         head,
         "You may quote from it, exactly as written, timestamp and all. Never invent other messages:",
     ]
-    lines += [f'  [{e.get("stamp", "0200 hours")}] "{e["text"]}"' for e in _pick_entries(unlocked, seed)]
+    lines += [
+        f'  [{e.get("stamp", "0200 hours")}] "{e["text"]}"'
+        for e in _pick_entries(unlocked, seed)
+    ]
     lines.append(
         "Share one, perhaps two. Let him feel what it cost. The thread ends with the only "
         f'reply it ever received: "{last_reply}"'
@@ -77,7 +87,7 @@ def build_thread_block(p: dict, affection_level: int, seed: int = 0) -> str:
     return "\n".join(lines)
 
 
-def thread_share_lines(p: dict, affection_level: int) -> list[str]:
+def thread_share_lines(p: dict[str, Any], affection_level: int) -> list[str]:
     """Proactive messages in which she shares one entry, for the
     ``random_events`` category whose ``source`` is ``ten_year_thread``."""
     cfg = p.get("ten_year_thread", {})
@@ -85,6 +95,8 @@ def thread_share_lines(p: dict, affection_level: int) -> list[str]:
     if not framings:
         return []
     return [
-        framings[i % len(framings)].format(stamp=e.get("stamp", "0200 hours"), text=e["text"])
+        framings[i % len(framings)].format(
+            stamp=e.get("stamp", "0200 hours"), text=e["text"]
+        )
         for i, e in enumerate(_unlocked_entries(cfg, affection_level))
     ]

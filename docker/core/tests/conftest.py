@@ -290,3 +290,16 @@ def _reset_wardrobe_cache():
     wardrobe.clear_cache()
     yield
     wardrobe.clear_cache()
+
+
+@pytest.fixture(autouse=True)
+def isolate_dependency_breakers():
+    """Unit tests inject independent outages; production keeps one registry.
+
+    Reset only between test cases, never between requests in a fault/recovery
+    case, so real admission and half-open semantics remain exercised.
+    """
+    from app.circuit_breakers import _BREAKERS
+    _BREAKERS.clear()
+    yield
+    _BREAKERS.clear()

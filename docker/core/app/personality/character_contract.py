@@ -1,8 +1,10 @@
 """The single precedence and address boundary for assembled character prompts."""
+
 from __future__ import annotations
+from typing import Any
 
 
-def build_character_contract(p: dict, affection_level: int) -> str:
+def build_character_contract(p: dict[str, Any], affection_level: int) -> str:
     """Resolve style, disclosure, context, and factual-result conflicts explicitly."""
     title = p.get("user_title", "Commander")
     return (

@@ -31,8 +31,9 @@ class _MemoryTimelineEntryState extends State<MemoryTimelineEntry> {
   String get _thumbnailUrl =>
       '${widget.serverUrl}/api/memories/${widget.memory.id}/thumbnail';
 
-  Color get _dotColor =>
-      widget.memory.keptBy == 'commander' ? GFL2Colors.primary : GFL2Colors.affinity;
+  Color get _dotColor => widget.memory.keptBy == 'commander'
+      ? GFL2Colors.primary
+      : GFL2Colors.affinity;
 
   String get _timestamp {
     final d = widget.memory.createdAt;
@@ -44,8 +45,18 @@ class _MemoryTimelineEntryState extends State<MemoryTimelineEntry> {
 
   String _monthAbbr(int m) {
     const months = [
-      'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-      'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'
+      'JAN',
+      'FEB',
+      'MAR',
+      'APR',
+      'MAY',
+      'JUN',
+      'JUL',
+      'AUG',
+      'SEP',
+      'OCT',
+      'NOV',
+      'DEC',
     ];
     return months[(m - 1).clamp(0, 11)];
   }
@@ -244,15 +255,10 @@ class _MemoryTimelineEntryState extends State<MemoryTimelineEntry> {
       height: h,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(3),
-        border: Border.all(
-          color: GFL2Colors.border.withValues(alpha: 0.5),
-        ),
+        border: Border.all(color: GFL2Colors.border.withValues(alpha: 0.5)),
         color: GFL2Colors.panel,
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(2),
-        child: content,
-      ),
+      child: ClipRRect(borderRadius: BorderRadius.circular(2), child: content),
     );
   }
 
@@ -262,9 +268,7 @@ class _MemoryTimelineEntryState extends State<MemoryTimelineEntry> {
       decoration: BoxDecoration(
         color: GFL2Colors.background,
         borderRadius: BorderRadius.circular(3),
-        border: Border.all(
-          color: GFL2Colors.primary.withValues(alpha: 0.25),
-        ),
+        border: Border.all(color: GFL2Colors.primary.withValues(alpha: 0.25)),
       ),
       child: Text(
         tag,

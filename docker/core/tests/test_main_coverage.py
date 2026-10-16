@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app.main as main
 from app.models import SessionState
+from app.ws_manager import WSManager
 
 
 # ── Request stub for BaseHTTPMiddleware.dispatch ─────────────────────────────
@@ -218,10 +219,10 @@ class TestMetricsMiddleware:
             out = await mw.dispatch(_request(path="/api/x"),
                                     AsyncMock(return_value=resp))
         assert out is resp
-        incr.assert_called_once()
+        assert incr.call_count == 2  # canonical RED plus legacy JSON counter
         assert incr.call_args.kwargs["status"] == "200"
         assert incr.call_args.kwargs["path"] == "/api/x"
-        obs.assert_called_once()
+        assert obs.call_count == 2  # canonical RED plus legacy JSON histogram
 
     async def test_records_500_and_reraises_on_handler_exception(self):
         mw = main._MetricsMiddleware(app=MagicMock())
@@ -233,7 +234,7 @@ class TestMetricsMiddleware:
                                   AsyncMock(side_effect=boom))
         # Even on failure, a 500 metric + latency are recorded before re-raise.
         assert incr.call_args.kwargs["status"] == "500"
-        obs.assert_called_once()
+        assert obs.call_count == 2  # canonical RED plus legacy JSON histogram
 
     async def test_unmatched_path_collapses_to_constant_label(self):
         """Scan/404 paths must not mint unbounded metric label values."""
@@ -606,14 +607,16 @@ class TestLifespan:
         async with main.lifespan(main.app):
             pass
         lifespan_mocks.router.keepalive.assert_not_awaited()
-        assert len(lifespan_mocks.created) == 1
+        assert [task.get_name() for task in lifespan_mocks.created].count("session-cleanup") == 1
+        assert all(task.done() for task in lifespan_mocks.created)
 
     async def test_keepalive_task_is_never_created(self, lifespan_mocks, monkeypatch):
         monkeypatch.setenv("KLUKAI_LLM_KEEPALIVE", "1")
         async with main.lifespan(main.app):
             pass
         lifespan_mocks.router.keepalive.assert_not_awaited()
-        assert len(lifespan_mocks.created) == 1
+        assert [task.get_name() for task in lifespan_mocks.created].count("session-cleanup") == 1
+        assert all(task.done() for task in lifespan_mocks.created)
 
     async def test_session_getter_falls_back_to_primary_user(self, lifespan_mocks, monkeypatch):
         """The lifespan-local session getter tries connected users, then primary."""
@@ -622,8 +625,7 @@ class TestLifespan:
         lifespan_mocks.proactive.set_session_getter.side_effect = (
             lambda fn: captured.setdefault("getter", fn)
         )
-        ws = MagicMock()
-        ws._connections = {}
+        ws = WSManager()
         monkeypatch.setattr(main, "ws", ws)
         primary = SessionState(conversation_id="c")
         lifespan_mocks.memory.get_session = AsyncMock(return_value=primary)
@@ -642,8 +644,7 @@ class TestLifespan:
         lifespan_mocks.proactive.set_session_getter.side_effect = (
             lambda fn: captured.setdefault("getter", fn)
         )
-        ws = MagicMock()
-        ws._connections = {}
+        ws = WSManager()
         monkeypatch.setattr(main, "ws", ws)
         wanted = SessionState(conversation_id="bob-conv")
         lifespan_mocks.memory.get_session = AsyncMock(return_value=wanted)
@@ -660,8 +661,9 @@ class TestLifespan:
         lifespan_mocks.proactive.set_session_getter.side_effect = (
             lambda fn: captured.setdefault("getter", fn)
         )
-        ws = MagicMock()
-        ws._connections = {"carol": object()}
+        ws = WSManager()
+        socket = MagicMock(close=AsyncMock())
+        ws._connections = {"carol": {socket}}
         monkeypatch.setattr(main, "ws", ws)
         primary_session = SessionState(conversation_id="primary-conv")
         lifespan_mocks.memory.get_session = AsyncMock(return_value=primary_session)

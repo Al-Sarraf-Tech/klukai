@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+from typing import Any, Unpack
+
+
 import asyncio
 import json
 import logging
-import hashlib
 import os
-import re
-import uuid
+import uuid as uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
 from typing import TypeVar
 
 import httpx
+from .shared_http import client as http_client, close as close_http_client
 
 from app.gpu_lease import (
     GPU_LEASE_ACQUIRE_READ_TIMEOUT_SECONDS,
@@ -21,86 +22,82 @@ from app.gpu_lease import (
     GPULease,
     GPULeaseError,
     gpu_lease,
-    gpu_lease_auth_headers,
+    confirm_gpu_cleanup,
 )
 
 # Constants extracted to image_gen_constants.py (S+ Phase 2 file-size hygiene).
 # Imported here and re-exported for backward compat with callers that still
 # `from app.image_gen import <CONSTANT>` (helpers.py, tests, etc.).
 from app.image_gen_constants import (
-    AFFECTION_MOOD_TAGS,
-    COMMANDER_DEFAULT_OUTFIT,
-    COMMANDER_IDENTITY,
-    COMMANDER_OUTFIT_MAP,
-    COUPLE_KEYWORDS,
-    COUPLE_TAGS,
-    IMAGE_KEYWORDS,
-    IMG2IMG_TEMPLATE,
-    INPAINT_NODES,
-    KLUKAI_DEFAULT_OUTFIT,
-    KLUKAI_IDENTITY,
-    KLUKAI_LORA,
-    KLUKAI_LORA_TRIGGER,
-    LANDSCAPE_KEYWORDS,
-    MISSION_SCENE_TAGS,
-    MOOD_EXPRESSION_TAGS,
-    NEGATIVE_TAGS,
-    OUTFIT_MAP,
-    INTIMATE_MIN_LEVEL,
-    INTIMATE_OUTFIT_KEYS,
-    QUALITY_TAGS,
-    SCENE_OUTFIT_KEYWORDS,
-    SFW_NEGATIVE_TAGS,
-    SITUATION_KEYWORDS,
-    SQUAD_KEYWORDS,
-    TIME_OF_DAY_TAGS,
-    WORKFLOW_TEMPLATE,
+    AFFECTION_MOOD_TAGS as AFFECTION_MOOD_TAGS,
+    COMMANDER_DEFAULT_OUTFIT as COMMANDER_DEFAULT_OUTFIT,
+    COMMANDER_IDENTITY as COMMANDER_IDENTITY,
+    COMMANDER_OUTFIT_MAP as COMMANDER_OUTFIT_MAP,
+    COUPLE_KEYWORDS as COUPLE_KEYWORDS,
+    COUPLE_TAGS as COUPLE_TAGS,
+    IMAGE_KEYWORDS as IMAGE_KEYWORDS,
+    IMG2IMG_TEMPLATE as IMG2IMG_TEMPLATE,
+    INPAINT_NODES as INPAINT_NODES,
+    KLUKAI_DEFAULT_OUTFIT as KLUKAI_DEFAULT_OUTFIT,
+    KLUKAI_IDENTITY as KLUKAI_IDENTITY,
+    KLUKAI_LORA as KLUKAI_LORA,
+    KLUKAI_LORA_TRIGGER as KLUKAI_LORA_TRIGGER,
+    LANDSCAPE_KEYWORDS as LANDSCAPE_KEYWORDS,
+    MISSION_SCENE_TAGS as MISSION_SCENE_TAGS,
+    MOOD_EXPRESSION_TAGS as MOOD_EXPRESSION_TAGS,
+    NEGATIVE_TAGS as NEGATIVE_TAGS,
+    OUTFIT_MAP as OUTFIT_MAP,
+    INTIMATE_MIN_LEVEL as INTIMATE_MIN_LEVEL,
+    INTIMATE_OUTFIT_KEYS as INTIMATE_OUTFIT_KEYS,
+    QUALITY_TAGS as QUALITY_TAGS,
+    SCENE_OUTFIT_KEYWORDS as SCENE_OUTFIT_KEYWORDS,
+    SFW_NEGATIVE_TAGS as SFW_NEGATIVE_TAGS,
+    SITUATION_KEYWORDS as SITUATION_KEYWORDS,
+    SQUAD_KEYWORDS as SQUAD_KEYWORDS,
+    TIME_OF_DAY_TAGS as TIME_OF_DAY_TAGS,
+    WORKFLOW_TEMPLATE as WORKFLOW_TEMPLATE,
 )
 
 # Public re-exports — keep linter happy AND preserve `from app.image_gen import X` paths.
-__all__ = [
-    "AFFECTION_MOOD_TAGS",
-    "COMMANDER_DEFAULT_OUTFIT",
-    "COMMANDER_IDENTITY",
-    "COMMANDER_OUTFIT_MAP",
-    "COUPLE_KEYWORDS",
-    "COUPLE_TAGS",
-    "IMAGE_KEYWORDS",
-    "IMG2IMG_TEMPLATE",
-    "INPAINT_NODES",
-    "KLUKAI_DEFAULT_OUTFIT",
-    "KLUKAI_IDENTITY",
-    "KLUKAI_LORA",
-    "KLUKAI_LORA_TRIGGER",
-    "LANDSCAPE_KEYWORDS",
-    "MISSION_SCENE_TAGS",
-    "MOOD_EXPRESSION_TAGS",
-    "NEGATIVE_TAGS",
-    "OUTFIT_MAP",
-    "INTIMATE_MIN_LEVEL",
-    "INTIMATE_OUTFIT_KEYS",
-    "QUALITY_TAGS",
-    "SCENE_OUTFIT_KEYWORDS",
-    "SFW_NEGATIVE_TAGS",
-    "SITUATION_KEYWORDS",
-    "SQUAD_KEYWORDS",
-    "TIME_OF_DAY_TAGS",
-    "WORKFLOW_TEMPLATE",
-    "build_mission_prompt",
-    "build_prompt",
-    "check_comfyui_ready",
-    "detect_squad_members",
-    "free_comfyui_vram",
-    "generate_image",
-    "generate_img2img",
-    "generate_inpaint_set",
-    "InpaintBranch",
-    "Sampling",
-    "is_couple_scene",
-    "is_landscape",
-    "is_outfit_unlocked",
-    "needs_image",
-]
+__all__ = (
+    "AFFECTION_MOOD_TAGS COMMANDER_DEFAULT_OUTFIT COMMANDER_IDENTITY "
+    "COMMANDER_OUTFIT_MAP COUPLE_KEYWORDS COUPLE_TAGS IMAGE_KEYWORDS "
+    "IMG2IMG_TEMPLATE INPAINT_NODES KLUKAI_DEFAULT_OUTFIT KLUKAI_IDENTITY "
+    "KLUKAI_LORA KLUKAI_LORA_TRIGGER LANDSCAPE_KEYWORDS MISSION_SCENE_TAGS "
+    "MOOD_EXPRESSION_TAGS NEGATIVE_TAGS OUTFIT_MAP INTIMATE_MIN_LEVEL "
+    "INTIMATE_OUTFIT_KEYS QUALITY_TAGS SCENE_OUTFIT_KEYWORDS "
+    "SFW_NEGATIVE_TAGS SITUATION_KEYWORDS SQUAD_KEYWORDS TIME_OF_DAY_TAGS "
+    "WORKFLOW_TEMPLATE build_mission_prompt build_prompt check_comfyui_ready "
+    "detect_squad_members free_comfyui_vram generate_image generate_img2img "
+    "generate_inpaint_set InpaintBranch Sampling is_couple_scene is_landscape "
+    "is_outfit_unlocked needs_image"
+).split()
+
+
+from .image_comfy import ComfyTransport
+from .image_leases import run_leased
+from .image_rendering import render_with_cleanup
+from .image_inpaint import InpaintRenderer, InpaintSetOptions
+from .image_prompts import (
+    detect_squad_members as detect_squad_members,
+    build_mission_prompt as build_mission_prompt,
+    needs_image as needs_image,
+    is_couple_scene as is_couple_scene,
+    is_landscape as is_landscape,
+    _select_outfit as _select_outfit,
+    is_outfit_unlocked as is_outfit_unlocked,
+    _explicit_scene as _explicit_scene,
+    _outfit_map_for as _outfit_map_for,
+    build_prompt as build_prompt,
+    negative_prompt as negative_prompt,
+)
+from .image_workflows import (
+    Sampling as Sampling,
+    InpaintBranch as InpaintBranch,
+    _txt2img_workflow as _txt2img_workflow,
+    _inpaint_graph as _inpaint_graph,
+    DEFAULT_SAMPLING as DEFAULT_SAMPLING,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,248 +129,14 @@ _IMAGE_LEASE_WORK_SECONDS = int(
 
 def _get_http() -> httpx.AsyncClient:
     global _http
-    if _http is None or _http.is_closed:
-        # Both bearer auth and the lease capability are sent per request.
-        # Never let ambient proxies or redirects move them off the literal
-        # Tailscale gateway route.
-        _http = httpx.AsyncClient(
-            timeout=180.0,
-            trust_env=False,
-            follow_redirects=False,
-        )
+    _http = http_client(_http, timeout=180.0, trust_env=False, follow_redirects=False)
     return _http
 
 
-# Character identity tags — Danbooru format for Animagine XL 3.1
-# Core identity is FIXED (face, hair, body). Outfit is selected per-scene.
-
-# Scene-appropriate outfits — matched by keyword in conversation context
-
-
-# Squad member detection for multi-character scenes
-# Rich visual profiles — weapon designation IS the character identity
-# Lore-accurate squad visual profiles — sourced from Danbooru tags, IOP Wiki, official art
-# Each T-Doll's weapon designation IS their identity
-
-# ── Mission-aware image generation ────────────────────────────────────────
-
-
-def detect_squad_members(text: str) -> list[str]:
-    """Detect which squad members are mentioned in the text."""
-    lower = text.lower()
-    found = []
-    for name in SQUAD_KEYWORDS:
-        if name in lower:
-            found.append(name)
-    return found
-
-
-def build_mission_prompt(
-    scene_type: str = "combat",
-    squad_members: list[str] | None = None,
-    injuries: list[str] | None = None,
-    affection_level: int = 0,
-) -> str:
-    """Build an image prompt for mission-context scenes.
-
-    Args:
-        scene_type: Key from MISSION_SCENE_TAGS.
-        squad_members: List of squad member names to include.
-        injuries: Active injury events (e.g., ["klukai_injured", "squad_injured"]).
-        affection_level: 0-9, affects Klukai's expression.
-    """
-    parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
-
-    # Klukai is always in mission images
-    parts.append(KLUKAI_IDENTITY)
-    parts.append("high ponytail, tactical gear, body armor, combat vest, rifle, intense")
-
-    # Add injury tags to Klukai if she's hurt
-    if injuries and "klukai_injured" in injuries:
-        parts.append(
-            "bandaged arm, torn sleeve, blood stains, determined expression, still commanding"
-        )
-
-    # Add squad members
-    if squad_members:
-        for name in squad_members[:3]:  # Max 3 extra characters to avoid crowding
-            if name in SQUAD_KEYWORDS:
-                parts.append(SQUAD_KEYWORDS[name])
-        # Add injury tags to generic squad if injured
-        if injuries and "squad_injured" in injuries:
-            parts.append("injured teammate, field bandages, supporting each other")
-        if injuries and "medical_emergency" in injuries:
-            parts.append("field medic, treating wounds, urgent medical attention")
-
-    # Scene tags
-    scene = MISSION_SCENE_TAGS.get(scene_type, MISSION_SCENE_TAGS["combat"])
-    parts.append(scene)
-
-    # Multi-girl tag if squad members present
-    if squad_members:
-        count = len(squad_members) + 1  # +1 for Klukai
-        parts.append(f"{count}girls, multiple girls, group")
-
-    return ", ".join(parts)
-
-
-# Situational context tags — detect what's happening in the conversation
-
-
-# NoobAI-XL (Illustrious) + Klukai IL LoRA workflow
-
-# Expanded keyword detection for image requests
-
-# Landscape scene keywords — use wider aspect ratio
-
-# Mood-to-scene mapping for affection-aware prompt enhancement
-
-
-def needs_image(message: str) -> bool:
-    """Check if the message is requesting image generation."""
-    lower = message.lower()
-    return any(kw in lower for kw in IMAGE_KEYWORDS)
-
-
-def is_couple_scene(text: str) -> bool:
-    """Detect if the request is for a scene with both Klukai and the Commander."""
-
-    lower = text.lower()
-    return any(
-        re.search(r"\b" + re.escape(kw) + r"\b", lower) for kw in COUPLE_KEYWORDS
-    )
-
-
-def is_landscape(text: str) -> bool:
-    """Detect if the scene should use landscape aspect ratio."""
-    lower = text.lower()
-    return any(kw in lower for kw in LANDSCAPE_KEYWORDS)
-
-
-def _select_outfit(context: str, outfit_map: dict[str, str], default: str) -> str:
-    """Pick the best outfit from a map based on conversation context keywords."""
-    lower = context.lower()
-    for keyword, outfit in outfit_map.items():
-        if keyword in lower:
-            return outfit
-    return default
-
-
-def is_outfit_unlocked(costume: str, affection_level: int) -> bool:
-    """Return whether ``costume`` is unlocked at the given affection level.
-
-    Delegates to the wardrobe catalog (app/wardrobe.py). Legacy ids map
-    forward; an unknown id is locked (fail-closed).
-    """
-    from . import wardrobe
-
-    return wardrobe.is_unlocked(costume, affection_level)
-
-
-def _explicit_scene(text: str) -> bool:
-    """An explicit bath/bed/lingerie scene (whole words), which outranks today's outfit."""
-    lower = text.lower()
-    return any(re.search(rf"\b{kw}\b", lower) for kw in SCENE_OUTFIT_KEYWORDS)
-
-
-def _outfit_map_for(affection_level: int) -> dict[str, str]:
-    """OUTFIT_MAP minus the intimate outfits below the intimacy gate."""
-    if affection_level >= INTIMATE_MIN_LEVEL:
-        return OUTFIT_MAP
-    return {k: v for k, v in OUTFIT_MAP.items() if k not in INTIMATE_OUTFIT_KEYS}
-
-
-def build_prompt(
-    scene_tags: str,
-    couple: bool = False,
-    affection_level: int = 0,
-    context: str = "",
-    squad_members: list[str] | None = None,
-    mood: str = "composed",
-    time_of_day: str | None = None,
-    costume: str | None = None,
-    request: str | None = None,
-    affection_tags: bool = True,
-) -> str:
-    """Build the full positive prompt with quality tags, LoRA trigger, and character identities.
-
-    Args:
-        scene_tags: Scene/action Danbooru tags.
-        couple: Whether to include the Commander.
-        affection_level: 0-9, affects mood expression tags.
-        context: Recent conversation text for outfit selection.
-        squad_members: Optional list of squad member names to include in the scene.
-        mood: Session mood (e.g. "tender", "playful") — adds a concise expression
-            cue before the scene tags. Defaults to "composed". Unknown moods are
-            ignored (no descriptor injected).
-        time_of_day: One of morning/afternoon/evening/night, or None. When set,
-            injects a short lighting/time cue before the scene tags.
-        costume: Optional wardrobe id (app/wardrobe.py catalog) — what she is
-            wearing. Its tag block replaces the keyword-matched outfit, unless
-            the scene is explicitly a bath/bed/lingerie one. Unknown ids fall
-            through to the keyword-context outfit logic.
-        request: His own words for this image, when known. Only these (never
-            her replies in ``context``) can make it an explicit bath/bed scene.
-        affection_tags: Inject the affection-level expression/setting tags.
-            Live Portrait turns this off: its frames set the expression
-            themselves and need a neutral, setting-free base.
-    """
-    parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
-
-    # Add affection-aware mood tags
-    mood_tags = AFFECTION_MOOD_TAGS.get(affection_level, "") if affection_tags else ""
-    if mood_tags:
-        parts.append(mood_tags)
-
-    # Scene-aware descriptors — concise mood expression + time/lighting cue,
-    # injected BEFORE the scene tags so they colour the moment without bloat.
-    expression = MOOD_EXPRESSION_TAGS.get(mood or "")
-    if expression:
-        parts.append(expression)
-    if time_of_day:
-        lighting = TIME_OF_DAY_TAGS.get(time_of_day)
-        if lighting:
-            parts.append(lighting)
-
-    # Context for outfit matching: use full context (conversation + scene tags)
-    outfit_context = f"{context} {scene_tags}" if context else scene_tags
-    # What she is wearing today overrides the keyword-matched outfit, except
-    # for an explicit bath/bed scene; otherwise fall back to keyword selection.
-    from . import wardrobe
-
-    costume_tags = wardrobe.image_tags(costume) if costume else None
-    explicit = affection_level >= INTIMATE_MIN_LEVEL and _explicit_scene(
-        request if request is not None else outfit_context
-    )
-    if costume_tags and not explicit:
-        klukai_outfit = costume_tags
-    else:
-        klukai_outfit = _select_outfit(
-            outfit_context, _outfit_map_for(affection_level), KLUKAI_DEFAULT_OUTFIT
-        )
-
-    if couple:
-        commander_outfit = _select_outfit(
-            outfit_context, COMMANDER_OUTFIT_MAP, COMMANDER_DEFAULT_OUTFIT
-        )
-        parts.append(COUPLE_TAGS)
-        parts.append(f"{COMMANDER_IDENTITY}, {commander_outfit}")
-        parts.append(KLUKAI_IDENTITY)
-    else:
-        parts.append(KLUKAI_IDENTITY)
-    parts.append(klukai_outfit)
-
-    # Add squad members if specified
-    if squad_members:
-        for name in squad_members[:3]:  # Max 3 to avoid overcrowding
-            if name in SQUAD_KEYWORDS:
-                parts.append(SQUAD_KEYWORDS[name])
-        total_girls = 1 + len([n for n in squad_members if n in SQUAD_KEYWORDS])
-        if total_girls > 1:
-            parts.append(f"{total_girls}girls, multiple girls")
-
-    parts.append(scene_tags)
-    return ", ".join(parts)
+async def close() -> None:
+    global _http
+    client, _http = _http, None
+    await close_http_client(client)
 
 
 async def check_comfyui_ready() -> bool:
@@ -384,9 +147,11 @@ async def check_comfyui_ready() -> bool:
     continuous lease and does not use a separate preflight lease.
     """
     from .image_provider import selected_provider
+
     provider = selected_provider()
     if provider == "agy":
         from .agy_image_provider import agy_images_ready
+
         return await agy_images_ready()
     if provider != "comfyui":
         return False
@@ -396,86 +161,23 @@ async def check_comfyui_ready() -> bool:
         async with get_lm_gate():
             try:
                 async with gpu_lease("comfyui") as lease:
-                    client = _get_http()
-                    response = await client.get(
-                        f"{COMFYUI_URL}/queue",
-                        headers=gpu_lease_auth_headers(lease),
-                        timeout=5.0,
-                    )
-                    if response.status_code != 200:
-                        return False
-                    data = response.json()
-                    running = len(data.get("queue_running", []))
-                    pending = len(data.get("queue_pending", []))
-                    if running > 0 or pending > 0:
-                        logger.info(
-                            "ComfyUI busy: %d running, %d pending", running, pending
-                        )
-                        return False
-                    return True
+                    return await _transport().ready(lease)
             except (GPULeaseError, httpx.HTTPError, TypeError, ValueError):
                 return False
 
 
 async def _interrupt_comfyui(lease: GPULease) -> bool:
-    """Interrupt the current ComfyUI generation."""
-    try:
-        client = _get_http()
-        response = await client.post(
-            f"{COMFYUI_URL}/interrupt",
-            headers=gpu_lease_auth_headers(lease),
-            timeout=5.0,
-        )
-        if response.status_code != 200:
-            logger.warning("ComfyUI interrupt returned HTTP %s", response.status_code)
-            return False
-        logger.info("ComfyUI generation interrupted")
-        await asyncio.sleep(1)  # Let it settle
-        return True
-    except Exception as e:
-        logger.warning("ComfyUI interrupt failed: %s", e)
-        return False
+    return await confirm_gpu_cleanup(_transport().interrupt_comfyui(lease))
 
 
 async def _free_comfyui_vram(lease: GPULease, settle_s: float = 2.0) -> bool:
-    """Unload ComfyUI weights, retrying before the gateway lease is released.
-
-    ``settle_s`` lets ComfyUI finish post-processing first; a caller that has
-    already read the finished history (the inpaint set) can pass less.
-    """
-    await asyncio.sleep(settle_s)
-    client = _get_http()
-    for attempt in range(1, 4):
-        try:
-            response = await client.post(
-                f"{COMFYUI_URL}/free",
-                headers=gpu_lease_auth_headers(lease),
-                json={"unload_models": True, "free_memory": True},
-                timeout=5.0,
-            )
-            if response.status_code == 200:
-                logger.info("ComfyUI VRAM freed after image generation")
-                return True
-            logger.warning(
-                "ComfyUI VRAM free returned HTTP %s (attempt %d/3)",
-                response.status_code,
-                attempt,
-            )
-        except Exception as exc:
-            logger.warning(
-                "ComfyUI VRAM free failed (%s, attempt %d/3)",
-                type(exc).__name__,
-                attempt,
-            )
-        if attempt < 3:
-            await asyncio.sleep(1)
-    logger.error("ComfyUI VRAM could not be confirmed free after three attempts")
-    return False
+    return await confirm_gpu_cleanup(_transport().free_comfyui_vram(lease, settle_s))
 
 
 async def free_comfyui_vram() -> bool:
     """Safely release stale Comfy weights under an authenticated GPU lease."""
     from .image_provider import selected_provider
+
     if selected_provider() != "comfyui":
         return True
     from .llm_router import get_lm_gate
@@ -488,13 +190,6 @@ async def free_comfyui_vram() -> bool:
             except GPULeaseError as exc:
                 logger.warning("ComfyUI cleanup GPU handoff refused: %s", exc)
                 return False
-
-
-def negative_prompt(sfw: bool = False, extra: str | None = None) -> str:
-    """The negative prompt; ``sfw`` adds the below-intimacy-gate backstop and
-    ``extra`` a caller's own negatives."""
-    base = f"{NEGATIVE_TAGS}, {SFW_NEGATIVE_TAGS}" if sfw else NEGATIVE_TAGS
-    return f"{base}, {extra}" if extra else base
 
 
 async def generate_image(
@@ -531,26 +226,42 @@ async def generate_image(
     provider = image_provider.selected_provider()
     if provider == "agy":
         from .agy_image_provider import generate_agy_image, uses_agy_images
+
         if not uses_agy_images(user_id):
             return None
         try:
-            description = image_provider.cloud_prompt(prompt, sfw=sfw, negative_extra=negative_extra)
+            description = image_provider.cloud_prompt(
+                prompt, sfw=sfw, negative_extra=negative_extra
+            )
         except image_provider.ImageProviderError:
             return None
         return await generate_agy_image(
-            description, user_id=user_id, width=width, height=height,
+            description,
+            user_id=user_id or "",
+            width=width,
+            height=height,
             include_commander=include_commander,
         )
     if provider == "openai":
         return await image_provider.generate_cloud_image(
-            prompt, width, height, sfw=sfw, negative_extra=negative_extra,
+            prompt,
+            width,
+            height,
+            sfw=sfw,
+            negative_extra=negative_extra,
         )
     if provider != "comfyui":
         logger.warning("Unknown image provider; generation disabled")
         return None
     return await _leased(
         lambda lease: _generate_image_inner(
-            prompt, width, height, retry, lease, sfw=sfw, seed=seed,
+            prompt,
+            width,
+            height,
+            retry,
+            lease,
+            sfw=sfw,
+            seed=seed,
             negative_extra=negative_extra,
         )
     )
@@ -576,7 +287,13 @@ async def generate_img2img(
     """
     return await _leased(
         lambda lease: _img2img_inner(
-            source_png, prompt, denoise, seed, sfw, lease, mask_png=mask_png,
+            source_png,
+            prompt,
+            denoise,
+            seed,
+            sfw,
+            lease,
+            mask_png=mask_png,
             negative_extra=negative_extra,
         )
     )
@@ -586,45 +303,21 @@ _T = TypeVar("_T")
 
 
 async def _leased(render: Callable[[GPULease], Awaitable[_T]]) -> _T | None:
-    """Run ``render`` under the image lock, LM gate and one ComfyUI GPU lease."""
     from .image_provider import selected_provider
-    if selected_provider() != "comfyui":
-        # Legacy portrait/img2img/inpaint paths are GPU-only. Preserve existing
-        # artifacts and refuse local work unless ComfyUI is explicitly selected.
-        return None
-    async with _image_gen_lock:
-        # Lazy import avoids coupling image prompt helpers to the LLM router at
-        # module import time.
-        from .llm_router import get_lm_gate
 
-        async with get_lm_gate():
-            try:
-                async with gpu_lease("comfyui") as lease:
-                    try:
-                        async with asyncio.timeout(_IMAGE_LEASE_WORK_SECONDS):
-                            return await render(lease)
-                    except TimeoutError:
-                        logger.error(
-                            "Image generation exceeded the bounded GPU lease window"
-                        )
-                        # A timed-out Comfy job may still be executing.  Stop it
-                        # and release its weights before the lease can be returned.
-                        interrupted = await _interrupt_comfyui(lease)
-                        cleaned = await _free_comfyui_vram(lease)
-                        if not interrupted or not cleaned:
-                            # The gateway release endpoint is the final cleanup
-                            # authority and must retain a fail-closed marker if
-                            # it cannot prove quiescence.  Still reject the job
-                            # locally rather than treating failed cleanup as
-                            # success.
-                            raise GPULeaseError(
-                                "ComfyUI timeout cleanup could not be confirmed"
-                            ) from None
-                        return None
-            except GPULeaseError as exc:
-                # The exception is intentionally credential-free.
-                logger.warning("Image GPU handoff refused: %s", exc)
-                return None
+    if selected_provider() != "comfyui":
+        return None
+    from .llm_router import get_lm_gate
+
+    return await run_leased(
+        render,
+        lock=_image_gen_lock,
+        gate=get_lm_gate(),
+        acquire=gpu_lease,
+        timeout=_IMAGE_LEASE_WORK_SECONDS,
+        interrupt=_interrupt_comfyui,
+        free=_free_comfyui_vram,
+    )
 
 
 async def _generate_image_inner(
@@ -637,22 +330,21 @@ async def _generate_image_inner(
     seed: int | None = None,
     negative_extra: str | None = None,
 ) -> bytes | None:
-    try:
-        result = await _try_generate(
-            prompt, width, height, lease, sfw=sfw, seed=seed, negative_extra=negative_extra
-        )
-        if result is None and retry:
-            logger.info("Image generation retry — interrupting stale job and retrying")
-            if not await _interrupt_comfyui(lease):
-                raise GPULeaseError("ComfyUI retry interrupt could not be confirmed")
-            result = await _try_generate(
-                prompt, width, height, lease, sfw=sfw, seed=seed, negative_extra=negative_extra
-            )
-        return result
-    finally:
-        # Always free VRAM after gen so LM Studio can reclaim it
-        if not await _free_comfyui_vram(lease):
-            raise GPULeaseError("ComfyUI VRAM cleanup could not be confirmed")
+    return await render_with_cleanup(
+        lambda: _try_generate(
+            prompt,
+            width,
+            height,
+            lease,
+            sfw=sfw,
+            seed=seed,
+            negative_extra=negative_extra,
+        ),
+        retry=retry,
+        lease=lease,
+        interrupt=_interrupt_comfyui,
+        free=_free_comfyui_vram,
+    )
 
 
 async def _img2img_inner(
@@ -692,27 +384,7 @@ async def _img2img_inner(
 
 
 async def _upload_image(png: bytes, lease: GPULease) -> str | None:
-    """Upload a source image to ComfyUI's input folder; returns its LoadImage name."""
-    try:
-        client = _get_http()
-        r = await client.post(
-            f"{COMFYUI_URL}/upload/image",
-            headers=gpu_lease_auth_headers(lease),
-            # Content-addressed name + overwrite: re-uploading the same base or
-            # mask reuses one input file instead of piling up copies.
-            files={"image": (f"klukai_src_{hashlib.sha256(png).hexdigest()[:16]}.png", png, "image/png")},
-            data={"type": "input", "overwrite": "true"},
-        )
-        if r.status_code != 200:
-            logger.error("ComfyUI upload failed: HTTP %s", r.status_code)
-            return None
-        data = r.json()
-        name = str(data.get("name") or "")
-        sub = str(data.get("subfolder") or "")
-        return (f"{sub}/{name}" if sub else name) or None
-    except Exception as e:
-        logger.error("ComfyUI upload failed: %s", e)
-        return None
+    return await _transport().upload_image(png, lease)
 
 
 async def _try_generate(
@@ -729,196 +401,31 @@ async def _try_generate(
     return await _run_workflow(workflow, lease)
 
 
-def _txt2img_workflow(
-    prompt: str,
-    width: int,
-    height: int,
-    sfw: bool,
-    seed: int | None,
-    negative_extra: str | None,
-    sampling: Sampling | None = None,
-) -> dict:
-    workflow = json.loads(json.dumps(WORKFLOW_TEMPLATE))
-    workflow["6"]["inputs"]["text"] = prompt
-    workflow["7"]["inputs"]["text"] = negative_prompt(sfw, negative_extra)
-    workflow["5"]["inputs"]["width"] = width
-    workflow["5"]["inputs"]["height"] = height
-    workflow["3"]["inputs"]["seed"] = (
-        int(seed) % (2**32) if seed is not None else int(uuid.uuid4().int % (2**32))
-    )
-    if sampling is not None:
-        workflow["3"]["inputs"].update(
-            sampler_name=sampling.sampler, scheduler=sampling.scheduler,
-            steps=sampling.steps, cfg=sampling.cfg,
-        )
-    return workflow
-
-
 # History polling: fast at first (a portrait frame is done in ~2s), then 1s.
 _POLL_FAST_S = 0.25
 _POLL_FAST_COUNT = 40
 
 
-async def _queue_and_wait(workflow: dict, lease: GPULease) -> dict | None:
-    """Queue ``workflow`` and wait for its history; returns its outputs or None."""
-    client = _get_http()
-    r = await client.post(
-        f"{COMFYUI_URL}/prompt",
-        headers=gpu_lease_auth_headers(lease),
-        json={"prompt": workflow},
-    )
-    if r.status_code != 200:
-        logger.error("ComfyUI queue failed: %s", r.text[:200])
-        return None
-
-    prompt_id = r.json().get("prompt_id")
-    if not prompt_id:
-        return None
-
-    # Poll for completion (first gen after a model load can be slow)
-    for i in range(300):
-        await asyncio.sleep(_POLL_FAST_S if i < _POLL_FAST_COUNT else 1)
-        r = await client.get(
-            f"{COMFYUI_URL}/history/{prompt_id}",
-            headers=gpu_lease_auth_headers(lease),
-        )
-        if r.status_code == 200:
-            history = r.json()
-            if prompt_id in history:
-                return dict(history[prompt_id].get("outputs", {}))
-
-    logger.warning("Image generation timed out waiting for ComfyUI history")
-    return None
+async def _queue_and_wait(
+    workflow: dict[str, Any], lease: GPULease
+) -> dict[str, Any] | None:
+    return await _transport().queue_and_wait(workflow, lease)
 
 
-async def _fetch_image(img: dict, lease: GPULease) -> bytes | None:
-    r = await _get_http().get(
-        f"{COMFYUI_URL}/view",
-        headers=gpu_lease_auth_headers(lease),
-        params={
-            "filename": img["filename"],
-            "subfolder": img.get("subfolder", ""),
-            "type": img.get("type", "output"),
-        },
-    )
-    if r.status_code != 200:
-        return None
-    logger.info("Image generated: %s (%d bytes)", img["filename"], len(r.content))
-    return r.content
+async def _fetch_image(img: dict[str, Any], lease: GPULease) -> bytes | None:
+    return await _transport().fetch_image(img, lease)
 
 
-async def _run_workflow(workflow: dict, lease: GPULease) -> bytes | None:
-    """Queue ``workflow``, poll its history, and fetch the first output image."""
-    try:
-        outputs = await _queue_and_wait(workflow, lease)
-        for output in (outputs or {}).values():
-            images = output.get("images", [])
-            if images:
-                return await _fetch_image(images[0], lease)
-        return None
-    except Exception as e:
-        logger.error("Image generation failed: %s", e)
-        return None
+async def _run_workflow(workflow: dict[str, Any], lease: GPULease) -> bytes | None:
+    return await _transport().run_workflow(workflow, lease)
 
 
-async def _run_graph(workflow: dict, lease: GPULease) -> dict[str, bytes]:
-    """Queue a multi-output graph; returns {SaveImage node id: first image}."""
-    try:
-        outputs = await _queue_and_wait(workflow, lease)
-        result: dict[str, bytes] = {}
-        for node_id, output in (outputs or {}).items():
-            images = output.get("images", [])
-            if images:
-                data = await _fetch_image(images[0], lease)
-                if data:
-                    result[str(node_id)] = data
-        return result
-    except Exception as e:
-        logger.error("Image graph failed: %s", e)
-        return {}
-
-
-# ── One-lease inpaint sets (Live Portrait) ──────────────────────────────────
-
-
-_TEMPLATE_KSAMPLER = WORKFLOW_TEMPLATE["3"]["inputs"]
-
-
-@dataclass(frozen=True)
-class Sampling:
-    """KSampler settings; the defaults are WORKFLOW_TEMPLATE's (the model's own)."""
-
-    sampler: str = _TEMPLATE_KSAMPLER["sampler_name"]
-    scheduler: str = _TEMPLATE_KSAMPLER["scheduler"]
-    steps: int = _TEMPLATE_KSAMPLER["steps"]
-    cfg: float = _TEMPLATE_KSAMPLER["cfg"]
-
-
-@dataclass(frozen=True)
-class InpaintBranch:
-    """One masked re-sample of the shared source (mask: white = repaint)."""
-
-    name: str
-    prompt: str
-    denoise: float
-    mask_png: bytes
-    negative: str = ""  # extra negatives for this branch only
+async def _run_graph(workflow: dict[str, Any], lease: GPULease) -> dict[str, bytes]:
+    return await _transport().run_graph(workflow, lease)
 
 
 InpaintPlan = Callable[[bytes], Awaitable[tuple[bytes, list[InpaintBranch]]]]
-DEFAULT_SAMPLING = Sampling()
 _SET_SETTLE_S = 0.25
-
-
-def _inpaint_graph(
-    source: str,
-    branches: list[InpaintBranch],
-    masks: dict[str, str],
-    seed: int,
-    sfw: bool,
-    negative_extra: str | None,
-    sampling: Sampling,
-) -> tuple[dict, dict[str, str]]:
-    """One ComfyUI graph: a shared checkpoint/LoRA load and source encode, and
-    one masked KSampler -> VAEDecode -> SaveImage branch per expression.
-    Returns the graph and {branch name: SaveImage node id}."""
-    graph: dict = {
-        "4": json.loads(json.dumps(WORKFLOW_TEMPLATE["4"])),
-        "10": json.loads(json.dumps(WORKFLOW_TEMPLATE["10"])),
-        "7": {"class_type": "CLIPTextEncode",
-              "inputs": {"text": negative_prompt(sfw, negative_extra), "clip": ["10", 1]}},
-        "11": {"class_type": "LoadImage", "inputs": {"image": source}},
-        "12": {"class_type": "VAEEncode", "inputs": {"pixels": ["11", 0], "vae": ["4", 2]}},
-        "16": {"class_type": "DifferentialDiffusion", "inputs": {"model": ["10", 0]}},
-    }
-    save_ids: dict[str, str] = {}
-    for i, branch in enumerate(branches):
-        n = 100 + 10 * i
-        ids = [str(n + k) for k in range(6)]
-        graph[ids[0]] = {"class_type": "CLIPTextEncode",
-                         "inputs": {"text": branch.prompt, "clip": ["10", 1]}}
-        negative = ["7", 0]
-        if branch.negative:
-            neg_id = str(n + 9)
-            graph[neg_id] = {"class_type": "CLIPTextEncode", "inputs": {
-                "text": f"{negative_prompt(sfw, negative_extra)}, {branch.negative}", "clip": ["10", 1]}}
-            negative = [neg_id, 0]
-        graph[ids[1]] = {"class_type": "LoadImageMask",
-                         "inputs": {"image": masks[branch.name], "channel": "red"}}
-        graph[ids[2]] = {"class_type": "SetLatentNoiseMask",
-                         "inputs": {"samples": ["12", 0], "mask": [ids[1], 0]}}
-        graph[ids[3]] = {"class_type": "KSampler", "inputs": {
-            "seed": int(seed) % (2**32), "steps": sampling.steps, "cfg": sampling.cfg,
-            "sampler_name": sampling.sampler, "scheduler": sampling.scheduler,
-            "denoise": max(0.0, min(1.0, float(branch.denoise))),
-            "model": ["16", 0], "positive": [ids[0], 0], "negative": negative,
-            "latent_image": [ids[2], 0],
-        }}
-        graph[ids[4]] = {"class_type": "VAEDecode", "inputs": {"samples": [ids[3], 0], "vae": ["4", 2]}}
-        graph[ids[5]] = {"class_type": "SaveImage",
-                         "inputs": {"filename_prefix": f"klukai_set_{branch.name}", "images": [ids[4], 0]}}
-        save_ids[branch.name] = ids[5]
-    return graph, save_ids
 
 
 async def generate_inpaint_set(
@@ -952,96 +459,40 @@ async def generate_inpaint_set(
     freed once, at the end. Returns the accepted images ("base" only if
     rendered here); empty if the lease was refused or the base failed.
     """
-    result = await _leased(lambda lease: _inpaint_set_inner(
-        lease, base_prompt=base_prompt, base_png=base_png, plan=plan, seed=seed,
-        width=width, height=height, sfw=sfw, negative_extra=negative_extra,
-        base_sampling=base_sampling, inpaint_sampling=inpaint_sampling,
-        on_image=on_image, accept=accept, retries=retries,
-        retry_denoise_step=retry_denoise_step, fallback=fallback,
-    ))
+    result = await _leased(
+        lambda lease: _inpaint_set_inner(
+            lease,
+            base_prompt=base_prompt,
+            base_png=base_png,
+            plan=plan,
+            seed=seed,
+            width=width,
+            height=height,
+            sfw=sfw,
+            negative_extra=negative_extra,
+            base_sampling=base_sampling,
+            inpaint_sampling=inpaint_sampling,
+            on_image=on_image,
+            accept=accept,
+            retries=retries,
+            retry_denoise_step=retry_denoise_step,
+            fallback=fallback,
+        )
+    )
     return result or {}
 
 
 async def _inpaint_set_inner(
-    lease: GPULease,
-    *,
-    base_prompt: str,
-    base_png: bytes | None,
-    plan: InpaintPlan,
-    seed: int,
-    width: int,
-    height: int,
-    sfw: bool,
-    negative_extra: str | None,
-    base_sampling: Sampling,
-    inpaint_sampling: Sampling,
-    on_image: Callable[[str, bytes], Awaitable[None]] | None,
-    accept: Callable[[str, bytes], bool] | None,
-    retries: int,
-    retry_denoise_step: float = 0.0,
-    fallback: Callable[[str, list[bytes]], bytes | None] | None = None,
+    lease: GPULease, **options: Unpack[InpaintSetOptions]
 ) -> dict[str, bytes]:
-    results: dict[str, bytes] = {}
-    try:
-        base = base_png
-        if base is None:
-            base = await _run_workflow(_txt2img_workflow(
-                base_prompt, width, height, sfw, seed, negative_extra, base_sampling,
-            ), lease)
-            if base is None:
-                return results
-            results["base"] = base
-            if on_image is not None:
-                await on_image("base", base)
-        source, branches = await plan(base)
-        if not branches:
-            return results
-        uploads = await asyncio.gather(
-            _upload_image(source, lease), *(_upload_image(b.mask_png, lease) for b in branches)
-        )
-        source_name, mask_names = uploads[0], uploads[1:]
-        if source_name is None or any(m is None for m in mask_names):
-            return results
-        masks = {b.name: str(m) for b, m in zip(branches, mask_names, strict=True)}
-        pending = list(branches)
-        candidates: dict[str, list[bytes]] = {}
-        for attempt in range(retries + 1):
-            escalated = [
-                replace(b, denoise=min(1.0, b.denoise + attempt * retry_denoise_step)) for b in pending
-            ]
-            graph, save_ids = _inpaint_graph(
-                source_name, escalated, masks, seed + attempt, sfw, negative_extra, inpaint_sampling,
-            )
-            outputs = await _run_graph(graph, lease)
-            rejected: list[InpaintBranch] = []
-            for branch in pending:
-                png = outputs.get(save_ids[branch.name])
-                if png is None:
-                    continue  # lost, not rejected: no point re-running it
-                if accept is not None and not accept(branch.name, png):
-                    rejected.append(branch)
-                    candidates.setdefault(branch.name, []).append(png)
-                    continue
-                results[branch.name] = png
-                if on_image is not None:
-                    await on_image(branch.name, png)
-            if not rejected:
-                break
-            pending = rejected
-            if attempt < retries:
-                logger.info("Re-running rejected inpaint branches: %s", [b.name for b in rejected])
-        else:
-            # Retries exhausted: the caller may still take its best rejected render.
-            for branch in pending:
-                chosen = fallback(branch.name, candidates[branch.name]) if fallback else None
-                if chosen is None:
-                    continue
-                logger.info("Accepting the best rejected render for %s", branch.name)
-                results[branch.name] = chosen
-                if on_image is not None:
-                    await on_image(branch.name, chosen)
-        return results
-    finally:
-        # The graph's history is already complete, so a short settle suffices.
-        if not await _free_comfyui_vram(lease, settle_s=_SET_SETTLE_S):
-            raise GPULeaseError("ComfyUI VRAM cleanup could not be confirmed")
+    renderer = InpaintRenderer(
+        _upload_image, _run_workflow, _run_graph, _free_comfyui_vram
+    )
+    return await renderer.render(lease, **options)
+
+
+def _transport() -> ComfyTransport:
+    # Construct no client/state here: all adapters share the original client.
+    return ComfyTransport(
+        _get_http(), COMFYUI_URL, range(300), _POLL_FAST_S, _POLL_FAST_COUNT
+    )

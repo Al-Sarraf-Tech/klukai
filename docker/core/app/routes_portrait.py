@@ -8,6 +8,8 @@ GET  /api/avatar/model                            the GLB (Bearer; game-ripped, 
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import gzip
 import logging
@@ -58,7 +60,7 @@ def register_portrait_routes(app: FastAPI) -> None:
         return level, outfit, await context.router.is_game_active()
 
     @app.get("/api/portrait")
-    async def api_portrait(request: Request):
+    async def api_portrait(request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
@@ -66,39 +68,52 @@ def register_portrait_routes(app: FastAPI) -> None:
         return await portrait.portrait_state(user_id, outfit, level, game_active=game)
 
     @app.post("/api/portrait/refresh")
-    async def api_portrait_refresh(request: Request):
+    async def api_portrait_refresh(request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
         level, outfit, game = await _context(user_id)
         if game:
-            return ec.err("GPU_BUSY", "A game owns the GPU right now; try again after it.",
-                          status_code=409)
+            return ec.err(
+                "GPU_BUSY",
+                "A game owns the GPU right now; try again after it.",
+                status_code=409,
+            )
         if not portrait.refresh(user_id, outfit, level):
-            return ec.err("IN_PROGRESS", "Her portrait is already being drawn.", status_code=409)
+            return ec.err(
+                "IN_PROGRESS", "Her portrait is already being drawn.", status_code=409
+            )
         return await portrait.portrait_state(user_id, outfit, level, game_active=False)
 
     @app.get("/api/portrait/frame/{user_id}/{outfit_id}/{frame}.webp")
-    async def api_portrait_frame(user_id: str, outfit_id: str, frame: str, sig: str = ""):
+    async def api_portrait_frame(
+        user_id: str, outfit_id: str, frame: str, sig: str = ""
+    ) -> Any:
         try:
             path = portrait.frame_file(user_id, outfit_id, frame)
         except ValueError:
             return JSONResponse({"error": "Not found"}, status_code=404)
         if not portrait.verify_frame(user_id, outfit_id, frame, sig):
-            return JSONResponse({"error": "Invalid or expired signature"}, status_code=403)
+            return JSONResponse(
+                {"error": "Invalid or expired signature"}, status_code=403
+            )
         if not path.is_file():
             return JSONResponse({"error": "Not found"}, status_code=404)
-        return FileResponse(path, media_type="image/webp", headers={"Cache-Control": FRAME_CACHE})
+        return FileResponse(
+            path, media_type="image/webp", headers={"Cache-Control": FRAME_CACHE}
+        )
 
     @app.get("/api/avatar/models")
-    async def api_avatar_models(request: Request):
+    async def api_avatar_models(request: Request) -> Any:
         if not await _get_user_id(request):
             return ec.auth_required()
         default = Path(os.environ.get("AVATAR_MODEL_PATH", DEFAULT_AVATAR_MODEL_PATH))
-        return JSONResponse(avatar_models.catalog(default), headers={"Cache-Control": MODEL_CACHE})
+        return JSONResponse(
+            avatar_models.catalog(default), headers={"Cache-Control": MODEL_CACHE}
+        )
 
     @app.get("/api/avatar/model")
-    async def api_avatar_model(request: Request, model: str = "default"):
+    async def api_avatar_model(request: Request, model: str = "default") -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
@@ -107,7 +122,11 @@ def register_portrait_routes(app: FastAPI) -> None:
         if path is None or not path.is_file():
             return JSONResponse({"error": "Avatar model not found"}, status_code=404)
         etag = f'"{model}-{_etag(path)[1:-1]}"'
-        headers = {"Cache-Control": MODEL_CACHE, "ETag": etag, "Vary": "Accept-Encoding"}
+        headers = {
+            "Cache-Control": MODEL_CACHE,
+            "ETag": etag,
+            "Vary": "Accept-Encoding",
+        }
         if _etag_matches(request.headers.get("if-none-match", ""), etag):
             return Response(status_code=304, headers=headers)
         if "gzip" in request.headers.get("accept-encoding", "").lower():
@@ -119,7 +138,8 @@ def register_portrait_routes(app: FastAPI) -> None:
                 _MODEL_GZ.clear()
                 _MODEL_GZ[etag] = body
             return Response(
-                body, media_type="model/gltf-binary",
+                body,
+                media_type="model/gltf-binary",
                 headers={**headers, "Content-Encoding": "gzip"},
             )
         return FileResponse(path, media_type="model/gltf-binary", headers=headers)

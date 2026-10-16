@@ -17,6 +17,8 @@ API surface (used by routes):
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import logging
 
@@ -56,12 +58,14 @@ async def count_recent(user_id: str, hours: int = TRIBUTE_COOLDOWN_HOURS) -> int
     try:
         pool = get_pool()
         async with pool.connection() as conn:
-            row = await (await conn.execute(
-                "SELECT COUNT(*) FROM companion_tributes "
-                "WHERE user_id = %s AND created_at > now() - make_interval(hours => %s)",
-                (user_id, hours),
-            )).fetchone()
-        return (row or (0,))[0]
+            row = await (
+                await conn.execute(
+                    "SELECT COUNT(*) FROM companion_tributes "
+                    "WHERE user_id = %s AND created_at > now() - make_interval(hours => %s)",
+                    (user_id, hours),
+                )
+            ).fetchone()
+        return int((row or (0,))[0])
     except Exception as e:
         logger.error("Tribute count failed (failing closed): %s", e)
         return None
@@ -102,19 +106,28 @@ async def save_tribute(
                     (user_id,),
                 )
 
-            row = await (await conn.execute(
-                "INSERT INTO companion_tributes "
-                "(user_id, text, mood_at_time, affection_at_time, is_crown_jewel) "
-                "SELECT %s, %s, %s, %s, %s "
-                "WHERE NOT EXISTS ("
-                "  SELECT 1 FROM companion_tributes "
-                "  WHERE user_id = %s "
-                "    AND created_at > now() - make_interval(hours => %s)"
-                ") "
-                "RETURNING id",
-                (user_id, text, mood_at_time, affection_at_time,
-                 make_crown_jewel, user_id, TRIBUTE_COOLDOWN_HOURS),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "INSERT INTO companion_tributes "
+                    "(user_id, text, mood_at_time, affection_at_time, is_crown_jewel) "
+                    "SELECT %s, %s, %s, %s, %s "
+                    "WHERE NOT EXISTS ("
+                    "  SELECT 1 FROM companion_tributes "
+                    "  WHERE user_id = %s "
+                    "    AND created_at > now() - make_interval(hours => %s)"
+                    ") "
+                    "RETURNING id",
+                    (
+                        user_id,
+                        text,
+                        mood_at_time,
+                        affection_at_time,
+                        make_crown_jewel,
+                        user_id,
+                        TRIBUTE_COOLDOWN_HOURS,
+                    ),
+                )
+            ).fetchone()
             if not row:
                 # Cooldown guard blocked the insert — undo the crown-jewel
                 # demotion (same transaction) and signal the caller.
@@ -124,7 +137,10 @@ async def save_tribute(
         tribute_id = str(row[0])
         logger.info(
             "Tribute saved: user=%s id=%s crown=%s len=%d",
-            user_id, tribute_id, make_crown_jewel, len(text),
+            user_id,
+            tribute_id,
+            make_crown_jewel,
+            len(text),
         )
         return tribute_id
     except TributeCooldownActive:
@@ -134,7 +150,7 @@ async def save_tribute(
     return None
 
 
-async def get_crown_jewel(user_id: str) -> dict | None:
+async def get_crown_jewel(user_id: str) -> dict[str, Any] | None:
     """Fetch the user's current crown-jewel tribute.
 
     Returns dict {id, text, created_at, mood_at_time, affection_at_time}
@@ -143,12 +159,14 @@ async def get_crown_jewel(user_id: str) -> dict | None:
     try:
         pool = get_pool()
         async with pool.connection() as conn:
-            row = await (await conn.execute(
-                "SELECT id, text, mood_at_time, affection_at_time, created_at "
-                "FROM companion_tributes "
-                "WHERE user_id = %s AND is_crown_jewel = true",
-                (user_id,),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "SELECT id, text, mood_at_time, affection_at_time, created_at "
+                    "FROM companion_tributes "
+                    "WHERE user_id = %s AND is_crown_jewel = true",
+                    (user_id,),
+                )
+            ).fetchone()
         if not row:
             return None
         return {
@@ -163,19 +181,21 @@ async def get_crown_jewel(user_id: str) -> dict | None:
         return None
 
 
-async def list_tributes(user_id: str, limit: int = 20) -> list[dict]:
+async def list_tributes(user_id: str, limit: int = 20) -> list[dict[str, Any]]:
     """Return newest-first list of the user's tributes."""
     try:
         pool = get_pool()
         async with pool.connection() as conn:
-            rows = await (await conn.execute(
-                "SELECT id, text, mood_at_time, affection_at_time, "
-                "is_crown_jewel, created_at "
-                "FROM companion_tributes "
-                "WHERE user_id = %s "
-                "ORDER BY created_at DESC LIMIT %s",
-                (user_id, limit),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    "SELECT id, text, mood_at_time, affection_at_time, "
+                    "is_crown_jewel, created_at "
+                    "FROM companion_tributes "
+                    "WHERE user_id = %s "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (user_id, limit),
+                )
+            ).fetchall()
         return [
             {
                 "id": str(r[0]),
@@ -198,11 +218,12 @@ async def set_crown_jewel(user_id: str, tribute_id: str) -> bool:
         pool = get_pool()
         async with pool.connection() as conn:
             # Verify the tribute exists + belongs to this user
-            row = await (await conn.execute(
-                "SELECT id FROM companion_tributes "
-                "WHERE id = %s AND user_id = %s",
-                (tribute_id, user_id),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "SELECT id FROM companion_tributes WHERE id = %s AND user_id = %s",
+                    (tribute_id, user_id),
+                )
+            ).fetchone()
             if not row:
                 return False
 
@@ -230,5 +251,8 @@ async def set_crown_jewel(user_id: str, tribute_id: str) -> bool:
 def can_send_tribute(recent_count: int) -> tuple[bool, str | None]:
     """Pure helper: returns (allowed, reason_if_blocked)."""
     if recent_count >= 1:
-        return False, f"Tributes are sacred — please wait {TRIBUTE_COOLDOWN_HOURS}h between them"
+        return (
+            False,
+            f"Tributes are sacred — please wait {TRIBUTE_COOLDOWN_HOURS}h between them",
+        )
     return True, None

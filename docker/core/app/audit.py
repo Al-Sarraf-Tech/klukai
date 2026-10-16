@@ -58,27 +58,37 @@ async def log(
                 (_CHAIN_WRITE_LOCK_KEY,),
             )
             # Fetch previous chain_hash (most recent row)
-            prev_row = await (await conn.execute(
-                "SELECT chain_hash FROM companion_audit_log "
-                "ORDER BY id DESC LIMIT 1"
-            )).fetchone()
+            prev_row = await (
+                await conn.execute(
+                    "SELECT chain_hash FROM companion_audit_log "
+                    "ORDER BY id DESC LIMIT 1"
+                )
+            ).fetchone()
             prev_hash = prev_row[0] if prev_row else None
 
             # Insert and get the new row id + timestamp
-            new_row = await (await conn.execute(
-                "INSERT INTO companion_audit_log "
-                "(event_type, user_id, ip_address, request_id, metadata) "
-                "VALUES (%s, %s, %s, %s, %s) "
-                "RETURNING id, created_at",
-                (event_type, user_id, ip_address, request_id,
-                 json.dumps(metadata) if metadata else None),
-            )).fetchone()
+            new_row = await (
+                await conn.execute(
+                    "INSERT INTO companion_audit_log "
+                    "(event_type, user_id, ip_address, request_id, metadata) "
+                    "VALUES (%s, %s, %s, %s, %s) "
+                    "RETURNING id, created_at",
+                    (
+                        event_type,
+                        user_id,
+                        ip_address,
+                        request_id,
+                        json.dumps(metadata) if metadata else None,
+                    ),
+                )
+            ).fetchone()
             if not new_row:
                 return
             row_id, created_at = new_row
 
             try:
                 from . import audit_chain
+
                 chain_hash = audit_chain.compute_row_hash(
                     row_id=row_id,
                     event_type=event_type,
@@ -102,7 +112,9 @@ async def log(
                     "AUDIT CHAIN HASH FAILED for row %s (event=%s): %s — "
                     "row inserted with NULL chain_hash; verify-chain will "
                     "flag it as a break",
-                    row_id, event_type, e,
+                    row_id,
+                    event_type,
+                    e,
                 )
     except Exception as e:
         logger.warning("Audit log write failed: event=%s err=%s", event_type, e)

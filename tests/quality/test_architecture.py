@@ -55,6 +55,58 @@ def forbidden(targets: set[str], prefixes: tuple[str, ...]) -> set[str]:
     }
 
 
+def unresolved_relative_imports(source: str, module: str, root: Path, *, package=False):
+    parent = module.split(".") if package else module.split(".")[:-1]
+    failures = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.ImportFrom) or not node.level:
+            continue
+        if node.level > len(parent):
+            failures.add("." * node.level + (node.module or ""))
+            continue
+        target = parent[: len(parent) - node.level + 1]
+        if node.module:
+            target += node.module.split(".")
+        path = root.joinpath(*target)
+        if (
+            not path.with_suffix(".py").is_file()
+            and not (path / "__init__.py").is_file()
+        ):
+            failures.add(".".join(target))
+    return failures
+
+
+def test_missing_lazy_relative_import_is_rejected(tmp_path):
+    app = tmp_path / "app"
+    (app / "proactive").mkdir(parents=True)
+    (app / "__init__.py").touch()
+    (app / "proactive/state.py").touch()
+    assert not unresolved_relative_imports(
+        "def presence():\n from .proactive.state import label\n",
+        "app.chat_prompt",
+        tmp_path,
+    )
+    assert unresolved_relative_imports(
+        "def presence():\n from .self.proactive.state import label\n",
+        "app.chat_prompt",
+        tmp_path,
+    ) == {"app.self.proactive.state"}
+    assert unresolved_relative_imports("from .. import x", "app.chat_prompt", tmp_path)
+
+
+def test_all_explicit_relative_import_modules_exist_even_on_lazy_paths():
+    failures = {}
+    for path in sorted((CORE / "app").rglob("*.py")):
+        parts = path.relative_to(CORE).with_suffix("").parts
+        module = ".".join(parts[:-1] if path.name == "__init__.py" else parts)
+        missing = unresolved_relative_imports(
+            path.read_text(), module, CORE, package=path.name == "__init__.py"
+        )
+        if missing:
+            failures[str(path.relative_to(CORE))] = sorted(missing)
+    assert not failures, f"Missing relative import targets: {failures}"
+
+
 @pytest.mark.parametrize(
     "source",
     [

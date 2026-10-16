@@ -2,33 +2,43 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+from collections.abc import Callable
 import asyncio
 import logging
 import os
-from datetime import datetime
-from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
+from datetime import datetime as datetime
 
 import httpx
+
+from .dependencies import http_request
 import redis.asyncio as redis
 
-from .models import SessionState
+from .memory_facts import MemoryFactsMixin
+from .memory_session import (
+    RedisSessionMixin,
+    SessionUnavailable as SessionUnavailable,
+    SESSION_TTL as SESSION_TTL,
+    MAX_SESSION_TURNS as MAX_SESSION_TURNS,
+)
+from .memory_exchange import ExchangeMemoryMixin
+from .memory_settings import (
+    EMBED_DIM as EMBED_DIM,
+    MSG_COLLECTION_NAME as MSG_COLLECTION_NAME,
+    MSG_RECALL_LIMIT as MSG_RECALL_LIMIT,
+    MSG_MIN_SCORE as MSG_MIN_SCORE,
+    RECENCY_WEIGHT as RECENCY_WEIGHT,
+    QDRANT_URL as QDRANT_URL,
+)
 
 logger = logging.getLogger(__name__)
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://aichat-redis:6379/1")
 INFERENCE_URL = os.environ.get("INFERENCE_URL", "http://aichat-inference:8105")
 DATA_URL = os.environ.get("DATA_URL", "http://aichat-data:8091")
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://aichat-vector:6333")
 
-SESSION_TTL = 24 * 3600  # 24 hours — mood persists to DB as backup
-MAX_SESSION_TURNS = 16
 COLLECTION_NAME = "companion_episodes"
-MSG_COLLECTION_NAME = "companion_exchanges"
-EMBED_DIM = 768
-MSG_RECALL_LIMIT = 5
-MSG_MIN_SCORE = 0.35
-RECENCY_WEIGHT = 0.15
 
 
 class EmbeddingFailed(RuntimeError):
@@ -37,14 +47,11 @@ class EmbeddingFailed(RuntimeError):
     rather than indexing a zero vector that silently corrupts recall."""
 
 
-class SessionUnavailable(RuntimeError):
-    """Session persistence is unavailable; the client may retry."""
-
-
-class MemoryManager:
+class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
     """Manages all three tiers of companion memory."""
 
     def __init__(self) -> None:
+        self._redis_reconnect_lock = asyncio.Lock()
         self._session_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._redis: redis.Redis | None = None
         self._http: httpx.AsyncClient | None = None
@@ -52,7 +59,9 @@ class MemoryManager:
         self._msg_collection_ready = False
 
     async def init(self) -> None:
-        self._redis = redis.from_url(
+        # redis factory stubs omit annotations; preserve the established injection seam.
+        factory: Callable[..., redis.Redis] = redis.from_url
+        self._redis = factory(
             REDIS_URL,
             decode_responses=True,
             retry_on_timeout=True,
@@ -71,106 +80,17 @@ class MemoryManager:
             if self._http:
                 await self._http.aclose()
 
-    # ── Stubs for methods attached from memory_exchange.py (S+ Phase 2 §6.1) ──
-    # Real implementations are bound at module load via memory_exchange.attach_to().
-    # These stubs exist so mypy / IDEs see the methods on MemoryManager.
-    async def _ensure_msg_collection(self) -> None:
-        """Bound from memory_exchange.py."""
-        raise NotImplementedError
-
-    async def store_exchange(self, *args, **kwargs):
-        """Bound from memory_exchange.py."""
-        raise NotImplementedError
-
-    async def recall_exchanges(self, *args, **kwargs):
-        """Bound from memory_exchange.py."""
-        raise NotImplementedError
-
-    async def recall_exchanges_with_recency(self, *args, **kwargs):
-        """Bound from memory_exchange.py."""
-        raise NotImplementedError
-
-    async def _redis_op(self, op, *args, strict=False, **kwargs):
-        """Execute a Redis operation with auto-reconnect on failure."""
-        try:
-            return await op(*args, **kwargs)
-        except (redis.ConnectionError, redis.TimeoutError) as e:
-            logger.warning("Redis connection error: %s — reconnecting", e)
-            try:
-                self._redis = redis.from_url(
-                    REDIS_URL, decode_responses=True,
-                    retry_on_timeout=True, socket_keepalive=True,
-                    health_check_interval=30,
-                )
-                # Re-bind operation to the new client
-                new_op = getattr(self._redis, op.__name__)
-                return await new_op(*args, **kwargs)
-            except Exception as e2:
-                logger.error("Redis reconnect failed: %s", e2)
-                if strict:
-                    raise SessionUnavailable(str(e2)) from e2
-                return None
-
-    # ── Tier 1: Session (Redis) ──────────────────────────────────────────
-
-    @asynccontextmanager
-    async def session_owner(self, session_id: str) -> AsyncIterator[None]:
-        """Serialize this session in the deployed single-worker process.
-
-        Count holders AND waiters before yielding, so cancellation and idle
-        reclamation cannot create two locks for the same session.
-        """
-        lock, users = self._session_locks.get(session_id, (asyncio.Lock(), 0))
-        self._session_locks[session_id] = (lock, users + 1)
-        try:
-            async with lock:
-                yield
-        finally:
-            _, users = self._session_locks[session_id]
-            if users == 1:
-                del self._session_locks[session_id]
-            else:
-                self._session_locks[session_id] = (lock, users - 1)
-
-    async def get_session(self, session_id: str) -> SessionState | None:
-        raw = await self._redis_op(self._redis.get, f"companion:session:{session_id}", strict=True)
-        if raw is None:
-            return None
-        try:
-            return SessionState.model_validate_json(raw)
-        except Exception as e:
-            raise SessionUnavailable("Stored session is invalid") from e
-
-    async def save_session(self, session_id: str, state: SessionState) -> None:
-        if len(state.turns) > MAX_SESSION_TURNS:
-            state.turns = state.turns[-MAX_SESSION_TURNS:]
-        state.last_activity = datetime.now()
-        saved = await self._redis_op(
-            self._redis.set,
-            f"companion:session:{session_id}",
-            state.model_dump_json(),
-            ex=SESSION_TTL,
-            strict=True,
-        )
-        if saved is None or saved is False:
-            raise SessionUnavailable("Session write was not acknowledged")
-
-    async def add_turn(
-        self, session_id: str, role: str, content: str, state: SessionState
-    ) -> SessionState:
-        state.turns.append({"role": role, "content": content})
-        state.turn_count += 1
-        await self.save_session(session_id, state)
-        return state
-
     # ── Tier 2: Episodic Memory (Qdrant + embeddings) ────────────────────
 
     async def _ensure_qdrant_collection(self) -> None:
         if self._collection_ready:
             return
         try:
-            r = await self._http.get(
-                f"{QDRANT_URL}/collections/{COLLECTION_NAME}"
+            r = await http_request(
+                "qdrant",
+                self._http,
+                "get",
+                f"{QDRANT_URL}/collections/{COLLECTION_NAME}",
             )
             if r.status_code == 200:
                 self._collection_ready = True
@@ -179,7 +99,10 @@ class MemoryManager:
             pass
 
         try:
-            await self._http.put(
+            await http_request(
+                "qdrant",
+                self._http,
+                "put",
                 f"{QDRANT_URL}/collections/{COLLECTION_NAME}",
                 json={
                     "vectors": {"size": EMBED_DIM, "distance": "Cosine"},
@@ -189,7 +112,10 @@ class MemoryManager:
             logger.info("Created Qdrant collection: %s", COLLECTION_NAME)
             # Create user_id index for filtered search performance
             try:
-                await self._http.put(
+                await http_request(
+                    "qdrant",
+                    self._http,
+                    "put",
                     f"{QDRANT_URL}/collections/{COLLECTION_NAME}/index",
                     json={"field_name": "user_id", "field_schema": "keyword"},
                 )
@@ -198,7 +124,9 @@ class MemoryManager:
         except httpx.HTTPError:
             logger.warning("Failed to create Qdrant collection, will retry later")
 
-    async def embed_text(self, text: str, *, raise_on_failure: bool = False) -> list[float]:
+    async def embed_text(
+        self, text: str, *, raise_on_failure: bool = False
+    ) -> list[float]:
         """Get embedding vector for text. Cache-first.
 
         Args:
@@ -209,13 +137,17 @@ class MemoryManager:
         """
         try:
             from . import caches
+
             cached = await caches.get_embedding(text)
             if cached:
                 return cached
         except Exception:
             pass
         try:
-            r = await self._http.post(
+            r = await http_request(
+                "embedding",
+                self._http,
+                "post",
                 f"{INFERENCE_URL}/v1/embeddings",
                 json={"input": text, "model": "nomic-embed-text-v1.5"},
             )
@@ -223,10 +155,15 @@ class MemoryManager:
             vector = r.json()["data"][0]["embedding"]
             try:
                 from . import caches
+
                 await caches.put_embedding(text, vector)
             except Exception:
                 pass
-            return vector
+            if not isinstance(vector, list) or not all(
+                isinstance(v, (int, float)) for v in vector
+            ):
+                raise ValueError("Invalid embedding vector")
+            return [float(v) for v in vector]
         except Exception as e:
             logger.error("EMBEDDING FAILED — search quality degraded: %s", e)
             if raise_on_failure:
@@ -253,7 +190,10 @@ class MemoryManager:
         # Qdrant vector storage
         try:
             vector = await self.embed_text(summary, raise_on_failure=True)
-            r = await self._http.put(
+            r = await http_request(
+                "qdrant",
+                self._http,
+                "put",
                 f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points",
                 json={
                     "points": [
@@ -282,14 +222,23 @@ class MemoryManager:
         # PostgreSQL fallback — ensures episodes survive Qdrant outages
         try:
             from .db import get_conn_autocommit
+
             async with get_conn_autocommit() as conn:
                 await conn.execute(
                     "INSERT INTO companion_episodes "
                     "(id, conversation_id, summary, keywords, emotion_tags, importance, embedding_id, user_id) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (id) DO NOTHING",
-                    (episode_id, conversation_id, summary, keywords,
-                     emotion_tags, importance, episode_id, user_id),
+                    (
+                        episode_id,
+                        conversation_id,
+                        summary,
+                        keywords,
+                        emotion_tags,
+                        importance,
+                        episode_id,
+                        user_id,
+                    ),
                 )
         except Exception as e:
             logger.error("Failed to store episode %s in DB: %s", episode_id[:8], e)
@@ -297,17 +246,25 @@ class MemoryManager:
         return episode_id
 
     async def recall_episodes(
-        self, query: str, limit: int = 5, min_score: float = 0.3,
+        self,
+        query: str,
+        limit: int = 5,
+        min_score: float = 0.3,
         user_id: str = "jalsarraf",
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         try:
             vector = await self.embed_text(query)
             if not vector or all(v == 0.0 for v in vector):
                 # Embedding failed — searching Qdrant with an all-zero vector returns
                 # meaningless (garbage-ranked) results. Return empty instead.
-                logger.warning("Episode recall skipped — embedding failed (zero vector)")
+                logger.warning(
+                    "Episode recall skipped — embedding failed (zero vector)"
+                )
                 return []
-            r = await self._http.post(
+            r = await http_request(
+                "qdrant",
+                self._http,
+                "post",
                 f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points/search",
                 json={
                     "vector": vector,
@@ -341,145 +298,16 @@ class MemoryManager:
 
     # ── Conversation Exchange Memory (Qdrant — per-exchange vectors) ────
 
-
-
-
-
     # ── Tier 3: Factual Memory (aichat-data /memory) ────────────────────
-
-    async def store_fact(self, key: str, value: str, ttl: int | None = None,
-                         user_id: str = "jalsarraf") -> None:
-        try:
-            body: dict = {"key": f"companion:{user_id}:{key}", "value": value}
-            if ttl:
-                body["ttl_seconds"] = ttl
-            await self._http.post(f"{DATA_URL}/memory/store", json=body)
-        except Exception as e:
-            logger.warning("store_fact failed for %s: %s", key, e)
-
-    async def recall_fact(self, key: str, user_id: str = "jalsarraf") -> str | None:
-        try:
-            r = await self._http.get(
-                f"{DATA_URL}/memory/recall", params={"key": f"companion:{user_id}:{key}"}
-            )
-            data = r.json()
-            if data.get("found"):
-                return data.get("value")
-        except Exception as e:
-            logger.warning("recall_fact failed for %s: %s", key, e)
-        return None
-
-    async def recall_facts_by_pattern(self, pattern: str,
-                                       user_id: str = "jalsarraf") -> list[dict]:
-        # Fail open like recall_fact/store_fact — this backs inside-jokes, the
-        # Commander dossier, and milestones on the live chat read path, so a
-        # data-service hiccup must return empty, not raise.
-        try:
-            r = await self._http.get(
-                f"{DATA_URL}/memory/recall",
-                params={"pattern": f"companion:{user_id}:{pattern}"},
-            )
-            r.raise_for_status()
-            data = r.json()
-            return data.get("entries", [])
-        except Exception as e:
-            logger.warning("recall_facts_by_pattern failed (%s): %s", pattern, e)
-            return []
-
-    # ── Relationship facts (convenience) ─────────────────────────────────
-
-    async def get_relationship_facts(self, user_id: str = "jalsarraf") -> dict:
-        entries = await self.recall_facts_by_pattern("rel:%", user_id=user_id)
-        # Strip the full prefix: companion:{user_id}:rel:
-        prefix = f"companion:{user_id}:rel:"
-        out: dict = {}
-        for e in entries:
-            short = e["key"].replace(prefix, "")
-            # Inside jokes live under rel:joke:* and surface via their own
-            # per-message block — exclude them so the Commander dossier stays
-            # clean and they aren't double-injected.
-            if short.startswith("joke:"):
-                continue
-            out[short] = e["value"]
-        return out
-
-    async def set_relationship_fact(self, key: str, value: str,
-                                     user_id: str = "jalsarraf") -> None:
-        await self.store_fact(f"rel:{key}", value, user_id=user_id)
-
-    # ── Inside jokes / running references ────────────────────────────────
-    # Reuses the relationship-fact store (companion_relationship) under a
-    # dedicated "joke:" sub-namespace so running references stay separate
-    # from the Commander dossier yet need no new table. Key is a slug of the
-    # label; value is the note (how the bit is used).
-
-    @staticmethod
-    def _joke_slug(label: str) -> str:
-        """Stable, store-safe slug for an inside-joke label."""
-        slug = "".join(c if c.isalnum() else "_" for c in label.strip().lower())
-        slug = "_".join(filter(None, slug.split("_")))  # collapse repeats
-        return slug[:60] or "ref"
-
-    async def set_inside_joke(self, label: str, note: str,
-                              user_id: str = "jalsarraf") -> None:
-        """Store/refresh a relationship-specific running reference.
-
-        Stored as ``rel:joke:<slug>`` -> ``"<label> :: <note>"`` so the label
-        survives the round-trip even though the key is slugged. Re-storing the
-        same label overwrites (keeps the latest phrasing), which doubles as a
-        natural recency signal."""
-        if not label or not label.strip() or not note or not note.strip():
-            return
-        slug = self._joke_slug(label)
-        await self.store_fact(
-            f"rel:joke:{slug}", f"{label.strip()} :: {note.strip()}", user_id=user_id
-        )
-
-    async def get_inside_jokes(self, user_id: str = "jalsarraf") -> list[dict]:
-        """Return all stored running references as [{label, note}] dicts.
-
-        Order follows whatever the data service returns; callers cap the count
-        themselves. Malformed rows (missing the '::' separator) degrade to a
-        label-only entry rather than being dropped."""
-        entries = await self.recall_facts_by_pattern("rel:joke:%", user_id=user_id)
-        jokes: list[dict] = []
-        for e in entries:
-            raw = e.get("value", "") or ""
-            if " :: " in raw:
-                label, note = raw.split(" :: ", 1)
-            else:
-                label, note = raw, ""
-            label = label.strip()
-            if label:
-                jokes.append({"label": label, "note": note.strip()})
-        return jokes
-
-    # ── Milestone tracking ────────────────────────────────────────────────
-
-    async def record_milestone(self, milestone: str, user_id: str = "jalsarraf") -> bool:
-        """Record a relationship milestone. Returns True if new."""
-        existing = await self.recall_fact(f"milestone:{milestone}", user_id=user_id)
-        if existing:
-            return False
-        await self.store_fact(f"milestone:{milestone}", datetime.now().isoformat(), user_id=user_id)
-        logger.info("New milestone recorded: %s for %s", milestone, user_id)
-        return True
-
-    async def get_milestones(self, user_id: str = "jalsarraf") -> dict[str, str]:
-        """Get all recorded relationship milestones for a user."""
-        entries = await self.recall_facts_by_pattern("milestone:%", user_id=user_id)
-        prefix = f"companion:{user_id}:milestone:"
-        return {
-            e["key"].replace(prefix, ""): e["value"]
-            for e in entries
-        }
 
     # ── Combined recall for prompt building ──────────────────────────────
 
     async def recall_for_prompt(
-        self, query: str, user_id: str = "jalsarraf",
+        self,
+        query: str,
+        user_id: str = "jalsarraf",
         affection_level: int = 0,
-    ) -> tuple[list[str], dict, list[dict]]:
+    ) -> tuple[list[str], dict[str, Any], list[dict[str, Any]]]:
         """Return (episodic_memories, relationship_facts, recalled_exchanges) — parallel fetch, scoped to user.
 
         affection_level is threaded into exchange re-ranking so high-affection
@@ -487,14 +315,21 @@ class MemoryManager:
         them). Callers that omit it keep the historical default of 0.
         """
         import asyncio
+
         episodes_task = self.recall_episodes(query, limit=5, user_id=user_id)
         facts_task = self.get_relationship_facts(user_id=user_id)
         exchanges_task = self.recall_exchanges_with_recency(
-            query, limit=MSG_RECALL_LIMIT, affection_level=affection_level, user_id=user_id
+            query,
+            limit=MSG_RECALL_LIMIT,
+            affection_level=affection_level,
+            user_id=user_id,
         )
 
         episodes, facts, exchanges = await asyncio.gather(
-            episodes_task, facts_task, exchanges_task, return_exceptions=True,
+            episodes_task,
+            facts_task,
+            exchanges_task,
+            return_exceptions=True,
         )
         # Each sub-call already fails open; return_exceptions is belt-and-suspenders
         # so an unexpected error in one path can never propagate out of the chat
@@ -512,7 +347,10 @@ class MemoryManager:
         return episode_texts, facts, exchanges
 
     async def get_memory_nudge(
-        self, turn_count: int, affection_level: int, user_id: str = "jalsarraf",
+        self,
+        turn_count: int,
+        affection_level: int,
+        user_id: str = "jalsarraf",
     ) -> str | None:
         """Return a memory nudge string if it's time for one, else None. Scoped to user."""
         if affection_level <= 2:
@@ -529,11 +367,20 @@ class MemoryManager:
             return None
 
         import random
-        prompts = ["something personal", "a shared memory", "something important",
-                   "a past conversation", "what the Commander told me"]
+
+        prompts = [
+            "something personal",
+            "a shared memory",
+            "something important",
+            "a past conversation",
+            "what the Commander told me",
+        ]
         query = random.choice(prompts)
         exchanges = await self.recall_exchanges_with_recency(
-            query, limit=3, affection_level=affection_level, user_id=user_id,
+            query,
+            limit=3,
+            affection_level=affection_level,
+            user_id=user_id,
         )
         if not exchanges:
             return None
@@ -548,7 +395,3 @@ class MemoryManager:
             f'The Commander said: "{user_snip}". '
             f'You replied: "{asst_snip}".]'
         )
-
-# Exchange methods moved to memory_exchange.py for file-size hygiene.
-from app import memory_exchange  # noqa: E402
-memory_exchange.attach_to(MemoryManager)

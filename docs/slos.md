@@ -1,138 +1,47 @@
-# Service Level Objectives — klukai
+<!-- Generated; policy SHA256 e8447adbef71f29dc2ba9af7353298bfa7deef8ac9dfb8a7a87055df49de83c0. Edit docker/core/app/observability/slos.json, then regenerate. -->
+# Service level objectives
 
-This document codifies klukai's per-endpoint SLOs (Service Level
-Objectives). Phase 2 deliverable for the S+ tier uplift (see
-`docs/superpowers/specs/2026-05-16-s-plus-uplift.md` §6.6).
+The canonical thresholds are [docker/core/app/observability/slos.json](../docker/core/app/observability/slos.json). This generated table covers the registered HTTP endpoints in that policy over a rolling 30-day window.
 
-The baseline numbers come from `docs/perf-baseline.md` (Phase 1 perf
-probe). The targets below are what klukai commits to over a rolling
-30-day window. SLO breach → page → root-cause → either fix or
-adjust the target (with an ADR).
+| Method | Registered route | Availability | p99 |
+| --- | --- | --- | --- |
+| GET | `/health` | 99.90000% | 30 ms |
+| GET | `/api/health/live` | 99.90000% | 30 ms |
+| GET | `/api/health/ready` | 99.90000% | 2500 ms |
+| POST | `/api/auth/login` | 99.90000% | 500 ms |
+| GET | `/api/auth/verify` | 99.90000% | 150 ms |
+| GET | `/api/affection` | 99.90000% | 150 ms |
+| GET | `/api/messages` | 99.90000% | 300 ms |
+| GET | `/api/memories` | 99.90000% | 300 ms |
+| GET | `/api/tts/jobs/{job_id}` | 99.50000% | 250 ms |
+| POST | `/api/generate-image` | 99.50000% | 3000 ms |
 
-## Why SLOs matter
+## Measurement contract
 
-Without them, performance is whatever it happens to be on the day
-someone checks. With them, every PR is gated against a number, every
-alert links to an action, and an "incident" is a measurable thing
-instead of a vibe.
+Core emits `klukai_http_requests_total{route,method,status_class}` and cumulative `klukai_http_request_duration_ms_bucket{route,method,le}` at authenticated `/internal/metrics`. `/api/metrics` remains the admin JSON API. Route values are matched templates; unknown URLs share `_unmatched`. Latency measures the core HTTP handler through response headers, excluding gateway/network overhead, WebSocket turns and time to first token. HTTP 5xx consumes availability; authentication rejections are completed service responses.
 
-## Conventions
+## Burn and latency alerts
 
-- **Latency**: wall-clock from request-receive to response-flush at the
-  amarillo gateway. Excludes Cloudflare TLS overhead and end-user network.
-- **Availability**: 1 − (5xx responses / total responses) over the
-  rolling window.
-- **Error budget**: `1 − SLO`. A 99.9% availability target gives a 0.1%
-  budget — 43m of downtime/month. Burn-rate alerts fire when 14d of
-  budget is consumed in < 24h.
-- **Rolling window**: 30 days unless otherwise noted.
-- **Measurement source**: Prometheus scrape of `/api/metrics` (Phase 2
-  wires this in). Pre-Phase 2 the baseline comes from `tools/load-test/probe.py`.
+For each endpoint, the generated recording rules compute requests, normalized availability burn and histogram p99 over both 5m and 1h. Burn is `(5xx rate / request rate) / (1 - availability)`. A value above 1 consumes the endpoint budget faster than its target; both windows must exceed 1 and each must have at least **20 requests**. Latency alerts use the same sample gates and the endpoint p99 threshold. Alerts persist for **30s**, derived from the policy rollback polling interval times consecutive breaches. These are budget-boundary alerts, without an additional unconfigured multiplier.
 
-## Per-endpoint SLOs
+Absent input stays absent; zero requests does not become a synthetic successful sample. Low traffic does not page for endpoint burn or latency. A separate `KlukaiTelemetryMissing` alert detects missing HTTP counters, and `KlukaiCoreDown` detects an unreachable scrape target. No-data dashboard fields explicitly say `NO DATA`.
 
-### Health endpoints
+Rules: [deployable rules](../obs/prometheus/klukai-slo.rules.yml), [review copy](alerts/klukai.yaml). Runbooks: [availability burn](runbooks/dependency-outage.md#availability-burn), [latency breach](runbooks/dependency-outage.md#latency-breach), [missing telemetry](runbooks/dependency-outage.md#telemetry-missing).
 
-| Endpoint | Latency target | Availability | Notes |
-|---|---|---|---|
-| `/health` | p99 ≤ **30ms** | 99.99% | Cached (5s TTL). 2026-06-12 measured p50 13ms / p99 36ms (was 119ms p50 pre-cache) — p99 still ~6ms over target under 10-way concurrency |
-| `/api/health/live` | p99 ≤ **5ms** | 99.999% | Process-only, no backend ping. Sub-ms expected |
-| `/api/health/ready` | p99 ≤ **500ms** | 99.9% | Uncached deep check; readiness probes only |
-| `/api/health/subsystems` | p99 ≤ **100ms** | 99.9% | Operator/dashboard endpoint, less hot than `/health` |
+## Rollback and retention
 
-### Chat path (dominated by LLM)
+The same policy supplies rollback minimum samples 20, consecutive breaches 3, and polling interval 10 seconds. The release deployer owns evaluation and compatible artifact rollback; an alert never restores production data.
 
-| Endpoint | Latency target | Availability | Notes |
-|---|---|---|---|
-| `POST /api/chat/turn` (first token) | p99 ≤ **2s** | 99.9% | Time-to-first-token; a cold llama.cpp load on dominus-nobara dominates |
-| `POST /api/chat/turn` (full response) | p99 ≤ **8s** | 99.9% | Whole completion, varies by `max_tokens` (6144 cap) |
-| `WS /ws` (connection) | p99 ≤ **200ms** | 99.9% | Reconnect-tolerant; brief drops acceptable |
-| `WS /ws` (per-message latency) | p99 ≤ **8s** | 99.9% | Inherits chat-turn target |
+A full rolling-window availability report requires at least 30 days of retained metrics. The historical 15-day Prometheus setting cannot prove that report. The root operator must verify effective live retention, storage capacity, scrape ingestion and notification routing before operational acceptance. Generated files and passing promtool tests provide source evidence only.
 
-### Memory pipeline
+## Reproduce and verify
 
-| Endpoint | Latency target | Availability | Notes |
-|---|---|---|---|
-| `POST /api/memories/search` | p99 ≤ **500ms** | 99.9% | Qdrant vector search |
-| `GET /api/memories/timeline` | p99 ≤ **300ms** | 99.9% | PG read with index |
-| `GET /api/memories/affection-timeline` | p99 ≤ **300ms** | 99.9% | PG read with date aggregation |
-
-### User-facing CRUD
-
-| Endpoint | Latency target | Availability | Notes |
-|---|---|---|---|
-| `GET /api/user/stats` | p99 ≤ **200ms** | 99.9% | PG aggregation |
-| `GET /api/user/export` | p99 ≤ **3s** | 99.9% | Full data dump; lower frequency |
-| `POST /api/user/login` | p99 ≤ **300ms** | 99.95% | bcrypt verify + session create |
-| `POST /api/user/password-change` | p99 ≤ **300ms** | 99.95% | Same shape as login |
-
-### Audit + admin
-
-| Endpoint | Latency target | Availability | Notes |
-|---|---|---|---|
-| `POST /api/audit/log` (internal) | p99 ≤ **100ms** | 99.95% | PG write; HMAC chain extend |
-| `GET /api/audit/verify` | p99 ≤ **500ms** | 99.9% | Walk chain; O(N) over recent window |
-| `POST /api/admin/rate-limit/reset` | p99 ≤ **200ms** | 99.9% | Redis flush by bucket |
-
-### Image gen (offloaded to dominus-nobara)
-
-| Endpoint | Latency target | Availability | Notes |
-|---|---|---|---|
-| `POST /api/images/generate` (queue) | p99 ≤ **200ms** | 99.9% | Just enqueues; actual gen happens async |
-| Image gen end-to-end | p95 ≤ **15s** | 99% | ComfyUI on dominus-nobara; admission waits for the bounded GPU lease and verified LLM quiescence |
-
-## Composite SLOs
-
-| Composite | Target |
-|---|---|
-| **Overall service availability** | 99.9% — measured as the rate of non-5xx responses across all endpoints |
-| **Chat round-trip availability** | 99.9% — chat must work even if image gen is down |
-| **Cold-start recovery** | After `docker compose restart`, `/health` returns `ok` within **30s** |
-
-## Burn-rate alerting
-
-Alerts fire when the 30-day error budget burns faster than expected:
-
-- **Fast burn (page)**: 14d budget consumed in 1h → wake someone.
-- **Slow burn (ticket)**: 7d budget consumed in 24h → file an issue.
-
-Burn-rate formula (per https://sre.google/workbook/alerting-on-slos/):
-
-```
-short_window_burn = (errors_in_short_window / total_in_short_window) / (1 - SLO)
-long_window_burn  = (errors_in_long_window  / total_in_long_window)  / (1 - SLO)
-alert_if  short_burn ≥ 14 AND long_burn ≥ 14
+```bash
+python -m tools.observability.slo_assets --write
+python -m tools.observability.slo_assets --check
+python -m pytest tests/observability/test_slo_assets.py -q
+promtool check rules obs/prometheus/klukai-slo.rules.yml
+promtool test rules tests/observability/slo-rules.test.yml
 ```
 
-The Prometheus alert rules in `docs/alerts/klukai.yaml` (Phase 2)
-encode the math. Annotations link to `docs/runbooks/<name>.md` so
-the on-call page lands you on the right runbook.
-
-## Out-of-SLO endpoints (explicitly named)
-
-These endpoints do NOT have an SLO because they're operator-only or
-intrinsically variable:
-
-- `/api/admin/*` — operator-only, error rate matters but latency doesn't.
-- `/api/voice/clone-sample` — one-off, training-time bound.
-- `POST /api/memory-archive/seed` — nightly batch, runs for minutes by design.
-
-If one of these becomes user-facing, it gets an SLO when that PR lands.
-
-## Revisiting
-
-This document is **not a contract** — it's a target. When the architecture
-changes (e.g., voice moves off dominus-nobara, the llama.cpp backend changes,
-or a cache TTL is tuned), the targets get re-evaluated. Change history
-lives in `git log -- docs/slos.md`; rationale for any target change goes
-in an ADR.
-
-## Phase 2 perf-gate plan
-
-Once SLOs land, `tools/load-test/probe.py` extends to:
-1. Compare against `docs/perf-baseline.json`.
-2. Fail PR if any endpoint's p99 worsens by > 20% AND breaches its SLO.
-3. Print a regression diff on every CI run as an informational step
-   even when not failing.
-
-This makes regressions visible at author-time, not in production.
+The check compares generated bytes, validates every generated alert/dashboard runbook anchor and verifies provisioned datasource UIDs. Changes to thresholds require editing the canonical JSON and reviewing regenerated rules, docs and dashboards. WebSocket and LLM observations are shown in the chat dashboard without inventing HTTP endpoint objectives.

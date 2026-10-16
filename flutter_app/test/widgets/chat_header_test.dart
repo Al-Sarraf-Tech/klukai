@@ -10,7 +10,8 @@ import '../support/her_day_fixtures.dart';
 
 class _Taps {
   final calls = <String>[];
-  VoidCallback on(String name) => () => calls.add(name);
+  VoidCallback on(String name) =>
+      () => calls.add(name);
 }
 
 Future<_Taps> _pump(
@@ -25,52 +26,78 @@ Future<_Taps> _pump(
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
   final taps = _Taps();
-  await tester.pumpWidget(MaterialApp(
-    home: Scaffold(
-      body: SingleChildScrollView(
-        child: ChatHeader(
-          connected: connected,
-          mood: mood,
-          glow: Colors.cyan,
-          bpm: 72,
-          heartbeatColor: Colors.cyan,
-          ambientMuted: true,
-          affectionScore: 640,
-          affectionLevel: 6,
-          affectionLevelName: levelName,
-          lastAffectionDelta: 12,
-          herDay: withDay
-              ? HerDay.fromJson(herDayJson(
-                  label: 'Hangar · re-torquing every bolt on the swing arm, twice',
-                  outfit: outfitJson(name: 'Astral Luminous (Midnight Jetstream)')))
-              : null,
-          onOpenProfile: taps.on('profile'),
-          onHerDayTap: taps.on('her_day'),
-          onToggleAmbient: taps.on('ambient'),
-          onCompanion: taps.on('companion'),
-          onHerPov: taps.on('her_pov'),
-          onArchive: taps.on('archive'),
-          onSubscription: taps.on('subscription'),
-          onLogout: taps.on('logout'),
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(
+          child: ChatHeader(
+            connected: connected,
+            mood: mood,
+            glow: Colors.cyan,
+            bpm: 72,
+            heartbeatColor: Colors.cyan,
+            ambientMuted: true,
+            affectionScore: 640,
+            affectionLevel: 6,
+            affectionLevelName: levelName,
+            lastAffectionDelta: 12,
+            herDay: withDay
+                ? HerDay.fromJson(
+                    herDayJson(
+                      label:
+                          'Hangar · re-torquing every bolt on the swing arm, twice',
+                      outfit: outfitJson(
+                        name: 'Astral Luminous (Midnight Jetstream)',
+                      ),
+                    ),
+                  )
+                : null,
+            onOpenProfile: taps.on('profile'),
+            onHerDayTap: taps.on('her_day'),
+            onToggleAmbient: taps.on('ambient'),
+            onCompanion: taps.on('companion'),
+            onHerPov: taps.on('her_pov'),
+            onArchive: taps.on('archive'),
+            onSubscription: taps.on('subscription'),
+            onLogout: taps.on('logout'),
+          ),
         ),
       ),
     ),
-  ));
+  );
   await tester.pump();
   return taps;
 }
 
 void main() {
-  for (final width in [320.0, 340.0, 360.0, 375.0, 390.0, 414.0, 430.0, 768.0, 1280.0]) {
+  for (final width in [
+    320.0,
+    340.0,
+    360.0,
+    375.0,
+    390.0,
+    414.0,
+    430.0,
+    768.0,
+    1280.0,
+  ]) {
     testWidgets('no overflow at ${width.toInt()}px', (tester) async {
-      await _pump(tester, width, connected: false, levelName: 'Unspoken Covenant', mood: 'battle_ready');
+      await _pump(
+        tester,
+        width,
+        connected: false,
+        levelName: 'Unspoken Covenant',
+        mood: 'battle_ready',
+      );
       expect(tester.takeException(), isNull);
       expect(find.byKey(const Key('chat-header-companion')), findsOneWidget);
       expect(find.byKey(const Key('chat-header-exit')), findsOneWidget);
     });
   }
 
-  testWidgets('wide: every action is a direct button, no overflow menu', (tester) async {
+  testWidgets('wide: every action is a direct button, no overflow menu', (
+    tester,
+  ) async {
     await _pump(tester, 430);
     expect(find.byKey(const Key('chat-header-more')), findsNothing);
     for (final k in ['ambient', 'her-pov', 'archive', 'subscription']) {
@@ -78,7 +105,9 @@ void main() {
     }
   });
 
-  testWidgets('narrow: secondary actions fold into the menu and still work', (tester) async {
+  testWidgets('narrow: secondary actions fold into the menu and still work', (
+    tester,
+  ) async {
     final taps = await _pump(tester, 340);
     expect(find.byKey(const Key('chat-header-more')), findsOneWidget);
     expect(find.byKey(const Key('chat-header-ambient')), findsNothing);
@@ -114,18 +143,29 @@ void main() {
     expect(semantics, isNotNull);
   });
 
-  testWidgets('companion, archive, exit, portrait and Her Day line call through', (tester) async {
-    final taps = await _pump(tester, 390);
-    await tester.tap(find.byKey(const Key('chat-header-companion')));
-    await tester.tap(find.byKey(const Key('chat-header-archive')));
-    await tester.tap(find.byKey(const Key('chat-header-exit')));
-    await tester.tap(find.byKey(const Key('chat-header-portrait')));
-    await tester.tap(find.byKey(const Key('her-day-status')));
-    expect(taps.calls, ['companion', 'archive', 'logout', 'profile', 'her_day']);
-    expect(find.byTooltip('Companion'), findsOneWidget);
-  });
+  testWidgets(
+    'companion, archive, exit, portrait and Her Day line call through',
+    (tester) async {
+      final taps = await _pump(tester, 390);
+      await tester.tap(find.byKey(const Key('chat-header-companion')));
+      await tester.tap(find.byKey(const Key('chat-header-archive')));
+      await tester.tap(find.byKey(const Key('chat-header-exit')));
+      await tester.tap(find.byKey(const Key('chat-header-portrait')));
+      await tester.tap(find.byKey(const Key('her-day-status')));
+      expect(taps.calls, [
+        'companion',
+        'archive',
+        'logout',
+        'profile',
+        'her_day',
+      ]);
+      expect(find.byTooltip('Companion'), findsOneWidget);
+    },
+  );
 
-  testWidgets('link state text and no Her Day line without a day', (tester) async {
+  testWidgets('link state text and no Her Day line without a day', (
+    tester,
+  ) async {
     await _pump(tester, 390, connected: false, withDay: false);
     expect(find.text('LINK DOWN'), findsOneWidget);
     expect(find.byKey(const Key('her-day-status')), findsNothing);

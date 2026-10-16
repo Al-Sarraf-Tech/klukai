@@ -56,17 +56,21 @@ async def commit_oath_scene(user_id: str, lines: list[str]) -> bool:
             )
             if not claimed.rowcount:
                 return False
-            row = await (await conn.execute(
-                "SELECT id FROM companion_conversations "
-                "WHERE user_id = %s ORDER BY started_at DESC LIMIT 1",
-                (user_id,),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "SELECT id FROM companion_conversations "
+                    "WHERE user_id = %s ORDER BY started_at DESC LIMIT 1",
+                    (user_id,),
+                )
+            ).fetchone()
             if row is None:
-                row = await (await conn.execute(
-                    "INSERT INTO companion_conversations (user_id, summary, model_used) "
-                    "VALUES (%s, %s, %s) RETURNING id",
-                    (user_id, "proactive", "proactive"),
-                )).fetchone()
+                row = await (
+                    await conn.execute(
+                        "INSERT INTO companion_conversations (user_id, summary, model_used) "
+                        "VALUES (%s, %s, %s) RETURNING id",
+                        (user_id, "proactive", "proactive"),
+                    )
+                ).fetchone()
             if row is None:
                 raise RuntimeError("oath conversation was not created")
             conversation_id = row[0]

@@ -6,17 +6,19 @@ globals — single-process FastAPI, no contention.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import os
 
 import yaml
 
-_PERSONALITY: dict | None = None
+_PERSONALITY: dict[str, Any] | None = None
 _PERSONALITY_MTIME: float = 0
 _PERSONALITY_PATH: str = ""
 
 
-def load_personality(path: str | None = None) -> dict:
+def load_personality(path: str | None = None) -> dict[str, Any]:
     """Load personality config, auto-reload if file changed on disk."""
     global _PERSONALITY, _PERSONALITY_MTIME, _PERSONALITY_PATH
     path = path or os.environ.get("PERSONALITY_PATH", "/config/personality.yaml")
@@ -26,17 +28,24 @@ def load_personality(path: str | None = None) -> dict:
     except OSError:
         mtime = 0
 
-    if _PERSONALITY is not None and path == _PERSONALITY_PATH and mtime == _PERSONALITY_MTIME:
+    if (
+        _PERSONALITY is not None
+        and path == _PERSONALITY_PATH
+        and mtime == _PERSONALITY_MTIME
+    ):
         return _PERSONALITY
 
     with open(path) as f:
-        _PERSONALITY = yaml.safe_load(f)
+        loaded: object = yaml.safe_load(f)
+    if not isinstance(loaded, dict):
+        raise ValueError("Personality configuration must be a mapping")
+    _PERSONALITY = loaded
     _PERSONALITY_MTIME = mtime
     _PERSONALITY_PATH = path
     return _PERSONALITY
 
 
-def reload_personality(path: str | None = None) -> dict:
+def reload_personality(path: str | None = None) -> dict[str, Any]:
     """Force reload personality config."""
     global _PERSONALITY, _PERSONALITY_MTIME, _PERSONALITY_PATH
     _PERSONALITY = None
@@ -45,16 +54,16 @@ def reload_personality(path: str | None = None) -> dict:
     return load_personality(path)
 
 
-def get_affection_level_config(p: dict, level: int) -> dict:
+def get_affection_level_config(p: dict[str, Any], level: int) -> dict[str, Any]:
     """Get the affection level configuration for the given level index."""
     levels = p.get("affection", {}).get("levels", [])
     for lv in levels:
         if lv.get("index") == level:
-            return lv
-    return levels[0] if levels else {}
+            return dict(lv)
+    return dict(levels[0]) if levels else {}
 
 
-def get_speech_patterns(p: dict, level: int) -> dict:
+def get_speech_patterns(p: dict[str, Any], level: int) -> dict[str, Any]:
     """Get speech pattern config for the given affection level.
 
     Aligns speech keys with the emotional progression of affection.levels:
@@ -79,4 +88,4 @@ def get_speech_patterns(p: dict, level: int) -> dict:
         key = "level_3_devoted"
     else:
         key = "level_4_bonded"
-    return p.get("speech_patterns", {}).get(key, {})
+    return dict(p.get("speech_patterns", {}).get(key, {}))

@@ -7,6 +7,8 @@ with a dream?", "is today an anniversary?" — that the higher-level flows
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import logging
 from datetime import date, datetime, timezone
@@ -52,6 +54,7 @@ def classify_return_greeting(
 # Emotional continuity — "missed you" beat scaled by gap + closeness
 # ─────────────────────────────────────────────────────────────────────────
 
+
 # Human-readable description of the gap, used to ground the LLM directive.
 def describe_gap(hours_away: float) -> str:
     """Turn an hours-away float into a natural span phrase."""
@@ -68,8 +71,9 @@ def describe_gap(hours_away: float) -> str:
     return f"about {weeks} weeks"
 
 
-def compose_return_emotion(hours_away: float, affection_level: int,
-                            prior_mood: str | None = None) -> str:
+def compose_return_emotion(
+    hours_away: float, affection_level: int, prior_mood: str | None = None
+) -> str:
     """Return a directive describing *how the gap felt to Klukai*.
 
     The result is a short instruction injected into the return-greeting prompt
@@ -127,7 +131,11 @@ def compose_return_emotion(hours_away: float, affection_level: int,
                 "when you greet him."
             )
 
-    if prior_mood and str(prior_mood).strip().lower() not in {"", "composed", "neutral"}:
+    if prior_mood and str(prior_mood).strip().lower() not in {
+        "",
+        "composed",
+        "neutral",
+    }:
         beat += (
             f" Carry over the mood you were left in — '{prior_mood}' — so this feels "
             "like a continuation of where you two left off, not a fresh start."
@@ -166,7 +174,7 @@ def _as_aware_datetime(value: datetime | date | str | None) -> datetime | None:
 
 def is_anniversary(
     event_date: datetime | date | str | None, today: datetime | date | str | None = None
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Return anniversary metadata if today matches event_date's month/day.
 
     For a date that occurred N years ago, returns {"years": N, "original": ISO}.
@@ -199,15 +207,16 @@ def is_anniversary(
     return None
 
 
-def select_anniversary_from_firsts(firsts: list[dict],
-                                    today: datetime | date | str | None = None) -> dict | None:
+def select_anniversary_from_firsts(
+    firsts: list[dict[str, Any]], today: datetime | date | str | None = None
+) -> dict[str, Any] | None:
     """Scan a list of 'firsts' (companion_firsts rows) for anniversary matches.
 
     Returns the first match (or the most significant by years) or None.
     Each firsts dict should contain at least 'event_type' and 'event_date'.
     """
     now = _as_aware_datetime(today) or datetime.now(timezone.utc)
-    best: dict | None = None
+    best: dict[str, Any] | None = None
     for f in firsts:
         ed = _as_aware_datetime(f.get("event_date"))
         if not ed:
@@ -227,9 +236,10 @@ def select_anniversary_from_firsts(firsts: list[dict],
 # Mood contagion
 # ─────────────────────────────────────────────────────────────────────────
 
+
 # Sentiment -> mood pull. Small magnitudes so a single message doesn't
 # flip her whole register — it nudges.
-def interaction_to_sentiment(interaction: dict | None) -> str | None:
+def interaction_to_sentiment(interaction: dict[str, Any] | None) -> str | None:
     """Map an LLM-extracted `interaction` dict to a sentiment label for nudge_mood.
 
     interaction shape (from fact_extractor):
@@ -251,8 +261,15 @@ def interaction_to_sentiment(interaction: dict | None) -> str | None:
         return "flirty"
     # Extractor-native positives (plus legacy labels)
     if t in {
-        "playful", "warm", "affectionate", "tender", "positive",
-        "compliment", "genuine_interest", "personal_sharing", "greeting",
+        "playful",
+        "warm",
+        "affectionate",
+        "tender",
+        "positive",
+        "compliment",
+        "genuine_interest",
+        "personal_sharing",
+        "greeting",
         "remembering",
     }:
         # High-intensity compliments pull flirty at close range. `personal_sharing`
@@ -276,46 +293,46 @@ def interaction_to_sentiment(interaction: dict | None) -> str | None:
 _MOOD_NUDGES: dict[str, dict[str, str]] = {
     # Targets must be valid moods the rest of the stack accepts.
     "negative_heavy": {
-        "composed":  "irritated",
-        "playful":   "composed",
-        "flirty":    "composed",
+        "composed": "irritated",
+        "playful": "composed",
+        "flirty": "composed",
         "affectionate": "composed",
-        "defiant":   "composed",
-        "content":   "composed",
+        "defiant": "composed",
+        "content": "composed",
     },
     "negative_light": {
-        "composed":  "composed",
-        "playful":   "composed",
-        "content":   "composed",
+        "composed": "composed",
+        "playful": "composed",
+        "content": "composed",
     },
     # The Commander is hurting. She drops whatever register she was in and
     # turns toward him — protective when she was neutral, softer when she
     # was light, worried instead of annoyed if she was already prickly.
     "distress": {
-        "composed":  "protective",
-        "focused":   "protective",
-        "defiant":   "protective",
+        "composed": "protective",
+        "focused": "protective",
+        "defiant": "protective",
         "battle_ready": "protective",
-        "playful":   "tender",
-        "amused":    "tender",
+        "playful": "tender",
+        "amused": "tender",
         "flustered": "tender",
-        "content":   "tender",
+        "content": "tender",
         "quietly_pleased": "tender",
         "affectionate": "tender",
         "irritated": "worried",
         "exasperated": "worried",
-        "bored":     "worried",
+        "bored": "worried",
     },
-    "positive":    {
-        "cold":      "composed",  # legacy / invalid cold label warms toward composed
-        "composed":  "quietly_pleased",
+    "positive": {
+        "cold": "composed",  # legacy / invalid cold label warms toward composed
+        "composed": "quietly_pleased",
         "irritated": "composed",
-        "tender":    "affectionate",
-        "focused":   "composed",
+        "tender": "affectionate",
+        "focused": "composed",
     },
-    "flirty":      {
-        "composed":  "flustered",
-        "playful":   "affectionate",
+    "flirty": {
+        "composed": "flustered",
+        "playful": "affectionate",
         "quietly_pleased": "flustered",
     },
 }
@@ -336,8 +353,7 @@ def nudge_mood(current: str, sentiment: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def fade_score(importance: int, age_days: float,
-                half_life_days: float = 30.0) -> float:
+def fade_score(importance: int, age_days: float, half_life_days: float = 30.0) -> float:
     """Decay an episode's effective importance by age.
 
     Effective = importance * 0.5 ** (age / half_life)
@@ -348,11 +364,15 @@ def fade_score(importance: int, age_days: float,
     if importance <= 0 or age_days < 0:
         return 0.0
     decay = 0.5 ** (age_days / half_life_days)
-    return max(0.0, min(float(importance), importance * decay))
+    return float(max(0.0, min(float(importance), importance * decay)))
 
 
-def should_fade(importance: int, age_days: float,
-                threshold: float = 0.5, half_life_days: float = 30.0) -> bool:
+def should_fade(
+    importance: int,
+    age_days: float,
+    threshold: float = 0.5,
+    half_life_days: float = 30.0,
+) -> bool:
     """Return True if this episode's effective importance has fallen below
     `threshold` — candidate for compaction / archival."""
     return fade_score(importance, age_days, half_life_days) < threshold

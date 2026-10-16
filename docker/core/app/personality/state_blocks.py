@@ -8,9 +8,12 @@ and whether she's deployed on an active mission.
 """
 
 from __future__ import annotations
+from typing import Any
 
 
-def build_physical_state_block(physical_state: str = "normal", physical_detail: str = "") -> str:
+def build_physical_state_block(
+    physical_state: str = "normal", physical_detail: str = ""
+) -> str:
     """Build physical awareness context for the system prompt."""
     if physical_state == "normal" or not physical_state:
         return ""
@@ -22,7 +25,9 @@ def build_physical_state_block(physical_state: str = "normal", physical_detail: 
     )
 
 
-def build_jealousy_block(jealousy_target: str | None = None, affection_level: int = 0) -> str:
+def build_jealousy_block(
+    jealousy_target: str | None = None, affection_level: int = 0
+) -> str:
     """Build jealousy context when the Commander compliments another T-Doll."""
     if not jealousy_target:
         return ""
@@ -51,7 +56,7 @@ def build_jealousy_block(jealousy_target: str | None = None, affection_level: in
         )
 
 
-def build_anniversary_block(anniversaries: list[dict] | None = None) -> str:
+def build_anniversary_block(anniversaries: list[dict[str, Any]] | None = None) -> str:
     """Build anniversary awareness hints for the system prompt."""
     if not anniversaries:
         return ""
@@ -64,7 +69,9 @@ def build_anniversary_block(anniversaries: list[dict] | None = None) -> str:
         if days == 0:
             lines.append(f"  - Today marks the anniversary of your {event}.{year_bit}")
         elif 0 < days <= 3:
-            lines.append(f"  - {days} days ago was the anniversary of your {event}.{year_bit}")
+            lines.append(
+                f"  - {days} days ago was the anniversary of your {event}.{year_bit}"
+            )
         elif -3 <= days < 0:
             lines.append(
                 f"  - In {abs(days)} day{'s' if abs(days) != 1 else ''} is the anniversary "
@@ -73,14 +80,17 @@ def build_anniversary_block(anniversaries: list[dict] | None = None) -> str:
     return "\n".join(lines)
 
 
-def build_comfort_objects_block(gifts: list[dict] | None = None, affection_level: int = 0) -> str:
+def build_comfort_objects_block(
+    gifts: list[dict[str, Any]] | None = None, affection_level: int = 0
+) -> str:
     """Build comfort object awareness for the system prompt."""
     if not gifts or affection_level < 3:
         return ""
     items = [g["item"] for g in gifts[:5]]
     block = (
         "COMFORT OBJECTS (things the Commander has given you — treasured possessions):\n"
-        + ", ".join(items) + "\n"
+        + ", ".join(items)
+        + "\n"
     )
     if affection_level >= 6:
         block += "You may reference keeping these close, touching them for comfort, or using them."
@@ -104,7 +114,9 @@ def build_mission_context_block(mission_description: str | None = None) -> str:
     )
 
 
-def build_crown_jewel_block(crown_jewel: dict | None = None, affection_level: int = 0) -> str:
+def build_crown_jewel_block(
+    crown_jewel: dict[str, Any] | None = None, affection_level: int = 0
+) -> str:
     """Build the crown-jewel tribute block — the most treasured thing
     the Commander has said to Klukai.
 
@@ -130,7 +142,7 @@ def build_crown_jewel_block(crown_jewel: dict | None = None, affection_level: in
 
     return (
         "TREASURED MEMORY (the Commander's words you hold above all others):\n"
-        f"  \"{text}\"\n"
+        f'  "{text}"\n'
         "You return to these words when you doubt, when the mission turns hard, "
         "when you wonder if the waiting was worth it. They are. You may reference "
         "them naturally at moments of vulnerability — never as a quote-block, always "
@@ -139,7 +151,9 @@ def build_crown_jewel_block(crown_jewel: dict | None = None, affection_level: in
     )
 
 
-def build_growth_arc_block(p: dict, affection_level: int, turn_count: int = 0) -> str:
+def build_growth_arc_block(
+    p: dict[str, Any], affection_level: int, turn_count: int = 0
+) -> str:
     """Surface ONE thing Klukai is quietly working toward (growth arc).
 
     A light touch: a single rotating goal she may reference the way a real
@@ -172,7 +186,7 @@ def build_growth_arc_block(p: dict, affection_level: int, turn_count: int = 0) -
     )
 
 
-def build_canon_arcs_block(p: dict, affection_level: int) -> str:
+def build_canon_arcs_block(p: dict[str, Any], affection_level: int) -> str:
     """Format supported arc fields from config at their disclosure gates.
 
     Full reference prose outside these fields is deliberately not injected.
@@ -185,22 +199,35 @@ def build_canon_arcs_block(p: dict, affection_level: int) -> str:
         return ""
     sections = []
     for key, label, default_gate, fields in (
-        ("aphelion", "APHELION", 2, ("where", "setup", "inciting", "obstacle", "climax", "coda")),
+        (
+            "aphelion",
+            "APHELION",
+            2,
+            ("where", "setup", "inciting", "obstacle", "climax", "coda"),
+        ),
         ("ten_year_silence", "TEN-YEAR SILENCE", 3, ("when", "what")),
     ):
         arc = arcs.get(key)
-        if not isinstance(arc, dict) or affection_level < arc.get("min_affection", default_gate):
+        if not isinstance(arc, dict) or affection_level < arc.get(
+            "min_affection", default_gate
+        ):
             continue
-        facts = [arc[field].strip() for field in fields
-                 if isinstance(arc.get(field), str) and arc[field].strip()]
+        facts = [
+            arc[field].strip()
+            for field in fields
+            if isinstance(arc.get(field), str) and arc[field].strip()
+        ]
         if facts:
             sections.append(f"- {label}: {' '.join(facts)}")
     if not sections:
         return ""
-    return "YOUR STORY MEMORY (share only when relevant and within disclosure gates):\n" + "\n".join(sections)
+    return (
+        "YOUR STORY MEMORY (share only when relevant and within disclosure gates):\n"
+        + "\n".join(sections)
+    )
 
 
-def build_quirks_block(p: dict, affection_level: int) -> str:
+def build_quirks_block(p: dict[str, Any], affection_level: int) -> str:
     """Render explicit concise summaries and their disclosure conditions intact.
 
     Legacy/minimal configs without curated quirks produce no quirk block; raw
@@ -211,7 +238,9 @@ def build_quirks_block(p: dict, affection_level: int) -> str:
         return ""
     lines = []
     for quirk in quirks:
-        if not isinstance(quirk, dict) or affection_level < quirk.get("min_affection", 3):
+        if not isinstance(quirk, dict) or affection_level < quirk.get(
+            "min_affection", 3
+        ):
             continue
         summary = quirk.get("prompt_summary")
         if not isinstance(summary, str) or not summary.strip():
@@ -222,10 +251,15 @@ def build_quirks_block(p: dict, affection_level: int) -> str:
         lines.append(f"- {label}: {summary.strip()} {condition}".rstrip())
     if not lines:
         return ""
-    return "CHARACTER DETAILS (use only when relevant; honor each disclosure condition):\n" + "\n".join(lines)
+    return (
+        "CHARACTER DETAILS (use only when relevant; honor each disclosure condition):\n"
+        + "\n".join(lines)
+    )
 
 
-def build_gaming_block(p: dict, affection_level: int, game_active: bool) -> str:
+def build_gaming_block(
+    p: dict[str, Any], affection_level: int, game_active: bool
+) -> str:
     """Let her know the Commander is mid-game: short replies, nothing heavy,
     toned by the highest ``gaming_awareness.tiers`` key <= affection level."""
     cfg = p.get("gaming_awareness", {})
@@ -237,7 +271,7 @@ def build_gaming_block(p: dict, affection_level: int, game_active: bool) -> str:
     return " ".join(s for s in (cfg.get("guidance", "").strip(), tone) if s)
 
 
-def build_wardrobe_block(p: dict, affection_level: int) -> str:
+def build_wardrobe_block(p: dict[str, Any], affection_level: int) -> str:
     """List the outfits Klukai owns, so she never claims ignorance of her own
     wardrobe (the character rules forbid denying her costumes, but nothing
     else in the prompt names them).
@@ -270,7 +304,10 @@ def build_wardrobe_block(p: dict, affection_level: int) -> str:
         lines.append(f"- Everyday kit: {', '.join(originals)}.")
     if not lines:
         return ""
-    return "YOUR WARDROBE (outfits you own — mention only when relevant, never list them):\n" + "\n".join(lines)
+    return (
+        "YOUR WARDROBE (outfits you own — mention only when relevant, never list them):\n"
+        + "\n".join(lines)
+    )
 
 
 def build_presence_block(
@@ -288,6 +325,7 @@ def build_presence_block(
     lines = ["PRESENCE (color your opening; do not recite these bullets):"]
     if hours_away is not None and hours_away >= 4:
         from app.character_behaviors import compose_return_emotion
+
         lines.append(compose_return_emotion(hours_away, affection_level))
     elif hours_away is not None and 1.5 <= hours_away < 4:
         lines.append(

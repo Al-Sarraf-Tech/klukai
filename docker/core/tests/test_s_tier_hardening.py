@@ -3,6 +3,7 @@ atomic transactions, subsystem health, episode dual-write."""
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 
@@ -236,7 +237,9 @@ class TestSecurityConfig:
 
             pytest.skip("Dockerfile not shipped into runtime image")
         text = dockerfile.read_text()
-        users = [line.split()[1] for line in text.splitlines() if line.startswith("USER ")]
+        users = [
+            line.split()[1] for line in text.splitlines() if line.startswith("USER ")
+        ]
         assert users, "The final runtime must explicitly select a user"
         assert users[-1].split(":")[0] not in {"root", "0"}
         # The release suite additionally checks the actual image UID. A
@@ -245,11 +248,16 @@ class TestSecurityConfig:
     def test_costume_endpoints_require_auth(self):
         source = Path(__file__).resolve().parent.parent / "app" / "routes_extras.py"
         text = source.read_text()
-        # Find both costume handlers — both should have _get_user_id
-        costume_section = text[text.index("api_get_costume") : text.index("api_stt")]
-        assert costume_section.count("_get_user_id") >= 2, (
-            "Both costume GET and POST must require auth"
-        )
+        handlers = {
+            node.name: ast.get_source_segment(text, node)
+            for node in ast.walk(ast.parse(text))
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name in {"api_get_costume", "api_set_costume"}
+        }
+        assert set(handlers) == {"api_get_costume", "api_set_costume"}
+        for name, handler in handlers.items():
+            assert "await _get_user_id(request)" in handler, name
+            assert "status_code=401" in handler, name
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -261,9 +269,11 @@ class TestAtomicTransaction:
     """Verify store_message uses atomic transaction."""
 
     def test_store_message_uses_commit(self):
-        source = Path(__file__).resolve().parent.parent / "app" / "helpers.py"
+        source = (
+            Path(__file__).resolve().parent.parent / "app" / "conversation_store.py"
+        )
         text = source.read_text()
-        # Find the store_message function — it's the last function in the file
+        # Inspect the persistence owner, independent of the helpers re-export
         func_start = text.index("async def store_message")
         func_text = text[func_start:]
         assert "await conn.commit()" in func_text, (
@@ -308,17 +318,16 @@ class TestSubsystemHealth:
     """Verify subsystem health endpoint exists and checks all services."""
 
     def test_subsystem_health_endpoint_exists(self):
-        source = Path(__file__).resolve().parent.parent / "app" / "routes.py"
+        source = Path(__file__).resolve().parent.parent / "app" / "routes_health.py"
         text = source.read_text()
         assert "/api/health/subsystems" in text
 
     def test_checks_all_seven_subsystems(self):
-        source = Path(__file__).resolve().parent.parent / "app" / "routes.py"
+        source = Path(__file__).resolve().parent.parent / "app" / "routes_health.py"
         text = source.read_text()
         # Find the subsystem_health function
-        func_start = text.index("subsystem_health")
-        func_end = text.index("# ── Push subscription", func_start)
-        func_text = text[func_start:func_end]
+        func_text = text
+        assert "results.update(await _image_subsystems())" in func_text
         for subsystem in [
             "database",
             "redis",
@@ -331,14 +340,15 @@ class TestSubsystemHealth:
             assert subsystem in func_text, f"Must check {subsystem} subsystem"
 
     def test_subsystem_health_requires_auth(self):
-        source = Path(__file__).resolve().parent.parent / "app" / "routes.py"
+        source = Path(__file__).resolve().parent.parent / "app" / "routes_health.py"
         text = source.read_text()
-        func_start = text.index("subsystem_health")
-        func_end = text.index("# ── Push subscription", func_start)
-        func_text = text[func_start:func_end]
-        assert "_get_user_id" in func_text, (
+        func_text = text
+        assert "await resolve_user(request)" in func_text, (
             "Subsystem health must require authentication"
         )
+        assert "status_code=401" in func_text
+        registry = (source.parent / "routes.py").read_text()
+        assert "lambda request: _get_user_id(request)" in registry
 
 
 # ═══════════════════════════════════════════════════════════════════════════

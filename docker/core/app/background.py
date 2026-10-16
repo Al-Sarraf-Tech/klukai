@@ -5,10 +5,11 @@ from the WebSocket message handler in chat.py.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import asyncio
 import logging
-import uuid
 from datetime import datetime
 
 from . import context
@@ -21,6 +22,7 @@ from .image_gen import build_prompt, generate_image, is_couple_scene, is_landsca
 from .image_gen_constants import INTIMATE_MIN_LEVEL
 from .character_scenes import commit_oath_scene, oath_lines
 from .models import SessionState
+from .memory_extraction import ExtractionRuntime
 from .personality import load_personality
 
 logger = logging.getLogger(__name__)
@@ -51,13 +53,18 @@ async def maybe_deliver_oath(user_id: str) -> bool:
     return True
 
 
-async def _apply_extracted_state(snapshot: SessionState, mood: str, user_id: str) -> bool:
+async def _apply_extracted_state(
+    snapshot: SessionState, mood: str, user_id: str
+) -> bool:
     """Atomically guard mood, mission and their persistent/timer/WS effects."""
     key = session_id(user_id)
     async with memory.session_owner(key):
         session = await memory.get_session(key)
-        if (session is None or session.conversation_id != snapshot.conversation_id
-                or session.revision != snapshot.revision):
+        if (
+            session is None
+            or session.conversation_id != snapshot.conversation_id
+            or session.revision != snapshot.revision
+        ):
             return False
         # The mood she was in BEFORE this turn — read it before set_last_mood
         # overwrites it, or the vigilant-after-battle_ready check below only
@@ -73,20 +80,28 @@ async def _apply_extracted_state(snapshot: SessionState, mood: str, user_id: str
         if mood == "vigilant" and prev_mood == "battle_ready":
             mission_moods.add("vigilant")
         if mood in mission_moods and not proactive.get_mission_timer(user_id):
-            recent_text = " ".join(
-                t.get("content", "")[:100] for t in session.turns[-4:]
-                if t.get("role") == "user"
-            ) or "Combat operation"
+            recent_text = (
+                " ".join(
+                    t.get("content", "")[:100]
+                    for t in session.turns[-4:]
+                    if t.get("role") == "user"
+                )
+                or "Combat operation"
+            )
             start_mission = True
             session.mission_description = recent_text
             session.mission_interval = 30
             session.mission_started_at = datetime.now().isoformat()
-            logger.info("Mission auto-started from battle_ready mood: %s", recent_text[:60])
+            logger.info(
+                "Mission auto-started from battle_ready mood: %s", recent_text[:60]
+            )
 
         await memory.save_session(key, session)
         proactive.set_last_mood(mood, user_id=user_id)
-        if start_mission:
-            proactive.start_mission(session.mission_description, interval_minutes=30, user_id=user_id)
+        if start_mission and session.mission_description is not None:
+            proactive.start_mission(
+                session.mission_description, interval_minutes=30, user_id=user_id
+            )
         await ws.send_mood(user_id, mood)
 
         # Persist mood so it survives session expiry
@@ -96,7 +111,13 @@ async def _apply_extracted_state(snapshot: SessionState, mood: str, user_id: str
                     "INSERT INTO companion_persistent_state (user_id, mood, last_conversation_id, updated_at) "
                     "VALUES (%s, %s, %s, NOW()) "
                     "ON CONFLICT (user_id) DO UPDATE SET mood = %s, last_conversation_id = %s, updated_at = NOW()",
-                    (user_id, mood, session.conversation_id, mood, session.conversation_id),
+                    (
+                        user_id,
+                        mood,
+                        session.conversation_id,
+                        mood,
+                        session.conversation_id,
+                    ),
                 )
         except Exception as e:
             logger.warning("Failed to persist mood: %s", e)
@@ -112,273 +133,27 @@ async def background_extraction(
     image_generated: bool = False,
     memory_id: str | None = None,
 ) -> None:
-    """Background task: extract facts, adjust affection, and maybe create an episode.
-
-    Delayed 3s so LLM calls don't compete with the main response stream.
-    All calls are serialized (not parallel) to avoid queuing in LM Studio.
-    """
-    session = session.model_copy(deep=True)
-    await asyncio.sleep(3)  # Let main response finish streaming first
-    try:
-        aff_state_bg = await affection.get_state(user_id)
-        result = await extract_facts(
-            user_msg, assistant_msg,
-            image_generated=image_generated,
-            affection_level=aff_state_bg.level,
-        )
-
-        # Apply curation if image was generated and curation data came back
-        # Resolve memory_id: prefer explicit arg, fall back to module-level last_memory_id
-        # (image gen runs concurrently and sets it ~1-30s before extraction completes)
-        curation_target = memory_id or (image_generated and context.get_last_memory_id(user_id)) or None
-        if image_generated and curation_target and "memory_curation" in result:
-            try:
-                await memory_archive.update_curation(
-                    curation_target, result["memory_curation"], aff_state_bg.level
-                )
-            except Exception as e:
-                logger.warning("Memory curation update failed for %s: %s", curation_target, e)
-
-        # Store new facts (scoped to user). LLM output is untrusted — skip any
-        # non-dict / non-string entries instead of TypeError-ing the whole
-        # extraction (which would also skip mood, affection, and exchange store).
-        try:
-            for fact in result.get("facts", []) or []:
-                if not isinstance(fact, dict):
-                    logger.warning("Skipping non-dict fact from extractor: %r", fact)
-                    continue
-                key, value = fact.get("key"), fact.get("value")
-                if not isinstance(key, str) or not isinstance(value, str):
-                    logger.warning("Skipping malformed fact (key/value types): %r", fact)
-                    continue
-                if not key or not value:
-                    continue
-                await memory.set_relationship_fact(key, value, user_id=user_id)
-        except Exception as e:
-            logger.warning("Fact storage failed (continuing extraction): %s", e)
-
-        # Store commander details as relationship facts (feature: she remembers)
-        commander_details = result.get("commander_details", {})
-        if isinstance(commander_details, dict):
-            for detail_key, detail_val in commander_details.items():
-                if detail_val and isinstance(detail_val, str):
-                    await memory.set_relationship_fact(
-                        f"commander_{detail_key}", detail_val, user_id=user_id
-                    )
-
-        # Store gift if detected (feature: comfort objects)
-        gift_item = result.get("gift_item")
-        if gift_item and isinstance(gift_item, str) and len(gift_item) > 1:
-            await proactive.store_gift(user_id, gift_item)
-            # Record as a "first" if it's the first gift
-            await proactive.record_first(user_id, "first_gift")
-
-        # Store inside joke / running reference if detected (feature: inside
-        # jokes). Reuses the relationship-fact store under the rel:joke:*
-        # namespace — no new table. Surfaced later via a per-message block.
-        inside_joke = result.get("inside_joke")
-        if isinstance(inside_joke, dict):
-            jk_label = inside_joke.get("label")
-            jk_note = inside_joke.get("note")
-            if isinstance(jk_label, str) and isinstance(jk_note, str):
-                await memory.set_inside_joke(jk_label, jk_note, user_id=user_id)
-
-        # Promises & gentle accountability: detect commitments the Commander
-        # makes ("I'll…", "tomorrow I'll…") and schedule a caring follow-up.
-        # A separate LLM call (the merged extraction prompt is already large),
-        # fully fail-soft so it can never break the rest of extraction.
-        upcoming_events: list = []
-        try:
-            from .fact_extractor import extract_promises
-            from . import promises as promises_store
-            promise_result = await extract_promises(user_msg, aff_state_bg.level)
-            for commitment in promise_result.get("promises", []):
-                await promises_store.store_promise(commitment, user_id=user_id)
-            upcoming_events = promise_result.get("events") or []
-        except Exception as e:
-            logger.warning("Promise extraction failed: %s", e)
-
-        # Operation Brief: the same call also returned his upcoming real-life
-        # events. op_brief retires anything he says was cancelled, then plans a
-        # brief / send-off / debrief chain on the deferred rail. Never raises.
-        from . import op_brief
-        await op_brief.on_turn(
-            user_msg, upcoming_events, user_id=user_id,
-            affection_level=aff_state_bg.level,
-        )
-
-        # Update mood in session + persist to PostgreSQL
-        mood = result.get("mood", "composed")
-
-        # Mood contagion: nudge Klukai's mood toward user's sentiment.
-        # Small effect — the LLM-detected mood is the primary signal; contagion
-        # is a one-step bounded adjustment that never jumps more than one register.
-        try:
-            from .character_behaviors import nudge_mood, interaction_to_sentiment
-            sentiment = interaction_to_sentiment(result.get("interaction"))
-            if sentiment:
-                mood = nudge_mood(mood, sentiment)
-        except Exception as e:
-            logger.debug("Mood contagion skipped: %s", e)
-
-        await _apply_extracted_state(session, mood, user_id)
-
-        # Record "firsts" for anniversary tracking (scoped to user)
-        if session.turn_count == 1:
-            await proactive.record_first(user_id, "first_message")
-            # Also record milestone in the fact store
-            await memory.record_milestone("first_message", user_id=user_id)
-
-        # Physical state: long conversation -> relaxed
-        if session.turn_count > 0 and session.turn_count % 10 == 0:
-            from .context import physical
-            await physical.on_long_conversation(user_id)
-
-        # Adjust affection using the merged interaction classification (no separate LLM call)
-        try:
-            interaction = result.get("interaction", {})
-            if isinstance(interaction, str):
-                interaction = {"type": interaction, "intensity": 5}
-            elif not isinstance(interaction, dict):
-                interaction = {"type": "neutral", "intensity": 5}
-            interaction_type = interaction.get("type", "neutral")
-            intensity = max(1, min(10, int(interaction.get("intensity", 5))))
-            aff_change = await affection.apply_classification(interaction_type, intensity, user_id)
-
-            # Heartbeat spike detection (feature: heartbeat spike alerts)
-            HIGH_INTENSITY_MOODS = {
-                "passionate": 165, "terrified": 175, "panicked": 180,
-                "desperate": 170, "furious": 160, "adrenaline": 155,
-                "yearning": 150, "infatuated": 152,
-            }
-            if mood in HIGH_INTENSITY_MOODS and intensity >= 7:
-                bpm = HIGH_INTENSITY_MOODS[mood]
-                await ws.send_heartbeat_spike(user_id, bpm, mood)
-                logger.info("Heartbeat spike: %s bpm=%d intensity=%d", mood, bpm, intensity)
-
-            # Sync affection level to proactive engine
-            proactive.set_affection_level(aff_change.new_level, user_id=user_id)
-
-            # Send real-time affection update to UI
-            await ws.send_affection(user_id,
-                aff_change.new_score, aff_change.new_level,
-                aff_change.new_level_name, aff_change.delta,
-            )
-
-            # Handle level transitions
-            if aff_change.level_changed:
-                await ws.send_affection_level_change(user_id,
-                    aff_change.new_level, aff_change.new_level_name,
-                    aff_change.level_direction,
-                )
-
-                personality = load_personality()
-                aff_config = personality.get("affection", {})
-
-                if aff_change.level_direction == "up":
-                    # ── PRIMARY: Level-9 "Oath Fulfilled" capstone ──────────
-                    # The first time affection reaches level 9, fire the one-time
-                    # oath scene (indigo_oath / wedding imagery, "Every day, I
-                    # choose you again."). Guarded by companion_firsts so it can
-                    # NEVER repeat — a later return to lv9 falls through to the
-                    # short level_up_messages[9] line. We deliver it as a
-                    # distinctive proactive scene because no UI costume-swap WS
-                    # event exists (verified ws_manager.py).
-                    oath_delivered = False
-                    if aff_change.new_level == 9:
-                        oath_delivered = await maybe_deliver_oath(user_id)
-
-                    # Check for first-time milestone scene — scoped to THIS user
-                    # so one user's progress can't suppress (or steal) another
-                    # user's milestone. record_milestone is idempotent per user.
-                    milestone_key = f"affection_level_{aff_change.new_level}"
-                    is_new = await memory.record_milestone(milestone_key, user_id=user_id)
-
-                    if oath_delivered:
-                        # The oath scene IS the level-9 moment — the milestone is
-                        # already recorded above, so just suppress the ordinary
-                        # scene/message this turn.
-                        pass
-                    elif is_new:
-                        # First time reaching this level — deliver milestone scene
-                        scenes = aff_config.get("milestone_scenes", {})
-                        scene_lines = scenes.get(aff_change.new_level, [])
-                        for line in scene_lines:
-                            await ws.send_proactive(user_id, line)
-                            await asyncio.sleep(2)  # Pause between lines
-                    else:
-                        # Repeat level-up — just the short message
-                        messages = aff_config.get("level_up_messages", {})
-                        special_line = messages.get(aff_change.new_level)
-                        if special_line:
-                            await ws.send_proactive(user_id, special_line)
-                else:
-                    messages = aff_config.get("level_down_messages", {})
-                    special_line = messages.get(aff_change.new_level)
-                    if special_line:
-                        await ws.send_proactive(user_id, special_line)
-
-                logger.info(
-                    "Affection level %s: %d -> %d (%s)",
-                    aff_change.level_direction,
-                    aff_change.new_level - (1 if aff_change.level_direction == "up" else -1),
-                    aff_change.new_level,
-                    aff_change.new_level_name,
-                )
-        except Exception as e:
-            logger.warning("Affection adjustment failed: %s", e)
-
-        # Normalize topics once — extractor sometimes returns a bare string or null.
-        raw_topics = result.get("topics", [])
-        if isinstance(raw_topics, str):
-            topics = [raw_topics] if raw_topics else []
-        elif isinstance(raw_topics, list):
-            topics = [t for t in raw_topics if isinstance(t, str)]
-        else:
-            topics = []
-
-        # Store exchange in conversation memory for rich recall (scoped to user).
-        # Isolated from fact-parsing so a malformed extractor payload never
-        # silently drops the conversation from long-term memory.
-        try:
-            exchange_id = str(uuid.uuid4())
-            await memory.store_exchange(
-                exchange_id=exchange_id,
-                user_content=user_msg,
-                assistant_content=assistant_msg,
-                topics=topics,
-                mood=mood if isinstance(mood, str) else "composed",
-                importance=0.7 if result.get("should_remember") else 0.4,
-                conversation_id=session.conversation_id,
-                user_id=user_id,
-            )
-        except Exception as e:
-            logger.warning("Exchange storage failed: %s", e)
-
-        # Create episode every 10 turns (scoped to user)
-        if session.turn_count > 0 and session.turn_count % 10 == 0:
-            try:
-                summary = await create_episode_summary(session.turns)
-                if summary:
-                    episode_id = str(uuid.uuid4())
-                    await memory.store_episode(
-                        episode_id=episode_id,
-                        summary=summary,
-                        keywords=topics,
-                        emotion_tags=[mood] if isinstance(mood, str) else [],
-                        importance=0.5,
-                        conversation_id=session.conversation_id,
-                        user_id=user_id,
-                    )
-                    logger.info("Episode stored: %s", summary[:80])
-            except Exception as e:
-                logger.warning("Episode creation failed: %s", e)
-    except Exception as e:
-        import traceback
-        logger.error("Background extraction failed: %s\n%s", e, traceback.format_exc())
+    runtime = ExtractionRuntime(
+        memory,
+        affection,
+        proactive,
+        ws,
+        context.get_last_memory_id,
+        memory_archive.update_curation,
+        extract_facts,
+        create_episode_summary,
+        _apply_extracted_state,
+        maybe_deliver_oath,
+        load_personality,
+    )
+    await runtime.process(
+        user_msg, assistant_msg, session, user_id, image_generated, memory_id
+    )
 
 
-async def background_compaction(session: SessionState, user_id: str = "jalsarraf") -> None:
+async def background_compaction(
+    session: SessionState, user_id: str = "jalsarraf"
+) -> None:
     """Compact older session turns into a summary to reduce prefill tokens.
 
     Triggered when session.turns >= COMPACT_THRESHOLD. Summarizes the oldest
@@ -401,7 +176,12 @@ async def background_compaction(session: SessionState, user_id: str = "jalsarraf
 
         # Build text to compact (include existing summary if any)
         if session.context_summary:
-            old_turns = [{"role": "system", "content": f"[Previous summary: {session.context_summary}]"}] + old_turns
+            old_turns = [
+                {
+                    "role": "system",
+                    "content": f"[Previous summary: {session.context_summary}]",
+                }
+            ] + old_turns
 
         summary = await compact_turns(old_turns)
         if not summary:
@@ -411,15 +191,24 @@ async def background_compaction(session: SessionState, user_id: str = "jalsarraf
         key = session_id(user_id)
         async with memory.session_owner(key):
             live = await memory.get_session(key)
-            if (live is None or live.conversation_id != session.conversation_id
-                    or live.context_summary != session.context_summary
-                    or live.turns[:n_old] != prefix):
-                logger.info("Compaction skipped: stored prefix, summary or conversation changed")
+            if (
+                live is None
+                or live.conversation_id != session.conversation_id
+                or live.context_summary != session.context_summary
+                or live.turns[:n_old] != prefix
+            ):
+                logger.info(
+                    "Compaction skipped: stored prefix, summary or conversation changed"
+                )
                 return
             live.context_summary = summary
             del live.turns[:n_old]
             await memory.save_session(key, live)
-            logger.info("Session compacted: %d old turns, %d raw turns remain", n_old, len(live.turns))
+            logger.info(
+                "Session compacted: %d old turns, %d raw turns remain",
+                n_old,
+                len(live.turns),
+            )
     except Exception as e:
         logger.error("Background compaction failed: %s", e)
 
@@ -442,7 +231,11 @@ async def background_image_gen(
             ready = True  # The host worker fails visibly; never probe the GPU.
         elif provider == "openai":
             if not await asyncio.to_thread(cloud_images_ready):
-                await ws.send_proactive(user_id, "...Visualization is unavailable right now, Commander.", persist=False)
+                await ws.send_proactive(
+                    user_id,
+                    "...Visualization is unavailable right now, Commander.",
+                    persist=False,
+                )
                 await ws.send(user_id, {"type": "thinking", "content": ""})
                 return
             ready = True
@@ -452,20 +245,33 @@ async def background_image_gen(
             await asyncio.sleep(1)
             ready = await check_comfyui_ready()
         else:
-            await ws.send_proactive(user_id, "...Visualization is unavailable right now, Commander.", persist=False)
+            await ws.send_proactive(
+                user_id,
+                "...Visualization is unavailable right now, Commander.",
+                persist=False,
+            )
             await ws.send(user_id, {"type": "thinking", "content": ""})
             return
         logger.info("Image gen: starting")
         if not ready:
-            await ws.send_thinking(user_id, "Warming up image systems, Commander. Stand by...")
+            await ws.send_thinking(
+                user_id, "Warming up image systems, Commander. Stand by..."
+            )
         else:
-            await ws.send_thinking(user_id, "Compiling tactical visualization, Commander...")
+            await ws.send_thinking(
+                user_id, "Compiling tactical visualization, Commander..."
+            )
 
         # Agy receives only the explicit request and local appearance tags.
         # Squad hints supplied by chat_handlers may include old conversations.
-        full_context = user_request if use_agy else (f"{chat_context}\n{user_request}" if chat_context else user_request)
+        full_context = (
+            user_request
+            if use_agy
+            else (f"{chat_context}\n{user_request}" if chat_context else user_request)
+        )
         if use_agy:
             from .image_gen import detect_squad_members
+
             squad_members = detect_squad_members(user_request)
         couple = is_couple_scene(full_context)
 
@@ -477,10 +283,15 @@ async def background_image_gen(
         # Render what she is actually wearing right now (Her Day: today's pick,
         # his granted request, or block kit) — gated at the current level.
         from .her_day import render_costume
+
         costume = await render_costume(user_id, aff_level)
         full_prompt = build_prompt(
-            scene_tags, couple=couple, affection_level=aff_level,
-            context=full_context, squad_members=squad_members, costume=costume,
+            scene_tags,
+            couple=couple,
+            affection_level=aff_level,
+            context=full_context,
+            squad_members=squad_members,
+            costume=costume,
             request=user_request,
         )
         logger.info("Image composition prepared (aff=%d)", aff_level)
@@ -493,73 +304,52 @@ async def background_image_gen(
 
         outcome = None
         if use_agy:
-            from .account_images import complete_archive, explicit_request_id, fulfill_account_image
+            from .account_images import explicit_request_id, fulfill_account_image
             from .image_provider import cloud_prompt
+
             full_prompt = f"{user_request}\n\n{cloud_prompt(full_prompt, sfw=aff_level < INTIMATE_MIN_LEVEL)}"
             # The id is the explicit sentence, so a repeat finds this journal row.
-            request_id = explicit_request_id(user_id, user_request, width, height, couple)
+            request_id = explicit_request_id(
+                user_id, user_request, width, height, couple
+            )
             accepted_session = await memory.get_session(session_id(user_id))
             archive_context = {
-                "conversation_id": accepted_session.conversation_id if accepted_session else "unknown",
+                "conversation_id": accepted_session.conversation_id
+                if accepted_session
+                else "unknown",
                 "mood": accepted_session.mood if accepted_session else "composed",
                 "affection_level": aff_level,
             }
             outcome = await fulfill_account_image(
-                user_id, full_prompt, width=width, height=height,
-                include_commander=couple, request_id=request_id,
+                user_id,
+                full_prompt,
+                width=width,
+                height=height,
+                include_commander=couple,
+                request_id=request_id,
                 archive_context=archive_context,
             )
             img_bytes = outcome.get("image")
         else:
             img_bytes = await generate_image(
-                full_prompt, width=width, height=height,
+                full_prompt,
+                width=width,
+                height=height,
                 sfw=aff_level < INTIMATE_MIN_LEVEL,
             )
         if img_bytes:
-            import base64 as b64
-
-            # Get current session state for archive metadata
-            session_for_save = await memory.get_session(session_id(user_id))
-            conv_id = session_for_save.conversation_id if session_for_save else "unknown"
-            session_mood = session_for_save.mood if session_for_save else "composed"
-
-            if outcome is not None and outcome.get("needs_archive"):
-                metadata = outcome["archive_metadata"]
-                memory_id = await memory_archive.save_image(
-                    img_bytes, metadata["prompt"], metadata["conversation_id"],
-                    metadata["mood"], metadata["affection_level"],
-                    user_id=user_id, memory_id=outcome["request_id"],
-                )
-                outcome = await complete_archive(outcome["request_id"], memory_id, img_bytes, user_id)
-            elif outcome is None:
-                memory_id = await memory_archive.save_image(
-                    img_bytes, full_prompt, conv_id, session_mood, aff_level,
-                    user_id=user_id,
-                )
-            else:
-                memory_id = outcome.get("memory_id") if outcome.get("archived") else None
-            archived = bool(memory_id)
-            if archived:
-                context.set_last_memory_id(user_id, memory_id)
-                logger.info("Image archived as memory %s", memory_id)
-
-            img_b64 = b64.b64encode(img_bytes).decode()
-            frame = {"type": "image", "data": img_b64, "archived": archived}
-            if archived:
-                frame["memory_id"] = memory_id
-            if outcome is not None:
-                frame["request_id"] = outcome["request_id"]
-            elif memory_id:
-                frame["memory_id"] = memory_id
-            await ws.send(user_id, frame)
-            logger.info("Image sent to UI (%d bytes)", len(img_bytes))
-
-            # Record first image milestone (both DB table and fact store)
-            await proactive.record_first(user_id, "first_image")
-            await memory.record_milestone("first_image", user_id=user_id)
+            await _deliver_generated_image(
+                user_id, img_bytes, full_prompt, aff_level, outcome
+            )
         else:
-            await ws.send_proactive(user_id, "...Visualization failed. Interference in the rendering pipeline. I'll try again later.", persist=False)
-            await ws.send(user_id, {"type": "thinking", "content": ""})  # clear thinking bubble
+            await ws.send_proactive(
+                user_id,
+                "...Visualization failed. Interference in the rendering pipeline. I'll try again later.",
+                persist=False,
+            )
+            await ws.send(
+                user_id, {"type": "thinking", "content": ""}
+            )  # clear thinking bubble
     except Exception as e:
         logger.error("Background image gen failed (%s)", type(e).__name__)
         try:
@@ -580,13 +370,20 @@ async def background_recall(content: str, session: SessionState, user_id: str) -
     """Retrieve a memory from the archive and send it to the UI as a proactive message + image."""
     try:
         aff_state = await affection.get_state(user_id)
-        mem = await memory_archive.recall_memory(content, session.mood, aff_state.level, user_id=user_id)
+        mem = await memory_archive.recall_memory(
+            content, session.mood, aff_state.level, user_id=user_id
+        )
         if not mem:
-            await ws.send_proactive(user_id, "...I searched through our records, but nothing matched. Perhaps we haven't made that memory yet, Commander.", persist=False)
+            await ws.send_proactive(
+                user_id,
+                "...I searched through our records, but nothing matched. Perhaps we haven't made that memory yet, Commander.",
+                persist=False,
+            )
             return
 
         # Format the memory card
         from datetime import datetime, timezone
+
         mem_date = mem.get("created_at")
         if mem_date:
             if isinstance(mem_date, str):
@@ -615,11 +412,16 @@ async def background_recall(content: str, session: SessionState, user_id: str) -
         card += f"\n\n{annotation}"
         await ws.send_proactive(user_id, card)
 
-        img_bytes = await memory_archive.get_image_bytes(mem["id"], thumbnail=False, user_id=user_id)
+        img_bytes = await memory_archive.get_image_bytes(
+            mem["id"], thumbnail=False, user_id=user_id
+        )
         if img_bytes:
             import base64 as b64
+
             img_b64 = b64.b64encode(img_bytes).decode()
-            await ws.send(user_id, {"type": "image", "data": img_b64, "memory_id": mem["id"]})
+            await ws.send(
+                user_id, {"type": "image", "data": img_b64, "memory_id": mem["id"]}
+            )
             logger.info("Recalled memory %s sent to UI", mem["id"])
     except Exception as e:
         logger.error("Background recall failed: %s", e)
@@ -634,3 +436,64 @@ async def do_memory_keep(memory_id: str, kept: bool) -> None:
             logger.info("Memory %s: kept=%s by commander", memory_id, kept)
     except Exception as e:
         logger.error("Memory keep/discard failed for %s: %s", memory_id, e)
+
+
+async def _deliver_generated_image(
+    user_id: str,
+    img_bytes: bytes,
+    full_prompt: str,
+    aff_level: int,
+    outcome: dict[str, Any] | None,
+) -> None:
+    from .account_images import complete_archive
+    import base64 as b64
+
+    # Get current session state for archive metadata
+    session_for_save = await memory.get_session(session_id(user_id))
+    conv_id = session_for_save.conversation_id if session_for_save else "unknown"
+    session_mood = session_for_save.mood if session_for_save else "composed"
+
+    if outcome is not None and outcome.get("needs_archive"):
+        metadata = outcome["archive_metadata"]
+        memory_id = await memory_archive.save_image(
+            img_bytes,
+            metadata["prompt"],
+            metadata["conversation_id"],
+            metadata["mood"],
+            metadata["affection_level"],
+            user_id=user_id,
+            memory_id=outcome["request_id"],
+        )
+        outcome = await complete_archive(
+            outcome["request_id"], memory_id, img_bytes, user_id
+        )
+    elif outcome is None:
+        memory_id = await memory_archive.save_image(
+            img_bytes,
+            full_prompt,
+            conv_id,
+            session_mood,
+            aff_level,
+            user_id=user_id,
+        )
+    else:
+        memory_id = outcome.get("memory_id") if outcome.get("archived") else None
+    archived = bool(memory_id)
+    if memory_id is not None:
+        context.set_last_memory_id(user_id, memory_id)
+        logger.info("Image archived as memory %s", memory_id)
+
+    img_b64 = b64.b64encode(img_bytes).decode()
+    frame = {"type": "image", "data": img_b64, "archived": archived}
+    if archived:
+        frame["memory_id"] = memory_id
+    if outcome is not None:
+        frame["request_id"] = outcome["request_id"]
+    elif memory_id:
+        frame["memory_id"] = memory_id
+    await ws.send(user_id, frame)
+    logger.info("Image sent to UI (%d bytes)", len(img_bytes))
+
+    # Record first image milestone (both DB table and fact store)
+    await proactive.record_first(user_id, "first_image")
+    await memory.record_milestone("first_image", user_id=user_id)

@@ -18,8 +18,11 @@ const _base = 'https://klukai.example.cc';
 http.Response _json(Object body, [int status = 200]) =>
     http.Response.bytes(utf8.encode(jsonEncode(body)), status);
 
-WardrobeService _svc(MockClientHandler handler) =>
-    WardrobeService(serverUrl: _base, client: MockClient(handler), token: () => 'tok-123');
+WardrobeService _svc(MockClientHandler handler) => WardrobeService(
+  serverUrl: _base,
+  client: MockClient(handler),
+  token: () => 'tok-123',
+);
 
 void _expectAuth(http.BaseRequest req) {
   expect(req.headers['Authorization'], 'Bearer tok-123');
@@ -121,8 +124,14 @@ void main() {
       final notToday = await refusal('{"error":"x","decision":"not_today"}');
       expect(notToday.decision, 'not_today');
       expect(notToday.refusalLine, contains('a day that matters'));
-      expect((await refusal('{"decision":"deny"}')).refusalLine, 'What onesie.');
-      expect((await refusal('{"decision":"occasion_only"}')).refusalLine, contains('season'));
+      expect(
+        (await refusal('{"decision":"deny"}')).refusalLine,
+        'What onesie.',
+      );
+      expect(
+        (await refusal('{"decision":"occasion_only"}')).refusalLine,
+        contains('season'),
+      );
       expect((await refusal('{"decision":"not_now"}')).refusalLine, 'Not now.');
       final plain = await refusal('{"error":"locked"}');
       expect(plain.decision, isNull);
@@ -134,17 +143,32 @@ void main() {
       final svc = _svc((_) async => http.Response('nope', 503));
       await expectLater(
         svc.fetchHerDay(),
-        throwsA(isA<WardrobeServiceException>().having((e) => e.statusCode, 'status', 503)),
+        throwsA(
+          isA<WardrobeServiceException>().having(
+            (e) => e.statusCode,
+            'status',
+            503,
+          ),
+        ),
       );
-      await expectLater(svc.fetchOutfits(), throwsA(isA<WardrobeServiceException>()));
-      await expectLater(svc.fetchLog(), throwsA(isA<WardrobeServiceException>()));
+      await expectLater(
+        svc.fetchOutfits(),
+        throwsA(isA<WardrobeServiceException>()),
+      );
+      await expectLater(
+        svc.fetchLog(),
+        throwsA(isA<WardrobeServiceException>()),
+      );
     });
 
     test('non-ASCII labels survive without a charset header', () async {
       final svc = _svc((_) async => _json(herDayJson()));
       final d = await svc.fetchHerDay();
       expect(d.status!.label, 'Hangar \u00B7 tuning the suspension');
-      expect(d.schedule.first.activity, "reports at 0200 \u2014 she wasn't sleeping anyway");
+      expect(
+        d.schedule.first.activity,
+        "reports at 0200 \u2014 she wasn't sleeping anyway",
+      );
     });
 
     test('a non-object body decodes to empty defaults', () async {

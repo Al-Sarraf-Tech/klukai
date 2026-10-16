@@ -8,6 +8,8 @@ still works (re-exports below).
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import asyncio
 import os
@@ -29,6 +31,7 @@ logger = logging.getLogger(__name__)
 # get_image_bytes() returned None and the memory archive showed no drawings.
 IMAGES_DIR = Path(os.environ.get("IMAGES_DIR", "/images"))
 
+
 async def get_image_bytes(
     memory_id: str, thumbnail: bool = False, user_id: str | None = None
 ) -> bytes | None:
@@ -37,15 +40,20 @@ async def get_image_bytes(
         async with get_conn() as conn:
             col = "thumb_filename" if thumbnail else "filename"
             if user_id:
-                row = await (await conn.execute(
-                    f"SELECT {col} FROM companion_memories WHERE id = %s AND user_id = %s",  # nosec B608 — `col` is one of two literal column names; values bound via %s
-                    (memory_id, user_id),
-                )).fetchone()
+                row = await (
+                    await conn.execute(
+                        f"SELECT {col} FROM companion_memories WHERE id = %s AND user_id = %s",  # nosec B608 — `col` is one of two literal column names; values bound via %s
+                        (memory_id, user_id),
+                    )
+                ).fetchone()
             else:
                 # Internal calls (e.g., recall) may not have user context
-                row = await (await conn.execute(
-                    f"SELECT {col} FROM companion_memories WHERE id = %s", (memory_id,)  # nosec B608 — same as above
-                )).fetchone()
+                row = await (
+                    await conn.execute(
+                        f"SELECT {col} FROM companion_memories WHERE id = %s",
+                        (memory_id,),  # nosec B608 — same as above
+                    )
+                ).fetchone()
             if not row or not row[0]:
                 return None
             path = IMAGES_DIR / row[0]
@@ -58,13 +66,14 @@ async def get_image_bytes(
         logger.error("Failed to read image %s: %s", memory_id, e)
     return None
 
+
 async def list_memories(
     category: str | None = None,
     limit: int = 20,
     before: str | None = None,
     month: str | None = None,
     user_id: str = "jalsarraf",
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List kept memories, optionally filtered by category and/or month (YYYY-MM), scoped to user.
 
     Fails closed — mirror of get_timeline/get_categories: a DB outage
@@ -74,7 +83,7 @@ async def list_memories(
     try:
         async with get_conn() as conn:
             conditions = ["kept = true", "user_id = %s"]
-            params: list = [user_id]
+            params: list[Any] = [user_id]
 
             if category:
                 conditions.append("category = %s")
@@ -89,13 +98,15 @@ async def list_memories(
             where = " AND ".join(conditions)
             params.append(limit)
 
-            rows = await (await conn.execute(
-                f"SELECT id, filename, thumb_filename, annotation, scene_tags, "
-                f"mood, affection_level, kept_by, category, created_at "
-                f"FROM companion_memories WHERE {where} "  # nosec B608 — `where` is built from a fixed allow-list of column predicates; values bound via %s
-                f"ORDER BY created_at DESC LIMIT %s",
-                tuple(params),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    f"SELECT id, filename, thumb_filename, annotation, scene_tags, "
+                    f"mood, affection_level, kept_by, category, created_at "
+                    f"FROM companion_memories WHERE {where} "  # nosec B608 — `where` is built from a fixed allow-list of column predicates; values bound via %s
+                    f"ORDER BY created_at DESC LIMIT %s",
+                    tuple(params),
+                )
+            ).fetchall()
 
             return [
                 {
@@ -116,7 +127,8 @@ async def list_memories(
         logger.error("Failed to list memories: %s", e)
         raise
 
-async def get_timeline(user_id: str = "jalsarraf") -> list[dict]:
+
+async def get_timeline(user_id: str = "jalsarraf") -> list[dict[str, Any]]:
     """Return month/year groups with memory counts for the archive timeline.
 
     Fails closed: a DB outage propagates (the route returns 503) instead of
@@ -124,19 +136,24 @@ async def get_timeline(user_id: str = "jalsarraf") -> list[dict]:
     """
     try:
         async with get_conn() as conn:
-            rows = await (await conn.execute(
-                "SELECT to_char(created_at, 'YYYY-MM') as month, count(*) "
-                "FROM companion_memories "
-                "WHERE kept = true AND user_id = %s "
-                "GROUP BY month ORDER BY month DESC",
-                (user_id,),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    "SELECT to_char(created_at, 'YYYY-MM') as month, count(*) "
+                    "FROM companion_memories "
+                    "WHERE kept = true AND user_id = %s "
+                    "GROUP BY month ORDER BY month DESC",
+                    (user_id,),
+                )
+            ).fetchall()
             return [{"month": r[0], "count": r[1]} for r in rows]
     except Exception as e:
         logger.error("Failed to get timeline: %s", e)
         raise
 
-async def get_categories(affection_level: int, user_id: str = "jalsarraf") -> list[dict]:
+
+async def get_categories(
+    affection_level: int, user_id: str = "jalsarraf"
+) -> list[dict[str, Any]]:
     """Return available categories with memory counts, scoped to user.
 
     Fails closed — mirror of get_timeline: surface the outage.
@@ -144,11 +161,13 @@ async def get_categories(affection_level: int, user_id: str = "jalsarraf") -> li
     try:
         valid = available_categories(affection_level)
         async with get_conn() as conn:
-            rows = await (await conn.execute(
-                "SELECT category, count(*) FROM companion_memories "
-                "WHERE kept = true AND user_id = %s GROUP BY category",
-                (user_id,),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    "SELECT category, count(*) FROM companion_memories "
+                    "WHERE kept = true AND user_id = %s GROUP BY category",
+                    (user_id,),
+                )
+            ).fetchall()
 
             counts = {r[0]: r[1] for r in rows}
             total = sum(counts.get(c, 0) for c in valid)
@@ -158,6 +177,7 @@ async def get_categories(affection_level: int, user_id: str = "jalsarraf") -> li
     except Exception as e:
         logger.error("Failed to get categories: %s", e)
         raise
+
 
 async def update_kept(
     memory_id: str, kept: bool, kept_by: str = "commander", user_id: str | None = None
@@ -185,8 +205,12 @@ async def update_kept(
         logger.error("Failed to update memory %s: %s", memory_id, e)
         return False
 
+
 async def update_curation(
-    memory_id: str, curation: dict, affection_level: int = 0, user_id: str | None = None
+    memory_id: str,
+    curation: dict[str, Any],
+    affection_level: int = 0,
+    user_id: str | None = None,
 ) -> bool:
     """Update a memory row with LLM curation results after initial save."""
     try:
@@ -212,18 +236,21 @@ async def update_curation(
                     "category = %s, scene_tags = %s WHERE id = %s",
                     (kept, annotation, category, scene_tags, memory_id),
                 )
-        logger.info("Memory %s curated: kept=%s, category=%s", memory_id, kept, category)
+        logger.info(
+            "Memory %s curated: kept=%s, category=%s", memory_id, kept, category
+        )
         return True
     except Exception as e:
         logger.error("Failed to update curation for %s: %s", memory_id, e)
         return False
+
 
 async def recall_memory(
     query: str | None,
     mood: str,
     affection_level: int,
     user_id: str = "jalsarraf",
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Recall a memory from the archive, scoped to user.
 
     Specific query: search scene_tags + annotation text.
@@ -236,25 +263,29 @@ async def recall_memory(
                 terms = [w.lower().strip() for w in query.split() if len(w) > 2]
                 # Search tags first
                 for term in terms:
-                    rows = await (await conn.execute(
-                        "SELECT id, filename, annotation, category, scene_tags, created_at "
-                        "FROM companion_memories "
-                        "WHERE kept = true AND user_id = %s AND %s = ANY(scene_tags) "
-                        "ORDER BY created_at DESC LIMIT 1",
-                        (user_id, term),
-                    )).fetchall()
+                    rows = await (
+                        await conn.execute(
+                            "SELECT id, filename, annotation, category, scene_tags, created_at "
+                            "FROM companion_memories "
+                            "WHERE kept = true AND user_id = %s AND %s = ANY(scene_tags) "
+                            "ORDER BY created_at DESC LIMIT 1",
+                            (user_id, term),
+                        )
+                    ).fetchall()
                     if rows:
                         return _row_to_dict(rows[0])
 
                 # Fallback: search annotation text
                 for term in terms:
-                    rows = await (await conn.execute(
-                        "SELECT id, filename, annotation, category, scene_tags, created_at "
-                        "FROM companion_memories "
-                        "WHERE kept = true AND user_id = %s AND annotation ILIKE %s "
-                        "ORDER BY created_at DESC LIMIT 1",
-                        (user_id, f"%{term}%"),
-                    )).fetchall()
+                    rows = await (
+                        await conn.execute(
+                            "SELECT id, filename, annotation, category, scene_tags, created_at "
+                            "FROM companion_memories "
+                            "WHERE kept = true AND user_id = %s AND annotation ILIKE %s "
+                            "ORDER BY created_at DESC LIMIT 1",
+                            (user_id, f"%{term}%"),
+                        )
+                    ).fetchall()
                     if rows:
                         return _row_to_dict(rows[0])
 
@@ -278,31 +309,36 @@ async def recall_memory(
                 k=1,
             )[0]
 
-            rows = await (await conn.execute(
-                "SELECT id, filename, annotation, category, scene_tags, created_at "
-                "FROM companion_memories "
-                "WHERE kept = true AND user_id = %s AND category = %s "
-                "ORDER BY random() LIMIT 1",
-                (user_id, chosen_cat),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    "SELECT id, filename, annotation, category, scene_tags, created_at "
+                    "FROM companion_memories "
+                    "WHERE kept = true AND user_id = %s AND category = %s "
+                    "ORDER BY random() LIMIT 1",
+                    (user_id, chosen_cat),
+                )
+            ).fetchall()
 
             if rows:
                 return _row_to_dict(rows[0])
 
             # Fallback: any kept memory for this user
-            rows = await (await conn.execute(
-                "SELECT id, filename, annotation, category, scene_tags, created_at "
-                "FROM companion_memories WHERE kept = true AND user_id = %s "
-                "ORDER BY random() LIMIT 1",
-                (user_id,),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    "SELECT id, filename, annotation, category, scene_tags, created_at "
+                    "FROM companion_memories WHERE kept = true AND user_id = %s "
+                    "ORDER BY random() LIMIT 1",
+                    (user_id,),
+                )
+            ).fetchall()
             return _row_to_dict(rows[0]) if rows else None
 
     except Exception as e:
         logger.error("Memory recall failed: %s", e)
         return None
 
-def _row_to_dict(r) -> dict:
+
+def _row_to_dict(r: Any) -> dict[str, Any]:
     return {
         "id": str(r[0]),
         "filename": r[1],
@@ -311,4 +347,3 @@ def _row_to_dict(r) -> dict:
         "scene_tags": r[4] or [],
         "created_at": r[5].isoformat() if r[5] else None,
     }
-

@@ -15,7 +15,12 @@ external double _getHeight(int handle, double maxWidth, double lineHeight);
 
 @JS('pretextBridge.renderToCanvas')
 external bool _renderToCanvas(
-    int handle, String canvasId, double maxWidth, double lineHeight, String color);
+  int handle,
+  String canvasId,
+  double maxWidth,
+  double lineHeight,
+  String color,
+);
 
 @JS('pretextBridge.release')
 external void _release(int handle);
@@ -23,7 +28,8 @@ external void _release(int handle);
 /// High-level pretext service for Flutter.
 class PretextService {
   // Must match the CSS font used in canvas rendering
-  static const String font = '15px Inter, -apple-system, BlinkMacSystemFont, sans-serif';
+  static const String font =
+      '15px Inter, -apple-system, BlinkMacSystemFont, sans-serif';
   static const double lineHeight = 21.0;
   static const double bubblePaddingH = 16.0;
   static const double bubblePaddingV = 10.0;
@@ -60,7 +66,12 @@ class PretextService {
   }
 
   /// Render text to a canvas element.
-  static bool renderToCanvas(int handle, String canvasId, double maxWidth, String color) {
+  static bool renderToCanvas(
+    int handle,
+    String canvasId,
+    double maxWidth,
+    String color,
+  ) {
     if (handle < 0) return false;
     return _renderToCanvas(handle, canvasId, maxWidth, lineHeight, color);
   }

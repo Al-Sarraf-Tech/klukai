@@ -6,6 +6,8 @@ The ledger belongs on the shared persistent images volume, outside served files.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import asyncio
 import json
@@ -29,7 +31,9 @@ def _utc_now() -> datetime:
 
 
 def _ledger_path() -> Path:
-    path = Path(os.environ.get("KLUKAI_CREATIVE_LEDGER", "/images/.creative/attempts.sqlite3"))
+    path = Path(
+        os.environ.get("KLUKAI_CREATIVE_LEDGER", "/images/.creative/attempts.sqlite3")
+    )
     if not path.is_absolute():
         raise CreativeBudgetError("Creative ledger must be an absolute persistent path")
     return path
@@ -39,8 +43,10 @@ def _limits(kind: str) -> tuple[int, int]:
     if kind not in {"image", "text"}:
         raise CreativeBudgetError("Unknown creative request kind")
     try:
-        limits = tuple(int(os.environ.get(f"KLUKAI_CLOUD_{kind.upper()}_{period}_LIMIT", "0"))
-                       for period in ("DAILY", "MONTHLY"))
+        limits = tuple(
+            int(os.environ.get(f"KLUKAI_CLOUD_{kind.upper()}_{period}_LIMIT", "0"))
+            for period in ("DAILY", "MONTHLY")
+        )
     except ValueError:
         raise CreativeBudgetError("Creative limits must be positive integers") from None
     if any(limit <= 0 for limit in limits):
@@ -71,7 +77,9 @@ def _reserve(kind: str) -> str:
             id TEXT PRIMARY KEY, kind TEXT NOT NULL, day TEXT NOT NULL,
             month TEXT NOT NULL, reserved_at TEXT NOT NULL, usage_json TEXT
         )""")
-        conn.execute("CREATE INDEX IF NOT EXISTS creative_attempt_period ON creative_attempts(kind, month, day)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS creative_attempt_period ON creative_attempts(kind, month, day)"
+        )
         month_count, day_count = conn.execute(
             "SELECT count(*), coalesce(sum(day = ?), 0) FROM creative_attempts WHERE kind = ? AND month = ?",
             (day, kind, month),
@@ -96,14 +104,23 @@ async def reserve_attempt(kind: str) -> str:
     return await asyncio.to_thread(_reserve, kind)
 
 
-_USAGE_FIELDS = frozenset({
-    "input_tokens", "output_tokens", "total_tokens", "text_tokens", "image_tokens",
-    "cached_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
-    "input_tokens_details", "output_tokens_details",
-})
+_USAGE_FIELDS = frozenset(
+    {
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "text_tokens",
+        "image_tokens",
+        "cached_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "input_tokens_details",
+        "output_tokens_details",
+    }
+)
 
 
-def _numeric_usage(value: dict, depth: int = 0) -> dict:
+def _numeric_usage(value: dict[str, Any], depth: int = 0) -> dict[str, Any]:
     result: dict[str, object] = {}
     for key, item in value.items():
         if key not in _USAGE_FIELDS:
@@ -115,17 +132,19 @@ def _numeric_usage(value: dict, depth: int = 0) -> dict:
     return result
 
 
-def _record_usage(attempt_id: str, usage: dict) -> None:
+def _record_usage(attempt_id: str, usage: dict[str, Any]) -> None:
     path = _ledger_path()
     # Do not create a missing ledger merely to record telemetry.
     if not path.is_file():
         return
     with closing(sqlite3.connect(path, timeout=5.0)) as conn, conn:
-        conn.execute("UPDATE creative_attempts SET usage_json=? WHERE id=?",
-                     (json.dumps(_numeric_usage(usage), separators=(",", ":")), attempt_id))
+        conn.execute(
+            "UPDATE creative_attempts SET usage_json=? WHERE id=?",
+            (json.dumps(_numeric_usage(usage), separators=(",", ":")), attempt_id),
+        )
 
 
-async def record_usage(attempt_id: str, usage: dict) -> None:
+async def record_usage(attempt_id: str, usage: dict[str, Any]) -> None:
     """Best-effort numeric telemetry; never refund or repeat a dispatched call."""
     try:
         await asyncio.to_thread(_record_usage, attempt_id, usage)

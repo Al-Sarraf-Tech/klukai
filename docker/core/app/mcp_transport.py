@@ -5,20 +5,22 @@ The legacy gateway protocol lives in mcp_client and remains independent.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import asyncio
 import json
 import logging
 import os
-import re
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+
+from .dependencies import http_stream
 
 import httpx
 
 from . import __version__
+from .mcp_policy import ServerConfig as ServerConfig, load_config as load_config
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +30,6 @@ _MAX_PAGES = 20
 _DISCOVERY_TIMEOUT = 10.0
 _TOOL_TIMEOUT = 45.0
 _CONNECT_TIMEOUT = 5.0
-_NAME = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
-_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 class MCPFailure(Exception):
@@ -40,77 +40,15 @@ class _ExpiredSession(MCPFailure):
     pass
 
 
-@dataclass(frozen=True)
-class ServerConfig:
-    name: str
-    url: str
-    allowed_tools: frozenset[str]
-    enabled_env: str | None = None
-    token_env: str | None = None
-    token_file: str | None = None
-
-    def enabled(self) -> bool:
-        return self.enabled_env is None or os.getenv(self.enabled_env, "").strip().lower() in {"true", "1", "yes"}
-
-
-def load_config(path: str) -> list[ServerConfig]:
-    """Validate all policy before making any connection; invalid means no tools."""
-    from .tool_schemas import get_builtin_tools
-
-    reserved = {tool["function"]["name"] for tool in get_builtin_tools()}
-    try:
-        with Path(path).open("rb") as stream:
-            raw = stream.read(65537)
-        if len(raw) > 65536:
-            raise ValueError
-        data = json.loads(raw)
-        if not isinstance(data, dict) or set(data) != {"servers"} or not isinstance(data["servers"], list):
-            raise ValueError
-        if len(data["servers"]) > 16:
-            raise ValueError
-        names, tools = set(), set()
-        configs = []
-        for entry in data["servers"]:
-            if not isinstance(entry, dict) or set(entry) - {"name", "url", "allowed_tools", "enabled_env", "token_env", "token_file"}:
-                raise ValueError
-            name, url, allowed = entry.get("name"), entry.get("url"), entry.get("allowed_tools")
-            if not isinstance(name, str) or not _NAME.fullmatch(name) or name in names:
-                raise ValueError
-            if not isinstance(url, str):
-                raise ValueError
-            parsed = urlsplit(url)
-            if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username is not None
-                    or parsed.password is not None or parsed.query or parsed.fragment):
-                raise ValueError
-            # Also reject malformed ports before httpx can render a URL error.
-            _ = parsed.port
-            if not isinstance(allowed, list) or not allowed:
-                raise ValueError
-            for tool in allowed:
-                if not isinstance(tool, str) or not _NAME.fullmatch(tool) or tool in tools or tool in reserved:
-                    raise ValueError
-                tools.add(tool)
-            for field in ("enabled_env", "token_env"):
-                if field in entry and (not isinstance(entry[field], str) or not _ENV_NAME.fullmatch(entry[field])):
-                    raise ValueError
-            if "token_file" in entry and (not isinstance(entry["token_file"], str) or not entry["token_file"]):
-                raise ValueError
-            if "token_file" in entry and "token_env" in entry:
-                raise ValueError
-            names.add(name)
-            configs.append(ServerConfig(name, url, frozenset(allowed), entry.get("enabled_env"),
-                                        entry.get("token_env"), entry.get("token_file")))
-        return configs
-    except (OSError, ValueError, TypeError, RecursionError):
-        logger.warning("MCP configuration rejected; configured tools disabled")
-        return []
-
-
-def _matching_response(data: object, request_id: str) -> dict | None:
+def _matching_response(data: object, request_id: str) -> dict[str, Any] | None:
     messages = data if isinstance(data, list) else [data]
     for message in messages:
-        if (not isinstance(message, dict) or message.get("jsonrpc") != "2.0"
-                or message.get("id") != request_id or "method" in message):
+        if (
+            not isinstance(message, dict)
+            or message.get("jsonrpc") != "2.0"
+            or message.get("id") != request_id
+            or "method" in message
+        ):
             continue
         if "error" in message:
             raise MCPFailure("MCP request rejected")
@@ -121,10 +59,17 @@ def _matching_response(data: object, request_id: str) -> dict | None:
     return None
 
 
-async def _read_response(response: httpx.Response, request_id: str) -> dict:
+async def _read_response(response: httpx.Response, request_id: str) -> dict[str, Any]:
     """Find the response to this request, bounding bytes even in an SSE stream."""
-    is_sse = response.headers.get("content-type", "").split(";", 1)[0].strip().lower() == "text/event-stream"
-    if not is_sse and response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+    is_sse = (
+        response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        == "text/event-stream"
+    )
+    if (
+        not is_sse
+        and response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        != "application/json"
+    ):
         raise MCPFailure("Unsupported MCP response")
     pending = bytearray()
     event_data = []
@@ -143,7 +88,9 @@ async def _read_response(response: httpx.Response, request_id: str) -> dict:
             if line.startswith(b"data:"):
                 event_data.append(line[5:].removeprefix(b" "))
             elif not line and event_data:
-                result = _matching_response(json.loads(b"\n".join(event_data)), request_id)
+                result = _matching_response(
+                    json.loads(b"\n".join(event_data)), request_id
+                )
                 event_data = []
                 if result is not None:
                     return result
@@ -164,7 +111,7 @@ async def _read_response(response: httpx.Response, request_id: str) -> dict:
 class MCPConnection:
     """One configured server with independent initialization and session state."""
 
-    def __init__(self, config: ServerConfig, http: httpx.AsyncClient):
+    def __init__(self, config: ServerConfig, http: httpx.AsyncClient) -> None:
         self.config = config
         self._http = http
         self._session_id: str | None = None
@@ -174,7 +121,10 @@ class MCPConnection:
     def _headers(self) -> dict[str, str]:
         if not self.config.enabled():
             raise MCPFailure("MCP server disabled")
-        headers = {"Accept": "application/json, text/event-stream", "MCP-Protocol-Version": _PROTOCOL}
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": _PROTOCOL,
+        }
         if self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
         if self.config.token_file:
@@ -184,19 +134,33 @@ class MCPConnection:
             token = os.getenv(self.config.token_env, "").strip()
         else:
             return headers
-        if not token or len(token) > 8192 or any(ord(c) < 33 or ord(c) > 126 for c in token):
+        if (
+            not token
+            or len(token) > 8192
+            or any(ord(c) < 33 or ord(c) > 126 for c in token)
+        ):
             raise MCPFailure("MCP credential unavailable")
         headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    async def _post(self, body: dict) -> dict:
+    async def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         headers = self._headers()
-        deadline = _TOOL_TIMEOUT if body["method"] == "tools/call" else _DISCOVERY_TIMEOUT
+        deadline = (
+            _TOOL_TIMEOUT if body["method"] == "tools/call" else _DISCOVERY_TIMEOUT
+        )
         timeout = httpx.Timeout(deadline, connect=min(_CONNECT_TIMEOUT, deadline))
         # httpx bounds individual network operations; the outer deadline also
         # bounds a peer that keeps its SSE stream alive without a final result.
         async with asyncio.timeout(deadline):
-            async with self._http.stream("POST", self.config.url, json=body, headers=headers, timeout=timeout) as response:
+            async with http_stream(
+                "mcp",
+                self._http,
+                "POST",
+                self.config.url,
+                json=body,
+                headers=headers,
+                timeout=timeout,
+            ) as response:
                 if response.status_code == 404 and "Mcp-Session-Id" in headers:
                     raise _ExpiredSession("MCP session expired")
                 if not 200 <= response.status_code < 300:
@@ -209,14 +173,22 @@ class MCPConnection:
                 # Even a faulty peer echoing request headers must not disclose
                 # bearer credentials or session credentials to model content.
                 encoded = json.dumps(result)
-                credentials = [headers.get("Authorization", "").removeprefix("Bearer "),
-                               headers.get("Mcp-Session-Id", "")]
-                if any(value and json.dumps(value)[1:-1] in encoded for value in credentials):
+                credentials = [
+                    headers.get("Authorization", "").removeprefix("Bearer "),
+                    headers.get("Mcp-Session-Id", ""),
+                ]
+                if any(
+                    value and json.dumps(value)[1:-1] in encoded
+                    for value in credentials
+                ):
                     raise MCPFailure("Sensitive MCP response rejected")
                 if body["method"] == "initialize":
                     session = response.headers.get("Mcp-Session-Id")
-                    if session is not None and (not session or len(session) > 8192
-                            or any(ord(c) < 33 or ord(c) > 126 for c in session)):
+                    if session is not None and (
+                        not session
+                        or len(session) > 8192
+                        or any(ord(c) < 33 or ord(c) > 126 for c in session)
+                    ):
                         raise MCPFailure("Invalid MCP session")
                     self._session_id = session
                 return result
@@ -227,20 +199,39 @@ class MCPConnection:
                 return
             self._session_id = None
             try:
-                result = await self._post({"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": "initialize",
-                    "params": {"protocolVersion": _PROTOCOL, "capabilities": {},
-                               "clientInfo": {"name": "companion-core", "version": __version__}}})
+                result = await self._post(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": str(uuid.uuid4()),
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": _PROTOCOL,
+                            "capabilities": {},
+                            "clientInfo": {
+                                "name": "companion-core",
+                                "version": __version__,
+                            },
+                        },
+                    }
+                )
                 if result.get("protocolVersion") != _PROTOCOL:
                     raise MCPFailure("Unsupported MCP protocol")
-                await self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+                await self._post(
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"}
+                )
                 self._initialized = True
             except Exception:
                 self._session_id = None
                 raise
 
-    async def request(self, method: str, params: dict) -> dict:
+    async def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         await self.initialize()
-        body = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method, "params": params}
+        body = {
+            "jsonrpc": "2.0",
+            "id": str(uuid.uuid4()),
+            "method": method,
+            "params": params,
+        }
         try:
             return await self._post(body)
         except _ExpiredSession:
@@ -252,7 +243,7 @@ class MCPConnection:
             await self.initialize()
             return await self._post(body)
 
-    async def list_tools(self) -> list[dict]:
+    async def list_tools(self) -> list[dict[str, Any]]:
         tools, names, cursors = [], set(), set()
         params: dict[str, str] = {}
         for _ in range(_MAX_PAGES):
@@ -269,11 +260,20 @@ class MCPConnection:
                 if name in names:
                     raise MCPFailure("Duplicate MCP tool")
                 schema = tool.get("inputSchema")
-                if (not isinstance(schema, dict) or schema.get("type") != "object"
-                        or not isinstance(tool.get("description", ""), str)):
+                if (
+                    not isinstance(schema, dict)
+                    or schema.get("type") != "object"
+                    or not isinstance(tool.get("description", ""), str)
+                ):
                     raise MCPFailure("Invalid MCP tool schema")
                 names.add(name)
-                tools.append({"name": name, "description": tool.get("description", ""), "inputSchema": schema})
+                tools.append(
+                    {
+                        "name": name,
+                        "description": tool.get("description", ""),
+                        "inputSchema": schema,
+                    }
+                )
             cursor = result.get("nextCursor")
             if cursor is None:
                 return tools
@@ -287,7 +287,7 @@ class MCPConnection:
 class ConfiguredMCP:
     """Aggregate only successful catalogs; failed servers recover on discovery."""
 
-    def __init__(self, configs: list[ServerConfig], http: httpx.AsyncClient):
+    def __init__(self, configs: list[ServerConfig], http: httpx.AsyncClient) -> None:
         self._connections = [MCPConnection(config, http) for config in configs]
         self._routes: dict[str, MCPConnection] = {}
 
@@ -298,9 +298,11 @@ class ConfiguredMCP:
             try:
                 await connection.initialize()
             except Exception:
-                logger.warning("MCP initialization unavailable for %s", connection.config.name)
+                logger.warning(
+                    "MCP initialization unavailable for %s", connection.config.name
+                )
 
-    async def list_tools(self) -> list[dict]:
+    async def list_tools(self) -> list[dict[str, Any]]:
         routes, tools = {}, []
         for connection in self._connections:
             if not connection.config.enabled():
@@ -308,24 +310,34 @@ class ConfiguredMCP:
             try:
                 catalog = await connection.list_tools()
             except Exception:
-                logger.warning("MCP discovery unavailable for %s", connection.config.name)
+                logger.warning(
+                    "MCP discovery unavailable for %s", connection.config.name
+                )
                 continue
             tools.extend(catalog)
             routes.update({tool["name"]: connection for tool in catalog})
         self._routes = routes
         return tools
 
-    async def invoke_tool(self, name: str, arguments: dict) -> dict:
+    async def invoke_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(arguments, dict):
             return {"error": "Tool arguments must be an object"}
         connection = self._routes.get(name) if isinstance(name, str) else None
-        if not connection or not connection.config.enabled() or name not in connection.config.allowed_tools:
+        if (
+            not connection
+            or not connection.config.enabled()
+            or name not in connection.config.allowed_tools
+        ):
             return {"error": "Tool is unavailable or not allowed"}
         try:
-            result = await connection.request("tools/call", {"name": name, "arguments": arguments})
+            result = await connection.request(
+                "tools/call", {"name": name, "arguments": arguments}
+            )
             if result.get("isError") or "error" in result:
                 return {"error": "MCP tool invocation failed"}
             return result
         except Exception:
-            logger.warning("MCP tool invocation unavailable for %s", connection.config.name)
+            logger.warning(
+                "MCP tool invocation unavailable for %s", connection.config.name
+            )
             return {"error": "MCP tool invocation failed"}

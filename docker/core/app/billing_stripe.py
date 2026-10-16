@@ -37,7 +37,9 @@ _EVENT_HANDLERS: dict[str, str] = {
 }
 
 
-def verify_stripe_signature(payload: bytes, sig_header: str, secret: str | None = None) -> bool:
+def verify_stripe_signature(
+    payload: bytes, sig_header: str, secret: str | None = None
+) -> bool:
     """Verify Stripe-Signature header per
     https://stripe.com/docs/webhooks/signatures.
 
@@ -66,7 +68,10 @@ def verify_stripe_signature(payload: bytes, sig_header: str, secret: str | None 
         return False
     if ts is None or not candidates:
         return False
-    if abs(int(datetime.now(timezone.utc).timestamp()) - ts) > _STRIPE_TOLERANCE_SECONDS:
+    if (
+        abs(int(datetime.now(timezone.utc).timestamp()) - ts)
+        > _STRIPE_TOLERANCE_SECONDS
+    ):
         return False
     signed_payload = f"{ts}.".encode() + payload
     mac = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
@@ -77,6 +82,8 @@ def verify_stripe_signature(payload: bytes, sig_header: str, secret: str | None 
         if hmac.compare_digest(mac, candidate):
             matched = True
     return matched
+
+
 async def handle_stripe_event(event: dict[str, Any]) -> dict[str, Any]:
     """Process a verified Stripe event. Idempotent via event id PK."""
     event_id = event.get("id", "")
@@ -113,13 +120,16 @@ async def handle_stripe_event(event: dict[str, Any]) -> dict[str, Any]:
                     # Conflict yet no row found — inconsistent; fail so
                     # Stripe retries rather than silently dropping the event.
                     logger.error(
-                        "Stripe idempotency lookup found no row for %s", event_id)
+                        "Stripe idempotency lookup found no row for %s", event_id
+                    )
                     return {"ok": False, "reason": "idempotency lookup failed"}
                 if prior[0]:
                     return {"ok": True, "replay": True}
                 logger.warning(
                     "Stripe event %s retried with processed=FALSE — "
-                    "re-dispatching handler", event_id)
+                    "re-dispatching handler",
+                    event_id,
+                )
     except Exception as e:
         logger.error("Stripe event insert failed: %s", e)
         return {"ok": False, "reason": str(e)}
@@ -146,8 +156,12 @@ async def handle_stripe_event(event: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass
         return {"ok": False, "reason": str(e)}
+
+
 def _json_dumps(obj: Any) -> str:
     return json.dumps(obj, default=str)
+
+
 async def _mark_event_processed(event_id: str) -> None:
     try:
         async with get_conn_autocommit() as conn:
@@ -157,8 +171,12 @@ async def _mark_event_processed(event_id: str) -> None:
             )
     except Exception:
         pass
+
+
 def _stripe_obj(event: dict[str, Any]) -> dict[str, Any]:
     return event.get("data", {}).get("object", {}) or {}
+
+
 def _stripe_tier_from_price(price_id: str | None) -> str:
     """Map a Stripe price id to our internal tier name."""
     if not price_id:
@@ -176,11 +194,15 @@ def _stripe_tier_from_price(price_id: str | None) -> str:
     if price_id in elite:
         return "elite"
     return "free"
+
+
 def _user_id_from_metadata(obj: dict[str, Any]) -> str | None:
     """Stripe customer/subscription metadata.user_id is set by the
     checkout-session creator."""
     meta = obj.get("metadata") or {}
     return meta.get("user_id") or None
+
+
 async def _apply_subscription(event: dict[str, Any]) -> dict[str, Any]:
     obj = _stripe_obj(event)
     user_id = _user_id_from_metadata(obj)
@@ -208,10 +230,19 @@ async def _apply_subscription(event: dict[str, Any]) -> dict[str, Any]:
             "  stripe_customer_id = EXCLUDED.stripe_customer_id, "
             "  stripe_subscription_id = EXCLUDED.stripe_subscription_id, "
             "  updated_at = NOW()",
-            (user_id, tier, status, period_start, period_end,
-             customer_id, subscription_id),
+            (
+                user_id,
+                tier,
+                status,
+                period_start,
+                period_end,
+                customer_id,
+                subscription_id,
+            ),
         )
     return {"user_id": user_id, "tier": tier, "status": status}
+
+
 async def _cancel_subscription(event: dict[str, Any]) -> dict[str, Any]:
     """Downgrade tier to free. SACRED: chat/episodes/affection preserved."""
     obj = _stripe_obj(event)
@@ -231,11 +262,15 @@ async def _cancel_subscription(event: dict[str, Any]) -> dict[str, Any]:
                 (sub_id,),
             )
     return {"user_id": user_id, "subscription_id": sub_id, "tier": "free"}
+
+
 async def _record_payment(event: dict[str, Any]) -> dict[str, Any]:
     """invoice.paid — mark sub active. Stripe pushes subscription.updated too,
     so this is mostly informational."""
     obj = _stripe_obj(event)
     return {"invoice": obj.get("id"), "amount_paid": obj.get("amount_paid")}
+
+
 async def _mark_past_due(event: dict[str, Any]) -> dict[str, Any]:
     obj = _stripe_obj(event)
     sub_id = obj.get("subscription")
@@ -247,6 +282,8 @@ async def _mark_past_due(event: dict[str, Any]) -> dict[str, Any]:
                 (sub_id,),
             )
     return {"subscription_id": sub_id, "status": "past_due"}
+
+
 def _stripe_ts(epoch: Any) -> datetime | None:
     if epoch is None:
         return None

@@ -1,45 +1,130 @@
 {
-  "annotations": {"list": []},
-  "description": "Klukai chat-path performance.",
-  "title": "Klukai Chat Path",
-  "editable": true,
+  "uid": "klukai-chat-path",
+  "title": "Klukai Chat Observations",
+  "description": "Generated from docker/core/app/observability/slos.json; SHA256 e8447adbef71f29dc2ba9af7353298bfa7deef8ac9dfb8a7a87055df49de83c0. Missing telemetry is not healthy.",
+  "schemaVersion": 38,
+  "version": 1,
+  "editable": false,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "annotations": {
+    "list": []
+  },
+  "tags": [
+    "klukai",
+    "canonical-slo"
+  ],
   "panels": [
     {
       "id": 1,
-      "title": "/api/chat/turn p50/p95/p99",
+      "title": "Observed LLM duration (no HTTP SLO)",
       "type": "timeseries",
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{route=\"/api/chat/turn\"}[5m])))", "refId": "A", "legendFormat": "p50"},
-        {"expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{route=\"/api/chat/turn\"}[5m])))", "refId": "B", "legendFormat": "p95"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{route=\"/api/chat/turn\"}[5m])))", "refId": "C", "legendFormat": "p99"}
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (model,le) (rate(klukai_llm_latency_ms_bucket{job=\"klukai-core\"}[5m])))"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "s"}},
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "NO DATA"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      }
     },
     {
       "id": 2,
-      "title": "Time to first token (TTFT)",
+      "title": "Model request rate",
       "type": "timeseries",
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(klukai_chat_ttft_seconds_bucket[5m])))", "refId": "A", "legendFormat": "TTFT p99"}],
-      "fieldConfig": {"defaults": {"unit": "s"}},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model) (rate(klukai_llm_requests_total{job=\"klukai-core\"}[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "NO DATA"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      }
     },
     {
       "id": 3,
-      "title": "Model routing (gemma / dolphin / gpt-oss)",
-      "type": "piechart",
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum by (model) (increase(klukai_llm_calls_total[1h]))", "refId": "A"}],
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      "title": "Input tokens",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model) (rate(klukai_llm_tokens_in_total{job=\"klukai-core\"}[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "noValue": "NO DATA"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "id": 4,
+      "title": "Output tokens",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model) (rate(klukai_llm_tokens_out_total{job=\"klukai-core\"}[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "noValue": "NO DATA"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      }
     }
-  ],
-  "refresh": "30s",
-  "schemaVersion": 38,
-  "tags": ["klukai", "chat", "S+"],
-  "templating": {"list": []},
-  "time": {"from": "now-6h", "to": "now"},
-  "uid": "klukai-chat-path",
-  "version": 1
+  ]
 }

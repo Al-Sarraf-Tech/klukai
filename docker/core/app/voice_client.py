@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from .dependencies import http_request
+
 from .gpu_lease import gpu_lease, gpu_lease_capability_headers
 
 _local_gate = asyncio.Lock()
@@ -24,8 +26,13 @@ def local_voice_enabled() -> bool:
 
 def async_voice_jobs_enabled() -> bool:
     """Keep Arc queued; allow other backends to opt into submit/poll speech."""
-    return local_voice_enabled() or os.environ.get("VOICE_ASYNC_JOBS", "false").strip().lower() in {
-        "true", "1", "yes", "on",
+    return local_voice_enabled() or os.environ.get(
+        "VOICE_ASYNC_JOBS", "false"
+    ).strip().lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
     }
 
 
@@ -49,8 +56,14 @@ async def _unload_local_voice() -> None:
 
     try:
         async with asyncio.timeout(10.0):
-            async with httpx.AsyncClient(timeout=10.0, trust_env=False, follow_redirects=False) as cleanup:
-                response = await cleanup.post(f"{voice_url()}/unload", headers=voice_auth_headers())
+            async with httpx.AsyncClient(
+                timeout=10.0, trust_env=False, follow_redirects=False
+            ) as cleanup:
+                # Cleanup must reach the worker even after synthesis trips the
+                # voice breaker; it never admits inference or a fallback.
+                response = await cleanup.post(
+                    f"{voice_url()}/unload", headers=voice_auth_headers()
+                )
                 response.raise_for_status()
     except Exception as exc:
         logger.warning("Voice cancellation cleanup unavailable: %s", type(exc).__name__)
@@ -74,9 +87,14 @@ async def post_leased_tts(
         async with asyncio.timeout(LOCAL_TTS_DEADLINE):
             async with _local_gate:
                 try:
-                    response = await client.post(
-                        f"{voice_url()}/tts", json=payload,
-                        headers=voice_auth_headers(), timeout=LOCAL_TTS_DEADLINE,
+                    response = await http_request(
+                        "voice",
+                        client,
+                        "post",
+                        f"{voice_url()}/tts",
+                        json=payload,
+                        headers=voice_auth_headers(),
+                        timeout=LOCAL_TTS_DEADLINE,
                     )
                 except (asyncio.CancelledError, httpx.TimeoutException):
                     # Closing TCP alone races the supervisor's disconnect
@@ -91,14 +109,19 @@ async def post_leased_tts(
                 if response.status_code != 200:
                     return response
                 encoded = response.json().get("audio")
-                if not isinstance(encoded, str) or len(encoded) > MAX_AUDIO_BYTES * 4 // 3 + 4:
+                if (
+                    not isinstance(encoded, str)
+                    or len(encoded) > MAX_AUDIO_BYTES * 4 // 3 + 4
+                ):
                     raise ValueError("Invalid voice audio result")
                 audio = base64.b64decode(encoded, validate=True)
                 if not audio or len(audio) > MAX_AUDIO_BYTES:
                     raise ValueError("Invalid voice audio result")
                 # Preserve the binary WAV contract used by existing callers.
                 return httpx.Response(
-                    200, content=audio, headers={"Content-Type": "audio/wav"},
+                    200,
+                    content=audio,
+                    headers={"Content-Type": "audio/wav"},
                     request=response.request,
                 )
 
@@ -108,7 +131,10 @@ async def post_leased_tts(
                 **voice_auth_headers(),
                 **gpu_lease_capability_headers(lease),
             }
-            return await client.post(
+            return await http_request(
+                "voice",
+                client,
+                "post",
                 f"{voice_url()}/tts",
                 json=payload,
                 headers=headers,

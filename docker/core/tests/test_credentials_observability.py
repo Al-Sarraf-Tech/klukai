@@ -169,6 +169,8 @@ def test_real_fastapi_traces_redact_credentials_even_with_header_capture(monkeyp
 
 
 def test_real_configured_export_pipeline_redacts_exception_events(monkeypatch):
+    # Export-pipeline verification needs every test span; production defaults to10%.
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER_ARG", "1")
     from opentelemetry import trace
     from opentelemetry.exporter.otlp.proto.grpc import trace_exporter
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import (

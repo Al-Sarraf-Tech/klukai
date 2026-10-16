@@ -7,6 +7,8 @@ rules, character preamble) lands at the top and dynamic state
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 from .character_contract import build_answer_discipline, build_character_contract
 from .loader import get_affection_level_config, load_personality
@@ -42,8 +44,8 @@ from .state_blocks import (
 def assemble_system_prompt(
     mood: str = "composed",
     memories: list[str] | None = None,
-    relationship_facts: dict | None = None,
-    recalled_exchanges: list[dict] | None = None,
+    relationship_facts: dict[str, Any] | None = None,
+    recalled_exchanges: list[dict[str, Any]] | None = None,
     tools_available: bool = False,
     affection_score: int = 0,
     affection_level: int = 0,
@@ -56,9 +58,9 @@ def assemble_system_prompt(
     jealousy_target: str | None = None,
     physical_state: str = "normal",
     physical_detail: str = "",
-    anniversaries: list[dict] | None = None,
-    comfort_objects: list[dict] | None = None,
-    crown_jewel: dict | None = None,
+    anniversaries: list[dict[str, Any]] | None = None,
+    comfort_objects: list[dict[str, Any]] | None = None,
+    crown_jewel: dict[str, Any] | None = None,
     current_outfit: str | None = None,
     current_location: str | None = None,
 ) -> str:
@@ -73,7 +75,9 @@ def assemble_system_prompt(
     abs_rules = p.get("absolute_rules", [])
     abs_block = ""
     if abs_rules:
-        abs_block = "ABSOLUTE RULES (never violate):\n" + "\n".join(f"- {r}" for r in abs_rules)
+        abs_block = "ABSOLUTE RULES (never violate):\n" + "\n".join(
+            f"- {r}" for r in abs_rules
+        )
 
     blocks = [
         build_character_contract(p, affection_level),
@@ -90,7 +94,9 @@ def assemble_system_prompt(
         build_speech_guidelines(p, affection_level),
         build_behavioral_grammar_block(affection_level),
         build_affection_block(affection_score, affection_level, level_name, p),
-        build_context_block(mood, affection_level, days_together, current_outfit, current_location),
+        build_context_block(
+            mood, affection_level, days_together, current_outfit, current_location
+        ),
         build_mood_bleed_block(mood),
         build_anniversary_block(anniversaries),
         build_comfort_objects_block(comfort_objects, affection_level),

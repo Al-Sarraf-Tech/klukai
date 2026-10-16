@@ -1,11 +1,15 @@
 """Web Push notification dispatch via VAPID — persisted to DB, context-aware."""
 
 from __future__ import annotations
+from typing import Any
+
 
 import asyncio
 import json
 import logging
 import os
+
+from .runtime_tasks import complete
 
 logger = logging.getLogger(__name__)
 
@@ -13,12 +17,12 @@ VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_CLAIMS = {"sub": "mailto:companion@localhost"}
 
-# pywebpush's request to the push service is blocking `requests` I/O with no
-# timeout by default. One unreachable endpoint must not stall the fan-out.
+# Blocking requests carries a per-I/O timeout, not a physical thread deadline.
+# Cancellation must still join that thread; it cannot prove nondelivery.
 PUSH_TIMEOUT_SECONDS = 10
 
 # In-memory cache loaded from DB on startup
-_subscriptions: dict[str, list[dict]] = {}  # user_id → list of subscriptions
+_subscriptions: dict[str, list[dict[str, Any]]] = {}  # user_id → list of subscriptions
 _initialized = False
 
 
@@ -33,6 +37,7 @@ async def init_subscriptions() -> None:
         return
     try:
         from .db import get_conn_autocommit
+
         async with get_conn_autocommit() as conn:
             # Create table if not exists
             await conn.execute("""
@@ -44,7 +49,9 @@ async def init_subscriptions() -> None:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
             """)
-            cur = await conn.execute("SELECT user_id, subscription FROM companion_push_subscriptions")
+            cur = await conn.execute(
+                "SELECT user_id, subscription FROM companion_push_subscriptions"
+            )
             rows = await cur.fetchall()
             for row in rows:
                 uid = row[0]
@@ -61,7 +68,7 @@ async def init_subscriptions() -> None:
         _initialized = True
 
 
-async def add_subscription(user_id: str, sub: dict) -> None:
+async def add_subscription(user_id: str, sub: dict[str, Any]) -> None:
     """Add push subscription — persisted to DB."""
     endpoint = sub.get("endpoint", "")
     if not endpoint:
@@ -78,6 +85,7 @@ async def add_subscription(user_id: str, sub: dict) -> None:
     # DB
     try:
         from .db import get_conn_autocommit
+
         async with get_conn_autocommit() as conn:
             await conn.execute(
                 "INSERT INTO companion_push_subscriptions (user_id, endpoint, subscription) "
@@ -87,27 +95,36 @@ async def add_subscription(user_id: str, sub: dict) -> None:
     except Exception as e:
         logger.warning("Failed to persist push subscription: %s", e)
 
-    logger.info("Push subscription added for %s (total: %d)", user_id, len(_subscriptions[user_id]))
+    logger.info(
+        "Push subscription added for %s (total: %d)",
+        user_id,
+        len(_subscriptions[user_id]),
+    )
 
 
 def remove_subscription(endpoint: str) -> None:
     """Remove a subscription from memory and DB."""
     for uid in _subscriptions:
-        _subscriptions[uid] = [s for s in _subscriptions[uid] if s.get("endpoint") != endpoint]
+        _subscriptions[uid] = [
+            s for s in _subscriptions[uid] if s.get("endpoint") != endpoint
+        ]
 
     try:
         import asyncio
         from .db import get_conn_autocommit
 
-        async def _delete():
+        async def _delete() -> None:
             async with get_conn_autocommit() as conn:
                 await conn.execute(
-                    "DELETE FROM companion_push_subscriptions WHERE endpoint = %s", (endpoint,)
+                    "DELETE FROM companion_push_subscriptions WHERE endpoint = %s",
+                    (endpoint,),
                 )
 
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            asyncio.create_task(_delete())
+            from .runtime_tasks import spawn
+
+            spawn(_delete())
         else:
             loop.run_until_complete(_delete())
     except Exception:
@@ -128,7 +145,7 @@ def _subscription_gone(exc: Exception) -> bool:
 async def send_push(
     title: str,
     body: str,
-    data: dict | None = None,
+    data: dict[str, Any] | None = None,
     user_id: str | None = None,
 ) -> int:
     """Send push notification. If user_id given, only to that user. Otherwise all."""
@@ -153,11 +170,13 @@ async def send_push(
         logger.warning("pywebpush not installed")
         return 0
 
-    payload = json.dumps({
-        "title": title,
-        "body": body[:200],
-        "data": data or {},
-    })
+    payload = json.dumps(
+        {
+            "title": title,
+            "body": body[:200],
+            "data": data or {},
+        }
+    )
 
     sent = 0
     gone_endpoints = []
@@ -165,15 +184,19 @@ async def send_push(
     for sub in targets:
         endpoint = sub.get("endpoint", "?")
         try:
-            # webpush() is synchronous `requests` I/O: run it off the event
-            # loop, bounded, so a slow push service never stalls chat delivery.
-            await asyncio.to_thread(
-                webpush,
-                subscription_info=sub,
-                data=payload,
-                vapid_private_key=VAPID_PRIVATE_KEY,
-                vapid_claims=VAPID_CLAIMS,
-                timeout=PUSH_TIMEOUT_SECONDS,
+            # A cancelled asyncio waiter cannot stop physical requests I/O.
+            # Retain and join it before returning cancellation or retiring DB.
+            await complete(
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        webpush,
+                        subscription_info=sub,
+                        data=payload,
+                        vapid_private_key=VAPID_PRIVATE_KEY,
+                        vapid_claims=VAPID_CLAIMS,
+                        timeout=PUSH_TIMEOUT_SECONDS,
+                    )
+                )
             )
             sent += 1
         except WebPushException as e:

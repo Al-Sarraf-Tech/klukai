@@ -1,6 +1,8 @@
 """Multi-user authentication: bcrypt passwords, token sessions, IP banning."""
 
 from __future__ import annotations
+from typing import Any
+
 
 import hashlib
 import logging
@@ -9,7 +11,12 @@ import secrets
 from datetime import datetime, timezone
 
 from .db import get_conn, get_conn_autocommit
-from .passwords import MAX_PASSWORD_BYTES, PasswordWorkBusy, hash_password, verify_password
+from .passwords import (
+    MAX_PASSWORD_BYTES,
+    PasswordWorkBusy,
+    hash_password,
+    verify_password,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +82,8 @@ async def init_users() -> None:
                 if not password:
                     logger.warning(
                         "Skipping user %s: no %s environment variable set",
-                        user["id"], env_key,
+                        user["id"],
+                        env_key,
                     )
                     continue
 
@@ -137,20 +145,22 @@ async def authenticate(username: str, password: str, ip: str) -> str | None:
             ).fetchone()
 
         # No database connection/transaction is held during expensive CPU work.
-        valid = bool(row) and await verify_password(password, row[1])
+        valid = row is not None and await verify_password(password, row[1])
         async with get_conn_autocommit() as conn:
-            if valid:
+            if valid and row is not None:
                 # Serialize with password change/deactivation and recheck the
                 # exact credential verified above. A stale login must never
                 # mint a new session after another transaction revoked it.
-                current = await (await conn.execute(
-                    "SELECT id, password_hash FROM companion_users "
-                    "WHERE id = %s AND password_hash = %s "
-                    "AND deactivated_at IS NULL FOR UPDATE",
-                    (row[0], row[1]),
-                )).fetchone()
+                current = await (
+                    await conn.execute(
+                        "SELECT id, password_hash FROM companion_users "
+                        "WHERE id = %s AND password_hash = %s "
+                        "AND deactivated_at IS NULL FOR UPDATE",
+                        (row[0], row[1]),
+                    )
+                ).fetchone()
                 valid = current is not None
-            if valid:
+            if valid and row is not None:
                 # Success — create token
                 token = secrets.token_urlsafe(48)
                 await conn.execute(
@@ -175,9 +185,13 @@ async def authenticate(username: str, password: str, ip: str) -> str | None:
         # this transaction owns the user's credential lock.
         try:
             from . import audit
-            await audit.log(audit.EVENT_LOGIN_SUCCESS if valid else audit.EVENT_LOGIN_FAILURE,
-                            user_id=row[0] if valid else None,
-                            ip_address=ip, metadata={"username": username})
+
+            await audit.log(
+                audit.EVENT_LOGIN_SUCCESS if valid else audit.EVENT_LOGIN_FAILURE,
+                user_id=str(row[0]) if valid and row is not None else None,
+                ip_address=ip,
+                metadata={"username": username},
+            )
         except Exception:
             pass
         if valid:
@@ -222,7 +236,9 @@ async def get_user_from_token(token: str) -> str | None:
     return await get_user_from_session_hash(_hash_token(token), refresh=True)
 
 
-async def get_user_from_session_hash(session_hash: str, *, refresh: bool = False) -> str | None:
+async def get_user_from_session_hash(
+    session_hash: str, *, refresh: bool = False
+) -> str | None:
     """Revalidate an admitted session without retaining its bearer credential.
 
     Passive WebSocket delivery must not extend a session's idle lifetime.
@@ -242,6 +258,7 @@ async def get_user_from_session_hash(session_hash: str, *, refresh: bool = False
             if row:
                 from datetime import timedelta
                 from datetime import timezone as tz
+
                 expires = row[1]
                 created = row[2] if len(row) > 2 else None
                 # Make timestamps timezone-aware for comparison
@@ -251,8 +268,14 @@ async def get_user_from_session_hash(session_hash: str, *, refresh: bool = False
                 if created is not None and created.tzinfo is None:
                     created = created.replace(tzinfo=tz.utc)
                 # Absolute lifetime cap — a token can't be rolled forward forever.
-                if created is not None and now - created > timedelta(days=SESSION_MAX_DAYS):
-                    logger.debug("Token exceeded absolute lifetime (%dd) for user %s", SESSION_MAX_DAYS, row[0])
+                if created is not None and now - created > timedelta(
+                    days=SESSION_MAX_DAYS
+                ):
+                    logger.debug(
+                        "Token exceeded absolute lifetime (%dd) for user %s",
+                        SESSION_MAX_DAYS,
+                        row[0],
+                    )
                 elif now < expires:
                     # Roll the expiry forward on active use (within 3 days of expiry)
                     if refresh and expires - now < timedelta(days=3):
@@ -265,7 +288,7 @@ async def get_user_from_session_hash(session_hash: str, *, refresh: bool = False
                             )
                         except Exception:
                             pass  # refresh is best-effort
-                    return row[0]
+                    return str(row[0])
                 else:
                     logger.debug("Token expired for user %s", row[0])
     except Exception as e:
@@ -273,7 +296,7 @@ async def get_user_from_session_hash(session_hash: str, *, refresh: bool = False
     return None
 
 
-async def get_session_info(token: str) -> dict | None:
+async def get_session_info(token: str) -> dict[str, Any] | None:
     """Return session metadata (expires_at, created_at) for /api/session/info."""
     try:
         async with get_conn() as conn:
@@ -302,7 +325,11 @@ async def change_password(user_id: str, old_password: str, new_password: str) ->
     Returns True on success. On success, invalidates ALL existing sessions
     for this user (forces logout on all devices).
     """
-    if not new_password or len(new_password) < 8 or len(new_password.encode()) > MAX_PASSWORD_BYTES:
+    if (
+        not new_password
+        or len(new_password) < 8
+        or len(new_password.encode()) > MAX_PASSWORD_BYTES
+    ):
         return False
     try:
         async with get_conn_autocommit() as conn:
@@ -316,12 +343,14 @@ async def change_password(user_id: str, old_password: str, new_password: str) ->
             return False
         new_hash = await hash_password(new_password)
         async with get_conn_autocommit() as conn:
-            changed = await (await conn.execute(
-                "UPDATE companion_users SET password_hash = %s "
-                "WHERE id = %s AND password_hash = %s AND deactivated_at IS NULL "
-                "RETURNING id",
-                (new_hash, user_id, row[0]),
-            )).fetchone()
+            changed = await (
+                await conn.execute(
+                    "UPDATE companion_users SET password_hash = %s "
+                    "WHERE id = %s AND password_hash = %s AND deactivated_at IS NULL "
+                    "RETURNING id",
+                    (new_hash, user_id, row[0]),
+                )
+            ).fetchone()
             if changed is None:
                 return False
             # Invalidate all existing sessions for this user
@@ -332,9 +361,11 @@ async def change_password(user_id: str, old_password: str, new_password: str) ->
         # Commit the credential change and session deletion before closing
         # transports; a reconnect must already see the revoked state.
         from .context import ws
+
         await ws.revoke_user(user_id)
         try:
             from . import audit
+
             await audit.log("password.changed", user_id=user_id)
         except Exception:
             pass

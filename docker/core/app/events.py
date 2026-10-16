@@ -1,12 +1,17 @@
 """Redis event publisher — companion-core -> Telegram bot notifications."""
 
 from __future__ import annotations
+from collections.abc import Callable
+from typing import Any
+
 
 import json
 import logging
 import os
 
 import redis.asyncio as aioredis
+
+from .circuit_breakers import get_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +23,8 @@ _redis: aioredis.Redis | None = None
 
 async def init() -> None:
     global _redis
-    _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+    _redis_factory: Callable[..., aioredis.Redis] = aioredis.from_url
+    _redis = _redis_factory(REDIS_URL, decode_responses=True)
     logger.info("Event publisher connected to Redis")
 
 
@@ -29,7 +35,7 @@ async def close() -> None:
         _redis = None
 
 
-async def publish(event_type: str, data: str = "", **kwargs) -> int:
+async def publish(event_type: str, data: str = "", **kwargs: Any) -> int:
     """Publish an event to companion:events channel.
 
     Returns the number of subscribers Redis delivered to (0 when Redis is
@@ -41,7 +47,9 @@ async def publish(event_type: str, data: str = "", **kwargs) -> int:
         return 0
     event = {"type": event_type, "data": data, **kwargs}
     try:
-        received = await _redis.publish(CHANNEL, json.dumps(event))
+        received = await get_breaker("redis").call(
+            _redis.publish, CHANNEL, json.dumps(event)
+        )
     except Exception as e:
         logger.warning("Failed to publish event: %s", e)
         return 0

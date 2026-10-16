@@ -66,27 +66,35 @@ def init_tracing() -> bool:
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
         from .trace_redaction import CredentialRedactingExporter
 
         service_name = os.getenv("OTEL_SERVICE_NAME", "klukai-core")
         endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
 
-        resource = Resource.create({
-            "service.name": service_name,
-            "service.namespace": "klukai",
-            "deployment.environment": os.getenv("KLUKAI_ENV", "production"),
-        })
+        resource = Resource.create(
+            {
+                "service.name": service_name,
+                "service.namespace": "klukai",
+                "deployment.environment": os.getenv("KLUKAI_ENV", "production"),
+            }
+        )
 
-        provider = TracerProvider(resource=resource)
+        provider = TracerProvider(
+            resource=resource, sampler=ParentBased(TraceIdRatioBased(sampling_ratio()))
+        )
         exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
-        provider.add_span_processor(BatchSpanProcessor(CredentialRedactingExporter(exporter)))
+        provider.add_span_processor(
+            BatchSpanProcessor(CredentialRedactingExporter(exporter))
+        )
         trace.set_tracer_provider(provider)
 
         _TRACING_INITIALIZED = True
         _TRACING_NOOP_REASON = None
         logger.info(
             "OTel tracing initialized: service=%s endpoint=%s",
-            service_name, endpoint,
+            service_name,
+            endpoint,
         )
         return True
 
@@ -104,7 +112,9 @@ def _redact_request_span(span: Any, _scope: Any) -> None:
     from .redaction import redact_credentials
 
     for key, value in (span.attributes or {}).items():
-        if key in {"http.url", "http.target", "url.full", "url.query"} and isinstance(value, str):
+        if key in {"http.url", "http.target", "url.full", "url.query"} and isinstance(
+            value, str
+        ):
             span.set_attribute(key, redact_credentials(value))
 
 
@@ -114,12 +124,27 @@ def instrument_fastapi(app: Any) -> bool:
         return False
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        sanitized = [v.strip() for v in os.getenv(
-            "OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS", ""
-        ).split(",") if v.strip()]
-        sanitized.extend(["authorization", "proxy-authorization", "cookie", "set-cookie", ".*token.*", ".*api.key.*"])
+
+        sanitized = [
+            v.strip()
+            for v in os.getenv(
+                "OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS", ""
+            ).split(",")
+            if v.strip()
+        ]
+        sanitized.extend(
+            [
+                "authorization",
+                "proxy-authorization",
+                "cookie",
+                "set-cookie",
+                ".*token.*",
+                ".*api.key.*",
+            ]
+        )
         FastAPIInstrumentor.instrument_app(
-            app, server_request_hook=_redact_request_span,
+            app,
+            server_request_hook=_redact_request_span,
             http_capture_headers_sanitize_fields=sanitized,
         )
         logger.info("OTel FastAPI instrumentation enabled")
@@ -135,6 +160,7 @@ def instrument_httpx() -> bool:
         return False
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
         HTTPXClientInstrumentor().instrument()
         logger.info("OTel httpx instrumentation enabled")
         return True
@@ -153,6 +179,7 @@ def get_current_trace_id() -> str | None:
         return None
     try:
         from opentelemetry import trace
+
         span = trace.get_current_span()
         ctx = span.get_span_context()
         if ctx.is_valid and ctx.trace_id != 0:
@@ -166,7 +193,29 @@ def status() -> dict[str, Any]:
     """Return current tracing state — used by /api/health/subsystems."""
     return {
         "initialized": _TRACING_INITIALIZED,
+        "sampling_policy": "parentbased_traceidratio",
+        "sampling_ratio": sampling_ratio(),
         "noop_reason": _TRACING_NOOP_REASON,
         "endpoint": os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip() or None,
         "service_name": os.getenv("OTEL_SERVICE_NAME", "klukai-core"),
     }
+
+
+def sampling_ratio() -> float:
+    """Bound exported trace volume. Invalid config uses the 10% default."""
+    import math
+
+    try:
+        value = float(os.getenv("OTEL_TRACES_SAMPLER_ARG", "0.1"))
+    except ValueError:
+        return 0.1
+    return min(1.0, max(0.0, value)) if math.isfinite(value) else 0.1
+
+
+def correlate_request(request_id: str) -> None:
+    """Attach only the validated opaque ID, never headers or query values."""
+    from opentelemetry import trace
+
+    span = trace.get_current_span()
+    if span.is_recording():
+        span.set_attribute("klukai.request_id", request_id)

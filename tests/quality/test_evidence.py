@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/quality"))
-from checks import complexity, final_image, mutations  # noqa: E402
+from checks import complexity, evaluate, final_image, mutations  # noqa: E402
 from evidence import InvalidEvidence, load_bundle  # noqa: E402
 
 REVISION = "a" * 40
@@ -21,6 +21,9 @@ REVISION = "a" * 40
 def test_complexity_rejects_empty_nonfinite_and_individual_outlier(
     monkeypatch, tmp_path, scores
 ):
+    module = tmp_path / "docker/core/app/a.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def f():\n    return 1\n")
     raw = {"app/a.py": [{"type": "function", "complexity": score} for score in scores]}
     monkeypatch.setattr("checks.run", lambda *args: json.dumps(raw))
     with pytest.raises(InvalidEvidence):
@@ -30,6 +33,9 @@ def test_complexity_rejects_empty_nonfinite_and_individual_outlier(
 def test_complexity_accepts_boundary_and_excludes_duplicate_class_aggregate(
     monkeypatch, tmp_path
 ):
+    module = tmp_path / "docker/core/app/a.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("class Example:\n    def f(self):\n        return 1\n")
     raw = {
         "app/a.py": [
             {
@@ -84,6 +90,24 @@ def test_valid_bound_bundle_retains_raw_output(tmp_path):
     payload = bundle(tmp_path)
     save_bundle(tmp_path, payload)
     assert load_bundle(tmp_path, "TEST-1", REVISION, 30) == payload
+
+
+def test_named_flags_and_hashed_failure_text_cannot_pass_the_requirement(tmp_path):
+    payload = bundle(tmp_path)
+    output = tmp_path / "pytest.log"
+    output.write_text("99 failed; coverage=0%\n")
+    payload["commands"][0].update(
+        argv=["false"], sha256=hashlib.sha256(output.read_bytes()).hexdigest()
+    )
+    save_bundle(tmp_path, payload)
+    with pytest.raises(InvalidEvidence, match="semantic"):
+        evaluate(
+            {"id": "TEST-1", "kind": "evidence"},
+            tmp_path,
+            REVISION,
+            {"limits": {"evidence_max_age_days": 30}},
+            tmp_path,
+        )
 
 
 def test_unrelated_true_assertions_cannot_certify_coverage(tmp_path):
@@ -158,10 +182,11 @@ def mutation_report(root: Path) -> dict:
     }
 
 
-def test_real_mutation_score_accepts_exact_threshold(tmp_path):
+def test_hand_authored_killed_rows_do_not_establish_execution(tmp_path):
     data = mutation_report(tmp_path)
     (tmp_path / "docs/mutation-results.json").write_text(json.dumps(data))
-    assert "8/10" in mutations(tmp_path, REVISION, 0.8, 30)
+    with pytest.raises(InvalidEvidence):
+        mutations(tmp_path, REVISION, 0.8, 30)
 
 
 @pytest.mark.parametrize(
@@ -195,3 +220,67 @@ def test_pinned_distroless_nonroot_stage_is_parsed(tmp_path):
         + "\nFROM python:3.14-slim AS build\nFROM ${RUNTIME}\nUSER 1000:1000\n"
     )
     assert "final FROM" in final_image(tmp_path)
+
+
+def test_mutation_dispatch_requires_the_execution_validator(monkeypatch, tmp_path):
+    evidence = tmp_path / "retained/TEST-3"
+    evidence.mkdir(parents=True)
+    (evidence / "mutation.json").write_text("{}")
+    calls = []
+
+    def executed_validator(argv, cwd):
+        calls.append((argv, cwd))
+        return json.dumps(
+            {"development_only": False, "killed": 8, "total": 10, "kill_rate": 0.8}
+        )
+
+    monkeypatch.setattr("checks.run", executed_validator)
+    assert mutations(tmp_path, REVISION, 0.8, 30, evidence).startswith(
+        "8/10 execution-verified"
+    )
+    assert calls == [
+        (
+            [
+                sys.executable,
+                "-m",
+                "tools.ci.mutation",
+                "validate",
+                "--root",
+                str(tmp_path),
+                "--output",
+                str(evidence),
+                "--revision",
+                REVISION,
+                "--threshold",
+                "0.8",
+                "--max-age-days",
+                "30",
+            ],
+            tmp_path,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "",
+        "not-json",
+        "[]",
+        "{}",
+        '{"development_only":true,"killed":8,"total":10,"kill_rate":0.8}',
+        '{"development_only":false,"killed":true,"total":1,"kill_rate":1}',
+        '{"development_only":false,"killed":0,"total":0,"kill_rate":1}',
+        '{"development_only":false,"killed":8,"total":10,"kill_rate":0.9}',
+        '{"development_only":false,"killed":7,"total":10,"kill_rate":0.7}',
+    ],
+)
+def test_mutation_dispatch_rejects_invalid_validator_output(
+    monkeypatch, tmp_path, result
+):
+    directory = tmp_path / "mutation"
+    directory.mkdir()
+    (directory / "mutation.json").write_text("{}")
+    monkeypatch.setattr("checks.run", lambda *_args: result)
+    with pytest.raises(InvalidEvidence):
+        mutations(tmp_path, REVISION, 0.8, 30, directory)

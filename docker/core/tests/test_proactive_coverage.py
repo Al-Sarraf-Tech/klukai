@@ -118,11 +118,13 @@ class TestTickLoopBehavior:
             t.active = False  # stop after the first tick
 
         # No major event (random()>=0.10), no jitter surprise, monotonic advances.
-        with patch.object(t, "_fire_update", side_effect=fake_fire), \
-             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.mission.random.uniform", return_value=1.0), \
-             patch("app.proactive.mission.random.random", return_value=0.99), \
-             patch("app.proactive.mission.time.monotonic", return_value=2800.0):
+        with (
+            patch.object(t, "_fire_update", side_effect=fake_fire),
+            patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()),
+            patch("app.proactive.mission.random.uniform", return_value=1.0),
+            patch("app.proactive.mission.random.random", return_value=0.99),
+            patch("app.proactive.mission.time.monotonic", return_value=2800.0),
+        ):
             await t._tick_loop()
 
         assert t.update_count == 1
@@ -141,12 +143,14 @@ class TestTickLoopBehavior:
         async def fake_fire(elapsed, major):
             t.active = False
 
-        with patch.object(t, "_fire_update", side_effect=fake_fire), \
-             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.mission.random.uniform", return_value=0.6), \
-             patch("app.proactive.mission.random.random", return_value=0.05), \
-             patch("app.proactive.mission.random.choice", return_value="klukai_injured"), \
-             patch("app.proactive.mission.time.monotonic", return_value=600.0):
+        with (
+            patch.object(t, "_fire_update", side_effect=fake_fire),
+            patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()),
+            patch("app.proactive.mission.random.uniform", return_value=0.6),
+            patch("app.proactive.mission.random.random", return_value=0.05),
+            patch("app.proactive.mission.random.choice", return_value="klukai_injured"),
+            patch("app.proactive.mission.time.monotonic", return_value=600.0),
+        ):
             await t._tick_loop()
 
         # The major injury event is recorded persistently.
@@ -164,12 +168,14 @@ class TestTickLoopBehavior:
             async def fake_fire(elapsed, major):
                 t.active = False
 
-            with patch.object(t, "_fire_update", side_effect=fake_fire), \
-                 patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
-                 patch("app.proactive.mission.random.uniform", return_value=0.6), \
-                 patch("app.proactive.mission.random.random", return_value=0.05), \
-                 patch("app.proactive.mission.random.choice", return_value=evt), \
-                 patch("app.proactive.mission.time.monotonic", return_value=600.0):
+            with (
+                patch.object(t, "_fire_update", side_effect=fake_fire),
+                patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()),
+                patch("app.proactive.mission.random.uniform", return_value=0.6),
+                patch("app.proactive.mission.random.random", return_value=0.05),
+                patch("app.proactive.mission.random.choice", return_value=evt),
+                patch("app.proactive.mission.time.monotonic", return_value=600.0),
+            ):
                 await t._tick_loop()
             assert evt in t.active_events
 
@@ -190,11 +196,15 @@ class TestTickLoopBehavior:
         # skip) then resolve roll. We need 0.99 first, then <0.30. Use side_effect.
         rolls = iter([0.99, 0.10])
 
-        with patch.object(t, "_fire_update", side_effect=fake_fire), \
-             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.mission.random.uniform", return_value=1.0), \
-             patch("app.proactive.mission.random.random", side_effect=lambda: next(rolls)), \
-             patch("app.proactive.mission.time.monotonic", return_value=120.0):
+        with (
+            patch.object(t, "_fire_update", side_effect=fake_fire),
+            patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()),
+            patch("app.proactive.mission.random.uniform", return_value=1.0),
+            patch(
+                "app.proactive.mission.random.random", side_effect=lambda: next(rolls)
+            ),
+            patch("app.proactive.mission.time.monotonic", return_value=120.0),
+        ):
             await t._tick_loop()
 
         assert "klukai_injured" not in t.active_events
@@ -212,10 +222,12 @@ class TestTickLoopBehavior:
             t.active = False
 
         fire = AsyncMock()
-        with patch.object(t, "_fire_update", fire), \
-             patch("app.proactive.mission.asyncio.sleep", side_effect=flip_inactive), \
-             patch("app.proactive.mission.random.uniform", return_value=1.0), \
-             patch("app.proactive.mission.random.random", return_value=0.99):
+        with (
+            patch.object(t, "_fire_update", fire),
+            patch("app.proactive.mission.asyncio.sleep", side_effect=flip_inactive),
+            patch("app.proactive.mission.random.uniform", return_value=1.0),
+            patch("app.proactive.mission.random.random", return_value=0.99),
+        ):
             await t._tick_loop()
 
         assert t.update_count == 0
@@ -228,10 +240,14 @@ class TestTickLoopBehavior:
         t.active = True
         t.started_at = 0.0
 
-        with patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.mission.random.uniform", return_value=1.0), \
-             patch("app.proactive.mission.random.random", return_value=0.99), \
-             patch("app.proactive.mission.time.monotonic", side_effect=RuntimeError("boom")):
+        with (
+            patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()),
+            patch("app.proactive.mission.random.uniform", return_value=1.0),
+            patch("app.proactive.mission.random.random", return_value=0.99),
+            patch(
+                "app.proactive.mission.time.monotonic", side_effect=RuntimeError("boom")
+            ),
+        ):
             await t._tick_loop()  # must not raise
 
         assert t.active is False
@@ -242,9 +258,14 @@ class TestTickLoopBehavior:
         t.active = True
         t.started_at = 0.0
 
-        with patch("app.proactive.mission.asyncio.sleep", side_effect=asyncio.CancelledError), \
-             patch("app.proactive.mission.random.uniform", return_value=1.0), \
-             patch("app.proactive.mission.random.random", return_value=0.99):
+        with (
+            patch(
+                "app.proactive.mission.asyncio.sleep",
+                side_effect=asyncio.CancelledError,
+            ),
+            patch("app.proactive.mission.random.uniform", return_value=1.0),
+            patch("app.proactive.mission.random.random", return_value=0.99),
+        ):
             await t._tick_loop()  # CancelledError caught, no propagation
 
         # active is left as-is on cancel (only the except-Exception branch clears it)
@@ -290,8 +311,10 @@ class TestFireUpdate:
         t = MissionTimer()
         cb = AsyncMock()
         t._callback = cb
-        with patch("app.fact_extractor.generate_mission_update",
-                   AsyncMock(side_effect=RuntimeError("LM down"))):
+        with patch(
+            "app.fact_extractor.generate_mission_update",
+            AsyncMock(side_effect=RuntimeError("LM down")),
+        ):
             await t._fire_update(elapsed_minutes=10, major_event=None)  # no raise
         cb.assert_not_awaited()
 
@@ -303,11 +326,17 @@ class TestFireUpdate:
         t.update_count = 3
         cb = AsyncMock()
         t._callback = cb
-        with patch("app.fact_extractor.generate_mission_update", AsyncMock(return_value="")), \
-             patch("app.proactive.mission.logger") as log:
+        with (
+            patch(
+                "app.fact_extractor.generate_mission_update", AsyncMock(return_value="")
+            ),
+            patch("app.proactive.mission_timer.logger") as log,
+        ):
             await t._fire_update(elapsed_minutes=90, major_event=None)
         cb.assert_not_awaited()
-        assert log.info.call_args.args[0] == "Mission update #%d skipped: LLM unavailable"
+        assert (
+            log.info.call_args.args[0] == "Mission update #%d skipped: LLM unavailable"
+        )
         assert log.info.call_args.args[1] == 3
 
 
@@ -337,7 +366,9 @@ class TestStopMissionDispatch:
             coro.close()  # we only need to observe dispatch, not run them
             return MagicMock()
 
-        with patch("app.proactive.mission.asyncio.create_task", side_effect=fake_create_task):
+        with patch(
+            "app.proactive.mission.asyncio.create_task", side_effect=fake_create_task
+        ):
             e.stop_mission("alice", trigger_aftermath=True)
 
         # 3 coroutines dispatched: aftermath image, decompression, physical state.
@@ -363,7 +394,9 @@ class TestStopMissionDispatch:
             coro.close()
             return MagicMock()
 
-        with patch("app.proactive.mission.asyncio.create_task", side_effect=fake_create_task):
+        with patch(
+            "app.proactive.mission.asyncio.create_task", side_effect=fake_create_task
+        ):
             e.stop_mission("bob", trigger_aftermath=False)
 
         assert len(scheduled) == 1  # only _set_post_mission_physical
@@ -385,9 +418,11 @@ class TestStopMissionDispatch:
             captured["uid"] = uid
             captured["had_injury"] = had_injury
 
-        with patch.object(e, "_set_post_mission_physical", side_effect=fake_physical), \
-             patch.object(e, "trigger_mission_aftermath_image", new=AsyncMock()), \
-             patch.object(e, "_decompression_message", new=AsyncMock()):
+        with (
+            patch.object(e, "_set_post_mission_physical", side_effect=fake_physical),
+            patch.object(e, "trigger_mission_aftermath_image", new=AsyncMock()),
+            patch.object(e, "_decompression_message", new=AsyncMock()),
+        ):
             e.stop_mission("carol", trigger_aftermath=True)
             await asyncio.sleep(0)  # let the create_task coroutines run
 
@@ -434,6 +469,7 @@ class TestSchedulerErrorListener:
             # start() registers more than one listener (job-error and
             # job-executed), so select by mask rather than taking the last.
             from apscheduler.events import EVENT_JOB_ERROR
+
             if mask & EVENT_JOB_ERROR:
                 captured["cb"] = cb
                 captured["mask"] = mask
@@ -443,15 +479,23 @@ class TestSchedulerErrorListener:
             e.start()
         try:
             assert "cb" in captured, "error listener was not registered"
-            event = MagicMock(job_id="anniversary_check", exception=ValueError("kaboom"), traceback="Traceback ...")
+            event = MagicMock(
+                job_id="anniversary_check",
+                exception=ValueError("kaboom"),
+                traceback="Traceback ...",
+            )
             created = []
+
             def consume(coro):
                 created.append(coro)
                 coro.close()
                 return MagicMock()
-            with patch("app.proactive.engine.logger") as log, \
-                 patch("app.audit.log", new=AsyncMock()), \
-                 patch("asyncio.create_task", side_effect=consume):
+
+            with (
+                patch("app.proactive.engine.logger") as log,
+                patch("app.audit.log", new=AsyncMock()),
+                patch("asyncio.create_task", side_effect=consume),
+            ):
                 captured["cb"](event)
             assert log.error.called
             assert "SCHEDULED_JOB_FAILED" in log.error.call_args.args[0]
@@ -469,6 +513,7 @@ class TestSchedulerErrorListener:
 
         def spy(cb, mask):
             from apscheduler.events import EVENT_JOB_ERROR
+
             if mask & EVENT_JOB_ERROR:
                 captured["cb"] = cb
             return real_add(cb, mask)
@@ -477,9 +522,11 @@ class TestSchedulerErrorListener:
             e.start()
         try:
             event = MagicMock(job_id="x", exception=ValueError("boom"), traceback="tb")
-            with patch("app.proactive.engine.logger") as log, \
-                 patch("app.audit.log", new=AsyncMock()), \
-                 patch("asyncio.create_task", side_effect=RuntimeError("no loop")):
+            with (
+                patch("app.proactive.engine.logger") as log,
+                patch("app.audit.log", new=AsyncMock()),
+                patch("asyncio.create_task", side_effect=RuntimeError("no loop")),
+            ):
                 captured["cb"](event)
             assert log.error.called
         finally:
@@ -490,11 +537,16 @@ class TestSchedulerErrorListener:
         to start the scheduler (outer except). The scheduler start/shutdown are
         stubbed so the assertion targets the warning path, not the AP lifecycle."""
         e = ProactiveEngine()
-        with patch.object(e._scheduler, "add_listener",
-                          side_effect=RuntimeError("apscheduler busted")), \
-             patch.object(e._scheduler, "start"), \
-             patch.object(e._scheduler, "shutdown"), \
-             patch("app.proactive.engine.logger") as log:
+        with (
+            patch.object(
+                e._scheduler,
+                "add_listener",
+                side_effect=RuntimeError("apscheduler busted"),
+            ),
+            patch.object(e._scheduler, "start"),
+            patch.object(e._scheduler, "shutdown"),
+            patch("app.proactive.engine.logger") as log,
+        ):
             e.start()
         assert log.warning.called
         warnings = [c.args[0] for c in log.warning.call_args_list]
@@ -529,11 +581,13 @@ class TestCheckinPhysicalLoop:
         fake_ws = MagicMock()
         fake_ws._connections = {"alice": object(), "bob": object()}
 
-        with _patch_now(datetime(2026, 5, 17, 8, 0, 0)), \
-             patch("app.context.physical", fake_phys), \
-             patch("app.context.ws", fake_ws), \
-             patch("app.weather_client.fetch_weather", new=AsyncMock(return_value=None)), \
-             patch("app.proactive.engine.publish_event", new=AsyncMock()):
+        with (
+            _patch_now(datetime(2026, 5, 17, 8, 0, 0)),
+            patch("app.context.physical", fake_phys),
+            patch("app.context.ws", fake_ws),
+            patch("app.weather_client.fetch_weather", new=AsyncMock(return_value=None)),
+            patch("app.proactive.engine.publish_event", new=AsyncMock()),
+        ):
             await e._morning_checkin()
 
         # on_time_of_day called for both connected users with hour=8.
@@ -552,12 +606,15 @@ class TestCheckinPhysicalLoop:
         # Patch the import target to raise on access of ._connections
         fake_ws = MagicMock()
         type(fake_ws)._connections = property(
-            lambda self: (_ for _ in ()).throw(RuntimeError("ws gone")))
+            lambda self: (_ for _ in ()).throw(RuntimeError("ws gone"))
+        )
 
-        with _patch_now(datetime(2026, 5, 17, 8, 0, 0)), \
-             patch("app.context.ws", fake_ws), \
-             patch("app.weather_client.fetch_weather", new=AsyncMock(return_value=None)), \
-             patch("app.proactive.engine.publish_event", new=AsyncMock()):
+        with (
+            _patch_now(datetime(2026, 5, 17, 8, 0, 0)),
+            patch("app.context.ws", fake_ws),
+            patch("app.weather_client.fetch_weather", new=AsyncMock(return_value=None)),
+            patch("app.proactive.engine.publish_event", new=AsyncMock()),
+        ):
             await e._morning_checkin()
         cb.assert_awaited_once()  # delivery still happens after the swallowed error
 
@@ -573,10 +630,12 @@ class TestCheckinPhysicalLoop:
         fake_ws = MagicMock()
         fake_ws._connections = {"alice": object()}
 
-        with _patch_now(datetime(2026, 5, 17, 22, 0, 0)), \
-             patch("app.context.physical", fake_phys), \
-             patch("app.context.ws", fake_ws), \
-             patch("app.proactive.engine.publish_event", new=AsyncMock()):
+        with (
+            _patch_now(datetime(2026, 5, 17, 22, 0, 0)),
+            patch("app.context.physical", fake_phys),
+            patch("app.context.ws", fake_ws),
+            patch("app.proactive.engine.publish_event", new=AsyncMock()),
+        ):
             await e._evening_checkin()
 
         fake_phys.on_time_of_day.assert_awaited_once()
@@ -591,10 +650,13 @@ class TestCheckinPhysicalLoop:
         e._on_message_callback = cb
         fake_ws = MagicMock()
         type(fake_ws)._connections = property(
-            lambda self: (_ for _ in ()).throw(RuntimeError("ws gone")))
-        with _patch_now(datetime(2026, 5, 17, 22, 0, 0)), \
-             patch("app.context.ws", fake_ws), \
-             patch("app.proactive.engine.publish_event", new=AsyncMock()):
+            lambda self: (_ for _ in ()).throw(RuntimeError("ws gone"))
+        )
+        with (
+            _patch_now(datetime(2026, 5, 17, 22, 0, 0)),
+            patch("app.context.ws", fake_ws),
+            patch("app.proactive.engine.publish_event", new=AsyncMock()),
+        ):
             await e._evening_checkin()
         cb.assert_awaited_once()  # delivery survives the swallowed physical error
 
@@ -605,8 +667,9 @@ class TestDailyChallengeError:
         e = ProactiveEngine()
         e._on_message_callback = AsyncMock()
         e._affection_level = 5
-        with patch("app.personality.load_personality",
-                   side_effect=RuntimeError("yaml missing")):
+        with patch(
+            "app.personality.load_personality", side_effect=RuntimeError("yaml missing")
+        ):
             await e._daily_challenge()  # no raise
         e._on_message_callback.assert_not_awaited()
 
@@ -629,10 +692,16 @@ def _engine_for_random_event(affection=3, mood="composed"):
 
 
 _EVENTS_CFG = {
-    "lore": {"min_affection": 0, "weight": 10,
-             "messages": ["The wind off Mechty's ridge again."]},
-    "intimate": {"min_affection": 5, "weight": 20,
-                 "messages": ["...I keep thinking about you."]},
+    "lore": {
+        "min_affection": 0,
+        "weight": 10,
+        "messages": ["The wind off Mechty's ridge again."],
+    },
+    "intimate": {
+        "min_affection": 5,
+        "weight": 20,
+        "messages": ["...I keep thinking about you."],
+    },
 }
 
 
@@ -670,18 +739,25 @@ class TestRandomEvent:
         e._on_message_callback.assert_not_awaited()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("when", [
-        datetime(2026, 5, 17, 23, 15, 0),  # first quiet minute slot
-        datetime(2026, 5, 17, 7, 45, 0),   # last quiet-hour slot before 0800
-    ])
+    @pytest.mark.parametrize(
+        "when",
+        [
+            datetime(2026, 5, 17, 23, 15, 0),  # first quiet minute slot
+            datetime(2026, 5, 17, 7, 45, 0),  # last quiet-hour slot before 0800
+        ],
+    )
     async def test_quiet_hours_block_even_with_a_winning_roll(self, when):
         """_random_event bypasses _can_send(), so it must check quiet hours
         itself — a misfire replay at 23:15 must never wake him."""
         e = _engine_for_random_event(affection=0)
-        with _patch_now(when), \
-             patch("app.proactive.events.random.random", return_value=0.0), \
-             patch("app.personality.load_personality",
-                   return_value={"random_events": _EVENTS_CFG}) as load:
+        with (
+            _patch_now(when),
+            patch("app.proactive.events.random.random", return_value=0.0),
+            patch(
+                "app.personality.load_personality",
+                return_value={"random_events": _EVENTS_CFG},
+            ) as load,
+        ):
             await e._random_event()
         e._on_message_callback.assert_not_awaited()
         load.assert_not_called()  # refused before the roll, not after
@@ -691,18 +767,25 @@ class TestRandomEvent:
     async def test_probability_roll_above_chance_skips(self):
         e = _engine_for_random_event()
         # base 0.35; roll just above -> skip
-        with _patch_now(), patch("app.proactive.events.random.random", return_value=0.99):
+        with (
+            _patch_now(),
+            patch("app.proactive.events.random.random", return_value=0.99),
+        ):
             await e._random_event()
         e._on_message_callback.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_fires_and_increments_counters(self):
         e = _engine_for_random_event(affection=0)
-        with _patch_now(), \
-             patch("app.proactive.events.random.random", return_value=0.01), \
-             patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]), \
-             patch("app.personality.load_personality",
-                   return_value={"random_events": _EVENTS_CFG}):
+        with (
+            _patch_now(),
+            patch("app.proactive.events.random.random", return_value=0.01),
+            patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]),
+            patch(
+                "app.personality.load_personality",
+                return_value={"random_events": _EVENTS_CFG},
+            ),
+        ):
             await e._random_event()
 
         e._on_message_callback.assert_awaited_once()
@@ -710,19 +793,25 @@ class TestRandomEvent:
         assert e._last_random_event == _NOON
         assert e._last_proactive_answered is False
         # Only the lore category is eligible at affection 0.
-        assert e._on_message_callback.call_args.args[0] == \
-            "The wind off Mechty's ridge again."
+        assert (
+            e._on_message_callback.call_args.args[0]
+            == "The wind off Mechty's ridge again."
+        )
 
     @pytest.mark.asyncio
     async def test_intimate_mood_boosts_chance_above_base(self):
         """At a tender mood, base_chance becomes 0.60 — a roll of 0.5 (which
         would skip at the 0.35 base) now fires."""
         e = _engine_for_random_event(affection=0, mood="tender")
-        with _patch_now(), \
-             patch("app.proactive.events.random.random", return_value=0.5), \
-             patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]), \
-             patch("app.personality.load_personality",
-                   return_value={"random_events": _EVENTS_CFG}):
+        with (
+            _patch_now(),
+            patch("app.proactive.events.random.random", return_value=0.5),
+            patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]),
+            patch(
+                "app.personality.load_personality",
+                return_value={"random_events": _EVENTS_CFG},
+            ),
+        ):
             await e._random_event()
         e._on_message_callback.assert_awaited_once()
 
@@ -733,35 +822,49 @@ class TestRandomEvent:
         e = _engine_for_random_event(affection=5)
         # random() consulted twice: probability gate, then weighted-pick roll.
         rolls = iter([0.01, 0.0])
-        with _patch_now(), \
-             patch("app.proactive.events.random.random", side_effect=lambda: next(rolls)), \
-             patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]), \
-             patch("app.personality.load_personality",
-                   return_value={"random_events": _EVENTS_CFG}):
+        with (
+            _patch_now(),
+            patch(
+                "app.proactive.events.random.random", side_effect=lambda: next(rolls)
+            ),
+            patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]),
+            patch(
+                "app.personality.load_personality",
+                return_value={"random_events": _EVENTS_CFG},
+            ),
+        ):
             await e._random_event()
         # roll==0 hits the first cumulative bucket -> 'lore' messages.
-        assert e._on_message_callback.call_args.args[0] == \
-            "The wind off Mechty's ridge again."
+        assert (
+            e._on_message_callback.call_args.args[0]
+            == "The wind off Mechty's ridge again."
+        )
 
     @pytest.mark.asyncio
     async def test_no_eligible_categories_skips(self):
         e = _engine_for_random_event(affection=0)
         # Only an intimate category requiring affection 5 — none eligible at 0.
         cfg = {"intimate": {"min_affection": 5, "weight": 5, "messages": ["x"]}}
-        with _patch_now(), \
-             patch("app.proactive.events.random.random", return_value=0.01), \
-             patch("app.personality.load_personality",
-                   return_value={"random_events": cfg}):
+        with (
+            _patch_now(),
+            patch("app.proactive.events.random.random", return_value=0.01),
+            patch(
+                "app.personality.load_personality", return_value={"random_events": cfg}
+            ),
+        ):
             await e._random_event()
         e._on_message_callback.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_personality_load_failure_skips(self):
         e = _engine_for_random_event()
-        with _patch_now(), \
-             patch("app.proactive.events.random.random", return_value=0.01), \
-             patch("app.personality.load_personality",
-                   side_effect=RuntimeError("no yaml")):
+        with (
+            _patch_now(),
+            patch("app.proactive.events.random.random", return_value=0.01),
+            patch(
+                "app.personality.load_personality", side_effect=RuntimeError("no yaml")
+            ),
+        ):
             await e._random_event()
         e._on_message_callback.assert_not_awaited()
 
@@ -774,11 +877,14 @@ class TestRandomEvent:
             "garbage": "not-a-dict",  # skipped by isinstance check
             "lore": {"min_affection": 0, "weight": 10, "messages": ["Mechty wind."]},
         }
-        with _patch_now(), \
-             patch("app.proactive.events.random.random", return_value=0.01), \
-             patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]), \
-             patch("app.personality.load_personality",
-                   return_value={"random_events": cfg}):
+        with (
+            _patch_now(),
+            patch("app.proactive.events.random.random", return_value=0.01),
+            patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]),
+            patch(
+                "app.personality.load_personality", return_value={"random_events": cfg}
+            ),
+        ):
             await e._random_event()
         e._on_message_callback.assert_awaited_once_with("Mechty wind.")
 
@@ -790,11 +896,15 @@ class TestRandomEvent:
         active_timer = MagicMock()
         active_timer.active = True
         e._mission_timer = active_timer
-        with _patch_now(), \
-             patch("app.proactive.events.random.random", return_value=0.45), \
-             patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]), \
-             patch("app.personality.load_personality",
-                   return_value={"random_events": _EVENTS_CFG}):
+        with (
+            _patch_now(),
+            patch("app.proactive.events.random.random", return_value=0.45),
+            patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]),
+            patch(
+                "app.personality.load_personality",
+                return_value={"random_events": _EVENTS_CFG},
+            ),
+        ):
             await e._random_event()
         e._on_message_callback.assert_awaited_once()
 
@@ -834,7 +944,10 @@ class TestMissionRandomEvent:
     async def test_15min_gap_blocks(self):
         e, _ = self._active_engine()
         e._last_random_event = _NOON - timedelta(minutes=5)
-        with _patch_now(), patch("app.fact_extractor.generate_mission_update", new=AsyncMock()):
+        with (
+            _patch_now(),
+            patch("app.fact_extractor.generate_mission_update", new=AsyncMock()),
+        ):
             await e._mission_random_event()
         e._on_message_callback.assert_not_awaited()
 
@@ -842,7 +955,10 @@ class TestMissionRandomEvent:
     async def test_typing_cooldown_blocks(self):
         e, _ = self._active_engine()
         e._last_message_time = _NOON - timedelta(minutes=1)
-        with _patch_now(), patch("app.fact_extractor.generate_mission_update", new=AsyncMock()):
+        with (
+            _patch_now(),
+            patch("app.fact_extractor.generate_mission_update", new=AsyncMock()),
+        ):
             await e._mission_random_event()
         e._on_message_callback.assert_not_awaited()
 
@@ -850,16 +966,21 @@ class TestMissionRandomEvent:
     async def test_mute_blocks(self):
         e, _ = self._active_engine()
         e._muted_until = _NOON + timedelta(hours=1)
-        with _patch_now(), patch("app.fact_extractor.generate_mission_update", new=AsyncMock()):
+        with (
+            _patch_now(),
+            patch("app.fact_extractor.generate_mission_update", new=AsyncMock()),
+        ):
             await e._mission_random_event()
         e._on_message_callback.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_probability_above_75pct_skips(self):
         e, _ = self._active_engine()
-        with _patch_now(), \
-             patch("app.proactive.mission.random.random", return_value=0.99), \
-             patch("app.fact_extractor.generate_mission_update", new=AsyncMock()):
+        with (
+            _patch_now(),
+            patch("app.proactive.mission.random.random", return_value=0.99),
+            patch("app.fact_extractor.generate_mission_update", new=AsyncMock()),
+        ):
             await e._mission_random_event()
         e._on_message_callback.assert_not_awaited()
 
@@ -867,18 +988,23 @@ class TestMissionRandomEvent:
     async def test_fires_contextual_update_with_mission_desc(self):
         e, timer = self._active_engine()
         gen = AsyncMock(return_value="Contact on Mechty's flank — handling it.")
-        with _patch_now(), \
-             patch("app.proactive.mission.random.random", return_value=0.1), \
-             patch("app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]), \
-             patch("app.proactive.mission.time.monotonic", return_value=1800.0), \
-             patch("app.fact_extractor.generate_mission_update", gen):
+        with (
+            _patch_now(),
+            patch("app.proactive.mission.random.random", return_value=0.1),
+            patch(
+                "app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]
+            ),
+            patch("app.proactive.mission.time.monotonic", return_value=1800.0),
+            patch("app.fact_extractor.generate_mission_update", gen),
+        ):
             await e._mission_random_event()
 
         gen.assert_awaited_once()
         assert gen.await_args.kwargs["mission_desc"] == "Hold the ridge"
         assert gen.await_args.kwargs["update_number"] == 3  # update_count+1
         e._on_message_callback.assert_awaited_once_with(
-            "Contact on Mechty's flank — handling it.")
+            "Contact on Mechty's flank — handling it."
+        )
         assert e._last_random_event == _NOON
         assert e._random_events_today == 1
 
@@ -902,9 +1028,11 @@ class TestMissionRandomEvent:
 
         e._mission_timer = _FalsyActiveTimer()
         gen = AsyncMock()
-        with _patch_now(), \
-             patch("app.proactive.mission.random.random", return_value=0.1), \
-             patch("app.fact_extractor.generate_mission_update", gen):
+        with (
+            _patch_now(),
+            patch("app.proactive.mission.random.random", return_value=0.1),
+            patch("app.fact_extractor.generate_mission_update", gen),
+        ):
             await e._mission_random_event()
         gen.assert_not_awaited()
         e._on_message_callback.assert_not_awaited()
@@ -912,24 +1040,35 @@ class TestMissionRandomEvent:
     @pytest.mark.asyncio
     async def test_empty_llm_message_not_delivered(self):
         e, _ = self._active_engine()
-        with _patch_now(), \
-             patch("app.proactive.mission.random.random", return_value=0.1), \
-             patch("app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]), \
-             patch("app.proactive.mission.time.monotonic", return_value=1800.0), \
-             patch("app.fact_extractor.generate_mission_update",
-                   AsyncMock(return_value="")):
+        with (
+            _patch_now(),
+            patch("app.proactive.mission.random.random", return_value=0.1),
+            patch(
+                "app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]
+            ),
+            patch("app.proactive.mission.time.monotonic", return_value=1800.0),
+            patch(
+                "app.fact_extractor.generate_mission_update", AsyncMock(return_value="")
+            ),
+        ):
             await e._mission_random_event()
         e._on_message_callback.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_llm_error_swallowed(self):
         e, _ = self._active_engine()
-        with _patch_now(), \
-             patch("app.proactive.mission.random.random", return_value=0.1), \
-             patch("app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]), \
-             patch("app.proactive.mission.time.monotonic", return_value=1800.0), \
-             patch("app.fact_extractor.generate_mission_update",
-                   AsyncMock(side_effect=RuntimeError("LM down"))):
+        with (
+            _patch_now(),
+            patch("app.proactive.mission.random.random", return_value=0.1),
+            patch(
+                "app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]
+            ),
+            patch("app.proactive.mission.time.monotonic", return_value=1800.0),
+            patch(
+                "app.fact_extractor.generate_mission_update",
+                AsyncMock(side_effect=RuntimeError("LM down")),
+            ),
+        ):
             await e._mission_random_event()  # no raise
         e._on_message_callback.assert_not_awaited()
 
@@ -1026,14 +1165,18 @@ class TestRomanceEdgeGates:
         e._session_getter = AsyncMock(return_value=session)
 
         gen = AsyncMock(return_value="The ridge... I keep thinking of it. And you.")
-        with patch("asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.events.publish_event", new=AsyncMock()), \
-             patch("app.fact_extractor.generate_romance_message", gen):
+        with (
+            patch("asyncio.sleep", new=AsyncMock()),
+            patch("app.proactive.events.publish_event", new=AsyncMock()),
+            patch("app.fact_extractor.generate_romance_message", gen),
+        ):
             await e._romance_window()
 
         gen.assert_awaited_once()
-        assert gen.await_args.kwargs["context_summary"] == \
-            "He mentioned the ridge mission earlier."
+        assert (
+            gen.await_args.kwargs["context_summary"]
+            == "He mentioned the ridge mission earlier."
+        )
         assert gen.await_args.kwargs["affection_level"] == 6
         cb.assert_awaited_once_with("The ridge... I keep thinking of it. And you.")
 
@@ -1060,14 +1203,18 @@ class TestDailyRecap:
     async def test_generates_and_delivers_recap(self):
         e = ProactiveEngine()
         e._affection_level = 5
-        recap_cb = AsyncMock(return_value="Today we held the ridge. I'm proud of the unit.")
+        recap_cb = AsyncMock(
+            return_value="Today we held the ridge. I'm proud of the unit."
+        )
         e._on_recap_callback = recap_cb
         msg_cb = AsyncMock()
         e._on_message_callback = msg_cb
         with _patch_now():
             await e._daily_recap()
         recap_cb.assert_awaited_once_with(5)  # affection level passed through
-        msg_cb.assert_awaited_once_with("Today we held the ridge. I'm proud of the unit.")
+        msg_cb.assert_awaited_once_with(
+            "Today we held the ridge. I'm proud of the unit."
+        )
         assert e._proactive_count_today == 1
         assert e._last_proactive_answered is False
 
@@ -1131,7 +1278,10 @@ class TestDreamEvent:
     @pytest.mark.asyncio
     async def test_probability_above_40pct_skips(self):
         e = _dream_engine()
-        with _patch_now(), patch("app.proactive.events.random.random", return_value=0.99):
+        with (
+            _patch_now(),
+            patch("app.proactive.events.random.random", return_value=0.99),
+        ):
             await e._dream_event()
         e._on_message_callback.assert_not_awaited()
 
@@ -1155,11 +1305,15 @@ class TestDreamEvent:
         # does `from . import memory_archive` then `memory_archive.list_memories`,
         # so patching the module attribute is robust regardless of import order
         # (replacing sys.modules wholesale breaks once the module is pre-imported).
-        with _patch_now(datetime(2026, 5, 17, 2, 37, 0)), \
-             patch("app.proactive.events.random.random", side_effect=lambda: next(rolls)), \
-             patch("app.llm_json.call_llm_text", side_effect=fake_text), \
-             patch("app.llm_router.get_lm_gate", return_value=gate), \
-             patch("app.memory_archive.list_memories", new=AsyncMock(return_value=[])):
+        with (
+            _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
+            patch(
+                "app.proactive.events.random.random", side_effect=lambda: next(rolls)
+            ),
+            patch("app.llm_json.call_llm_text", side_effect=fake_text),
+            patch("app.llm_router.get_lm_gate", return_value=gate),
+            patch("app.memory_archive.list_memories", new=AsyncMock(return_value=[])),
+        ):
             await e._dream_event()
         return captured
 
@@ -1189,7 +1343,10 @@ class TestDreamEvent:
     async def test_high_affection_random_branch(self):
         e = _dream_engine(affection=8)
         captured = await self._run_dream_collecting_prompt(e, roll_value=0.95)
-        assert "strange" in captured["prompt"].lower() or "surreal" in captured["prompt"].lower()
+        assert (
+            "strange" in captured["prompt"].lower()
+            or "surreal" in captured["prompt"].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_mid_affection_tender_branch(self):
@@ -1217,7 +1374,10 @@ class TestDreamEvent:
         # aff 6: roll>=0.80 -> random
         e = _dream_engine(affection=6)
         captured = await self._run_dream_collecting_prompt(e, roll_value=0.9)
-        assert "strange" in captured["prompt"].lower() or "surreal" in captured["prompt"].lower()
+        assert (
+            "strange" in captured["prompt"].lower()
+            or "surreal" in captured["prompt"].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_lower_affection_no_erotic(self):
@@ -1230,10 +1390,17 @@ class TestDreamEvent:
     @pytest.mark.asyncio
     async def test_lower_affection_nightmare_and_random(self):
         e = _dream_engine(affection=5)
-        cap_nm = await self._run_dream_collecting_prompt(_dream_engine(affection=5), 0.5)
+        cap_nm = await self._run_dream_collecting_prompt(
+            _dream_engine(affection=5), 0.5
+        )
         assert "nightmare" in cap_nm["prompt"].lower()
-        cap_rnd = await self._run_dream_collecting_prompt(_dream_engine(affection=5), 0.9)
-        assert "strange" in cap_rnd["prompt"].lower() or "surreal" in cap_rnd["prompt"].lower()
+        cap_rnd = await self._run_dream_collecting_prompt(
+            _dream_engine(affection=5), 0.9
+        )
+        assert (
+            "strange" in cap_rnd["prompt"].lower()
+            or "surreal" in cap_rnd["prompt"].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_memory_seed_woven_into_prompt(self):
@@ -1251,14 +1418,19 @@ class TestDreamEvent:
         gate.__aenter__ = AsyncMock()
         gate.__aexit__ = AsyncMock()
         archive_mem = AsyncMock(
-            return_value=[{"annotation": "The night on the observation deck."}])
+            return_value=[{"annotation": "The night on the observation deck."}]
+        )
 
-        with _patch_now(datetime(2026, 5, 17, 2, 37, 0)), \
-             patch("app.proactive.events.random.random", side_effect=lambda: next(rolls)), \
-             patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]), \
-             patch("app.llm_json.call_llm_text", side_effect=fake_text), \
-             patch("app.llm_router.get_lm_gate", return_value=gate), \
-             patch("app.memory_archive.list_memories", new=archive_mem):
+        with (
+            _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
+            patch(
+                "app.proactive.events.random.random", side_effect=lambda: next(rolls)
+            ),
+            patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]),
+            patch("app.llm_json.call_llm_text", side_effect=fake_text),
+            patch("app.llm_router.get_lm_gate", return_value=gate),
+            patch("app.memory_archive.list_memories", new=archive_mem),
+        ):
             await e._dream_event()
 
         assert "observation deck" in captured["prompt"]
@@ -1279,12 +1451,18 @@ class TestDreamEvent:
         gate = AsyncMock()
         gate.__aenter__ = AsyncMock()
         gate.__aexit__ = AsyncMock()
-        with _patch_now(datetime(2026, 5, 17, 2, 37, 0)), \
-             patch("app.proactive.events.random.random", side_effect=lambda: next(rolls)), \
-             patch("app.llm_json.call_llm_text", side_effect=fake_text), \
-             patch("app.llm_router.get_lm_gate", return_value=gate), \
-             patch("app.memory_archive.list_memories",
-                   new=AsyncMock(side_effect=RuntimeError("archive down"))):
+        with (
+            _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
+            patch(
+                "app.proactive.events.random.random", side_effect=lambda: next(rolls)
+            ),
+            patch("app.llm_json.call_llm_text", side_effect=fake_text),
+            patch("app.llm_router.get_lm_gate", return_value=gate),
+            patch(
+                "app.memory_archive.list_memories",
+                new=AsyncMock(side_effect=RuntimeError("archive down")),
+            ),
+        ):
             await e._dream_event()
 
         assert "Dream seed" not in captured["prompt"]
@@ -1297,11 +1475,15 @@ class TestDreamEvent:
         gate = AsyncMock()
         gate.__aenter__ = AsyncMock()
         gate.__aexit__ = AsyncMock()
-        with _patch_now(datetime(2026, 5, 17, 2, 37, 0)), \
-             patch("app.proactive.events.random.random", side_effect=lambda: next(rolls)), \
-             patch("app.llm_json.call_llm_text", AsyncMock(return_value="")), \
-             patch("app.llm_router.get_lm_gate", return_value=gate), \
-             patch("app.memory_archive.list_memories", new=AsyncMock(return_value=[])):
+        with (
+            _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
+            patch(
+                "app.proactive.events.random.random", side_effect=lambda: next(rolls)
+            ),
+            patch("app.llm_json.call_llm_text", AsyncMock(return_value="")),
+            patch("app.llm_router.get_lm_gate", return_value=gate),
+            patch("app.memory_archive.list_memories", new=AsyncMock(return_value=[])),
+        ):
             await e._dream_event()
         e._on_message_callback.assert_not_awaited()
         assert e._dream_delivered_today is False
@@ -1313,11 +1495,18 @@ class TestDreamEvent:
         gate = AsyncMock()
         gate.__aenter__ = AsyncMock()
         gate.__aexit__ = AsyncMock()
-        with _patch_now(datetime(2026, 5, 17, 2, 37, 0)), \
-             patch("app.proactive.events.random.random", side_effect=lambda: next(rolls)), \
-             patch("app.llm_json.call_llm_text", AsyncMock(side_effect=RuntimeError("down"))), \
-             patch("app.llm_router.get_lm_gate", return_value=gate), \
-             patch("app.memory_archive.list_memories", new=AsyncMock(return_value=[])):
+        with (
+            _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
+            patch(
+                "app.proactive.events.random.random", side_effect=lambda: next(rolls)
+            ),
+            patch(
+                "app.llm_json.call_llm_text",
+                AsyncMock(side_effect=RuntimeError("down")),
+            ),
+            patch("app.llm_router.get_lm_gate", return_value=gate),
+            patch("app.memory_archive.list_memories", new=AsyncMock(return_value=[])),
+        ):
             await e._dream_event()  # no raise
         e._on_message_callback.assert_not_awaited()
 
@@ -1351,7 +1540,10 @@ class TestUnsentMessageCheck:
         e._affection_level = 6
         e._last_proactive_answered = True
         e._on_message_callback = AsyncMock()
-        with _patch_now(), patch("app.proactive.milestones.random.random", return_value=0.99):
+        with (
+            _patch_now(),
+            patch("app.proactive.milestones.random.random", return_value=0.99),
+        ):
             await e._unsent_message_check()
         e._on_message_callback.assert_not_awaited()
 
@@ -1362,18 +1554,24 @@ class TestUnsentMessageCheck:
         e._last_proactive_answered = True
         cb = AsyncMock()
         e._on_message_callback = cb
-        with _patch_now(), \
-             patch("app.proactive.milestones.random.random", return_value=0.01), \
-             patch("app.proactive.milestones.random.uniform", return_value=0), \
-             patch("app.proactive.milestones.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.milestones.random.choice", side_effect=lambda seq: seq[0]):
+        with (
+            _patch_now(),
+            patch("app.proactive.milestones.random.random", return_value=0.01),
+            patch("app.proactive.milestones.random.uniform", return_value=0),
+            patch("app.proactive.milestones.asyncio.sleep", new=AsyncMock()),
+            patch(
+                "app.proactive.milestones.random.choice", side_effect=lambda seq: seq[0]
+            ),
+        ):
             await e._unsent_message_check()
 
         # First the "[Message deleted]" placeholder, then a level-7 follow-up.
         assert cb.await_count == 2
         assert cb.await_args_list[0].args[0] == "[Message deleted]"
-        assert cb.await_args_list[1].args[0] == \
-            "...I didn't mean to send that. Or maybe I did. Forget it."
+        assert (
+            cb.await_args_list[1].args[0]
+            == "...I didn't mean to send that. Or maybe I did. Forget it."
+        )
         assert e._proactive_count_today == 1
         assert e._last_proactive_answered is False
 
@@ -1385,14 +1583,20 @@ class TestUnsentMessageCheck:
         e._last_proactive_answered = True
         cb = AsyncMock()
         e._on_message_callback = cb
-        with _patch_now(), \
-             patch("app.proactive.milestones.random.random", return_value=0.01), \
-             patch("app.proactive.milestones.random.uniform", return_value=0), \
-             patch("app.proactive.milestones.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.milestones.random.choice", side_effect=lambda seq: seq[0]):
+        with (
+            _patch_now(),
+            patch("app.proactive.milestones.random.random", return_value=0.01),
+            patch("app.proactive.milestones.random.uniform", return_value=0),
+            patch("app.proactive.milestones.asyncio.sleep", new=AsyncMock()),
+            patch(
+                "app.proactive.milestones.random.choice", side_effect=lambda seq: seq[0]
+            ),
+        ):
             await e._unsent_message_check()
-        assert cb.await_args_list[1].args[0] == \
-            "...You know what it said. You always know."
+        assert (
+            cb.await_args_list[1].args[0]
+            == "...You know what it said. You always know."
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1458,7 +1662,9 @@ class TestCheckAnniversaries:
         today = _NOON.date()
         past = date(today.year - 1, today.month, today.day)
         conn = AsyncMock()
-        conn.execute = AsyncMock(return_value=_result_with_fetchall([("first_kiss", past)]))
+        conn.execute = AsyncMock(
+            return_value=_result_with_fetchall([("first_kiss", past)])
+        )
         with _patch_now(), patch("app.db.get_conn", return_value=_db_ctx(conn)) as gc:
             first = await e.check_anniversaries("alice")
             second = await e.check_anniversaries("alice")  # served from cache
@@ -1485,7 +1691,9 @@ class TestCheckAnniversaries:
         # exercised deterministically rather than skipped in leap years.
         past = date(2020, 2, 29)  # 2020 is a leap year
         conn = AsyncMock()
-        conn.execute = AsyncMock(return_value=_result_with_fetchall([("first_snow", past)]))
+        conn.execute = AsyncMock(
+            return_value=_result_with_fetchall([("first_snow", past)])
+        )
         with _patch_now(), patch("app.db.get_conn", return_value=_db_ctx(conn)):
             results = await e.check_anniversaries("alice")  # must not raise
         assert isinstance(results, list)
@@ -1547,13 +1755,15 @@ class TestGetComfortObjects:
         conn.execute = AsyncMock(return_value=_result_with_fetchall(rows))
         with patch("app.db.get_conn", return_value=_db_ctx(conn)):
             gifts = await e.get_comfort_objects("alice")
-        assert gifts == [{
-            "item": "compass",
-            "description": "brass field compass",
-            "sentiment": "treasured",
-            "given_date": given.isoformat(),
-            "referenced_count": 3,
-        }]
+        assert gifts == [
+            {
+                "item": "compass",
+                "description": "brass field compass",
+                "sentiment": "treasured",
+                "given_date": given.isoformat(),
+                "referenced_count": 3,
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_cached_for_five_minutes(self):
@@ -1658,10 +1868,17 @@ class TestMissionAftermathImage:
         timer.active_events = []
 
         build = MagicMock(return_value="victory prompt")
-        with patch("app.image_gen.build_mission_prompt", build), \
-             patch("app.image_gen.generate_image", new=AsyncMock(return_value=None)), \
-             patch("app.proactive.mission.asyncio.create_task", side_effect=lambda c: (c.close(), MagicMock())[-1]), \
-             patch("app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]):
+        with (
+            patch("app.image_gen.build_mission_prompt", build),
+            patch("app.image_gen.generate_image", new=AsyncMock(return_value=None)),
+            patch(
+                "app.proactive.mission.asyncio.create_task",
+                side_effect=lambda c: (c.close(), MagicMock())[-1],
+            ),
+            patch(
+                "app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]
+            ),
+        ):
             await e.trigger_mission_aftermath_image("alice", timer=timer)
 
         # scene_type derived as "victory"; caption is the first victory line.
@@ -1677,10 +1894,17 @@ class TestMissionAftermathImage:
         timer = MissionTimer()
         timer.active_events = ["klukai_injured"]
         build = MagicMock(return_value="injury prompt")
-        with patch("app.image_gen.build_mission_prompt", build), \
-             patch("app.image_gen.generate_image", new=AsyncMock(return_value=None)), \
-             patch("app.proactive.mission.asyncio.create_task", side_effect=lambda c: (c.close(), MagicMock())[-1]), \
-             patch("app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]):
+        with (
+            patch("app.image_gen.build_mission_prompt", build),
+            patch("app.image_gen.generate_image", new=AsyncMock(return_value=None)),
+            patch(
+                "app.proactive.mission.asyncio.create_task",
+                side_effect=lambda c: (c.close(), MagicMock())[-1],
+            ),
+            patch(
+                "app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]
+            ),
+        ):
             await e.trigger_mission_aftermath_image("alice", timer=timer)
         assert build.call_args.kwargs["scene_type"] == "injury"
         assert build.call_args.kwargs["injuries"] == ["klukai_injured"]
@@ -1693,10 +1917,17 @@ class TestMissionAftermathImage:
         timer = MissionTimer()
         timer.active_events = ["comms_disruption"]  # event present, no injury
         build = MagicMock(return_value="extraction prompt")
-        with patch("app.image_gen.build_mission_prompt", build), \
-             patch("app.image_gen.generate_image", new=AsyncMock(return_value=None)), \
-             patch("app.proactive.mission.asyncio.create_task", side_effect=lambda c: (c.close(), MagicMock())[-1]), \
-             patch("app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]):
+        with (
+            patch("app.image_gen.build_mission_prompt", build),
+            patch("app.image_gen.generate_image", new=AsyncMock(return_value=None)),
+            patch(
+                "app.proactive.mission.asyncio.create_task",
+                side_effect=lambda c: (c.close(), MagicMock())[-1],
+            ),
+            patch(
+                "app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]
+            ),
+        ):
             await e.trigger_mission_aftermath_image("alice", timer=timer)
         assert build.call_args.kwargs["scene_type"] == "extraction"
 
@@ -1719,12 +1950,21 @@ class TestMissionAftermathImage:
         fake_ws = MagicMock()
         fake_ws.send = AsyncMock()
 
-        with patch("app.image_gen.build_mission_prompt", MagicMock(return_value="p")), \
-             patch("app.image_gen.generate_image", new=AsyncMock(return_value=b"\x89PNGdata")) as generate, \
-             patch("app.context.ws", fake_ws), \
-             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.mission.asyncio.create_task", side_effect=capture_task), \
-             patch("app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]):
+        with (
+            patch("app.image_gen.build_mission_prompt", MagicMock(return_value="p")),
+            patch(
+                "app.image_gen.generate_image",
+                new=AsyncMock(return_value=b"\x89PNGdata"),
+            ) as generate,
+            patch("app.context.ws", fake_ws),
+            patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()),
+            patch(
+                "app.proactive.mission.asyncio.create_task", side_effect=capture_task
+            ),
+            patch(
+                "app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]
+            ),
+        ):
             await e.trigger_mission_aftermath_image("alice", timer=timer)
             # Now actually run the captured background coroutine.
             assert captured_tasks, "no background image task was scheduled"
@@ -1736,6 +1976,7 @@ class TestMissionAftermathImage:
         assert uid == "alice"
         assert frame["type"] == "image"
         import base64
+
         assert base64.b64decode(frame["data"]) == b"\x89PNGdata"
 
     @pytest.mark.asyncio
@@ -1744,8 +1985,10 @@ class TestMissionAftermathImage:
         e._on_message_callback = AsyncMock()
         timer = MissionTimer()
         timer.active_events = []
-        with patch("app.image_gen.build_mission_prompt",
-                   MagicMock(side_effect=RuntimeError("comfy down"))):
+        with patch(
+            "app.image_gen.build_mission_prompt",
+            MagicMock(side_effect=RuntimeError("comfy down")),
+        ):
             await e.trigger_mission_aftermath_image("alice", timer=timer)  # no raise
 
     @pytest.mark.asyncio
@@ -1759,13 +2002,21 @@ class TestMissionAftermathImage:
         timer.active_events = []
         captured = []
 
-        with patch("app.image_gen.build_mission_prompt", MagicMock(return_value="p")), \
-             patch("app.image_gen.generate_image",
-                   new=AsyncMock(side_effect=RuntimeError("comfy timeout"))), \
-             patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
-             patch("app.proactive.mission.asyncio.create_task",
-                   side_effect=lambda c: (captured.append(c), MagicMock())[-1]), \
-             patch("app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]):
+        with (
+            patch("app.image_gen.build_mission_prompt", MagicMock(return_value="p")),
+            patch(
+                "app.image_gen.generate_image",
+                new=AsyncMock(side_effect=RuntimeError("comfy timeout")),
+            ),
+            patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()),
+            patch(
+                "app.proactive.mission.asyncio.create_task",
+                side_effect=lambda c: (captured.append(c), MagicMock())[-1],
+            ),
+            patch(
+                "app.proactive.mission.random.choice", side_effect=lambda seq: seq[0]
+            ),
+        ):
             await e.trigger_mission_aftermath_image("alice", timer=timer)
             assert captured
             await captured[0]  # run the inner coroutine — must not raise
@@ -1784,7 +2035,8 @@ class _FakeConn:
     async def execute(self, sql, params=None):
         res = AsyncMock()
         res.fetchall = AsyncMock(
-            return_value=self._batches.pop(0) if self._batches else [])
+            return_value=self._batches.pop(0) if self._batches else []
+        )
         return res
 
     async def __aenter__(self):
@@ -1812,11 +2064,12 @@ class TestAnniversarySendFailure:
         # select_anniversary_from_firsts compares against datetime.now(timezone.utc),
         # so build the "one year ago today" date in UTC to guarantee a match.
         from datetime import timezone
+
         today = datetime.now(timezone.utc)
         one_year_ago = today.replace(year=today.year - 1)
         pool = _FakePool(
-            [[("alice",)]],                                # active users
-            [[("first_message", one_year_ago, None)]],     # firsts for alice
+            [[("alice",)]],  # active users
+            [[("first_message", one_year_ago, None)]],  # firsts for alice
         )
         fake_ws = MagicMock()
         fake_ws.is_connected = MagicMock(return_value=True)
@@ -1824,10 +2077,12 @@ class TestAnniversarySendFailure:
 
         # Freeze the send gate's clock at 08:00 local so the test does not
         # depend on whether it runs inside the Commander's quiet hours.
-        with _patch_now(datetime(2026, 5, 17, 8, 0, 0)), \
-             patch("app.db.get_pool", return_value=pool), \
-             patch("app.context.ws", fake_ws), \
-             patch("app.proactive.milestones.logger") as log:
+        with (
+            _patch_now(datetime(2026, 5, 17, 8, 0, 0)),
+            patch("app.db.get_pool", return_value=pool),
+            patch("app.context.ws", fake_ws),
+            patch("app.proactive.milestones.logger") as log,
+        ):
             await e._anniversary_check()  # must not raise
 
         fake_ws.send_proactive.assert_awaited_once()
@@ -1843,23 +2098,25 @@ class TestWeeklyReflectionSaveFailure:
         # >=10 messages so the reflection proceeds.
         msgs = [("user", f"line {i}") for i in range(12)]
         pool = _FakePool(
-            [[("alice",)]],   # active users (7d)
-            [msgs],           # alice's messages
+            [[("alice",)]],  # active users (7d)
+            [msgs],  # alice's messages
         )
 
         fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock(return_value={
-            "choices": [{"message": {"content": "A" * 80}}]
-        })
+        fake_router.complete_local = AsyncMock(
+            return_value={"choices": [{"message": {"content": "A" * 80}}]}
+        )
         fake_memory = MagicMock()
         fake_memory.store_episode = AsyncMock(side_effect=RuntimeError("qdrant down"))
 
-        with patch("app.db.get_pool", return_value=pool), \
-             patch("app.context.router", fake_router), \
-             patch("app.context.memory", fake_memory), \
-             patch("app.personality.load_personality", return_value={}), \
-             patch("app.personality.build_character_preamble", return_value="preamble"), \
-             patch("app.proactive.milestones.logger") as log:
+        with (
+            patch("app.db.get_pool", return_value=pool),
+            patch("app.context.router", fake_router),
+            patch("app.context.memory", fake_memory),
+            patch("app.personality.load_personality", return_value={}),
+            patch("app.personality.build_character_preamble", return_value="preamble"),
+            patch("app.proactive.milestones.logger") as log,
+        ):
             await e._weekly_reflection()  # must not raise
 
         fake_memory.store_episode.assert_awaited_once()
@@ -1872,17 +2129,27 @@ class TestWeeklyReflectionSaveFailure:
         pool = _FakePool([[("alice",)]], [msgs])
 
         fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock(return_value={
-            "choices": [{"message": {"content": "This week we held the ridge together." * 3}}]
-        })
+        fake_router.complete_local = AsyncMock(
+            return_value={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "This week we held the ridge together." * 3
+                        }
+                    }
+                ]
+            }
+        )
         fake_memory = MagicMock()
         fake_memory.store_episode = AsyncMock()
 
-        with patch("app.db.get_pool", return_value=pool), \
-             patch("app.context.router", fake_router), \
-             patch("app.context.memory", fake_memory), \
-             patch("app.personality.load_personality", return_value={}), \
-             patch("app.personality.build_character_preamble", return_value="preamble"):
+        with (
+            patch("app.db.get_pool", return_value=pool),
+            patch("app.context.router", fake_router),
+            patch("app.context.memory", fake_memory),
+            patch("app.personality.load_personality", return_value={}),
+            patch("app.personality.build_character_preamble", return_value="preamble"),
+        ):
             await e._weekly_reflection()
 
         fake_memory.store_episode.assert_awaited_once()
@@ -1896,8 +2163,10 @@ class TestWeeklyReflectionSaveFailure:
         """A failure acquiring the pool aborts the whole job without raising
         (outer except, line 1658-1659)."""
         e = ProactiveEngine()
-        with patch("app.db.get_pool", side_effect=RuntimeError("pool down")), \
-             patch("app.proactive.milestones.logger") as log:
+        with (
+            patch("app.db.get_pool", side_effect=RuntimeError("pool down")),
+            patch("app.proactive.milestones.logger") as log,
+        ):
             await e._weekly_reflection()  # must not raise
         assert log.error.called
 
@@ -1909,11 +2178,13 @@ class TestWeeklyReflectionSaveFailure:
         pool = _FakePool([[("alice",)]], [msgs])
         fake_router = MagicMock()
         fake_router.complete_local = AsyncMock()
-        with patch("app.db.get_pool", return_value=pool), \
-             patch("app.context.router", fake_router), \
-             patch("app.context.memory", MagicMock()), \
-             patch("app.personality.load_personality", return_value={}), \
-             patch("app.personality.build_character_preamble", return_value="p"):
+        with (
+            patch("app.db.get_pool", return_value=pool),
+            patch("app.context.router", fake_router),
+            patch("app.context.memory", MagicMock()),
+            patch("app.personality.load_personality", return_value={}),
+            patch("app.personality.build_character_preamble", return_value="p"),
+        ):
             await e._weekly_reflection()
         fake_router.complete_local.assert_not_awaited()
 

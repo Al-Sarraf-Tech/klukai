@@ -35,7 +35,7 @@ def now_local() -> datetime:
 # Guardrails
 MAX_PROACTIVE_PER_DAY = 23
 QUIET_HOUR_START = 23  # 2300 hours America/Chicago
-QUIET_HOUR_END = 8     # 0800 hours America/Chicago
+QUIET_HOUR_END = 8  # 0800 hours America/Chicago
 
 # ── Module-level mission state (for idle-unload check) ────────────────────
 # Forward-declared; MissionTimer class is defined in mission.py.
@@ -57,7 +57,7 @@ MAJOR_EVENTS = [
     "comms_disruption",
     "discovery",
     "medical_emergency",
-    "mechty_asleep",       # Mechty fell asleep at a critical moment
-    "belka_reckless",      # Belka charged ahead without orders
-    "andoris_freeze",      # Andoris processing lag under fire
+    "mechty_asleep",  # Mechty fell asleep at a critical moment
+    "belka_reckless",  # Belka charged ahead without orders
+    "andoris_freeze",  # Andoris processing lag under fire
 ]

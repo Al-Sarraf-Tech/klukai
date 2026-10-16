@@ -110,7 +110,9 @@ void main() {
       );
       expect(locked.copyWith(isInputLocked: false).inputLockReason, isNull);
       expect(
-        locked.copyWith(isInputLocked: false, inputLockReason: null).inputLockReason,
+        locked
+            .copyWith(isInputLocked: false, inputLockReason: null)
+            .inputLockReason,
         isNull,
       );
     });

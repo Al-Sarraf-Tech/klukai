@@ -8,144 +8,142 @@ Map<String, dynamic> outfitJson({
   String name = 'Speed Star',
   String source = 'auto',
   String reason = 'Off-duty plans.',
-}) =>
-    {
-      'id': id,
-      'name': name,
-      'blurb': 'Silver-white rider suit',
-      'category': 'rider',
-      'source': source,
-      'reason': reason,
-      'canon': true,
-      'level_ok': true,
-    };
+}) => {
+  'id': id,
+  'name': name,
+  'blurb': 'Silver-white rider suit',
+  'category': 'rider',
+  'source': source,
+  'reason': reason,
+  'canon': true,
+  'level_ok': true,
+};
 
 Map<String, dynamic> herDayJson({
   String label = 'Hangar · tuning the suspension',
   String? override,
   Map<String, dynamic>? outfit,
-}) =>
+}) => {
+  'date': '2026-10-04',
+  'outfit': outfit ?? outfitJson(),
+  'status': {
+    'location': 'Hangar',
+    'activity': 'tuning the suspension',
+    'label': label,
+    'slot': 'afternoon',
+    'override': override,
+  },
+  'schedule': [
     {
-      'date': '2026-10-04',
-      'outfit': outfit ?? outfitJson(),
-      'status': {
-        'location': 'Hangar',
-        'activity': 'tuning the suspension',
-        'label': label,
-        'slot': 'afternoon',
-        'override': override,
-      },
-      'schedule': [
-        {
-          'slot': 'late',
-          'start': '0000',
-          'end': '0500',
-          'location': 'Command deck',
-          'activity': "reports at 0200 — she wasn't sleeping anyway",
-          'current': false,
-        },
-        {
-          'slot': 'morning',
-          'start': '0500',
-          'end': '0800',
-          'location': 'Range',
-          'activity': 'drills',
-          'current': false,
-        },
-        {
-          'slot': 'afternoon',
-          'start': '1200',
-          'end': '1700',
-          'location': 'Hangar',
-          'activity': 'tuning the suspension',
-          'current': true,
-        },
-        {
-          'slot': 'evening',
-          'start': '1700',
-          'end': '2100',
-          'location': 'Off duty',
-          'activity': '',
-          'current': false,
-        },
-      ],
-      'weather': {'temp_c': 14.2, 'condition': 'clear'},
-    };
+      'slot': 'late',
+      'start': '0000',
+      'end': '0500',
+      'location': 'Command deck',
+      'activity': "reports at 0200 — she wasn't sleeping anyway",
+      'current': false,
+    },
+    {
+      'slot': 'morning',
+      'start': '0500',
+      'end': '0800',
+      'location': 'Range',
+      'activity': 'drills',
+      'current': false,
+    },
+    {
+      'slot': 'afternoon',
+      'start': '1200',
+      'end': '1700',
+      'location': 'Hangar',
+      'activity': 'tuning the suspension',
+      'current': true,
+    },
+    {
+      'slot': 'evening',
+      'start': '1700',
+      'end': '2100',
+      'location': 'Off duty',
+      'activity': '',
+      'current': false,
+    },
+  ],
+  'weather': {'temp_c': 14.2, 'condition': 'clear'},
+};
 
 Map<String, dynamic> outfitsJson({Map<String, dynamic>? today}) => {
-      'outfits': [
-        {
-          'id': 'blazing_star',
-          'name': 'Blazing Star',
-          'blurb': 'Military-tactical outfit befitting an elite squad leader',
-          'category': 'duty',
-          'source': 'canon',
-          'unlock_level': 0,
-          'unlocked': true,
-          'current': false,
-        },
-        {
-          'id': 'speed_star',
-          'name': 'Speed Star',
-          'blurb': 'Silver-white rider suit',
-          'category': 'rider',
-          'source': 'canon',
-          'unlock_level': 0,
-          'unlocked': true,
-          'current': true,
-        },
-        {
-          'id': 'immaculate_service',
-          'name': 'Immaculate Service',
-          'blurb': 'A battle maid is a combat configuration',
-          'category': 'formal',
-          'source': 'canon',
-          'unlock_level': 5,
-          'unlocked': false,
-          'current': false,
-        },
-        {
-          'id': 'hangar_coveralls',
-          'name': 'Hangar Coveralls',
-          'blurb': 'Oil on the sleeves',
-          'category': 'work',
-          'source': 'original',
-          'unlock_level': 1,
-          'unlocked': true,
-          'current': false,
-        },
-        {
-          'id': 'his_jacket',
-          'name': 'His Jacket',
-          'blurb': 'It was the nearest available',
-          'category': 'off_duty',
-          'source': 'original',
-          'unlock_level': 6,
-          'unlocked': false,
-          'current': false,
-        },
-      ],
-      'today': today ?? outfitJson(),
-    };
+  'outfits': [
+    {
+      'id': 'blazing_star',
+      'name': 'Blazing Star',
+      'blurb': 'Military-tactical outfit befitting an elite squad leader',
+      'category': 'duty',
+      'source': 'canon',
+      'unlock_level': 0,
+      'unlocked': true,
+      'current': false,
+    },
+    {
+      'id': 'speed_star',
+      'name': 'Speed Star',
+      'blurb': 'Silver-white rider suit',
+      'category': 'rider',
+      'source': 'canon',
+      'unlock_level': 0,
+      'unlocked': true,
+      'current': true,
+    },
+    {
+      'id': 'immaculate_service',
+      'name': 'Immaculate Service',
+      'blurb': 'A battle maid is a combat configuration',
+      'category': 'formal',
+      'source': 'canon',
+      'unlock_level': 5,
+      'unlocked': false,
+      'current': false,
+    },
+    {
+      'id': 'hangar_coveralls',
+      'name': 'Hangar Coveralls',
+      'blurb': 'Oil on the sleeves',
+      'category': 'work',
+      'source': 'original',
+      'unlock_level': 1,
+      'unlocked': true,
+      'current': false,
+    },
+    {
+      'id': 'his_jacket',
+      'name': 'His Jacket',
+      'blurb': 'It was the nearest available',
+      'category': 'off_duty',
+      'source': 'original',
+      'unlock_level': 6,
+      'unlocked': false,
+      'current': false,
+    },
+  ],
+  'today': today ?? outfitJson(),
+};
 
 Map<String, dynamic> logJson() => {
-      'history': [
-        {
-          'day': '2026-10-03',
-          'outfit_id': 'speed_star',
-          'name': 'Speed Star',
-          'reason': 'Off-duty plans.',
-          'requested': false,
-        },
-        {
-          'day': '2026-10-02',
-          'outfit_id': 'immaculate_service',
-          'name': 'Immaculate Service',
-          'reason': '',
-          'requested': true,
-        },
-      ],
-    };
+  'history': [
+    {
+      'day': '2026-10-03',
+      'outfit_id': 'speed_star',
+      'name': 'Speed Star',
+      'reason': 'Off-duty plans.',
+      'requested': false,
+    },
+    {
+      'day': '2026-10-02',
+      'outfit_id': 'immaculate_service',
+      'name': 'Immaculate Service',
+      'reason': '',
+      'requested': true,
+    },
+  ],
+};
 
 /// Scriptable fake. Each queue entry is a value to return or an exception to
 /// throw; the last entry repeats once the queue is down to one.
@@ -155,10 +153,10 @@ class FakeWardrobeService extends WardrobeService {
     List<Object>? herDays,
     List<Object>? logs,
     this.setCostumeError,
-  })  : _outfits = outfits ?? [Wardrobe.fromJson(outfitsJson())],
-        _herDays = herDays ?? [HerDay.fromJson(herDayJson())],
-        _logs = logs ?? [WardrobeLogEntry.listFromJson(logJson())],
-        super(serverUrl: 'http://127.0.0.1:1', token: () => 'test-token');
+  }) : _outfits = outfits ?? [Wardrobe.fromJson(outfitsJson())],
+       _herDays = herDays ?? [HerDay.fromJson(herDayJson())],
+       _logs = logs ?? [WardrobeLogEntry.listFromJson(logJson())],
+       super(serverUrl: 'http://127.0.0.1:1', token: () => 'test-token');
 
   final List<Object> _outfits;
   final List<Object> _herDays;

@@ -12,15 +12,24 @@ void main() {
       expect(companionOpensInNewWindow(FakeBrowserPlatform()), isTrue);
     });
     test('iOS Safari tab still gets a new tab', () {
-      expect(companionOpensInNewWindow(FakeBrowserPlatform(isIos: true)), isTrue);
+      expect(
+        companionOpensInNewWindow(FakeBrowserPlatform(isIos: true)),
+        isTrue,
+      );
     });
     test('iOS home-screen app navigates in place (it has no windows)', () {
       expect(
-          companionOpensInNewWindow(FakeBrowserPlatform(isIos: true, isStandalone: true)),
-          isFalse);
+        companionOpensInNewWindow(
+          FakeBrowserPlatform(isIos: true, isStandalone: true),
+        ),
+        isFalse,
+      );
     });
     test('an installed desktop PWA still opens a window', () {
-      expect(companionOpensInNewWindow(FakeBrowserPlatform(isStandalone: true)), isTrue);
+      expect(
+        companionOpensInNewWindow(FakeBrowserPlatform(isStandalone: true)),
+        isTrue,
+      );
     });
   });
 

@@ -1,12 +1,15 @@
 """WebSocket connection manager for companion — multi-device support."""
 
 from __future__ import annotations
+from typing import Any
+
 
 import asyncio
 import json
 import logging
 
 from fastapi import WebSocket
+from .runtime_tasks import TaskSupervisor, settle
 
 logger = logging.getLogger(__name__)
 
@@ -39,21 +42,52 @@ class WSManager:
         # Cancelled on full-user disconnect so an old session can't write to a
         # stale conn_id or send to a closed WS. Accepted account-image jobs are
         # kept in _durable_tasks so a closed tab does not abandon the journal.
-        self._user_tasks: dict[str, set[asyncio.Task]] = {}
-        self._durable_tasks: dict[str, set[asyncio.Task]] = {}
+        self._user_tasks: dict[str, set[asyncio.Task[Any]]] = {}
+        self._durable_tasks: dict[str, set[asyncio.Task[Any]]] = {}
+        self._task_owner = TaskSupervisor()
+        self._closing = False
 
-    def track_task(self, user_id: str, task: asyncio.Task, *, survive_disconnect: bool = False) -> None:
+    def start(self) -> None:
+        self._task_owner.start()
+        self._closing = False
+
+    def stop_admission(self) -> None:
+        self._closing = True
+        self._task_owner.stop_admission()
+
+    async def close(self) -> None:
+        """Retire sockets and settle both ordinary and accepted durable work."""
+        self.stop_admission()
+        users = tuple(self._connections)
+        await settle(
+            (
+                *(
+                    self.disconnect(
+                        user, close=True, code=1001, reason="Service shutting down"
+                    )
+                    for user in users
+                ),
+                self._task_owner.close(),
+            )
+        )
+        self._user_tasks.clear()
+        self._durable_tasks.clear()
+
+    def track_task(
+        self, user_id: str, task: asyncio.Task[Any], *, survive_disconnect: bool = False
+    ) -> None:
         """Register a per-user background task.
 
         The default is cancelled when the user's last device disconnects.
         survive_disconnect keeps an accepted account-image job until it finishes.
         Completed tasks remove themselves.
         """
+        self._task_owner.track(task)
         store = self._durable_tasks if survive_disconnect else self._user_tasks
         bucket = store.setdefault(user_id, set())
         bucket.add(task)
 
-        def _discard(t: asyncio.Task, _b: set[asyncio.Task] = bucket) -> None:
+        def _discard(t: asyncio.Task[Any], _b: set[asyncio.Task[Any]] = bucket) -> None:
             _b.discard(t)
             if not t.cancelled():
                 error = t.exception()
@@ -85,6 +119,7 @@ class WSManager:
             # the public endpoint always binds its authenticated session.
             return True
         from .auth import get_user_from_session_hash
+
         try:
             owner = await asyncio.wait_for(
                 get_user_from_session_hash(session_hash, refresh=refresh),
@@ -107,17 +142,31 @@ class WSManager:
         )
 
     async def connect(
-        self, ws: WebSocket, user_id: str = "default", *,
+        self,
+        ws: WebSocket,
+        user_id: str = "default",
+        *,
         disconnected: asyncio.Event | None = None,
         session_hash: str | None = None,
     ) -> None:
+        if self._closing:
+            await asyncio.wait_for(
+                ws.close(code=1013, reason="Service shutting down"),
+                CLOSE_TIMEOUT_SECONDS,
+            )
+            raise ConnectionError("WebSocket manager is shutting down")
         total = sum(map(len, self._connections.values())) + len(self._admissions)
-        owned = len(self._connections.get(user_id, ())) + sum(u == user_id for u in self._admissions.values())
+        owned = len(self._connections.get(user_id, ())) + sum(
+            u == user_id for u in self._admissions.values()
+        )
         if total >= self._max_connections:
             try:
                 # No room even for a rejection handshake. Deny before accept
                 # (HTTP403 under Uvicorn); clients back off without logging out.
-                await asyncio.wait_for(ws.close(code=1013, reason="Connection capacity reached"), CLOSE_TIMEOUT_SECONDS)
+                await asyncio.wait_for(
+                    ws.close(code=1013, reason="Connection capacity reached"),
+                    CLOSE_TIMEOUT_SECONDS,
+                )
             except Exception:
                 pass
             raise ConnectionError("WebSocket capacity reached")
@@ -127,7 +176,12 @@ class WSManager:
                 # Complete the handshake so clients receive a retryable close,
                 # rather than confusing capacity with invalid authentication.
                 await asyncio.wait_for(ws.accept(), HANDSHAKE_TIMEOUT_SECONDS)
-                await asyncio.wait_for(ws.close(code=1013, reason="Connection capacity reached; retry later"), CLOSE_TIMEOUT_SECONDS)
+                await asyncio.wait_for(
+                    ws.close(
+                        code=1013, reason="Connection capacity reached; retry later"
+                    ),
+                    CLOSE_TIMEOUT_SECONDS,
+                )
             except Exception:
                 pass
             finally:
@@ -137,6 +191,8 @@ class WSManager:
         # count against both bounds until promoted or cleaned up.
         try:
             await asyncio.wait_for(ws.accept(), HANDSHAKE_TIMEOUT_SECONDS)
+            if self._closing:
+                raise ConnectionError("WebSocket manager is shutting down")
             self._connections.setdefault(user_id, set()).add(ws)
             self._admissions.pop(ws, None)
             if disconnected is not None:
@@ -150,17 +206,30 @@ class WSManager:
             if not await self._send_one(ws, {"type": "connected", "status": "ok"}):
                 raise ConnectionError("Initial WebSocket send failed")
         except asyncio.CancelledError:
-            await self.disconnect(user_id, ws, close=self.has_connection(user_id, ws) or ws in self._admissions)
+            await self.disconnect(
+                user_id,
+                ws,
+                close=self.has_connection(user_id, ws) or ws in self._admissions,
+            )
             raise
         except Exception as exc:
-            await self.disconnect(user_id, ws, close=self.has_connection(user_id, ws) or ws in self._admissions)
+            await self.disconnect(
+                user_id,
+                ws,
+                close=self.has_connection(user_id, ws) or ws in self._admissions,
+            )
             raise ConnectionError("WebSocket admission failed") from exc
         finally:
             self._admissions.pop(ws, None)
 
     async def disconnect(
-        self, user_id: str = "default", ws: WebSocket | None = None, *, close: bool = False,
-        code: int = 1011, reason: str = "Connection send failed; reconnect",
+        self,
+        user_id: str = "default",
+        ws: WebSocket | None = None,
+        *,
+        close: bool = False,
+        code: int = 1011,
+        reason: str = "Connection send failed; reconnect",
     ) -> None:
         conns = self._connections.get(user_id)
         retired = tuple(conns or ()) if ws is None else (ws,)
@@ -174,7 +243,7 @@ class WSManager:
                 conns.clear()
             else:
                 conns.discard(ws)
-        tasks: set[asyncio.Task] = set()
+        tasks: set[asyncio.Task[Any]] = set()
         if not conns:
             self._connections.pop(user_id, None)
             # Detach before any await. Reconnects receive a new task bucket.
@@ -182,8 +251,9 @@ class WSManager:
         current = asyncio.current_task()
         pending = [task for task in tasks if task is not current]
         for task in pending:
-            if not task.done():
+            if not task.done() and not task.cancelling():
                 task.cancel()
+
         async def close_socket(socket: WebSocket) -> None:
             try:
                 await asyncio.wait_for(
@@ -194,12 +264,13 @@ class WSManager:
                 # Membership is already revoked, so this endpoint cannot
                 # process another frame even if the transport cannot close.
                 logger.debug("Could not close retired WebSocket for %s", user_id)
+
         if close:
             await asyncio.gather(*(close_socket(socket) for socket in retired))
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
-    async def _send_one(self, ws: WebSocket, data: dict) -> bool:
+    async def _send_one(self, ws: WebSocket, data: dict[str, Any]) -> bool:
         """Send to a single WebSocket. Returns False if failed."""
         try:
             await asyncio.wait_for(ws.send_text(json.dumps(data)), SEND_TIMEOUT_SECONDS)
@@ -207,7 +278,7 @@ class WSManager:
         except Exception:
             return False
 
-    async def send(self, user_id: str, data: dict) -> None:
+    async def send(self, user_id: str, data: dict[str, Any]) -> None:
         """Broadcast to ALL connected devices for this user."""
         conns = self._connections.get(user_id)
         if not conns:
@@ -221,7 +292,9 @@ class WSManager:
     async def send_token(self, user_id: str, text: str) -> None:
         await self.send(user_id, {"type": "token", "text": text})
 
-    async def send_done(self, user_id: str, message_id: str, model: str, final_text: str | None = None) -> None:
+    async def send_done(
+        self, user_id: str, message_id: str, model: str, final_text: str | None = None
+    ) -> None:
         msg = {"type": "done", "message_id": message_id, "model": model}
         if final_text is not None:
             msg["text"] = final_text
@@ -236,7 +309,7 @@ class WSManager:
     async def send_mood(self, user_id: str, mood: str) -> None:
         await self.send(user_id, {"type": "mood", "mood": mood})
 
-    async def send_outfit(self, user_id: str, outfit: dict) -> None:
+    async def send_outfit(self, user_id: str, outfit: dict[str, Any]) -> None:
         """She changed (his request was granted) — the PWA updates its chip."""
         await self.send(user_id, {"type": "outfit", "outfit": outfit})
 
@@ -261,26 +334,34 @@ class WSManager:
             await self._persist_proactive(user_id, message)
         except Exception as e:
             import logging
+
             logging.getLogger(__name__).warning(
                 "Proactive persist failed for %s: %s", user_id, e
             )
 
     async def _persist_proactive(self, user_id: str, message: str) -> None:
         from .db import get_conn
+
         async with get_conn() as conn:
-            row = await (await conn.execute(
-                "SELECT id FROM companion_conversations "
-                "WHERE user_id = %s ORDER BY started_at DESC LIMIT 1",
-                (user_id,),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "SELECT id FROM companion_conversations "
+                    "WHERE user_id = %s ORDER BY started_at DESC LIMIT 1",
+                    (user_id,),
+                )
+            ).fetchone()
             if not row:
                 # No conversation yet — create a lightweight shell so the
                 # message is not lost (SACRED: she spoke; it must land).
-                row = await (await conn.execute(
-                    "INSERT INTO companion_conversations (user_id, summary, model_used) "
-                    "VALUES (%s, %s, %s) RETURNING id",
-                    (user_id, "proactive", "proactive"),
-                )).fetchone()
+                row = await (
+                    await conn.execute(
+                        "INSERT INTO companion_conversations (user_id, summary, model_used) "
+                        "VALUES (%s, %s, %s) RETURNING id",
+                        (user_id, "proactive", "proactive"),
+                    )
+                ).fetchone()
+            if row is None:
+                raise RuntimeError("Conversation insert returned no identity")
             conv_id = row[0]
             await conn.execute(
                 "INSERT INTO companion_messages "
@@ -297,23 +378,47 @@ class WSManager:
             )
             await conn.commit()
 
-    async def send_voice(self, user_id: str, audio_b64: str, final: bool = False) -> None:
-        await self.send(user_id, {"type": "voice_audio", "audio": audio_b64, "final": final})
+    async def send_voice(
+        self, user_id: str, audio_b64: str, final: bool = False
+    ) -> None:
+        await self.send(
+            user_id, {"type": "voice_audio", "audio": audio_b64, "final": final}
+        )
 
-    async def send_affection(self, user_id: str, score: int, level: int, level_name: str, delta: int) -> None:
-        await self.send(user_id, {
-            "type": "affection", "score": score, "level": level,
-            "level_name": level_name, "delta": delta,
-        })
+    async def send_affection(
+        self, user_id: str, score: int, level: int, level_name: str, delta: int
+    ) -> None:
+        await self.send(
+            user_id,
+            {
+                "type": "affection",
+                "score": score,
+                "level": level,
+                "level_name": level_name,
+                "delta": delta,
+            },
+        )
 
-    async def send_affection_level_change(self, user_id: str, new_level: int, new_level_name: str, direction: str) -> None:
-        await self.send(user_id, {
-            "type": "affection_level_change", "level": new_level,
-            "level_name": new_level_name, "direction": direction,
-        })
+    async def send_affection_level_change(
+        self, user_id: str, new_level: int, new_level_name: str, direction: str
+    ) -> None:
+        await self.send(
+            user_id,
+            {
+                "type": "affection_level_change",
+                "level": new_level,
+                "level_name": new_level_name,
+                "direction": direction,
+            },
+        )
 
     async def send_heartbeat_spike(self, user_id: str, bpm: int, mood: str) -> None:
         """Send a heartbeat spike alert for high-intensity emotional moments."""
-        await self.send(user_id, {
-            "type": "heartbeat_spike", "bpm": bpm, "mood": mood,
-        })
+        await self.send(
+            user_id,
+            {
+                "type": "heartbeat_spike",
+                "bpm": bpm,
+                "mood": mood,
+            },
+        )

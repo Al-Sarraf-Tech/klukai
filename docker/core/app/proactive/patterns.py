@@ -14,6 +14,8 @@ Design notes:
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import logging
 from datetime import datetime
@@ -26,8 +28,13 @@ logger = logging.getLogger(__name__)
 # Day-of-week index → name. PostgreSQL EXTRACT(DOW ...) is 0=Sunday..6=Saturday,
 # which matches this list, so the heatmap key lines up with the DB directly.
 _DOW_NAMES = (
-    "sunday", "monday", "tuesday", "wednesday",
-    "thursday", "friday", "saturday",
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
 )
 
 # How many days of history to profile, and the cache TTL.
@@ -36,8 +43,8 @@ _PATTERN_CACHE_TTL_SECONDS = 3600  # ~1 hour
 
 # A day must be this much quieter than the user's average to count as a "quiet
 # day", and we need at least this many observed weeks before trusting it.
-_QUIET_RATIO = 0.5          # day avg <= 50% of overall daily average
-_MIN_WEEKS_OBSERVED = 2     # need a couple of that-weekday occurrences
+_QUIET_RATIO = 0.5  # day avg <= 50% of overall daily average
+_MIN_WEEKS_OBSERVED = 2  # need a couple of that-weekday occurrences
 
 
 class PatternsMixin(_EngineBase):
@@ -45,7 +52,7 @@ class PatternsMixin(_EngineBase):
 
     async def detect_activity_patterns(
         self, user_id: str = "jalsarraf"
-    ) -> dict[str, dict]:
+    ) -> dict[str, dict[str, Any]]:
         """Return detected behavioural patterns for ``user_id``.
 
         Shape::
@@ -74,11 +81,15 @@ class PatternsMixin(_EngineBase):
         patterns = await self._compute_quiet_day_patterns(user_id)
 
         if not hasattr(self, "_pattern_cache"):
-            self._pattern_cache: dict[str, tuple[datetime, dict[str, dict]]] = {}
+            self._pattern_cache: dict[
+                str, tuple[datetime, dict[str, dict[str, Any]]]
+            ] = {}
         self._pattern_cache[cache_key] = (now, patterns)
         return patterns
 
-    async def _compute_quiet_day_patterns(self, user_id: str) -> dict[str, dict]:
+    async def _compute_quiet_day_patterns(
+        self, user_id: str
+    ) -> dict[str, dict[str, Any]]:
         """Query the last ~30 days of user messages and find low-activity days."""
         from ..db import get_conn
 
@@ -91,17 +102,19 @@ class PatternsMixin(_EngineBase):
         # quiet-day check compares it against.
         try:
             async with get_conn() as conn:
-                rows = await (await conn.execute(
-                    "SELECT EXTRACT(DOW FROM created_at AT TIME ZONE %s)::int AS dow, "
-                    "       COUNT(*) AS msgs, "
-                    "       COUNT(DISTINCT (created_at AT TIME ZONE %s)::date) AS active_days "
-                    "FROM companion_messages "
-                    "WHERE user_id = %s "
-                    "  AND role = 'user' "
-                    "  AND created_at > NOW() - make_interval(days => %s) "
-                    "GROUP BY dow",
-                    (LOCAL_TZ.key, LOCAL_TZ.key, user_id, _PATTERN_WINDOW_DAYS),
-                )).fetchall()
+                rows = await (
+                    await conn.execute(
+                        "SELECT EXTRACT(DOW FROM created_at AT TIME ZONE %s)::int AS dow, "
+                        "       COUNT(*) AS msgs, "
+                        "       COUNT(DISTINCT (created_at AT TIME ZONE %s)::date) AS active_days "
+                        "FROM companion_messages "
+                        "WHERE user_id = %s "
+                        "  AND role = 'user' "
+                        "  AND created_at > NOW() - make_interval(days => %s) "
+                        "GROUP BY dow",
+                        (LOCAL_TZ.key, LOCAL_TZ.key, user_id, _PATTERN_WINDOW_DAYS),
+                    )
+                ).fetchall()
         except Exception as e:
             logger.debug("Activity pattern query failed for %s: %s", user_id, e)
             return {}
@@ -139,7 +152,7 @@ class PatternsMixin(_EngineBase):
         # window: a brand-new user with a single busy day must not yield a
         # confidence-1.0 quiet day for every other (never-seen) weekday.
         observed_weeks = max(per_day_obs.values(), default=0)
-        patterns: dict[str, dict] = {}
+        patterns: dict[str, dict[str, Any]] = {}
         for dow in range(7):
             day_avg = per_day_avg.get(dow, 0.0)
             # Per-weekday observation count: an active weekday is trusted by its

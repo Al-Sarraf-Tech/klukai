@@ -73,7 +73,9 @@ class ChatHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
         color: GFL2Colors.surface,
-        border: Border(bottom: BorderSide(color: GFL2Colors.border.withValues(alpha: 0.4))),
+        border: Border(
+          bottom: BorderSide(color: GFL2Colors.border.withValues(alpha: 0.4)),
+        ),
       ),
       child: Column(
         children: [
@@ -90,9 +92,16 @@ class ChatHeader extends StatelessWidget {
                   height: 52,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: glow.withValues(alpha: 0.6), width: 1.5),
+                    border: Border.all(
+                      color: glow.withValues(alpha: 0.6),
+                      width: 1.5,
+                    ),
                     boxShadow: [
-                      BoxShadow(color: glow.withValues(alpha: 0.2), blurRadius: 12, spreadRadius: 2),
+                      BoxShadow(
+                        color: glow.withValues(alpha: 0.2),
+                        blurRadius: 12,
+                        spreadRadius: 2,
+                      ),
                     ],
                   ),
                   child: ClipRRect(
@@ -103,9 +112,14 @@ class ChatHeader extends StatelessWidget {
                       errorBuilder: (_, e, s) => Container(
                         color: GFL2Colors.panel,
                         child: const Center(
-                          child: Text('K',
-                              style: TextStyle(
-                                  color: GFL2Colors.primary, fontSize: 22, fontWeight: FontWeight.w700)),
+                          child: Text(
+                            'K',
+                            style: TextStyle(
+                              color: GFL2Colors.primary,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -229,7 +243,9 @@ class ChatHeader extends StatelessWidget {
     final mute = _button(
       key: 'chat-header-ambient',
       icon: ambientMuted ? Icons.music_off : Icons.music_note,
-      color: ambientMuted ? GFL2Colors.primary.withValues(alpha: 0.4) : glow.withValues(alpha: 0.8),
+      color: ambientMuted
+          ? GFL2Colors.primary.withValues(alpha: 0.4)
+          : glow.withValues(alpha: 0.8),
       tooltip: ambientMuted ? 'Enable ambient audio' : 'Mute ambient audio',
       onPressed: onToggleAmbient,
     );
@@ -274,7 +290,10 @@ class ChatHeader extends StatelessWidget {
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         visualDensity: VisualDensity.compact,
       ),
-      icon: ExitIcon(size: 18, color: GFL2Colors.danger.withValues(alpha: 0.85)),
+      icon: ExitIcon(
+        size: 18,
+        color: GFL2Colors.danger.withValues(alpha: 0.85),
+      ),
     );
     if (!compact) return [mute, companion, herPov, archive, subscription, exit];
     return [companion, archive, _overflowMenu(), exit];
@@ -287,9 +306,16 @@ class ChatHeader extends StatelessWidget {
       padding: EdgeInsets.zero,
       constraints: const BoxConstraints(minWidth: 180),
       color: GFL2Colors.panel,
-      icon: Icon(Icons.more_vert, size: 16, color: GFL2Colors.primary.withValues(alpha: 0.7)),
+      icon: Icon(
+        Icons.more_vert,
+        size: 16,
+        color: GFL2Colors.primary.withValues(alpha: 0.7),
+      ),
       iconSize: 16,
-      style: IconButton.styleFrom(minimumSize: const Size(28, 28), padding: EdgeInsets.zero),
+      style: IconButton.styleFrom(
+        minimumSize: const Size(28, 28),
+        padding: EdgeInsets.zero,
+      ),
       onSelected: (v) => switch (v) {
         'ambient' => onToggleAmbient?.call(),
         'her_pov' => onHerPov?.call(),
@@ -297,21 +323,35 @@ class ChatHeader extends StatelessWidget {
         _ => null,
       },
       itemBuilder: (_) => [
-        _menuItem('ambient', ambientMuted ? Icons.music_note : Icons.music_off,
-            ambientMuted ? 'Ambient audio on' : 'Ambient audio off'),
+        _menuItem(
+          'ambient',
+          ambientMuted ? Icons.music_note : Icons.music_off,
+          ambientMuted ? 'Ambient audio on' : 'Ambient audio off',
+        ),
         _menuItem('her_pov', Icons.auto_awesome, 'Her POV'),
-        _menuItem('subscription', Icons.workspace_premium_outlined, 'Subscription'),
+        _menuItem(
+          'subscription',
+          Icons.workspace_premium_outlined,
+          'Subscription',
+        ),
       ],
     );
   }
 
-  PopupMenuItem<String> _menuItem(String value, IconData icon, String label) => PopupMenuItem(
+  PopupMenuItem<String> _menuItem(String value, IconData icon, String label) =>
+      PopupMenuItem(
         value: value,
         child: Row(
           children: [
             Icon(icon, size: 16, color: GFL2Colors.primary),
             const SizedBox(width: 10),
-            Text(label, style: const TextStyle(color: GFL2Colors.textPrimary, fontSize: 13)),
+            Text(
+              label,
+              style: const TextStyle(
+                color: GFL2Colors.textPrimary,
+                fontSize: 13,
+              ),
+            ),
           ],
         ),
       );

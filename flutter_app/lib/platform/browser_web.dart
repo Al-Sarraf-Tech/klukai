@@ -42,7 +42,8 @@ class WebBrowserPlatform implements BrowserPlatform {
     try {
       final probe = _probe ??= _makeProbe();
       final style = web.window.getComputedStyle(probe);
-      double px(String v) => double.tryParse(v.replaceAll('px', '').trim()) ?? 0;
+      double px(String v) =>
+          double.tryParse(v.replaceAll('px', '').trim()) ?? 0;
       return EdgeInsets.fromLTRB(
         px(style.paddingLeft),
         px(style.paddingTop),
@@ -57,7 +58,8 @@ class WebBrowserPlatform implements BrowserPlatform {
   web.HTMLElement _makeProbe() {
     final el = web.document.createElement('div') as web.HTMLElement;
     el.setAttribute('aria-hidden', 'true');
-    el.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;'
+    el.style.cssText =
+        'position:fixed;top:0;left:0;width:0;height:0;'
         'visibility:hidden;pointer-events:none;'
         'padding:env(safe-area-inset-top) env(safe-area-inset-right) '
         'env(safe-area-inset-bottom) env(safe-area-inset-left);';
@@ -77,7 +79,9 @@ class WebBrowserPlatform implements BrowserPlatform {
   @override
   bool get isStandalone {
     try {
-      if (web.window.matchMedia('(display-mode: standalone)').matches) return true;
+      if (web.window.matchMedia('(display-mode: standalone)').matches) {
+        return true;
+      }
       // iOS Safari's own flag for home-screen launches.
       final standalone = (web.window.navigator as JSObject)['standalone'];
       return standalone.isA<JSBoolean>() && (standalone as JSBoolean).toDart;

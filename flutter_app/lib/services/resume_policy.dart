@@ -15,6 +15,8 @@ class ResumePolicy {
 
   final Duration staleAfter;
 
-  bool shouldReconnect({required bool connected, required Duration sinceLastFrame}) =>
-      !connected || sinceLastFrame >= staleAfter;
+  bool shouldReconnect({
+    required bool connected,
+    required Duration sinceLastFrame,
+  }) => !connected || sinceLastFrame >= staleAfter;
 }

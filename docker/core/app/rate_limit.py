@@ -9,12 +9,16 @@ slightly degraded.
 """
 
 from __future__ import annotations
+from collections.abc import Callable
+
 
 import logging
 import os
 from dataclasses import dataclass
 
 import redis.asyncio as aioredis
+
+from .circuit_breakers import get_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +30,8 @@ _redis: aioredis.Redis | None = None
 async def _get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
-        _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+        _redis_factory: Callable[..., aioredis.Redis] = aioredis.from_url
+        _redis = _redis_factory(REDIS_URL, decode_responses=True)
     return _redis
 
 
@@ -44,6 +49,7 @@ async def close() -> None:
 @dataclass(frozen=True)
 class Limit:
     """A single rate limit: N requests per window_seconds."""
+
     requests: int
     window_seconds: int
 
@@ -54,28 +60,34 @@ class Limit:
 
 # Default limits per bucket. Tune per endpoint.
 LIMITS: dict[str, Limit] = {
-    "default":    Limit(requests=60,  window_seconds=60),   # 60/min fallback
-    "login":      Limit(requests=10,  window_seconds=300),  # 10 logins / 5 min
-    "export":     Limit(requests=3,   window_seconds=3600), # 3 exports / hour
-    "tts":        Limit(requests=120, window_seconds=60),   # 2/sec sustained
-    "voice_jobs": Limit(requests=240, window_seconds=60),   # two active polls + cancellation
-    "stt":        Limit(requests=30,  window_seconds=60),
-    "image_gen":  Limit(requests=20,  window_seconds=3600), # expensive
-    "gift":       Limit(requests=30,  window_seconds=3600),
-    "mission":    Limit(requests=15,  window_seconds=3600),
-    "search":     Limit(requests=60,  window_seconds=60),
-    "stats":      Limit(requests=30,  window_seconds=60),
-    "portrait_refresh": Limit(requests=1, window_seconds=600),  # re-renders 6 GPU images
+    "default": Limit(requests=60, window_seconds=60),  # 60/min fallback
+    "login": Limit(requests=10, window_seconds=300),  # 10 logins / 5 min
+    "export": Limit(requests=3, window_seconds=3600),  # 3 exports / hour
+    "tts": Limit(requests=120, window_seconds=60),  # 2/sec sustained
+    "voice_jobs": Limit(
+        requests=240, window_seconds=60
+    ),  # two active polls + cancellation
+    "stt": Limit(requests=30, window_seconds=60),
+    "image_gen": Limit(requests=20, window_seconds=3600),  # expensive
+    "gift": Limit(requests=30, window_seconds=3600),
+    "mission": Limit(requests=15, window_seconds=3600),
+    "search": Limit(requests=60, window_seconds=60),
+    "stats": Limit(requests=30, window_seconds=60),
+    "portrait_refresh": Limit(
+        requests=1, window_seconds=600
+    ),  # re-renders 6 GPU images
 }
 
 
 class RateLimitExceeded(Exception):
     """Raised when a request exceeds its bucket's limit."""
 
-    def __init__(self, bucket: str, retry_after: int):
+    def __init__(self, bucket: str, retry_after: int) -> None:
         self.bucket = bucket
         self.retry_after = retry_after
-        super().__init__(f"Rate limit exceeded for bucket '{bucket}'; retry in {retry_after}s")
+        super().__init__(
+            f"Rate limit exceeded for bucket '{bucket}'; retry in {retry_after}s"
+        )
 
 
 async def check_and_consume(user_id: str, bucket: str) -> tuple[int, int]:
@@ -90,18 +102,23 @@ async def check_and_consume(user_id: str, bucket: str) -> tuple[int, int]:
     key = f"{limit.key_prefix}:{user_id}:{bucket}"
     try:
         r = await _get_redis()
-        count = await r.incr(key)
-        if count == 1:
-            await r.expire(key, limit.window_seconds)
-        ttl = await r.ttl(key)
+        async with get_breaker("redis").protect():
+            count = await r.incr(key)
+            if count == 1:
+                await r.expire(key, limit.window_seconds)
+            ttl = await r.ttl(key)
         if count > limit.requests:
             raise RateLimitExceeded(bucket=bucket, retry_after=max(ttl, 1))
         return (limit.requests - count, max(ttl, 0))
     except RateLimitExceeded:
         raise
     except Exception as e:
-        logger.warning("Rate limiter unavailable for bucket=%s user=%s: %s",
-                       bucket, user_id[:16], e)
+        logger.warning(
+            "Rate limiter unavailable for bucket=%s user=%s: %s",
+            bucket,
+            user_id[:16],
+            e,
+        )
         return (999, 0)
 
 
@@ -111,6 +128,6 @@ async def reset(user_id: str, bucket: str) -> None:
     key = f"{limit.key_prefix}:{user_id}:{bucket}"
     try:
         r = await _get_redis()
-        await r.delete(key)
+        await get_breaker("redis").call(r.delete, key)
     except Exception as e:
         logger.debug("Rate limit reset failed: %s", e)

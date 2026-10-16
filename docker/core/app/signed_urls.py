@@ -60,8 +60,9 @@ def verify(token: str, resource_id: str, user_id: str | None = None) -> bool:
     return hmac.compare_digest(expected_sig, sig_part)
 
 
-def signed_path(base_path: str, resource_id: str,
-                ttl_seconds: int = 300, user_id: str | None = None) -> str:
+def signed_path(
+    base_path: str, resource_id: str, ttl_seconds: int = 300, user_id: str | None = None
+) -> str:
     """Convenience: append ?sig=TOKEN to an existing URL."""
     token = sign(resource_id, ttl_seconds=ttl_seconds, user_id=user_id)
     sep = "&" if "?" in base_path else "?"

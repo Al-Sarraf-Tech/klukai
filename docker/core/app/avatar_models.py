@@ -4,6 +4,9 @@ Only reviewed, fixed filenames are addressable. Model binaries never enter Git.
 The intended-use notice does not replace any creator's original license.
 """
 
+from typing import Any
+
+
 from pathlib import Path
 
 NOTICE = "For personal, noncommercial use only."
@@ -53,10 +56,12 @@ def model_path(model_id: str, default: Path) -> Path | None:
     return default.parent / "variants" / f"{model_id}.glb"
 
 
-def catalog(default: Path) -> dict:
+def catalog(default: Path) -> dict[str, Any]:
     return {
         "notice": NOTICE,
         "models": [
-            {**m, "available": model_path(m["id"], default).is_file()} for m in MODELS
+            {**m, "available": path is not None and path.is_file()}
+            for m in MODELS
+            for path in [model_path(m["id"], default)]
         ],
     }

@@ -21,10 +21,10 @@ class HerDayStatusLine extends StatelessWidget {
   const HerDayStatusLine({super.key, required this.day, this.onTap});
 
   IconData get _icon => switch (day.status?.override) {
-        'gaming' => Icons.sports_esports_outlined,
-        'mission' => Icons.gps_fixed,
-        _ => Icons.place_outlined,
-      };
+    'gaming' => Icons.sports_esports_outlined,
+    'mission' => Icons.gps_fixed,
+    _ => Icons.place_outlined,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -36,7 +36,11 @@ class HerDayStatusLine extends StatelessWidget {
       onTap: onTap,
       child: Row(
         children: [
-          Icon(_icon, size: 11, color: GFL2Colors.primary.withValues(alpha: 0.7)),
+          Icon(
+            _icon,
+            size: 11,
+            color: GFL2Colors.primary.withValues(alpha: 0.7),
+          ),
           const SizedBox(width: 4),
           Expanded(
             child: Text(
@@ -55,7 +59,10 @@ class HerDayStatusLine extends StatelessWidget {
           ),
           if (outfit != null) ...[
             const SizedBox(width: 6),
-            OutfitChip(name: outfit.name, requested: outfit.requestedByCommander),
+            OutfitChip(
+              name: outfit.name,
+              requested: outfit.requestedByCommander,
+            ),
           ],
         ],
       ),
@@ -75,7 +82,9 @@ class OutfitChip extends StatelessWidget {
     final color = requested ? GFL2Colors.affinity : GFL2Colors.primary;
     return ConstrainedBox(
       key: const Key('her-day-outfit-chip'),
-      constraints: const BoxConstraints(maxWidth: HerDayStatusLine.chipMaxWidth),
+      constraints: const BoxConstraints(
+        maxWidth: HerDayStatusLine.chipMaxWidth,
+      ),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
         decoration: BoxDecoration(
@@ -111,15 +120,18 @@ class ScheduleStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (blocks.isEmpty) {
-      return Text('No schedule filed.',
-          style: TextStyle(
-              color: GFL2Colors.textMuted, fontSize: 11, fontFamily: _mono));
+      return Text(
+        'No schedule filed.',
+        style: TextStyle(
+          color: GFL2Colors.textMuted,
+          fontSize: 11,
+          fontFamily: _mono,
+        ),
+      );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (var i = 0; i < blocks.length; i++) _row(i, blocks[i]),
-      ],
+      children: [for (var i = 0; i < blocks.length; i++) _row(i, blocks[i])],
     );
   }
 
@@ -130,10 +142,14 @@ class ScheduleStrip extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 3),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
-        color: current ? GFL2Colors.primary.withValues(alpha: 0.10) : Colors.transparent,
+        color: current
+            ? GFL2Colors.primary.withValues(alpha: 0.10)
+            : Colors.transparent,
         border: Border(
           left: BorderSide(
-            color: current ? GFL2Colors.primary : GFL2Colors.border.withValues(alpha: 0.4),
+            color: current
+                ? GFL2Colors.primary
+                : GFL2Colors.border.withValues(alpha: 0.4),
             width: current ? 2 : 1,
           ),
         ),
@@ -168,13 +184,16 @@ class ScheduleStrip extends StatelessWidget {
           if (current)
             const Padding(
               padding: EdgeInsets.only(left: 6),
-              child: Text('NOW',
-                  style: TextStyle(
-                      color: GFL2Colors.accent,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1,
-                      fontFamily: _mono)),
+              child: Text(
+                'NOW',
+                style: TextStyle(
+                  color: GFL2Colors.accent,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1,
+                  fontFamily: _mono,
+                ),
+              ),
             ),
         ],
       ),
@@ -203,31 +222,42 @@ class HerDaySheet extends StatelessWidget {
             Text(
               day.date.isEmpty ? 'TODAY' : 'TODAY // ${day.date}',
               style: TextStyle(
-                  color: GFL2Colors.primary.withValues(alpha: 0.7),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.5,
-                  fontFamily: _mono),
+                color: GFL2Colors.primary.withValues(alpha: 0.7),
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.5,
+                fontFamily: _mono,
+              ),
             ),
             const SizedBox(height: 8),
             if ((day.status?.label ?? '').isNotEmpty)
-              Text(day.status!.label,
-                  style: const TextStyle(
-                      color: GFL2Colors.textPrimary, fontSize: 13, fontWeight: FontWeight.w600)),
+              Text(
+                day.status!.label,
+                style: const TextStyle(
+                  color: GFL2Colors.textPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             if (outfit != null) ...[
               const SizedBox(height: 4),
               Text(
-                outfit.sourceLine.isEmpty ? outfit.name : '${outfit.name} — ${outfit.sourceLine}',
+                outfit.sourceLine.isEmpty
+                    ? outfit.name
+                    : '${outfit.name} — ${outfit.sourceLine}',
                 style: TextStyle(color: GFL2Colors.textMuted, fontSize: 11),
               ),
             ],
             if (weather != null && weather.label.isNotEmpty) ...[
               const SizedBox(height: 2),
-              Text(weather.label,
-                  style: TextStyle(
-                      color: GFL2Colors.textMuted,
-                      fontSize: 10,
-                      fontFamily: _mono)),
+              Text(
+                weather.label,
+                style: TextStyle(
+                  color: GFL2Colors.textMuted,
+                  fontSize: 10,
+                  fontFamily: _mono,
+                ),
+              ),
             ],
             const SizedBox(height: 12),
             ScheduleStrip(blocks: day.schedule),
@@ -238,13 +268,20 @@ class HerDaySheet extends StatelessWidget {
                 child: TextButton.icon(
                   key: const Key('her-day-open-dossier'),
                   onPressed: onOpenDossier,
-                  icon: const Icon(Icons.badge_outlined, size: 14, color: GFL2Colors.primary),
-                  label: const Text('DOSSIER',
-                      style: TextStyle(
-                          color: GFL2Colors.primary,
-                          fontSize: 11,
-                          letterSpacing: 1.2,
-                          fontFamily: _mono)),
+                  icon: const Icon(
+                    Icons.badge_outlined,
+                    size: 14,
+                    color: GFL2Colors.primary,
+                  ),
+                  label: const Text(
+                    'DOSSIER',
+                    style: TextStyle(
+                      color: GFL2Colors.primary,
+                      fontSize: 11,
+                      letterSpacing: 1.2,
+                      fontFamily: _mono,
+                    ),
+                  ),
                 ),
               ),
             ],

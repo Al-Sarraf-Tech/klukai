@@ -1,0 +1,6 @@
+**
+!Dockerfile.ci
+!Dockerfile.ci.dockerignore
+!requirements-build.txt
+!requirements-ci.txt
+!package_runtime.py

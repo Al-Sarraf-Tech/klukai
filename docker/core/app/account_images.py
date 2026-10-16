@@ -7,6 +7,8 @@ may be submitted later, using the originally journaled payload.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import hashlib
 import json
@@ -15,9 +17,13 @@ from pathlib import Path
 
 
 def canonical_payload(
-    request_id: str, user_id: str, prompt: str, width: int, height: int,
+    request_id: str,
+    user_id: str,
+    prompt: str,
+    width: int,
+    height: int,
     include_commander: bool,
-) -> dict:
+) -> dict[str, Any]:
     return {
         "height": height,
         "include_commander": include_commander,
@@ -28,8 +34,10 @@ def canonical_payload(
     }
 
 
-def payload_digest(payload: dict) -> str:
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+def payload_digest(payload: dict[str, Any]) -> str:
+    raw = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode()
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -37,7 +45,11 @@ _EXPLICIT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "klukai:explicit-account-im
 
 
 def explicit_request_id(
-    user_id: str, prompt: str, width: int, height: int, include_commander: bool,
+    user_id: str,
+    prompt: str,
+    width: int,
+    height: int,
+    include_commander: bool,
 ) -> str:
     """One id for one explicit picture, stable across a closed tab or a new process."""
     raw = json.dumps(
@@ -48,7 +60,9 @@ def explicit_request_id(
             "user_id": user_id,
             "width": width,
         },
-        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
     )
     return str(uuid.uuid5(_EXPLICIT_NAMESPACE, raw))
 
@@ -63,9 +77,14 @@ def _normalize_request_id(request_id: str | None) -> str:
 
 
 def _result(
-    request_id: str, *, phase: str, image: bytes | None = None,
-    archived: bool = False, memory_id: str | None = None, needs_archive: bool = False,
-) -> dict:
+    request_id: str,
+    *,
+    phase: str,
+    image: bytes | None = None,
+    archived: bool = False,
+    memory_id: str | None = None,
+    needs_archive: bool = False,
+) -> dict[str, Any]:
     return {
         "request_id": request_id,
         "phase": phase,
@@ -90,16 +109,18 @@ def _archived_png(memory_id: str) -> bytes | None:
     return data
 
 
-async def fetch_request(request_id: str) -> dict | None:
+async def fetch_request(request_id: str) -> dict[str, Any] | None:
     from .db import get_conn_autocommit
 
     async with get_conn_autocommit() as conn:
-        row = await (await conn.execute(
-            "SELECT id, user_id, payload_digest, prompt, width, height, "
-            "include_commander, phase, memory_id, archive_context "
-            "FROM companion_account_image_requests WHERE id = %s",
-            (request_id,),
-        )).fetchone()
+        row = await (
+            await conn.execute(
+                "SELECT id, user_id, payload_digest, prompt, width, height, "
+                "include_commander, phase, memory_id, archive_context "
+                "FROM companion_account_image_requests WHERE id = %s",
+                (request_id,),
+            )
+        ).fetchone()
     if row is None:
         return None
     return {
@@ -117,8 +138,14 @@ async def fetch_request(request_id: str) -> dict | None:
 
 
 async def insert_request(
-    request_id: str, user_id: str, prompt: str, width: int, height: int,
-    include_commander: bool, digest: str, archive_context: dict | None = None,
+    request_id: str,
+    user_id: str,
+    prompt: str,
+    width: int,
+    height: int,
+    include_commander: bool,
+    digest: str,
+    archive_context: dict[str, Any] | None = None,
 ) -> None:
     from .db import get_conn_autocommit
 
@@ -127,12 +154,26 @@ async def insert_request(
             "INSERT INTO companion_account_image_requests "
             "(id, user_id, payload_digest, prompt, width, height, include_commander, phase, archive_context) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s, 'accepted', %s::jsonb)",
-            (request_id, user_id, digest, prompt, width, height, include_commander,
-             json.dumps(archive_context or {})),
+            (
+                request_id,
+                user_id,
+                digest,
+                prompt,
+                width,
+                height,
+                include_commander,
+                json.dumps(archive_context or {}),
+            ),
         )
 
 
-async def update_request(request_id: str, *, phase: str, memory_id: str | None = None, failure: str | None = None) -> None:
+async def update_request(
+    request_id: str,
+    *,
+    phase: str,
+    memory_id: str | None = None,
+    failure: str | None = None,
+) -> None:
     from .db import get_conn_autocommit
 
     async with get_conn_autocommit() as conn:
@@ -144,7 +185,7 @@ async def update_request(request_id: str, *, phase: str, memory_id: str | None =
         )
 
 
-def _archive_metadata(row: dict) -> dict:
+def _archive_metadata(row: dict[str, Any]) -> dict[str, Any]:
     """The generation's original context, never the retry's live session.
 
     Older journal rows have no recorded context. Keep that absence explicit
@@ -168,28 +209,39 @@ async def claim_unsubmitted_request(request_id: str, user_id: str) -> bool:
     from .db import get_conn_autocommit
 
     async with get_conn_autocommit() as conn:
-        row = await (await conn.execute(
-            "UPDATE companion_account_image_requests "
-            "SET phase = 'accepted', failure = NULL, updated_at = NOW() "
-            "WHERE id = %s AND user_id = %s AND phase = 'busy' RETURNING id",
-            (request_id, user_id),
-        )).fetchone()
+        row = await (
+            await conn.execute(
+                "UPDATE companion_account_image_requests "
+                "SET phase = 'accepted', failure = NULL, updated_at = NOW() "
+                "WHERE id = %s AND user_id = %s AND phase = 'busy' RETURNING id",
+                (request_id, user_id),
+            )
+        ).fetchone()
     return row is not None
 
 
-async def _submit_saved(row: dict) -> dict:
+async def _submit_saved(row: dict[str, Any]) -> dict[str, Any]:
     from . import agy_image_provider
 
     request_id = row["id"]
     submitted = await agy_image_provider.submit_agy_image(
-        row["prompt"], user_id=row["user_id"], width=row["width"], height=row["height"],
-        include_commander=row["include_commander"], request_id=request_id,
+        row["prompt"],
+        user_id=row["user_id"],
+        width=row["width"],
+        height=row["height"],
+        include_commander=row["include_commander"],
+        request_id=request_id,
     )
     status = submitted.get("status")
     if status == "completed" and submitted.get("image"):
         await update_request(request_id, phase="completed")
         return {
-            **_result(request_id, phase="completed", image=submitted["image"], needs_archive=True),
+            **_result(
+                request_id,
+                phase="completed",
+                image=submitted["image"],
+                needs_archive=True,
+            ),
             "archive_metadata": _archive_metadata(row),
         }
     if status not in {"refused", "failed", "pending", "unknown", "unavailable", "busy"}:
@@ -198,16 +250,24 @@ async def _submit_saved(row: dict) -> dict:
     return _result(request_id, phase=status)
 
 
-async def complete_archive(request_id: str, memory_id: str | None, image: bytes, user_id: str) -> dict:
+async def complete_archive(
+    request_id: str, memory_id: str | None, image: bytes, user_id: str
+) -> dict[str, Any]:
     """Record the save outcome. None is an archive failure, not a saved picture."""
     if memory_id:
         await update_request(request_id, phase="archived", memory_id=str(memory_id))
-        return _result(request_id, phase="archived", image=image, archived=True, memory_id=str(memory_id))
+        return _result(
+            request_id,
+            phase="archived",
+            image=image,
+            archived=True,
+            memory_id=str(memory_id),
+        )
     await update_request(request_id, phase="archive_failed", failure="archive")
     return _result(request_id, phase="archive_failed", image=image, archived=False)
 
 
-async def _recover_saved(row: dict) -> dict:
+async def _recover_saved(row: dict[str, Any]) -> dict[str, Any]:
     from . import agy_image_provider
 
     request_id = row["id"]
@@ -220,21 +280,43 @@ async def _recover_saved(row: dict) -> dict:
     if phase == "archived" and row.get("memory_id"):
         image = _archived_png(row["memory_id"])
         if image is not None:
-            return _result(request_id, phase="archived", image=image, archived=True, memory_id=row["memory_id"])
+            return _result(
+                request_id,
+                phase="archived",
+                image=image,
+                archived=True,
+                memory_id=row["memory_id"],
+            )
     if phase == "refused":
         return _result(request_id, phase="refused")
     recovered = await agy_image_provider.recover_agy_image(
-        row["prompt"], user_id=row["user_id"], width=row["width"], height=row["height"],
-        include_commander=row["include_commander"], request_id=request_id,
+        row["prompt"],
+        user_id=row["user_id"],
+        width=row["width"],
+        height=row["height"],
+        include_commander=row["include_commander"],
+        request_id=request_id,
     )
     if recovered.get("status") == "completed" and recovered.get("image"):
         await update_request(request_id, phase="completed")
         return {
-            **_result(request_id, phase="completed", image=recovered["image"], needs_archive=True),
+            **_result(
+                request_id,
+                phase="completed",
+                image=recovered["image"],
+                needs_archive=True,
+            ),
             "archive_metadata": _archive_metadata(row),
         }
     status = recovered.get("status")
-    if status not in {"pending", "unknown", "refused", "failed", "conflict", "unavailable"}:
+    if status not in {
+        "pending",
+        "unknown",
+        "refused",
+        "failed",
+        "conflict",
+        "unavailable",
+    }:
         status = "unknown"
     # Recovery is an observation, not submission ownership. In particular a
     # stale /recover miss must not erase a concurrent definitive busy rejection.
@@ -243,14 +325,27 @@ async def _recover_saved(row: dict) -> dict:
 
 
 async def fulfill_account_image(
-    user_id: str, prompt: str, *, width: int, height: int, include_commander: bool,
-    request_id: str | None = None, archive_context: dict | None = None,
-) -> dict:
+    user_id: str,
+    prompt: str,
+    *,
+    width: int,
+    height: int,
+    include_commander: bool,
+    request_id: str | None = None,
+    archive_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Accept one explicit picture, or return the image already stored for that id."""
     request_id = _normalize_request_id(request_id)
-    digest = payload_digest(canonical_payload(
-        request_id, user_id, prompt, width, height, include_commander,
-    ))
+    digest = payload_digest(
+        canonical_payload(
+            request_id,
+            user_id,
+            prompt,
+            width,
+            height,
+            include_commander,
+        )
+    )
     current = await fetch_request(request_id)
     if current is not None:
         if current["user_id"] != user_id:
@@ -261,7 +356,16 @@ async def fulfill_account_image(
         return await _recover_saved(current)
 
     try:
-        await insert_request(request_id, user_id, prompt, width, height, include_commander, digest, archive_context)
+        await insert_request(
+            request_id,
+            user_id,
+            prompt,
+            width,
+            height,
+            include_commander,
+            digest,
+            archive_context,
+        )
     except Exception:
         current = await fetch_request(request_id)
         if current is None:
@@ -270,8 +374,14 @@ async def fulfill_account_image(
             return _result(request_id, phase="unknown")
         return await _recover_saved(current)
 
-    return await _submit_saved({
-        "id": request_id, "user_id": user_id, "prompt": prompt,
-        "width": width, "height": height, "include_commander": include_commander,
-        "archive_context": archive_context or {},
-    })
+    return await _submit_saved(
+        {
+            "id": request_id,
+            "user_id": user_id,
+            "prompt": prompt,
+            "width": width,
+            "height": height,
+            "include_commander": include_commander,
+            "archive_context": archive_context or {},
+        }
+    )

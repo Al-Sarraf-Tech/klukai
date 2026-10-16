@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+from .dependencies import http_request, json_object, json_objects
 
 from . import __version__
 
@@ -49,7 +51,10 @@ class MCPClient:
                 await self._configured.initialize()
             return
         try:
-            r = await self._http.post(
+            r = await http_request(
+                "mcp",
+                self._http,
+                "post",
                 f"{MCP_URL}/mcp",
                 json={
                     "jsonrpc": "2.0",
@@ -65,8 +70,9 @@ class MCPClient:
                     },
                 },
             )
+            r.raise_for_status()
             self._session_id = r.headers.get("Mcp-Session-Id")
-            logger.info("MCP session initialized: %s", self._session_id)
+            logger.info("MCP session initialized")
         except httpx.HTTPError as e:
             logger.warning("MCP init failed (will retry on first tool call): %s", e)
 
@@ -76,7 +82,9 @@ class MCPClient:
             headers["Mcp-Session-Id"] = self._session_id
         return headers
 
-    async def invoke_tool(self, tool_name: str, params: dict) -> dict:
+    async def invoke_tool(
+        self, tool_name: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
         """Invoke an MCP tool and return the result."""
         if not self._http:
             raise RuntimeError("MCPClient not initialized")
@@ -103,8 +111,13 @@ class MCPClient:
             },
         }
         had_session = self._session_id is not None
-        r = await self._http.post(
-            f"{MCP_URL}/mcp", json=body, headers=self._session_headers()
+        r = await http_request(
+            "mcp",
+            self._http,
+            "post",
+            f"{MCP_URL}/mcp",
+            json=body,
+            headers=self._session_headers(),
         )
         if had_session and r.status_code in (400, 404):
             # The gateway no longer knows our session (restart or expiry).
@@ -114,19 +127,24 @@ class MCPClient:
             )
             self._session_id = None
             await self._initialize_session()
-            r = await self._http.post(
-                f"{MCP_URL}/mcp", json=body, headers=self._session_headers()
+            r = await http_request(
+                "mcp",
+                self._http,
+                "post",
+                f"{MCP_URL}/mcp",
+                json=body,
+                headers=self._session_headers(),
             )
         r.raise_for_status()
-        data = r.json()
+        data = json_object(r.json())
 
         if "error" in data:
             logger.error("MCP tool error: %s", data["error"])
             return {"error": data["error"].get("message", "Tool invocation failed")}
 
-        return data.get("result", {})
+        return json_object(data.get("result", {}))
 
-    async def list_tools(self) -> list[dict]:
+    async def list_tools(self) -> list[dict[str, Any]]:
         """List available MCP tools."""
         if self._config_path is not None:
             if self._configured is None:
@@ -134,7 +152,10 @@ class MCPClient:
             return await self._configured.list_tools()
         headers = self._session_headers()
 
-        r = await self._http.post(
+        r = await http_request(
+            "mcp",
+            self._http,
+            "post",
             f"{MCP_URL}/mcp",
             json={
                 "jsonrpc": "2.0",
@@ -145,5 +166,5 @@ class MCPClient:
             headers=headers,
         )
         r.raise_for_status()
-        data = r.json()
-        return data.get("result", {}).get("tools", [])
+        data = json_object(r.json())
+        return json_objects(json_object(data.get("result", {})).get("tools", []))

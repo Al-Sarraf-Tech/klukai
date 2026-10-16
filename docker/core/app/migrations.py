@@ -1,4 +1,5 @@
 """Transactional, checksum-verified startup migrations for PostgreSQL."""
+
 from __future__ import annotations
 
 import hashlib
@@ -21,14 +22,21 @@ async def apply_migrations(pool: AsyncConnectionPool, migration_dir: Path) -> li
     Any validation, SQL, or lock error propagates and prevents startup.
     """
     if not migration_dir.is_dir():
-        raise RuntimeError(f"Migration directory is missing or invalid: {migration_dir}")
+        raise RuntimeError(
+            f"Migration directory is missing or invalid: {migration_dir}"
+        )
     paths = sorted(migration_dir.glob("*.sql"))
     if not paths:
-        raise RuntimeError(f"Migration directory contains no SQL files: {migration_dir}")
+        raise RuntimeError(
+            f"Migration directory contains no SQL files: {migration_dir}"
+        )
     migrations = {}
     for path in paths:
         contents = path.read_bytes()
-        migrations[path.name] = (hashlib.sha256(contents).hexdigest(), contents.decode("utf-8"))
+        migrations[path.name] = (
+            hashlib.sha256(contents).hexdigest(),
+            contents.decode("utf-8"),
+        )
 
     applied = []
     async with pool.connection() as conn:
@@ -36,7 +44,9 @@ async def apply_migrations(pool: AsyncConnectionPool, migration_dir: Path) -> li
             # SET LOCAL resets at transaction end, including rollback. Bound
             # both startup serialization and schema locks to 30 seconds.
             await conn.execute("SET LOCAL lock_timeout = '30s'")
-            await conn.execute("SELECT pg_advisory_xact_lock(%s)", (_MIGRATION_LOCK_ID,))
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(%s)", (_MIGRATION_LOCK_ID,)
+            )
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS companion_schema_migrations (
                     name TEXT PRIMARY KEY,
@@ -44,7 +54,9 @@ async def apply_migrations(pool: AsyncConnectionPool, migration_dir: Path) -> li
                     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
-            cursor = await conn.execute("SELECT name, sha256 FROM companion_schema_migrations")
+            cursor = await conn.execute(
+                "SELECT name, sha256 FROM companion_schema_migrations"
+            )
             recorded: dict[str, str] = dict(await cursor.fetchall())
             # Validate the complete history before running even the first new
             # file (which might sort before the changed or removed file).

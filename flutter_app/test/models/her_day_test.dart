@@ -37,12 +37,25 @@ void main() {
 
     test('sourceLine names who chose it', () {
       expect(OutfitInfo.fromJson(outfitJson()).sourceLine, 'Off-duty plans.');
-      expect(OutfitInfo.fromJson(outfitJson(source: 'commander', reason: '')).sourceLine,
-          'Your request.');
-      expect(OutfitInfo.fromJson(outfitJson(source: 'roster', reason: '')).sourceLine,
-          'On duty kit.');
+      expect(
+        OutfitInfo.fromJson(
+          outfitJson(source: 'commander', reason: ''),
+        ).sourceLine,
+        'Your request.',
+      );
+      expect(
+        OutfitInfo.fromJson(
+          outfitJson(source: 'roster', reason: ''),
+        ).sourceLine,
+        'On duty kit.',
+      );
       expect(OutfitInfo.fromJson(outfitJson(reason: '')).sourceLine, '');
-      expect(OutfitInfo.fromJson(outfitJson(source: 'commander')).requestedByCommander, isTrue);
+      expect(
+        OutfitInfo.fromJson(
+          outfitJson(source: 'commander'),
+        ).requestedByCommander,
+        isTrue,
+      );
     });
   });
 
@@ -50,8 +63,11 @@ void main() {
     test('groups canon and everyday kit', () {
       final w = Wardrobe.fromJson(outfitsJson());
       expect(w.outfits, hasLength(5));
-      expect(w.canon.map((o) => o.id),
-          ['blazing_star', 'speed_star', 'immaculate_service']);
+      expect(w.canon.map((o) => o.id), [
+        'blazing_star',
+        'speed_star',
+        'immaculate_service',
+      ]);
       expect(w.everyday.map((o) => o.id), ['hangar_coveralls', 'his_jacket']);
       expect(w.today!.id, 'speed_star');
       final maid = w.outfits.firstWhere((o) => o.id == 'immaculate_service');
@@ -62,7 +78,11 @@ void main() {
 
     test('tolerates junk entries, a missing today, and an empty body', () {
       final w = Wardrobe.fromJson({
-        'outfits': ['nope', {'name': 'no id'}, {'id': 'x_y', 'unlock_level': 2.0}],
+        'outfits': [
+          'nope',
+          {'name': 'no id'},
+          {'id': 'x_y', 'unlock_level': 2.0},
+        ],
         'today': 'not a map',
       });
       expect(w.outfits.map((o) => o.id), ['x_y']);
@@ -89,14 +109,26 @@ void main() {
     });
 
     test('override is kept; empty override is null', () {
-      expect(HerDay.fromJson(herDayJson(override: 'gaming')).status!.override, 'gaming');
-      expect(HerDay.fromJson(herDayJson(override: '')).status!.override, isNull);
+      expect(
+        HerDay.fromJson(herDayJson(override: 'gaming')).status!.override,
+        'gaming',
+      );
+      expect(
+        HerDay.fromJson(herDayJson(override: '')).status!.override,
+        isNull,
+      );
     });
 
     test('label falls back to location · activity, or just the location', () {
-      final s = HerDayStatus.fromJson({'location': 'Range', 'activity': 'drills'});
+      final s = HerDayStatus.fromJson({
+        'location': 'Range',
+        'activity': 'drills',
+      });
       expect(s.label, 'Range · drills');
-      expect(HerDayStatus.fromJson({'location': 'Off duty', 'activity': ''}).label, 'Off duty');
+      expect(
+        HerDayStatus.fromJson({'location': 'Off duty', 'activity': ''}).label,
+        'Off duty',
+      );
       expect(HerDayStatus.fromJson({'activity': 'thinking'}).label, 'thinking');
     });
 
@@ -111,8 +143,15 @@ void main() {
 
     test('withOutfit swaps only the outfit', () {
       final d = HerDay.fromJson(herDayJson());
-      final next = d.withOutfit(OutfitInfo.fromJson(outfitJson(
-          id: 'immaculate_service', name: 'Immaculate Service', source: 'commander')));
+      final next = d.withOutfit(
+        OutfitInfo.fromJson(
+          outfitJson(
+            id: 'immaculate_service',
+            name: 'Immaculate Service',
+            source: 'commander',
+          ),
+        ),
+      );
       expect(next.outfit!.name, 'Immaculate Service');
       expect(next.status!.label, d.status!.label);
       expect(next.schedule, same(d.schedule));
@@ -129,7 +168,10 @@ void main() {
   group('ScheduleBlock', () {
     test('time range and line', () {
       final b = ScheduleBlock.fromJson(const {
-        'start': '0500', 'end': '0800', 'location': 'Range', 'activity': 'drills',
+        'start': '0500',
+        'end': '0800',
+        'location': 'Range',
+        'activity': 'drills',
       });
       expect(b.timeRange, '0500–0800');
       expect(b.line, 'Range · drills');
@@ -138,7 +180,10 @@ void main() {
 
     test('private block shows only Off duty', () {
       final b = ScheduleBlock.fromJson(const {
-        'start': '1700', 'end': '2100', 'location': 'Off duty', 'activity': '',
+        'start': '1700',
+        'end': '2100',
+        'location': 'Off duty',
+        'activity': '',
       });
       expect(b.line, 'Off duty');
       expect(ScheduleBlock.fromJson(const {'start': '0000'}).timeRange, '0000');
@@ -155,7 +200,10 @@ void main() {
     });
 
     test('defaults and an unparseable day', () {
-      final e = WardrobeLogEntry.fromJson({'day': 'yesterday', 'outfit_id': 'speed_star'});
+      final e = WardrobeLogEntry.fromJson({
+        'day': 'yesterday',
+        'outfit_id': 'speed_star',
+      });
       expect(e.name, 'Speed Star');
       expect(e.reason, '');
       expect(e.shortDay, 'yesterday');

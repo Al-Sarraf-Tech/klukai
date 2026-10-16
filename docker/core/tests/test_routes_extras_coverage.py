@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.task_fakes import discard_task
+
 import pytest
 from fastapi import FastAPI
 
@@ -35,6 +37,7 @@ def _mk_request(token: str | None = "good") -> MagicMock:
 
 def _app_with_routes() -> FastAPI:
     from app.routes import register_routes
+
     app = FastAPI()
     register_routes(app)
     return app
@@ -42,7 +45,9 @@ def _app_with_routes() -> FastAPI:
 
 def _find_route(app: FastAPI, path: str, method: str):
     for route in app.routes:
-        if getattr(route, "path", None) == path and method in getattr(route, "methods", set()):
+        if getattr(route, "path", None) == path and method in getattr(
+            route, "methods", set()
+        ):
             return route.endpoint
     raise AssertionError(f"route not found: {method} {path}")
 
@@ -64,10 +69,13 @@ class TestGetUserIdHelper:
     @pytest.mark.asyncio
     async def test_returns_none_without_bearer_prefix(self):
         from app import routes_extras
+
         req = MagicMock()
         req.headers = {"Authorization": "Basic abc"}
         # get_user_from_token must NOT be consulted when prefix is wrong.
-        with patch("app.auth.get_user_from_token", new=AsyncMock(return_value="should-not-see")) as gut:
+        with patch(
+            "app.auth.get_user_from_token", new=AsyncMock(return_value="should-not-see")
+        ) as gut:
             result = await routes_extras._get_user_id(req)
         assert result is None
         gut.assert_not_called()
@@ -75,6 +83,7 @@ class TestGetUserIdHelper:
     @pytest.mark.asyncio
     async def test_returns_none_when_header_absent(self):
         from app import routes_extras
+
         req = MagicMock()
         req.headers = {}
         result = await routes_extras._get_user_id(req)
@@ -83,9 +92,12 @@ class TestGetUserIdHelper:
     @pytest.mark.asyncio
     async def test_strips_bearer_and_returns_token_user(self):
         from app import routes_extras
+
         req = MagicMock()
         req.headers = {"Authorization": "Bearer tok-123"}
-        with patch("app.auth.get_user_from_token", new=AsyncMock(return_value="alice")) as gut:
+        with patch(
+            "app.auth.get_user_from_token", new=AsyncMock(return_value="alice")
+        ) as gut:
             result = await routes_extras._get_user_id(req)
         assert result == "alice"
         # Confirms the 7-char "Bearer " prefix is stripped before lookup.
@@ -120,9 +132,15 @@ class TestSimpleAuthGatesAndHappyPaths:
     async def test_milestones_returns_list(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/milestones", "GET")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory.get_milestones",
-                   new=AsyncMock(return_value=[{"event": "first_meeting"}])) as gm:
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.memory.get_milestones",
+                new=AsyncMock(return_value=[{"event": "first_meeting"}]),
+            ) as gm,
+        ):
             result = await handler(_mk_request())
         assert result == {"milestones": [{"event": "first_meeting"}]}
         gm.assert_awaited_once_with(user_id="alice")
@@ -139,7 +157,9 @@ class TestSimpleAuthGatesAndHappyPaths:
     async def test_costume_get_returns_current(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "GET")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch(
+            "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+        ):
             result = await handler(_mk_request())
         assert "costume" in result
 
@@ -148,8 +168,11 @@ class TestSimpleAuthGatesAndHappyPaths:
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "POST")
         from app.routes import CostumeRequest
+
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
-            resp = await handler(CostumeRequest(costume="blazing_star"), _mk_request(token=None))
+            resp = await handler(
+                CostumeRequest(costume="blazing_star"), _mk_request(token=None)
+            )
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
@@ -157,7 +180,10 @@ class TestSimpleAuthGatesAndHappyPaths:
         app = _app_with_routes()
         handler = _find_route(app, "/api/costume", "POST")
         from app.routes import CostumeRequest
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")):
+
+        with patch(
+            "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+        ):
             resp = await handler(CostumeRequest(costume="bogus"), _mk_request())
         assert resp.status_code == 400
 
@@ -174,12 +200,23 @@ class TestSimpleAuthGatesAndHappyPaths:
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories", "GET")
         list_mock = AsyncMock(return_value=[{"id": "abc"}])
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory_archive.list_memories", new=list_mock):
-            await handler(_mk_request(), category="combat", limit=10, before=None, month="2026-04")
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.memory_archive.list_memories", new=list_mock),
+        ):
+            await handler(
+                _mk_request(), category="combat", limit=10, before=None, month="2026-04"
+            )
         kwargs = list_mock.call_args.kwargs
-        assert kwargs == {"category": "combat", "limit": 10, "before": None,
-                          "month": "2026-04", "user_id": "alice"}
+        assert kwargs == {
+            "category": "combat",
+            "limit": 10,
+            "before": None,
+            "month": "2026-04",
+            "user_id": "alice",
+        }
 
     @pytest.mark.asyncio
     async def test_memory_categories_unauth_401(self):
@@ -192,13 +229,20 @@ class TestSimpleAuthGatesAndHappyPaths:
     @pytest.mark.asyncio
     async def test_memory_categories_passes_affection_level(self):
         from types import SimpleNamespace
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/categories", "GET")
         cats = AsyncMock(return_value={"core": 5})
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=SimpleNamespace(level=7))), \
-             patch("app.routes_extras.memory_archive.get_categories", new=cats):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=SimpleNamespace(level=7)),
+            ),
+            patch("app.routes_extras.memory_archive.get_categories", new=cats),
+        ):
             result = await handler(_mk_request())
         assert result == {"core": 5}
         cats.assert_awaited_once_with(7, user_id="alice")
@@ -216,9 +260,15 @@ class TestSimpleAuthGatesAndHappyPaths:
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/timeline", "GET")
         tl = [{"month": "2026-04", "count": 12}]
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory_archive.get_timeline",
-                   new=AsyncMock(return_value=tl)):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.memory_archive.get_timeline",
+                new=AsyncMock(return_value=tl),
+            ),
+        ):
             result = await handler(_mk_request())
         assert result == tl
 
@@ -232,9 +282,12 @@ class TestSimpleAuthGatesAndHappyPaths:
     @pytest.mark.asyncio
     async def test_change_password_unauth_401(self):
         from app.routes import ChangePasswordRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/change-password", "POST")
-        new_pw = "yyyyyyyy12"  # fake test value; a var avoids the commit-hook false positive
+        new_pw = (
+            "yyyyyyyy12"  # fake test value; a var avoids the commit-hook false positive
+        )
         body = ChangePasswordRequest(old_password="x", new_password=new_pw)
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(body, _mk_request(token=None))
@@ -243,12 +296,19 @@ class TestSimpleAuthGatesAndHappyPaths:
     @pytest.mark.asyncio
     async def test_change_password_weak_or_wrong_400(self):
         from app.routes import ChangePasswordRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/change-password", "POST")
-        new_pw = "yyyyyyyy12"  # fake test value; a var avoids the commit-hook false positive
+        new_pw = (
+            "yyyyyyyy12"  # fake test value; a var avoids the commit-hook false positive
+        )
         body = ChangePasswordRequest(old_password="x", new_password=new_pw)
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.auth.change_password", new=AsyncMock(return_value=False)):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.auth.change_password", new=AsyncMock(return_value=False)),
+        ):
             resp = await handler(body, _mk_request())
         assert resp.status_code == 400
 
@@ -257,14 +317,18 @@ class TestSimpleAuthGatesAndHappyPaths:
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
-            resp = await handler(_mk_request(token=None), user_id_target="x", bucket="login")
+            resp = await handler(
+                _mk_request(token=None), user_id_target="x", bucket="login"
+            )
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
     async def test_rate_limit_reset_non_admin_403(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")):
+        with patch(
+            "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+        ):
             resp = await handler(_mk_request(), user_id_target="x", bucket="login")
         assert resp.status_code == 403
 
@@ -272,7 +336,9 @@ class TestSimpleAuthGatesAndHappyPaths:
     async def test_rate_limit_reset_unknown_bucket_400(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="jalsarraf")):
+        with patch(
+            "app.routes_extras._get_user_id", new=AsyncMock(return_value="jalsarraf")
+        ):
             resp = await handler(_mk_request(), user_id_target="alice", bucket="bogus")
         assert resp.status_code == 400
 
@@ -293,12 +359,20 @@ class TestMissionConnectedBranch:
         ws_mock.send_proactive = AsyncMock()
         audit_log = AsyncMock()
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state())), \
-             patch("app.routes_extras.asyncio.create_task") as ct, \
-             patch("app.routes_extras.ws", ws_mock), \
-             patch("app.audit.log", audit_log):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state()),
+            ),
+            patch(
+                "app.routes_extras.spawn", side_effect=discard_task
+            ) as ct,
+            patch("app.routes_extras.ws", ws_mock),
+            patch("app.audit.log", audit_log),
+        ):
             result = await handler(_mk_request())
 
         assert result == {"status": "deployed"}
@@ -319,12 +393,20 @@ class TestMissionConnectedBranch:
         ws_mock = MagicMock()
         ws_mock.is_connected = MagicMock(return_value=False)
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state())), \
-             patch("app.routes_extras.asyncio.create_task"), \
-             patch("app.routes_extras.ws", ws_mock), \
-             patch("app.audit.log", new=AsyncMock(side_effect=RuntimeError("audit down"))):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state()),
+            ),
+            patch("app.routes_extras.spawn", side_effect=discard_task),
+            patch("app.routes_extras.ws", ws_mock),
+            patch(
+                "app.audit.log", new=AsyncMock(side_effect=RuntimeError("audit down"))
+            ),
+        ):
             result = await handler(_mk_request())
 
         assert result == {"status": "deployed"}
@@ -344,11 +426,17 @@ class TestCostumeSetSuccess:
 
         audit_log = AsyncMock()
         store_fact = AsyncMock()
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state(level=9))), \
-             patch("app.routes_extras.memory.store_fact", store_fact), \
-             patch("app.audit.log", audit_log):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state(level=9)),
+            ),
+            patch("app.routes_extras.memory.store_fact", store_fact),
+            patch("app.audit.log", audit_log),
+        ):
             result = await handler(CostumeRequest(costume="speed_star"), _mk_request())
 
         assert result == {"costume": "speed_star"}
@@ -368,12 +456,20 @@ class TestCostumeSetSuccess:
         handler = _find_route(app, "/api/costume", "POST")
         from app.routes import CostumeRequest
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state(level=9))), \
-             patch("app.routes_extras.memory.store_fact", new=AsyncMock()), \
-             patch("app.audit.log", new=AsyncMock(side_effect=RuntimeError("boom"))):
-            result = await handler(CostumeRequest(costume="cerulean_breaker"), _mk_request())
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state(level=9)),
+            ),
+            patch("app.routes_extras.memory.store_fact", new=AsyncMock()),
+            patch("app.audit.log", new=AsyncMock(side_effect=RuntimeError("boom"))),
+        ):
+            result = await handler(
+                CostumeRequest(costume="cerulean_breaker"), _mk_request()
+            )
 
         assert result == {"costume": "cerulean_breaker"}
 
@@ -395,12 +491,19 @@ class TestOutfitsList:
     @pytest.mark.asyncio
     async def test_returns_shape_and_derived_unlock(self):
         from app import wardrobe
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/outfits", "GET")
         # At level 3: anything with unlock_level <= 3 is unlocked, else locked.
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state(level=3))):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state(level=3)),
+            ),
+        ):
             result = await handler(_mk_request())
 
         outfits = result["outfits"]
@@ -408,7 +511,14 @@ class TestOutfitsList:
         assert len(outfits) == len(visible)
         for o in outfits:
             assert set(o.keys()) == {
-                "id", "name", "blurb", "category", "source", "unlock_level", "unlocked", "current",
+                "id",
+                "name",
+                "blurb",
+                "category",
+                "source",
+                "unlock_level",
+                "unlocked",
+                "current",
             }
             assert o["unlocked"] == (3 >= o["unlock_level"])
         by_id = {o["id"]: o for o in outfits}
@@ -425,9 +535,15 @@ class TestOutfitsList:
     async def test_wedding_gown_listed_locked_once_acknowledged(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/outfits", "GET")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state(level=7))):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state(level=7)),
+            ),
+        ):
             result = await handler(_mk_request())
         by_id = {o["id"]: o for o in result["outfits"]}
         assert by_id["indigo_oath"]["unlocked"] is False
@@ -443,10 +559,16 @@ class TestCostumeUnlockGate:
         from app.routes import CostumeRequest
 
         store_fact = AsyncMock()
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state(level=7))), \
-             patch("app.routes_extras.memory.store_fact", store_fact):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state(level=7)),
+            ),
+            patch("app.routes_extras.memory.store_fact", store_fact),
+        ):
             # indigo_oath needs level 8; at 7 she acknowledges it but it's locked.
             resp = await handler(CostumeRequest(costume="indigo_oath"), _mk_request())
 
@@ -463,13 +585,21 @@ class TestCostumeUnlockGate:
 
         store_fact = AsyncMock()
         audit_log = AsyncMock()
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state(level=6))), \
-             patch("app.routes_extras.memory.store_fact", store_fact), \
-             patch("app.audit.log", audit_log):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state(level=6)),
+            ),
+            patch("app.routes_extras.memory.store_fact", store_fact),
+            patch("app.audit.log", audit_log),
+        ):
             # Legacy id midnight_sovereign maps to formal_commission (unlock 6).
-            result = await handler(CostumeRequest(costume="midnight_sovereign"), _mk_request())
+            result = await handler(
+                CostumeRequest(costume="midnight_sovereign"), _mk_request()
+            )
 
         assert result == {"costume": "formal_commission"}
         store_fact.assert_awaited_once()
@@ -483,9 +613,15 @@ class TestCostumeUnlockGate:
         handler = _find_route(app, "/api/costume", "POST")
         from app.routes import CostumeRequest
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state(level=1))):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state(level=1)),
+            ),
+        ):
             resp = await handler(CostumeRequest(costume="starlit_vow"), _mk_request())
         assert resp.status_code == 400
         assert b"indigo_oath" not in resp.body
@@ -497,12 +633,18 @@ class TestCostumeUnlockGate:
         from app.routes import CostumeRequest
 
         set_requested = AsyncMock()
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state(level=5))), \
-             patch("app.routes_extras.memory.store_fact", new=AsyncMock()), \
-             patch("app.wardrobe.set_requested", set_requested), \
-             patch("app.audit.log", new=AsyncMock()):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state(level=5)),
+            ),
+            patch("app.routes_extras.memory.store_fact", new=AsyncMock()),
+            patch("app.wardrobe.set_requested", set_requested),
+            patch("app.audit.log", new=AsyncMock()),
+        ):
             await handler(CostumeRequest(costume="immaculate_service"), _mk_request())
         set_requested.assert_awaited_once_with("alice", "immaculate_service", 5)
 
@@ -513,10 +655,18 @@ class TestCostumeUnlockGate:
         handler = _find_route(app, "/api/costume", "POST")
         from app.routes import CostumeRequest
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=_mk_aff_state(level=9))):
-            resp = await handler(CostumeRequest(costume="not_a_real_skin"), _mk_request())
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=_mk_aff_state(level=9)),
+            ),
+        ):
+            resp = await handler(
+                CostumeRequest(costume="not_a_real_skin"), _mk_request()
+            )
         assert resp.status_code == 400
 
 
@@ -531,6 +681,7 @@ class TestSTTProxy:
         app = _app_with_routes()
         handler = _find_route(app, "/api/stt", "POST")
         from app.routes import STTRequest
+
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             resp = await handler(STTRequest(audio="abc"), _mk_request(token=None))
         assert resp.status_code == 401
@@ -559,11 +710,17 @@ class TestSTTProxy:
                 # Confirms the audio payload is forwarded to the voice /stt path.
                 assert url.endswith("/stt")
                 assert json == {"audio": "abc"}
-                assert isinstance(headers, dict)  # voice auth header dict (empty when no token)
+                assert isinstance(
+                    headers, dict
+                )  # voice auth header dict (empty when no token)
                 return fake_resp
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.httpx.AsyncClient", FakeClient):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.httpx.AsyncClient", FakeClient),
+        ):
             result = await handler(STTRequest(audio="abc"), _mk_request())
 
         assert result == {"text": "hello commander"}
@@ -591,6 +748,7 @@ class TestSTTProxy:
         """The PWA treats any 200 as a transcript; an upstream failure that
         came back as 200 made it silently do nothing."""
         import json as _json
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/stt", "POST")
         from app.routes import STTRequest
@@ -598,8 +756,12 @@ class TestSTTProxy:
         resp = MagicMock()
         resp.status_code = 500
         resp.json = MagicMock(side_effect=ValueError("not json"))
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.httpx.AsyncClient", self._client_returning(resp)):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.httpx.AsyncClient", self._client_returning(resp)),
+        ):
             out = await handler(STTRequest(audio="abc"), _mk_request())
 
         assert out.status_code == 502
@@ -610,6 +772,7 @@ class TestSTTProxy:
     async def test_stt_url_honours_trailing_slash_in_voice_url(self):
         """A trailing slash in VOICE_URL must not produce `//stt` (a 404)."""
         import os
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/stt", "POST")
         from app.routes import STTRequest
@@ -618,9 +781,13 @@ class TestSTTProxy:
         resp.status_code = 200
         resp.json = MagicMock(return_value={"text": "ok"})
         client = self._client_returning(resp)
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.httpx.AsyncClient", client), \
-             patch.dict(os.environ, {"VOICE_URL": "http://voice.local:8301/"}):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.httpx.AsyncClient", client),
+            patch.dict(os.environ, {"VOICE_URL": "http://voice.local:8301/"}),
+        ):
             result = await handler(STTRequest(audio="abc"), _mk_request())
 
         assert result == {"text": "ok"}
@@ -645,8 +812,14 @@ class TestSTTProxy:
         ok_resp.status_code = 200
         ok_resp.json = MagicMock(return_value=upstream_json)
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.httpx.AsyncClient", self._client_returning(ok_resp)):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.httpx.AsyncClient", self._client_returning(ok_resp)
+            ),
+        ):
             resp = await handler(STTRequest(audio="abc"), _mk_request())
 
         assert resp.status_code == 502
@@ -678,8 +851,12 @@ class TestSTTProxy:
             async def __aexit__(self, *a):
                 return None
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.httpx.AsyncClient", BoomClient):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.httpx.AsyncClient", BoomClient),
+        ):
             resp = await handler(STTRequest(audio="abc"), _mk_request())
 
         assert resp.status_code == 503
@@ -737,8 +914,12 @@ class TestMessagesHappyPath:
             def connection(self):
                 raise RuntimeError("db down")
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.get_pool", return_value=_BoomPool()):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.get_pool", return_value=_BoomPool()),
+        ):
             result = await handler(_mk_request(), limit=10, before=None)
         assert result.status_code == 503
 
@@ -755,8 +936,12 @@ class TestMessagesHappyPath:
             (1, "user", "hello", "text", None, None, ts1),
         ]
         captured = []
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.get_pool", return_value=_MsgPool(rows, captured)):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.get_pool", return_value=_MsgPool(rows, captured)),
+        ):
             result = await handler(_mk_request(), limit=50, before=None)
 
         msgs = result["messages"]
@@ -777,9 +962,15 @@ class TestMessagesHappyPath:
         handler = _find_route(app, "/api/messages", "GET")
 
         captured = []
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.get_pool", return_value=_MsgPool([], captured)):
-            result = await handler(_mk_request(), limit=10, before="2026-04-01T00:00:00Z")
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.get_pool", return_value=_MsgPool([], captured)),
+        ):
+            result = await handler(
+                _mk_request(), limit=10, before="2026-04-01T00:00:00Z"
+            )
 
         assert result == {"messages": []}
         # `before` set → the cursor SQL branch with the timestamp param.
@@ -814,8 +1005,14 @@ class TestBackfillAnnotations:
             coro.close()  # avoid "never awaited" warning
             return MagicMock()
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.asyncio.create_task", side_effect=fake_create_task):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.spawn", side_effect=fake_create_task
+            ),
+        ):
             result = await handler(_mk_request())
 
         assert result["status"] == "started"
@@ -835,9 +1032,13 @@ class TestBackfillAnnotations:
             return MagicMock()
 
         backfill = AsyncMock(return_value={"updated": 3})
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.asyncio.create_task", side_effect=capture_task), \
-             patch("app.routes_extras.memory_archive.backfill_annotations", backfill):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.spawn", side_effect=capture_task),
+            patch("app.routes_extras.memory_archive.backfill_annotations", backfill),
+        ):
             await handler(_mk_request())
             # Execute the captured coroutine directly.
             await captured["coro"]
@@ -856,10 +1057,16 @@ class TestBackfillAnnotations:
             captured["coro"] = coro
             return MagicMock()
 
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.asyncio.create_task", side_effect=capture_task), \
-             patch("app.routes_extras.memory_archive.backfill_annotations",
-                   new=AsyncMock(side_effect=RuntimeError("backfill boom"))):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.spawn", side_effect=capture_task),
+            patch(
+                "app.routes_extras.memory_archive.backfill_annotations",
+                new=AsyncMock(side_effect=RuntimeError("backfill boom")),
+            ),
+        ):
             await handler(_mk_request())
             await captured["coro"]  # must not raise
 
@@ -882,9 +1089,15 @@ class TestMemoryImageRoutes:
     async def test_image_returns_png_bytes(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/{memory_id}/image", "GET")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory_archive.get_image_bytes",
-                   new=AsyncMock(return_value=b"\x89PNGdata")) as gib:
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.memory_archive.get_image_bytes",
+                new=AsyncMock(return_value=b"\x89PNGdata"),
+            ) as gib,
+        ):
             resp = await handler("m1", _mk_request())
         assert resp.media_type == "image/png"
         assert resp.body == b"\x89PNGdata"
@@ -894,9 +1107,15 @@ class TestMemoryImageRoutes:
     async def test_image_404_when_missing(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/{memory_id}/image", "GET")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory_archive.get_image_bytes",
-                   new=AsyncMock(return_value=None)):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.memory_archive.get_image_bytes",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
             resp = await handler("missing", _mk_request())
         assert resp.status_code == 404
 
@@ -912,9 +1131,15 @@ class TestMemoryImageRoutes:
     async def test_thumbnail_returns_png_with_thumbnail_flag(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/{memory_id}/thumbnail", "GET")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory_archive.get_image_bytes",
-                   new=AsyncMock(return_value=b"thumbdata")) as gib:
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.memory_archive.get_image_bytes",
+                new=AsyncMock(return_value=b"thumbdata"),
+            ) as gib,
+        ):
             resp = await handler("m1", _mk_request())
         assert resp.media_type == "image/png"
         gib.assert_awaited_once_with("m1", thumbnail=True, user_id="alice")
@@ -923,9 +1148,15 @@ class TestMemoryImageRoutes:
     async def test_thumbnail_404_when_missing(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/{memory_id}/thumbnail", "GET")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory_archive.get_image_bytes",
-                   new=AsyncMock(return_value=None)):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.memory_archive.get_image_bytes",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
             resp = await handler("missing", _mk_request())
         assert resp.status_code == 404
 
@@ -944,11 +1175,17 @@ class TestMemoryKeepDiscard:
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/{memory_id}/keep", "POST")
         upd = AsyncMock(return_value=True)
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory_archive.update_kept", upd):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.memory_archive.update_kept", upd),
+        ):
             result = await handler("m1", _mk_request())
         assert result == {"ok": True}
-        upd.assert_awaited_once_with("m1", kept=True, kept_by="commander", user_id="alice")
+        upd.assert_awaited_once_with(
+            "m1", kept=True, kept_by="commander", user_id="alice"
+        )
 
     @pytest.mark.asyncio
     async def test_discard_requires_auth(self):
@@ -963,8 +1200,12 @@ class TestMemoryKeepDiscard:
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/{memory_id}/discard", "POST")
         upd = AsyncMock(return_value=False)
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory_archive.update_kept", upd):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.memory_archive.update_kept", upd),
+        ):
             result = await handler("m1", _mk_request())
         assert result == {"ok": False}
         upd.assert_awaited_once_with("m1", kept=False, user_id="alice")
@@ -980,8 +1221,11 @@ class TestSessionInfoSuccess:
     async def test_returns_session_metadata_for_valid_token(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/session/info", "GET")
-        info = {"user_id": "alice", "created_at": "2026-04-01T00:00:00+00:00",
-                "expires_at": "2026-04-08T00:00:00+00:00"}
+        info = {
+            "user_id": "alice",
+            "created_at": "2026-04-01T00:00:00+00:00",
+            "expires_at": "2026-04-08T00:00:00+00:00",
+        }
         with patch("app.auth.get_session_info", new=AsyncMock(return_value=info)):
             result = await handler(_mk_request())
         assert result == info
@@ -1004,12 +1248,20 @@ class TestChangePasswordSuccess:
     @pytest.mark.asyncio
     async def test_success_invalidates_sessions(self):
         from app.routes import ChangePasswordRequest
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/user/change-password", "POST")
-        old_pw, new_pw = "current-pw", "brand-new-pw-12"  # fake test values; vars avoid the commit-hook false positive
+        old_pw, new_pw = (
+            "current-pw",
+            "brand-new-pw-12",
+        )  # fake test values; vars avoid the commit-hook false positive
         body = ChangePasswordRequest(old_password=old_pw, new_password=new_pw)
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.auth.change_password", new=AsyncMock(return_value=True)) as cp:
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.auth.change_password", new=AsyncMock(return_value=True)) as cp,
+        ):
             result = await handler(body, _mk_request())
         assert result == {"ok": True, "sessions_invalidated": True}
         cp.assert_awaited_once_with("alice", old_pw, new_pw)
@@ -1026,9 +1278,16 @@ class TestRateLimitResetSuccess:
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
         reset_mock = AsyncMock()
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="jalsarraf")), \
-             patch("app.rate_limit.reset", reset_mock):
-            result = await handler(_mk_request(), user_id_target="alice", bucket="login")
+        with (
+            patch(
+                "app.routes_extras._get_user_id",
+                new=AsyncMock(return_value="jalsarraf"),
+            ),
+            patch("app.rate_limit.reset", reset_mock),
+        ):
+            result = await handler(
+                _mk_request(), user_id_target="alice", bucket="login"
+            )
         assert result == {"ok": True, "user_id": "alice", "bucket": "login"}
         reset_mock.assert_awaited_once_with("alice", "login")
 
@@ -1038,9 +1297,16 @@ class TestRateLimitResetSuccess:
         app = _app_with_routes()
         handler = _find_route(app, "/api/admin/rate-limit/reset", "POST")
         reset_mock = AsyncMock()
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="jalsarraf")), \
-             patch("app.rate_limit.reset", reset_mock):
-            result = await handler(_mk_request(), user_id_target="bob", bucket="default")
+        with (
+            patch(
+                "app.routes_extras._get_user_id",
+                new=AsyncMock(return_value="jalsarraf"),
+            ),
+            patch("app.rate_limit.reset", reset_mock),
+        ):
+            result = await handler(
+                _mk_request(), user_id_target="bob", bucket="default"
+            )
         assert result == {"ok": True, "user_id": "bob", "bucket": "default"}
         reset_mock.assert_awaited_once_with("bob", "default")
 
@@ -1056,22 +1322,37 @@ class TestMemoryArchiveFailClosed:
     async def test_memories_list_db_error_returns_503(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories", "GET")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory_archive.list_memories",
-                   new=AsyncMock(side_effect=RuntimeError("db down"))):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.memory_archive.list_memories",
+                new=AsyncMock(side_effect=RuntimeError("db down")),
+            ),
+        ):
             resp = await handler(_mk_request())
         assert resp.status_code == 503
 
     @pytest.mark.asyncio
     async def test_memory_categories_db_error_returns_503(self):
         from types import SimpleNamespace
+
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/categories", "GET")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.affection.get_state",
-                   new=AsyncMock(return_value=SimpleNamespace(level=7))), \
-             patch("app.routes_extras.memory_archive.get_categories",
-                   new=AsyncMock(side_effect=RuntimeError("db down"))):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.affection.get_state",
+                new=AsyncMock(return_value=SimpleNamespace(level=7)),
+            ),
+            patch(
+                "app.routes_extras.memory_archive.get_categories",
+                new=AsyncMock(side_effect=RuntimeError("db down")),
+            ),
+        ):
             resp = await handler(_mk_request())
         assert resp.status_code == 503
 
@@ -1079,8 +1360,14 @@ class TestMemoryArchiveFailClosed:
     async def test_memory_timeline_db_error_returns_503(self):
         app = _app_with_routes()
         handler = _find_route(app, "/api/memories/timeline", "GET")
-        with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes_extras.memory_archive.get_timeline",
-                   new=AsyncMock(side_effect=RuntimeError("db down"))):
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch(
+                "app.routes_extras.memory_archive.get_timeline",
+                new=AsyncMock(side_effect=RuntimeError("db down")),
+            ),
+        ):
             resp = await handler(_mk_request())
         assert resp.status_code == 503

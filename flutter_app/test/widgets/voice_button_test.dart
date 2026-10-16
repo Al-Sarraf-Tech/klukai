@@ -86,15 +86,13 @@ void main() {
       var downs = 0;
       var cancels = 0;
       await tester.pumpWidget(
-        _wrap(
-          VoiceButton(
-            onTapDown: () => downs++,
-            onCancel: () => cancels++,
-          ),
-        ),
+        _wrap(VoiceButton(onTapDown: () => downs++, onCancel: () => cancels++)),
       );
       final focus = tester.widget<Focus>(
-        find.descendant(of: find.byType(VoiceButton), matching: find.byType(Focus)),
+        find.descendant(
+          of: find.byType(VoiceButton),
+          matching: find.byType(Focus),
+        ),
       );
       focus.focusNode!.requestFocus();
       await tester.pump();
@@ -104,7 +102,10 @@ void main() {
       await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(cancels, 1);
-      expect(tester.getSize(find.byType(VoiceButton)).shortestSide, greaterThanOrEqualTo(44));
+      expect(
+        tester.getSize(find.byType(VoiceButton)).shortestSide,
+        greaterThanOrEqualTo(44),
+      );
     });
   });
 }

@@ -8,13 +8,15 @@ modulates (affection).
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import re
 
 from .loader import get_affection_level_config, get_speech_patterns, load_personality
 
 
-def build_character_preamble(p: dict, affection_level: int = 0) -> str:
+def build_character_preamble(p: dict[str, Any], affection_level: int = 0) -> str:
     """Format curated identity data; missing optional lore stays absent.
 
     Minimal legacy fixtures retain identity and their configured user title,
@@ -31,13 +33,23 @@ def build_character_preamble(p: dict, affection_level: int = 0) -> str:
         "not a squadmate. Follow the response-priority contract for address and disclosure.",
         "WHO YOU ARE:",
     ]
-    for field in ("former_designation", "organization", "role", "frame",
-                  "weapon_imprint", "core_motivation", "simple_wish", "catchphrase"):
+    for field in (
+        "former_designation",
+        "organization",
+        "role",
+        "frame",
+        "weapon_imprint",
+        "core_motivation",
+        "simple_wish",
+        "catchphrase",
+    ):
         value = identity.get(field)
         if isinstance(value, str) and value.strip():
             lines.append(f"- {field.replace('_', ' ').title()}: {value.strip()}")
-    for field, label in (("biography_summary", "YOUR HISTORY"),
-                         ("voice_summary", "YOUR DELIVERY")):
+    for field, label in (
+        ("biography_summary", "YOUR HISTORY"),
+        ("voice_summary", "YOUR DELIVERY"),
+    ):
         value = p.get(field)
         if isinstance(value, str) and value.strip():
             lines.append(f"{label}: {value.strip()}")
@@ -86,7 +98,7 @@ def build_behavioral_grammar_block(affection_level: int = 0) -> str:
     return "\n".join(lines)
 
 
-def build_speech_guidelines(p: dict, affection_level: int = 0) -> str:
+def build_speech_guidelines(p: dict[str, Any], affection_level: int = 0) -> str:
     """Build speech pattern instructions for the current affection level."""
     speech = get_speech_patterns(p, affection_level)
     if not speech:
@@ -107,7 +119,9 @@ def build_speech_guidelines(p: dict, affection_level: int = 0) -> str:
 
     if examples:
         example_str = "\n".join(f'  - "{ex}"' for ex in examples)
-        lines.append(f"\nEXAMPLE LINES (match this style, do not repeat verbatim):\n{example_str}")
+        lines.append(
+            f"\nEXAMPLE LINES (match this style, do not repeat verbatim):\n{example_str}"
+        )
 
     if forbidden:
         forbidden_str = ", ".join(f'"{w}"' for w in forbidden)
@@ -116,12 +130,14 @@ def build_speech_guidelines(p: dict, affection_level: int = 0) -> str:
     anti_patterns = speech.get("anti_patterns", [])
     if anti_patterns:
         anti_str = "\n".join(f"  - {ap}" for ap in anti_patterns)
-        lines.append(f"\nANTI-PATTERNS (these are CHARACTER FAILURES — never do them):\n{anti_str}")
+        lines.append(
+            f"\nANTI-PATTERNS (these are CHARACTER FAILURES — never do them):\n{anti_str}"
+        )
 
     return "\n".join(lines)
 
 
-def build_japanese_block(p: dict, affection_level: int = 0) -> str:
+def build_japanese_block(p: dict[str, Any], affection_level: int = 0) -> str:
     """Build Japanese phrase guidelines for current affection level.
 
     Falls back to the highest defined level if the exact level isn't configured.
@@ -147,7 +163,7 @@ def build_japanese_block(p: dict, affection_level: int = 0) -> str:
     )
 
 
-def build_expressive_block(p: dict, affection_level: int = 0) -> str:
+def build_expressive_block(p: dict[str, Any], affection_level: int = 0) -> str:
     """Build vocal expression guidelines based on affection level."""
     tokens = p.get("expressive_tokens", {})
     if not tokens:
@@ -204,7 +220,7 @@ def build_affection_block(
     affection_score: int = 0,
     affection_level: int = 0,
     affection_level_name: str = "Cold Assessment",
-    p: dict | None = None,
+    p: dict[str, Any] | None = None,
 ) -> str:
     """Build behavioral modulation instructions based on affection state."""
     if p is None:

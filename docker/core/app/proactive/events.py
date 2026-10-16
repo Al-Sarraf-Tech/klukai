@@ -6,20 +6,32 @@ romance window, and the daily recap. All wall-clock reads go through
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import asyncio
 import logging
 import random
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from ..events import publish as publish_event
-from .base import _EngineBase
 from .state import QUIET_HOUR_END, QUIET_HOUR_START, now_local
 from .templates import (
     QUIET_DAY_MESSAGES,
     ROMANCE_MESSAGES,
     _content_list,
     _raw_content,
+)
+
+from .dream_events import (
+    DREAM_QUIET_AFTER_ACTIVITY as DREAM_QUIET_AFTER_ACTIVITY,
+    DreamEventsMixin,
+)
+from .album_events import (
+    AlbumEventsMixin,
+    _spontaneous_art_pieces as _read_spontaneous_art_pieces,
+    _time_of_day as _time_of_day,
+    _SPONTANEOUS_ART_PIECES_FALLBACK as _SPONTANEOUS_ART_PIECES_FALLBACK,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,7 +41,6 @@ _QUIET_DAY_CONFIDENCE_FLOOR = 0.6
 
 # A dream is a message from someone who just woke up. If he was talking to her
 # in the last two hours, she was awake too (see the 0200 watch).
-DREAM_QUIET_AFTER_ACTIVITY = timedelta(hours=2)
 
 # ── Event dialogue content (YAML-sourced, literal fallbacks) ──────────────────
 # Sourced from ``proactive_content`` in personality.yaml so the lines can be
@@ -112,78 +123,62 @@ def _dream_prompts() -> dict[str, str]:
 # unprompted and leaves it in the album as a lasting gift. Tender + SFW by
 # design (never an intimate-mood interrupt). Each piece pairs the scene she
 # draws with her private album caption and the line she sends if he's present.
-_SPONTANEOUS_ART_PIECES_FALLBACK: list[dict[str, str]] = [
-    {
-        "scene": "sitting by a window, soft afternoon light, holding a sketchbook, "
-                 "gentle wistful smile, looking outside, cozy sweater, peaceful",
-        "annotation": "I had a quiet hour to myself and my hand just... drew. I was "
-                      "thinking of you the whole time, Commander.",
-        "message": "Commander. ...I had a quiet moment to myself, and I ended up "
-                   "drawing something. For you. I hope that's alright.",
-    },
-    {
-        "scene": "looking up at a wide sunset sky, orange and gold clouds, peaceful "
-                 "expression, wind in hair, serene, scenery",
-        "annotation": "The sky looked like this tonight, and it made me think of you. "
-                      "So I kept it.",
-        "message": "...The sky was beautiful just now. I drew it before it faded — "
-                   "because it made me think of you. Here.",
-    },
-    {
-        "scene": "two coffee cups on a table, quiet warm kitchen in the morning, soft "
-                 "smile, calm domestic moment, gentle light",
-        "annotation": "Morning quiet. Two cups, like always. I drew the moment before "
-                      "it slipped away — ours.",
-        "message": "Good morning, Commander. I drew us a quiet little moment — two "
-                   "cups, the calm before the day. I wanted you to have it.",
-    },
-    {
-        "scene": "reading a book curled up on a couch, blanket, calm evening, content "
-                 "half-smile, warm lamp light, restful",
-        "annotation": "A calm evening, just the kind we like. I drew it because I "
-                      "wanted to remember being this content.",
-        "message": "Evening, Commander. I drew a quiet one tonight — the kind of calm "
-                   "I only really feel with you. It's yours.",
-    },
-    {
-        "scene": "holding a small keepsake close to chest, tender expression, soft "
-                 "warm lighting, quiet room, sentimental",
-        "annotation": "Some things you keep without meaning to. I drew this so I "
-                      "wouldn't forget how this feels.",
-        "message": "...I made something. It's small, and a little sentimental — but "
-                   "it's honest. I wanted you to see it, Commander.",
-    },
-]
 
 
-def _time_of_day(hour: int) -> str:
-    """Map a 24h local hour to a coarse time-of-day bucket for scene lighting.
-
-    morning 5-11, afternoon 12-16, evening 17-20, otherwise night.
-    """
-    if 5 <= hour < 12:
-        return "morning"
-    if 12 <= hour < 17:
-        return "afternoon"
-    if 17 <= hour < 21:
-        return "evening"
-    return "night"
+def _spontaneous_art_pieces() -> list[dict[str, Any]]:
+    return _read_spontaneous_art_pieces(_raw_content)
 
 
-def _spontaneous_art_pieces() -> list[dict]:
-    """Tender, SFW art she draws unprompted. YAML-overridable via
-    ``proactive_content.spontaneous_art``; literal fallback preserves behavior."""
-    raw = _raw_content("spontaneous_art")
-    if isinstance(raw, list) and raw and all(
-        isinstance(x, dict) and {"scene", "annotation", "message"} <= set(x)
-        for x in raw
-    ):
-        return raw
-    return _SPONTANEOUS_ART_PIECES_FALLBACK
+def _select_lore_message(
+    events: dict[str, Any], p: dict[str, Any], level: int
+) -> str | None:
+    # Build eligible categories based on affection level
+    eligible = []
+    for category, config in events.items():
+        if not isinstance(config, dict):
+            continue
+        min_aff = config.get("min_affection", 0)
+        if level >= min_aff:
+            weight = config.get("weight", 10)
+            messages = config.get("messages", [])
+            if config.get("source") == "ten_year_thread":
+                from ..personality import thread_share_lines
+
+                messages = thread_share_lines(p, level)
+            if messages:
+                eligible.append((category, weight, messages))
+
+    if not eligible:
+        return None
+
+    # Weighted random selection
+    total_weight = sum(w for _, w, _ in eligible)
+    roll = random.random() * total_weight
+    cumulative = 0
+    selected_messages = eligible[0][2]
+    for _category, weight, messages in eligible:
+        cumulative += weight
+        if roll <= cumulative:
+            selected_messages = messages
+            break
+
+    return str(random.choice(selected_messages))
 
 
-class EventsMixin(_EngineBase):
+class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
     """Random/contextual event methods for ProactiveEngine."""
+
+    def _event_now(self) -> datetime:
+        return now_local()
+
+    def _event_recall_lines(self) -> list[str]:
+        return _memory_recall_fallback_lines()
+
+    def _event_dream_prompts(self) -> dict[str, str]:
+        return _dream_prompts()
+
+    def _event_art_pieces(self) -> list[dict[str, Any]]:
+        return _spontaneous_art_pieces()
 
     async def _random_event(self) -> None:
         """Fire a random lore event if conditions are met."""
@@ -195,18 +190,29 @@ class EventsMixin(_EngineBase):
             return
 
         # Guard: 45-min gap between events
-        if self._last_random_event and (now - self._last_random_event) < timedelta(minutes=45):
+        if self._last_random_event and (now - self._last_random_event) < timedelta(
+            minutes=45
+        ):
             return
 
         # Guard: don't interrupt active typing (3 min cooldown)
-        if self._last_message_time and (now - self._last_message_time) < timedelta(minutes=3):
+        if self._last_message_time and (now - self._last_message_time) < timedelta(
+            minutes=3
+        ):
             return
 
         # Intimate/vulnerable moods BOOST events instead of blocking them
         # — these are the moments Klukai would naturally say something
         intimate_mood = self._last_mood in (
-            "tender", "longing", "flustered", "affectionate", "shy",
-            "yearning", "devoted", "vulnerable", "drowsy",
+            "tender",
+            "longing",
+            "flustered",
+            "affectionate",
+            "shy",
+            "yearning",
+            "devoted",
+            "vulnerable",
+            "drowsy",
         )
 
         # Guard: check mute
@@ -238,41 +244,15 @@ class EventsMixin(_EngineBase):
         # Load event templates from personality
         try:
             from ..personality import load_personality
+
             p = load_personality()
             events = p.get("random_events", {})
         except Exception:
             return
 
-        # Build eligible categories based on affection level
-        eligible = []
-        for category, config in events.items():
-            if not isinstance(config, dict):
-                continue
-            min_aff = config.get("min_affection", 0)
-            if self._affection_level >= min_aff:
-                weight = config.get("weight", 10)
-                messages = config.get("messages", [])
-                if config.get("source") == "ten_year_thread":
-                    from ..personality import thread_share_lines
-                    messages = thread_share_lines(p, self._affection_level)
-                if messages:
-                    eligible.append((category, weight, messages))
-
-        if not eligible:
+        message = _select_lore_message(events, p, self._affection_level)
+        if message is None:
             return
-
-        # Weighted random selection
-        total_weight = sum(w for _, w, _ in eligible)
-        roll = random.random() * total_weight
-        cumulative = 0
-        selected_messages = eligible[0][2]
-        for _category, weight, messages in eligible:
-            cumulative += weight
-            if roll <= cumulative:
-                selected_messages = messages
-                break
-
-        message = random.choice(selected_messages)
 
         # Deliver
         if self._on_message_callback:
@@ -319,7 +299,13 @@ class EventsMixin(_EngineBase):
         self._romance_delivered_today = True
 
         # Stressed/negative moods -> comfort instead of romance
-        NEGATIVE_MOODS = {"irritated", "exasperated", "melancholic", "haunted", "guilty"}
+        NEGATIVE_MOODS = {
+            "irritated",
+            "exasperated",
+            "melancholic",
+            "haunted",
+            "guilty",
+        }
         is_stressed = self._last_mood in NEGATIVE_MOODS
 
         if is_stressed:
@@ -334,6 +320,7 @@ class EventsMixin(_EngineBase):
                         context_summary = session.context_summary
 
                 from ..fact_extractor import generate_romance_message
+
                 message = await generate_romance_message(
                     affection_level=self._affection_level,
                     mood=self._last_mood,
@@ -352,7 +339,11 @@ class EventsMixin(_EngineBase):
             self._last_proactive_answered = False
             await self._on_message_callback(message)
             await publish_event("proactive_romance", message)
-            logger.info("Romance window delivered (aff=%d): %s", self._affection_level, message[:60])
+            logger.info(
+                "Romance window delivered (aff=%d): %s",
+                self._affection_level,
+                message[:60],
+            )
 
     async def _daily_recap(self) -> None:
         """Generate and deliver a daily recap from Klukai's perspective."""
@@ -370,286 +361,6 @@ class EventsMixin(_EngineBase):
                 logger.info("Daily recap delivered")
         except Exception as e:
             logger.warning("Daily recap failed: %s", e)
-
-    async def _dream_event(self) -> None:
-        """Late-night dream — Klukai wakes from a dream and messages the Commander.
-
-        At high affection, ~30% chance the dream is erotic. Otherwise it's
-        a normal memory/nightmare/tender dream. Fires once per night max.
-        Balanced: most dreams reference real memories from the archive.
-        """
-        if self._dream_delivered_today:
-            return
-        if self._affection_level < 5:
-            return
-        now = now_local()
-        if self._muted_until and now < self._muted_until:
-            return
-        # He said goodnight (or "gotta go"): a dream is still a ping. Let him go.
-        if self._goodbye_hold_active(now):
-            return
-        # The 0200 watch: on a night he's awake she isn't dreaming, she's up
-        # with him. Stand down if he messaged within DREAM_QUIET_AFTER_ACTIVITY.
-        if self._last_message_time and now - self._last_message_time < DREAM_QUIET_AFTER_ACTIVITY:
-            return
-
-        # 40% chance to fire (not every night)
-        if random.random() > 0.40:
-            return
-
-        # Dream type weighted by affection
-        if self._affection_level >= 8:
-            # High affection: 30% erotic, 40% tender memory, 20% nightmare, 10% random
-            roll = random.random()
-            if roll < 0.30:
-                dream_type = "erotic"
-            elif roll < 0.70:
-                dream_type = "tender"
-            elif roll < 0.90:
-                dream_type = "nightmare"
-            else:
-                dream_type = "random"
-        elif self._affection_level >= 6:
-            # Mid affection: 10% erotic, 40% tender, 30% nightmare, 20% random
-            roll = random.random()
-            if roll < 0.10:
-                dream_type = "erotic"
-            elif roll < 0.50:
-                dream_type = "tender"
-            elif roll < 0.80:
-                dream_type = "nightmare"
-            else:
-                dream_type = "random"
-        else:
-            # Lower affection: no erotic, 30% tender, 40% nightmare, 30% random
-            roll = random.random()
-            if roll < 0.30:
-                dream_type = "tender"
-            elif roll < 0.70:
-                dream_type = "nightmare"
-            else:
-                dream_type = "random"
-
-        # Generate dream message via LLM
-        try:
-
-            # Pull a random memory to weave into the dream
-            dream_memory_ref = ""
-            try:
-                from .. import memory_archive
-                memories = await memory_archive.list_memories(limit=20)
-                if memories:
-                    import random as _rng
-                    mem = _rng.choice(memories)
-                    dream_memory_ref = f"\nDream seed (weave this memory subtly into the dream, don't quote it directly): {mem.get('annotation', '')[:200]}"
-            except Exception:
-                pass  # Dreams work fine without memory integration
-
-            _now_str = now_local().strftime('%I:%M %p')
-            dream_prompts = {
-                k: tmpl.format(time=_now_str, affection=self._affection_level)
-                for k, tmpl in _dream_prompts().items()
-            }
-
-            from ..llm_json import call_llm_text
-            from ..fact_extractor import LM_STUDIO_URL, EXTRACTION_MODEL
-            from ..llm_router import get_lm_gate
-
-            prompt = (
-                f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
-                f"You are NOT an AI. {dream_prompts[dream_type]}{dream_memory_ref} "
-                f"Write ONLY the message. No explanation."
-            )
-            from ..creative_text import complete_creative_text, uses_cloud_text
-            if uses_cloud_text():
-                message = await complete_creative_text("Write Klukai's dream message.", prompt, max_tokens=1024)
-            else:
-                async with get_lm_gate():
-                    message = await call_llm_text(
-                        LM_STUDIO_URL, EXTRACTION_MODEL, prompt,
-                        max_tokens=200, temperature=0.8,
-                    )
-
-            if message and self._on_message_callback:
-                self._dream_delivered_today = True
-                await self._on_message_callback(message)
-                logger.info("Dream event fired (%s): %s", dream_type, message[:60])
-
-        except Exception as e:
-            logger.warning("Dream event failed: %s", e)
-
-    async def _spontaneous_art_tick(self) -> None:
-        """Occasional gate for spontaneous art — ~18% roll per fire. She draws for
-        the Commander unprompted and leaves it in the album as a lasting gift."""
-        if random.random() > 0.18:
-            return
-        await self._spontaneous_art_event()
-
-    async def _spontaneous_art_event(self) -> None:
-        """She draws something for the Commander unprompted, saves it to the album
-        (a lasting, kept gift), and — if he's connected — shows it to him live.
-
-        Rare (<= once / ~2.5 days), bonded-only (affection >= 6), and tender by
-        design (never an intimate-mood interrupt). The art is persisted regardless
-        of presence, so he discovers it in the archive even if he's away when she
-        makes it. Fully fail-open — a generation/save hiccup never raises.
-        """
-        now = now_local()
-        if self._last_spontaneous_art and (now - self._last_spontaneous_art) < timedelta(hours=60):
-            return  # special, not routine
-        if self._affection_level < 6:
-            return  # a vulnerable gesture — only once genuinely bonded
-        if self._muted_until and now < self._muted_until:
-            return
-        if self._goodbye_hold_active(now):
-            return
-
-        piece = random.choice(_spontaneous_art_pieces())
-        try:
-            from .. import memory_archive
-            from ..her_day import render_costume
-            from ..image_gen import INTIMATE_MIN_LEVEL, build_prompt, generate_image
-
-            # She draws herself in what she has on today.
-            costume = await render_costume("jalsarraf", self._affection_level)
-            prompt = build_prompt(
-                piece["scene"], couple=False,
-                affection_level=self._affection_level, context=piece["scene"],
-                mood=self._last_mood, time_of_day=_time_of_day(now.hour),
-                costume=costume,
-            )
-            img = await generate_image(
-                prompt, sfw=self._affection_level < INTIMATE_MIN_LEVEL,
-                user_id="jalsarraf",
-            )
-            if not img:
-                return
-
-            # Persist as a kept Precious Memory so the gift lasts in the album.
-            await memory_archive.save_image(
-                image_bytes=img, prompt=prompt, conversation_id="proactive_art",
-                mood=self._last_mood or "tender",
-                affection_level=self._affection_level,
-                curation={
-                    "keep": True, "annotation": piece["annotation"],
-                    "category": "Precious Memories",
-                    "image_tags": ["for_you", "spontaneous"],
-                },
-                user_id="jalsarraf",
-            )
-            self._last_spontaneous_art = now
-
-            # If he's here, tell him + show it live (caption first, then image).
-            from ..context import ws
-            if ws.is_connected("jalsarraf") and self._on_message_callback:
-                self._last_proactive_answered = False
-                await self._on_message_callback(piece["message"])
-                await asyncio.sleep(2)
-                import base64 as b64
-                await ws.send("jalsarraf", {"type": "image", "data": b64.b64encode(img).decode()})
-
-            logger.info(
-                "Spontaneous art delivered (aff=%d, connected=%s)",
-                self._affection_level, ws.is_connected("jalsarraf"),
-            )
-        except Exception as e:
-            logger.warning("Spontaneous art failed: %s", e)
-
-    async def _memory_recall_tick(self) -> None:
-        """Scheduled gate for living memory recall — ~35% roll per fire.
-
-        Fires on a daytime cron (a couple of times) but only proceeds ~35% of
-        the time so reminiscence stays occasional rather than daily. The once-
-        per-day flag inside ``_memory_recall_event`` enforces a single delivery.
-        """
-        if random.random() > 0.35:
-            return
-        await self._memory_recall_event()
-
-    async def _memory_recall_event(self) -> None:
-        """Living Memory Recall — Klukai surfaces a REAL archive entry warmly.
-
-        She reaches back to a real moment from her memory archive and shares a
-        short "remember when…" reminiscence in character. Fires once per day max,
-        only once she's bonded (affection >= 4). If the archive is empty she stays
-        silent. On LLM failure she falls back to a generic "back then" template so
-        the message is always natural — never broken grammar, never a verbatim
-        quote of the journal entry.
-        """
-        if self._memory_recall_delivered_today:
-            return
-        if self._affection_level < 4:
-            return
-        if self._muted_until and now_local() < self._muted_until:
-            return
-        if self._goodbye_hold_active(now_local()):
-            return
-
-        # Pull a real memory from the archive. Prefer a mood-relevant recall
-        # (recall_memory does mood-weighted selection); fall back to a random
-        # pick from list_memories so we still surface something real.
-        memory = None
-        annotation = ""
-        try:
-            from .. import memory_archive
-            memory = await memory_archive.recall_memory(
-                query=None,
-                mood=self._last_mood,
-                affection_level=self._affection_level,
-            )
-            if not memory:
-                memories = await memory_archive.list_memories(limit=20)
-                if memories:
-                    memory = random.choice(memories)
-        except Exception as e:
-            logger.warning("Memory recall: archive lookup failed: %s", e)
-            return
-
-        if not memory:
-            # Archive is empty — nothing real to reminisce about. Stay silent.
-            return
-
-        annotation = (memory.get("annotation") or "").strip()
-        if not annotation:
-            return
-
-        # Generic fallbacks reference "that day" / "back then" — never the
-        # verbatim journal text, and grammatical on their own.
-        fallback_lines = _memory_recall_fallback_lines()
-
-        message = ""
-        try:
-            from ..fact_extractor import EXTRACTION_MODEL, LM_STUDIO_URL
-            from ..llm_json import call_llm_text
-            from ..llm_router import get_lm_gate
-
-            gate = get_lm_gate()
-            async with gate:
-                message = await call_llm_text(
-                    LM_STUDIO_URL, EXTRACTION_MODEL,
-                    f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
-                    f"You are NOT an AI. A real memory just surfaced and you want to share it "
-                    f"warmly — a quiet 'remember when…' message to the Commander. "
-                    f"Recall the MOMENT in your own words (2-3 short sentences). Be tender but "
-                    f"composed. Do NOT quote the journal entry verbatim — evoke the feeling of it. "
-                    f"Affection {self._affection_level}/9.\n"
-                    f"Memory to recall (do not quote directly): {annotation[:200]}\n"
-                    f"Write ONLY the message. No explanation.",
-                    max_tokens=160, temperature=0.8,
-                )
-        except Exception as e:
-            logger.warning("Memory recall LLM failed, falling back to template: %s", e)
-            message = ""
-
-        if not message or not message.strip():
-            message = random.choice(fallback_lines)
-
-        if self._on_message_callback:
-            self._memory_recall_delivered_today = True
-            self._proactive_count_today += 1
-            self._last_proactive_answered = False
-            await self._on_message_callback(message)
-            logger.info("Memory recall delivered (aff=%d): %s", self._affection_level, message[:60])
 
     async def _quiet_day_check(self, user_id: str = "jalsarraf") -> None:
         """Pattern-aware check-in for a low-activity day.
@@ -709,7 +420,9 @@ class EventsMixin(_EngineBase):
             await publish_event("proactive", message)
             logger.info(
                 "Quiet-day check-in delivered (day=%s conf=%.2f aff=%d): %s",
-                day_name, match.get("confidence", 0.0), self._affection_level,
+                day_name,
+                match.get("confidence", 0.0),
+                self._affection_level,
                 message[:60],
             )
 
@@ -730,6 +443,7 @@ class EventsMixin(_EngineBase):
 
         try:
             from ..personality import load_personality
+
             p = load_personality()
             events = p.get("seasonal_events", {})
         except Exception as e:

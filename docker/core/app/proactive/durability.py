@@ -66,11 +66,22 @@ CATCH_UP_WINDOWS: dict[str, timedelta] = {
 #   deferred_sweep       runs every minute anyway; replaying it is pointless.
 #   command_decision     a rolled, unpredictable ask; it rolls again tomorrow.
 #   portrait_backfill    idle-only by design; the next quiet slot picks it up.
-NEVER_CATCH_UP = frozenset({
-    "daily_reset", "random_event", "mission_random_event", "idle_check",
-    "dream_event", "memory_recall", "spontaneous_art", "romance_window",
-    "mission_report", "deferred_sweep", "command_decision", "portrait_backfill",
-})
+NEVER_CATCH_UP = frozenset(
+    {
+        "daily_reset",
+        "random_event",
+        "mission_random_event",
+        "idle_check",
+        "dream_event",
+        "memory_recall",
+        "spontaneous_art",
+        "romance_window",
+        "mission_report",
+        "deferred_sweep",
+        "command_decision",
+        "portrait_backfill",
+    }
+)
 
 # Guard against a pathological trigger walking forever.
 _MAX_TRIGGER_STEPS = 2000
@@ -99,9 +110,9 @@ async def load_last_fired() -> dict[str, datetime]:
         from ..db import get_conn
 
         async with get_conn() as conn:
-            rows = await (await conn.execute(
-                "SELECT job_id, last_fired FROM companion_job_runs"
-            )).fetchall()
+            rows = await (
+                await conn.execute("SELECT job_id, last_fired FROM companion_job_runs")
+            ).fetchall()
         out: dict[str, datetime] = {}
         for job_id, last_fired in rows:
             if last_fired is None:
@@ -204,7 +215,8 @@ async def run_catch_up(
                 continue
             logger.info(
                 "Scheduler catch-up: replaying %s (was due %s)",
-                job_id, due.isoformat(),
+                job_id,
+                due.isoformat(),
             )
             try:
                 await fn()

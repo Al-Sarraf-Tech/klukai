@@ -9,8 +9,9 @@ import {
 
 test("the mood list matches the backend's VALID_MOODS exactly", () => {
   const src = readFileSync(new URL("../../../docker/core/app/fact_extractor.py", import.meta.url), "utf8");
-  const block = src.slice(src.indexOf("VALID_MOODS = frozenset({"), src.indexOf("})", src.indexOf("VALID_MOODS")));
-  const backend = new Set([...block.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
+  const block = src.match(/VALID_MOODS\s*=\s*frozenset\(\s*\{([\s\S]*?)\}\s*\)/);
+  assert.ok(block, "backend VALID_MOODS literal must be found");
+  const backend = new Set([...block[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
   assert.deepEqual(new Set(MOODS), backend);
 });
 

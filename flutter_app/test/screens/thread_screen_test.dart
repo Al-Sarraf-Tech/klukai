@@ -13,7 +13,7 @@ import 'package:companion_app/services/thread_service.dart';
 
 class _FakeThreadService extends ThreadService {
   _FakeThreadService(this.views, {this.markReadFails = false})
-      : super(serverUrl: 'http://127.0.0.1:1');
+    : super(serverUrl: 'http://127.0.0.1:1');
 
   final List<Object> views; // ThreadView, or an exception to throw
   final bool markReadFails;
@@ -37,26 +37,40 @@ class _FakeThreadService extends ThreadService {
 final _open = ThreadView(
   sealed: false,
   entries: [
-    const ThreadEntry(stamp: '0200 hours, March 2065', text: 'I will write for both of us.'),
+    const ThreadEntry(
+      stamp: '0200 hours, March 2065',
+      text: 'I will write for both of us.',
+    ),
     ThreadEntry(
       stamp: '0200 hours, April 2065',
       text: 'Status report.',
       readAt: DateTime(2026, 9, 1),
     ),
-    const ThreadEntry(stamp: '0200 hours, June 2067', text: 'I really bought it.'),
+    const ThreadEntry(
+      stamp: '0200 hours, June 2067',
+      text: 'I really bought it.',
+    ),
   ],
   heldBack: 3,
-  reply: const ThreadReply(stamp: 'November 2074, Yellow Zone', text: "I'm here."),
+  reply: const ThreadReply(
+    stamp: 'November 2074, Yellow Zone',
+    text: "I'm here.",
+  ),
 );
 
-Future<_FakeThreadService> _pump(WidgetTester tester, _FakeThreadService fake) async {
-  await tester.pumpWidget(MaterialApp(
-    home: ThreadScreen(
-      serverUrl: 'http://127.0.0.1:1',
-      threadService: fake,
-      markReadDelay: const Duration(milliseconds: 10),
+Future<_FakeThreadService> _pump(
+  WidgetTester tester,
+  _FakeThreadService fake,
+) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      home: ThreadScreen(
+        serverUrl: 'http://127.0.0.1:1',
+        threadService: fake,
+        markReadDelay: const Duration(milliseconds: 10),
+      ),
     ),
-  ));
+  );
   await tester.pump();
   return fake;
 }
@@ -75,13 +89,17 @@ void main() {
     expect(fake.markReadCalls, isEmpty);
   });
 
-  testWidgets('opening the thread delivers the read receipts, ten years late',
-      (tester) async {
+  testWidgets('opening the thread delivers the read receipts, ten years late', (
+    tester,
+  ) async {
     final fake = await _pump(tester, _FakeThreadService([_open]));
     expect(find.text('I will write for both of us.'), findsOneWidget);
     expect(find.text('Delivered'), findsNWidgets(2));
     expect(find.text('Read · Sep 1, 2026'), findsOneWidget);
-    expect(find.text("3 more messages she isn't ready to show you."), findsOneWidget);
+    expect(
+      find.text("3 more messages she isn't ready to show you."),
+      findsOneWidget,
+    );
     expect(find.text("I'm here."), findsOneWidget);
 
     await tester.pump(const Duration(milliseconds: 20));
@@ -101,7 +119,10 @@ void main() {
   });
 
   testWidgets('a down channel offers a retry', (tester) async {
-    await _pump(tester, _FakeThreadService([ThreadServiceException(500), _open]));
+    await _pump(
+      tester,
+      _FakeThreadService([ThreadServiceException(500), _open]),
+    );
     await tester.pump();
     expect(find.text('The channel is down. Try again.'), findsOneWidget);
     await tester.tap(find.text('Retry'));

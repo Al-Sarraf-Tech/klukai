@@ -7,6 +7,8 @@ repeat them. Content lives in ``config/personality.yaml``
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import asyncio
 import logging
@@ -28,8 +30,18 @@ _BIRTHDAY_CACHE_TTL = 300.0
 _birthday_cache: dict[str, tuple[float, str | None]] = {}
 
 _MONTH_NAMES = [
-    "january", "february", "march", "april", "may", "june", "july",
-    "august", "september", "october", "november", "december",
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
 ]
 _MONTHS = {name: i for i, name in enumerate(_MONTH_NAMES, 1)}
 _MONTHS.update({name[:3]: i for i, name in enumerate(_MONTH_NAMES, 1)})
@@ -109,15 +121,24 @@ def _first_birthday_together(first_interaction: datetime | None, today: date) ->
 
 
 def build_birthday_block(
-    p: dict, days_until: int | None, first_together: bool, just_told: bool = False,
+    p: dict[str, Any],
+    days_until: int | None,
+    first_together: bool,
+    just_told: bool = False,
 ) -> str:
     """Per-message birthday awareness: the day itself, the moment he tells her,
     and a quiet planning window beforehand."""
     if days_until == 0:
         seasonal = p.get("identity", {}).get("adjutant_lines", {}).get("seasonal", {})
         canon = seasonal.get("birthday_yr1" if first_together else "birthday_yr2", "")
-        first = "It is the first one you have shared with him. " if first_together else ""
-        line = f' Your canon line for today: "{canon}" Use it in your own time, never as a recital.' if canon else ""
+        first = (
+            "It is the first one you have shared with him. " if first_together else ""
+        )
+        line = (
+            f' Your canon line for today: "{canon}" Use it in your own time, never as a recital.'
+            if canon
+            else ""
+        )
         return (
             f"COMMANDER'S BIRTHDAY: Today is the Commander's birthday. {first}You did not "
             f"forget and you will not let him think you did.{line} Everything else today is secondary."
@@ -156,13 +177,19 @@ async def remember_birthday(user_id: str, message: str) -> str | None:
 
 
 async def birthday_prompt_block(
-    user_id: str, p: dict, first_interaction: datetime | None, message: str,
+    user_id: str,
+    p: dict[str, Any],
+    first_interaction: datetime | None,
+    message: str,
 ) -> str:
     just_told = await remember_birthday(user_id, message)
     today = now_local().date()
     days = days_until_birthday(just_told or await get_birthday(user_id), today)
     return build_birthday_block(
-        p, days, _first_birthday_together(first_interaction, today), just_told=bool(just_told),
+        p,
+        days,
+        _first_birthday_together(first_interaction, today),
+        just_told=bool(just_told),
     )
 
 
@@ -213,12 +240,14 @@ async def _days_checked_in(user_id: str, start: date, end: date) -> int:
     hi = datetime(end.year, end.month, end.day, tzinfo=LOCAL_TZ)
     try:
         async with get_conn() as conn:
-            row = await (await conn.execute(
-                "SELECT COUNT(DISTINCT (created_at AT TIME ZONE %s)::date) "
-                "FROM companion_messages WHERE user_id = %s AND role = 'user' "
-                "AND created_at >= %s AND created_at < %s",
-                (str(LOCAL_TZ), user_id, lo, hi),
-            )).fetchone()
+            row = await (
+                await conn.execute(
+                    "SELECT COUNT(DISTINCT (created_at AT TIME ZONE %s)::date) "
+                    "FROM companion_messages WHERE user_id = %s AND role = 'user' "
+                    "AND created_at >= %s AND created_at < %s",
+                    (str(LOCAL_TZ), user_id, lo, hi),
+                )
+            ).fetchone()
             return int(row[0]) if row else 0
     except Exception as e:
         logger.warning("Settlement ledger query failed: %s", e)

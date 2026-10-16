@@ -44,6 +44,7 @@ class TestCheckIpBanned:
     @pytest.mark.asyncio
     async def test_not_banned_with_few_attempts(self):
         from app.auth import check_ip_banned
+
         conn = _FakeConn(fetchone_result=(2,))  # 2 failed, below threshold
         with patch("app.auth.get_conn", return_value=conn):
             assert await check_ip_banned("1.2.3.4") is False
@@ -51,6 +52,7 @@ class TestCheckIpBanned:
     @pytest.mark.asyncio
     async def test_banned_at_threshold(self):
         from app.auth import check_ip_banned, IP_BAN_THRESHOLD
+
         conn = _FakeConn(fetchone_result=(IP_BAN_THRESHOLD,))
         with patch("app.auth.get_conn", return_value=conn):
             assert await check_ip_banned("1.2.3.4") is True
@@ -58,6 +60,7 @@ class TestCheckIpBanned:
     @pytest.mark.asyncio
     async def test_banned_above_threshold(self):
         from app.auth import check_ip_banned, IP_BAN_THRESHOLD
+
         conn = _FakeConn(fetchone_result=(IP_BAN_THRESHOLD + 5,))
         with patch("app.auth.get_conn", return_value=conn):
             assert await check_ip_banned("1.2.3.4") is True
@@ -84,6 +87,7 @@ class TestGetUserFromToken:
     @pytest.mark.asyncio
     async def test_valid_token_returns_user_id(self):
         from app.auth import get_user_from_token
+
         future = datetime.now(timezone.utc) + timedelta(hours=1)
         conn = _FakeConn(fetchone_result=("alice", future))
         with patch("app.auth.get_conn_autocommit", return_value=conn):
@@ -93,6 +97,7 @@ class TestGetUserFromToken:
     @pytest.mark.asyncio
     async def test_expired_token_returns_none(self):
         from app.auth import get_user_from_token
+
         past = datetime.now(timezone.utc) - timedelta(hours=1)
         conn = _FakeConn(fetchone_result=("alice", past))
         with patch("app.auth.get_conn_autocommit", return_value=conn):
@@ -102,6 +107,7 @@ class TestGetUserFromToken:
     @pytest.mark.asyncio
     async def test_missing_token_returns_none(self):
         from app.auth import get_user_from_token
+
         conn = _FakeConn(fetchone_result=None)
         with patch("app.auth.get_conn_autocommit", return_value=conn):
             user = await get_user_from_token("bogus-token")
@@ -111,7 +117,10 @@ class TestGetUserFromToken:
     async def test_naive_expires_coerced_to_utc(self):
         """Expires timestamps without tz should still compare correctly (assumed UTC)."""
         from app.auth import get_user_from_token
-        future_naive = datetime.utcnow() + timedelta(hours=1)  # deliberately naive
+
+        future_naive = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
+            hours=1
+        )  # deliberately naive
         conn = _FakeConn(fetchone_result=("bob", future_naive))
         with patch("app.auth.get_conn_autocommit", return_value=conn):
             user = await get_user_from_token("tok")
@@ -138,6 +147,7 @@ class TestCleanupExpiredSessions:
     @pytest.mark.asyncio
     async def test_returns_deleted_count(self):
         from app.auth import cleanup_expired_sessions
+
         conn = MagicMock()
         conn.__aenter__ = AsyncMock(return_value=conn)
         conn.__aexit__ = AsyncMock(return_value=None)
@@ -170,6 +180,7 @@ class TestCreateAffectionForUser:
     @pytest.mark.asyncio
     async def test_delegates_to_ensure_row(self):
         from app import auth
+
         captured: list[str] = []
 
         async def fake_ensure(uid):

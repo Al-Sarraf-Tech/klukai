@@ -54,6 +54,34 @@ def test_duplicate_wheel_distribution_fails_closed(tmp_path):
         packaging.wheel_lock(tmp_path, tmp_path / "lock", tmp_path / "manifest")
 
 
+def test_vendored_distribution_metadata_does_not_replace_wheel_identity(tmp_path):
+    packaging = load_packaging()
+    path = tmp_path / "setuptools-84.0.0-py3-none-any.whl"
+    wheel(path, "setuptools", "84.0.0")
+    # Setuptools legitimately bundles vendor metadata inside its package.
+    with ZipFile(path, "a") as archive:
+        archive.writestr(
+            "setuptools/_vendor/packaging-26.3.dist-info/METADATA",
+            "Name: packaging\nVersion: 26.3\n",
+        )
+    lock, manifest = tmp_path / "lock", tmp_path / "manifest"
+    packaging.wheel_lock(tmp_path, lock, manifest)
+    assert lock.read_text().startswith("setuptools==84.0.0 --hash=sha256:")
+    assert [item["name"] for item in json.loads(manifest.read_text())["wheels"]] == [
+        "setuptools"
+    ]
+
+
+def test_multiple_top_level_wheel_identities_are_still_rejected(tmp_path):
+    packaging = load_packaging()
+    path = tmp_path / "ambiguous.whl"
+    wheel(path, "one", "1")
+    with ZipFile(path, "a") as archive:
+        archive.writestr("two-2.dist-info/METADATA", "Name: two\nVersion: 2\n")
+    with pytest.raises(ValueError, match="invalid wheel metadata"):
+        packaging.wheel_lock(tmp_path, tmp_path / "lock", tmp_path / "manifest")
+
+
 def test_ldd_parser_retains_direct_loader_and_mapped_dependencies():
     packaging = load_packaging()
     parsed = packaging.parse_ldd(

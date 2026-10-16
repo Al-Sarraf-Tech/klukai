@@ -5,6 +5,8 @@ POST /api/thread/read  record that the Commander read entries (insert-only)
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import logging
 import random
@@ -39,17 +41,19 @@ async def _read_receipts(user_id: str) -> dict[str, str]:
 
     try:
         async with get_conn() as conn:
-            rows = await (await conn.execute(
-                "SELECT entry_stamp, read_at FROM companion_thread_reads WHERE user_id = %s",
-                (user_id,),
-            )).fetchall()
+            rows = await (
+                await conn.execute(
+                    "SELECT entry_stamp, read_at FROM companion_thread_reads WHERE user_id = %s",
+                    (user_id,),
+                )
+            ).fetchall()
         return {stamp: read_at.isoformat() for stamp, read_at in rows}
     except Exception as e:
         logger.warning("Thread read receipts unavailable: %s", e)
         return {}
 
 
-def _sealed_line(cfg: dict, level: int) -> str:
+def _sealed_line(cfg: dict[str, Any], level: int) -> str:
     lines = {int(k): v for k, v in cfg.get("sealed_lines", {}).items()}
     reached = [k for k in lines if k <= level]
     return lines[max(reached)] if reached else ""
@@ -57,7 +61,7 @@ def _sealed_line(cfg: dict, level: int) -> str:
 
 def register_thread_routes(app: FastAPI) -> None:
     @app.get("/api/thread")
-    async def api_thread(request: Request):
+    async def api_thread(request: Request) -> Any:
         """The ten-year thread, sealed until she is ready to show it."""
         user_id = await _get_user_id(request)
         if not user_id:
@@ -67,22 +71,34 @@ def register_thread_routes(app: FastAPI) -> None:
         cfg = p.get("ten_year_thread", {})
         entries = unlocked_entries(p, level)
         if level < cfg.get("share_from_level", 6) or not entries:
-            return {"status": "sealed", "message": _sealed_line(cfg, level),
-                    "entries": [], "held_back": 0, "reply": None}
+            return {
+                "status": "sealed",
+                "message": _sealed_line(cfg, level),
+                "entries": [],
+                "held_back": 0,
+                "reply": None,
+            }
         receipts = await _read_receipts(user_id)
         return {
             "status": "open",
             "message": None,
             "entries": [
-                {"stamp": e["stamp"], "text": e["text"], "read_at": receipts.get(e["stamp"])}
+                {
+                    "stamp": e["stamp"],
+                    "text": e["text"],
+                    "read_at": receipts.get(e["stamp"]),
+                }
                 for e in entries
             ],
             "held_back": len(cfg.get("entries", [])) - len(entries),
-            "reply": {"stamp": cfg.get("last_reply_stamp", ""), "text": cfg.get("last_reply", "I'm here.")},
+            "reply": {
+                "stamp": cfg.get("last_reply_stamp", ""),
+                "text": cfg.get("last_reply", "I'm here."),
+            },
         }
 
     @app.post("/api/thread/read")
-    async def api_thread_read(req: ThreadReadRequest, request: Request):
+    async def api_thread_read(req: ThreadReadRequest, request: Request) -> Any:
         """Mark entries read. Only entries she is currently showing count; the
         first read ever is a relationship first, and she notices."""
         from .db import get_conn_autocommit
@@ -106,9 +122,15 @@ def register_thread_routes(app: FastAPI) -> None:
                     newly_read += cur.rowcount or 0
         except Exception as e:
             logger.warning("Thread read receipt write failed: %s", e)
-            return ec.err(ec.DB_UNAVAILABLE, "Could not record read receipts", status_code=503)
+            return ec.err(
+                ec.DB_UNAVAILABLE, "Could not record read receipts", status_code=503
+            )
 
         reactions = p.get("ten_year_thread", {}).get("first_read_reactions", [])
-        if newly_read and reactions and await context.proactive.record_first(user_id, "first_thread_read"):
+        if (
+            newly_read
+            and reactions
+            and await context.proactive.record_first(user_id, "first_thread_read")
+        ):
             await context.ws.send_proactive(user_id, random.choice(reactions))
         return {"newly_read": newly_read}

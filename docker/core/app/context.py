@@ -30,6 +30,7 @@ def session_id(user_id: str) -> str:
     """Return a per-user session key for Redis."""
     return f"session:{user_id}"
 
+
 # Tracks per-user most recently generated memory_id for save/discard overrides
 _last_memory_ids: dict[str, str] = {}
 
@@ -40,6 +41,7 @@ def get_last_memory_id(user_id: str) -> str | None:
 
 def set_last_memory_id(user_id: str, memory_id: str) -> None:
     _last_memory_ids[user_id] = memory_id
+
 
 # Compaction threshold — compact oldest turns when session exceeds this
 COMPACT_THRESHOLD = 8

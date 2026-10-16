@@ -33,9 +33,13 @@ from app.models import SessionState
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _session(turn_count: int = 1, *, mood: str = "composed",
-             context_summary: str | None = None,
-             turns: list | None = None) -> SessionState:
+def _session(
+    turn_count: int = 1,
+    *,
+    mood: str = "composed",
+    context_summary: str | None = None,
+    turns: list | None = None,
+) -> SessionState:
     if turns is None:
         turns = [{"role": "user", "content": f"Turn {i}"} for i in range(turn_count)]
     return SessionState(
@@ -51,11 +55,22 @@ def _aff_state(level: int = 5):
     return SimpleNamespace(level=level, score=level * 100)
 
 
-def _aff_change(*, new_score=510, new_level=5, new_level_name="Trusted",
-                delta=10, level_changed=False, level_direction=""):
+def _aff_change(
+    *,
+    new_score=510,
+    new_level=5,
+    new_level_name="Trusted",
+    delta=10,
+    level_changed=False,
+    level_direction="",
+):
     return SimpleNamespace(
-        new_score=new_score, new_level=new_level, new_level_name=new_level_name,
-        delta=delta, level_changed=level_changed, level_direction=level_direction,
+        new_score=new_score,
+        new_level=new_level,
+        new_level_name=new_level_name,
+        delta=delta,
+        level_changed=level_changed,
+        level_direction=level_direction,
     )
 
 
@@ -81,7 +96,9 @@ def bg_mocks(monkeypatch):
     Returns a namespace of the mocks so each test asserts the calls it cares
     about. asyncio.sleep is neutralized so the real 1s/2s/3s delays vanish.
     """
-    monkeypatch.setattr("app.fact_extractor.extract_promises", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        "app.fact_extractor.extract_promises", AsyncMock(return_value={})
+    )
     monkeypatch.setattr("app.op_brief.on_turn", AsyncMock())
     sleep = AsyncMock()
     monkeypatch.setattr(bg.asyncio, "sleep", sleep)
@@ -144,11 +161,18 @@ def bg_mocks(monkeypatch):
     # session_id is imported as a name; keep it deterministic
     monkeypatch.setattr(bg, "session_id", lambda uid: f"session:{uid}")
     # load_personality returns affection config used in level-transition branch
-    monkeypatch.setattr(bg, "load_personality", MagicMock(return_value={"affection": {}}))
+    monkeypatch.setattr(
+        bg, "load_personality", MagicMock(return_value={"affection": {}})
+    )
 
     return SimpleNamespace(
-        sleep=sleep, affection=affection, memory=memory, ws=ws,
-        proactive=proactive, context=context_mod, memory_archive=memory_archive,
+        sleep=sleep,
+        affection=affection,
+        memory=memory,
+        ws=ws,
+        proactive=proactive,
+        context=context_mod,
+        memory_archive=memory_archive,
         extract_facts=extract_facts,
     )
 
@@ -198,7 +222,9 @@ class TestExtractionPersistence:
             assert call.args[0] != "commander_blank"
 
     async def test_stores_gift_and_records_first_gift(self, bg_mocks):
-        bg_mocks.extract_facts.return_value = _base_extract_result(gift_item="teddy bear")
+        bg_mocks.extract_facts.return_value = _base_extract_result(
+            gift_item="teddy bear"
+        )
         await bg.background_extraction("m", "r", _session(1), user_id="u1")
         bg_mocks.proactive.store_gift.assert_awaited_once_with("u1", "teddy bear")
         bg_mocks.proactive.record_first.assert_any_await("u1", "first_gift")
@@ -219,7 +245,9 @@ class TestExtractionMood:
         await bg.background_extraction("m", "r", session, user_id="u1")
         assert bg_mocks.memory.get_session.return_value.mood == "affectionate"
         bg_mocks.ws.send_mood.assert_awaited_once_with("u1", "affectionate")
-        bg_mocks.proactive.set_last_mood.assert_called_once_with("affectionate", user_id="u1")
+        bg_mocks.proactive.set_last_mood.assert_called_once_with(
+            "affectionate", user_id="u1"
+        )
 
     async def test_mood_contagion_nudges_toward_sentiment(self, bg_mocks):
         """When interaction maps to a sentiment, nudge_mood adjusts the mood."""
@@ -227,10 +255,13 @@ class TestExtractionMood:
             mood="composed", interaction={"type": "affection", "intensity": 8}
         )
         session = _session(1)
-        with patch("app.character_behaviors.interaction_to_sentiment",
-                   return_value="positive"), \
-             patch("app.character_behaviors.nudge_mood",
-                   return_value="warm") as nudge:
+        with (
+            patch(
+                "app.character_behaviors.interaction_to_sentiment",
+                return_value="positive",
+            ),
+            patch("app.character_behaviors.nudge_mood", return_value="warm") as nudge,
+        ):
             await bg.background_extraction("m", "r", session, user_id="u1")
         nudge.assert_called_once_with("composed", "positive")
         assert bg_mocks.memory.get_session.return_value.mood == "warm"
@@ -262,14 +293,17 @@ class TestExtractionMilestones:
         phys = MagicMock()
         phys.on_long_conversation = AsyncMock()
         with patch("app.context.physical", phys):
-            await bg.background_extraction("m", "r", _session(turn_count=10), user_id="u1")
+            await bg.background_extraction(
+                "m", "r", _session(turn_count=10), user_id="u1"
+            )
         phys.on_long_conversation.assert_awaited_once_with("u1")
 
     async def test_battle_ready_mood_auto_starts_mission(self, bg_mocks):
         bg_mocks.extract_facts.return_value = _base_extract_result(mood="battle_ready")
         bg_mocks.proactive.mission_active = False
-        session = _session(turns=[{"role": "user", "content": "Engage hostiles now"}],
-                           turn_count=3)
+        session = _session(
+            turns=[{"role": "user", "content": "Engage hostiles now"}], turn_count=3
+        )
         await bg.background_extraction("m", "r", session, user_id="u1")
         bg_mocks.proactive.start_mission.assert_called_once()
         assert bg_mocks.memory.get_session.return_value.mission_interval == 30
@@ -281,8 +315,8 @@ class TestExtractionMilestones:
         MagicMock the old mood survived the call, so the check that compared
         against _last_mood AFTER set_last_mood passed here while being dead
         code in production (it only ever saw the new mood)."""
-        proactive.set_last_mood.side_effect = (
-            lambda mood, **kw: proactive._moods.__setitem__(kw["user_id"], mood)
+        proactive.set_last_mood.side_effect = lambda mood, **kw: (
+            proactive._moods.__setitem__(kw["user_id"], mood)
         )
 
     async def test_vigilant_starts_mission_only_after_battle_ready(self, bg_mocks):
@@ -293,7 +327,9 @@ class TestExtractionMilestones:
         bg_mocks.proactive.mission_active = False
         await bg.background_extraction("m", "r", _session(2), user_id="u1")
         bg_mocks.proactive.start_mission.assert_called_once()
-        assert bg_mocks.proactive._moods["u1"] == "vigilant"  # the new mood was still recorded
+        assert (
+            bg_mocks.proactive._moods["u1"] == "vigilant"
+        )  # the new mood was still recorded
 
     async def test_vigilant_no_mission_when_prev_mood_calm(self, bg_mocks):
         bg_mocks.extract_facts.return_value = _base_extract_result(mood="vigilant")
@@ -330,7 +366,9 @@ class TestExtractionAffection:
 
     async def test_string_interaction_coerced_to_dict(self, bg_mocks):
         """interaction given as a bare string is normalized to type+intensity."""
-        bg_mocks.extract_facts.return_value = _base_extract_result(interaction="teasing")
+        bg_mocks.extract_facts.return_value = _base_extract_result(
+            interaction="teasing"
+        )
         await bg.background_extraction("m", "r", _session(1), user_id="u1")
         args = bg_mocks.affection.apply_classification.await_args.args
         assert args[0] == "teasing" and args[1] == 5
@@ -351,17 +389,24 @@ class TestExtractionAffection:
             new_level=4, level_changed=True, level_direction="up"
         )
         bg_mocks.memory.record_milestone.return_value = False  # already seen
-        with patch.object(bg, "load_personality", return_value={
-            "affection": {
-                "milestone_scenes": {4: ["scene line"]},
-                "level_up_messages": {4: "Welcome back to this place."},
-            }
-        }):
+        with patch.object(
+            bg,
+            "load_personality",
+            return_value={
+                "affection": {
+                    "milestone_scenes": {4: ["scene line"]},
+                    "level_up_messages": {4: "Welcome back to this place."},
+                }
+            },
+        ):
             await bg.background_extraction("m", "r", _session(1), user_id="u1")
         bg_mocks.ws.send_proactive.assert_any_await("u1", "Welcome back to this place.")
         # The full milestone scene line is NOT delivered on a repeat.
-        scene = [c for c in bg_mocks.ws.send_proactive.await_args_list
-                 if c.args[1] == "scene line"]
+        scene = [
+            c
+            for c in bg_mocks.ws.send_proactive.await_args_list
+            if c.args[1] == "scene line"
+        ]
         assert not scene
 
     async def test_heartbeat_spike_on_high_intensity_passionate(self, bg_mocks):
@@ -369,7 +414,9 @@ class TestExtractionAffection:
             mood="passionate", interaction={"type": "affection", "intensity": 8}
         )
         await bg.background_extraction("m", "r", _session(1), user_id="u1")
-        bg_mocks.ws.send_heartbeat_spike.assert_awaited_once_with("u1", 165, "passionate")
+        bg_mocks.ws.send_heartbeat_spike.assert_awaited_once_with(
+            "u1", 165, "passionate"
+        )
 
     async def test_no_heartbeat_spike_below_intensity_threshold(self, bg_mocks):
         bg_mocks.extract_facts.return_value = _base_extract_result(
@@ -388,13 +435,22 @@ class TestExtractionAffection:
         # First time at this milestone → record_milestone returns True
         bg_mocks.memory.record_milestone.return_value = True
         bg_mocks.load_personality = None
-        with patch.object(bg, "load_personality", return_value={
-            "affection": {"milestone_scenes": {4: ["You've earned this.", "I see you."]}}
-        }):
+        with patch.object(
+            bg,
+            "load_personality",
+            return_value={
+                "affection": {
+                    "milestone_scenes": {4: ["You've earned this.", "I see you."]}
+                }
+            },
+        ):
             await bg.background_extraction("m", "r", _session(1), user_id="u1")
         # Two scene lines proactively sent.
-        scene_calls = [c for c in bg_mocks.ws.send_proactive.await_args_list
-                       if c.args[1] in ("You've earned this.", "I see you.")]
+        scene_calls = [
+            c
+            for c in bg_mocks.ws.send_proactive.await_args_list
+            if c.args[1] in ("You've earned this.", "I see you.")
+        ]
         assert len(scene_calls) == 2
 
     async def test_level_down_message_delivered(self, bg_mocks):
@@ -404,9 +460,13 @@ class TestExtractionAffection:
         bg_mocks.affection.apply_classification.return_value = _aff_change(
             new_level=2, level_changed=True, level_direction="down"
         )
-        with patch.object(bg, "load_personality", return_value={
-            "affection": {"level_down_messages": {2: "...I expected better."}}
-        }):
+        with patch.object(
+            bg,
+            "load_personality",
+            return_value={
+                "affection": {"level_down_messages": {2: "...I expected better."}}
+            },
+        ):
             await bg.background_extraction("m", "r", _session(1), user_id="u1")
         bg_mocks.ws.send_proactive.assert_any_await("u1", "...I expected better.")
 
@@ -426,21 +486,31 @@ class TestExtractionStorage:
         assert kwargs["user_id"] == "u1"
 
     async def test_low_importance_when_not_memorable(self, bg_mocks):
-        bg_mocks.extract_facts.return_value = _base_extract_result(should_remember=False)
+        bg_mocks.extract_facts.return_value = _base_extract_result(
+            should_remember=False
+        )
         await bg.background_extraction("m", "r", _session(1), user_id="u1")
         assert bg_mocks.memory.store_exchange.await_args.kwargs["importance"] == 0.4
 
     async def test_episode_created_every_10_turns(self, bg_mocks):
-        with patch.object(bg, "create_episode_summary", new=AsyncMock(
-                return_value="They discussed the upcoming op.")):
-            await bg.background_extraction("m", "r", _session(turn_count=10), user_id="u1")
+        with patch.object(
+            bg,
+            "create_episode_summary",
+            new=AsyncMock(return_value="They discussed the upcoming op."),
+        ):
+            await bg.background_extraction(
+                "m", "r", _session(turn_count=10), user_id="u1"
+            )
         bg_mocks.memory.store_episode.assert_awaited_once()
         assert bg_mocks.memory.store_episode.await_args.kwargs["summary"]
 
     async def test_no_episode_off_10_turn_boundary(self, bg_mocks):
-        with patch.object(bg, "create_episode_summary", new=AsyncMock(
-                return_value="summary")) as ces:
-            await bg.background_extraction("m", "r", _session(turn_count=7), user_id="u1")
+        with patch.object(
+            bg, "create_episode_summary", new=AsyncMock(return_value="summary")
+        ) as ces:
+            await bg.background_extraction(
+                "m", "r", _session(turn_count=7), user_id="u1"
+            )
         ces.assert_not_awaited()
         bg_mocks.memory.store_episode.assert_not_awaited()
 
@@ -454,8 +524,12 @@ class TestExtractionCurationAndResilience:
             memory_curation={"category": "battle", "annotation": "A fierce moment."}
         )
         await bg.background_extraction(
-            "m", "r", _session(1), user_id="u1",
-            image_generated=True, memory_id="mem-xyz",
+            "m",
+            "r",
+            _session(1),
+            user_id="u1",
+            image_generated=True,
+            memory_id="mem-xyz",
         )
         bg_mocks.memory_archive.update_curation.assert_awaited_once_with(
             "mem-xyz", {"category": "battle", "annotation": "A fierce moment."}, 5
@@ -467,7 +541,11 @@ class TestExtractionCurationAndResilience:
         )
         bg_mocks.context.get_last_memory_id.return_value = "ctx-mem"
         await bg.background_extraction(
-            "m", "r", _session(1), user_id="u1", image_generated=True,
+            "m",
+            "r",
+            _session(1),
+            user_id="u1",
+            image_generated=True,
         )
         bg_mocks.context.get_last_memory_id.assert_called_once_with("u1")
         assert bg_mocks.memory_archive.update_curation.await_args.args[0] == "ctx-mem"
@@ -489,9 +567,12 @@ class TestExtractionCurationAndResilience:
     async def test_exchange_storage_failure_isolated(self, bg_mocks):
         """A crash storing the exchange must not stop episode creation downstream."""
         bg_mocks.memory.store_exchange.side_effect = RuntimeError("pg down")
-        with patch.object(bg, "create_episode_summary",
-                          new=AsyncMock(return_value="An episode.")):
-            await bg.background_extraction("m", "r", _session(turn_count=10), user_id="u1")
+        with patch.object(
+            bg, "create_episode_summary", new=AsyncMock(return_value="An episode.")
+        ):
+            await bg.background_extraction(
+                "m", "r", _session(turn_count=10), user_id="u1"
+            )
         # Exchange failed, but the 10-turn episode still got stored.
         bg_mocks.memory.store_episode.assert_awaited_once()
 
@@ -510,8 +591,10 @@ class TestCompaction:
     async def test_at_threshold_compacts_and_keeps_recent_raw(self, bg_mocks):
         session = _session(turn_count=10)
         bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
-        with patch("app.fact_extractor.compact_turns",
-                   new=AsyncMock(return_value="Condensed summary.")):
+        with patch(
+            "app.fact_extractor.compact_turns",
+            new=AsyncMock(return_value="Condensed summary."),
+        ):
             await bg.background_compaction(session, user_id="u1")
         # Keeps exactly COMPACT_KEEP_RAW recent turns + the new summary.
         stored = bg_mocks.memory.get_session.return_value
@@ -560,7 +643,9 @@ class TestCompaction:
         appended = {"role": "user", "content": "sent while compacting"}
 
         async def _slow_compact(old_turns):
-            bg_mocks.memory.get_session.return_value.turns.append(appended)  # a new turn lands mid-flight
+            bg_mocks.memory.get_session.return_value.turns.append(
+                appended
+            )  # a new turn lands mid-flight
             return "Condensed summary."
 
         with patch("app.fact_extractor.compact_turns", new=_slow_compact):
@@ -598,21 +683,35 @@ class TestCompaction:
 
 
 class TestImageGen:
-    async def test_agy_uses_explicit_scene_and_outfit_without_history_or_gpu(self, bg_mocks, monkeypatch):
+    async def test_agy_uses_explicit_scene_and_outfit_without_history_or_gpu(
+        self, bg_mocks, monkeypatch
+    ):
         from app import agy_image_provider
 
         monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
         monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
         generate = AsyncMock(return_value={"status": "completed", "image": b"PNG"})
-        with patch.object(agy_image_provider, "submit_agy_image", new=generate), \
-             patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)), \
-             patch("app.account_images.insert_request", new=AsyncMock()), \
-             patch("app.account_images.update_request", new=AsyncMock()), \
-             patch("app.image_gen.check_comfyui_ready", new=AsyncMock(side_effect=AssertionError("GPU readiness"))), \
-             patch.object(bg, "generate_image", new=AsyncMock(side_effect=AssertionError("local rendering"))), \
-             patch("app.her_day.render_costume", new=AsyncMock(return_value="blazing_star")):
+        with (
+            patch.object(agy_image_provider, "submit_agy_image", new=generate),
+            patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)),
+            patch("app.account_images.insert_request", new=AsyncMock()),
+            patch("app.account_images.update_request", new=AsyncMock()),
+            patch(
+                "app.image_gen.check_comfyui_ready",
+                new=AsyncMock(side_effect=AssertionError("GPU readiness")),
+            ),
+            patch.object(
+                bg,
+                "generate_image",
+                new=AsyncMock(side_effect=AssertionError("local rendering")),
+            ),
+            patch(
+                "app.her_day.render_costume", new=AsyncMock(return_value="blazing_star")
+            ),
+        ):
             await bg.background_image_gen(
-                "Draw Klukai carrying a violet teapot", user_id="u1",
+                "Draw Klukai carrying a violet teapot",
+                user_id="u1",
                 chat_context="private medical-history: us together on a beach with mechty",
                 squad_members=["mechty"],
             )
@@ -620,86 +719,146 @@ class TestImageGen:
         assert "carrying a violet teapot" in prompt
         assert "silver hair" in prompt and "green eyes" in prompt
         assert "black leotard" in prompt and "purple jacket" in prompt
-        assert "medical-history" not in prompt and "beach" not in prompt and "g11" not in prompt
+        assert (
+            "medical-history" not in prompt
+            and "beach" not in prompt
+            and "g11" not in prompt
+        )
         assert generate.await_args.kwargs["user_id"] == "u1"
         assert generate.await_args.kwargs["width"] == 832
         assert generate.await_args.kwargs["height"] == 1216
         assert generate.await_args.kwargs["include_commander"] is False
         assert generate.await_args.kwargs["request_id"]
-        assert any(call.args[1].get("type") == "image" for call in bg_mocks.ws.send.await_args_list)
+        assert any(
+            call.args[1].get("type") == "image"
+            for call in bg_mocks.ws.send.await_args_list
+        )
         assert bg_mocks.memory_archive.save_image.await_args.kwargs["user_id"] == "u1"
 
-    async def test_agy_explicit_couple_request_selects_commander_and_landscape(self, bg_mocks, monkeypatch):
+    async def test_agy_explicit_couple_request_selects_commander_and_landscape(
+        self, bg_mocks, monkeypatch
+    ):
         from app import agy_image_provider
 
         monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
         monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
         generate = AsyncMock(return_value={"status": "completed", "image": b"PNG"})
-        with patch.object(agy_image_provider, "submit_agy_image", new=generate), \
-             patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)), \
-             patch("app.account_images.insert_request", new=AsyncMock()), \
-             patch("app.account_images.update_request", new=AsyncMock()), \
-             patch("app.her_day.render_costume", new=AsyncMock(return_value=None)), \
-             patch("app.image_gen.check_comfyui_ready", new=AsyncMock(side_effect=AssertionError("GPU readiness"))):
-            await bg.background_image_gen("Draw us together in a landscape", user_id="u1")
+        with (
+            patch.object(agy_image_provider, "submit_agy_image", new=generate),
+            patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)),
+            patch("app.account_images.insert_request", new=AsyncMock()),
+            patch("app.account_images.update_request", new=AsyncMock()),
+            patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),
+            patch(
+                "app.image_gen.check_comfyui_ready",
+                new=AsyncMock(side_effect=AssertionError("GPU readiness")),
+            ),
+        ):
+            await bg.background_image_gen(
+                "Draw us together in a landscape", user_id="u1"
+            )
         assert generate.await_args.kwargs["user_id"] == "u1"
         assert generate.await_args.kwargs["width"] == 1216
         assert generate.await_args.kwargs["height"] == 832
         assert generate.await_args.kwargs["include_commander"] is True
         assert generate.await_args.kwargs["request_id"]
 
-    async def test_agy_failure_is_visible_and_never_falls_back(self, bg_mocks, monkeypatch):
+    async def test_agy_failure_is_visible_and_never_falls_back(
+        self, bg_mocks, monkeypatch
+    ):
         from app import agy_image_provider
 
         monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
         monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
         generate = AsyncMock(return_value={"status": "failed", "image": None})
         local = AsyncMock(side_effect=AssertionError("local fallback"))
-        with patch.object(agy_image_provider, "submit_agy_image", new=generate), \
-             patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)), \
-             patch("app.account_images.insert_request", new=AsyncMock()), \
-             patch("app.account_images.update_request", new=AsyncMock()), \
-             patch.object(bg, "generate_image", new=local), \
-             patch("app.her_day.render_costume", new=AsyncMock(return_value=None)), \
-             patch("app.image_gen.check_comfyui_ready", new=AsyncMock(side_effect=AssertionError("GPU readiness"))):
+        with (
+            patch.object(agy_image_provider, "submit_agy_image", new=generate),
+            patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)),
+            patch("app.account_images.insert_request", new=AsyncMock()),
+            patch("app.account_images.update_request", new=AsyncMock()),
+            patch.object(bg, "generate_image", new=local),
+            patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),
+            patch(
+                "app.image_gen.check_comfyui_ready",
+                new=AsyncMock(side_effect=AssertionError("GPU readiness")),
+            ),
+        ):
             await bg.background_image_gen("Draw Klukai", user_id="u1")
         generate.assert_awaited_once()
         local.assert_not_awaited()
         bg_mocks.ws.send_proactive.assert_awaited_once()
-        assert {"type": "thinking", "content": ""} in [call.args[1] for call in bg_mocks.ws.send.await_args_list]
+        assert {"type": "thinking", "content": ""} in [
+            call.args[1] for call in bg_mocks.ws.send.await_args_list
+        ]
         bg_mocks.memory_archive.save_image.assert_not_awaited()
 
-    async def test_nonallowlisted_user_retains_existing_local_renderer(self, bg_mocks, monkeypatch):
+    async def test_nonallowlisted_user_retains_existing_local_renderer(
+        self, bg_mocks, monkeypatch
+    ):
         from app import agy_image_provider
 
         monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
         monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "owner")
         local = AsyncMock(return_value=b"LOCAL")
-        with patch.object(agy_image_provider, "generate_agy_image", new=AsyncMock(side_effect=AssertionError("unauthorized agy"))), \
-             patch.object(bg, "generate_image", new=local), \
-             patch("app.her_day.render_costume", new=AsyncMock(return_value=None)), \
-             patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)):
-            await bg.background_image_gen("Draw Klukai", chat_context="sunset", user_id="u1")
+        with (
+            patch.object(
+                agy_image_provider,
+                "generate_agy_image",
+                new=AsyncMock(side_effect=AssertionError("unauthorized agy")),
+            ),
+            patch.object(bg, "generate_image", new=local),
+            patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+        ):
+            await bg.background_image_gen(
+                "Draw Klukai", chat_context="sunset", user_id="u1"
+            )
         assert "sunset" in local.await_args.args[0]
-        assert any(call.args[1].get("type") == "image" for call in bg_mocks.ws.send.await_args_list)
+        assert any(
+            call.args[1].get("type") == "image"
+            for call in bg_mocks.ws.send.await_args_list
+        )
 
-    async def test_cloud_image_avoids_gpu_readiness_and_prompt_logging(self, bg_mocks, monkeypatch, caplog):
+    async def test_cloud_image_avoids_gpu_readiness_and_prompt_logging(
+        self, bg_mocks, monkeypatch, caplog
+    ):
         caplog.set_level(logging.INFO, logger="app.background")
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "openai")
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(side_effect=AssertionError("Dominus readiness"))), \
-             patch("app.image_provider.cloud_images_ready", return_value=True), \
-             patch.object(bg, "_enhance_image_prompt", return_value="private-scene-description"), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=b"PNG")):
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready",
+                new=AsyncMock(side_effect=AssertionError("Dominus readiness")),
+            ),
+            patch("app.image_provider.cloud_images_ready", return_value=True),
+            patch.object(
+                bg, "_enhance_image_prompt", return_value="private-scene-description"
+            ),
+            patch.object(bg, "generate_image", new=AsyncMock(return_value=b"PNG")),
+        ):
             await bg.background_image_gen("private-scene-description", user_id="u1")
         frames = [call.args[1] for call in bg_mocks.ws.send.await_args_list]
         assert any(frame.get("type") == "image" for frame in frames)
         assert "private-scene-description" not in caplog.text
 
-    async def test_unconfigured_cloud_image_stops_before_composition(self, bg_mocks, monkeypatch):
+    async def test_unconfigured_cloud_image_stops_before_composition(
+        self, bg_mocks, monkeypatch
+    ):
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "openai")
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(side_effect=AssertionError("Dominus readiness"))), \
-             patch("app.image_provider.cloud_images_ready", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", side_effect=AssertionError("unready composition")):
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready",
+                new=AsyncMock(side_effect=AssertionError("Dominus readiness")),
+            ),
+            patch("app.image_provider.cloud_images_ready", return_value=False),
+            patch.object(
+                bg,
+                "_enhance_image_prompt",
+                side_effect=AssertionError("unready composition"),
+            ),
+        ):
             await bg.background_image_gen("draw", user_id="u1")
         frames = [call.args[1] for call in bg_mocks.ws.send.await_args_list]
         assert {"type": "thinking", "content": ""} in frames
@@ -707,103 +866,154 @@ class TestImageGen:
         bg_mocks.ws.send_proactive.assert_awaited_once()
 
     async def test_sleeps_then_checks_comfyui_and_sends_thinking(self, bg_mocks):
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="full prompt"), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)):
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+            patch.object(bg, "is_couple_scene", return_value=False),
+            patch.object(bg, "is_landscape", return_value=False),
+            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
+            patch.object(bg, "build_prompt", return_value="full prompt"),
+            patch.object(bg, "generate_image", new=AsyncMock(return_value=None)),
+        ):
             await bg.background_image_gen("draw a sunset", user_id="u1")
         assert bg_mocks.sleep.await_args_list[0].args == (1,)
         bg_mocks.ws.send_thinking.assert_awaited()
 
     async def test_portrait_dimensions_for_non_landscape(self, bg_mocks):
         gen = AsyncMock(return_value=None)
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="p"), \
-             patch.object(bg, "generate_image", new=gen):
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+            patch.object(bg, "is_couple_scene", return_value=False),
+            patch.object(bg, "is_landscape", return_value=False),
+            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
+            patch.object(bg, "build_prompt", return_value="p"),
+            patch.object(bg, "generate_image", new=gen),
+        ):
             await bg.background_image_gen("portrait of klukai", user_id="u1")
-        assert gen.await_args.kwargs["width"] == 832 and gen.await_args.kwargs["height"] == 1216
+        assert (
+            gen.await_args.kwargs["width"] == 832
+            and gen.await_args.kwargs["height"] == 1216
+        )
 
     async def test_landscape_dimensions_swapped(self, bg_mocks):
         gen = AsyncMock(return_value=None)
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=True), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="p"), \
-             patch.object(bg, "generate_image", new=gen):
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+            patch.object(bg, "is_couple_scene", return_value=False),
+            patch.object(bg, "is_landscape", return_value=True),
+            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
+            patch.object(bg, "build_prompt", return_value="p"),
+            patch.object(bg, "generate_image", new=gen),
+        ):
             await bg.background_image_gen("wide vista", user_id="u1")
-        assert gen.await_args.kwargs["width"] == 1216 and gen.await_args.kwargs["height"] == 832
+        assert (
+            gen.await_args.kwargs["width"] == 1216
+            and gen.await_args.kwargs["height"] == 832
+        )
 
     async def test_successful_image_archived_and_sent(self, bg_mocks):
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="full prompt"), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=b"PNGDATA")):
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+            patch.object(bg, "is_couple_scene", return_value=False),
+            patch.object(bg, "is_landscape", return_value=False),
+            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
+            patch.object(bg, "build_prompt", return_value="full prompt"),
+            patch.object(bg, "generate_image", new=AsyncMock(return_value=b"PNGDATA")),
+        ):
             await bg.background_image_gen("draw klukai", user_id="u1")
         bg_mocks.memory_archive.save_image.assert_awaited_once()
         bg_mocks.context.set_last_memory_id.assert_called_once_with("u1", "mem-123")
         # The image frame carries the archived memory_id.
-        img_frames = [c for c in bg_mocks.ws.send.await_args_list
-                      if c.args[1].get("type") == "image"]
+        img_frames = [
+            c
+            for c in bg_mocks.ws.send.await_args_list
+            if c.args[1].get("type") == "image"
+        ]
         assert img_frames and img_frames[0].args[1]["memory_id"] == "mem-123"
         bg_mocks.proactive.record_first.assert_any_await("u1", "first_image")
 
     async def test_failed_generation_sends_graceful_message(self, bg_mocks):
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="p"), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)):
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+            patch.object(bg, "is_couple_scene", return_value=False),
+            patch.object(bg, "is_landscape", return_value=False),
+            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
+            patch.object(bg, "build_prompt", return_value="p"),
+            patch.object(bg, "generate_image", new=AsyncMock(return_value=None)),
+        ):
             await bg.background_image_gen("draw", user_id="u1")
         # User is never ghosted: a proactive failure message + a thinking-clear.
         bg_mocks.ws.send_proactive.assert_awaited()
-        clear_frames = [c for c in bg_mocks.ws.send.await_args_list
-                        if c.args[1] == {"type": "thinking", "content": ""}]
+        clear_frames = [
+            c
+            for c in bg_mocks.ws.send.await_args_list
+            if c.args[1] == {"type": "thinking", "content": ""}
+        ]
         assert clear_frames
 
     async def test_comfyui_warmup_message_when_not_ready(self, bg_mocks):
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=False)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="p"), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)):
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=False)
+            ),
+            patch.object(bg, "is_couple_scene", return_value=False),
+            patch.object(bg, "is_landscape", return_value=False),
+            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
+            patch.object(bg, "build_prompt", return_value="p"),
+            patch.object(bg, "generate_image", new=AsyncMock(return_value=None)),
+        ):
             await bg.background_image_gen("draw", user_id="u1")
-        warmups = [c for c in bg_mocks.ws.send_thinking.await_args_list
-                   if "Warming up" in c.args[1]]
+        warmups = [
+            c
+            for c in bg_mocks.ws.send_thinking.await_args_list
+            if "Warming up" in c.args[1]
+        ]
         assert warmups
 
     async def test_exception_path_clears_thinking_bubble(self, bg_mocks):
         """If generate_image raises, the except block still surfaces a message."""
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", return_value="p"), \
-             patch.object(bg, "generate_image",
-                          new=AsyncMock(side_effect=RuntimeError("GPU OOM"))):
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+            patch.object(bg, "is_couple_scene", return_value=False),
+            patch.object(bg, "is_landscape", return_value=False),
+            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
+            patch.object(bg, "build_prompt", return_value="p"),
+            patch.object(
+                bg, "generate_image", new=AsyncMock(side_effect=RuntimeError("GPU OOM"))
+            ),
+        ):
             await bg.background_image_gen("draw", user_id="u1")  # must not raise
-        clear_frames = [c for c in bg_mocks.ws.send.await_args_list
-                        if c.args[1] == {"type": "thinking", "content": ""}]
+        clear_frames = [
+            c
+            for c in bg_mocks.ws.send.await_args_list
+            if c.args[1] == {"type": "thinking", "content": ""}
+        ]
         assert clear_frames
 
     async def test_affection_level_threaded_into_prompt(self, bg_mocks):
         bg_mocks.affection.get_state.return_value = _aff_state(8)
         build = MagicMock(return_value="prompt")
-        with patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=True), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", new=build), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)):
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+            patch.object(bg, "is_couple_scene", return_value=True),
+            patch.object(bg, "is_landscape", return_value=False),
+            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
+            patch.object(bg, "build_prompt", new=build),
+            patch.object(bg, "generate_image", new=AsyncMock(return_value=None)),
+        ):
             await bg.background_image_gen("us together", user_id="u1")
         assert build.call_args.kwargs["affection_level"] == 8
         assert build.call_args.kwargs["couple"] is True
@@ -812,13 +1022,17 @@ class TestImageGen:
         bg_mocks.affection.get_state.return_value = _aff_state(8)
         render = AsyncMock(return_value="astral_luminous")
         build = MagicMock(return_value="prompt")
-        with patch("app.her_day.render_costume", new=render), \
-             patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", new=build), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)) as gen:
+        with (
+            patch("app.her_day.render_costume", new=render),
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+            patch.object(bg, "is_couple_scene", return_value=False),
+            patch.object(bg, "is_landscape", return_value=False),
+            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
+            patch.object(bg, "build_prompt", new=build),
+            patch.object(bg, "generate_image", new=AsyncMock(return_value=None)) as gen,
+        ):
             await bg.background_image_gen("draw yourself", user_id="u1")
         assert build.call_args.kwargs["costume"] == "astral_luminous"
         render.assert_awaited_once_with("u1", 8)
@@ -828,13 +1042,17 @@ class TestImageGen:
         # Gating lives in her_day.render_costume; None means keyword fallback.
         bg_mocks.affection.get_state.return_value = _aff_state(2)
         build = MagicMock(return_value="prompt")
-        with patch("app.her_day.render_costume", new=AsyncMock(return_value=None)), \
-             patch("app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)), \
-             patch.object(bg, "is_couple_scene", return_value=False), \
-             patch.object(bg, "is_landscape", return_value=False), \
-             patch.object(bg, "_enhance_image_prompt", return_value="tags"), \
-             patch.object(bg, "build_prompt", new=build), \
-             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)) as gen:
+        with (
+            patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+            patch.object(bg, "is_couple_scene", return_value=False),
+            patch.object(bg, "is_landscape", return_value=False),
+            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
+            patch.object(bg, "build_prompt", new=build),
+            patch.object(bg, "generate_image", new=AsyncMock(return_value=None)) as gen,
+        ):
             await bg.background_image_gen("draw yourself", user_id="u1")
         assert build.call_args.kwargs["costume"] is None
         assert gen.await_args.kwargs["sfw"] is True  # level 2: backstop on
@@ -852,8 +1070,10 @@ class TestRecall:
 
     async def test_match_sends_card_and_image(self, bg_mocks):
         bg_mocks.memory_archive.recall_memory.return_value = {
-            "id": "m9", "category": "candid",
-            "annotation": "A quiet evening.", "created_at": None,
+            "id": "m9",
+            "category": "candid",
+            "annotation": "A quiet evening.",
+            "created_at": None,
         }
         bg_mocks.memory_archive.get_image_bytes.return_value = b"IMG"
         await bg.background_recall("our evening", _session(1), "u1")
@@ -861,16 +1081,22 @@ class TestRecall:
         card_call = bg_mocks.ws.send_proactive.await_args.args[1]
         assert "[candid]" in card_call and "A quiet evening." in card_call
         # Image frame sent with the recalled memory id.
-        img_frames = [c for c in bg_mocks.ws.send.await_args_list
-                      if c.args[1].get("type") == "image"]
+        img_frames = [
+            c
+            for c in bg_mocks.ws.send.await_args_list
+            if c.args[1].get("type") == "image"
+        ]
         assert img_frames and img_frames[0].args[1]["memory_id"] == "m9"
 
     async def test_recall_time_ref_yesterday(self, bg_mocks):
         from datetime import datetime, timezone, timedelta
+
         yesterday = datetime.now(timezone.utc) - timedelta(days=1, hours=2)
         bg_mocks.memory_archive.recall_memory.return_value = {
-            "id": "m1", "category": "milestone",
-            "annotation": "First mission.", "created_at": yesterday.isoformat(),
+            "id": "m1",
+            "category": "milestone",
+            "annotation": "First mission.",
+            "created_at": yesterday.isoformat(),
         }
         bg_mocks.memory_archive.get_image_bytes.return_value = None
         await bg.background_recall("first op", _session(1), "u1")
@@ -878,10 +1104,13 @@ class TestRecall:
 
     async def test_recall_time_ref_earlier_today(self, bg_mocks):
         from datetime import datetime, timezone
+
         today = datetime.now(timezone.utc)
         bg_mocks.memory_archive.recall_memory.return_value = {
-            "id": "m3", "category": "candid",
-            "annotation": "A laugh.", "created_at": today,
+            "id": "m3",
+            "category": "candid",
+            "annotation": "A laugh.",
+            "created_at": today,
         }
         bg_mocks.memory_archive.get_image_bytes.return_value = None
         await bg.background_recall("x", _session(1), "u1")
@@ -889,10 +1118,13 @@ class TestRecall:
 
     async def test_recall_time_ref_n_days_ago(self, bg_mocks):
         from datetime import datetime, timezone, timedelta
+
         three_days = datetime.now(timezone.utc) - timedelta(days=3, hours=1)
         bg_mocks.memory_archive.recall_memory.return_value = {
-            "id": "m4", "category": "candid",
-            "annotation": "An outing.", "created_at": three_days,
+            "id": "m4",
+            "category": "candid",
+            "annotation": "An outing.",
+            "created_at": three_days,
         }
         bg_mocks.memory_archive.get_image_bytes.return_value = None
         await bg.background_recall("x", _session(1), "u1")
@@ -900,10 +1132,13 @@ class TestRecall:
 
     async def test_recall_time_ref_old_date_formatted(self, bg_mocks):
         from datetime import datetime, timezone, timedelta
+
         old = datetime.now(timezone.utc) - timedelta(days=40)
         bg_mocks.memory_archive.recall_memory.return_value = {
-            "id": "m5", "category": "milestone",
-            "annotation": "Long ago.", "created_at": old,
+            "id": "m5",
+            "category": "milestone",
+            "annotation": "Long ago.",
+            "created_at": old,
         }
         bg_mocks.memory_archive.get_image_bytes.return_value = None
         await bg.background_recall("x", _session(1), "u1")
@@ -913,11 +1148,16 @@ class TestRecall:
 
     async def test_recall_naive_datetime_gets_utc_tzinfo(self, bg_mocks):
         """A naive created_at string is coerced to UTC before the delta math."""
-        from datetime import datetime, timedelta
-        naive = (datetime.utcnow() - timedelta(days=1, hours=3)).isoformat()
+        from datetime import datetime, timedelta, timezone
+
+        naive = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1, hours=3)
+        ).isoformat()
         bg_mocks.memory_archive.recall_memory.return_value = {
-            "id": "m6", "category": "candid",
-            "annotation": "A memory.", "created_at": naive,
+            "id": "m6",
+            "category": "candid",
+            "annotation": "A memory.",
+            "created_at": naive,
         }
         bg_mocks.memory_archive.get_image_bytes.return_value = None
         await bg.background_recall("x", _session(1), "u1")  # must not raise on tz math
@@ -925,11 +1165,16 @@ class TestRecall:
 
     async def test_recall_default_annotation_when_blank(self, bg_mocks):
         bg_mocks.memory_archive.recall_memory.return_value = {
-            "id": "m2", "category": "", "annotation": "", "created_at": None,
+            "id": "m2",
+            "category": "",
+            "annotation": "",
+            "created_at": None,
         }
         bg_mocks.memory_archive.get_image_bytes.return_value = None
         await bg.background_recall("x", _session(1), "u1")
-        assert "A moment I've preserved." in bg_mocks.ws.send_proactive.await_args.args[1]
+        assert (
+            "A moment I've preserved." in bg_mocks.ws.send_proactive.await_args.args[1]
+        )
 
     async def test_recall_exception_swallowed(self, bg_mocks):
         bg_mocks.memory_archive.recall_memory.side_effect = RuntimeError("qdrant down")
@@ -952,7 +1197,10 @@ class TestMemoryKeep:
 
     async def test_discard_marks_discarded(self, bg_mocks):
         await bg.do_memory_keep("mem-7", kept=False)
-        assert bg_mocks.memory_archive.update_kept.await_args.kwargs["kept_by"] == "discarded"
+        assert (
+            bg_mocks.memory_archive.update_kept.await_args.kwargs["kept_by"]
+            == "discarded"
+        )
 
     async def test_keep_exception_swallowed(self, bg_mocks):
         bg_mocks.memory_archive.update_kept.side_effect = RuntimeError("db error")
@@ -961,7 +1209,6 @@ class TestMemoryKeep:
         bg_mocks.memory_archive.update_kept.assert_awaited_once_with(
             "mem-7", kept=True, kept_by="commander"
         )
-
 
 
 # ── background_extraction: malformed LLM fact payloads ───────────────────────
@@ -1026,42 +1273,66 @@ class TestOperationBriefWiring:
 
     @pytest.mark.asyncio
     async def test_events_from_the_promise_call_are_planned(self, bg_mocks):
-        events = [{"what": "job interview", "when_hint": "thursday at 9am",
-                   "sensitivity": "normal", "confidence": 0.9}]
+        events = [
+            {
+                "what": "job interview",
+                "when_hint": "thursday at 9am",
+                "sensitivity": "normal",
+                "confidence": 0.9,
+            }
+        ]
         promise = {"action": "prep the slides", "confidence": 0.9}
         extract = AsyncMock(return_value={"promises": [promise], "events": events})
-        with patch("app.fact_extractor.extract_promises", extract), \
-             patch("app.promises.store_promise", AsyncMock()) as store_promise, \
-             patch("app.op_brief.on_turn", AsyncMock(return_value=1)) as on_turn:
-            await bg.background_extraction("interview thursday at 9", "r",
-                                           _session(1), user_id="u1")
+        with (
+            patch("app.fact_extractor.extract_promises", extract),
+            patch("app.promises.store_promise", AsyncMock()) as store_promise,
+            patch("app.op_brief.on_turn", AsyncMock(return_value=1)) as on_turn,
+        ):
+            await bg.background_extraction(
+                "interview thursday at 9", "r", _session(1), user_id="u1"
+            )
         extract.assert_awaited_once()
-        store_promise.assert_awaited_once_with(promise, user_id="u1")  # promises unchanged
-        on_turn.assert_awaited_once_with("interview thursday at 9", events,
-                                         user_id="u1", affection_level=5)
+        store_promise.assert_awaited_once_with(
+            promise, user_id="u1"
+        )  # promises unchanged
+        on_turn.assert_awaited_once_with(
+            "interview thursday at 9", events, user_id="u1", affection_level=5
+        )
 
     @pytest.mark.asyncio
     async def test_extractor_failure_still_runs_cancellation(self, bg_mocks):
         """LLM down: no events, but "my interview got cancelled" must still be heard."""
-        with patch("app.fact_extractor.extract_promises",
-                   AsyncMock(side_effect=RuntimeError("LLM down"))), \
-             patch("app.op_brief.on_turn", AsyncMock(return_value=0)) as on_turn:
-            await bg.background_extraction("my interview got cancelled", "r",
-                                           _session(1), user_id="u1")
-        on_turn.assert_awaited_once_with("my interview got cancelled", [],
-                                         user_id="u1", affection_level=5)
+        with (
+            patch(
+                "app.fact_extractor.extract_promises",
+                AsyncMock(side_effect=RuntimeError("LLM down")),
+            ),
+            patch("app.op_brief.on_turn", AsyncMock(return_value=0)) as on_turn,
+        ):
+            await bg.background_extraction(
+                "my interview got cancelled", "r", _session(1), user_id="u1"
+            )
+        on_turn.assert_awaited_once_with(
+            "my interview got cancelled", [], user_id="u1", affection_level=5
+        )
         bg_mocks.memory.store_exchange.assert_awaited_once()  # rest of extraction intact
 
     @pytest.mark.asyncio
     async def test_missing_events_key_is_an_empty_list(self, bg_mocks):
-        with patch("app.fact_extractor.extract_promises",
-                   AsyncMock(return_value={"promises": []})), \
-             patch("app.op_brief.on_turn", AsyncMock(return_value=0)) as on_turn:
+        with (
+            patch(
+                "app.fact_extractor.extract_promises",
+                AsyncMock(return_value={"promises": []}),
+            ),
+            patch("app.op_brief.on_turn", AsyncMock(return_value=0)) as on_turn,
+        ):
             await bg.background_extraction("m", "r", _session(1), user_id="u1")
         assert on_turn.await_args.args[1] == []
 
 
-async def test_delayed_extraction_cannot_restore_mood_after_new_turn(bg_mocks, monkeypatch):
+async def test_delayed_extraction_cannot_restore_mood_after_new_turn(
+    bg_mocks, monkeypatch
+):
     """Run the actual extractor orchestration across a newer admission epoch."""
     import asyncio
     from app.memory import MemoryManager
@@ -1072,26 +1343,30 @@ async def test_delayed_extraction_cannot_restore_mood_after_new_turn(bg_mocks, m
     manager._redis = StoredRedis()
     manager.store_exchange = AsyncMock()
     snapshot = _session(2)
-    await manager.save_session(session_id('u1'), snapshot)
-    monkeypatch.setattr(bg, 'memory', manager)
+    await manager.save_session(session_id("u1"), snapshot)
+    monkeypatch.setattr(bg, "memory", manager)
     entered, release = asyncio.Event(), asyncio.Event()
+
     async def extract(*args, **kwargs):
         entered.set()
         await release.wait()
-        return _base_extract_result(mood='battle_ready')
-    monkeypatch.setattr(bg, 'extract_facts', extract)
-    task = asyncio.create_task(bg.background_extraction('mission', 'reply', snapshot, 'u1'))
+        return _base_extract_result(mood="battle_ready")
+
+    monkeypatch.setattr(bg, "extract_facts", extract)
+    task = asyncio.create_task(
+        bg.background_extraction("mission", "reply", snapshot, "u1")
+    )
     await entered.wait()
-    async with manager.session_owner(session_id('u1')):
-        latest = await manager.get_session(session_id('u1'))
+    async with manager.session_owner(session_id("u1")):
+        latest = await manager.get_session(session_id("u1"))
         latest.revision += 1
-        latest.mood = 'happy'
+        latest.mood = "happy"
         latest.mission_description = None
-        await manager.save_session(session_id('u1'), latest)
+        await manager.save_session(session_id("u1"), latest)
     release.set()
     await task
-    current = await manager.get_session(session_id('u1'))
-    assert current.mood == 'happy'
+    current = await manager.get_session(session_id("u1"))
+    assert current.mood == "happy"
     assert current.mission_description is None
     bg_mocks.ws.send_mood.assert_not_awaited()
     bg_mocks.proactive.start_mission.assert_not_called()

@@ -30,4 +30,5 @@ abstract class BrowserPlatform {
 /// How the Companion page opens: a separate window on desktop, the same
 /// window inside an iOS home-screen app (which has no windows to open, and
 /// where companion.html carries its own way back).
-bool companionOpensInNewWindow(BrowserPlatform b) => !(b.isIos && b.isStandalone);
+bool companionOpensInNewWindow(BrowserPlatform b) =>
+    !(b.isIos && b.isStandalone);

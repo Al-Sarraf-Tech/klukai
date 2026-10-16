@@ -14,6 +14,8 @@ unavailable: she answers him at once, whatever the roster says.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 import hashlib
 import random
@@ -55,14 +57,24 @@ def _rng(seed: str, day: date) -> random.Random:
     return random.Random(int(digest[:16], 16))
 
 
-def build_day(cfg: dict, day: date, level: int, *, weather: dict | None = None, seed: str = "") -> list[Block]:
+def build_day(
+    cfg: dict[str, Any],
+    day: date,
+    level: int,
+    *,
+    weather: dict[str, Any] | None = None,
+    seed: str = "",
+) -> list[Block]:
     """The day's roster, one block per slot, in her day's order (0500 → 0500)."""
     rng = _rng(seed, day)
     condition = (weather or {}).get("condition")
-    activities = [a for a in cfg.get("activities") or () if isinstance(a, dict) and a.get("id")]
+    activities = [
+        a for a in cfg.get("activities") or () if isinstance(a, dict) and a.get("id")
+    ]
     blocks: list[Block] = []
+
     # Ordered from her day's start (0500): the insomnia hours close the day.
-    def _order(kv: tuple) -> int:
+    def _order(kv: tuple[Any, ...]) -> int:
         try:
             return (int(kv[1][0]) - wardrobe.DAY_START_HOUR) % 24
         except (TypeError, ValueError, IndexError):
@@ -75,7 +87,8 @@ def build_day(cfg: dict, day: date, level: int, *, weather: dict | None = None, 
         except (TypeError, ValueError, IndexError):
             continue  # a malformed slot never takes the roster (or a route) down
         candidates = [
-            a for a in activities
+            a
+            for a in activities
             if slot in (a.get("slots") or ())
             and level >= int(a.get("min_level", 0))
             and (not a.get("weekdays") or day.weekday() in a["weekdays"])
@@ -83,13 +96,22 @@ def build_day(cfg: dict, day: date, level: int, *, weather: dict | None = None, 
         ]
         if not candidates:
             continue
-        a = rng.choices(candidates, weights=[float(c.get("weight", 1.0)) for c in candidates])[0]
-        blocks.append(Block(
-            slot=slot, start=start, end=end, id=str(a["id"]),
-            location=str(a.get("location", "The Elmo")), activity=str(a.get("activity", "")),
-            duty=bool(a.get("duty", False)), private=bool(a.get("private", False)),
-            outfit=a.get("outfit"),
-        ))
+        a = rng.choices(
+            candidates, weights=[float(c.get("weight", 1.0)) for c in candidates]
+        )[0]
+        blocks.append(
+            Block(
+                slot=slot,
+                start=start,
+                end=end,
+                id=str(a["id"]),
+                location=str(a.get("location", "The Elmo")),
+                activity=str(a.get("activity", "")),
+                duty=bool(a.get("duty", False)),
+                private=bool(a.get("private", False)),
+                outfit=a.get("outfit"),
+            )
+        )
     return blocks
 
 
@@ -98,7 +120,10 @@ def current_block(blocks: list[Block], hour: int) -> Block | None:
 
 
 def effective_outfit(
-    row: wardrobe.HerDayRow, block: Block | None, level: int, cat: dict[str, wardrobe.Outfit],
+    row: wardrobe.HerDayRow,
+    block: Block | None,
+    level: int,
+    cat: dict[str, wardrobe.Outfit],
 ) -> tuple[str, str]:
     """(outfit_id, source): his granted request > special-day pick > block kit > her pick."""
     requested = wardrobe.canonical_id(row.requested_outfit_id, cat)
@@ -111,7 +136,13 @@ def effective_outfit(
     # Block kit for her private life shows only once he's allowed to see that
     # life (affection 3) — otherwise "Off duty" + "Hangar Coveralls" leaks it.
     visible = block is not None and (not block.private or level >= 3)
-    if not special and visible and block.outfit and wardrobe.is_unlocked(block.outfit, level, cat):
+    if (
+        not special
+        and visible
+        and block is not None
+        and block.outfit
+        and wardrobe.is_unlocked(block.outfit, level, cat)
+    ):
         return str(block.outfit), "roster"
     if base:
         return base, "auto"
@@ -132,7 +163,9 @@ class HerNow:
     override: str | None = None
 
     def outfit_line(self, level: int) -> str:
-        return wardrobe.outfit_line(self.outfit, self.outfit_reason, self.outfit_source, self.hour, level)
+        return wardrobe.outfit_line(
+            self.outfit, self.outfit_reason, self.outfit_source, self.hour, level
+        )
 
     def location_line(self) -> str:
         where = f"{self.location} — {self.activity}" if self.activity else self.location
@@ -141,7 +174,7 @@ class HerNow:
             "grease); you still answer him at once — you are never too busy for him."
         )
 
-    def status(self, level: int) -> dict:
+    def status(self, level: int) -> dict[str, Any]:
         if self.override or self.block is None:
             location, activity = self.location, self.activity
         else:
@@ -154,18 +187,20 @@ class HerNow:
             "override": self.override,
         }
 
-    def schedule(self, level: int) -> list[dict]:
+    def schedule(self, level: int) -> list[dict[str, Any]]:
         out = []
         for b in self.blocks:
             location, activity = b.label(level)
-            out.append({
-                "slot": b.slot,
-                "start": f"{b.start:02d}00",
-                "end": f"{b.end % 24:02d}00",
-                "location": location,
-                "activity": activity,
-                "current": b is self.block,
-            })
+            out.append(
+                {
+                    "slot": b.slot,
+                    "start": f"{b.start:02d}00",
+                    "end": f"{b.end % 24:02d}00",
+                    "location": location,
+                    "activity": activity,
+                    "current": b is self.block,
+                }
+            )
         return out
 
 
@@ -190,7 +225,9 @@ async def her_now(
     cat = wardrobe.catalog(p)
     row = await wardrobe.ensure_today(user_id, level, mood=mood)
     hour = now_local().hour
-    blocks = build_day(p.get("her_day") or {}, row.day, level, weather=row.weather, seed=user_id)
+    blocks = build_day(
+        p.get("her_day") or {}, row.day, level, weather=row.weather, seed=user_id
+    )
     block = current_block(blocks, hour)
     overrides = (p.get("her_day") or {}).get("overrides") or {}
 
@@ -204,16 +241,26 @@ async def her_now(
         oid, source = effective_outfit(row, block, level, cat)
         if override == "gaming":
             cfg = overrides.get("gaming") or {}
-            location, activity = str(cfg.get("location", "Rec room")), str(cfg.get("activity", ""))
+            location, activity = (
+                str(cfg.get("location", "Rec room")),
+                str(cfg.get("activity", "")),
+            )
         elif block:
             location, activity = block.location, block.activity
         else:
             location, activity = "The Elmo", ""
     outfit = wardrobe.lookup(oid, cat)
     return HerNow(
-        day=row.day, hour=hour, outfit=outfit, outfit_source=source,
-        outfit_reason=row.base_reason, location=location, activity=activity,
-        block=block, blocks=blocks, override=override,
+        day=row.day,
+        hour=hour,
+        outfit=outfit,
+        outfit_source=source,
+        outfit_reason=row.base_reason,
+        location=location,
+        activity=activity,
+        block=block,
+        blocks=blocks,
+        override=override,
     )
 
 
@@ -235,7 +282,9 @@ _DRINK = re.compile(
 )
 
 
-def tea_time_block(now: HerNow, message: str, level: int, p: dict | None = None) -> str:
+def tea_time_block(
+    now: HerNow, message: str, level: int, p: dict[str, Any] | None = None
+) -> str:
     """Per-message block when he orders a drink while she works the counter."""
     if now.override or not now.block or now.block.id != "tea_counter":
         return ""

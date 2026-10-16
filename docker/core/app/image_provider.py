@@ -19,6 +19,8 @@ import threading
 import warnings
 from pathlib import Path
 
+from .dependencies import http_stream
+
 import httpx
 from PIL import Image, UnidentifiedImageError
 
@@ -63,10 +65,12 @@ def _settings() -> tuple[str, str, str]:
 
 def _validate_dimensions(width: int, height: int) -> None:
     if (
-        type(width) is not int or type(height) is not int
+        type(width) is not int
+        or type(height) is not int
         or min(width, height) <= 0
         or max(width, height) > 3840
-        or width % 16 or height % 16
+        or width % 16
+        or height % 16
         or not 655_360 <= width * height <= 8_294_400
         or max(width, height) > 3 * min(width, height)
     ):
@@ -113,7 +117,9 @@ def _load_references() -> list[tuple[str, tuple[str, bytes, str]]]:
         path = Path(value)
         info = path.stat()
         if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size < MAX_REFERENCE_BYTES:
-            raise ImageProviderError("Reference file exceeds byte limit or is not regular")
+            raise ImageProviderError(
+                "Reference file exceeds byte limit or is not regular"
+            )
         # Bound the read even if the file changes after stat().
         with path.open("rb") as handle:
             raw = handle.read(MAX_REFERENCE_BYTES)
@@ -128,7 +134,10 @@ def _load_references() -> list[tuple[str, tuple[str, bytes, str]]]:
         finally:
             validated.close()
         normalized_total += len(normalized)
-        if len(normalized) >= MAX_REFERENCE_BYTES or normalized_total > MAX_REFERENCE_TOTAL_BYTES:
+        if (
+            len(normalized) >= MAX_REFERENCE_BYTES
+            or normalized_total > MAX_REFERENCE_TOTAL_BYTES
+        ):
             raise ImageProviderError("Normalized reference pack exceeds byte limit")
         files.append(("image[]", (f"reference-{index}.png", normalized, "image/png")))
     return files
@@ -146,7 +155,13 @@ def cloud_images_ready() -> bool:
                 return False
         _references()
         return True
-    except (ValueError, OSError, RecursionError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+    except (
+        ValueError,
+        OSError,
+        RecursionError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ):
         return False
 
 
@@ -167,11 +182,19 @@ def _plain_description(text: str) -> str:
     text = re.sub(r"\b(\d+)girls\b", r"\1 women", text)
     text = re.sub(r"\b(\d+)boys\b", r"\1 men", text)
     tags = [tag.strip() for tag in text.split(",")]
-    tags = [tag for tag in tags if tag and tag.lower() not in {"masterpiece", "best quality", "absurdres", "highres"} and not re.fullmatch(r"score \d+(?: up)?", tag, flags=re.I)]
+    tags = [
+        tag
+        for tag in tags
+        if tag
+        and tag.lower() not in {"masterpiece", "best quality", "absurdres", "highres"}
+        and not re.fullmatch(r"score \d+(?: up)?", tag, flags=re.I)
+    ]
     return "; ".join(tags)
 
 
-def cloud_prompt(prompt: str, *, sfw: bool = False, negative_extra: str | None = None) -> str:
+def cloud_prompt(
+    prompt: str, *, sfw: bool = False, negative_extra: str | None = None
+) -> str:
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 32_000:
         raise ImageProviderError("Invalid image description")
     parts = [
@@ -182,11 +205,15 @@ def cloud_prompt(prompt: str, *, sfw: bool = False, negative_extra: str | None =
         "Scene and appearance: " + _plain_description(prompt) + ".",
     ]
     if sfw:
-        parts.append("Keep every character fully clothed, with no nudity or exposed intimate anatomy.")
+        parts.append(
+            "Keep every character fully clothed, with no nudity or exposed intimate anatomy."
+        )
     if negative_extra:
         if not isinstance(negative_extra, str) or len(negative_extra) > 4000:
             raise ImageProviderError("Invalid image exclusions")
-        parts.append("Avoid these visual elements: " + _plain_description(negative_extra) + ".")
+        parts.append(
+            "Avoid these visual elements: " + _plain_description(negative_extra) + "."
+        )
     description = "\n".join(parts)
     if len(description) > 32_000:
         raise ImageProviderError("Image description exceeds API limit")
@@ -194,7 +221,11 @@ def cloud_prompt(prompt: str, *, sfw: bool = False, negative_extra: str | None =
 
 
 async def generate_cloud_image(
-    prompt: str, width: int, height: int, *, sfw: bool = False,
+    prompt: str,
+    width: int,
+    height: int,
+    *,
+    sfw: bool = False,
     negative_extra: str | None = None,
 ) -> bytes | None:
     """Make exactly one edit request; budget failures propagate to batch callers."""
@@ -204,13 +235,19 @@ async def generate_cloud_image(
         logger.info("Cloud image renderer busy; no attempt reserved")
         return None
     try:
-        return await _generate_cloud_image(prompt, width, height, sfw=sfw, negative_extra=negative_extra)
+        return await _generate_cloud_image(
+            prompt, width, height, sfw=sfw, negative_extra=negative_extra
+        )
     finally:
         _cloud_render_lock.release()
 
 
 async def _generate_cloud_image(
-    prompt: str, width: int, height: int, *, sfw: bool,
+    prompt: str,
+    width: int,
+    height: int,
+    *,
+    sfw: bool,
     negative_extra: str | None,
 ) -> bytes | None:
     try:
@@ -218,7 +255,13 @@ async def _generate_cloud_image(
         _validate_dimensions(width, height)
         description = cloud_prompt(prompt, sfw=sfw, negative_extra=negative_extra)
         references = await asyncio.to_thread(_references)
-    except (ValueError, OSError, RecursionError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+    except (
+        ValueError,
+        OSError,
+        RecursionError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as exc:
         logger.warning("Cloud image configuration rejected (%s)", type(exc).__name__)
         return None
 
@@ -228,23 +271,41 @@ async def _generate_cloud_image(
     try:
         async with asyncio.timeout(REQUEST_DEADLINE_SECONDS):
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(REQUEST_DEADLINE_SECONDS, connect=10, write=30, pool=10),
-                trust_env=False, follow_redirects=False,
+                timeout=httpx.Timeout(
+                    REQUEST_DEADLINE_SECONDS, connect=10, write=30, pool=10
+                ),
+                trust_env=False,
+                follow_redirects=False,
             ) as client:
-                async with client.stream(
-                    "POST", OPENAI_IMAGES_ENDPOINT,
+                async with http_stream(
+                    "cloud_images",
+                    client,
+                    "POST",
+                    OPENAI_IMAGES_ENDPOINT,
                     headers={"Authorization": f"Bearer {key}"},
-                    data={"model": model, "quality": quality, "size": f"{width}x{height}",
-                          "n": "1", "prompt": description, "output_format": "png"},
+                    data={
+                        "model": model,
+                        "quality": quality,
+                        "size": f"{width}x{height}",
+                        "n": "1",
+                        "prompt": description,
+                        "output_format": "png",
+                    },
                     files=references,
                 ) as response:
                     if response.status_code != 200:
-                        logger.warning("Cloud image request failed (HTTP %d, attempt %s)", response.status_code, attempt_id)
+                        logger.warning(
+                            "Cloud image request failed (HTTP %d, attempt %s)",
+                            response.status_code,
+                            attempt_id,
+                        )
                         return None
                     raw = bytearray()
                     async for chunk in response.aiter_bytes():
                         if len(raw) + len(chunk) > MAX_RESPONSE_BYTES:
-                            raise ImageProviderError("Image response exceeds byte limit")
+                            raise ImageProviderError(
+                                "Image response exceeds byte limit"
+                            )
                         raw.extend(chunk)
         payload = json.loads(raw)
         if not isinstance(payload, dict):
@@ -253,9 +314,15 @@ async def _generate_cloud_image(
             try:
                 await record_usage(attempt_id, payload["usage"])
             except Exception as exc:
-                logger.warning("Cloud image usage recording failed (%s)", type(exc).__name__)
+                logger.warning(
+                    "Cloud image usage recording failed (%s)", type(exc).__name__
+                )
         data = payload.get("data")
-        if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        if (
+            not isinstance(data, list)
+            or len(data) != 1
+            or not isinstance(data[0], dict)
+        ):
             raise ImageProviderError("Expected one generated image")
         encoded = data[0].get("b64_json")
         if not isinstance(encoded, str):
@@ -264,13 +331,28 @@ async def _generate_cloud_image(
         image = await asyncio.to_thread(_verified_image, decoded, output=True)
         try:
             if image.size != (width, height):
-                raise ImageProviderError("Generated image dimensions do not match request")
+                raise ImageProviderError(
+                    "Generated image dimensions do not match request"
+                )
             output = io.BytesIO()
             image.save(output, format="PNG")
             return output.getvalue()
         finally:
             image.close()
-    except (httpx.HTTPError, TimeoutError, ValueError, OSError, RecursionError, binascii.Error,
-            UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
-        logger.warning("Cloud image request rejected (%s, attempt %s)", type(exc).__name__, attempt_id)
+    except (
+        httpx.HTTPError,
+        TimeoutError,
+        ValueError,
+        OSError,
+        RecursionError,
+        binascii.Error,
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as exc:
+        logger.warning(
+            "Cloud image request rejected (%s, attempt %s)",
+            type(exc).__name__,
+            attempt_id,
+        )
         return None

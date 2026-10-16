@@ -66,7 +66,8 @@ class _VoiceButtonState extends State<VoiceButton>
       widget.onCancel?.call();
       return KeyEventResult.handled;
     }
-    final activate = event.logicalKey == LogicalKeyboardKey.enter ||
+    final activate =
+        event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.space;
     if (!activate) return KeyEventResult.ignored;
     if (!widget.enabled) return KeyEventResult.handled;
@@ -113,16 +114,16 @@ class _VoiceButtonState extends State<VoiceButton>
                     color: widget.isRecording
                         ? GFL2Colors.danger
                         : widget.enabled
-                            ? GFL2Colors.primary.withValues(alpha: 0.15)
-                            : GFL2Colors.border,
+                        ? GFL2Colors.primary.withValues(alpha: 0.15)
+                        : GFL2Colors.border,
                     border: Border.all(
                       color: _focused
                           ? GFL2Colors.primary
                           : widget.isRecording
-                              ? GFL2Colors.danger
-                              : widget.enabled
-                                  ? GFL2Colors.primary.withValues(alpha: 0.4)
-                                  : GFL2Colors.border,
+                          ? GFL2Colors.danger
+                          : widget.enabled
+                          ? GFL2Colors.primary.withValues(alpha: 0.4)
+                          : GFL2Colors.border,
                       width: _focused ? 2.5 : 1.5,
                     ),
                   ),
@@ -131,8 +132,8 @@ class _VoiceButtonState extends State<VoiceButton>
                     color: widget.isRecording
                         ? Colors.white
                         : widget.enabled
-                            ? GFL2Colors.primary
-                            : GFL2Colors.textDim,
+                        ? GFL2Colors.primary
+                        : GFL2Colors.textDim,
                     size: 20,
                   ),
                 ),

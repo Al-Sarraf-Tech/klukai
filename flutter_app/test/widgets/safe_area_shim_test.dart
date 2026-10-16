@@ -32,35 +32,49 @@ void main() {
     });
   });
 
-  testWidgets('a SafeArea under the shim clears the notch and home indicator',
-      (tester) async {
+  testWidgets('a SafeArea under the shim clears the notch and home indicator', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(MaterialApp(
-      builder: (context, child) =>
-          SafeAreaShim(platform: FakeBrowserPlatform(insets: _notch), child: child!),
-      home: const Scaffold(
-        body: SafeArea(
-          child: Column(
-            children: [
-              SizedBox(key: Key('top'), height: 10),
-              Spacer(),
-              SizedBox(key: Key('input-bar'), height: 48),
-            ],
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => SafeAreaShim(
+          platform: FakeBrowserPlatform(insets: _notch),
+          child: child!,
+        ),
+        home: const Scaffold(
+          body: SafeArea(
+            child: Column(
+              children: [
+                SizedBox(key: Key('top'), height: 10),
+                Spacer(),
+                SizedBox(key: Key('input-bar'), height: 48),
+              ],
+            ),
           ),
         ),
       ),
-    ));
+    );
     expect(tester.getTopLeft(find.byKey(const Key('top'))).dy, 47);
-    expect(tester.getBottomLeft(find.byKey(const Key('input-bar'))).dy, 844 - 34);
+    expect(
+      tester.getBottomLeft(find.byKey(const Key('input-bar'))).dy,
+      844 - 34,
+    );
   });
 
-  testWidgets('defaults to the stub platform on the VM (zero insets)', (tester) async {
-    await tester.pumpWidget(MaterialApp(
-      builder: (context, child) => SafeAreaShim(child: child!),
-      home: const Scaffold(body: SafeArea(child: SizedBox(key: Key('box')))),
-    ));
+  testWidgets('defaults to the stub platform on the VM (zero insets)', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => SafeAreaShim(child: child!),
+        home: const Scaffold(
+          body: SafeArea(child: SizedBox(key: Key('box'))),
+        ),
+      ),
+    );
     expect(tester.getTopLeft(find.byKey(const Key('box'))).dy, 0);
   });
 }

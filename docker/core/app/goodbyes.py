@@ -22,11 +22,11 @@ DEPARTURE_FALLBACK: dict[str, Any] = {
         "You are not hurt that he is going. You are certain he will come back."
     ),
     "forbidden": [
-        "guilt of any kind (\"after everything\", \"you always leave\", a wounded sigh)",
-        "\"already?\" or any comment on how short his visit was",
+        'guilt of any kind ("after everything", "you always leave", a wounded sigh)',
+        '"already?" or any comment on how short his visit was',
         "a question he would have to answer before he can go",
-        "a teaser or hook (\"I'll tell you tomorrow...\", \"there was something I wanted to say\")",
-        "bargaining for more time (\"five more minutes\", \"stay a little\")",
+        'a teaser or hook ("I\'ll tell you tomorrow...", "there was something I wanted to say")',
+        'bargaining for more time ("five more minutes", "stay a little")',
     ],
     "night": "It's night: you may order him to rest. One order, not a lecture.",
     "tiers": {
@@ -41,7 +41,7 @@ DEPARTURE_FALLBACK: dict[str, Any] = {
             "night": ["Go. Don't make me file a report on your sleep."],
         },
         6: {
-            "register": "Warm and unclinging. You may end with \"...I'll be here.\"",
+            "register": 'Warm and unclinging. You may end with "...I\'ll be here."',
             "leave": ["...Go. I'll be here."],
             "night": ["Sleep, Commander. ...I'll be here."],
         },
@@ -49,10 +49,10 @@ DEPARTURE_FALLBACK: dict[str, Any] = {
 }
 
 
-def _tiers(cfg: dict) -> dict[int, dict]:
+def _tiers(cfg: dict[str, Any]) -> dict[int, dict[str, Any]]:
     """``{min_level: tier}`` from YAML, or the fallback if nothing usable."""
     raw = cfg.get("tiers")
-    out: dict[int, dict] = {}
+    out: dict[int, dict[str, Any]] = {}
     if isinstance(raw, dict):
         for key, tier in raw.items():
             if isinstance(tier, dict):
@@ -63,14 +63,14 @@ def _tiers(cfg: dict) -> dict[int, dict]:
     return out or DEPARTURE_FALLBACK["tiers"]
 
 
-def _tier_for(tiers: dict[int, dict], level: int) -> dict:
+def _tier_for(tiers: dict[int, dict[str, Any]], level: int) -> dict[str, Any]:
     reached = [k for k in tiers if k <= level]
     if not reached:  # YAML tiers start above this level: use the built-in floor
         return _tier_for(DEPARTURE_FALLBACK["tiers"], max(level, 0))
     return tiers[max(reached)]
 
 
-def build_departure_block(p: dict, kind: str, affection_level: int) -> str:
+def build_departure_block(p: dict[str, Any], kind: str, affection_level: int) -> str:
     """The one-shot DEPARTURE block for a goodbye of ``kind`` ("night"/"leave")."""
     cfg = p.get("departures")
     cfg = cfg if isinstance(cfg, dict) else {}
@@ -83,7 +83,10 @@ def build_departure_block(p: dict, kind: str, affection_level: int) -> str:
         forbidden = DEPARTURE_FALLBACK["forbidden"]
 
     when = "for the night" if night else "for now"
-    lines = [f"DEPARTURE (one-shot, this reply only: he is signing off {when}):", guidance]
+    lines = [
+        f"DEPARTURE (one-shot, this reply only: he is signing off {when}):",
+        guidance,
+    ]
     if night:
         lines.append(str(cfg.get("night") or DEPARTURE_FALLBACK["night"]).strip())
     register = str(tier.get("register", "")).strip()

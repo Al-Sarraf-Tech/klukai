@@ -14,7 +14,9 @@ class TodayOutfitCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final line = outfit.sourceLine;
-    final accent = outfit.requestedByCommander ? GFL2Colors.affinity : GFL2Colors.primary;
+    final accent = outfit.requestedByCommander
+        ? GFL2Colors.affinity
+        : GFL2Colors.primary;
     return Container(
       key: const Key('today-outfit-card'),
       width: double.infinity,
@@ -27,26 +29,37 @@ class TodayOutfitCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('TODAY',
-              style: TextStyle(
-                  color: accent.withValues(alpha: 0.8),
-                  fontSize: 9,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.5,
-                  fontFamily: _mono)),
+          Text(
+            'TODAY',
+            style: TextStyle(
+              color: accent.withValues(alpha: 0.8),
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.5,
+              fontFamily: _mono,
+            ),
+          ),
           const SizedBox(height: 4),
-          Text(outfit.name.toUpperCase(),
-              style: const TextStyle(
-                  color: GFL2Colors.textPrimary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1,
-                  fontFamily: _mono)),
+          Text(
+            outfit.name.toUpperCase(),
+            style: const TextStyle(
+              color: GFL2Colors.textPrimary,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1,
+              fontFamily: _mono,
+            ),
+          ),
           if (outfit.blurb.isNotEmpty) ...[
             const SizedBox(height: 3),
-            Text(outfit.blurb,
-                style: TextStyle(
-                    color: GFL2Colors.textPrimary.withValues(alpha: 0.7), fontSize: 11, height: 1.4)),
+            Text(
+              outfit.blurb,
+              style: TextStyle(
+                color: GFL2Colors.textPrimary.withValues(alpha: 0.7),
+                fontSize: 11,
+                height: 1.4,
+              ),
+            ),
           ],
           if (line.isNotEmpty) ...[
             const SizedBox(height: 5),
@@ -54,9 +67,10 @@ class TodayOutfitCard extends StatelessWidget {
               line,
               key: const Key('today-reason'),
               style: TextStyle(
-                  color: accent.withValues(alpha: 0.9),
-                  fontSize: 11,
-                  fontStyle: FontStyle.italic),
+                color: accent.withValues(alpha: 0.9),
+                fontSize: 11,
+                fontStyle: FontStyle.italic,
+              ),
             ),
           ],
         ],
@@ -73,7 +87,12 @@ class WardrobeGrid extends StatelessWidget {
   final ValueChanged<WardrobeItem>? onSelect;
   final ValueChanged<WardrobeItem>? onLockedTap;
 
-  const WardrobeGrid({super.key, required this.wardrobe, this.onSelect, this.onLockedTap});
+  const WardrobeGrid({
+    super.key,
+    required this.wardrobe,
+    this.onSelect,
+    this.onLockedTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -81,30 +100,42 @@ class WardrobeGrid extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (wardrobe.canon.isNotEmpty) ..._group('CANON', wardrobe.canon, todayId),
-        if (wardrobe.everyday.isNotEmpty) ..._group('EVERYDAY KIT', wardrobe.everyday, todayId),
+        if (wardrobe.canon.isNotEmpty)
+          ..._group('CANON', wardrobe.canon, todayId),
+        if (wardrobe.everyday.isNotEmpty)
+          ..._group('EVERYDAY KIT', wardrobe.everyday, todayId),
       ],
     );
   }
 
-  List<Widget> _group(String title, List<WardrobeItem> items, String? todayId) => [
-        Padding(
-          padding: const EdgeInsets.only(top: 10, bottom: 6),
-          child: Text(title,
-              key: Key('wardrobe-group-$title'),
-              style: TextStyle(
-                  color: GFL2Colors.textMuted,
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.4,
-                  fontFamily: _mono)),
+  List<Widget> _group(
+    String title,
+    List<WardrobeItem> items,
+    String? todayId,
+  ) => [
+    Padding(
+      padding: const EdgeInsets.only(top: 10, bottom: 6),
+      child: Text(
+        title,
+        key: Key('wardrobe-group-$title'),
+        style: TextStyle(
+          color: GFL2Colors.textMuted,
+          fontSize: 9,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.4,
+          fontFamily: _mono,
         ),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [for (final item in items) _tile(item, item.current || item.id == todayId)],
-        ),
-      ];
+      ),
+    ),
+    Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final item in items)
+          _tile(item, item.current || item.id == todayId),
+      ],
+    ),
+  ];
 
   Widget _tile(WardrobeItem item, bool selected) {
     final unlocked = item.unlocked;
@@ -119,10 +150,14 @@ class WardrobeGrid extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 170),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
-            color: selected ? GFL2Colors.primary.withValues(alpha: 0.15) : GFL2Colors.background,
+            color: selected
+                ? GFL2Colors.primary.withValues(alpha: 0.15)
+                : GFL2Colors.background,
             borderRadius: BorderRadius.circular(4),
             border: Border.all(
-              color: selected ? GFL2Colors.primary : GFL2Colors.border.withValues(alpha: 0.3),
+              color: selected
+                  ? GFL2Colors.primary
+                  : GFL2Colors.border.withValues(alpha: 0.3),
               width: selected ? 1.5 : 1,
             ),
           ),
@@ -136,38 +171,49 @@ class WardrobeGrid extends StatelessWidget {
                   if (!unlocked)
                     Padding(
                       padding: const EdgeInsets.only(right: 4),
-                      child: Icon(Icons.lock_outline,
-                          key: Key('wardrobe-lock-${item.id}'),
-                          size: 10,
-                          color: GFL2Colors.textMuted),
+                      child: Icon(
+                        Icons.lock_outline,
+                        key: Key('wardrobe-lock-${item.id}'),
+                        size: 10,
+                        color: GFL2Colors.textMuted,
+                      ),
                     ),
                   Flexible(
-                    child: Text(item.name,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: selected ? GFL2Colors.primary : GFL2Colors.textPrimary,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          fontFamily: _mono,
-                        )),
+                    child: Text(
+                      item.name,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: selected
+                            ? GFL2Colors.primary
+                            : GFL2Colors.textPrimary,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        fontFamily: _mono,
+                      ),
+                    ),
                   ),
                   if (!unlocked)
                     Padding(
                       padding: const EdgeInsets.only(left: 6),
-                      child: Text('LV ${item.unlockLevel}',
-                          style: const TextStyle(
-                              color: GFL2Colors.accent,
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
-                              fontFamily: _mono)),
+                      child: Text(
+                        'LV ${item.unlockLevel}',
+                        style: const TextStyle(
+                          color: GFL2Colors.accent,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          fontFamily: _mono,
+                        ),
+                      ),
                     ),
                 ],
               ),
               if (item.blurb.isNotEmpty)
-                Text(item.blurb,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: GFL2Colors.textMuted, fontSize: 9)),
+                Text(
+                  item.blurb,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: GFL2Colors.textMuted, fontSize: 9),
+                ),
             ],
           ),
         ),
@@ -185,9 +231,14 @@ class WornLogList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (entries.isEmpty) {
-      return Text('No record yet.',
-          style: TextStyle(
-              color: GFL2Colors.textMuted, fontSize: 11, fontFamily: _mono));
+      return Text(
+        'No record yet.',
+        style: TextStyle(
+          color: GFL2Colors.textMuted,
+          fontSize: 11,
+          fontFamily: _mono,
+        ),
+      );
     }
     return Column(
       key: const Key('worn-log'),
@@ -201,36 +252,48 @@ class WornLogList extends StatelessWidget {
               children: [
                 SizedBox(
                   width: 52,
-                  child: Text(e.shortDay,
-                      style: TextStyle(
-                          color: GFL2Colors.textMuted,
-                          fontSize: 10,
-                          fontFamily: _mono)),
+                  child: Text(
+                    e.shortDay,
+                    style: TextStyle(
+                      color: GFL2Colors.textMuted,
+                      fontSize: 10,
+                      fontFamily: _mono,
+                    ),
+                  ),
                 ),
                 Expanded(
                   child: Text.rich(
-                    TextSpan(children: [
-                      TextSpan(
+                    TextSpan(
+                      children: [
+                        TextSpan(
                           text: e.name,
                           style: const TextStyle(
-                              color: GFL2Colors.textPrimary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              fontFamily: _mono)),
-                      if (e.requested)
-                        const TextSpan(
+                            color: GFL2Colors.textPrimary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            fontFamily: _mono,
+                          ),
+                        ),
+                        if (e.requested)
+                          const TextSpan(
                             text: '  YOUR REQUEST',
                             style: TextStyle(
-                                color: GFL2Colors.affinity,
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                fontFamily: _mono))
-                      else if (e.reason.isNotEmpty)
-                        TextSpan(
+                              color: GFL2Colors.affinity,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              fontFamily: _mono,
+                            ),
+                          )
+                        else if (e.reason.isNotEmpty)
+                          TextSpan(
                             text: '  ${e.reason}',
                             style: TextStyle(
-                                color: GFL2Colors.textMuted, fontSize: 10)),
-                    ]),
+                              color: GFL2Colors.textMuted,
+                              fontSize: 10,
+                            ),
+                          ),
+                      ],
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),

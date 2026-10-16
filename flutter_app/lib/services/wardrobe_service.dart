@@ -15,12 +15,12 @@ class WardrobeServiceException implements Exception {
 
   /// What she says when she won't wear it — in her voice, per decision.
   String get refusalLine => switch (decision) {
-        'not_today' => '...Not today. Ask me on a day that matters.',
-        'deny' => 'What onesie.',
-        'occasion_only' => 'Wrong season for that, Commander.',
-        'not_now' => 'Not now.',
-        _ => 'Not yet.',
-      };
+    'not_today' => '...Not today. Ask me on a day that matters.',
+    'deny' => 'What onesie.',
+    'occasion_only' => 'Wrong season for that, Commander.',
+    'not_now' => 'Not now.',
+    _ => 'Not yet.',
+  };
 
   bool get isAuthExpired => statusCode == 401;
 
@@ -47,17 +47,19 @@ class WardrobeService {
     required this.serverUrl,
     http.Client? client,
     String Function()? token,
-  })  : _client = client ?? http.Client(),
-        _token = token ?? readAuthToken;
+  }) : _client = client ?? http.Client(),
+       _token = token ?? readAuthToken;
 
   Map<String, String> get _headers => {
-        'Authorization': 'Bearer ${_token()}',
-        'Content-Type': 'application/json',
-      };
+    'Authorization': 'Bearer ${_token()}',
+    'Content-Type': 'application/json',
+  };
 
   Future<Map<String, dynamic>> _getJson(String pathAndQuery) async {
-    final response =
-        await _client.get(Uri.parse('$serverUrl$pathAndQuery'), headers: _headers);
+    final response = await _client.get(
+      Uri.parse('$serverUrl$pathAndQuery'),
+      headers: _headers,
+    );
     if (response.statusCode != 200) {
       throw WardrobeServiceException(response.statusCode);
     }
@@ -71,12 +73,16 @@ class WardrobeService {
   static Object? _decode(http.Response response) =>
       jsonDecode(utf8.decode(response.bodyBytes, allowMalformed: true));
 
-  Future<Wardrobe> fetchOutfits() async => Wardrobe.fromJson(await _getJson('/api/outfits'));
+  Future<Wardrobe> fetchOutfits() async =>
+      Wardrobe.fromJson(await _getJson('/api/outfits'));
 
-  Future<HerDay> fetchHerDay() async => HerDay.fromJson(await _getJson('/api/her-day'));
+  Future<HerDay> fetchHerDay() async =>
+      HerDay.fromJson(await _getJson('/api/her-day'));
 
   Future<List<WardrobeLogEntry>> fetchLog({int days = 30}) async =>
-      WardrobeLogEntry.listFromJson(await _getJson('/api/wardrobe/log?days=$days'));
+      WardrobeLogEntry.listFromJson(
+        await _getJson('/api/wardrobe/log?days=$days'),
+      );
 
   /// Ask her to wear [id] today. Returns the costume she confirmed. Throws
   /// [WardrobeServiceException] (403 locked, 400 unknown) otherwise.

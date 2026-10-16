@@ -21,7 +21,7 @@ const repo = path.resolve(here, '../../..');
 /** Backend source of truth: docker/core/app/fact_extractor.py VALID_MOODS. */
 function backendMoods() {
   const src = fs.readFileSync(path.join(repo, 'docker/core/app/fact_extractor.py'), 'utf8');
-  const m = src.match(/VALID_MOODS\s*=\s*frozenset\(\{([\s\S]*?)\}\)/);
+  const m = src.match(/VALID_MOODS\s*=\s*frozenset\(\s*\{([\s\S]*?)\}\s*\)/);
   assert.ok(m, 'VALID_MOODS not found in fact_extractor.py');
   return [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
 }
@@ -139,7 +139,7 @@ test('iosMajorVersion reads iPhone and desktop-mode iPad user agents', () => {
 });
 
 test('the renderer never asks for the high-performance GPU (WebKit AA bug; battery)', () => {
-  const src = fs.readFileSync(path.join(repo, 'flutter_app/web/companion/avatar3d.js'), 'utf8')
+  const src = viewerSources().map(({ source }) => source).join('\n')
     .replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.match(src, /powerPreference: 'low-power'/);
   assert.doesNotMatch(src, /high-performance/);
@@ -542,10 +542,10 @@ import {
   createStateMachine, stepEnvelope, nodCurve, blinkCurve, pickFidget, createAvatar3D, softLimit, EYE_GUARD,
   springStep, springHang, springSubsteps, poseJumped, collidePoint, closestOnSegment, coneClamp, SPRING,
 } from '../../../flutter_app/web/companion/avatar3d.js';
-import { coreNamesUsed, ADDONS, BUNDLE } from '../vendor.mjs';
+import { coreNamesUsed, viewerSources, ADDONS, BUNDLE } from '../vendor.mjs';
 
 test('viewer never uses polygonOffset (it made double-sided cloth look hollow on Safari/Metal)', () => {
-  const src = fs.readFileSync(path.join(repo, 'flutter_app/web/companion/avatar3d.js'), 'utf8')
+  const src = viewerSources().map(({ source }) => source).join('\n')
     .replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.doesNotMatch(src, /polygonOffset/);
 });

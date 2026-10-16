@@ -11,17 +11,19 @@ warmer clear skies make her) but the mapping stays deliberately simple.
 """
 
 from __future__ import annotations
+from typing import Any
+
 
 # Condition → mood. Every value MUST be a key of moods.MOOD_SPECIFIC_BLEED.
 # Affection only shades the "clear" bucket (see weather_to_mood).
 _CONDITION_MOOD: dict[str, str] = {
-    "clear": "playful",       # sunshine — light, teasing (warmed further by affection)
-    "cloudy": "composed",     # grey/overcast — measured, professional
-    "fog": "composed",        # low visibility — steady, watchful composure
-    "drizzle": "tender",      # soft rain — guard lowers a little
-    "rain": "tender",         # steady rain — quiet, close, tender
-    "snow": "content",        # snow — cozy, settled
-    "storm": "protective",    # thunderstorm — wants him safe indoors
+    "clear": "playful",  # sunshine — light, teasing (warmed further by affection)
+    "cloudy": "composed",  # grey/overcast — measured, professional
+    "fog": "composed",  # low visibility — steady, watchful composure
+    "drizzle": "tender",  # soft rain — guard lowers a little
+    "rain": "tender",  # steady rain — quiet, close, tender
+    "snow": "content",  # snow — cozy, settled
+    "storm": "protective",  # thunderstorm — wants him safe indoors
 }
 
 # Fallback when a condition isn't recognized: neutral, always-valid.
@@ -42,7 +44,7 @@ _CONDITION_PHRASE: dict[str, str] = {
 _DEFAULT_PHRASE = "Weather's shifting where you are — stay sharp out there, Commander."
 
 
-def weather_to_mood(weather: dict | None, affection_level: int) -> str | None:
+def weather_to_mood(weather: dict[str, Any] | None, affection_level: int) -> str | None:
     """Map current weather to a valid taxonomy mood.
 
     Args:
@@ -70,7 +72,7 @@ def weather_to_mood(weather: dict | None, affection_level: int) -> str | None:
     return _CONDITION_MOOD.get(condition, _DEFAULT_MOOD)
 
 
-def weather_phrase(weather: dict | None) -> str:
+def weather_phrase(weather: dict[str, Any] | None) -> str:
     """Return a short, single-sentence in-character line about the weather.
 
     Returns ``""`` when ``weather`` is None.
