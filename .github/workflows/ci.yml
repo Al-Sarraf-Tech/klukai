@@ -229,6 +229,9 @@ jobs:
     name: Lint
     needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
+    timeout-minutes: 20
+    env:
+      KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/lint
     defaults:
       run:
         working-directory: docker/core
@@ -239,24 +242,20 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Prepare isolated Python environment
-        run: |
-          python3 -m venv "${RUNNER_TEMP}/python"
-          echo "${RUNNER_TEMP}/python/bin" >> "$GITHUB_PATH"
-          echo "VIRTUAL_ENV=${RUNNER_TEMP}/python" >> "$GITHUB_ENV"
-
-      - name: Install dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install ruff
+      - uses: ./.github/actions/python-tools
 
       - name: Lint with ruff
-        run: ruff check app/ --config ruff.toml
+        run: |
+          python -m ruff check app/ --config ruff.toml
+          python -m ruff format --check app/ --config ruff.toml
 
   typecheck:
     name: Type Check (mypy)
     needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
+    timeout-minutes: 20
+    env:
+      KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/typecheck
     defaults:
       run:
         working-directory: docker/core
@@ -267,25 +266,18 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Prepare isolated Python environment
-        run: |
-          python3 -m venv "${RUNNER_TEMP}/python"
-          echo "${RUNNER_TEMP}/python/bin" >> "$GITHUB_PATH"
-          echo "VIRTUAL_ENV=${RUNNER_TEMP}/python" >> "$GITHUB_ENV"
-
-      - name: Install dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install mypy types-PyYAML
+      - uses: ./.github/actions/python-tools
 
       - name: Type-check with mypy
-        run: mypy app/ --config-file mypy.ini
+        run: python -m mypy app/ --config-file mypy.ini
 
   security:
     name: Security Scan (bandit + safety)
     needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
+    timeout-minutes: 20
+    env:
+      KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/security
     defaults:
       run:
         working-directory: docker/core
@@ -296,25 +288,15 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Prepare isolated Python environment
-        run: |
-          python3 -m venv "${RUNNER_TEMP}/python"
-          echo "${RUNNER_TEMP}/python/bin" >> "$GITHUB_PATH"
-          echo "VIRTUAL_ENV=${RUNNER_TEMP}/python" >> "$GITHUB_ENV"
-
-      - name: Install scanners
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install bandit pip-audit
+      - uses: ./.github/actions/python-tools
 
       - name: SAST — bandit (high-severity only)
-        run: bandit -r app/ -ll --skip B101
+        run: python -m bandit -r app/ -ll --skip B101
 
       - name: Dependency vulnerability — pip-audit (BLOCKING)
-        # Fails the build on any known-vulnerable pinned dependency. Replaces
-        # the old `safety check ... || true`, which could never fail the job.
-        # For a triaged false positive, add a documented `--ignore-vuln <ID>`.
-        run: pip-audit --requirement requirements.txt
+        run: |
+          python -m pip_audit --strict --no-deps --disable-pip --require-hashes --requirement requirements.txt
+          python -m pip_audit --strict --no-deps --disable-pip --require-hashes --requirement requirements-ci.txt
 
   image-scan:
     name: Image Scan (trivy)

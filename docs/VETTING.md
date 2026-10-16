@@ -62,3 +62,46 @@ identifies 0.69.3 as unaffected by that particular compromise. This is not a
 blanket vulnerability clearance. Final scanner provenance, current database
 identity and the actual artifact scan must accompany the release manifest.
 Do not execute mutable installers or select an unchecked replacement release.
+
+## Syft 1.54.1 — 2026-10-15
+
+The installed unmanaged Syft 1.42.1 is affected by the upstream
+[temporary-file cleanup advisory](https://github.com/anchore/syft/security/advisories/GHSA-rjcw-vg7j-m9rc)
+and [binary-parser allocation advisory](https://github.com/anchore/syft/security/advisories/GHSA-mw2c-m758-9v5q).
+Their patched versions are 1.42.3 and 1.52.0, respectively. Select the pinned
+[1.54.1 release](https://github.com/anchore/syft/releases/tag/v1.54.1)
+for private version and format-conversion acceptance; the system binary stays
+unchanged. The candidate is **not cleared for release scans**: its published
+dependency inventory produced additional HIGH candidates described below.
+
+- Source tag resolves to commit `b254e6d92f28c3868a755f62fb3ca8f26e9fee76`.
+  Its Apache-2.0 LICENSE exactly matches the authenticated archive member.
+- Linux amd64 archive: 30968256 bytes, SHA256
+  `c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47`.
+  The selected regular executable is 91779234 bytes, SHA256
+  `dbf75864e7a7ff9e1fbf00552c31483f693188632a9f68f343cd7653dac513d6`.
+- The checksum manifest's modern Sigstore v0.3 bundle verified with the
+  previously vetted Cosign 3.1.3, the exact certificate identity
+  `https://github.com/anchore/syft/.github/workflows/release.yaml@refs/heads/main`
+  and issuer `https://token.actions.githubusercontent.com`. The selected
+  archive and published SBOM both match that authenticated manifest.
+  This authenticates release assets; it is not a source-to-binary attestation.
+- The published SBOM is Syft JSON schema 16.1.10. Existing Trivy 0.69.3 rejects
+  that format as unsupported; its failed scan is retained and does not mean
+  zero vulnerabilities. The authenticated executable reports version 1.54.1,
+  commit above and Go 1.26.8. Its private CycloneDX 1.6 conversion preserves
+  all 297 original package identities and adds one executable file component.
+- Trivy recognizes all 297 Go package rows in that converted SBOM. It reports
+  HIGH candidates CVE-2026-78667, CVE-2026-78669 and CVE-2026-97031 in Go 1.26.8,
+  plus CVE-2026-78669 in golang.org/x/net v0.59.0. Declared fixed versions are
+  Go 1.26.9/1.27.2 and x/net v0.60.0. Lower and unknown severity findings are
+  retained too. Reachability and binary incorporation are not adjudicated;
+  package-version findings do not establish that the converter is exploitable.
+  Resolve these findings or select a passing replacement before release use.
+
+[Anchore's verification instructions](https://oss.anchore.com/docs/installation/verification/)
+define the repository/workflow identity policy. Raw signed inputs, verification
+commands/output, immutable source references and the failed format check remain
+under `~/.local/state/klukai/s-uplift-20261015/tool-vetting/syft-1.54.1/`.
+A separate attempt to retain that documentation page returned HTTP 403; the
+page was read through the web tool, without a paid fallback.

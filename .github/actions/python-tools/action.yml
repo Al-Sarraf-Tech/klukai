@@ -1,0 +1,24 @@
+name: Complete pinned Python tools
+description: Build and validate private native tools before selecting the environment
+runs:
+  using: composite
+  steps:
+    - name: Bootstrap and select complete pinned tools
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        set -euo pipefail
+        umask 077
+        python3 -m tools.ci.light_environment --root "$GITHUB_WORKSPACE" \
+          --output "$KLUKAI_CI_OUTPUT" --revision "$KLUKAI_CI_REVISION"
+        python3 - <<'PY'
+        import os, pathlib
+        from tools.ci.light_environment import selection
+        environment = selection(pathlib.Path(os.environ['GITHUB_WORKSPACE']),
+                                pathlib.Path(os.environ['KLUKAI_CI_OUTPUT']),
+                                os.environ['KLUKAI_CI_REVISION'])
+        with open(os.environ['GITHUB_PATH'], 'a') as selected:
+            selected.write(environment + '/bin\n')
+        with open(os.environ['GITHUB_ENV'], 'a') as selected:
+            selected.write('VIRTUAL_ENV=' + environment + '\n')
+        PY
