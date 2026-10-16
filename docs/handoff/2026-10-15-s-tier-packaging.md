@@ -79,12 +79,18 @@ present. This precedes the reviewed cancellation fixes and the application
 shutdown-ownership changes, so it is not final-source proof. Independent reviews
 have resolved the gateway error-response lock leak, notifier finalizer
 interruption, module-graph import-scanning gap and stale Her POV polling races.
-Shutdown ownership and the full final rerun remain integration requirements.
+Shutdown ownership is integrated in checkpoint `090d1c9`; the full final rerun
+remains an acceptance requirement.
 
 An actual Python 3.14.8 CI tool image was built on the existing persistent heavy
 guest. Its executed probe matched all 131 packages in the complete hash lock,
 and its private probe container was removed. Its revision label is explicitly
 unverified. This proves toolchain capability, not a successful GitHub workflow.
+The subsequent clean-checkpoint run failed before collection because that
+image's pytest-asyncio 1.3.0 imports a Python 3.14 deprecated API under the strict
+startup warning policy. Its failed output and successful resource cleanup are
+retained. The CI lock now selects the upstream 1.4.0 fix, with explicit fixture
+loop scopes; see `docs/VETTING.md`. A new tool image and full run are required.
 The frontend runner's invalid `--platform vm` invocation has been replaced with
 Flutter's default tester invocation; Chrome retains its explicit platform.
 Full clean-source runner execution and final PWA artifact binding remain open.

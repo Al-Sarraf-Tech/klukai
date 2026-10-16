@@ -3,6 +3,29 @@
 These records identify selected inputs. They do not certify final CI, a release,
 or the absence of every vulnerability in an installed host tool.
 
+## pytest-asyncio 1.4.0 — 2026-10-15
+
+The first full run in the isolated CPython 3.14 CI image failed before test
+collection: 1.3.0 imports the deprecated `asyncio.AbstractEventLoopPolicy` at
+runtime, and `PYTHONWARNINGS=error` rejects it. The
+[upstream 1.4.0 release notes](https://github.com/pytest-dev/pytest-asyncio/releases)
+identify the fix: that import now occurs only during type checking.
+
+- The non-yanked wheel and source hashes were verified against the
+  [versioned PyPI metadata](https://pypi.org/pypi/pytest-asyncio/1.4.0/json).
+  Wheel SHA256: `933ca923a23075a87fb7070c0ec272a6848489824d887c85c812670932835aa1`.
+- The wheel's Apache-2.0 license and relevant source were inspected before
+  installation. The dated package advisory check found no known vulnerabilities.
+- The CI lock was regenerated with existing pip-tools 7.5.3 and pip 26.0.1 on
+  Python 3.14. Only pytest-asyncio changes version; the other 130 pins remain.
+- Core tests now explicitly select function-scoped fixture loops. The existing
+  session-scoped integration user fixture explicitly retains its session loop;
+  an isolated regression exercises that actual fixture without live backends.
+
+Raw metadata, wheel, hashes, advisory results and startup RED/GREEN logs are in
+`~/.local/state/klukai/s-uplift-20261015/pytest-asyncio-1.4.0-vetting/`.
+The old CI image remains failed evidence. A new image and full run are required.
+
 ## Cosign 3.1.3 — 2026-10-15
 
 The existing Cosign 3.0.6 has a legacy-bundle verification bypass described in

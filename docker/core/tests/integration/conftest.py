@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, patch
 from urllib.parse import urlparse
 
 import pytest
+import pytest_asyncio
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -121,7 +122,7 @@ def test_password() -> str:
     return secrets.token_urlsafe(20)
 
 
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def _create_test_user(test_user_id: str, test_password: str) -> AsyncIterator[None]:
     """Insert + tear down user row. SACRED data (chat/episodes/affection)
     written under this user stays — only the user account row is deleted.
