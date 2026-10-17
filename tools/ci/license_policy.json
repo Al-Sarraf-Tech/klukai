@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "decided": "2026-10-17",
+  "basis": "Owner decision: Klukai is a private service and its image is never distributed, so copyleft obligations triggered by distribution do not apply. GPL/LGPL OS and library components are allowed; every other copyleft or unclassified licence must be reviewed and listed here before it can ship.",
+  "allowed_categories": ["notice", "permissive", "unencumbered"],
+  "allowed_copyleft": [
+    "GPL-1.0-only", "GPL-1.0-or-later",
+    "GPL-2.0-only", "GPL-2.0-or-later",
+    "GPL-3.0-only", "GPL-3.0-or-later",
+    "LGPL-2.0-only", "LGPL-2.0-or-later",
+    "LGPL-2.1-only", "LGPL-2.1-or-later",
+    "LGPL-3.0-only", "LGPL-3.0-or-later",
+    "GPL-2+-with-link-exception", "LGPL-2.1+-with-link-exception"
+  ],
+  "reviewed_packages": {
+    "MPL-2.0": ["ca-certificates", "certifi", "hypothesis", "py-vapid", "pywebpush"]
+  },
+  "reviewed_identifiers": {
+    "BSD-3-clause-Berkeley": "BSD-style notice (glibc)",
+    "BSD-3-clause-Carnegie": "BSD-style notice (glibc)",
+    "BSD-3-clause-Oracle": "BSD-style notice (glibc)",
+    "BSD-3-clause-WIDE": "BSD-style notice (glibc)",
+    "BSD-like-Spencer": "Henry Spencer regex notice (glibc)",
+    "CORE-MATH": "MIT-style notice (glibc)",
+    "Carnegie": "permissive notice (glibc)",
+    "DEC": "permissive notice (glibc)",
+    "FSFAP": "all-permissive notice (glibc)",
+    "IBM": "permissive notice (glibc)",
+    "Inner-Net": "BSD-style notice (glibc)",
+    "MIT-CMU": "MIT-style notice (Pillow)",
+    "MIT-like-Lord": "MIT-style notice (glibc)",
+    "PCRE": "BSD-style notice (glibc)",
+    "PSF-2.0": "Python Software Foundation licence",
+    "Python Software Foundation License": "Python Software Foundation licence",
+    "SunPro": "permissive notice (glibc)",
+    "Univ-Coimbra": "permissive notice (glibc)",
+    "ad-hoc": "media-types data notice",
+    "public-domain": "public domain",
+    "verbatim": "verbatim-copying notice (base-files)"
+  }
+}

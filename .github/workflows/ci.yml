@@ -282,36 +282,77 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Trivy image scan (HIGH+CRITICAL block)
+      - name: Build twice, scan, and record provenance materials
         # This job requires heavy Docker-capable capacity. Missing capability
         # is a failed gate and must never certify an unscanned release.
+        env:
+          TRIVY_VERSION: "0.71.0"
+          # sha256 of trivy_0.71.0_Linux-64bit.tar.gz, matching upstream's
+          # trivy_0.71.0_checksums.txt (checked 2026-10-17).
+          TRIVY_SHA256: 30a3d22b23f88c233f1658f562fb477cae3b3e8b4761109d515b7698daf85814
         run: |
+          set -euo pipefail
+          umask 077
           command -v docker
           docker info >/dev/null
-          BIN="${RUNNER_TEMP:-/tmp}/bin"; mkdir -p "$BIN"; export PATH="$BIN:$PATH"
-          command -v trivy >/dev/null 2>&1 || \
-            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.71.0/contrib/install.sh \
-              | sh -s -- -b "$BIN" v0.71.0
+          BIN="${RUNNER_TEMP}/trivy-${TRIVY_VERSION}"; mkdir -p "$BIN"
+          curl -sfL -o "$BIN/trivy.tgz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  $BIN/trivy.tgz" | sha256sum --check --strict -
+          tar -xzf "$BIN/trivy.tgz" -C "$BIN" trivy
+          export PATH="$BIN:$PATH"
           trivy --version
           image="klukai-core:release-${GITHUB_SHA}"
-          docker build --build-arg VCS_REF="$GITHUB_SHA" \
-            --label org.opencontainers.image.revision="$GITHUB_SHA" \
-            -t "$image" -f docker/core/Dockerfile docker/core/
+          M="${RUNNER_TEMP}/release-materials"; mkdir -p "$M"
+          build() {
+            docker build "$@" --build-arg VCS_REF="$GITHUB_SHA" \
+              --label org.opencontainers.image.revision="$GITHUB_SHA" \
+              -f docker/core/Dockerfile docker/core/
+          }
+          build -t "$image"
+          # PROC-2: a second controlled build from the same checkout and pinned
+          # inputs, without cache; layers are compared and the result retained.
+          build --no-cache -t "${image}-rebuild"
+          python3 -m tools.ci.release_artifact compare-builds --first "$image" \
+            --second "${image}-rebuild" --output "$M/reproducibility.json"
+          docker image rm "${image}-rebuild" >/dev/null
+          cat "$M/reproducibility.json"
           trivy image --severity HIGH,CRITICAL --exit-code 1 --no-progress "$image"
+          trivy image --scanners secret --exit-code 1 --no-progress "$image"
+          trivy image --scanners license --format json --no-progress \
+            --output "$M/licenses.json" "$image"
+          python3 -m tools.ci.license_policy "$M/licenses.json" \
+            --output "$M/license-verdict.json"
+          trivy image --format cyclonedx --no-progress --output "$M/sbom.cdx.json" "$image"
+          {
+            echo "KLUKAI_TOOL_TRIVY=$(trivy --version | head -1)"
+            echo "KLUKAI_TOOL_DOCKER=$(docker version --format '{{.Server.Version}}')"
+            echo "KLUKAI_TOOL_BUILDX=$(docker buildx version | head -1)"
+          } >> "$GITHUB_ENV"
 
       - name: Retain the scanned image for digest-verified deployment
         # Amarillo pulls this exact tar through the Dominus guest agent after the
-        # whole run is green (ops/amarillo/scripts/klukai-fetch-ci-artifacts.py)
-        # and checks its hash, layers and revision before tagging it for deploy.
+        # whole run is green (ops/amarillo/scripts/klukai-fetch-ci-artifacts.py),
+        # verifies hash, layers, revision and provenance materials, then signs
+        # the manifest for the release deployer.
         env:
           RELEASE_DIR: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/release
         run: |
           set -euo pipefail
           umask 077
           image="klukai-core:release-${GITHUB_SHA}"
+          M="${RUNNER_TEMP}/release-materials"
           python3 -m tools.ci.release_artifact save --image "$image" \
             --revision "$GITHUB_SHA" --output "$RELEASE_DIR" \
-            --run "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            --run "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --dockerfile docker/core/Dockerfile \
+            --source-tree "$(git rev-parse HEAD:docker/core)" \
+            --material "sbom.cdx.json=$M/sbom.cdx.json" \
+            --material "licenses.json=$M/licenses.json" \
+            --material "license-verdict.json=$M/license-verdict.json" \
+            --material "reproducibility.json=$M/reproducibility.json" \
+            --tool "trivy=$KLUKAI_TOOL_TRIVY" --tool "docker=$KLUKAI_TOOL_DOCKER" \
+            --tool "buildx=$KLUKAI_TOOL_BUILDX" --tool "python=$(python3 --version)"
           docker image rm "$image" >/dev/null
           # Bound the guest disk: image tars (~200 MB each) older than 7 days go;
           # their manifests stay as the record. The relay refuses a missing tar.
