@@ -20,3 +20,10 @@
 #   stored in /etc/credstore.encrypted/. The leaked token is non-functional.
 
 23c547b4d17739b38e54ed1717badb7f22e01075:docs/superpowers/plans/2026-04-06-telegram-bot.md:telegram-bot-api-token:71
+
+# False positives (not credentials):
+#
+# 2026-10-11 — docker/core/tests/test_proactive_smart.py line 178:
+#   `LOCAL_TZ.key == "..."` asserts a zoneinfo timezone name; generic-api-key
+#   matches the `.key ==` attribute name. No secret is present.
+39f7f7a14597380ef0d2a56ae0495ba499e9eb55:docker/core/tests/test_proactive_smart.py:generic-api-key:178
