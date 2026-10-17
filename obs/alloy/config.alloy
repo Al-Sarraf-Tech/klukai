@@ -145,5 +145,19 @@ local.file_match "perf_nightly" {
 
 loki.source.file "perf_nightly" {
   targets    = local.file_match.perf_nightly.targets
+  forward_to = [loki.process.perf_nightly.receiver]
+}
+
+// Stamp each line with the night's finished_at, not the read time: Alloy's read
+// position is not persisted, so a restart re-reads the file, and Loki drops the
+// re-sent lines as duplicates/too old instead of filing past nights under today.
+loki.process "perf_nightly" {
+  stage.json {
+    expressions = { finished_at = "finished_at" }
+  }
+  stage.timestamp {
+    source = "finished_at"
+    format = "RFC3339Nano"
+  }
   forward_to = [loki.write.klukai.receiver]
 }

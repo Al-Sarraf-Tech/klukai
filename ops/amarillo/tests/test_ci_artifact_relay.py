@@ -100,6 +100,31 @@ class GuestTests(unittest.TestCase):
         self.assertIn("qemu-agent-command fleet-ci-heavy-nobara", argv[-1])
         self.assertIn('\'{"execute": "guest-ping"}\'', argv[-1])
 
+    def test_ssh_connection_failure_is_reported_as_host_unreachable(self) -> None:
+        down = subprocess.CompletedProcess([], 255, "", "No route to host")
+        with mock.patch.object(relay.subprocess, "run", return_value=down):
+            with self.assertRaises(relay.HostUnreachable):
+                relay.VirshAgent("dominus-nobara", "d").agent({"execute": "guest-ping"})
+        failed = subprocess.CompletedProcess([], 1, "", "agent not responding")
+        with mock.patch.object(relay.subprocess, "run", return_value=failed):
+            with self.assertRaises(RuntimeError) as caught:
+                relay.VirshAgent("dominus-nobara", "d").agent({"execute": "guest-ping"})
+        self.assertNotIsInstance(caught.exception, relay.HostUnreachable)
+
+    def test_empty_read_before_eof_fails_instead_of_looping(self) -> None:
+        agent = FakeAgent({"/x": b"data"})
+        original = agent.agent
+
+        def stuck(command: dict) -> object:
+            if command["execute"] == "guest-file-read":
+                return {"buf-b64": "", "count": 0, "eof": False}
+            return original(command)
+
+        agent.agent = stuck  # type: ignore[method-assign]
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(RuntimeError):
+            relay.Guest(agent).read("/x", Path(tmp) / "x")
+        self.assertEqual(agent.handles, {})
+
 
 class GreenRunTests(unittest.TestCase):
     def api(self, runs: list, jobs: dict) -> object:
@@ -188,6 +213,13 @@ class FetchImageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
             relay.fetch_image(relay.Guest(FakeAgent({})), "../../etc", REV, Path(tmp))
 
+    def test_revision_must_be_a_full_commit_before_any_transfer(self) -> None:
+        agent = FakeAgent({})
+        for bad in ("../../etc", REV[:7], REV.upper()):
+            with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
+                relay.fetch_image(relay.Guest(agent), "9-1", bad, Path(tmp))
+        self.assertEqual(agent.reads, [])
+
 
 class NightlyTests(unittest.TestCase):
     def summary(self, finished: str) -> bytes:
@@ -227,6 +259,36 @@ class NightlyTests(unittest.TestCase):
             self.assertTrue(
                 relay.stale(state, timedelta(days=2), now + timedelta(days=3))
             )
+
+    def test_corrupt_summary_is_skipped_without_blocking_later_nights(self) -> None:
+        root = "/opt/klukai-ci/artifacts/nightly"
+        torn = f"{root}/2026-10-17T01-30Z-c6d02f0/summary.json"
+        good = f"{root}/2026-10-18T01-30Z-c6d02f0/summary.json"
+        agent = FakeAgent(
+            {torn: b'{"revision": "', good: self.summary("2026-10-18T01:45:00+00:00")},
+            listing=f"{torn}\n{good}\n",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            state, sink = Path(tmp) / "state", Path(tmp) / "sink.jsonl"
+            state.mkdir()
+            added = relay.fetch_nightly(relay.Guest(agent), state, sink)
+            self.assertEqual(added, ["2026-10-18T01-30Z-c6d02f0"])
+            # The torn file is not marked seen, so a completed copy is picked up later.
+            self.assertNotIn("2026-10-17T01-30Z", (state / "seen.txt").read_text())
+
+    def test_finished_at_must_carry_a_timezone(self) -> None:
+        doc = json.loads(self.summary("2026-10-17T01:45:00+00:00"))
+        self.assertTrue(relay.valid_summary(doc))
+        for bad in ("2026-10-17T01:45:00", "yesterday", None):
+            self.assertFalse(relay.valid_summary({**doc, "finished_at": bad}))
+
+    def test_missing_summary_warning_is_sent_at_most_once_a_day(self) -> None:
+        now = datetime(2026, 10, 20, 12, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            self.assertTrue(relay.should_warn(state, now))
+            self.assertFalse(relay.should_warn(state, now + timedelta(hours=23)))
+            self.assertTrue(relay.should_warn(state, now + timedelta(hours=25)))
 
 
 class ReleaseManifestTests(unittest.TestCase):

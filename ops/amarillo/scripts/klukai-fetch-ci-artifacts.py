@@ -35,6 +35,11 @@ from tools.ci import release_artifact  # noqa: E402
 
 ARTIFACTS = "/opt/klukai-ci/artifacts"
 CHUNK = 16 * 1024 * 1024
+WARN_EVERY = timedelta(days=1)
+
+
+class HostUnreachable(RuntimeError):
+    """ssh could not reach the Dominus host (normal while it is powered off)."""
 
 
 class Transport(Protocol):
@@ -74,6 +79,8 @@ class VirshAgent:
             text=True,
             timeout=300,
         )
+        if result.returncode == 255:
+            raise HostUnreachable(f"{self.host} unreachable: {result.stderr.strip()[:200]}")
         if result.returncode:
             raise RuntimeError(f"guest agent failed: {result.stderr.strip()[:200]}")
         return json.loads(result.stdout)["return"]
@@ -117,9 +124,12 @@ class Guest:
                             "arguments": {"handle": handle, "count": CHUNK},
                         }
                     )
-                    out.write(base64.b64decode(chunk.get("buf-b64", "")))
+                    data = base64.b64decode(chunk.get("buf-b64", ""))
+                    out.write(data)
                     if chunk.get("eof"):
                         break
+                    if not data:
+                        raise RuntimeError("guest agent returned no data before EOF")
         finally:
             self.transport.agent(
                 {"execute": "guest-file-close", "arguments": {"handle": handle}}
@@ -158,6 +168,7 @@ def green_run(repo: str, revision: str, token: str, api: Any = github) -> str:
 
 
 def fetch_image(guest: Guest, run: str, revision: str, dest: Path) -> dict[str, Any]:
+    release_artifact._revision(revision)
     if not re.fullmatch(r"\d+-\d+", run):
         raise ValueError("Invalid CI run identity")
     remote = f"{ARTIFACTS}/{revision}/{run}/release"
@@ -175,11 +186,19 @@ def fetch_image(guest: Guest, run: str, revision: str, dest: Path) -> dict[str, 
     )
 
 
+def _finished(doc: dict[str, Any]) -> datetime | None:
+    try:
+        when = datetime.fromisoformat(str(doc.get("finished_at")))
+    except ValueError:
+        return None
+    return when if when.tzinfo is not None else None
+
+
 def valid_summary(doc: Any) -> bool:
     return (
         isinstance(doc, dict)
         and re.fullmatch(r"[0-9a-f]{40}", str(doc.get("revision", ""))) is not None
-        and isinstance(doc.get("finished_at"), str)
+        and _finished(doc) is not None
         and isinstance(doc.get("routes"), list)
         and all(
             isinstance(r, dict) and isinstance(r.get("candidate_p99_ms"), (int, float))
@@ -238,7 +257,10 @@ def fetch_nightly(guest: Guest, state: Path, sink: Path) -> list[str]:
             continue
         local = state / f"{name}.json"
         guest.read(path, local)
-        doc = json.loads(local.read_text())
+        try:
+            doc = json.loads(local.read_text())
+        except ValueError:
+            doc = None  # partly written or corrupt: retried next run, never blocks others
         if not valid_summary(doc):
             local.unlink()
             continue
@@ -254,9 +276,42 @@ def fetch_nightly(guest: Guest, state: Path, sink: Path) -> list[str]:
 def stale(state: Path, max_age: timedelta, now: datetime | None = None) -> bool:
     newest = None
     for path in state.glob("*.json"):
-        finished = datetime.fromisoformat(json.loads(path.read_text())["finished_at"])
-        newest = finished if newest is None or finished > newest else newest
+        finished = _finished(json.loads(path.read_text()))
+        if finished is not None and (newest is None or finished > newest):
+            newest = finished
     return newest is None or (now or datetime.now(UTC)) - newest > max_age
+
+
+def should_warn(state: Path, now: datetime | None = None) -> bool:
+    """At most one missing-summary note per day, however often the timer runs."""
+    now = now or datetime.now(UTC)
+    marker = state / "warned_at"
+    try:
+        last = datetime.fromisoformat(marker.read_text().strip())
+    except (OSError, ValueError):
+        last = None
+    if last is not None and last.tzinfo is not None and now - last < WARN_EVERY:
+        return False
+    marker.write_text(now.isoformat())
+    return True
+
+
+def warn_missing(days: int) -> None:
+    subprocess.run(
+        [
+            os.path.expanduser("~/.local/bin/bus"),
+            "send",
+            "owner@amarillo",
+            "--project",
+            "klukai",
+            "--note",
+            f"KLUKAI_PERF_NIGHTLY missing: no nightly performance summary in "
+            f"{days} days (Dominus off at the nightly window?)",
+        ],
+        check=False,
+        capture_output=True,
+        timeout=60,
+    )
 
 
 def main() -> int:
@@ -294,26 +349,17 @@ def main() -> int:
         else:
             args.state.mkdir(mode=0o700, parents=True, exist_ok=True)
             args.sink.parent.mkdir(parents=True, exist_ok=True)
-            result = {"added": fetch_nightly(guest, args.state, args.sink)}
+            try:
+                result = {"added": fetch_nightly(guest, args.state, args.sink)}
+            except HostUnreachable:
+                # Dominus is off most of the day by design: not a failure.
+                result = {"added": [], "skipped": "Dominus host unreachable"}
             if args.warn_after_days and stale(
                 args.state, timedelta(days=args.warn_after_days)
             ):
-                subprocess.run(
-                    [
-                        os.path.expanduser("~/.local/bin/bus"),
-                        "send",
-                        "owner@amarillo",
-                        "--project",
-                        "klukai",
-                        "--note",
-                        f"KLUKAI_PERF_NIGHTLY missing: no nightly performance summary in "
-                        f"{args.warn_after_days} days (Dominus off at the nightly window?)",
-                    ],
-                    check=False,
-                    capture_output=True,
-                    timeout=60,
-                )
                 result["stale"] = True
+                if should_warn(args.state):
+                    warn_missing(args.warn_after_days)
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
         print(f"fetch refused: {error}", file=sys.stderr)
         return 1

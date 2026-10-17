@@ -63,8 +63,13 @@ on the heavy guest under `/opt/klukai-ci/artifacts/nightly/<UTC stamp>-<sha7>/`.
 
 Amarillo's hourly `klukai-ci-relay.timer` pulls new summaries through the
 Dominus guest agent into `/mnt/nvmeINT/obs/klukai/perf-nightly/summaries.jsonl`
-(one verdict line per night and one line per route), which Alloy ships to Loki.
-It sends the owner a bus note when no summary has arrived for 3 days. In Grafana:
+(one verdict line per night and one line per route), which Alloy ships to Loki
+stamped with each night's `finished_at` (so re-reading the file after an Alloy
+restart cannot file old nights under today). While Dominus is off the relay
+skips quietly; when no summary has arrived for 3 days it sends the owner one bus
+note a day. Lines arriving more than 3 h after `finished_at` become queryable
+once Loki flushes the chunk. The guest keeps raw evidence bundles 14 days and
+every summary indefinitely; CI image tars are kept 7 days. In Grafana:
 
 ```logql
 avg_over_time({job="klukai-perf-nightly"} | json | kind="route" | unwrap candidate_p99_ms [1d]) by (route)
@@ -73,6 +78,7 @@ avg_over_time({job="klukai-perf-nightly"} | json | kind="route" | unwrap candida
 Enable on amarillo after the change is on `main`:
 
 ```bash
+install -d -m 0750 /mnt/nvmeINT/obs/klukai/perf-nightly   # before Alloy, or Docker creates it root-owned
 install -m 0644 ops/amarillo/systemd/klukai-ci-relay.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now klukai-ci-relay.timer
 docker compose -p klukai -f docker-compose.obs.yml up -d --no-deps alloy

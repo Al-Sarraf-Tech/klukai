@@ -177,6 +177,12 @@ jobs:
             --baseline-revision "$base" --candidate-revision "$head" \
             --out "$dir/evidence" || status=$?
           python -B -m tools.ci.perf_nightly --evidence "$dir/evidence" --output "$dir/summary.json"
+          # Bound the guest disk: raw evidence bundles (~180 MB a night) older than
+          # 14 days go; each night's small summary.json stays.
+          find "$KLUKAI_NIGHTLY_ROOT" -mindepth 2 -maxdepth 2 -type d -name evidence \
+            -mtime +14 -prune -print -exec rm -rf {} +
+          find "$KLUKAI_NIGHTLY_ROOT/mutation" "$KLUKAI_NIGHTLY_ROOT/trivy" -mindepth 1 \
+            -maxdepth 1 -type d -mtime +30 -prune -print -exec rm -rf {} + 2>/dev/null || true
           docker image rm "klukai-core:nightly-candidate-$GITHUB_RUN_ID" \
             "klukai-core:nightly-baseline-$GITHUB_RUN_ID" >/dev/null 2>&1 || true
           exit "$status"
