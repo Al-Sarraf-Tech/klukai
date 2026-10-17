@@ -14,6 +14,7 @@ Note that `config` prints resolved values, secrets included.
 from __future__ import annotations
 
 from pathlib import Path
+import signal
 import subprocess
 import sys
 
@@ -33,6 +34,8 @@ def argv(paths: dict[str, Path], args: list[str], pin: Path = PIN) -> list[str]:
 
 
 def main() -> int:
+    # SIGTERM becomes SystemExit so the tmpfs plaintext is still removed.
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(143))
     try:
         with klukai_secrets.materialized(klukai_secrets.NAMES) as paths:
             return subprocess.run(argv(paths, sys.argv[1:]), cwd=REPO).returncode

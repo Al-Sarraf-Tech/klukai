@@ -36,6 +36,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import signal
 import subprocess
 import sys
 import tempfile
@@ -284,7 +285,9 @@ def backup_and_verify(
             raise ReleaseError("backup does not restore cleanly")
         after = _counts(name, "aichat")
     finally:
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+        # -v: the postgres image declares a data VOLUME; without it every
+        # deploy would leave an anonymous volume holding a restored copy.
+        subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
     if after["tables"] != before["tables"] or any(
         after[t] < before[t] for t in KEY_TABLES
     ):
@@ -377,9 +380,15 @@ def watch(
         failures = 0 if ok else failures + 1
         if failures >= max_failures:
             return False, f"{failures} consecutive failed checks during the hold"
+    if failures:
+        return False, f"the hold ended with {failures} failed check(s)"
     burst = target.errors(started)
-    if burst is not None and burst > 0.05:
-        return False, f"5xx ratio {burst:.1%} during the hold"
+    if burst is None:
+        target.log.append("5xx check not evaluated (no request data in the window)")
+    else:
+        target.log.append(f"5xx ratio {burst:.2%} during the hold")
+        if burst > 0.05:
+            return False, f"5xx ratio {burst:.1%} during the hold"
     return True, "healthy and ready for the whole hold window"
 
 
@@ -404,35 +413,48 @@ def rollout(
         f"{datetime.now(UTC).strftime('%Y%m%dt%H%M%S')}-{previous_id[7:19]}"
     )
     run(["docker", "tag", previous_id, previous_pin])
+    common = {
+        "image_id": image_id,
+        "previous_image_id": previous_id,
+        "rollback_tag": previous_pin,
+    }
+    # From here production may already be changed: any failure, timeout,
+    # SIGTERM (main turns it into SystemExit) or Ctrl-C must restore the
+    # previous image rather than escape with the candidate pinned.
     target.write_pin(image)
-    target.recreate()
-    ok, detail = watch(
-        target, image_id, ready_timeout=ready_timeout, hold=hold, **watch_args
-    )
+    try:
+        target.recreate()
+        ok, detail = watch(
+            target, image_id, ready_timeout=ready_timeout, hold=hold, **watch_args
+        )
+    except BaseException as error:  # noqa: BLE001 - restore on every escape
+        ok, detail = (
+            False,
+            f"rollout interrupted: {type(error).__name__}: {error}"[:300],
+        )
     if ok:
-        return {
-            "status": "deployed",
-            "detail": detail,
-            "image_id": image_id,
-            "previous_image_id": previous_id,
-            "rollback_tag": previous_pin,
-        }
-    target.write_pin(previous_pin)
-    target.recreate()
-    back, back_detail = watch(
-        target,
-        previous_id,
-        ready_timeout=ready_timeout,
-        hold=min(hold, 30),
-        **watch_args,
-    )
+        return {"status": "deployed", "detail": detail, "checks": target.log, **common}
+    try:
+        target.write_pin(previous_pin)
+        target.recreate()
+        back, back_detail = watch(
+            target,
+            previous_id,
+            ready_timeout=ready_timeout,
+            hold=min(hold, 30),
+            **watch_args,
+        )
+    except BaseException as error:  # noqa: BLE001 - report, never hide
+        back, back_detail = (
+            False,
+            f"rollback raised {type(error).__name__}: {error}"[:300],
+        )
     return {
         "status": "rolled_back" if back else "rollback_failed",
         "detail": detail,
         "rollback_detail": back_detail,
-        "image_id": image_id,
-        "previous_image_id": previous_id,
-        "rollback_tag": previous_pin,
+        "checks": target.log,
+        **common,
     }
 
 
@@ -447,13 +469,19 @@ def http_ready(url: str = READY_URL) -> bool:
         return False
 
 
+def error_query(window: int) -> str:
+    """Core labels responses by status_class ("5xx"), not by status code."""
+    errors = (
+        'sum(increase(klukai_http_requests_total{job="klukai-core",'
+        f'status_class="5xx"}}[{window}s]))'
+    )
+    total = f'sum(increase(klukai_http_requests_total{{job="klukai-core"}}[{window}s]))'
+    return f"({errors} or vector(0)) / {total}"
+
+
 def error_ratio(since: float, prometheus: str = PROMETHEUS) -> float | None:
     """5xx share of core requests since the hold began; None if unknown."""
-    window = max(int(time.time() - since), 60)
-    query = (
-        f'sum(increase(klukai_http_requests_total{{job="klukai-core",status=~"5.."}}[{window}s]))'
-        f' / sum(increase(klukai_http_requests_total{{job="klukai-core"}}[{window}s]))'
-    )
+    query = error_query(max(int(time.time() - since), 60))
     try:
         with urllib.request.urlopen(
             f"{prometheus}/api/v1/query?" + urllib.parse.urlencode({"query": query}),
@@ -496,7 +524,98 @@ def receipt(doc: dict[str, Any]) -> Path:
     return path
 
 
-def deploy(revision: str, hold: float, ready_timeout: float) -> dict[str, Any]:
+IRREVERSIBLE_PATHS = ("docker/core/migrations", "docker-compose.yml")
+
+
+def rollback_safety(target_revision: str, repo: Path = REPO) -> dict[str, Any]:
+    """Rolling back restores only the image. Core applies migrations at startup
+    and refuses to start when an applied migration file is missing, and a
+    rollback recreates with the new revision's compose file, so a change to
+    either cannot be undone automatically."""
+    running = subprocess.run(
+        [
+            "docker",
+            "inspect",
+            "-f",
+            '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+            SERVICE,
+        ],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if (
+        not re_full_sha(running)
+        or subprocess.run(
+            ["git", "-C", str(repo), "cat-file", "-e", f"{running}^{{commit}}"],
+            capture_output=True,
+        ).returncode
+    ):
+        return {
+            "running_revision": running or None,
+            "safe": False,
+            "reason": "running image has no known source revision",
+        }
+    changed = run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "diff",
+            "--name-only",
+            running,
+            target_revision,
+            "--",
+            *IRREVERSIBLE_PATHS,
+        ]
+    ).split()
+    return {
+        "running_revision": running,
+        "safe": not changed,
+        "changed": changed,
+        "reason": "migrations or compose changed" if changed else "",
+    }
+
+
+def re_full_sha(value: str) -> bool:
+    return len(value) == 40 and all(c in "0123456789abcdef" for c in value)
+
+
+def prune(
+    backups: Path = BACKUPS, keep_dumps: int = 10, keep_tags: int = 5
+) -> dict[str, int]:
+    """Bound release dumps and rollback tags (newest kept)."""
+    dumps = sorted(backups.glob("aichat-*.dump"))
+    for old in dumps[:-keep_dumps]:
+        old.unlink()
+    tags = sorted(
+        t
+        for t in run(
+            [
+                "docker",
+                "image",
+                "ls",
+                "--format",
+                "{{.Repository}}:{{.Tag}}",
+                "klukai-core",
+            ]
+        ).split()
+        if ":rollback-20" in t
+    )
+    stale = tags[:-keep_tags]
+    if stale:
+        subprocess.run(["docker", "image", "rm", *stale], capture_output=True)
+    return {
+        "dumps_removed": max(len(dumps) - keep_dumps, 0),
+        "tags_removed": len(stale),
+    }
+
+
+def deploy(
+    revision: str,
+    hold: float,
+    ready_timeout: float,
+    accept_manual_rollback: bool = False,
+) -> dict[str, Any]:
     release_artifact._revision(revision)
     doc: dict[str, Any] = {
         "command": "deploy",
@@ -505,6 +624,15 @@ def deploy(revision: str, hold: float, ready_timeout: float) -> dict[str, Any]:
     }
     doc["artifact"] = verify_artifact(revision)
     verify_source(revision)
+    doc["rollback_safety"] = rollback_safety(revision)
+    if not doc["rollback_safety"]["safe"]:
+        if not accept_manual_rollback:
+            raise ReleaseError(
+                "automatic rollback cannot undo this release ("
+                + doc["rollback_safety"]["reason"]
+                + "); review it and rerun with --accept-manual-rollback"
+            )
+        doc["rollback_safety"]["accepted_by_operator"] = True
     doc["backup"] = backup_and_verify()
     target = production_target()
     if not target.pin.exists():
@@ -520,6 +648,11 @@ def deploy(revision: str, hold: float, ready_timeout: float) -> dict[str, Any]:
         ready_timeout=ready_timeout,
         hold=hold,
     )
+    if doc["rollout"]["status"] == "deployed":
+        try:
+            doc["pruned"] = prune()
+        except (ReleaseError, OSError) as error:  # housekeeping never masks a deploy
+            doc["pruned"] = {"error": str(error)[:200]}
     doc["finished_at"] = datetime.now(UTC).isoformat()
     return doc
 
@@ -656,16 +789,31 @@ def main() -> int:
     d.add_argument("revision")
     d.add_argument("--hold", type=float, default=180)
     d.add_argument("--ready-timeout", type=float, default=180)
+    d.add_argument(
+        "--accept-manual-rollback",
+        action="store_true",
+        help="deploy although migrations or docker-compose.yml changed since the "
+        "running image (automatic rollback cannot undo those)",
+    )
     r = sub.add_parser("drill")
     r.add_argument("--image", required=True, help="a verified klukai-core:ci-* tag")
     args = parser.parse_args()
+    # SIGTERM becomes SystemExit, so an interrupted rollout still rolls back
+    # and plaintext secrets in tmpfs are still removed.
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(143))
     try:
         doc = (
-            deploy(args.revision, args.hold, args.ready_timeout)
+            deploy(
+                args.revision,
+                args.hold,
+                args.ready_timeout,
+                accept_manual_rollback=args.accept_manual_rollback,
+            )
             if args.command == "deploy"
             else drill(args.image)
         )
     except (ReleaseError, ValueError, OSError, subprocess.SubprocessError) as error:
+        # Raised only before production changes: rollout() handles its own.
         doc = {"command": args.command, "status": "refused", "error": str(error)}
         print(json.dumps(doc, indent=2), file=sys.stderr)
         receipt(doc)

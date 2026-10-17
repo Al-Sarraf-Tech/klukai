@@ -20,12 +20,20 @@ needs the owner to re-enter the values; the files are not a portable backup.
 for this stack. For one command it decrypts both credentials into a private
 directory under `$XDG_RUNTIME_DIR` (tmpfs, 0700), runs `docker compose
 --env-file <env> -f docker-compose.yml -f <override> [-f <image pin>]`, then
-deletes the directory. A missing, corrupt, wrongly named or group/world-readable
+deletes the directory (SIGTERM is turned into a normal exit so this still
+happens; a directory left by SIGKILL is swept after an hour by the next command
+or by `check`). A missing, corrupt, wrongly named or group/world-readable
 credential stops the command before Compose runs; there is no fallback to a
 plaintext file. Plain `docker compose` in the repository no longer sees the
 secrets and must not be used for companion-core. The release deployer and
 `scripts/disaster-recovery.sh` use the same path. `klukai_compose.py config`
 prints resolved values, secrets included, so do not run it into logs.
+
+Not in the store yet: the two internal bearer tokens in `.runtime-secrets/`
+(`metrics-token` for the core metrics scrape, `alert-bridge-token` for the
+Alertmanager bridge) are 0600 files mounted read-only into the obs containers,
+because those containers restart on boot before any user session could decrypt
+them. They gate only private endpoints on the `klukai-obs` network.
 
 ### Commands (`ops/amarillo/scripts/klukai_secrets.py`)
 

@@ -32,8 +32,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 STORE = Path.home() / ".config/klukai/credentials"
+STALE_AFTER = 3600  # seconds; a live command never holds plaintext this long
 NAMES = ("compose-env", "core-override")
 SYSTEMD_CREDS = "systemd-creds"
 
@@ -159,6 +161,26 @@ def rollback(name: str, store: Path = STORE) -> None:
     os.replace(rescue, recovery / target.name)
 
 
+def sweep_stale(runtime: Path, older_than: float = STALE_AFTER) -> int:
+    """Remove plaintext directories left by a killed process (SIGKILL skips
+    every cleanup). Only this user's own `klukai-secrets-*` directories."""
+    removed = 0
+    for directory in runtime.glob("klukai-secrets-*"):
+        try:
+            info = directory.lstat()
+        except OSError:
+            continue
+        if (
+            directory.is_dir()
+            and not directory.is_symlink()
+            and info.st_uid == os.getuid()
+            and time.time() - info.st_mtime > older_than
+        ):
+            shutil.rmtree(directory, ignore_errors=True)
+            removed += 1
+    return removed
+
+
 @contextlib.contextmanager
 def materialized(
     names: tuple[str, ...], store: Path = STORE
@@ -167,6 +189,7 @@ def materialized(
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if not runtime or not Path(runtime).is_dir():
         raise SecretError("XDG_RUNTIME_DIR (tmpfs) is required for plaintext")
+    sweep_stale(Path(runtime))
     directory = Path(tempfile.mkdtemp(prefix="klukai-secrets-", dir=runtime))
     try:
         os.chmod(directory, 0o700)
@@ -195,7 +218,14 @@ def check(store: Path = STORE, plaintext: tuple[Path, ...] = ()) -> dict[str, ob
     leftovers = [str(p) for p in plaintext if p.exists()]
     if leftovers:
         raise SecretError(f"plaintext copies still present: {leftovers}")
-    return {"store": str(store), "credentials": sizes, "plaintext_absent": True}
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    stale = sweep_stale(Path(runtime)) if runtime and Path(runtime).is_dir() else 0
+    return {
+        "store": str(store),
+        "credentials": sizes,
+        "plaintext_absent": True,
+        "stale_plaintext_dirs_removed": stale,
+    }
 
 
 def main() -> int:

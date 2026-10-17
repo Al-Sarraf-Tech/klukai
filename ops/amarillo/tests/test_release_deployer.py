@@ -120,6 +120,17 @@ class SecretStoreTests(unittest.TestCase):
             )
         self.assertFalse(directory.exists())
 
+    def test_stale_plaintext_from_a_killed_command_is_swept(self) -> None:
+        stale = self.runtime / "klukai-secrets-old"
+        stale.mkdir(mode=0o700)
+        (stale / "compose-env").write_text("A=1\n")
+        os.utime(stale, (0, 0))
+        fresh = self.runtime / "klukai-secrets-live"
+        fresh.mkdir(mode=0o700)
+        self.assertEqual(klukai_secrets.sweep_stale(self.runtime), 1)
+        self.assertFalse(stale.exists())
+        self.assertTrue(fresh.exists())
+
     def test_check_refuses_leftover_plaintext(self) -> None:
         klukai_secrets.encrypt("compose-env", b"A=1\n", self.store)
         klukai_secrets.encrypt("core-override", b"{}", self.store)
@@ -230,6 +241,136 @@ class RolloutTests(unittest.TestCase):
         target.running = ""
         with self.assertRaises(release.ReleaseError):
             release.rollout(target, "klukai-core:new", "sha256:new", **self.fast())
+
+
+class ReviewFindingTests(RolloutTests):
+    """Regressions for the 2026-10-17 fresh-context review."""
+
+    def test_compose_failure_after_the_pin_switch_still_rolls_back(self) -> None:
+        target = self.target(bad=set())
+        real = target._compose
+        calls = []
+
+        def flaky(args: list[str]) -> None:
+            calls.append(target.read_pin())
+            if len(calls) == 1:
+                raise release.ReleaseError("docker compose up failed: port in use")
+            real(args)
+
+        target.compose = flaky
+        result = release.rollout(target, "klukai-core:new", "sha256:new", **self.fast())
+        self.assertEqual(result["status"], "rolled_back")
+        self.assertIn("rollout interrupted", result["detail"])
+        self.assertEqual(target.read_pin(), result["rollback_tag"])
+        self.assertEqual(target.running, "sha256:old")
+
+    def test_interrupt_during_the_hold_rolls_back(self) -> None:
+        target = self.target(bad=set())
+        ticks = iter(range(10_000))
+
+        def sleep(_: float) -> None:
+            if target.running == "sha256:new":
+                raise KeyboardInterrupt
+
+        result = release.rollout(
+            target,
+            "klukai-core:new",
+            "sha256:new",
+            ready_timeout=3,
+            hold=3,
+            interval=1,
+            clock=lambda: next(ticks),
+            sleep=sleep,
+        )
+        self.assertEqual(result["status"], "rolled_back")
+        self.assertEqual(target.running, "sha256:old")
+
+    def test_a_hold_that_ends_on_failed_checks_is_not_deployed(self) -> None:
+        target = self.target(bad=set())
+        answers = iter([True])  # ready once, then failing (fewer than 3 checks fit)
+
+        def ready() -> bool:
+            if target.running != "sha256:new":
+                return True
+            return next(answers, False)
+
+        target.ready = ready
+        result = release.rollout(target, "klukai-core:new", "sha256:new", **self.fast())
+        self.assertEqual(result["status"], "rolled_back")
+        self.assertIn("the hold ended with", result["detail"])
+
+    def test_error_query_uses_the_exported_status_class_label(self) -> None:
+        query = release.error_query(180)
+        self.assertIn('status_class="5xx"', query)
+        self.assertNotIn("status=~", query)
+        self.assertIn("or vector(0)", query)
+
+    def test_error_ratio_reports_the_value_or_unknown(self) -> None:
+        def response(value: object) -> mock.MagicMock:
+            body = json.dumps(
+                {"data": {"result": [] if value is None else [{"value": [0, value]}]}}
+            ).encode()
+            handle = mock.MagicMock()
+            handle.__enter__.return_value.read.return_value = body
+            return handle
+
+        for value, expected in (("0.25", 0.25), ("NaN", None), (None, None)):
+            with mock.patch.object(
+                release.urllib.request, "urlopen", return_value=response(value)
+            ):
+                self.assertEqual(release.error_ratio(0), expected)
+
+    def test_prune_keeps_the_newest_dumps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backups = Path(tmp)
+            for i in range(12):
+                (backups / f"aichat-20261017T{i:06d}Z.dump").write_text("x")
+            self.assertEqual(release.prune(backups)["dumps_removed"], 2)
+            self.assertEqual(len(list(backups.glob("*.dump"))), 10)
+            self.assertTrue((backups / "aichat-20261017T000011Z.dump").exists())
+
+
+class RollbackSafetyTests(unittest.TestCase):
+    def test_a_release_that_changes_migrations_needs_operator_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+
+            def git(*args: str) -> str:
+                return subprocess.run(
+                    ["git", "-C", str(repo), *args],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.email", "t@t")
+            git("config", "user.name", "t")
+            (repo / "docker-compose.yml").write_text("services: {}\n")
+            git("add", ".")
+            git("commit", "-qm", "base")
+            base = git("rev-parse", "HEAD")
+            (repo / "README").write_text("docs\n")
+            git("add", ".")
+            git("commit", "-qm", "docs")
+            docs_only = git("rev-parse", "HEAD")
+            (repo / "docker/core/migrations").mkdir(parents=True)
+            (repo / "docker/core/migrations/0099.sql").write_text("select 1;\n")
+            git("add", ".")
+            git("commit", "-qm", "migration")
+            migration = git("rev-parse", "HEAD")
+            real_run = subprocess.run
+
+            def fake(argv, **kwargs):
+                if argv[:2] == ["docker", "inspect"]:
+                    return subprocess.CompletedProcess(argv, 0, base + "\n", "")
+                return real_run(argv, **kwargs)
+
+            with mock.patch.object(release.subprocess, "run", side_effect=fake):
+                self.assertTrue(release.rollback_safety(docs_only, repo)["safe"])
+                unsafe = release.rollback_safety(migration, repo)
+            self.assertFalse(unsafe["safe"])
+            self.assertEqual(unsafe["changed"], ["docker/core/migrations/0099.sql"])
 
 
 class ArtifactGateTests(unittest.TestCase):

@@ -26,7 +26,9 @@ GH_TOKEN=... python3 ops/amarillo/scripts/klukai-fetch-ci-artifacts.py image <fu
 ```
 
 The relay requires a successful CI run whose `Required CI gates` job passed for
-that exact commit. It reads the files through the Dominus guest agent in 2 MiB
+that exact commit. The manifest must name that run, and its SHA-256 must equal
+the `KLUKAI_RELEASE_MANIFEST_SHA256=` line the run's own image-scan job printed
+to its GitHub log; bytes another job writes on the shared heavy guest are refused. It reads the files through the Dominus guest agent in 2 MiB
 chunks. libvirt caps an agent reply at 10 MiB and virsh's RPC string at 4 MiB,
 and exceeding the first disables the agent channel. It then verifies the manifest,
 every material digest, the licence verdict, the tar hash, and the loaded image's
@@ -59,22 +61,34 @@ Staged preflight, any failure refuses before production changes:
    check out, and the local tag has exactly the manifest's layers and revision.
 2. **Source:** the main checkout is at the release commit and
    `docker-compose.yml` is unmodified.
-3. **Backup:** a fresh `pg_dump` goes to `/mnt/nvmeINT/backups/klukai/releases/`.
+3. **Rollback safety:** a rollback restores only the image. Core applies
+   migrations at startup and will not start if an applied migration file is
+   missing, and a rollback recreates with the new compose file. If
+   `docker/core/migrations/` or `docker-compose.yml` changed since the running
+   image's revision label (or that label is unknown), the deployer refuses
+   unless `--accept-manual-rollback` is given after a manual rollback plan.
+4. **Backup:** a fresh `pg_dump` goes to `/mnt/nvmeINT/backups/klukai/releases/`.
    It is restored into a throwaway PostgreSQL container of the same image with no
    network, which must have every table and at least the live row counts of
    `users`, `companion_messages`, `companion_episodes`, `companion_memories`,
-   `companion_affection` and `memory`. Nothing is ever restored to production.
+   `companion_affection` and `memory`. The throwaway container is removed with
+   its volume (`docker rm -f -v`). Nothing is ever restored to production.
 
 Rollout: the running image gets an immutable `klukai-core:rollback-<time>-<id>`
 tag, the non-secret image pin `~/.local/state/klukai/release/core-image.json`
 is switched, and only companion-core is recreated through `klukai_compose.py`
 (secrets from the encrypted store, so runtime settings are preserved). The
 candidate must run the verified image ID, become healthy and ready within
-180 s, then stay healthy and ready with no restarts for a 180 s hold, without a
-5xx ratio above 5% in Prometheus. Otherwise the deployer pins the rollback tag,
-recreates core, waits for health and exits 2 (`rolled_back`) or loudly reports
-`rollback_failed`. Data and volumes are untouched, so newer writes survive.
-Each run writes a receipt to `~/.local/state/klukai/release/receipts/`.
+180 s, then pass every check of a 180 s hold (healthy, ready, no restarts; the
+hold may not end on a failed check) and keep its 5xx share
+(`status_class="5xx"`) at or below 5%. With no traffic in the window the 5xx
+check is recorded as not evaluated. Any failure, and also a compose error,
+timeout, Ctrl-C or SIGTERM after the pin switch, makes the deployer pin the
+rollback tag, recreate core, wait for health and exit 2 (`rolled_back`) or
+loudly report `rollback_failed`. Data and volumes are untouched, so newer
+writes survive. After a successful deploy it keeps the newest 10 release dumps
+and 5 rollback tags. Each run writes a receipt to
+`~/.local/state/klukai/release/receipts/`.
 
 Rollback drill, disposable and safe to repeat:
 
