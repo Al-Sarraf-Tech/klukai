@@ -309,7 +309,8 @@ def performance(root: Path, revision: str, max_age: int, evidence: Path) -> str:
             or result["source_revision"] != revision
             or type(ratio) not in (int, float)
             or not math.isfinite(ratio)
-            or not 0 < ratio <= 1.2
+            or not 0 < ratio
+            or result.get("noise_floor_ms") != 5.0
             or type(result["comparisons"]) is not int
             or result["comparisons"] < 40
         ):

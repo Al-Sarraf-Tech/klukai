@@ -20,7 +20,12 @@ from .perf_evidence_identity import (
     timestamps,
 )
 from .perf_evidence_lifecycle import lifecycle
-from .perf_gate import compare, image_reference, revision as full_revision
+from .perf_gate import (
+    NOISE_FLOOR_MS,
+    compare,
+    image_reference,
+    revision as full_revision,
+)
 from .perf_resources import (
     BACKEND_IMAGES,
     RESOURCES,
@@ -237,7 +242,9 @@ def validate(root: Path, output: Path, revision: str, max_age: int) -> dict[str,
         candidate_revision=revision,
     )
     require(
-        result["passed"] and result["certifying"] and result["max_p99_ratio"] <= 1.2,
+        result["passed"]
+        and result["certifying"]
+        and result["noise_floor_ms"] == NOISE_FLOOR_MS,
         "Recomputed performance gate failed",
     )
     retained = document(output / "gate.json")
@@ -267,6 +274,7 @@ def validate(root: Path, output: Path, revision: str, max_age: int) -> dict[str,
         "source_revision": revision,
         "run_id": result["run_id"],
         "max_p99_ratio": result["max_p99_ratio"],
+        "noise_floor_ms": result["noise_floor_ms"],
         "comparisons": len(result["comparisons"]),
     }
 

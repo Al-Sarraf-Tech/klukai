@@ -18,7 +18,9 @@ def test_strict_raw_parser_rejects_ambiguous_or_nonfinite_json():
 
 
 @pytest.mark.parametrize(
-    "millis,passed", [(11, True), (12, True), (12.01, False), (12.000000000005, False)]
+    "millis,passed",
+    # Baseline 10 ms: a regression needs >20% AND >5 ms (noise floor).
+    [(11, True), (12, True), (12.01, True), (15, True), (15.01, False)],
 )
 def test_real_format_bundle_recalculates_latency(tmp_path, millis, passed):
     from perf_evidence_fixture import bundle

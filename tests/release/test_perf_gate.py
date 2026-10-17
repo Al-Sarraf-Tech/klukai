@@ -240,7 +240,7 @@ def test_noncomparable_configuration_is_rejected(field):
 
 
 def test_more_than_twenty_percent_p99_regression_fails_even_below_absolute_slo():
-    result = compare(report(), report("candidate", 12.01), **arguments())
+    result = compare(report(), report("candidate", 15.01), **arguments())
     assert result["passed"] is False
     assert any("regression" in failure for failure in result["failures"])
 
@@ -469,3 +469,22 @@ def test_backend_identity_accepts_both_docker_image_store_forms():
     assert reviewed_backends(dict(BACKEND_INDEX_DIGESTS))
     assert not reviewed_backends(BACKEND_IMAGES | {"redis": "sha256:" + "0" * 64})
     assert not reviewed_backends({"postgres": BACKEND_IMAGES["postgres"]})
+
+
+def test_millisecond_jitter_under_the_noise_floor_is_not_a_regression():
+    # 10 -> 12.01 ms is +20.1% but only 2.01 ms: two scheduler hiccups.
+    assert compare(report(), report("candidate", 12.01), **arguments())["passed"]
+    assert compare(report(), report("candidate", 15), **arguments())["passed"]
+
+
+@pytest.mark.parametrize(
+    "measured,failed", [(120.0, False), (120.01, True), (104.99, False)]
+)
+def test_twenty_percent_budget_applies_above_the_noise_floor(measured, failed):
+    from tools.ci.perf_gate import _assess
+
+    route = ("GET", "/api/messages")
+    rows = _assess(
+        {route: ([100.0] * 100, 1.0)}, {route: ([measured] * 100, 1.0)}, {}, "0"
+    )
+    assert bool(rows[0]["failures"]) is failed

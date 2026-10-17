@@ -79,8 +79,11 @@ warmup failure, unavailable images, missing samples, bad contracts, thermal
 limit, nongraceful core shutdown, cleanup failure or gate failure.
 
 `gate.json` recomputes nearest-rank p99 from raw successful samples and checks
-each paired round and pooled samples. Candidate p99 must be at most 1.20 times
-baseline; availability must satisfy the canonical policy for both inputs;
+each paired round and pooled samples. A route regresses when candidate p99 is
+more than 1.20 times baseline and also more than 5 ms slower (`NOISE_FLOOR_MS`).
+Nearest-rank p99 of 100 samples is the second-slowest request, so on 2 ms routes
+two scheduler hiccups exceed 20%; the floor (owner decision, 2026-10-16) keeps
+real regressions such as the +55 ms login tail failing; availability must satisfy the canonical policy for both inputs;
 candidate latency must satisfy absolute thresholds from
 `docker/core/app/observability/slos.json`. Voice admission has no invented
 absolute threshold: it requires 100% observed availability and the ratio gate.

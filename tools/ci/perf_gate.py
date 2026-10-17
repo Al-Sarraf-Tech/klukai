@@ -21,6 +21,20 @@ from .perf_schema import (
 )
 
 
+RATIO_BUDGET = 1.2
+# p99 of 100 samples is the second-slowest request, so two scheduler hiccups
+# push a 2 ms route past 20%. A regression must also cost more than this
+# (owner decision 2026-10-16, after five runs flagged a different ms route each).
+NOISE_FLOOR_MS = 5.0
+
+
+def regressed(reference: float, measured: float) -> bool:
+    return (
+        measured / reference > RATIO_BUDGET + 1e-12
+        and measured - reference > NOISE_FLOOR_MS
+    )
+
+
 def p99(values: list[float]) -> float:
     if not values:
         raise ValueError("Missing percentile samples")
@@ -220,8 +234,10 @@ def _assess(
         measured = p99(values)
         ratio = measured / reference
         failures = []
-        if ratio > 1.2 + 1e-12:
-            failures.append(f"{label} {identity}: p99 regression exceeds20percent")
+        if regressed(reference, measured):
+            failures.append(
+                f"{label} {identity}: p99 regression exceeds20percent and5ms"
+            )
         objective = slos.get(identity)
         minimum = number(objective["availability"]) if objective else 1.0
         if availability < minimum or baseline[identity][1] < minimum:
@@ -297,6 +313,7 @@ def compare(
         "passed": not failures,
         "certifying": not allow_development,
         "max_p99_ratio": max(row["p99_ratio"] for row in results),
+        "noise_floor_ms": NOISE_FLOOR_MS,
         "failures": failures,
         "comparisons": results,
         "timestamp": datetime.now(UTC).isoformat(),
