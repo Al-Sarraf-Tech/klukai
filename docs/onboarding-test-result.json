@@ -16,14 +16,14 @@
     "method": "fresh git clone of main 5d9c3f0 into an empty directory on amarillo",
     "duration_minutes": 9,
     "executed": [
-      "\u00a71 git clone over SSH: ok",
-      "\u00a72 .env from .env.example: compose refused to render until POSTGRES_PASSWORD, LM_STUDIO_TOKEN, VOICE_API_TOKEN, RABBITMQ_PASSWORD were set; with those four it renders (core and obs)",
-      "\u00a76 python3.14 venv + pip --require-hashes requirements-ci.txt: ok; ruff: clean; mypy strict: 162 files clean",
-      "\u00a76 pytest tests/quality tests/release: 987 passed, 6 image tests deselected (needed -o pythonpath=.)",
-      "\u00a77 s-tier-audit --only code: CODE-1/2/3 pass"
+      "§1 git clone over SSH: ok",
+      "§2 .env from .env.example: compose refused to render until POSTGRES_PASSWORD, LM_STUDIO_TOKEN, VOICE_API_TOKEN, RABBITMQ_PASSWORD were set; with those four it renders (core and obs)",
+      "§6 python3.14 venv + pip --require-hashes requirements-ci.txt: ok; ruff: clean; mypy strict: 162 files clean",
+      "§6 pytest tests/quality tests/release: 987 passed, 6 image tests deselected (needed -o pythonpath=.)",
+      "§7 s-tier-audit --only code: CODE-1/2/3 pass"
     ],
     "not_executed": [
-      "\u00a73-\u00a75 on a fresh stack: core has a fixed container name and port 8300, so a second stack would collide with production on this host",
+      "§3-§5 on a fresh stack: core has a fixed container name and port 8300, so a second stack would collide with production on this host",
       "Instead verified on the live production stack the same evening: public /api/health/ready ok, login/session (test user), anonymous and forged-token rejection, WebSocket chat via scripts/e2e_live.py --only chat"
     ],
     "drift": [
@@ -32,6 +32,30 @@
       "Doc omitted the shared aichat infrastructure prerequisite (external networks, infra-postgres, redis, qdrant)",
       "Test command needed -o pythonpath=. and the hash-locked requirements-ci.txt (requirements-dev.txt no longer exists)"
     ],
-    "outcome": "partial: drift fixed in the same PR; a fresh-VM drill of \u00a73-\u00a75 by someone other than the author is still due"
+    "outcome": "partial: drift fixed in the same PR; a fresh-VM drill of §3-§5 by someone other than the author is still due"
+  },
+  {
+    "drill_date": "2026-10-17",
+    "operator": "nightly CI onboarding job on the heavy runner (tools/ci/onboarding_drill.py); automated, not the doc's author",
+    "method": "clean git clone of 40aff93's tree (drill run 39077712985 on the final PR #14 head) into an empty directory; throwaway pinned PostgreSQL/Valkey/Qdrant on the named networks",
+    "ci_run": "https://github.com/Al-Sarraf-Tech/klukai/actions/runs/39077712985",
+    "executed": [
+      "§2 test -e .env || cp .env.example .env; chmod 600 .env; required values set to random throwaway secrets: ok",
+      "§2 docker compose config --quiet: ok",
+      "§3 docker network ls | grep …: ok; docker compose up -d companion-core (fresh build): ok; became healthy",
+      "§3 docker compose ps: Up (healthy); curl /health: status/database/redis/qdrant all ok",
+      "§4 login as the seeded user and GET /api/session/info: ok (user_id jalsarraf)"
+    ],
+    "not_executed": [
+      "§1 clone over SSH from GitHub (cloned the same commit from the CI checkout)",
+      "§3 optional observability stack",
+      "§5 chat (needs the Dominus GPU)",
+      "§6 tests and §7 audit (run by the CI jobs themselves)"
+    ],
+    "drift_found_and_fixed": [
+      "a private-umask (077) clone yields 0600 source files that core (UID 1000) cannot read: gotcha added",
+      "/api/session/info returns user_id, created_at, expires_at: expected payload added"
+    ],
+    "result": "pass"
   }
 ]
