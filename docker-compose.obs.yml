@@ -82,7 +82,10 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=15d
+      # 35 days covers the 30-day SLO window (slos.json window_days) with margin;
+      # about 15 MB a day at 2026-10 volume, size-capped as a safety net.
+      - --storage.tsdb.retention.time=35d
+      - --storage.tsdb.retention.size=20GB
       - --web.listen-address=0.0.0.0:9090
       - --web.enable-lifecycle
       - --web.external-url=http://localhost:9090/
