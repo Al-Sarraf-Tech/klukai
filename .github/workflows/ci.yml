@@ -178,8 +178,6 @@ jobs:
     needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
     timeout-minutes: 20
-    env:
-      KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/lint
     defaults:
       run:
         working-directory: docker/core
@@ -191,6 +189,9 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/python-tools
+        env:
+          # runner context is unavailable in job-level env.
+          KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/lint
 
       - name: Lint with ruff
         run: |
@@ -202,8 +203,6 @@ jobs:
     needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
     timeout-minutes: 20
-    env:
-      KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/typecheck
     defaults:
       run:
         working-directory: docker/core
@@ -215,6 +214,9 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/python-tools
+        env:
+          # runner context is unavailable in job-level env.
+          KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/typecheck
 
       - name: Type-check with mypy
         run: python -m mypy app/ --config-file mypy.ini
@@ -224,8 +226,6 @@ jobs:
     needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
     timeout-minutes: 20
-    env:
-      KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/security
     defaults:
       run:
         working-directory: docker/core
@@ -237,6 +237,9 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/python-tools
+        env:
+          # runner context is unavailable in job-level env.
+          KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/security
 
       - name: SAST — bandit (high-severity only)
         run: python -m bandit -r app/ -ll --skip B101
