@@ -8,8 +8,11 @@ software:
 
 * `image <revision>`: require a successful GitHub CI run for that exact commit
   (including the aggregate "Required CI gates" job), stream its retained
-  `release/core-image.tar` + `manifest.json`, then verify and load it with
-  tools.ci.release_artifact (tar hash, layer diff IDs, revision label).
+  `release/core-image.tar`, `manifest.json` and provenance materials (SBOM,
+  licence inventory and verdict, reproducibility), verify and load them with
+  tools.ci.release_artifact (material digests, tar hash, layer diff IDs,
+  revision label), then sign `provenance.json` with the amarillo release key
+  (ssh-keygen, namespace klukai-release) for the release deployer.
 * `nightly`: copy new nightly performance summaries into a JSON-lines file the
   observability stack ingests; optionally warn the owner when none is recent.
 """
@@ -34,12 +37,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from tools.ci import release_artifact  # noqa: E402
 
 ARTIFACTS = "/opt/klukai-ci/artifacts"
-# libvirt rejects any guest-agent reply over 10 MiB and then disables the agent
-# channel until the guest reconnects (virtqemud: "No complete agent response
-# found in 10485760 bytes"). Reads come back base64-encoded (4/3 larger), so
-# keep each chunk well below that.
+SIGNING_NAMESPACE = "klukai-release"
+SIGNING_KEY = Path.home() / ".config/klukai/release-signing/release_ed25519"
+# Two libvirt limits bound each guest-file-read. virtqemud rejects any agent
+# reply over 10 MiB and then disables the agent channel until the stale reply is
+# drained ("No complete agent response found in 10485760 bytes"); virsh's RPC
+# then carries the reply as one string capped at 4 MiB ("Unable to encode
+# message payload"). Replies are base64 (4/3 larger) inside JSON.
 LIBVIRT_AGENT_REPLY_MAX = 10 * 1024 * 1024
-CHUNK = 4 * 1024 * 1024
+LIBVIRT_RPC_STRING_MAX = 4 * 1024 * 1024
+CHUNK = 2 * 1024 * 1024
 WARN_EVERY = timedelta(days=1)
 
 
@@ -174,23 +181,79 @@ def green_run(repo: str, revision: str, token: str, api: Any = github) -> str:
     raise ValueError("No successful CI run with Required CI gates for this revision")
 
 
-def fetch_image(guest: Guest, run: str, revision: str, dest: Path) -> dict[str, Any]:
+def sign(path: Path, key: Path) -> Path:
+    """ssh-keygen signature over one file in the klukai-release namespace."""
+    signature = path.with_name(path.name + ".sig")
+    signature.unlink(missing_ok=True)
+    result = subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(key),
+            "-n",
+            SIGNING_NAMESPACE,
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode or not signature.is_file():
+        raise RuntimeError(f"signing failed: {result.stderr.strip()[:200]}")
+    return signature
+
+
+def fetch_image(
+    guest: Guest,
+    run: str,
+    revision: str,
+    dest: Path,
+    *,
+    key: Path | None = None,
+) -> dict[str, Any]:
     release_artifact._revision(revision)
     if not re.fullmatch(r"\d+-\d+", run):
         raise ValueError("Invalid CI run identity")
     remote = f"{ARTIFACTS}/{revision}/{run}/release"
     dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    (dest / "provenance.json.sig").unlink(missing_ok=True)
     guest.read(f"{remote}/manifest.json", dest / "manifest.json")
-    release_artifact.check_manifest(
-        json.loads((dest / "manifest.json").read_text()), revision
-    )
+    manifest = json.loads((dest / "manifest.json").read_text())
+    release_artifact.check_manifest(manifest, revision)
+    for name in release_artifact.MATERIALS:
+        guest.read(f"{remote}/{name}", dest / name)
+    materials = release_artifact.verify_materials(dest, manifest)
     guest.read(f"{remote}/core-image.tar", dest / "core-image.tar")
-    return release_artifact.verify(
+    result = release_artifact.verify(
         dest / "core-image.tar",
         dest / "manifest.json",
         revision,
         f"klukai-core:ci-{revision[:7]}",
     )
+    result.update(materials)
+    if key is not None:
+        # Signed only after every check passed: the green CI run, the manifest,
+        # each provenance material and the loaded image's layers and label.
+        provenance = {
+            "schema": 1,
+            "revision": revision,
+            "ci_run": run,
+            "manifest_sha256": release_artifact.sha256(dest / "manifest.json"),
+            "tar_sha256": manifest["tar_sha256"],
+            "layers": manifest["layers"],
+            "materials": manifest["materials"],
+            "verified": result,
+            "verified_by": "amarillo klukai-fetch-ci-artifacts",
+            "verified_at": datetime.now(UTC).isoformat(),
+        }
+        (dest / "provenance.json").write_text(
+            json.dumps(provenance, indent=2, sort_keys=True) + "\n"
+        )
+        result["signature"] = str(sign(dest / "provenance.json", key))
+    return result
 
 
 def _finished(doc: dict[str, Any]) -> datetime | None:
@@ -330,6 +393,7 @@ def main() -> int:
     i = sub.add_parser("image")
     i.add_argument("revision")
     i.add_argument("--repo", default="Al-Sarraf-Tech/klukai")
+    i.add_argument("--signing-key", type=Path, default=SIGNING_KEY)
     i.add_argument(
         "--dest", type=Path, default=Path.home() / ".local/state/klukai/ci-releases"
     )
@@ -352,8 +416,16 @@ def main() -> int:
             )
             if not token:
                 raise ValueError("Set GH_TOKEN to check CI status")
+            if not args.signing_key.is_file():
+                raise ValueError(f"Release signing key missing: {args.signing_key}")
             run = green_run(args.repo, args.revision, token)
-            result = fetch_image(guest, run, args.revision, args.dest / args.revision)
+            result = fetch_image(
+                guest,
+                run,
+                args.revision,
+                args.dest / args.revision,
+                key=args.signing_key,
+            )
         else:
             args.state.mkdir(mode=0o700, parents=True, exist_ok=True)
             args.sink.parent.mkdir(parents=True, exist_ok=True)

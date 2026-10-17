@@ -62,15 +62,44 @@ class FakeAgent:
         raise AssertionError(name)
 
 
-def manifest(revision: str = REV, payload: bytes = b"image-bytes") -> bytes:
+def materials() -> dict[str, bytes]:
+    return {
+        "sbom.cdx.json": json.dumps(
+            {"bomFormat": "CycloneDX", "components": [{"name": "fastapi"}]}
+        ).encode(),
+        "licenses.json": b'{"Results": []}',
+        "license-verdict.json": b'{"passed": true, "findings": 1}',
+        "reproducibility.json": b'{"identical": true}',
+    }
+
+
+def manifest(
+    revision: str = REV, payload: bytes = b"image-bytes", files: dict | None = None
+) -> bytes:
+    files = materials() if files is None else files
     return json.dumps(
         {
-            "schema": 1,
+            "schema": 2,
             "revision": revision,
+            "source_tree": "c" * 40,
             "tar_sha256": release_artifact.hashlib.sha256(payload).hexdigest(),
             "layers": [LAYER],
+            "tools": {"trivy": "Version: 0.71.0"},
+            "materials": {
+                name: release_artifact.hashlib.sha256(body).hexdigest()
+                for name, body in files.items()
+            },
+            "reproducibility": {"identical": True},
         }
     ).encode()
+
+
+def release_files(base: str, revision: str = REV, **changes: bytes) -> dict:
+    files = {**materials(), **changes}
+    found = {f"{base}/{name}": body for name, body in files.items()}
+    found[f"{base}/manifest.json"] = manifest(revision, files=materials())
+    found[f"{base}/core-image.tar"] = b"image-bytes"
+    return found
 
 
 class GuestTests(unittest.TestCase):
@@ -113,6 +142,7 @@ class GuestTests(unittest.TestCase):
             }
         )
         self.assertLess(len(reply), relay.LIBVIRT_AGENT_REPLY_MAX * 0.75)
+        self.assertLess(len(reply), relay.LIBVIRT_RPC_STRING_MAX * 0.75)
 
     def test_ssh_connection_failure_is_reported_as_host_unreachable(self) -> None:
         down = subprocess.CompletedProcess([], 255, "", "No route to host")
@@ -192,12 +222,7 @@ class GreenRunTests(unittest.TestCase):
 class FetchImageTests(unittest.TestCase):
     def test_verified_image_is_loaded_from_the_exact_run_directory(self) -> None:
         base = f"/opt/klukai-ci/artifacts/{REV}/9-1/release"
-        agent = FakeAgent(
-            {
-                f"{base}/manifest.json": manifest(),
-                f"{base}/core-image.tar": b"image-bytes",
-            }
-        )
+        agent = FakeAgent(release_files(base))
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(
@@ -205,20 +230,103 @@ class FetchImageTests(unittest.TestCase):
             ) as verify,
         ):
             result = relay.fetch_image(relay.Guest(agent), "9-1", REV, Path(tmp))
-        self.assertEqual(result, {"tag": "ok"})
+        self.assertEqual(result["tag"], "ok")
+        self.assertEqual(result["sbom_components"], 1)
         self.assertEqual(verify.call_args.args[3], f"klukai-core:ci-{REV[:7]}")
+
+    def test_tampered_material_stops_before_the_image_transfer(self) -> None:
+        base = f"/opt/klukai-ci/artifacts/{REV}/9-1/release"
+        agent = FakeAgent(
+            release_files(base, **{"license-verdict.json": b'{"passed": false}'})
+        )
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
+            relay.fetch_image(relay.Guest(agent), "9-1", REV, Path(tmp))
+        self.assertNotIn(f"{base}/core-image.tar", agent.reads)
+
+    def test_provenance_is_signed_only_after_verification_and_verifies(self) -> None:
+        base = f"/opt/klukai-ci/artifacts/{REV}/9-1/release"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            key = root / "release_ed25519"
+            subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-C",
+                    "test",
+                    "-f",
+                    str(key),
+                ],
+                check=True,
+            )
+            dest = root / "dest"
+            with mock.patch.object(
+                release_artifact, "verify", return_value={"tag": "ok"}
+            ):
+                result = relay.fetch_image(
+                    relay.Guest(FakeAgent(release_files(base))),
+                    "9-1",
+                    REV,
+                    dest,
+                    key=key,
+                )
+            signers = root / "allowed_signers"
+            signers.write_text(
+                'klukai-release@amarillo namespaces="klukai-release" '
+                + (root / "release_ed25519.pub").read_text()
+            )
+            provenance = dest / "provenance.json"
+            verify = subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-Y",
+                    "verify",
+                    "-f",
+                    str(signers),
+                    "-I",
+                    "klukai-release@amarillo",
+                    "-n",
+                    "klukai-release",
+                    "-s",
+                    result["signature"],
+                ],
+                input=provenance.read_bytes(),
+                capture_output=True,
+            )
+            self.assertEqual(verify.returncode, 0, verify.stderr)
+            doc = json.loads(provenance.read_text())
+            self.assertEqual(doc["ci_run"], "9-1")
+            self.assertEqual(
+                doc["manifest_sha256"],
+                release_artifact.sha256(dest / "manifest.json"),
+            )
+            # A failed verification never leaves a fresh signature behind.
+            with (
+                mock.patch.object(
+                    release_artifact, "verify", side_effect=ValueError("x")
+                ),
+                self.assertRaises(ValueError),
+            ):
+                relay.fetch_image(
+                    relay.Guest(FakeAgent(release_files(base))),
+                    "9-1",
+                    REV,
+                    dest,
+                    key=key,
+                )
+            self.assertFalse((dest / "provenance.json.sig").exists())
 
     def test_manifest_for_another_revision_stops_before_the_image_transfer(
         self,
     ) -> None:
         base = f"/opt/klukai-ci/artifacts/{REV}/9-1/release"
         other = "5d9c3f054d9f1a6c56da091a7f9bd3fbffc1df27"
-        agent = FakeAgent(
-            {
-                f"{base}/manifest.json": manifest(other),
-                f"{base}/core-image.tar": b"image-bytes",
-            }
-        )
+        agent = FakeAgent(release_files(base, revision=other))
+        agent.files[f"{base}/manifest.json"] = manifest(other)
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
             relay.fetch_image(relay.Guest(agent), "9-1", REV, Path(tmp))
         self.assertNotIn(f"{base}/core-image.tar", agent.reads)
@@ -310,9 +418,12 @@ class ReleaseManifestTests(unittest.TestCase):
         good = json.loads(manifest())
         release_artifact.check_manifest(good, REV)
         for broken in (
-            {**good, "schema": 2},
+            {**good, "schema": 1},
             {**good, "layers": []},
             {**good, "tar_sha256": "x"},
+            {**good, "materials": {}},
+            {**good, "tools": {}},
+            {**good, "source_tree": "short"},
         ):
             with self.assertRaises(ValueError):
                 release_artifact.check_manifest(broken, REV)
