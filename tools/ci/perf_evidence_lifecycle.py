@@ -233,7 +233,7 @@ class Sequence:
             require(
                 not row["stdout_text"].strip()
                 and re.search(
-                    r"(?:No such (?:object|container|network|volume): "
+                    r"(?:(?i:no such) (?:object|container|network|volume): "
                     + re.escape(name)
                     + r"|(?:network|volume) "
                     + re.escape(name)

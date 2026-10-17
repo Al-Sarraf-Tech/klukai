@@ -92,6 +92,8 @@ jobs:
       # unprivileged user namespaces; wheels still build offline from hash-verified
       # downloads and the report records the missing sandbox.
       KLUKAI_CI_NATIVE_SANDBOX: unavailable
+      # Pinned native Chrome on the heavy guest (AppArmor userns profile installed).
+      KLUKAI_CHROME_BINARY: /opt/klukai-ci/toolchains/b838d34bba223857b3cab6b924de31a9ddee0c1f7c81df7611f3a0cb883a17c7/chrome/chrome
       KLUKAI_TEST_ALLOW_LIVE_BACKENDS: "0"
       KLUKAI_CLAUDE_PRIMARY: "false"
       KLUKAI_CREATIVE_TEXT_PROVIDER: "local"

@@ -159,7 +159,7 @@ def verify_absent(kind: str, name: str) -> None:
     row = recorder.rows[-1]
     error = (recorder.output / row["stderr"]).read_text()
     if row["exit_code"] == 0 or not re.search(
-        r"(?:No such (?:object|container|network|volume): "
+        r"(?:(?i:no such) (?:object|container|network|volume): "
         + re.escape(name)
         + r"|(?:network|volume) "
         + re.escape(name)
