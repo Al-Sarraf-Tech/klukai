@@ -100,6 +100,13 @@ Owner: "Get the rest to S and deploy". Decisions:
 | secrets | `.env`, the core override and old deploy snapshots moved into the encrypted store and archive; plaintext deleted | `klukai_secrets.py check`: plaintext absent; plain `docker compose` fails with "required variable … is missing" |
 | #14 | content reproducibility; nightly onboarding drill; e2e fixes | Two CI builds have 6,770 files each, none differing; drill result below |
 
+Review (2026-10-17): the owner had a fresh-context Claude session review everything since `2d52345`. It found three important issues in the deployer:
+- a rollout escaping without rolling back;
+- a 5xx gate that queried a label core doesn't export;
+- unsafe image-only rollback across migration or compose changes.
+
+It also found six minor ones. One of the minor ones was confirmed live: restore checks had left six anonymous volumes holding restored database copies, and they were deleted. All findings are fixed in #16.
+
 Incidents:
 - **513d859 was fast-forwarded without a PR.** CI was green on that commit; the PR flow was restored from #13 on.
 - **The guest agent fix needed a manual drain.** Even a restarted virtqemud re-read the stale 16 MiB reply, so it was drained from the socket by hand (646,921 bytes), followed by a resync and restart. The relay's 4 MiB chunks then hit virsh's 4 MiB RPC string cap, so it now reads 2 MiB.
@@ -112,9 +119,9 @@ Incidents:
 
 ## S-tier ledger (honest)
 
-Not an overall S yet: PROC-1 lacks the independent review. Rows marked met have direct evidence for
-`c6d02f0` (2026-10-16), `71dea42` or the production release `b93172d` (2026-10-17). 19 met, 1 partial.
-By dimension, every dimension except Process is at S.
+Not an overall S yet. Rows marked met have direct evidence for `c6d02f0` (2026-10-16), `71dea42` or
+the production release `b93172d` (2026-10-17). 18 met, 2 partial (SEC-3, PROC-1). By dimension: Code,
+Testing, Reliability, Observability, Performance and Docs are at S; Security and Process are not.
 
 | ID | Status | Evidence / gap |
 | --- | --- | --- |
@@ -126,16 +133,16 @@ By dimension, every dimension except Process is at S.
 | TEST-3 | Met | `tools.ci.mutation` on the heavy guest, run 39052144718 at 71dea42 (first run 39051043616 at d26cf90, same result): 1,072/1,300 killed (82.46%), 0 errors, timeouts or no-test mutants; every mutant bound to raw pytest observations, source/test hashes and mutmut 3.6.0; strict validator passed. Survivors: affection 161, speech 47, classifier 17, audit chain 3 |
 | SEC-1 | Met | distroless non-root, no shell/pip, digest-pinned bases and hash locks; on the CI artifact Trivy finds 0 HIGH/CRITICAL and 0 secrets; the owner licence policy (2026-10-17) is enforced in CI: 127 findings, 0 violations (GPL/LGPL allowed for private use; MPL-2.0 only for 5 reviewed packages) |
 | SEC-2 | Met | the CI manifest binds a per-build CycloneDX SBOM (93 components), the licence inventory and verdict, reproducibility, source tree, base images and tool versions by digest; `provenance.json` is signed (ssh-keygen, namespace `klukai-release`, committed signer) only after full verification and checked again at deploy; Trivy is SHA-256-pinned; actions are SHA-pinned; gitleaks and the image secret scan are clean |
-| SEC-3 | Met | production compose secrets are only `systemd-creds` user credentials (TPM2 + host key, name-bound, 0600 in a 0700 store) with a previous version and a host-key recovery copy; plaintext `.env`, the override and old snapshots are deleted (snapshots archived encrypted); values preserved (byte-identical resolved config, live deploy); rotate/rollback/recover drill passed; a missing, corrupt or exposed credential fails closed and plain compose refuses to render |
+| SEC-3 | Partial | compose interpolation secrets and the private core override are only `systemd-creds` user credentials (TPM2 + host key, name-bound, 0600 in a 0700 store) with a previous version and a host-key recovery copy. Plaintext `.env`, override and old snapshots are deleted (archived encrypted). Values preserved (byte-identical resolved config, live deploy); rotate/rollback/recover drill passed; missing, corrupt or exposed credentials fail closed and plain compose refuses to render. **Gap:** two internal bearer tokens (`.runtime-secrets/metrics-token`, `alert-bridge-token`) are still 0600 plaintext files mounted into the obs containers. Moving them needs a system unit that decrypts before docker starts containers on boot (owner decision) |
 | REL-1 | Met | assertions mapped to passing CI tests. postgres fail-closed: `test_postgres_auth_failure_and_real_protocol_recovery`. redis ownership: `test_redis_session_failure_closed_and_preserved_owner_recovery`. qdrant degrade: `test_qdrant_real_search_loss_keeps_optional_memory_and_recovers`. model breaker recovery: `test_breaker_half_open_recovers_on_success`, `test_classifier_failures_open_model_breaker_without_secret_logs`. voice keeps text: `test_offline_voice_keeps_text_and_authenticated_socket_usable`. images: `test_actual_busy_worker_can_retry_without_duplicate_render`, `test_global_agy_missing_or_unauthorized_user_cannot_fall_back`. search: `test_mcp_open_breaker_rejects_tool_without_network`, `test_tool_timeout_records_error_and_recovers_session` |
 | REL-2 | Met | the CI real-backend job injects PostgreSQL/Valkey/Qdrant faults, with real open→half-open→closed transitions, cancellation releasing pools and readiness recovery (`runtime_backends.py`, `health_runtime_backends.py`); shutdown joins producers before the database closes (`test_application_shutdown.py`); the perf harness fails on a non-graceful candidate shutdown |
-| REL-3 | Met | every release takes a fresh dump and restores it into an isolated throwaway PostgreSQL (same image, no network) with all tables and key row counts checked; automatic rollback to an immutable tag of the previous image was proven by the drill; runtime settings are preserved (encrypted store plus image pin); data is never restored or touched, so newer writes survive |
+| REL-3 | Met | every release takes a fresh dump and restores it into an isolated throwaway PostgreSQL (same image, no network, removed with its volume), checking all tables and key row counts. Automatic rollback to an immutable tag of the previous image covers every failure after the switch (proven by the drill and by tests for compose errors and interrupts). A release that changes migrations or compose, which an image-only rollback cannot undo, is refused without `--accept-manual-rollback`. Runtime settings are preserved; data is never restored or touched |
 | OBS-1 | Met | bounded RED/breaker/LLM metrics at token-protected `/internal/metrics` (401 without the token); Prometheus scrapes `job=klukai-core`, target up, live series queried (2026-10-16 follow-up) |
 | OBS-2 | Met | 60 recording + 23 alert rules healthy; Alertmanager routes to the owner on the bus (live test note `1f64201f21d4`, resolved; Prometheus 0 notification errors); Grafana loads both provisioned dashboards; retention 35d (20 GB cap) covers the 30-day window, first complete window 2026-11-01 |
-| PERF-1 | Met | CI paired disposable gate vs previous `main`: login 1.00, readiness 0.21, max pooled 1.32 (`POST /api/tts`, +2.9 ms, below the 5 ms floor). The per-round rule can fail an A/A comparison (2026-10-17 nightly), so it errs toward false failures; owner decision pending |
+| PERF-1 | Met | CI paired disposable gate vs previous `main`: login 1.00, readiness 0.21, max pooled 1.32 (`POST /api/tts`, +2.9 ms, below the 5 ms floor). Since 2026-10-17 a regression must show in at least 2 of 3 rounds (owner decision, after an A/A nightly failed on one noisy round) |
 | PERF-2 | Met | nightly paired run per night, revision-bound summary kept on the guest (raw bundles 14 days), relayed hourly into Loki stamped at `finished_at` and queryable as `{job="klukai-perf-nightly"}`; the window guard, `passed: false` summaries and a 3-day owner warning make missing collection explicit |
 | DOC-1 | Met | README, architecture (release and secrets), runbooks (release, encrypted credentials, failure taxonomy) match the code; the nightly onboarding drill runs `docs/onboarding.md` §2-§4 verbatim from a clean clone against throwaway infrastructure and passed (run 39077712985), after it found and fixed two real doc gaps; the dated result is in `docs/onboarding-test-result.json`; an extra human fresh-VM run remains welcome |
-| PROC-1 | Partial | PRs and blocking self-hosted CI, `main` protected (`Required CI gates`); #13/#14 via PR, but 513d859 was fast-forwarded without a PR (CI green on the exact head). No independent review yet: Codex is out of quota until 2026-10-22 and Gemini's print mode needs the owner to sign in once (`.claude/gemini-review/run.sh` is ready) |
+| PROC-1 | Partial | PRs and blocking self-hosted CI, `main` protected (`Required CI gates`); #13-#16 went through PRs, but 513d859 was fast-forwarded without one (CI green on the exact head). A fresh-context Claude session reviewed `2d52345..cced45c` (REQUEST CHANGES: 3 important, 6 minor; all fixed in #16). It shares the author's model family, so this is not an independent review: Codex is out of quota until 2026-10-22, and Gemini is out of quota |
 | PROC-2 | Met | CI builds once, scans and retains the image; amarillo transfers it through the guest agent and verifies the green run, manifest, materials, tar, layers and revision; production runs that exact image ID (`ci-b93172d`, no rebuild) after the deployer re-checks the signed provenance; reproducibility: two separate CI builds have identical content (6,770 files, timestamps excluded) and 18/23 identical layer digests (the rest differ by timestamps only) |
 | PROC-3 | Met | the exact CI-green commit `b93172d` is deployed as its CI image, with the revision label bound and the image ID read back; the PWA bundle (`e1d6942f`) comes from Flutter source unchanged since; live smoke: public auth, forged/anonymous rejection, WSS and revocation (4001), token redaction, 0 server errors; e2e user journeys as `claude` |
 
@@ -143,10 +150,12 @@ By dimension, every dimension except Process is at S.
 
 1. Done: `main` protection; licence policy (2026-10-17: GPL/LGPL allowed for private use, enforced in CI);
    alert routing to the bus; perf rule (regression in at least 2 of 3 rounds).
-2. **Independent review (PROC-1, the last open row).** Gemini via `agy` needs one print-mode sign-in by the owner
-   (`agy -p "Reply OK"`); then `.claude/gemini-review/run.sh`. Alternatively Codex after its quota resets on 2026-10-22.
-3. Durable fix for the fleet-CI boot deadlock (bus thread e638a8095d1e).
-4. Retention for the other per-run CI evidence on the heavy guest (about 800 MB per run; release tars and nightly
+2. **Independent review (PROC-1).** Codex after its quota resets on 2026-10-22 (`.claude/codex-review/`, update
+   the prompts to `2d52345..main`), or Gemini when its quota returns (`.claude/gemini-review/run.sh`).
+3. **SEC-3 tokens.** Allow a system unit that decrypts the metrics and alert-bridge tokens into `/run` before
+   docker starts the obs containers, or accept them as 0600 files.
+4. Durable fix for the fleet-CI boot deadlock (bus thread e638a8095d1e).
+5. Retention for the other per-run CI evidence on the heavy guest (about 800 MB per run; release tars and nightly
    bundles are pruned already).
-5. `hypothesis` (a test library) ships in the production image via `requirements.txt`; consider moving it to the CI
+6. `hypothesis` (a test library) ships in the production image via `requirements.txt`; consider moving it to the CI
    requirements.
