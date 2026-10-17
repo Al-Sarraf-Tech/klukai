@@ -38,6 +38,7 @@ from tools.ci import release_artifact  # noqa: E402
 
 ARTIFACTS = "/opt/klukai-ci/artifacts"
 SIGNING_NAMESPACE = "klukai-release"
+SCAN_JOB = "Image Scan (trivy)"
 SIGNING_KEY = Path.home() / ".config/klukai/release-signing/release_ed25519"
 # Two libvirt limits bound each guest-file-read. virtqemud rejects any agent
 # reply over 10 MiB and then disables the agent channel until the stale reply is
@@ -181,6 +182,60 @@ def green_run(repo: str, revision: str, token: str, api: Any = github) -> str:
     raise ValueError("No successful CI run with Required CI gates for this revision")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+def job_log(repo: str, job_id: int, token: str) -> str:
+    """Plain-text log of one Actions job. GitHub answers with a redirect to a
+    pre-signed URL; follow it without forwarding the API token."""
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/actions/jobs/{int(job_id)}/logs",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=30) as r:
+            return r.read().decode(errors="replace")
+    except urllib.error.HTTPError as error:
+        location = error.headers.get("Location", "")
+        error.close()
+        if error.code not in (301, 302, 303, 307, 308) or not location.startswith(
+            "https://"
+        ):
+            raise RuntimeError(f"job log unavailable (HTTP {error.code})") from error
+    with urllib.request.urlopen(location, timeout=60) as response:
+        return response.read().decode(errors="replace")
+
+
+def ci_manifest_digest(
+    repo: str, run: str, token: str, api: Any = github, log: Any = job_log
+) -> str:
+    """The manifest SHA-256 that the run's own image-scan job printed. GitHub's
+    job log is written by the run, so this binds the guest's bytes to it: a
+    file written to the shared heavy guest by any other job will not match."""
+    run_id, attempt = run.split("-")
+    jobs = api(
+        f"/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=50",
+        token,
+    )["jobs"]
+    scan = [j for j in jobs if j["name"] == SCAN_JOB and j["conclusion"] == "success"]
+    if len(scan) != 1:
+        raise ValueError("The run has no successful image-scan job")
+    found = set(
+        re.findall(
+            r"KLUKAI_RELEASE_MANIFEST_SHA256=([0-9a-f]{64})",
+            log(repo, scan[0]["id"], token),
+        )
+    )
+    if len(found) != 1:
+        raise ValueError("The image-scan job log does not record one manifest digest")
+    return found.pop()
+
+
 def sign(path: Path, key: Path) -> Path:
     """ssh-keygen signature over one file in the klukai-release namespace."""
     signature = path.with_name(path.name + ".sig")
@@ -213,6 +268,7 @@ def fetch_image(
     dest: Path,
     *,
     key: Path | None = None,
+    manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
     release_artifact._revision(revision)
     if not re.fullmatch(r"\d+-\d+", run):
@@ -223,6 +279,12 @@ def fetch_image(
     guest.read(f"{remote}/manifest.json", dest / "manifest.json")
     manifest = json.loads((dest / "manifest.json").read_text())
     release_artifact.check_manifest(manifest, revision)
+    if manifest.get("run") != run:
+        raise ValueError("Manifest was saved by a different CI run")
+    if manifest_sha256 is not None and (
+        release_artifact.sha256(dest / "manifest.json") != manifest_sha256
+    ):
+        raise ValueError("Manifest differs from the digest the CI job logged")
     for name in release_artifact.MATERIALS:
         guest.read(f"{remote}/{name}", dest / name)
     materials = release_artifact.verify_materials(dest, manifest)
@@ -424,6 +486,7 @@ def main() -> int:
                 run,
                 args.revision,
                 args.dest / args.revision,
+                manifest_sha256=ci_manifest_digest(args.repo, run, token),
                 key=args.signing_key,
             )
         else:

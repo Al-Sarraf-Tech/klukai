@@ -275,6 +275,7 @@ jobs:
     name: Image Scan (trivy)
     needs: source-policy
     runs-on: [self-hosted, Linux, X64, ci-heavy]
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -354,6 +355,10 @@ jobs:
             --tool "trivy=$KLUKAI_TOOL_TRIVY" --tool "docker=$KLUKAI_TOOL_DOCKER" \
             --tool "buildx=$KLUKAI_TOOL_BUILDX" --tool "python=$(python3 --version)"
           docker image rm "$image" >/dev/null
+          # The relay compares the guest's manifest with this line in the run's
+          # own job log, so bytes another job writes on the shared guest cannot
+          # be signed as this run's artifact.
+          echo "KLUKAI_RELEASE_MANIFEST_SHA256=$(sha256sum "$RELEASE_DIR/manifest.json" | cut -d' ' -f1)"
           # Bound the guest disk: image tars (~200 MB each) older than 7 days go;
           # their manifests stay as the record. The relay refuses a missing tar.
           find "$KLUKAI_CI_ARTIFACT_ROOT" -mindepth 4 -maxdepth 4 -type f \

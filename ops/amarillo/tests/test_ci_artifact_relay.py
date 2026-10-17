@@ -81,6 +81,7 @@ def manifest(
         {
             "schema": 2,
             "revision": revision,
+            "run": "9-1",
             "source_tree": "c" * 40,
             "tar_sha256": release_artifact.hashlib.sha256(payload).hexdigest(),
             "layers": [LAYER],
@@ -233,6 +234,52 @@ class FetchImageTests(unittest.TestCase):
         self.assertEqual(result["tag"], "ok")
         self.assertEqual(result["sbom_components"], 1)
         self.assertEqual(verify.call_args.args[3], f"klukai-core:ci-{REV[:7]}")
+
+    def test_manifest_from_another_run_or_unlogged_digest_is_refused(self) -> None:
+        base = f"/opt/klukai-ci/artifacts/{REV}/9-1/release"
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
+            relay.fetch_image(
+                relay.Guest(FakeAgent(release_files(base))),
+                "9-1",
+                REV,
+                Path(tmp),
+                manifest_sha256="0" * 64,
+            )
+        other = f"/opt/klukai-ci/artifacts/{REV}/8-1/release"
+        files = {k.replace(base, other): v for k, v in release_files(base).items()}
+        agent = FakeAgent(files)
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
+            relay.fetch_image(relay.Guest(agent), "8-1", REV, Path(tmp))
+        self.assertNotIn(f"{other}/core-image.tar", agent.reads)
+
+    def test_the_ci_logged_digest_is_read_from_the_runs_own_scan_job(self) -> None:
+        digest = "a" * 64
+        jobs = {
+            "jobs": [
+                {"id": 5, "name": "Lint", "conclusion": "success"},
+                {"id": 7, "name": "Image Scan (trivy)", "conclusion": "success"},
+            ]
+        }
+        seen = {}
+
+        def api(path: str, token: str) -> dict:
+            seen["path"] = path
+            return jobs
+
+        def log(repo: str, job_id: int, token: str) -> str:
+            seen["job"] = job_id
+            return (
+                'echo "KLUKAI_RELEASE_MANIFEST_SHA256=$(sha256sum ...)"\n'
+                f"KLUKAI_RELEASE_MANIFEST_SHA256={digest}\n"
+            )
+
+        self.assertEqual(
+            relay.ci_manifest_digest("o/r", "9-2", "tok", api, log), digest
+        )
+        self.assertIn("/runs/9/attempts/2/jobs", seen["path"])
+        self.assertEqual(seen["job"], 7)
+        with self.assertRaises(ValueError):
+            relay.ci_manifest_digest("o/r", "9-2", "tok", api, lambda *a: "nothing")
 
     def test_tampered_material_stops_before_the_image_transfer(self) -> None:
         base = f"/opt/klukai-ci/artifacts/{REV}/9-1/release"
