@@ -158,7 +158,8 @@ def base_environment(config: dict[str, Any], role: str) -> dict[str, str]:
         "PG_MAJOR": r"17",
         "PG_VERSION": r"17[0-9A-Za-z.+-]*",
         "VALKEY_VERSION": r"[0-9.]+",
-        "DOCKER_PG_LLVM_DEPS": r"[A-Za-z0-9 .+_-]+",
+        # The reviewed postgres:17-alpine image separates these with tabs.
+        "DOCKER_PG_LLVM_DEPS": r"[A-Za-z0-9 \t.+_-]+",
         "PGDATA": r"/var/lib/postgresql/data(?:/pgdata)?",
         "HOME": r"/home/(?:appuser|nonroot)",
         "XDG_CACHE_HOME": r"/tmp/klukai-cache",
