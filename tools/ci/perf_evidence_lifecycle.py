@@ -105,7 +105,9 @@ def host_profile(
         if dependency == "postgres"
         else []
     )
-    require((host.get("CapAdd") or []) == expected_caps, "Actual capabilities differ")
+    # Newer Docker engines report added capabilities as CAP_CHOWN, not CHOWN.
+    actual_caps = sorted(cap.removeprefix("CAP_") for cap in host.get("CapAdd") or [])
+    require(actual_caps == expected_caps, "Actual capabilities differ")
     argv = flags(dependency, name, network, volume, env=env, image=image["Id"])
     tmpfs = dict(
         item.split(":", 1)
@@ -153,10 +155,14 @@ def profile(
     ]
     require(mounts == expected_mounts, "Unexpected actual mounts")
     config = info["Config"]
+    # The containerd image store omits an empty User (null) where container
+    # inspect reports "": both mean the image default.
     expected_user = (
-        "1000:1000" if dependency in {"core", "redis"} else image["Config"]["User"]
+        "1000:1000"
+        if dependency in {"core", "redis"}
+        else image["Config"]["User"] or ""
     )
-    require(config["User"] == expected_user, "Effective container USER differs")
+    require((config["User"] or "") == expected_user, "Effective container USER differs")
     entrypoint = (
         ["/usr/local/bin/python"]
         if dependency == "fixture"
@@ -179,10 +185,11 @@ def profile(
         actual_env == {**base, **env}, "Actual exact worker/base environment differs"
     )
     networks = info["NetworkSettings"]["Networks"]
+    # Newer Docker engines clear the address once a container stops.
     require(
         set(networks) == {network}
         and type(networks[network]["IPAddress"]) is str
-        and networks[network]["IPAddress"],
+        and (bool(networks[network]["IPAddress"]) or not running),
         "Actual isolated network differs",
     )
     state = info["State"]

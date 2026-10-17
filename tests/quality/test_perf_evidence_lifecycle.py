@@ -420,3 +420,32 @@ def test_container_log_levels_are_not_python_warnings(tmp_path):
             )
     rehash(output)
     assert validate(root, output, revision, 1)["certifying"] is True
+
+
+def test_newer_docker_engine_inspect_spellings_still_certify(tmp_path):
+    """containerd store + Docker 29: CAP_ prefixes, omitted User, no stopped IP."""
+    from perf_evidence_fixture import bundle, rehash
+    from tools.ci.perf_evidence import validate
+
+    root, output, revision = bundle(tmp_path)
+
+    def change(rows):
+        for row in rows:
+            if row["argv"][1] not in {"inspect", "image"} or row["exit_code"]:
+                continue
+            data = json.loads(row["stdout_bytes"])
+            if not isinstance(data, dict) or "Config" not in data:
+                continue
+            if row["argv"][1] == "image" and data["Config"].get("User") == "":
+                data["Config"]["User"] = None
+            host = data.get("HostConfig") or {}
+            if host.get("CapAdd"):
+                host["CapAdd"] = ["CAP_" + cap for cap in host["CapAdd"]]
+            if data.get("State", {}).get("Running") is False:
+                for network in data["NetworkSettings"]["Networks"].values():
+                    network["IPAddress"] = ""
+            row["stdout_bytes"] = json.dumps(data)
+
+    rewrite_transcript(output, change)
+    rehash(output)
+    assert validate(root, output, revision, 1)["certifying"] is True
