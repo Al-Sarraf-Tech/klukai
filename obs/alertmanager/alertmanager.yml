@@ -1,0 +1,29 @@
+# Klukai alert delivery: every alert goes to the owner as a bus note.
+# The receiver is the host-side bridge (ops/amarillo/scripts/klukai-alert-bridge.py,
+# user unit klukai-alert-bridge.service) on the klukai-obs gateway; it runs
+# `bus send owner@amarillo --note` and returns 502 on failure so we retry.
+route:
+  receiver: bus-owner
+  group_by: [alertname, method, route]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Dominus (GPU host) is powered off by design every night and often by day,
+    # so its breakers opening is expected, not news. Everything else still pages.
+    - matchers:
+        - alertname="KlukaiDependencyCircuitOpen"
+        - dep=~"lm_studio|gpu_gateway|voice|embedding"
+      receiver: dominus-expected-downtime
+
+receivers:
+  - name: dominus-expected-downtime   # intentionally no delivery
+  - name: bus-owner
+    webhook_configs:
+      - url: http://192.168.128.1:19095/alert
+        send_resolved: true
+        max_alerts: 20
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/secrets/alert-bridge-token

@@ -66,8 +66,14 @@ scrape_configs:
           service: klukai-core
 
 # Generated SLO recordings and alerts (python -m tools.observability.slo_assets).
-# No Alertmanager is configured yet: alerts evaluate and show in Prometheus and
-# Grafana but are not routed anywhere. Reload after rule changes:
+# Alerts route through klukai-alertmanager to the owner on the bus
+# (obs/alertmanager/alertmanager.yml). Reload after rule changes:
 #   curl -X POST http://127.0.0.1:19090/-/reload
 rule_files:
   - /etc/prometheus/rules/klukai-slo.rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - klukai-alertmanager:9093

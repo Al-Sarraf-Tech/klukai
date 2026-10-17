@@ -1,0 +1,18 @@
+[Unit]
+Description=Klukai Alertmanager to bus bridge (owner notes)
+After=default.target docker.service
+
+[Service]
+Type=simple
+UMask=0077
+WorkingDirectory=%h/git/klukai
+Environment=HOME=%h
+# Listens only on the klukai-obs Docker network gateway; Alertmanager posts here
+# with the private bearer token shared through .runtime-secrets (0600, not in Git).
+ExecStart=/usr/bin/python3 %h/git/klukai/ops/amarillo/scripts/klukai-alert-bridge.py --bind 192.168.128.1:19095 --token-file %h/git/klukai/.runtime-secrets/alert-bridge-token --bus %h/.local/bin/bus --target owner@amarillo --project klukai
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

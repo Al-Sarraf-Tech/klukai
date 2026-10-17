@@ -35,7 +35,22 @@ The root operator owns activation on the existing approved collector. Prometheus
 
 Activated 2026-10-16. `obs/prometheus/prometheus.yml` scrapes `companion-core:8300/internal/metrics` as `job: klukai-core` over the `klukai-obs` network, with `credentials_file: /etc/prometheus/secrets/metrics-token`. `docker-compose.obs.yml` mounts that file read-only from `${KLUKAI_RUNTIME_SECRETS_DIR:-./.runtime-secrets}/metrics-token` (the same private 0600 file core reads; ignored by Git) and mounts `klukai-slo.rules.yml` under `rule_files`. A disposable Prometheus on that network verified the target `up`, 83 rules healthy with no evaluation errors, and live `klukai_http_requests_total` data before rollout. Rotating the token: write a new 0600 file, then recreate Prometheus; core rereads it on every scrape.
 
-No Alertmanager is configured: alerts evaluate and appear in Prometheus and Grafana but are not routed. Notification routing remains a separate acceptance step.
+Alerts route to the owner on the bus (owner decision 2026-10-16). Prometheus sends to `klukai-alertmanager` (`obs/alertmanager/alertmanager.yml`), which groups by alert/method/route, repeats every 4h, sends resolutions, and posts to the host bridge `ops/amarillo/scripts/klukai-alert-bridge.py` on the `klukai-obs` gateway `192.168.128.1:19095`. The bridge requires the private bearer token `.runtime-secrets/alert-bridge-token` (0600, outside Git), turns each batch into one `bus send owner@amarillo --note "KLUKAI_ALERT …"`, and answers 502 when the bus send fails so Alertmanager retries. Breaker alerts for the Dominus-backed dependencies (`lm_studio`, `gpu_gateway`, `voice`, `embedding`) go to a silent receiver because that host is powered off by design every night and often by day; every other alert is delivered.
+
+Delivery was proven on 2026-10-17 with a disposable Alertmanager and the bridge: a test alert produced owner bus note `2b4fad1bc8e7` about 30 s later (the group wait).
+
+Activation on amarillo (after the change is on `main`):
+
+```bash
+cd ~/git/klukai
+install -m 0644 ops/amarillo/systemd/klukai-alert-bridge.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now klukai-alert-bridge.service
+install -d -m 0750 /mnt/nvmeINT/obs/klukai/alertmanager
+docker compose -p klukai -f docker-compose.obs.yml up -d --no-deps alertmanager prometheus
+```
+
+If the `klukai-obs` network is ever recreated with a different subnet, update the gateway address in the unit and in `alertmanager.yml`; the bridge refuses to listen on all interfaces.
+
 
 ## Live acceptance
 
