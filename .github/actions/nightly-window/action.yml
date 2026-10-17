@@ -1,0 +1,26 @@
+name: Nightly window guard
+description: >-
+  Owner directive 2026-10-15: nightly jobs end by 23:30 America/Chicago and
+  Dominus is off by 23:45. A queued nightly job may start late (Dominus boots
+  when the owner powers it on), so refuse to start unless it can finish in time.
+  Refusal is an explicit failure, never a silent skip.
+inputs:
+  latest-start:
+    description: Latest Central start time as HHMM that still finishes by 23:30.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Require the nightly window (America/Chicago)
+      shell: bash
+      env:
+        LATEST: ${{ inputs.latest-start }}
+      run: |
+        set -euo pipefail
+        [[ "$LATEST" =~ ^[0-2][0-9][0-5][0-9]$ ]]
+        now=$(TZ=America/Chicago date +%H%M)
+        if (( 10#$now < 500 || 10#$now >= 10#$LATEST )); then
+          echo "::error title=Outside nightly window::Central time $now; this job may start 05:00-$LATEST so it ends before the 23:30 hard stop."
+          exit 1
+        fi
+        echo "Central time $now is inside the window (latest start $LATEST)."

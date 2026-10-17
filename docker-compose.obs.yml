@@ -34,6 +34,8 @@ services:
       - "127.0.0.1:14318:4318"   # OTLP HTTP ingest
     volumes:
       - ./obs/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Nightly perf summaries pulled from the CI guest (read-only).
+      - /mnt/nvmeINT/obs/klukai/perf-nightly:/var/lib/klukai-perf-nightly:ro
       # Alloy data is ephemeral buffer state — no host bind needed;
       # uses container-internal tmpfs equivalent. Restart-safe per the
       # restart: unless-stopped policy below.

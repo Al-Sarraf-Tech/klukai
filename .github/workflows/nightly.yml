@@ -5,7 +5,9 @@ name: Klukai Nightly
 # Jobs:
 #   1. mutation-test    — mutmut 3.x on character-critical paths (config in
 #                         docker/core/setup.cfg); kill-rate ratchet gate
-#   2. perf-baseline    — captures latency snapshot; compares via perf_compare.py
+#   2. perf-nightly     — paired disposable p99 run of main vs its previous commit;
+#                         summary retained on the heavy guest, pulled into Grafana
+#                         by ops/amarillo/scripts/klukai-fetch-ci-artifacts.py
 #   3. trivy-deep       — full HIGH+CRITICAL fs scan, BLOCKING (installs trivy
 #                         to a writable dir if missing — fs scan needs no Docker)
 #
@@ -19,13 +21,17 @@ name: Klukai Nightly
 
 on:
   schedule:
-    - cron: '7 4 * * *'   # 04:07 UTC, off the :00 mark per CronCreate guidance
+    # 01:37 UTC = 20:37 CDT / 19:37 CST, well before the 23:30 nightly hard
+    # stop. If Dominus is off, GitHub keeps the jobs queued until it boots; each
+    # job's window guard then refuses to start if it could not finish in time.
+    - cron: '37 1 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
+
+env:
+  KLUKAI_NIGHTLY_ROOT: /opt/klukai-ci/artifacts/nightly
 
 jobs:
   mutation:
@@ -36,7 +42,12 @@ jobs:
       run:
         working-directory: docker/core
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/nightly-window
+        with:
+          latest-start: "2115"   # up to 120 minutes
 
       - name: Install deps into a venv (PATH-safe)
         run: |
@@ -109,61 +120,78 @@ jobs:
           sys.exit(0 if rate >= floor else 1)
           PY
 
-      - name: Upload mutation results
+      - name: Retain mutation results on the heavy guest (no GitHub storage)
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mutation-results-${{ github.run_number }}
-          path: /tmp/mutmut-results.txt
-          if-no-files-found: warn
+        run: |
+          out="${KLUKAI_NIGHTLY_ROOT}/mutation/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          install -d -m 0700 "$out"
+          cp /tmp/mutmut-results.txt "$out/" 2>/dev/null || echo "no mutation results to retain"
 
-  perf-baseline:
-    name: Perf baseline capture
+  perf-nightly:
+    name: Nightly paired performance (retained)
     runs-on: [self-hosted, Linux, X64, ci-heavy]
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      KLUKAI_CI_NATIVE_SANDBOX: unavailable
+      KLUKAI_PERF_POSTGRES_IMAGE: postgres@sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1
+      KLUKAI_PERF_REDIS_IMAGE: valkey/valkey@sha256:cb3339abbd6e18942cd8ac3349f0c371a82ba5b6204b242563ba299e7956cbd0
+      KLUKAI_PERF_QDRANT_IMAGE: qdrant/qdrant@sha256:f1c7272cdac52b38c1a0e89313922d940ba50afd90d593a1605dbbc214e66ffb
+      KLUKAI_PERF_FIXTURE_IMAGE: python@sha256:dc1546eefcbe8caaa1f004f16ab76b204b5e1dbd58ff81b899f21cd40541232f
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Run probe against live stack
-        run: |
-          if curl -sf -m 3 http://localhost:8300/health >/dev/null 2>&1; then
-            python3 tools/load-test/probe.py \
-              --base http://localhost:8300 \
-              --requests 500 \
-              --concurrency 10 \
-              --out /tmp/perf-current.json
-          else
-            echo "::warning title=Perf capture skipped::klukai-core not reachable from this runner — no live perf data captured tonight."
-          fi
-
-      - name: Compare to committed baseline (p99 gate)
-        run: |
-          if [[ ! -f /tmp/perf-current.json ]]; then
-            echo "::warning title=Perf gate skipped::no current snapshot (stack unreachable)."
-            exit 0
-          fi
-          # 1.5× (not the SLO 1.2×): runner, probe and the live stack share
-          # one host, so p99 of a 500-request sample moves with ambient load.
-          python3 tools/load-test/perf_compare.py \
-            docs/perf-baseline.json /tmp/perf-current.json --threshold 1.50 \
-            | tee /tmp/perf-drift.txt
-
-      - name: Upload perf artifact
-        if: always()
-        uses: actions/upload-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: perf-nightly-${{ github.run_number }}
-          path: |
-            /tmp/perf-current.json
-            /tmp/perf-drift.txt
-          if-no-files-found: ignore
+          ref: ${{ github.sha }}   # main on the schedule; the branch head when dispatched
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/nightly-window
+        with:
+          latest-start: "2245"   # about 15 minutes of measurement
+      - uses: ./.github/actions/python-tools
+        env:
+          KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/nightly-${{ github.run_id }}-${{ github.run_attempt }}
+          KLUKAI_CI_REVISION: ${{ github.sha }}
+      - name: Measure main against its previous commit and retain the summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          head=$(git rev-parse HEAD)
+          base=$(git rev-parse HEAD^1)
+          stamp=$(date -u +%Y-%m-%dT%H-%MZ)
+          dir="${KLUKAI_NIGHTLY_ROOT}/${stamp}-${head:0:7}"
+          install -d -m 0700 "$dir"
+          for image in "$KLUKAI_PERF_POSTGRES_IMAGE" "$KLUKAI_PERF_REDIS_IMAGE" \
+                       "$KLUKAI_PERF_QDRANT_IMAGE" "$KLUKAI_PERF_FIXTURE_IMAGE"; do
+            docker pull --quiet "$image" >/dev/null
+          done
+          docker build --quiet --build-arg VCS_REF="$head" \
+            --label org.opencontainers.image.revision="$head" \
+            -t "klukai-core:nightly-candidate-$GITHUB_RUN_ID" docker/core >/dev/null
+          git archive --format=tar "$base:docker/core" | docker build --quiet \
+            --build-arg VCS_REF="$base" --label org.opencontainers.image.revision="$base" \
+            -t "klukai-core:nightly-baseline-$GITHUB_RUN_ID" - >/dev/null
+          status=0
+          python -B -m tools.ci.perf_stack \
+            --baseline-image "$(docker image inspect -f '{{.Id}}' "klukai-core:nightly-baseline-$GITHUB_RUN_ID")" \
+            --candidate-image "$(docker image inspect -f '{{.Id}}' "klukai-core:nightly-candidate-$GITHUB_RUN_ID")" \
+            --baseline-revision "$base" --candidate-revision "$head" \
+            --out "$dir/evidence" || status=$?
+          python -B -m tools.ci.perf_nightly --evidence "$dir/evidence" --output "$dir/summary.json"
+          docker image rm "klukai-core:nightly-candidate-$GITHUB_RUN_ID" \
+            "klukai-core:nightly-baseline-$GITHUB_RUN_ID" >/dev/null 2>&1 || true
+          exit "$status"
 
   trivy-deep:
     name: Trivy deep scan
     runs-on: [self-hosted, Linux, X64, ci-heavy]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/nightly-window
+        with:
+          latest-start: "2300"
 
       - name: Install trivy if missing (fs scan needs no Docker)
         # The upstream install.sh needs tooling this slim runner lacks, so
@@ -201,10 +229,9 @@ jobs:
           # report-only pass for the full severity picture
           trivy fs --severity MEDIUM,HIGH,CRITICAL --exit-code 0 --quiet . || true
 
-      - name: Upload trivy results
+      - name: Retain trivy results on the heavy guest (no GitHub storage)
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-nightly-${{ github.run_number }}
-          path: /tmp/trivy-deep.json
-          if-no-files-found: ignore
+        run: |
+          out="${KLUKAI_NIGHTLY_ROOT}/trivy/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          install -d -m 0700 "$out"
+          cp /tmp/trivy-deep.json "$out/" 2>/dev/null || echo "no trivy results to retain"

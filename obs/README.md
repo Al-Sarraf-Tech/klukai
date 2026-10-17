@@ -52,6 +52,32 @@ docker compose -p klukai -f docker-compose.obs.yml up -d --no-deps alertmanager 
 If the `klukai-obs` network is ever recreated with a different subnet, update the gateway address in the unit and in `alertmanager.yml`; the bridge refuses to listen on all interfaces.
 
 
+## Nightly performance history
+
+`.github/workflows/nightly.yml` runs the paired disposable harness on `main`
+against its previous commit at 20:37 CDT (19:37 CST). If Dominus is off, the job
+waits in the queue and its window guard refuses to start unless it can finish
+before the 23:30 hard stop; a refused or failed night is an explicit failure,
+and a harness failure still writes a `passed: false` summary. Summaries are kept
+on the heavy guest under `/opt/klukai-ci/artifacts/nightly/<UTC stamp>-<sha7>/`.
+
+Amarillo's hourly `klukai-ci-relay.timer` pulls new summaries through the
+Dominus guest agent into `/mnt/nvmeINT/obs/klukai/perf-nightly/summaries.jsonl`
+(one verdict line per night and one line per route), which Alloy ships to Loki.
+It sends the owner a bus note when no summary has arrived for 3 days. In Grafana:
+
+```logql
+avg_over_time({job="klukai-perf-nightly"} | json | kind="route" | unwrap candidate_p99_ms [1d]) by (route)
+```
+
+Enable on amarillo after the change is on `main`:
+
+```bash
+install -m 0644 ops/amarillo/systemd/klukai-ci-relay.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now klukai-ci-relay.timer
+docker compose -p klukai -f docker-compose.obs.yml up -d --no-deps alloy
+```
+
 ## Live acceptance
 
 Select the actual approved local collector endpoint and retain redacted query JSON with source/artifact identity. The commands below are read-only; executing them and inspecting successful, nonempty results is required. Example endpoint selection is not evidence that this port belongs to the intended collector.

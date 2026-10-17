@@ -293,8 +293,26 @@ jobs:
             curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.71.0/contrib/install.sh \
               | sh -s -- -b "$BIN" v0.71.0
           trivy --version
-          docker build -t klukai-core:ci -f docker/core/Dockerfile docker/core/
-          trivy image --severity HIGH,CRITICAL --exit-code 1 --no-progress klukai-core:ci
+          image="klukai-core:release-${GITHUB_SHA}"
+          docker build --build-arg VCS_REF="$GITHUB_SHA" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            -t "$image" -f docker/core/Dockerfile docker/core/
+          trivy image --severity HIGH,CRITICAL --exit-code 1 --no-progress "$image"
+
+      - name: Retain the scanned image for digest-verified deployment
+        # Amarillo pulls this exact tar through the Dominus guest agent after the
+        # whole run is green (ops/amarillo/scripts/klukai-fetch-ci-artifacts.py)
+        # and checks its hash, layers and revision before tagging it for deploy.
+        env:
+          RELEASE_DIR: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/release
+        run: |
+          set -euo pipefail
+          umask 077
+          image="klukai-core:release-${GITHUB_SHA}"
+          python3 -m tools.ci.release_artifact save --image "$image" \
+            --revision "$GITHUB_SHA" --output "$RELEASE_DIR" \
+            --run "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker image rm "$image" >/dev/null
 
 
 

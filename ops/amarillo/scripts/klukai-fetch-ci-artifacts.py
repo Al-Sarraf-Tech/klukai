@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""Pull CI evidence out of the isolated heavy guest onto amarillo.
+
+The CI guest has no route to amarillo by design. Amarillo already reaches it
+through the Dominus host's QEMU guest agent (ssh + `sudo virsh
+qemu-agent-command`), so the guest stays isolated and Dominus needs no extra
+software:
+
+* `image <revision>`: require a successful GitHub CI run for that exact commit
+  (including the aggregate "Required CI gates" job), stream its retained
+  `release/core-image.tar` + `manifest.json`, then verify and load it with
+  tools.ci.release_artifact (tar hash, layer diff IDs, revision label).
+* `nightly`: copy new nightly performance summaries into a JSON-lines file the
+  observability stack ingests; optionally warn the owner when none is recent.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+from datetime import UTC, datetime, timedelta
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+import time
+import urllib.request
+from typing import Any, Protocol
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from tools.ci import release_artifact  # noqa: E402
+
+ARTIFACTS = "/opt/klukai-ci/artifacts"
+CHUNK = 16 * 1024 * 1024
+
+
+class Transport(Protocol):
+    def agent(self, command: dict[str, Any]) -> Any: ...
+
+
+class VirshAgent:
+    """QEMU guest agent of the heavy guest, via ssh to the Dominus host."""
+
+    def __init__(self, host: str, domain: str) -> None:
+        self.host, self.domain = host, domain
+
+    def agent(self, command: dict[str, Any]) -> Any:
+        remote = shlex.join(
+            [
+                "sudo",
+                "-n",
+                "virsh",
+                "-c",
+                "qemu:///system",
+                "qemu-agent-command",
+                self.domain,
+                json.dumps(command),
+            ]
+        )
+        result = subprocess.run(
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                self.host,
+                remote,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode:
+            raise RuntimeError(f"guest agent failed: {result.stderr.strip()[:200]}")
+        return json.loads(result.stdout)["return"]
+
+
+class Guest:
+    def __init__(self, transport: Transport) -> None:
+        self.transport = transport
+
+    def run(self, argv: list[str], timeout: float = 120) -> str:
+        started = self.transport.agent(
+            {
+                "execute": "guest-exec",
+                "arguments": {"path": argv[0], "arg": argv[1:], "capture-output": True},
+            }
+        )
+        deadline = time.monotonic() + timeout
+        while True:
+            status = self.transport.agent(
+                {"execute": "guest-exec-status", "arguments": {"pid": started["pid"]}}
+            )
+            if status.get("exited"):
+                break
+            if time.monotonic() > deadline:
+                raise RuntimeError("guest command timed out")
+            time.sleep(0.5)
+        if status.get("exitcode") != 0:
+            raise RuntimeError(f"guest command failed: {argv[:2]}")
+        return base64.b64decode(status.get("out-data", "")).decode()
+
+    def read(self, path: str, dest: Path) -> None:
+        handle = self.transport.agent(
+            {"execute": "guest-file-open", "arguments": {"path": path, "mode": "r"}}
+        )
+        try:
+            with dest.open("wb") as out:
+                while True:
+                    chunk = self.transport.agent(
+                        {
+                            "execute": "guest-file-read",
+                            "arguments": {"handle": handle, "count": CHUNK},
+                        }
+                    )
+                    out.write(base64.b64decode(chunk.get("buf-b64", "")))
+                    if chunk.get("eof"):
+                        break
+        finally:
+            self.transport.agent(
+                {"execute": "guest-file-close", "arguments": {"handle": handle}}
+            )
+
+
+def github(path: str, token: str) -> Any:
+    request = urllib.request.Request(
+        "https://api.github.com" + path,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+def green_run(repo: str, revision: str, token: str, api: Any = github) -> str:
+    """Return '<run_id>-<attempt>' of the newest fully green CI run for the commit."""
+    runs = api(
+        f"/repos/{repo}/actions/workflows/ci.yml/runs?head_sha={revision}"
+        "&status=success&per_page=20",
+        token,
+    )["workflow_runs"]
+    for run in sorted(runs, key=lambda r: r["run_started_at"], reverse=True):
+        if run["head_sha"] != revision or run["conclusion"] != "success":
+            continue
+        jobs = api(f"/repos/{repo}/actions/runs/{run['id']}/jobs?per_page=50", token)
+        if any(
+            j["name"] == "Required CI gates" and j["conclusion"] == "success"
+            for j in jobs["jobs"]
+        ):
+            return f"{run['id']}-{run['run_attempt']}"
+    raise ValueError("No successful CI run with Required CI gates for this revision")
+
+
+def fetch_image(guest: Guest, run: str, revision: str, dest: Path) -> dict[str, Any]:
+    if not re.fullmatch(r"\d+-\d+", run):
+        raise ValueError("Invalid CI run identity")
+    remote = f"{ARTIFACTS}/{revision}/{run}/release"
+    dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    guest.read(f"{remote}/manifest.json", dest / "manifest.json")
+    release_artifact.check_manifest(
+        json.loads((dest / "manifest.json").read_text()), revision
+    )
+    guest.read(f"{remote}/core-image.tar", dest / "core-image.tar")
+    return release_artifact.verify(
+        dest / "core-image.tar",
+        dest / "manifest.json",
+        revision,
+        f"klukai-core:ci-{revision[:7]}",
+    )
+
+
+def valid_summary(doc: Any) -> bool:
+    return (
+        isinstance(doc, dict)
+        and re.fullmatch(r"[0-9a-f]{40}", str(doc.get("revision", ""))) is not None
+        and isinstance(doc.get("finished_at"), str)
+        and isinstance(doc.get("routes"), list)
+        and all(
+            isinstance(r, dict) and isinstance(r.get("candidate_p99_ms"), (int, float))
+            for r in doc["routes"]
+        )
+    )
+
+
+def rows(doc: dict[str, Any]) -> list[dict[str, Any]]:
+    """One verdict line per night plus one flat line per route, for Loki/Grafana."""
+    common = {
+        "source": "klukai-perf-nightly",
+        "revision": doc["revision"],
+        "finished_at": doc["finished_at"],
+        "passed": doc.get("passed") is True,
+    }
+    night = {
+        **common,
+        "kind": "night",
+        "max_p99_ratio": doc.get("max_p99_ratio"),
+        "failure": doc.get("failure"),
+    }
+    return [night] + [
+        {
+            **common,
+            "kind": "route",
+            "method": r.get("method"),
+            "route": r.get("route"),
+            "candidate_p99_ms": r["candidate_p99_ms"],
+            "baseline_p99_ms": r.get("baseline_p99_ms"),
+            "p99_ratio": r.get("p99_ratio"),
+        }
+        for r in doc["routes"]
+    ]
+
+
+def fetch_nightly(guest: Guest, state: Path, sink: Path) -> list[str]:
+    listing = guest.run(
+        [
+            "/usr/bin/find",
+            f"{ARTIFACTS}/nightly",
+            "-maxdepth",
+            "2",
+            "-name",
+            "summary.json",
+        ]
+    )
+    seen = state / "seen.txt"
+    known = set(seen.read_text().split()) if seen.exists() else set()
+    added = []
+    for path in sorted(
+        line for line in listing.split() if line.endswith("/summary.json")
+    ):
+        name = path.split("/")[-2]
+        if name in known or not re.fullmatch(r"[0-9TZ:-]+-[0-9a-f]{7}", name):
+            continue
+        local = state / f"{name}.json"
+        guest.read(path, local)
+        doc = json.loads(local.read_text())
+        if not valid_summary(doc):
+            local.unlink()
+            continue
+        with sink.open("a") as out:
+            for row in rows(doc):
+                out.write(json.dumps(row, sort_keys=True) + "\n")
+        with seen.open("a") as out:
+            out.write(name + "\n")
+        added.append(name)
+    return added
+
+
+def stale(state: Path, max_age: timedelta, now: datetime | None = None) -> bool:
+    newest = None
+    for path in state.glob("*.json"):
+        finished = datetime.fromisoformat(json.loads(path.read_text())["finished_at"])
+        newest = finished if newest is None or finished > newest else newest
+    return newest is None or (now or datetime.now(UTC)) - newest > max_age
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", default="dominus-nobara")
+    parser.add_argument("--domain", default="fleet-ci-heavy-nobara")
+    sub = parser.add_subparsers(dest="command", required=True)
+    i = sub.add_parser("image")
+    i.add_argument("revision")
+    i.add_argument("--repo", default="Al-Sarraf-Tech/klukai")
+    i.add_argument(
+        "--dest", type=Path, default=Path.home() / ".local/state/klukai/ci-releases"
+    )
+    n = sub.add_parser("nightly")
+    n.add_argument(
+        "--state", type=Path, default=Path.home() / ".local/state/klukai/perf-nightly"
+    )
+    n.add_argument(
+        "--sink",
+        type=Path,
+        default=Path("/mnt/nvmeINT/obs/klukai/perf-nightly/summaries.jsonl"),
+    )
+    n.add_argument("--warn-after-days", type=int, default=0)
+    args = parser.parse_args()
+    guest = Guest(VirshAgent(args.host, args.domain))
+    try:
+        if args.command == "image":
+            token = os.environ.get("GH_TOKEN") or os.environ.get(
+                "GITHUB_PERSONAL_ACCESS_TOKEN"
+            )
+            if not token:
+                raise ValueError("Set GH_TOKEN to check CI status")
+            run = green_run(args.repo, args.revision, token)
+            result = fetch_image(guest, run, args.revision, args.dest / args.revision)
+        else:
+            args.state.mkdir(mode=0o700, parents=True, exist_ok=True)
+            args.sink.parent.mkdir(parents=True, exist_ok=True)
+            result = {"added": fetch_nightly(guest, args.state, args.sink)}
+            if args.warn_after_days and stale(
+                args.state, timedelta(days=args.warn_after_days)
+            ):
+                subprocess.run(
+                    [
+                        os.path.expanduser("~/.local/bin/bus"),
+                        "send",
+                        "owner@amarillo",
+                        "--project",
+                        "klukai",
+                        "--note",
+                        f"KLUKAI_PERF_NIGHTLY missing: no nightly performance summary in "
+                        f"{args.warn_after_days} days (Dominus off at the nightly window?)",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    timeout=60,
+                )
+                result["stale"] = True
+    except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+        print(f"fetch refused: {error}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

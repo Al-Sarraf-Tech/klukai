@@ -1,0 +1,12 @@
+[Unit]
+Description=Pull Klukai nightly CI evidence from the isolated heavy guest
+After=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+WorkingDirectory=%h/git/klukai
+Environment=HOME=%h
+# Uses ssh to the Dominus host's guest agent; quietly fails while Dominus is off.
+ExecStart=/usr/bin/python3 %h/git/klukai/ops/amarillo/scripts/klukai-fetch-ci-artifacts.py nightly --warn-after-days 3
+TimeoutStartSec=15min

@@ -134,3 +134,16 @@ otelcol.exporter.otlp "tempo" {
     }
   }
 }
+
+// Nightly performance summaries pulled from the CI guest by
+// ops/amarillo/scripts/klukai-fetch-ci-artifacts.py (one JSON line per route
+// per night). Query in Grafana, e.g.
+//   avg_over_time({job="klukai-perf-nightly"} | json | unwrap candidate_p99_ms [1d]) by (route)
+local.file_match "perf_nightly" {
+  path_targets = [{"__path__" = "/var/lib/klukai-perf-nightly/*.jsonl", "job" = "klukai-perf-nightly"}]
+}
+
+loki.source.file "perf_nightly" {
+  targets    = local.file_match.perf_nightly.targets
+  forward_to = [loki.write.klukai.receiver]
+}

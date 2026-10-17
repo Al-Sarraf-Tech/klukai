@@ -444,7 +444,11 @@ docker compose build companion-core && docker compose up -d companion-core
 
 # Production (amarillo): never run an unqualified compose for core. It can drop
 # the preserved runtime settings or select the wrong image. Deploy the prebuilt
-# image of a CI-green commit through the private runtime override instead:
+# image of a CI-green commit through the private runtime override instead.
+# Pull the exact image CI built and scanned (refuses unless that commit's run
+# passed "Required CI gates"; verifies tar hash, layers and revision label):
+#   GH_TOKEN=... ops/amarillo/scripts/klukai-fetch-ci-artifacts.py image <sha>
+#   # -> tags klukai-core:ci-<sha7>; point the override's image at that tag, then
 #   docker compose -f docker-compose.yml \
 #     -f ~/.local/state/klukai/<deployment>/preserve-runtime.private.json \
 #     up -d --no-build --no-deps companion-core
