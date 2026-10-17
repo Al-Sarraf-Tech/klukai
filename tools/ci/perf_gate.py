@@ -93,8 +93,13 @@ def _identity(
         raise ValueError("Unverified or mismatched image revision")
     if report.get("cleanup_verified") is not True:
         raise ValueError("Disposable resources were not verified clean")
-    temperature = number(report.get("cpu_temperature_max_c"))
-    if temperature >= 70:
+    telemetry = report.get("thermal_telemetry", "sensors")
+    if telemetry == "virtualized-guest":
+        if report.get("cpu_temperature_max_c") is not None:
+            raise ValueError("Virtualized evidence cannot carry a sensor reading")
+    elif telemetry != "sensors":
+        raise ValueError("Unknown thermal telemetry")
+    elif number(report.get("cpu_temperature_max_c")) >= 70:
         raise ValueError("Thermal safety budget exceeded")
 
 

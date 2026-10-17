@@ -88,6 +88,10 @@ jobs:
     runs-on: [self-hosted, Linux, X64, ci-heavy]
     timeout-minutes: 20
     env:
+      # Light containers drop all capabilities and the Ubuntu heavy guest restricts
+      # unprivileged user namespaces; wheels still build offline from hash-verified
+      # downloads and the report records the missing sandbox.
+      KLUKAI_CI_NATIVE_SANDBOX: unavailable
       KLUKAI_TEST_ALLOW_LIVE_BACKENDS: "0"
       KLUKAI_CLAUDE_PRIMARY: "false"
       KLUKAI_CREATIVE_TEXT_PROVIDER: "local"
@@ -178,6 +182,11 @@ jobs:
     needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
     timeout-minutes: 20
+    env:
+      # Light containers drop all capabilities and the Ubuntu heavy guest restricts
+      # unprivileged user namespaces; wheels still build offline from hash-verified
+      # downloads and the report records the missing sandbox.
+      KLUKAI_CI_NATIVE_SANDBOX: unavailable
     defaults:
       run:
         working-directory: docker/core
@@ -203,6 +212,11 @@ jobs:
     needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
     timeout-minutes: 20
+    env:
+      # Light containers drop all capabilities and the Ubuntu heavy guest restricts
+      # unprivileged user namespaces; wheels still build offline from hash-verified
+      # downloads and the report records the missing sandbox.
+      KLUKAI_CI_NATIVE_SANDBOX: unavailable
     defaults:
       run:
         working-directory: docker/core
@@ -226,6 +240,11 @@ jobs:
     needs: source-policy
     runs-on: [fleet-ci-v1, ci-small]
     timeout-minutes: 20
+    env:
+      # Light containers drop all capabilities and the Ubuntu heavy guest restricts
+      # unprivileged user namespaces; wheels still build offline from hash-verified
+      # downloads and the report records the missing sandbox.
+      KLUKAI_CI_NATIVE_SANDBOX: unavailable
     defaults:
       run:
         working-directory: docker/core
@@ -280,38 +299,69 @@ jobs:
     name: Perf Gate (p99 regression check)
     needs: source-policy
     runs-on: [self-hosted, Linux, X64, ci-heavy]
-    defaults:
-      run:
-        working-directory: docker/core
+    timeout-minutes: 60
+    env:
+      KLUKAI_CI_NATIVE_SANDBOX: unavailable
+      # Same reviewed images as perf_resources.BACKEND_IMAGES, by registry digest.
+      KLUKAI_PERF_POSTGRES_IMAGE: postgres@sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1
+      KLUKAI_PERF_REDIS_IMAGE: valkey/valkey@sha256:cb3339abbd6e18942cd8ac3349f0c371a82ba5b6204b242563ba299e7956cbd0
+      KLUKAI_PERF_QDRANT_IMAGE: qdrant/qdrant@sha256:f1c7272cdac52b38c1a0e89313922d940ba50afd90d593a1605dbbc214e66ffb
+      KLUKAI_PERF_FIXTURE_IMAGE: python@sha256:dc1546eefcbe8caaa1f004f16ab76b204b5e1dbd58ff81b899f21cd40541232f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Install dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio
+      - uses: ./.github/actions/python-tools
+        env:
+          KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/perf
 
-      - name: Require target and capture performance samples
+      - name: Build the candidate and the previous main revision
+        id: images
+        shell: bash
         run: |
-          curl --fail --silent --show-error --max-time 3 http://localhost:8300/health >/dev/null
-          python3 ../../tools/load-test/probe.py \
-            --base http://localhost:8300 \
-            --requests 100 \
-            --concurrency 5 \
-            --out /tmp/perf-current.json
+          set -euo pipefail
+          command -v docker
+          docker info >/dev/null
+          base=$(git merge-base origin/main "$GITHUB_SHA")
+          if [ "$base" = "$GITHUB_SHA" ]; then base=$(git rev-parse "$GITHUB_SHA^1"); fi
+          for image in "$KLUKAI_PERF_POSTGRES_IMAGE" "$KLUKAI_PERF_REDIS_IMAGE" \
+                       "$KLUKAI_PERF_QDRANT_IMAGE" "$KLUKAI_PERF_FIXTURE_IMAGE"; do
+            docker pull --quiet "$image" >/dev/null
+          done
+          docker build --quiet --build-arg VCS_REF="$GITHUB_SHA" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            -t "klukai-core:perf-candidate-$GITHUB_RUN_ID" docker/core >/dev/null
+          git archive --format=tar "$base:docker/core" | docker build --quiet \
+            --build-arg VCS_REF="$base" --label org.opencontainers.image.revision="$base" \
+            -t "klukai-core:perf-baseline-$GITHUB_RUN_ID" - >/dev/null
+          {
+            echo "baseline_revision=$base"
+            echo "baseline_image=$(docker image inspect --format '{{.Id}}' "klukai-core:perf-baseline-$GITHUB_RUN_ID")"
+            echo "candidate_image=$(docker image inspect --format '{{.Id}}' "klukai-core:perf-candidate-$GITHUB_RUN_ID")"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Compare p99 against committed baseline (20% delta threshold)
-        # Single source of truth for the comparison: tools/load-test/perf_compare.py
-        # (the old inline script read a schema probe.py never produced, so the
-        # gate compared zero endpoints and always passed — fixed 2026-06-11).
+      - name: Paired disposable p99 gate (20% budget, absolute SLOs)
+        shell: bash
+        env:
+          BASELINE_IMAGE: ${{ steps.images.outputs.baseline_image }}
+          CANDIDATE_IMAGE: ${{ steps.images.outputs.candidate_image }}
+          BASELINE_REVISION: ${{ steps.images.outputs.baseline_revision }}
         run: |
-          test -s /tmp/perf-current.json
-          python3 ../../tools/load-test/perf_compare.py \
-            ../../docs/perf-baseline.json /tmp/perf-current.json --threshold 1.20
+          set -euo pipefail
+          out="${KLUKAI_CI_ARTIFACT_ROOT%/}/${GITHUB_SHA}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/perf"
+          python -B -m tools.ci.perf_stack \
+            --baseline-image "$BASELINE_IMAGE" --candidate-image "$CANDIDATE_IMAGE" \
+            --baseline-revision "$BASELINE_REVISION" --candidate-revision "$GITHUB_SHA" \
+            --out "$out"
+
+      - name: Remove run-scoped perf images
+        if: always()
+        run: |
+          docker image rm "klukai-core:perf-candidate-$GITHUB_RUN_ID" \
+            "klukai-core:perf-baseline-$GITHUB_RUN_ID" >/dev/null 2>&1 || true
 
   frontend:
     name: Frontend validation and immutable PWA evidence

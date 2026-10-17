@@ -70,6 +70,8 @@ def prerequisites(commands: Commands) -> dict[str, Any]:
 
 
 def namespace(commands: Commands, output: Path) -> dict[str, Any]:
+    if light_environment_sandbox.mode() == "unavailable":
+        return dict(light_environment_sandbox.UNAVAILABLE)
     record = light_environment_sandbox.identity(commands)
     builder, downloads, wheels = (
         output / name for name in ("builder", "downloads", "wheels")
@@ -150,7 +152,8 @@ def unchanged(report: dict[str, Any], output: Path) -> None:
         )
     light_environment_sandbox.unchanged(report["sandbox"])
     require(
-        report["sandbox"]["capability"] is True,
+        report["sandbox"]["capability"] is True
+        or report["sandbox"] == light_environment_sandbox.UNAVAILABLE,
         "Missing component namespace capability",
     )
     record = report["compose"]

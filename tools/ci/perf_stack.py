@@ -265,6 +265,7 @@ async def _execute(args: argparse.Namespace) -> dict[str, Any]:
                     finished_at=datetime.now(UTC).isoformat(),
                     cleanup_verified=stack.cleanup_verified,
                     cpu_temperature_max_c=stack.maximum_temperature,
+                    thermal_telemetry=stack.thermal_telemetry,
                 )
                 write_exclusive(args.out / f"{role}.json", report)
     result = compare(
@@ -392,7 +393,12 @@ def main() -> int:
                     "certifying": False,
                 },
             )
-        parser.exit(1, f"Performance stack failed closed: {type(error).__name__}\n")
+        # Disposable credentials die with their containers; the reason is needed
+        # to diagnose a refused CI gate.
+        detail = str(error).replace("\n", " ")[:400]
+        parser.exit(
+            1, f"Performance stack failed closed: {type(error).__name__}: {detail}\n"
+        )
     print(
         json.dumps(
             {key: result[key] for key in ("passed", "certifying", "max_p99_ratio")}

@@ -32,6 +32,34 @@ BACKEND_IMAGES = {
     "qdrant": "sha256:d88816626f62fbf8d3468cd8b6330ba1bff6d2219b05c00d9e1b85311747ac2a",
     "fixture": "sha256:18e30fdc01cec4f4e299dff7e93c1acc385807403c6bcb1ffdfe704d2bf64202",
 }
+# Docker's containerd image store reports the registry index digest as the
+# image ID; the classic store reports the config digest above. Both identify
+# the same reviewed images (postgres:17-alpine, valkey:8-alpine, qdrant and
+# python:3.13-slim), so either form certifies.
+BACKEND_INDEX_DIGESTS = {
+    "postgres": "sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1",
+    "redis": "sha256:cb3339abbd6e18942cd8ac3349f0c371a82ba5b6204b242563ba299e7956cbd0",
+    "qdrant": "sha256:f1c7272cdac52b38c1a0e89313922d940ba50afd90d593a1605dbbc214e66ffb",
+    "fixture": "sha256:dc1546eefcbe8caaa1f004f16ab76b204b5e1dbd58ff81b899f21cd40541232f",
+}
+# Recorded instead of a reading when a VM guest cannot see host CPU sensors.
+VIRTUALIZED = "virtualized-guest"
+
+
+def reviewed_backends(images: dict[str, str]) -> bool:
+    return set(images) == set(BACKEND_IMAGES) and all(
+        image in (BACKEND_IMAGES[role], BACKEND_INDEX_DIGESTS[role])
+        for role, image in images.items()
+    )
+
+
+def virtualized_guest() -> bool:
+    for line in Path("/proc/cpuinfo").read_text().splitlines():
+        if line.startswith("flags"):
+            return "hypervisor" in line.split()
+    return False
+
+
 RESOURCES = {
     "core": {"nano_cpus": 1_400_000_000, "memory_bytes": 768 * 1024**2},
     "postgres": {"nano_cpus": 400_000_000, "memory_bytes": 384 * 1024**2},
@@ -98,7 +126,8 @@ def inspect_image(reference: str, *, role: str = "core") -> dict[str, Any]:
     }
 
 
-def cpu_temperature() -> float:
+def cpu_temperature() -> float | None:
+    """The 70C limit protects bare-metal hosts; a VM guest has no host sensors."""
     readings: list[float] = []
     for directory in Path("/sys/class/hwmon").glob("*"):
         try:
@@ -109,6 +138,8 @@ def cpu_temperature() -> float:
             readings.extend(
                 float(file.read_text()) / 1000 for file in directory.glob("temp*_input")
             )
+    if not readings and virtualized_guest():
+        return None
     if not readings or not 0 < max(readings) < 70:
         raise RuntimeError("CPU thermal capability missing or70C safety limit reached")
     return max(readings)
@@ -328,7 +359,7 @@ class DisposableStack:
             self.backend_images[dependency] = inspect_image(reference, role=dependency)[
                 "id"
             ]
-        if certifying and self.backend_images != BACKEND_IMAGES:
+        if certifying and not reviewed_backends(self.backend_images):
             raise ValueError(
                 "Certifying performance requires reviewed backend image IDs"
             )
@@ -391,8 +422,16 @@ class DisposableStack:
                         ) from None
                     time.sleep(0.1)
 
+    @property
+    def thermal_telemetry(self) -> str:
+        return VIRTUALIZED if self.maximum_temperature is None else "sensors"
+
     def check_temperature(self) -> None:
-        self.maximum_temperature = max(self.maximum_temperature, cpu_temperature())
+        reading = cpu_temperature()
+        if (reading is None) != (self.maximum_temperature is None):
+            raise RuntimeError("CPU thermal telemetry changed during measurement")
+        if reading is not None and self.maximum_temperature is not None:
+            self.maximum_temperature = max(self.maximum_temperature, reading)
 
     def stop_core(self, name: str) -> None:
         docker("stop", "--time", "25", name)

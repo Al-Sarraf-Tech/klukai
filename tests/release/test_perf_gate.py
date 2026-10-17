@@ -409,3 +409,63 @@ async def test_loopback_proxy_cancellation_closes_active_streams():
     await upstream.wait_closed()
     with pytest.raises(ConnectionRefusedError):
         await asyncio.open_connection("127.0.0.1", port)
+
+
+def _virtualized(item):
+    item.update(cpu_temperature_max_c=None, thermal_telemetry="virtualized-guest")
+    return item
+
+
+def test_virtualized_guest_without_sensors_is_explicit_not_a_reading():
+    result = compare(
+        _virtualized(report()), _virtualized(report("candidate", 11)), **arguments()
+    )
+    assert result["passed"] is True
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"thermal_telemetry": "virtualized-guest"},  # reading present
+        {"thermal_telemetry": "guessed"},
+        {"cpu_temperature_max_c": None},  # sensors claimed, none read
+    ],
+)
+def test_thermal_telemetry_cannot_be_forged_or_omitted(change):
+    candidate = report("candidate", 11) | change
+    with pytest.raises(ValueError):
+        compare(report(), candidate, **arguments())
+
+
+def test_cpu_temperature_is_unobservable_only_inside_a_hypervisor(
+    monkeypatch, tmp_path
+):
+    from tools.ci import perf_resources
+
+    monkeypatch.setattr(perf_resources, "Path", _NoSensors(tmp_path))
+    monkeypatch.setattr(perf_resources, "virtualized_guest", lambda: True)
+    assert perf_resources.cpu_temperature() is None
+    monkeypatch.setattr(perf_resources, "virtualized_guest", lambda: False)
+    with pytest.raises(RuntimeError, match="thermal"):
+        perf_resources.cpu_temperature()
+
+
+class _NoSensors:
+    def __init__(self, root):
+        self.root = root
+
+    def __call__(self, value):
+        return self.root / "hwmon" if value == "/sys/class/hwmon" else Path(value)
+
+
+def test_backend_identity_accepts_both_docker_image_store_forms():
+    from tools.ci.perf_resources import (
+        BACKEND_IMAGES,
+        BACKEND_INDEX_DIGESTS,
+        reviewed_backends,
+    )
+
+    assert reviewed_backends(dict(BACKEND_IMAGES))
+    assert reviewed_backends(dict(BACKEND_INDEX_DIGESTS))
+    assert not reviewed_backends(BACKEND_IMAGES | {"redis": "sha256:" + "0" * 64})
+    assert not reviewed_backends({"postgres": BACKEND_IMAGES["postgres"]})

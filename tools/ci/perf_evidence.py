@@ -21,7 +21,12 @@ from .perf_evidence_identity import (
 )
 from .perf_evidence_lifecycle import lifecycle
 from .perf_gate import compare, image_reference, revision as full_revision
-from .perf_resources import BACKEND_IMAGES, RESOURCES
+from .perf_resources import (
+    BACKEND_IMAGES,
+    RESOURCES,
+    VIRTUALIZED,
+    reviewed_backends,
+)
 from .perf_schema import digest
 
 
@@ -58,7 +63,8 @@ def inputs_bound(output: Path) -> dict[str, Any]:
         "Invalid producer tool versions",
     )
     require(
-        inputs["resources"] == RESOURCES and inputs["backend_images"] == BACKEND_IMAGES,
+        inputs["resources"] == RESOURCES
+        and reviewed_backends(inputs["backend_images"]),
         "Pinned backend/resource profile differs",
     )
     return inputs
@@ -96,6 +102,19 @@ def reports_bound(
         "Baseline is not a previous source revision",
     )
     inputs = inputs_bound(output)
+    flags = [
+        line.split()
+        for line in inputs["host"]["cpu"].splitlines()
+        if line.startswith("flags")
+    ]
+    require(
+        all(
+            r.get("thermal_telemetry", "sensors") != VIRTUALIZED
+            or (flags and "hypervisor" in flags[0])
+            for r in (baseline, candidate)
+        ),
+        "Virtualized thermal claim without a hypervisor CPU",
+    )
     policy = document(root / "docker/core/app/observability/slos.json")
     require(
         inputs["policy"] == policy

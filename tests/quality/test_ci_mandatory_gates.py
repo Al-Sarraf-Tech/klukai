@@ -26,5 +26,8 @@ def test_performance_gate_requires_samples_and_enforces_twenty_percent_budget():
     assert "exit 0" not in script, (
         "Missing target/samples currently turn performance green"
     )
-    assert "--threshold 1.20" in script
-    assert "--threshold 2.0" not in script
+    # The paired disposable harness enforces the 1.20 p99 budget and SLOs.
+    assert "python -B -m tools.ci.perf_stack" in script
+    assert "--development" not in script
+    assert "localhost:8300" not in script and "probe.py" not in script
+    assert "pip install" not in script

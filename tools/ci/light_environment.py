@@ -197,16 +197,20 @@ def bootstrap(args: argparse.Namespace, report: dict[str, Any]) -> None:
     )
     report["downloads"] = core_source.inventory(downloads)
     report["builder_ca"] = light_environment_ca.discover(commands, builder)
-    report["sandbox"] = light_environment_sandbox.identity(commands)
-    sandbox = light_environment_sandbox.command(
-        builder, downloads, wheels, ci_lock, ca=report["builder_ca"]
-    )
-    commands.run([*sandbox, "--", "/usr/bin/true"])
-    report["sandbox"]["capability"] = True
+    if light_environment_sandbox.mode() == "required":
+        report["sandbox"] = light_environment_sandbox.identity(commands)
+        sandbox = light_environment_sandbox.command(
+            builder, downloads, wheels, ci_lock, ca=report["builder_ca"]
+        )
+        sandbox.append("--")
+        commands.run([*sandbox, "/usr/bin/true"])
+        report["sandbox"]["capability"] = True
+    else:
+        report["sandbox"] = dict(light_environment_sandbox.UNAVAILABLE)
+        sandbox = light_environment_sandbox.cleared_environment()
     commands.run(
         [
             *sandbox,
-            "--",
             *pip,
             "wheel",
             "--no-index",
@@ -355,7 +359,8 @@ def selection(root: Path, output: Path, revision: str, *, role: str = "tools") -
         )
         light_environment_sandbox.unchanged(report["sandbox"])
         require(
-            report["sandbox"]["capability"] is True,
+            report["sandbox"]["capability"] is True
+            or report["sandbox"] == light_environment_sandbox.UNAVAILABLE,
             "Missing offline sandbox capability",
         )
         require(

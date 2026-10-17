@@ -15,6 +15,37 @@ from . import light_environment_ca, light_environment_init
 BWRAP = Path("/usr/bin/bwrap")
 INIT_TARGET = Path("/run/klukai-native-init.py")
 INIT_SHA256 = sha256(Path(light_environment_init.__file__))
+# Fleet light containers drop all capabilities and Ubuntu heavy guests restrict
+# unprivileged user namespaces, so workflows there must opt out explicitly.
+MODE_VARIABLE = "KLUKAI_CI_NATIVE_SANDBOX"
+UNAVAILABLE = {
+    "capability": False,
+    "mode": "unavailable",
+    "reason": "runner forbids unprivileged user namespaces; wheels build offline "
+    "(--no-index, --require-hashes) from verified downloads in a cleared environment",
+}
+
+
+def mode() -> str:
+    value = os.environ.get(MODE_VARIABLE, "required")
+    require(value in {"required", "unavailable"}, "Unknown native sandbox mode")
+    return value
+
+
+def cleared_environment() -> list[str]:
+    """Unsandboxed prefix matching the sandbox's explicit environment."""
+    return [
+        "/usr/bin/env",
+        "-i",
+        "HOME=/nonexistent",
+        "PATH=/usr/bin:/bin",
+        "LC_ALL=C.UTF-8",
+        "PIP_CONFIG_FILE=/dev/null",
+        "PIP_DISABLE_PIP_VERSION_CHECK=1",
+        "PIP_NO_CACHE_DIR=1",
+        "SOURCE_DATE_EPOCH=0",
+        "PYTHONDONTWRITEBYTECODE=1",
+    ]
 
 
 def init_material() -> dict[str, Any]:
@@ -85,6 +116,9 @@ def identity(runner: Runner) -> dict[str, Any]:
 
 
 def unchanged(record: dict[str, Any]) -> None:
+    if record == UNAVAILABLE:
+        require(mode() == "unavailable", "Sandbox opt-out was not selected")
+        return
     require(
         record["executable"] == str(BWRAP) and sha256(BWRAP) == record["sha256"],
         "Native bwrap prerequisite changed",
