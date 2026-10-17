@@ -34,7 +34,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from tools.ci import release_artifact  # noqa: E402
 
 ARTIFACTS = "/opt/klukai-ci/artifacts"
-CHUNK = 16 * 1024 * 1024
+# libvirt rejects any guest-agent reply over 10 MiB and then disables the agent
+# channel until the guest reconnects (virtqemud: "No complete agent response
+# found in 10485760 bytes"). Reads come back base64-encoded (4/3 larger), so
+# keep each chunk well below that.
+LIBVIRT_AGENT_REPLY_MAX = 10 * 1024 * 1024
+CHUNK = 4 * 1024 * 1024
 WARN_EVERY = timedelta(days=1)
 
 

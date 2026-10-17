@@ -100,6 +100,20 @@ class GuestTests(unittest.TestCase):
         self.assertIn("qemu-agent-command fleet-ci-heavy-nobara", argv[-1])
         self.assertIn('\'{"execute": "guest-ping"}\'', argv[-1])
 
+    def test_read_chunks_fit_libvirts_agent_reply_limit(self) -> None:
+        # A full chunk, base64-encoded inside the JSON reply, must stay under
+        # libvirt's cap, or the agent channel is disabled until the guest reconnects.
+        reply = json.dumps(
+            {
+                "return": {
+                    "buf-b64": base64.b64encode(b"\xff" * relay.CHUNK).decode(),
+                    "count": relay.CHUNK,
+                    "eof": False,
+                }
+            }
+        )
+        self.assertLess(len(reply), relay.LIBVIRT_AGENT_REPLY_MAX * 0.75)
+
     def test_ssh_connection_failure_is_reported_as_host_unreachable(self) -> None:
         down = subprocess.CompletedProcess([], 255, "", "No route to host")
         with mock.patch.object(relay.subprocess, "run", return_value=down):
