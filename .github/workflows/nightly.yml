@@ -5,7 +5,9 @@ name: Klukai Nightly
 #                      summary retained on the heavy guest, pulled into Grafana
 #                      by ops/amarillo/scripts/klukai-fetch-ci-artifacts.py
 #   2. trivy-deep    — full HIGH+CRITICAL fs scan, BLOCKING
-#   3. mutation      — source-bound mutmut run on the affection, audit-chain and
+#   3. onboarding    — docs/onboarding.md §2-§4 from a clean clone against
+#                      throwaway infrastructure (tools/ci/onboarding_drill.py)
+#   4. mutation      — source-bound mutmut run on the affection, audit-chain and
 #                      speech critical paths via tools.ci.mutation (raw per-mutant
 #                      evidence, >=80% killed, errors/timeouts/no-tests count as
 #                      failure); evidence retained on the heavy guest
@@ -25,7 +27,7 @@ on:
       only:
         description: Run just one job (all runs the full chain)
         type: choice
-        options: [all, perf, trivy, mutation]
+        options: [all, perf, trivy, onboarding, mutation]
         default: all
 
 permissions:
@@ -153,9 +155,36 @@ jobs:
           install -d -m 0700 "$out"
           cp /tmp/trivy-deep.json "$out/" 2>/dev/null || echo "no trivy results to retain"
 
+  onboarding:
+    name: Onboarding drill (clean clone, docs/onboarding.md)
+    needs: [perf-nightly, trivy-deep]
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","onboarding"]'), inputs.only)) }}
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    timeout-minutes: 30
+    env:
+      KLUKAI_PERF_POSTGRES_IMAGE: postgres@sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1
+      KLUKAI_PERF_REDIS_IMAGE: valkey/valkey@sha256:cb3339abbd6e18942cd8ac3349f0c371a82ba5b6204b242563ba299e7956cbd0
+      KLUKAI_PERF_QDRANT_IMAGE: qdrant/qdrant@sha256:f1c7272cdac52b38c1a0e89313922d940ba50afd90d593a1605dbbc214e66ffb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/nightly-window
+        with:
+          latest-start: "2255"   # up to 30 minutes
+      - name: Run the documented onboarding steps from a clean clone
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          out="${KLUKAI_NIGHTLY_ROOT}/onboarding/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          install -d -m 0700 "$out"
+          python3 tools/ci/onboarding_drill.py --source "$GITHUB_WORKSPACE" \
+            --revision "$GITHUB_SHA" --output "$out/result.json"
+
   mutation:
     name: Mutation test (critical paths, >=80% killed)
-    needs: [perf-nightly, trivy-deep]
+    needs: [perf-nightly, trivy-deep, onboarding]
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","mutation"]'), inputs.only)) }}
     runs-on: [self-hosted, Linux, X64, ci-heavy]
     timeout-minutes: 150

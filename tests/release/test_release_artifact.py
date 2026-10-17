@@ -25,12 +25,23 @@ def test_base_images_must_be_digest_pinned(tmp_path):
 def test_reproducibility_reports_differing_layers():
     same = {"layers": LAYERS, "revision": REV, "user": "1000"}
     other = {"layers": [LAYERS[0], "sha256:" + "f" * 64, LAYERS[2]], "revision": REV}
-    with mock.patch.object(ra, "identity", side_effect=[same, same]):
-        assert ra.reproducibility("a", "b")["identical"] is True
-    with mock.patch.object(ra, "identity", side_effect=[same, other]):
+    files = {"/app/x.py": "'0' 644 0:0  abc"}
+    with (
+        mock.patch.object(ra, "identity", side_effect=[same, same]),
+        mock.patch.object(ra, "filesystem", side_effect=[files, files]),
+    ):
+        result = ra.reproducibility("a", "b")
+    assert result["identical"] is True and result["content_identical"] is True
+    changed = {"/app/x.py": "'0' 644 0:0  def"}
+    with (
+        mock.patch.object(ra, "identity", side_effect=[same, other]),
+        mock.patch.object(ra, "filesystem", side_effect=[files, changed]),
+    ):
         result = ra.reproducibility("a", "b")
     assert result["identical"] is False
     assert result["differing_layer_indexes"] == [1] and result["equal_layers"] == 2
+    assert result["content_identical"] is False
+    assert result["differing_paths"] == ["/app/x.py"]
 
 
 def materials(tmp_path: Path, passed: bool = True) -> dict[str, Path]:

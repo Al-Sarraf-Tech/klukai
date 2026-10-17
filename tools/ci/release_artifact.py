@@ -22,6 +22,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 from typing import Any
 
 LABEL = "org.opencontainers.image.revision"
@@ -134,20 +135,54 @@ def save(
     return manifest
 
 
+def filesystem(image: str) -> dict[str, str]:
+    """Every path in the image with type, mode, owner, link target and content
+    SHA-256; timestamps are deliberately left out."""
+    container = _docker("create", image).strip()
+    try:
+        proc = subprocess.Popen(["docker", "export", container], stdout=subprocess.PIPE)
+        assert proc.stdout is not None
+        entries: dict[str, str] = {}
+        with tarfile.open(fileobj=proc.stdout, mode="r|") as archive:
+            for member in archive:
+                digest = ""
+                if member.isfile():
+                    handle = archive.extractfile(member)
+                    assert handle is not None
+                    digest = hashlib.sha256(handle.read()).hexdigest()
+                entries[member.name] = (
+                    f"{member.type!r} {member.mode:o} {member.uid}:{member.gid} "
+                    f"{member.linkname} {digest}"
+                )
+        if proc.wait(timeout=600):
+            raise RuntimeError("docker export failed")
+        return entries
+    finally:
+        subprocess.run(["docker", "rm", "-f", container], capture_output=True)
+
+
 def reproducibility(first: str, second: str) -> dict[str, Any]:
-    """Compare two builds of the same revision and inputs, layer by layer."""
+    """Compare two builds of the same revision and inputs: layers, then the
+    complete filesystem content with timestamps excluded."""
     a, b = identity(first)["layers"], identity(second)["layers"]
     differing = [
         i
         for i in range(max(len(a), len(b)))
         if i >= len(a) or i >= len(b) or a[i] != b[i]
     ]
+    fa, fb = filesystem(first), filesystem(second)
+    changed = sorted(p for p in fa.keys() | fb.keys() if fa.get(p) != fb.get(p))
     return {
         "method": "second docker build --no-cache from the same checkout and inputs",
         "total_layers": max(len(a), len(b)),
         "equal_layers": max(len(a), len(b)) - len(differing),
         "differing_layer_indexes": differing,
         "identical": not differing,
+        "files": len(fa),
+        "content_identical": not changed,
+        "differing_paths": changed[:50],
+        "note": "layer digests include file timestamps; content comparison "
+        "covers path, type, mode, owner, link target and SHA-256",
     }
 
 
@@ -180,10 +215,12 @@ def verify_materials(directory: Path, manifest: dict[str, Any]) -> dict[str, Any
     sbom = json.loads((directory / "sbom.cdx.json").read_text())
     if sbom.get("bomFormat") != "CycloneDX" or not sbom.get("components"):
         raise ValueError("SBOM is not a populated CycloneDX document")
+    repro = manifest["reproducibility"]
     return {
         "sbom_components": len(sbom["components"]),
         "licence_findings": verdict.get("findings"),
-        "reproducible": manifest["reproducibility"].get("identical") is True,
+        "reproducible": repro.get("identical") is True,
+        "content_reproducible": repro.get("content_identical") is True,
     }
 
 

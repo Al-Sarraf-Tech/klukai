@@ -130,7 +130,10 @@ unverified. The honest per-row status lives in the latest handoff document.
 
 ## Drill
 
-Someone other than the author should run §1-§5 on a fresh VM, note any drift,
+The nightly `onboarding` job runs §2-§4 from a clean clone of the commit against
+throwaway infrastructure (`tools/ci/onboarding_drill.py`); every command it
+runs must still appear verbatim above, and its result lists what it did not
+exercise. Someone other than the author should still run §1-§5 on a fresh VM, note any drift,
 fix this doc in the next PR, and append a dated row to
 [`onboarding-test-result.json`](onboarding-test-result.json) with the exact
 steps actually executed, their results and what was not exercised.
