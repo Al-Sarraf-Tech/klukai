@@ -267,6 +267,58 @@ def drill(source: Path, revision: str) -> dict[str, Any]:
                 break
     finally:
         if not all(s.get("ok") for s in record["steps"]):
+            probe = (
+                "import os; print({p: (oct(os.stat(p).st_mode & 0o777), os.stat(p).st_uid)"
+                " for p in ('/app', '/app/app', '/app/app/__init__.py')}, os.getuid())"
+            )
+            diagnostics = {
+                "umask": oct(os.umask(0o022)),
+                "clone_modes": sh(
+                    "stat -c '%a %u %n' docker/core docker/core/app "
+                    "docker/core/app/__init__.py",
+                    checkout,
+                    env,
+                ).stdout,
+                "image_modes": subprocess.run(
+                    [
+                        "docker",
+                        "run",
+                        "--rm",
+                        "--entrypoint",
+                        "/opt/venv/bin/python",
+                        BUILT_IMAGES[0],
+                        "-c",
+                        probe,
+                    ],
+                    capture_output=True,
+                    text=True,
+                ).stdout
+                + "",
+                "image": subprocess.run(
+                    [
+                        "docker",
+                        "image",
+                        "inspect",
+                        "-f",
+                        "{{.Id}} {{.Created}} {{.Config.User}}",
+                        BUILT_IMAGES[0],
+                    ],
+                    capture_output=True,
+                    text=True,
+                ).stdout,
+                "container_user": subprocess.run(
+                    [
+                        "docker",
+                        "inspect",
+                        "-f",
+                        "{{.Config.User}} {{.HostConfig.UsernsMode}} {{json .HostConfig.SecurityOpt}}",
+                        "companion-core",
+                    ],
+                    capture_output=True,
+                    text=True,
+                ).stdout,
+            }
+            record["diagnostics"] = diagnostics
             logs = subprocess.run(
                 ["docker", "logs", "--tail", "40", "companion-core"],
                 capture_output=True,
