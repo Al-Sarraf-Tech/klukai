@@ -24,6 +24,8 @@ SCOPE = (
     "app/personality/speech.py",
 )
 TOOL_VERSION = "3.6.0"
+SENSORS = "sensors"
+VIRTUALIZED = "virtualized-guest"
 
 
 @lru_cache(maxsize=4)
@@ -206,15 +208,26 @@ def _identity(
     for name in SCOPE:
         if f"docker/core/{name}" not in report["inputs"]:
             raise ValueError("Missing critical source input")
-    children = integer(report.get("max_children"), 1)
+    if integer(report.get("max_children"), 1) > 2:
+        raise ValueError("Mutation resource/thermal budget was not proved")
+
+
+def _thermal(directory: Path, report: dict[str, Any]) -> None:
+    """Bare metal proves a sub-70C peak; a VM guest proves it has no host sensors."""
+    telemetry = report.get("thermal_telemetry", SENSORS)
     temperature = report.get("cpu_temperature_max_c")
-    if (
-        children > 2
-        or isinstance(temperature, bool)
-        or not isinstance(temperature, (int, float))
-        or not math.isfinite(temperature)
-        or not 0 < temperature < 70
-    ):
+    if telemetry == VIRTUALIZED:
+        flags = _raw_bytes(directory, report, report.get("cpu_flags")).decode()
+        proved = temperature is None and "hypervisor" in flags.split()
+    else:
+        proved = (
+            telemetry == SENSORS
+            and not isinstance(temperature, bool)
+            and isinstance(temperature, (int, float))
+            and math.isfinite(temperature)
+            and 0 < temperature < 70
+        )
+    if not proved:
         raise ValueError("Mutation resource/thermal budget was not proved")
 
 
@@ -375,6 +388,7 @@ def validate_report(
     report = object_dict(json.loads((directory / "mutation.json").read_text()))
     _timestamps(report, max_age_days)
     _identity(report, root, revision, allow_development)
+    _thermal(directory, report)
     _commands(directory, report)
     _baseline(directory, report)
     inventory = _inventory(directory, report, root)

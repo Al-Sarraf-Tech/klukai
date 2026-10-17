@@ -1,31 +1,32 @@
 name: Klukai Nightly
 
-# S+ Phase 3-4 hygiene (per docs/superpowers/specs/2026-05-16-s-plus-uplift.md §8.2, §8.5).
+# Jobs run one after another on the single heavy runner, short ones first:
+#   1. perf-nightly  — paired disposable p99 run of main vs its previous commit;
+#                      summary retained on the heavy guest, pulled into Grafana
+#                      by ops/amarillo/scripts/klukai-fetch-ci-artifacts.py
+#   2. trivy-deep    — full HIGH+CRITICAL fs scan, BLOCKING
+#   3. mutation      — source-bound mutmut run on the affection, audit-chain and
+#                      speech critical paths via tools.ci.mutation (raw per-mutant
+#                      evidence, >=80% killed, errors/timeouts/no-tests count as
+#                      failure); evidence retained on the heavy guest
 #
-# Jobs:
-#   1. mutation-test    — mutmut 3.x on character-critical paths (config in
-#                         docker/core/setup.cfg); kill-rate ratchet gate
-#   2. perf-nightly     — paired disposable p99 run of main vs its previous commit;
-#                         summary retained on the heavy guest, pulled into Grafana
-#                         by ops/amarillo/scripts/klukai-fetch-ci-artifacts.py
-#   3. trivy-deep       — full HIGH+CRITICAL fs scan, BLOCKING (installs trivy
-#                         to a writable dir if missing — fs scan needs no Docker)
-#
-# History: this workflow failed every night from 2026-05-29 to 2026-06-11 and
-# was never green. Root causes fixed 2026-06-11: pip-installed mutmut wasn't on
-# PATH (exit 127 hidden by continue-on-error), the gate parsed a `mutmut json`
-# subcommand that doesn't exist, mutmut 2.x can't run on modern Python, and the
-# 80% kill-rate bar was aspiration (measured baseline ~48%). The gate is now a
-# RATCHET against the measured baseline — raise MIN_KILL_RATE as tests improve,
-# never lower it to silence a red night.
+# Every job's window guard refuses to start unless it can finish before the
+# 23:30 America/Chicago hard stop (Dominus is off by 23:45).
 
 on:
   schedule:
-    # 01:37 UTC = 20:37 CDT / 19:37 CST, well before the 23:30 nightly hard
-    # stop. If Dominus is off, GitHub keeps the jobs queued until it boots; each
-    # job's window guard then refuses to start if it could not finish in time.
-    - cron: '37 1 * * *'
+    # 00:37 UTC = 19:37 CDT / 18:37 CST. The whole chain (perf ~20 min, trivy
+    # ~5 min, mutation up to 150 min) then ends near 22:30 CDT, before the 23:30
+    # hard stop. If Dominus is off, the jobs wait in the queue and each window
+    # guard refuses to start one that could not finish in time.
+    - cron: '37 0 * * *'
   workflow_dispatch:
+    inputs:
+      only:
+        description: Run just one job (all runs the full chain)
+        type: choice
+        options: [all, perf, trivy, mutation]
+        default: all
 
 permissions:
   contents: read
@@ -34,101 +35,9 @@ env:
   KLUKAI_NIGHTLY_ROOT: /opt/klukai-ci/artifacts/nightly
 
 jobs:
-  mutation:
-    name: Mutation test (mutmut)
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
-    timeout-minutes: 120
-    defaults:
-      run:
-        working-directory: docker/core
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/nightly-window
-        with:
-          latest-start: "2115"   # up to 120 minutes
-
-      - name: Install deps into a venv (PATH-safe)
-        run: |
-          python3 -m venv "${RUNNER_TEMP}/mutenv"
-          . "${RUNNER_TEMP}/mutenv/bin/activate"
-          python3 -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # mutmut pinned to the locally-validated version: 3.5.0 and older
-          # don't understand the source_paths key in setup.cfg
-          pip install pytest pytest-asyncio pytest-cov "mutmut==3.6.0"
-          # fail HERE, loudly, if the install is broken ('mutmut version' is
-          # not a stable CLI command across 3.x — check the import instead)
-          command -v mutmut
-          python3 -c "import importlib.metadata as m; print('mutmut', m.version('mutmut'))"
-
-      - name: Run mutmut on character-critical paths
-        # Config lives in docker/core/setup.cfg [mutmut]; PERSONALITY_PATH must
-        # be absolute because mutmut executes tests from its mutants/ copy.
-        run: |
-          . "${RUNNER_TEMP}/mutenv/bin/activate"
-          export PERSONALITY_PATH="${GITHUB_WORKSPACE}/config/personality.yaml"
-          # --max-children 2: the python-slim runner is a 3-CPU/4GB container
-          # on amarillo (70C thermal ceiling); an uncapped run (one pytest
-          # worker per CPU) killed the runner with exit 137 on 2026-06-12.
-          mutmut run --max-children 2 || true   # gate on parsed results, not exit code
-          mutmut results --all true > /tmp/mutmut-results.txt
-          grep -oE ': [a-z ]+$' /tmp/mutmut-results.txt | sort | uniq -c
-
-      - name: Enforce kill-rate ratchet gate
-        # Measured 2026-06-12: 804 killed / 1198 = 67.11%, 0 uncovered. (The
-        # earlier 50.18% was an artifact — affection's fixture tests were
-        # skipping in the mutmut sandbox because conftest's personality_config_path
-        # ignored PERSONALITY_PATH; fixed, so the real rate surfaced.)
-        # The remaining ~394 survivors are overwhelmingly string-literal mutants
-        # (prompt/log wording, deliberately not pinned) plus documented
-        # equivalent mutants. Ratchet: raise as kill rate improves, never lower.
-        #
-        # Floor 67 sits ~1 mutant under the measured 67.11% (804/1198): losing a
-        # single killed mutant (803/1198 = 67.03%) still passes; losing two
-        # (66.94%) goes red. This is intentionally the strictest possible ratchet
-        # — effectively "any new logic regression in these modules fails nightly."
-        # If it ever flakes from equivalent-mutant churn, drop to 66, never lower
-        # the work; kill the mutant instead.
-        env:
-          MIN_KILL_RATE: "67"
-        run: |
-          . "${RUNNER_TEMP}/mutenv/bin/activate"
-          python3 - <<'PY'
-          import os, re, sys
-          text = open("/tmp/mutmut-results.txt").read()
-          counts = {}
-          for status in re.findall(r":\s*(\w[\w ]*\w)\s*$", text, re.M):
-              counts[status] = counts.get(status, 0) + 1
-          killed = counts.get("killed", 0) + counts.get("timeout", 0)
-          survived = counts.get("survived", 0) + counts.get("suspicious", 0)
-          checked = killed + survived
-          print(f"mutmut status counts: {counts}")
-          if checked == 0:
-              print("FAIL: no mutants were checked — mutation run is broken")
-              sys.exit(1)
-          rate = killed * 100.0 / checked
-          floor = float(os.environ["MIN_KILL_RATE"])
-          print(f"Mutation kill rate: {rate:.2f}% ({killed}/{checked} checked; "
-                f"{counts.get('no tests', 0)} uncovered)")
-          summary = os.environ.get("GITHUB_STEP_SUMMARY")
-          if summary:
-              with open(summary, "a") as f:
-                  f.write(f"### Mutation kill rate: {rate:.2f}% "
-                          f"({killed}/{checked}, floor {floor}%)\n")
-          sys.exit(0 if rate >= floor else 1)
-          PY
-
-      - name: Retain mutation results on the heavy guest (no GitHub storage)
-        if: always()
-        run: |
-          out="${KLUKAI_NIGHTLY_ROOT}/mutation/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          install -d -m 0700 "$out"
-          cp /tmp/mutmut-results.txt "$out/" 2>/dev/null || echo "no mutation results to retain"
-
   perf-nightly:
     name: Nightly paired performance (retained)
+    if: ${{ github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","perf"]'), inputs.only) }}
     runs-on: [self-hosted, Linux, X64, ci-heavy]
     timeout-minutes: 45
     env:
@@ -189,6 +98,8 @@ jobs:
 
   trivy-deep:
     name: Trivy deep scan
+    needs: perf-nightly
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","trivy"]'), inputs.only)) }}
     runs-on: [self-hosted, Linux, X64, ci-heavy]
     timeout-minutes: 30
     steps:
@@ -241,3 +152,71 @@ jobs:
           out="${KLUKAI_NIGHTLY_ROOT}/trivy/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           install -d -m 0700 "$out"
           cp /tmp/trivy-deep.json "$out/" 2>/dev/null || echo "no trivy results to retain"
+
+  mutation:
+    name: Mutation test (critical paths, >=80% killed)
+    needs: [perf-nightly, trivy-deep]
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","mutation"]'), inputs.only)) }}
+    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    timeout-minutes: 150
+    env:
+      KLUKAI_CI_NATIVE_SANDBOX: unavailable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/nightly-window
+        with:
+          latest-start: "2100"   # up to 150 minutes
+      - uses: ./.github/actions/python-tools
+        env:
+          KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/mutation-${{ github.run_id }}-${{ github.run_attempt }}
+          KLUKAI_CI_REVISION: ${{ github.sha }}
+
+      - name: Run and validate source-bound mutation evidence
+        # tools.ci.mutation snapshots the exact clean checkout, proves a green
+        # baseline, runs pinned mutmut with at most two children, binds every
+        # mutant to raw pytest observations and fails below 80% killed. The
+        # report is written even when the gate fails, so survivors stay visible.
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          out="${KLUKAI_NIGHTLY_ROOT}/mutation/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          install -d -m 0700 "$out"
+          echo "KLUKAI_MUTATION_OUT=$out" >> "$GITHUB_ENV"
+          python -B -m tools.ci.mutation run --root "$GITHUB_WORKSPACE" \
+            --output "$out/evidence" --revision "$GITHUB_SHA" \
+            --max-children 2 --timeout 7200
+
+      - name: Summarize and retain mutation results on the heavy guest
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="${KLUKAI_MUTATION_OUT:-/nonexistent}/evidence/mutation.json"
+          if [[ ! -f "$report" ]]; then
+            echo "::error title=No mutation report::the run produced no mutation.json"
+            exit 0
+          fi
+          python3 - "$report" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import collections, json, sys
+          report = json.load(open(sys.argv[1]))
+          mutants = report.get("mutants") or []
+          counts = collections.Counter(m["status"] for m in mutants)
+          total = len(mutants)
+          rate = counts["killed"] / total if total else 0.0
+          print(f"### Mutation: {counts['killed']}/{total} killed ({rate:.2%}); {dict(counts)}")
+          by_module = collections.defaultdict(collections.Counter)
+          for m in mutants:
+              by_module[m["module"]][m["status"]] += 1
+          for module, c in sorted(by_module.items()):
+              print(f"- {module}: {dict(c)}")
+          if report.get("execution_error"):
+              print(f"- execution error: {report['execution_error']}")
+          PY
+          # The generated snapshot is large and not needed to re-validate the raw
+          # evidence; keep mutation.json and raw/ (30-day retention below).
+          rm -rf "${KLUKAI_MUTATION_OUT}/evidence/snapshot"
+          find "$KLUKAI_NIGHTLY_ROOT/mutation" -mindepth 1 -maxdepth 1 -type d \
+            -mtime +30 -prune -print -exec rm -rf {} +

@@ -18,7 +18,9 @@ import uuid
 
 from .mutation_evidence import (
     SCOPE,
+    SENSORS,
     TOOL_VERSION,
+    VIRTUALIZED,
     actual_status,
     digest,
     input_hashes,
@@ -51,13 +53,24 @@ TEST_SELECTION = (
 )
 
 
+HWMON = Path("/sys/class/hwmon")
+
+
 def git(root: Path, *args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=root, text=True).strip()
 
 
-def temperature_c() -> float:
+def cpu_flags() -> str:
+    for line in Path("/proc/cpuinfo").read_text().splitlines():
+        if line.startswith("flags"):
+            return line
+    return ""
+
+
+def temperature_c() -> float | None:
+    """The 70C ceiling protects bare-metal hosts; a VM guest has no host sensors."""
     values: list[float] = []
-    for folder in Path("/sys/class/hwmon").glob("hwmon*"):
+    for folder in HWMON.glob("hwmon*"):
         try:
             if (folder / "name").read_text().strip() not in (
                 "coretemp",
@@ -69,15 +82,24 @@ def temperature_c() -> float:
         except (OSError, ValueError):
             continue
     if not values:
+        if "hypervisor" in cpu_flags().split():
+            return None
         raise ValueError("CPU temperature telemetry is unavailable")
     return max(values)
 
 
+def _hotter(peak: float | None) -> float | None:
+    reading = temperature_c()
+    if (reading is None) != (peak is None):
+        raise ValueError("CPU thermal telemetry changed during mutation")
+    return None if peak is None or reading is None else max(peak, reading)
+
+
 def bounded_command(
     argv: list[str], cwd: Path, env: dict[str, str], output: Path, *, timeout: float
-) -> tuple[int, float]:
+) -> tuple[int, float | None]:
     peak = temperature_c()
-    if peak >= 70:
+    if peak is not None and peak >= 70:
         raise ValueError("CPU already exceeds the 70C ceiling")
     started = time.monotonic()
     with output.open("w") as log:
@@ -91,8 +113,10 @@ def bounded_command(
         )
         try:
             while proc.poll() is None:
-                peak = max(peak, temperature_c())
-                if peak >= 70 or time.monotonic() - started > timeout:
+                peak = _hotter(peak)
+                if (peak is not None and peak >= 70) or (
+                    time.monotonic() - started > timeout
+                ):
                     raise ValueError(
                         "Mutation thermal/wall-clock safety budget exceeded"
                     )
@@ -106,6 +130,12 @@ def bounded_command(
                 except subprocess.TimeoutExpired:
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait()
+
+
+def _peak(peak: float | None, measured: float | None) -> float | None:
+    if (peak is None) != (measured is None):
+        raise ValueError("CPU thermal telemetry changed during mutation")
+    return None if peak is None or measured is None else max(peak, measured)
 
 
 def _snapshot(root: Path, output: Path) -> Path:
@@ -254,7 +284,13 @@ def execute(
     }
     core = _snapshot(root, output)
     env = _environment(core, output, run_id)
-    peak = 0.0
+    peak = temperature_c()
+    if peak is None:
+        flags = output / "raw/cpu-flags.txt"
+        flags.write_text(cpu_flags() + "\n")
+        report.update(thermal_telemetry=VIRTUALIZED, cpu_flags="raw/cpu-flags.txt")
+    else:
+        report["thermal_telemetry"] = SENSORS
     try:
         baseline = [
             sys.executable,
@@ -270,7 +306,7 @@ def execute(
         code, measured = bounded_command(
             baseline, core, env, output / "raw/baseline.log", timeout=300
         )
-        peak = max(peak, measured)
+        peak = _peak(peak, measured)
         report["commands"].append(
             {"argv": baseline, "exit_code": code, "output": "raw/baseline.log"}
         )
@@ -289,7 +325,7 @@ def execute(
         code, measured = bounded_command(
             command, core, env, output / "raw/mutmut.log", timeout=timeout
         )
-        peak = max(peak, measured)
+        peak = _peak(peak, measured)
         report["commands"].append(
             {"argv": command, "exit_code": code, "output": "raw/mutmut.log"}
         )

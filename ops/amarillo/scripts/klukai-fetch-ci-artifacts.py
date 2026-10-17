@@ -80,7 +80,9 @@ class VirshAgent:
             timeout=300,
         )
         if result.returncode == 255:
-            raise HostUnreachable(f"{self.host} unreachable: {result.stderr.strip()[:200]}")
+            raise HostUnreachable(
+                f"{self.host} unreachable: {result.stderr.strip()[:200]}"
+            )
         if result.returncode:
             raise RuntimeError(f"guest agent failed: {result.stderr.strip()[:200]}")
         return json.loads(result.stdout)["return"]
@@ -260,7 +262,8 @@ def fetch_nightly(guest: Guest, state: Path, sink: Path) -> list[str]:
         try:
             doc = json.loads(local.read_text())
         except ValueError:
-            doc = None  # partly written or corrupt: retried next run, never blocks others
+            # Partly written or corrupt: retried next run, never blocks others.
+            doc = None
         if not valid_summary(doc):
             local.unlink()
             continue

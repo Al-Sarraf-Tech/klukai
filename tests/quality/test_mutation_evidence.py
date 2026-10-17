@@ -308,6 +308,62 @@ def test_invalid_or_misbound_reports_fail_closed(bundle, change):
         validate(bundle)
 
 
+def _virtualized(bundle, flags="flags\t: fpu sse2 hypervisor avx2"):
+    _, output, report = bundle
+    path = output / "raw/cpu-flags.txt"
+    path.write_text(flags + "\n")
+    report["raw"]["raw/cpu-flags.txt"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    report.update(
+        thermal_telemetry="virtualized-guest",
+        cpu_flags="raw/cpu-flags.txt",
+        cpu_temperature_max_c=None,
+    )
+
+
+def test_virtualized_guest_proves_thermal_safety_by_its_cpu_flags(bundle):
+    _virtualized(bundle)
+    assert validate(bundle)["total"] == len(bundle[2]["mutants"])
+
+
+@pytest.mark.parametrize("change", ["no_hypervisor", "reading", "unknown", "tamper"])
+def test_virtualized_thermal_claims_fail_closed(bundle, change):
+    if change == "no_hypervisor":
+        _virtualized(bundle, "flags\t: fpu sse2 avx2")
+    else:
+        _virtualized(bundle)
+    _, output, report = bundle
+    if change == "reading":
+        report["cpu_temperature_max_c"] = 50.0
+    elif change == "unknown":
+        report["thermal_telemetry"] = "estimated"
+    elif change == "tamper":
+        (output / "raw/cpu-flags.txt").write_text("flags\t: hypervisor sse2\n")
+    with pytest.raises(ValueError):
+        validate(bundle)
+
+
+def test_runner_treats_a_sensorless_vm_as_virtualized_and_bare_metal_as_unsafe(
+    tmp_path, monkeypatch
+):
+    from tools.ci import mutation_runner
+
+    monkeypatch.setattr(mutation_runner, "HWMON", tmp_path / "hwmon-root")
+    monkeypatch.setattr(mutation_runner, "cpu_flags", lambda: "flags : sse2 hypervisor")
+    assert mutation_runner.temperature_c() is None
+    monkeypatch.setattr(mutation_runner, "cpu_flags", lambda: "flags : sse2")
+    with pytest.raises(ValueError):
+        mutation_runner.temperature_c()
+    sensor = tmp_path / "hwmon-root/hwmon0"
+    sensor.mkdir(parents=True)
+    (sensor / "name").write_text("k10temp\n")
+    (sensor / "temp1_input").write_text("48000\n")
+    assert mutation_runner.temperature_c() == 48.0
+    with pytest.raises(ValueError):
+        mutation_runner._hotter(None)  # telemetry appeared mid-run
+    with pytest.raises(ValueError):
+        mutation_runner._peak(None, 48.0)
+
+
 def test_raw_evidence_tampering_fails(bundle):
     (bundle[1] / "raw/observed-0.json").write_text("{}")
     with pytest.raises(ValueError):
