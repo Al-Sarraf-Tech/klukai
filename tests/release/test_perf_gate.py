@@ -273,11 +273,24 @@ def test_canonical_absolute_slo_failure_cannot_hide_behind_fast_baseline():
     assert any("absolute" in failure for failure in result["failures"])
 
 
-def test_one_bad_round_cannot_be_hidden_by_other_rounds():
+def test_a_single_noisy_round_is_not_a_regression():
+    # Owner decision 2026-10-17: an A/A nightly failed on one /api/tts round.
     baseline, candidate = report(), report("candidate")
     for sample in candidate["rounds"][1]["routes"][0]["samples"]:
         sample["elapsed_ms"] = 20
-    assert compare(baseline, candidate, **arguments())["passed"] is False
+    result = compare(baseline, candidate, **arguments())
+    assert result["passed"] is True
+    assert result["regressed_rounds_required"] == 2
+
+
+def test_a_regression_in_two_of_three_rounds_fails_even_if_pooled_hides_it():
+    baseline, candidate = report(), report("candidate")
+    for index in (0, 2):
+        for sample in candidate["rounds"][index]["routes"][0]["samples"]:
+            sample["elapsed_ms"] = 20
+    result = compare(baseline, candidate, **arguments())
+    assert result["passed"] is False
+    assert any("in 2 of 3 rounds (0,2)" in failure for failure in result["failures"])
 
 
 def test_development_reports_cannot_satisfy_ci():
@@ -487,7 +500,8 @@ def test_twenty_percent_budget_applies_above_the_noise_floor(measured, failed):
     rows = _assess(
         {route: ([100.0] * 100, 1.0)}, {route: ([measured] * 100, 1.0)}, {}, "0"
     )
-    assert bool(rows[0]["failures"]) is failed
+    assert rows[0]["regressed"] is failed
+    assert rows[0]["failures"] == []
 
 
 def test_messages_contract_tolerates_owner_scheduler_rows_not_leaks():

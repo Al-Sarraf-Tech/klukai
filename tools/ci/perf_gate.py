@@ -26,6 +26,10 @@ RATIO_BUDGET = 1.2
 # push a 2 ms route past 20%. A regression must also cost more than this
 # (owner decision 2026-10-16, after five runs flagged a different ms route each).
 NOISE_FLOOR_MS = 5.0
+# One noisy round is not a regression: a route fails only when it regresses in
+# at least this many measured rounds (owner decision 2026-10-17, after an A/A
+# nightly failed on a single /api/tts round with a pooled ratio of 1.12).
+REGRESSED_ROUNDS_REQUIRED = 2
 
 
 def regressed(reference: float, measured: float) -> bool:
@@ -234,10 +238,6 @@ def _assess(
         measured = p99(values)
         ratio = measured / reference
         failures = []
-        if regressed(reference, measured):
-            failures.append(
-                f"{label} {identity}: p99 regression exceeds20percent and5ms"
-            )
         objective = slos.get(identity)
         minimum = number(objective["availability"]) if objective else 1.0
         if availability < minimum or baseline[identity][1] < minimum:
@@ -252,6 +252,7 @@ def _assess(
                 "baseline_p99_ms": reference,
                 "candidate_p99_ms": measured,
                 "p99_ratio": ratio,
+                "regressed": regressed(reference, measured),
                 "availability": availability,
                 "absolute_slo": objective,
                 "failures": failures,
@@ -308,12 +309,25 @@ def compare(
         )
     results.extend(_assess(pooled[0], pooled[1], slos, "pooled"))
     failures = [failure for row in results for failure in row["failures"]]
+    measured_rounds = [row for row in results if row["round"] != "pooled"]
+    for identity in dict.fromkeys((r["method"], r["route"]) for r in measured_rounds):
+        hits = [
+            r["round"]
+            for r in measured_rounds
+            if (r["method"], r["route"]) == identity and r["regressed"]
+        ]
+        if len(hits) >= REGRESSED_ROUNDS_REQUIRED:
+            failures.append(
+                f"{identity}: p99 regression exceeds20percent and5ms in "
+                f"{len(hits)} of {len(inputs[0])} rounds ({','.join(hits)})"
+            )
     return {
         "schema": 1,
         "passed": not failures,
         "certifying": not allow_development,
         "max_p99_ratio": max(row["p99_ratio"] for row in results),
         "noise_floor_ms": NOISE_FLOOR_MS,
+        "regressed_rounds_required": REGRESSED_ROUNDS_REQUIRED,
         "failures": failures,
         "comparisons": results,
         "timestamp": datetime.now(UTC).isoformat(),

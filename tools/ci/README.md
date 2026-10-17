@@ -83,7 +83,11 @@ each paired round and pooled samples. A route regresses when candidate p99 is
 more than 1.20 times baseline and also more than 5 ms slower (`NOISE_FLOOR_MS`).
 Nearest-rank p99 of 100 samples is the second-slowest request, so on 2 ms routes
 two scheduler hiccups exceed 20%; the floor (owner decision, 2026-10-16) keeps
-real regressions such as the +55 ms login tail failing; availability must satisfy the canonical policy for both inputs;
+real regressions such as the +55 ms login tail failing. A route fails the ratio
+gate only when it regresses in at least two measured rounds
+(`REGRESSED_ROUNDS_REQUIRED`, owner decision 2026-10-17): an A/A nightly failed
+on a single noisy `/api/tts` round with a pooled ratio of 1.12. Every row still
+records `regressed` for review. Availability must satisfy the canonical policy for both inputs;
 candidate latency must satisfy absolute thresholds from
 `docker/core/app/observability/slos.json`. Voice admission has no invented
 absolute threshold: it requires 100% observed availability and the ratio gate.
