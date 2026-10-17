@@ -1,9 +1,66 @@
 # Encrypted Klukai credentials
 
-Status: the consumer and disposable TPM-backed startup/rotation/rollback probes
-are implemented. Production migration is part of the verified release rollout;
-this file does not claim it has happened. Do not install the unit template until
-the reviewed release and its pinned activation overlay have been verified.
+## Active store (since 2026-10-17)
+
+Production Compose secrets are encrypted at rest and never kept in plaintext:
+
+| Credential | Was | Holds |
+| --- | --- | --- |
+| `compose-env` | `~/git/klukai/.env` | Compose interpolation variables (database, signing, API, VAPID, voice, broker) |
+| `core-override` | the private `preserve-runtime.private.json` | the preserved companion-core environment |
+
+Both live in `~/.config/klukai/credentials/` (directory 0700, files 0600, owner
+UID 1000) as `systemd-creds --user` credentials: host key plus TPM2, bound to
+this machine, this user and the embedded name `klukai-<name>`. Each has a
+`.cred.prev` rollback copy and a host-key-only copy under `recovery/` that
+survives a TPM reset on this host. Losing the host itself (disk and host key)
+needs the owner to re-enter the values; the files are not a portable backup.
+
+`ops/amarillo/scripts/klukai_compose.py` is the only supported way to run Compose
+for this stack. For one command it decrypts both credentials into a private
+directory under `$XDG_RUNTIME_DIR` (tmpfs, 0700), runs `docker compose
+--env-file <env> -f docker-compose.yml -f <override> [-f <image pin>]`, then
+deletes the directory. A missing, corrupt, wrongly named or group/world-readable
+credential stops the command before Compose runs; there is no fallback to a
+plaintext file. Plain `docker compose` in the repository no longer sees the
+secrets and must not be used for companion-core. The release deployer and
+`scripts/disaster-recovery.sh` use the same path. `klukai_compose.py config`
+prints resolved values, secrets included, so do not run it into logs.
+
+### Commands (`ops/amarillo/scripts/klukai_secrets.py`)
+
+Values are never printed; comparisons use SHA-256 in memory.
+
+```sh
+S=ops/amarillo/scripts/klukai_secrets.py
+python3 $S check --plaintext ~/git/klukai/.env       # perms, every cred + recovery copy decrypts, no plaintext left
+python3 $S rotate compose-env NEW_FILE --remove-source  # NEW_FILE in $XDG_RUNTIME_DIR; old version kept as .prev
+python3 $S rollback compose-env                      # previous version back; recovery copy follows
+python3 $S recover core-override                     # rebuild the primary from the host-key copy
+```
+
+After a rotation or rollback, recreate the consumer with
+`klukai_compose.py up -d --no-build --no-deps <service>` (core: use the release
+deployer) and read back health. Credential rollback never restores a database.
+
+### Migration record (2026-10-17)
+
+Both plaintext files were sealed with `migrate`, which encrypts, decrypts the
+staged file and compares it with the input before replacing anything. The
+resolved `docker compose config` from the encrypted path was byte-identical to
+the plaintext path (5,721 bytes, compared by SHA-256 only). A rotation drill on
+a scratch store with dummy values passed rotate, rollback, recover, and
+fail-closed checks for a missing, corrupt and world-readable credential. The
+plaintext files were removed only after the encrypted path had deployed core
+(see `docs/runbooks/release.md`).
+
+## Alternative design: service-owned credential (not activated)
+
+Codex's earlier design below, a `companion.service` user unit using
+`LoadCredentialEncrypted=` and `scripts/release/secret_store.py`, is kept for
+reference. It was never installed. The active store above supersedes it for the
+Compose-driven deployment; adopting it later would replace `klukai_compose.py`
+and must migrate from the active store, not from plaintext.
 
 ## Storage and execution
 

@@ -12,6 +12,9 @@ set -Eeuo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd -P)
 cd "${REPO_ROOT}"
+# Production Compose secrets come from the encrypted store (ops/amarillo/scripts/
+# klukai_secrets.py); plain `docker compose` would start core without them.
+KLUKAI_COMPOSE=(python3 "${REPO_ROOT}/ops/amarillo/scripts/klukai_compose.py")
 
 MODE=dry-run
 BACKUP_DATE=
@@ -316,8 +319,8 @@ fi
 
 docker ps --format '{{.Names}}' | grep -Fxq -- "${POSTGRES_CONTAINER}" || fatal "shared PostgreSQL container is not running"
 docker volume inspect "${IMAGES_VOLUME}" >/dev/null || fatal "companion images volume is absent"
-docker compose config --services | grep -Fxq companion-core || fatal "repository Compose does not define companion-core"
-docker compose ps --status running --services | grep -Fxq companion-core || fatal "companion-core is not currently running"
+"${KLUKAI_COMPOSE[@]}" config --services | grep -Fxq companion-core || fatal "repository Compose does not define companion-core"
+"${KLUKAI_COMPOSE[@]}" ps --status running --services | grep -Fxq companion-core || fatal "companion-core is not currently running"
 
 DROP_TABLES_SQL=$(docker exec "${POSTGRES_CONTAINER}" psql -U aichat -d aichat \
   -v ON_ERROR_STOP=1 -Atc \
@@ -350,7 +353,7 @@ CORE_STOPPED=false
 restore_core_on_exit() {
   if [[ "${CORE_STOPPED}" == true ]]; then
     echo "[DR] recovery trap: starting companion-core"
-    docker compose up -d --no-build companion-core >/dev/null 2>&1 || true
+    "${KLUKAI_COMPOSE[@]}" up -d --no-build companion-core >/dev/null 2>&1 || true
   fi
 }
 trap restore_core_on_exit EXIT
@@ -359,7 +362,7 @@ trap 'exit 143' TERM
 
 step "stop only companion-core; shared data services remain under their existing owners"
 CORE_STOPPED=true
-docker compose stop --timeout 30 companion-core
+"${KLUKAI_COMPOSE[@]}" stop --timeout 30 companion-core
 
 step "atomically replace companion_* PostgreSQL objects with ON_ERROR_STOP"
 {
@@ -387,7 +390,7 @@ docker run --rm \
   alpine sh -c 'cp -a /src/. /dst/' || fatal "companion image restore failed"
 
 step "start companion-core and run smoke test"
-docker compose up -d --no-build companion-core
+"${KLUKAI_COMPOSE[@]}" up -d --no-build companion-core
 CORE_STOPPED=false
 RECOVERED=false
 for ATTEMPT in {1..60}; do
