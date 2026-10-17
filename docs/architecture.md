@@ -1,6 +1,6 @@
 # Klukai Architecture
 
-> Companion PWA + FastAPI core on a two-host private mesh. Provider configuration below reflects the owner's October 14, 2026 deployment. The recorded October 15 hardening rollout uses source `a56979d`. Module and lifetime changes in the active S-tier uplift remain subject to the [acceptance ledger](superpowers/specs/2026-10-15-s-tier-completion.md); source and tests are not deployment evidence. Earlier refactor history is in `handoff/2026-10-14-elite-refactor-progress.md`. Per-decision history lives in `docs/adr/`.
+> Companion PWA + FastAPI core on a two-host private mesh. Provider configuration below reflects the owner's October 14, 2026 deployment. Since October 17, 2026 production runs the exact CI-built core image of `b93172d` (see [Release and secrets](#release-and-secrets)); the S-tier status per criterion is in the [ledger](handoff/2026-10-16-s-tier-finish.md#s-tier-ledger-honest). Source and tests alone are not deployment evidence. Earlier refactor history is in `handoff/2026-10-14-elite-refactor-progress.md`. Per-decision history lives in `docs/adr/`.
 
 **Redaction:** mesh IPs, MagicDNS names, and secret values are omitted. Use host roles **core host** and **GPU host**.
 
@@ -36,6 +36,8 @@ The GPU stack retains ComfyUI for explicit rollback/other authorized work. Produ
 | Core → GPU | Private mesh only; bearer / lease tokens |
 | Core → account image worker | Private Unix socket, scoped authentication, owner allowlist, pinned reference paths owned by the worker; no conversational history in account prompts |
 | Bridge → RabbitMQ | Credentials in env; not committed |
+| CI heavy guest → core host | No network route; the core host pulls retained artifacts read-only through the GPU host's guest agent, verifies them against a green CI run and the manifest, then signs the provenance |
+| Secrets at rest | Compose secrets only as systemd-creds credentials (TPM2 + host key); decrypted to tmpfs for one command; plaintext absent |
 | Process crash | Job/defer rows in Postgres survive; queue redelivery is subject to idempotent claims and the no-reclaim rule for ambiguous cloud work |
 
 ## companion-core
@@ -158,6 +160,14 @@ SACRED: never delete chat/memory/affection vectors for cleanup convenience.
 - Flutter Web PWA at `/app/` (`--base-href=/app/` required)
 - Her POV screen: `flutter_app/lib/screens/her_pov_screen.dart`
 - Auth: session token in local storage; login page co-deployed carefully (see deploy scripts)
+
+## Release and secrets
+
+- **Build once.** CI builds the core image, rebuilds it without cache to check reproducibility, scans it (vulnerabilities, secrets, licence policy), writes an SBOM, and retains the image with a digest manifest on the heavy CI guest.
+- **Verify and sign.** `ops/amarillo/scripts/klukai-fetch-ci-artifacts.py` pulls it to the core host and verifies it. It then signs `provenance.json` with the core host's release key; the public signer is committed.
+- **Deploy with rollback.** `ops/amarillo/scripts/klukai-release.py` deploys by verified image ID after a backup restore check. It rolls back automatically to an immutable tag of the previous image and never touches data.
+- **Secrets.** Compose secrets come from the encrypted store through `klukai_compose.py`. Plain `docker compose` lacks them and fails closed.
+- Procedures: [release](runbooks/release.md), [encrypted credentials](runbooks/encrypted-credentials.md).
 
 ## Failure domains
 
