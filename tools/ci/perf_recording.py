@@ -181,12 +181,27 @@ def base_environment(config: dict[str, Any], role: str) -> dict[str, str]:
     return result
 
 
+def field(parent: str, key: str) -> str:
+    """Newer Docker image stores omit empty keys; index yields null instead of failing."""
+    return "{{json (index " + parent + " " + json.dumps(key) + ")}}"
+
+
+def label(parent: str, key: str) -> str:
+    return (
+        "{{with index "
+        + parent
+        + ' "Labels"}}{{json (index . '
+        + json.dumps(key)
+        + ")}}{{else}}null{{end}}"
+    )
+
+
 def env_view(allowed: frozenset[str]) -> str:
     condition = "or " + " ".join(
         "(eq $key " + json.dumps(k) + ")" for k in sorted(allowed)
     )
     return (
-        "[{{range $i,$item := .Config.Env}}{{if $i}},{{end}}"
+        '[{{range $i,$item := index .Config "Env"}}{{if $i}},{{end}}'
         '{{$parts := split $item "="}}{{$key := index $parts 0}}'
         '{"key":{{json $key}},{{if ' + condition + '}}"value":{{json $item}}'
         '{{else}}"nonempty":{{ne $item (print $key "=")}}{{end}}}{{end}}]'
@@ -195,8 +210,15 @@ def env_view(allowed: frozenset[str]) -> str:
 
 IMAGE_VIEW = (
     '{"Id":{{json .Id}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},'
-    '"Config":{"User":{{json .Config.User}},"Entrypoint":{{json .Config.Entrypoint}},'
-    '"Cmd":{{json .Config.Cmd}},"Revision":{{json (index .Config.Labels "org.opencontainers.image.revision")}},'
+    '"Config":{"User":'
+    + field(".Config", "User")
+    + ',"Entrypoint":'
+    + field(".Config", "Entrypoint")
+    + ',"Cmd":'
+    + field(".Config", "Cmd")
+    + ',"Revision":'
+    + label(".Config", "org.opencontainers.image.revision")
+    + ","
     '"Env":' + env_view(BASE_ENV) + "}}"
 )
 HOST_FIELDS = tuple(
@@ -209,14 +231,22 @@ HOST_FIELDS = tuple(
 )
 HOST_VIEW = (
     "{"
-    + ",".join('"' + key + '":{{json .HostConfig.' + key + "}}" for key in HOST_FIELDS)
+    + ",".join('"' + key + '":' + field(".HostConfig", key) for key in HOST_FIELDS)
     + "}"
 )
 CONTAINER_VIEW = (
     '{"Id":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Image}},'
-    '"Config":{"Image":{{json .Config.Image}},"User":{{json .Config.User}},'
-    '"Entrypoint":{{json .Config.Entrypoint}},"Cmd":{{json .Config.Cmd}},'
-    '"Owner":{{json (index .Config.Labels "' + LABEL + '")}},'
+    '"Config":{"Image":'
+    + field(".Config", "Image")
+    + ',"User":'
+    + field(".Config", "User")
+    + ',"Entrypoint":'
+    + field(".Config", "Entrypoint")
+    + ',"Cmd":'
+    + field(".Config", "Cmd")
+    + ',"Owner":'
+    + label(".Config", LABEL)
+    + ","
     '"Env":' + env_view(BASE_ENV | WORKER_ENV) + "},"
     '"State":{"Running":{{json .State.Running}},"ExitCode":{{json .State.ExitCode}},"OOMKilled":{{json .State.OOMKilled}}},'
     '"HostConfig":' + HOST_VIEW + ',"Mounts":{{json .Mounts}},'
@@ -224,13 +254,11 @@ CONTAINER_VIEW = (
 )
 NETWORK_VIEW = (
     '{"Id":{{json .Id}},"Name":{{json .Name}},"Internal":{{json .Internal}},'
-    '"Owner":{{json (index .Labels "'
-    + LABEL
-    + '")}},"Containers":{{json .Containers}}}'
+    '"Owner":' + label(".", LABEL) + ',"Containers":' + field(".", "Containers") + "}"
 )
 VOLUME_VIEW = (
     '{"Name":{{json .Name}},"Driver":{{json .Driver}},'
-    '"Owner":{{json (index .Labels "' + LABEL + '")}},"Options":{{json .Options}}}'
+    '"Owner":' + label(".", LABEL) + ',"Options":' + field(".", "Options") + "}"
 )
 ACTIVE: ContextVar["Recorder | None"] = ContextVar("perf_recorder", default=None)
 

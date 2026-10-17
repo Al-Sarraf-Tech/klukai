@@ -46,3 +46,6 @@ docker/core/.mutmut-cache
 # Local MCP client credentials (production uses private storage outside the repo).
 .mcp-secrets/
 .agy-runtime/
+
+# Runtime secret files mounted read-only into core (e.g. the metrics scrape token)
+.runtime-secrets/

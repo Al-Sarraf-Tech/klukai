@@ -1,0 +1,21 @@
+name: Allow bwrap user namespaces on the heavy guest
+description: >-
+  Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor. Load a
+  profile that grants userns to /usr/bin/bwrap only (Ubuntu's documented
+  mechanism), then prove a full unshare works. Heavy guests only; light
+  containers have no sudo and keep KLUKAI_CI_NATIVE_SANDBOX=unavailable.
+runs:
+  using: composite
+  steps:
+    - name: Load the narrow bwrap AppArmor profile and probe it
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -x /usr/bin/bwrap
+        restrict=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+        if [ -r "$restrict" ] && [ "$(cat "$restrict")" = 1 ]; then
+          printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+            'profile klukai-ci-bwrap /usr/bin/bwrap flags=(unconfined) {' \
+            '  userns,' '}' | sudo -n apparmor_parser --replace
+        fi
+        /usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / /usr/bin/true

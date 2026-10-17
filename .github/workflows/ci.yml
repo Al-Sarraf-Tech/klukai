@@ -107,6 +107,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/heavy-userns
       - uses: ./.github/actions/node
       - name: Verify native component prerequisites and private Compose
         run: |
