@@ -26,6 +26,7 @@ import time
 from typing import Any
 
 NETWORKS = ("aichat_default", "infra", "klukai-obs")
+BUILT_IMAGES = ("klukai-companion-core", "klukai-events-bridge")
 INFRA = {
     "infra-postgres": "KLUKAI_PERF_POSTGRES_IMAGE",
     "aichat-redis": "KLUKAI_PERF_REDIS_IMAGE",
@@ -147,7 +148,7 @@ def provide_infrastructure(password: str) -> None:
 def cleanup(checkout: Path | None) -> None:
     if checkout is not None and checkout.exists():
         subprocess.run(
-            ["docker", "compose", "down", "-v", "--remove-orphans"],
+            ["docker", "compose", "down", "-v", "--remove-orphans", "--rmi", "local"],
             cwd=checkout,
             capture_output=True,
             timeout=300,
@@ -224,6 +225,11 @@ def drill(source: Path, revision: str) -> dict[str, Any]:
             )
         finally:
             os.umask(previous_umask)
+        # A fresh machine has no locally built image: remove any left by an
+        # earlier drill so `docker compose up` really builds from this clone.
+        subprocess.run(
+            ["docker", "image", "rm", "-f", *BUILT_IMAGES], capture_output=True
+        )
         provide_infrastructure(secrets_env["POSTGRES_PASSWORD"])
         for section, command in STEPS:
             step: dict[str, Any] = {"section": section, "command": command or section}
