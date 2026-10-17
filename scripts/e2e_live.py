@@ -234,13 +234,19 @@ async def check_chat_roundtrip(ctx: dict[str, Any]) -> str:
     if not saw_done:
         raise CheckFailed("stream never sent a 'done' frame")
 
-    # It must land in history, not just stream to the socket.
-    after = int(
-        _psql(
-            f"SELECT COUNT(*) FROM companion_messages WHERE user_id = '{user}'"
+    # It must land in history, not just stream to the socket. The assistant row
+    # commits a few milliseconds after the 'done' frame, so allow it 5 s.
+    poll_until = time.monotonic() + 5
+    while True:
+        after = int(
+            _psql(
+                f"SELECT COUNT(*) FROM companion_messages WHERE user_id = '{user}'"
+            )
+            or 0
         )
-        or 0
-    )
+        if after - before >= 2 or time.monotonic() > poll_until:
+            break
+        await asyncio.sleep(0.25)
     if after - before < 2:
         raise CheckFailed(
             f"expected user+assistant rows persisted, history grew by {after - before}"
@@ -537,8 +543,15 @@ def main() -> int:
     ap.add_argument(
         "--other-user", default="ricky", help="second user for cross-user checks"
     )
-    ap.add_argument("--only", action="append", help="run only these checks")
-    ap.add_argument("--skip", action="append", default=[], help="skip these checks")
+    ap.add_argument(
+        "--only", action="append", help="run only these checks (repeat or comma-separate)"
+    )
+    ap.add_argument(
+        "--skip",
+        action="append",
+        default=[],
+        help="skip these checks (repeat or comma-separate)",
+    )
     ap.add_argument("--list", action="store_true", help="list check names and exit")
     ap.add_argument(
         "--i-know-what-im-doing",
@@ -560,12 +573,18 @@ def main() -> int:
         )
         return 2
 
-    names = args.only or list(CHECKS)
-    unknown = [n for n in names if n not in CHECKS]
+    def split(values: list[str] | None) -> list[str]:
+        return [n.strip() for v in values or [] for n in v.split(",") if n.strip()]
+
+    only, skip = split(args.only), split(args.skip)
+    names = only or list(CHECKS)
+    # An unknown name in --skip must fail too: silently ignoring it would run a
+    # check (e.g. her-pov, which spends a real render) the operator meant to skip.
+    unknown = [n for n in names + skip if n not in CHECKS]
     if unknown:
         print(f"unknown check(s): {', '.join(unknown)}", file=sys.stderr)
         return 2
-    names = [n for n in names if n not in args.skip]
+    names = [n for n in names if n not in skip]
 
     return asyncio.run(run(names, args.user, args.other_user))
 
