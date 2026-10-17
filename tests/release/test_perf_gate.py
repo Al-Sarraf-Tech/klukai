@@ -488,3 +488,15 @@ def test_twenty_percent_budget_applies_above_the_noise_floor(measured, failed):
         {route: ([100.0] * 100, 1.0)}, {route: ([measured] * 100, 1.0)}, {}, "0"
     )
     assert bool(rows[0]["failures"]) is failed
+
+
+def test_messages_contract_tolerates_owner_scheduler_rows_not_leaks():
+    from tools.ci.perf_measure import contract
+
+    seed = [{"content": f"seed:jalsarraf:{i}"} for i in range(49)]
+    replay = {"content": "End of day. Log your status if you see fit."}
+    assert contract("/api/messages", {"messages": [*seed, replay]})
+    leak = {"content": "seed:ricky:1"}
+    assert not contract("/api/messages", {"messages": [*seed, leak]})
+    assert not contract("/api/messages", {"messages": seed})  # 49 rows
+    assert not contract("/api/messages", {"messages": [replay] * 50})

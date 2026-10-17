@@ -12,7 +12,7 @@ import httpx
 import redis.asyncio as redis
 
 from .perf_schema import TARGETS
-from .perf_seed import OWNER, reset_rate_limits
+from .perf_seed import OTHER, OWNER, reset_rate_limits
 
 
 def _archive_contract(body: Any) -> bool:
@@ -39,14 +39,24 @@ def _audio_contract(body: Any) -> bool:
 
 
 def _messages_contract(body: Any) -> bool:
+    """50 rows, none from the other seeded owner.
+
+    The core's scheduler replays missed fires on a fresh database (an evening
+    check-in after 22:00, for example) and writes into the owner's own history,
+    so not every row carries the seed prefix. Cross-owner leakage is what
+    matters: the other owner's 100 seeded rows must never appear.
+    """
     rows = body.get("messages") if isinstance(body, dict) else None
     return (
         isinstance(rows, list)
         and len(rows) == 50
-        and all(
-            isinstance(row, dict)
-            and str(row.get("content", "")).startswith(f"seed:{OWNER}:")
-            for row in rows
+        and all(isinstance(row, dict) for row in rows)
+        and sum(
+            str(row.get("content", "")).startswith(f"seed:{OWNER}:") for row in rows
+        )
+        >= 40
+        and not any(
+            str(row.get("content", "")).startswith(f"seed:{OTHER}:") for row in rows
         )
     )
 
