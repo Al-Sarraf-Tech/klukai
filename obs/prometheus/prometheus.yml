@@ -2,7 +2,7 @@
 #
 # Scrape targets:
 #  - alloy itself (collector health)
-#  - companion-core /api/metrics (when wired in Phase 3.2)
+#  - companion-core /internal/metrics (dedicated bearer-token file)
 #
 # Per S+ uplift spec §5.2: 15d retention, configured at runtime via
 # --storage.tsdb.retention.time=15d flag.
@@ -51,20 +51,23 @@ scrape_configs:
         labels:
           service: grafana
 
-  # companion-core /api/metrics scrape — admin-token gated.
-  # Token lives in the alloy config block (env-substituted at runtime
-  # by Alloy's secret integration). For now scrape is disabled until
-  # Phase 3.2 wires the OTel SDK; uncomment when ready.
-  #
-  # - job_name: klukai-core
-  #   metrics_path: /api/metrics
-  #   bearer_token_file: /etc/prometheus/klukai-admin-token
-  #   static_configs:
-  #     - targets: [companion-core:8300]
-  #       labels:
-  #         service: klukai-core
+  # companion-core bounded RED/breaker metrics. Core serves them only to the
+  # dedicated scrape token (fail closed: 401 without it). The token is a
+  # private 0600 file outside Git, mounted read-only by docker-compose.obs.yml.
+  - job_name: klukai-core
+    metrics_path: /internal/metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/metrics-token
+    static_configs:
+      - targets:
+          - companion-core:8300
+        labels:
+          service: klukai-core
 
-# Alert rules live in docs/alerts/klukai.yaml (Phase 3 wiring).
-# Reload Prometheus to pick up rule changes:
-#   curl -X POST http://localhost:9090/-/reload
-rule_files: []
+# Generated SLO recordings and alerts (python -m tools.observability.slo_assets).
+# No Alertmanager is configured yet: alerts evaluate and show in Prometheus and
+# Grafana but are not routed anywhere. Reload after rule changes:
+#   curl -X POST http://127.0.0.1:19090/-/reload
+rule_files:
+  - /etc/prometheus/rules/klukai-slo.rules.yml

@@ -439,8 +439,16 @@ test -e .env || cp .env.example .env   # edit locally; preserve an existing .env
 docker compose up -d                       # schema migrations apply at startup
 curl -sf http://127.0.0.1:8300/health
 
-# Python changes need a rebuild; personality.yaml hot-reloads on mtime
+# Development: Python changes need a rebuild; personality.yaml hot-reloads on mtime
 docker compose build companion-core && docker compose up -d companion-core
+
+# Production (amarillo): never run an unqualified compose for core. It can drop
+# the preserved runtime settings or select the wrong image. Deploy the prebuilt
+# image of a CI-green commit through the private runtime override instead:
+#   docker compose -f docker-compose.yml \
+#     -f ~/.local/state/klukai/<deployment>/preserve-runtime.private.json \
+#     up -d --no-build --no-deps companion-core
+# Procedure, rollback and evidence: docs/handoff/2026-10-16-s-tier-finish.md
 
 # Web / PWA
 ./scripts/deploy-web.sh          # preferred

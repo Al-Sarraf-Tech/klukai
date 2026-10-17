@@ -2,15 +2,23 @@
 
 # Onboarding — running klukai from a fresh machine
 
-> Goal: a fresh laptop with git + Docker installed can reach a running `klukai` stack and send a chat message in under 30 minutes. This doc is **tested quarterly**; the most recent test result lives in `docs/onboarding-test-result.json`. Any drift is a bug — open an issue with the `runbook-incident` template.
+> Goal: a Linux machine with git + Docker can reach a running `klukai` core and
+> complete an authenticated chat turn. Drill results live in
+> [`onboarding-test-result.json`](onboarding-test-result.json); any drift is a bug.
 
 ## Prerequisites
 
-- Fedora 43 (or any modern Linux). macOS host is not supported (global CLAUDE.md absolute).
-- Docker Engine + Docker Compose v2.
-- Python 3.13 (only required for tooling outside the container — the app itself runs inside Docker).
+- Fedora 44 or another modern Linux (macOS hosts are not supported).
+- Docker Engine with Compose v2.
+- Python 3.14 for tooling outside the container (the app runs in Docker).
 - `git`, `make`, `curl`, `jq`.
-- Tailscale account + amarillo node enrolled (only if you want to reach dominus-nobara).
+- **The shared aichat infrastructure.** Core does not ship its own database: it
+  joins the external Docker networks `aichat_default`, `infra` and `klukai-obs`
+  and expects `infra-postgres`, `aichat-redis` and `aichat-vector` (Qdrant) on
+  them. Bring that stack up first, or provide equivalent containers on those
+  networks.
+- Chat, voice and images use the guarded GPU services on `dominus-nobara` over
+  Tailscale. Without them core still starts and answers health/auth requests.
 
 ## 1. Clone the repo
 
@@ -22,134 +30,114 @@ cd ~/git/klukai
 ## 2. Set up the local environment
 
 ```bash
-cp .env.example .env
-# Fill in:
-#   POSTGRES_PASSWORD=<dev password>
-#   SEED_PASSWORD_JALSARRAF=<dev password>
-#   ADMIN_TOKEN=<short random string>
-# Cloud fallback is forbidden (local RTX 3090 only).
-#   VAPID_PUBLIC_KEY=...
-#   VAPID_PRIVATE_KEY=...
+test -e .env || cp .env.example .env   # never overwrite an existing .env
 chmod 600 .env
+# Required (compose refuses to render without them): POSTGRES_PASSWORD,
+# LM_STUDIO_TOKEN, VOICE_API_TOKEN, RABBITMQ_PASSWORD. Add the SEED_PASSWORD_*
+# values for the accounts you want created.
+docker compose config --quiet           # validates interpolation, prints nothing
 ```
 
-The `.env` file is **never** committed. Production reads secrets via `systemd-creds` (`/etc/credstore.encrypted/klukai-secrets.cred`); dev uses `.env`.
+`.env` is never committed. Production keeps its exact runtime values in a
+private Compose override outside Git (see the README's operator section).
 
-## 3. Bring up the stack
+## 3. Bring up core
 
 ```bash
-docker compose up -d                        # core + gateway
-docker compose -f docker-compose.obs.yml up -d   # observability (optional for dev)
+docker network ls | grep -E 'aichat_default|infra|klukai-obs'   # must exist
+docker compose up -d companion-core     # schema migrations apply at startup
+docker compose -f docker-compose.obs.yml up -d   # observability (optional)
+docker compose ps                        # companion-core "Up (healthy)"
+curl -s http://127.0.0.1:8300/health | jq .
 ```
 
-Wait for healthchecks:
-
-```bash
-docker compose ps     # all "Up (healthy)"
-curl -s http://localhost:8300/health | jq .
-```
-
-You should see:
+Expected shape:
 
 ```json
-{
-  "status": "ok",
-  "service": "companion-core",
-  "database": {"status": "ok"},
-  "redis": "ok",
-  "qdrant": "ok"
-}
+{"status": "ok", "service": "companion-core",
+ "database": {"status": "ok"}, "redis": "ok", "qdrant": "ok"}
 ```
 
 ## 4. Verify the auth path
 
 ```bash
-# Acquire a session token using your seed password
-curl -X POST http://localhost:8300/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"user_id":"jalsarraf","password":"'"${SEED_PASSWORD_JALSARRAF}"'"}'
+TOKEN=$(curl -s -X POST http://127.0.0.1:8300/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"jalsarraf","password":"'"${SEED_PASSWORD_JALSARRAF}"'"}' | jq -r .token)
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8300/api/session/info | jq .
 ```
 
-Returned `token` is a JWT. Use it for `/api/*` calls:
-
-```bash
-TOKEN=<paste token>
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8300/api/character/info
-```
+The token is an opaque random bearer value (stored hashed server-side), not a
+JWT. Three failed logins from one IP within an hour trigger a temporary ban.
 
 ## 5. Send a chat message
 
+Chat is a WebSocket conversation, not a REST call. The supported check is the
+live end-to-end suite, which mints a short-lived session for the dedicated
+`claude` test user (it refuses `jalsarraf` unless overridden):
+
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: application/json" \
-     -X POST http://localhost:8300/api/chat/turn \
-     -d '{"message":"Hello, Klukai."}'
+python3 scripts/e2e_live.py --only chat
 ```
 
-If the authenticated compatibility gateway or its llama.cpp backend on
-`dominus-nobara` is not reachable, you will get a clear 503 and the legacy
-`lm_studio` circuit-breaker label will be open. That label is retained for API
-compatibility; LM Studio itself is no longer deployed. This is expected on an
-isolated development box.
+If the GPU gateway on `dominus-nobara` is unreachable, chat degrades with a
+clear error and the legacy `lm_studio` breaker label opens; health and auth
+keep working.
 
 ## 6. Run the tests
 
+The CI environment is hash-locked; use the same lock locally:
+
 ```bash
-cd docker/core
-pip install -r requirements.txt -r requirements-dev.txt
-pytest -q                              # unit (the default)
-pytest -m integration                  # integration (needs testcontainers / docker)
-pytest tests/golden/                   # golden / character regression
-pytest tests/property/                 # hypothesis-driven property tests
-pytest tests/perf/ -m perf             # perf gate (needs running stack)
+python3.14 -m venv .venv && . .venv/bin/activate
+pip install --require-hashes -r docker/core/requirements-ci.txt
+python -m ruff check docker/core/app --config docker/core/ruff.toml
+python -m mypy docker/core/app --config-file docker/core/mypy.ini
+pytest tests/quality tests/release -q -o pythonpath=. \
+  -o asyncio_default_fixture_loop_scope=function \
+  --deselect tests/release/test_image_runtime.py   # that file needs KLUKAI_TEST_IMAGE
 ```
+
+The full core suite (5,400+ tests) runs in CI against a disposable PostgreSQL
+through `scripts/ci/core.sh`; the paired performance gate is
+`python -m tools.ci.perf_stack` (see [tools/ci/README.md](../tools/ci/README.md)).
+CI is dispatched on a branch head with
+`gh workflow run ci.yml --ref <branch> -f expected_revision=<sha>`.
 
 ## 7. Run the audit harness
 
 ```bash
-scripts/s-tier-audit.sh                # human report
-scripts/s-tier-audit.sh --json | jq .  # CI-friendly
-scripts/s-tier-audit.sh --only=testing # focus one dimension
+scripts/s-tier-audit.sh                  # human report
+scripts/s-tier-audit.sh --json | jq .    # machine-readable
+scripts/s-tier-audit.sh --only testing   # one dimension
 ```
 
-A green run is the definition of S+ tier. Anything red is the floor.
+The audit only credits measured evidence: missing or stale evidence never earns
+a tier, so a local run without CI evidence directories reports most rows as
+unverified. The honest per-row status lives in the latest handoff document.
 
 ## Common gotchas
 
 | Symptom | Fix |
 |---|---|
-| `companion-core` immediately exits | Check `docker compose logs core` — usually a missing env var |
-| `voice` service is unavailable | Follow `docs/runbooks/voice-unreachable.md`; recover only the canonical `ops/dominus-nobara` Compose service after checking the game guard and GPU lease |
-| Flutter app login page is blank | SW intercepted; rebuild with `--base-href=/app/` (ref `feedback_flutter_base_href.md`) |
-| Image upload returns 401 on web | `Image.network(headers:)` ignored on web — use `http.get` + `Image.memory` (ref `feedback_flutter_web_image_auth.md`) |
-| Tests can't import `psycopg` | dev shim in `conftest.py` mocks it — make sure `tests/__init__.py` is loaded |
-| Coverage gate fails | `cd docker/core && pytest --cov=app -q` to see per-module gaps |
+| `docker compose` refuses to render | A required `.env` value is missing (`POSTGRES_PASSWORD`, `LM_STUDIO_TOKEN`, `VOICE_API_TOKEN`, `RABBITMQ_PASSWORD`) |
+| `network aichat_default not found` | Start the shared aichat infrastructure first (Prerequisites) |
+| `companion-core` exits immediately | `docker compose logs companion-core` — usually a missing env var or an unreachable `infra-postgres` |
+| `voice` service is unavailable | Follow [voice-unreachable](runbooks/voice-unreachable.md); recover only the canonical `ops/dominus-nobara` Compose service after checking the game guard and GPU lease |
+| Flutter app login page is blank | Service worker intercepted; rebuild with `--base-href=/app/` (`scripts/deploy-web.sh` does) |
+| Images fail to load on web | `Image.network(headers:)` is ignored on web; use `http.get` + `Image.memory` |
+| Coverage gate fails | Read the per-module report from the CI core job; the floor is 95% statements and branches |
 
-## Quarterly drill
+## Drill
 
-The point of this doc is **someone other than the author** must be able to run klukai from these instructions. Once per quarter:
-
-1. Spin a fresh VM (or wipe a checkout).
-2. Walk through §1-§5 verbatim.
-3. Note any drift (commands that fail, missing context, broken links).
-4. Update this doc.
-5. Append a result row to `docs/onboarding-test-result.json`:
-
-   ```json
-   {
-     "drill_date": "2026-08-15",
-     "operator": "<name>",
-     "duration_minutes": 22,
-     "drift": [],
-     "outcome": "pass"
-   }
-   ```
-
-If drift is non-empty, the next PR fixes it. S+ certification (`scripts/s-tier-audit.sh`) requires this file to be <90 days old.
+Someone other than the author should run §1-§5 on a fresh VM, note any drift,
+fix this doc in the next PR, and append a dated row to
+[`onboarding-test-result.json`](onboarding-test-result.json) with the exact
+steps actually executed, their results and what was not exercised.
 
 ## See also
 
-- `docs/architecture.md` — what the boxes-and-arrows actually mean.
-- `docs/runbooks/` — what to do when an alert fires.
-- `docs/slos.md` — what "working" means quantitatively.
-- `docs/superpowers/specs/2026-05-16-s-plus-uplift.md` — the long-term roadmap.
+- [architecture.md](architecture.md) — what the boxes and arrows mean.
+- [runbooks/](runbooks/) — what to do when an alert fires.
+- [slos.md](slos.md) — what "working" means quantitatively.
+- [handoff/2026-10-16-s-tier-finish.md](handoff/2026-10-16-s-tier-finish.md) — current release, CI evidence and the honest S ledger.

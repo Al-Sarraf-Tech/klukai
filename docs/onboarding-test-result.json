@@ -9,5 +9,29 @@
     ],
     "outcome": "baseline-recorded",
     "note": "This is the *baseline* entry. Per docs/onboarding.md the quarterly drill requires someone other than the author. Until that drill happens, this entry exists to anchor the file but does NOT count as a passed drill for S+ certification."
+  },
+  {
+    "drill_date": "2026-10-16",
+    "operator": "claude (agent, for jalsarraf); not an independent human drill",
+    "method": "fresh git clone of main 5d9c3f0 into an empty directory on amarillo",
+    "duration_minutes": 9,
+    "executed": [
+      "\u00a71 git clone over SSH: ok",
+      "\u00a72 .env from .env.example: compose refused to render until POSTGRES_PASSWORD, LM_STUDIO_TOKEN, VOICE_API_TOKEN, RABBITMQ_PASSWORD were set; with those four it renders (core and obs)",
+      "\u00a76 python3.14 venv + pip --require-hashes requirements-ci.txt: ok; ruff: clean; mypy strict: 162 files clean",
+      "\u00a76 pytest tests/quality tests/release: 987 passed, 6 image tests deselected (needed -o pythonpath=.)",
+      "\u00a77 s-tier-audit --only code: CODE-1/2/3 pass"
+    ],
+    "not_executed": [
+      "\u00a73-\u00a75 on a fresh stack: core has a fixed container name and port 8300, so a second stack would collide with production on this host",
+      "Instead verified on the live production stack the same evening: public /api/health/ready ok, login/session (test user), anonymous and forged-token rejection, WebSocket chat via scripts/e2e_live.py --only chat"
+    ],
+    "drift": [
+      "Required env vars VOICE_API_TOKEN and LM_STUDIO_TOKEN were missing from .env.example and the doc",
+      "Doc claimed systemd-creds production secrets, JWT tokens, user_id login field, /api/character/info and /api/chat/turn: none true",
+      "Doc omitted the shared aichat infrastructure prerequisite (external networks, infra-postgres, redis, qdrant)",
+      "Test command needed -o pythonpath=. and the hash-locked requirements-ci.txt (requirements-dev.txt no longer exists)"
+    ],
+    "outcome": "partial: drift fixed in the same PR; a fresh-VM drill of \u00a73-\u00a75 by someone other than the author is still due"
   }
 ]

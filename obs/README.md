@@ -33,7 +33,9 @@ The emitted counters use `route`, `method`, `status_class`; histograms use milli
 
 The root operator owns activation on the existing approved collector. Prometheus must scrape core `/internal/metrics` with `job: klukai-core`, using a dedicated bearer-token file. Core reads `KLUKAI_METRICS_TOKEN_FILE`, default `/run/klukai-secrets/metrics-token`; the separate collector copy must remain private. Core rejects empty, unreadable, nonregular, symlinked or group/world-readable token files. Never use the general admin/session token or put token contents in a shell argument, Git, CI output or incident note.
 
-The existing Prometheus scaffold has `rule_files: []` and a disabled legacy `/api/metrics` scrape. The root operator must load the generated deployable rules and replace that legacy target under the approved live configuration. No generator command starts, reloads or provisions a service. Alert evaluation and notification routing are distinct acceptance steps; the source does not configure an Alertmanager or send a notification.
+Activated 2026-10-16. `obs/prometheus/prometheus.yml` scrapes `companion-core:8300/internal/metrics` as `job: klukai-core` over the `klukai-obs` network, with `credentials_file: /etc/prometheus/secrets/metrics-token`. `docker-compose.obs.yml` mounts that file read-only from `${KLUKAI_RUNTIME_SECRETS_DIR:-./.runtime-secrets}/metrics-token` (the same private 0600 file core reads; ignored by Git) and mounts `klukai-slo.rules.yml` under `rule_files`. A disposable Prometheus on that network verified the target `up`, 83 rules healthy with no evaluation errors, and live `klukai_http_requests_total` data before rollout. Rotating the token: write a new 0600 file, then recreate Prometheus; core rereads it on every scrape.
+
+No Alertmanager is configured: alerts evaluate and appear in Prometheus and Grafana but are not routed. Notification routing remains a separate acceptance step.
 
 ## Live acceptance
 

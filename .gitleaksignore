@@ -27,3 +27,7 @@
 #   `LOCAL_TZ.key == "..."` asserts a zoneinfo timezone name; generic-api-key
 #   matches the `.key ==` attribute name. No secret is present.
 39f7f7a14597380ef0d2a56ae0495ba499e9eb55:docker/core/tests/test_proactive_smart.py:generic-api-key:178
+
+# 2026-10-16 — docs/handoff/2026-10-16-s-tier-finish.md line 13 (commit 5d9c3f0):
+#   the handoff quoted the timezone-name assertion above; rephrased in the next commit.
+5d9c3f054d9f1a6c56da091a7f9bd3fbffc1df27:docs/handoff/2026-10-16-s-tier-finish.md:generic-api-key:13

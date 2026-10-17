@@ -10,7 +10,7 @@ Dominus on for CI, approved a one-time fleet-CI unlock, and approved a 5 ms perf
 | Commit | Change |
 | --- | --- |
 | 7388223 | Codex's uncommitted PERF-1 semantic verifier, reviewed and committed |
-| c81a3dc | gitleaks false positive (`LOCAL_TZ.key == "America/Chicago"`) recorded |
+| c81a3dc | gitleaks false positive (a zoneinfo timezone-name assertion in a test) recorded |
 | 77cd942 | workflow did not parse on GitHub: `runner.temp` in job-level `env` |
 | 455fd21 | `KLUKAI_CI_NATIVE_SANDBOX=unavailable` opt-out; real paired perf harness in CI; containerd image IDs; virtualized thermal telemetry |
 | 123b8e9 | inspect templates tolerate omitted keys; AppArmor userns profile for `/usr/bin/bwrap` on heavy |
@@ -81,20 +81,20 @@ Not an overall S. Each row is met only with direct evidence for `c6d02f0`.
 | REL-1 | Partial | breakers and degradation covered by tests; no live outage drill |
 | REL-2 | Partial | CI real-backend fault/recovery cases; shutdown-ordering tests |
 | REL-3 | Partial | restore-verified backup and a prepared manual rollback; no automatic rollback deployer |
-| OBS-1 | Partial | bounded RED metrics at token-protected `/internal/metrics` (fails closed); not scraped: no token provisioned, Prometheus job not added |
-| OBS-2 | Open | generated SLO rules/dashboards not loaded; no alert routing proof |
+| OBS-1 | Met | bounded RED/breaker/LLM metrics at token-protected `/internal/metrics` (401 without the token); Prometheus scrapes `job=klukai-core`, target up, live series queried (2026-10-16 follow-up) |
+| OBS-2 | Partial | 60 recording + 23 alert rules loaded and healthy, retention 15d; no Alertmanager, so alerts are not routed |
 | PERF-1 | Met | CI paired disposable gate vs previous `main`: login 1.00, readiness 0.21, max pooled 1.32 (`POST /api/tts`, +2.9 ms, below the 5 ms floor: a small real regression worth a look) |
 | PERF-2 | Open | nightly perf retention not implemented |
-| DOC-1 | Partial | handoff docs current; clean onboarding not re-run |
-| PROC-1 | Partial | PR + blocking self-hosted CI; `main` has no branch protection or ruleset; no independent reviewer |
+| DOC-1 | Partial | onboarding re-run from a fresh clone fixed real drift (env vars, API, prerequisites); a fresh-VM drill of the stack steps by someone else is still due |
+| PROC-1 | Partial | PR + blocking self-hosted CI; `main` protected with required `Required CI gates`, no force push/deletion (admins may bypass, fleet standard); no independent reviewer |
 | PROC-2 | Open | deployed image rebuilt on amarillo from the exact commit, not the CI-built artifact |
 | PROC-3 | Met | exact CI-green commit deployed, image label bound, live state read back |
 
 ## Owner decisions still needed
 
-1. Turn branch protection back on for `main` (required checks + review); it is currently off.
+1. Done 2026-10-16: `main` protection on with the required `Required CI gates` check.
 2. License policy for LGPL/GPL components (glibc base, psycopg) in a private, non-distributed service.
-3. Provision a metrics token and add the `klukai-core` scrape job plus generated rules (OBS-1/2).
+3. Done 2026-10-16: metrics token, scrape job and rules. Still open: an alert destination (Alertmanager route).
 4. Schedule the remaining open rows: mutation run, encrypted secret store, signed provenance,
    nightly perf retention, CI-artifact transfer, automatic rollback.
 5. Durable fix for the fleet-CI boot deadlock (bus thread e638a8095d1e).

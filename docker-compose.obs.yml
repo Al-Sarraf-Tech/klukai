@@ -65,6 +65,9 @@ services:
       - "127.0.0.1:19090:9090"   # +10000 to avoid host conflicts
     volumes:
       - ./obs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./obs/prometheus/klukai-slo.rules.yml:/etc/prometheus/rules/klukai-slo.rules.yml:ro
+      # Same private scrape token core reads (0600, outside Git; see obs/README.md).
+      - ${KLUKAI_RUNTIME_SECRETS_DIR:-./.runtime-secrets}/metrics-token:/etc/prometheus/secrets/metrics-token:ro
       - /mnt/nvmeINT/obs/klukai/prometheus:/prometheus
     restart: unless-stopped
     healthcheck:
