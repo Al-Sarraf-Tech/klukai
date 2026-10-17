@@ -93,6 +93,7 @@ def deliver(bus: str, target: str, text: str, project: str | None) -> bool:
 def handler(token: str, bus: str, target: str, project: str | None) -> type:
     class Handler(http.server.BaseHTTPRequestHandler):
         server_version = "klukai-alert-bridge"
+        timeout = 10  # a stalled client cannot pin a thread
 
         def _reply(self, code: int) -> None:
             self.send_response(code)
@@ -100,9 +101,10 @@ def handler(token: str, bus: str, target: str, project: str | None) -> type:
             self.end_headers()
 
         def _reject(self, code: int, length: int) -> None:
-            # Drain a bounded body so the client reads the status instead of a
-            # reset; anything larger just closes the connection.
-            if 0 < length <= 4 * MAX_BODY:
+            # Drain a small body so the client reads the status instead of a
+            # reset; anything larger, or any unauthenticated upload beyond a
+            # few KiB, just closes the connection.
+            if 0 < length <= (4 * MAX_BODY if code == 413 else 16 * 1024):
                 self.rfile.read(length)
             else:
                 self.close_connection = True

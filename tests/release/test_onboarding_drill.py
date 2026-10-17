@@ -41,3 +41,23 @@ def test_built_images_follow_the_pinned_compose_project_name(tmp_path):
     ]
     repo = drill.built_images(Path(__file__).resolve().parents[2])
     assert repo[0] == "companion-companion-core"
+
+
+def test_the_drill_refuses_outside_ci_or_next_to_existing_resources(monkeypatch):
+    import pytest
+    import subprocess
+
+    with pytest.raises(RuntimeError, match="only in CI"):
+        drill.preflight_isolation({})
+
+    def fake(argv, **kwargs):
+        out = (
+            "companion-core\nother\n"
+            if argv[1] == "ps"
+            else "companion_companion-images\n"
+        )
+        return subprocess.CompletedProcess(argv, 0, out, "")
+
+    monkeypatch.setattr(drill.subprocess, "run", fake)
+    with pytest.raises(RuntimeError, match="existing resources"):
+        drill.preflight_isolation({"GITHUB_ACTIONS": "true"})

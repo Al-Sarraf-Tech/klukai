@@ -193,7 +193,37 @@ def wait_healthy(timeout: float = 240) -> str:
     return state
 
 
+def preflight_isolation(env: dict[str, str] | None = None) -> None:
+    """The drill creates and later deletes fixed-name containers, networks and
+    the compose project's volumes (`companion`, the production project name).
+    Refuse anywhere but CI, and refuse if any of them already exist."""
+    env = os.environ if env is None else env
+    if env.get("GITHUB_ACTIONS") != "true":
+        raise RuntimeError("the onboarding drill runs only in CI (GITHUB_ACTIONS=true)")
+    names = set(
+        subprocess.run(
+            ["docker", "ps", "-a", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+    )
+    taken = sorted(names & {*INFRA, "companion-core", "companion-events-bridge"})
+    volumes = [
+        v
+        for v in subprocess.run(
+            ["docker", "volume", "ls", "-q"], capture_output=True, text=True, check=True
+        ).stdout.split()
+        if v.startswith("companion_")
+    ]
+    if taken or volumes:
+        raise RuntimeError(
+            f"refusing: existing resources would be removed: {taken + volumes}"
+        )
+
+
 def drill(source: Path, revision: str) -> dict[str, Any]:
+    preflight_isolation()
     doc = (source / "docs/onboarding.md").read_text()
     for section, command in STEPS:
         if command and not documented(doc, command):
