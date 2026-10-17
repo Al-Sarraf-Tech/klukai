@@ -16,6 +16,7 @@ Generated SLO alerts link to explicit anchors in [dependency outage response](de
 | Durable job delivery issue | [Job handoff](durable-job-handoff.md) |
 | Migration/rollback issue | [Database migrations](database-migrations.md) |
 | Encrypted credential storage and rotation | [Encrypted credentials](encrypted-credentials.md) |
+| Releasing core: CI artifact, signed provenance, automatic rollback | [Release](release.md) |
 
 Preserve ownership, session revocation and accepted image job identity during investigation. Keep authentication closed on database failure and session admission closed on Redis failure. Optional outages may leave text available. Never delete conversations, images or memories as a repair, rotate credentials without the owner's authorization, bypass GPU gaming guards or enable an unauthorized provider/paid fallback.
 
