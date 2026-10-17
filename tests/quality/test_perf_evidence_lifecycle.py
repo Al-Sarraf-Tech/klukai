@@ -39,6 +39,8 @@ def rewrite_transcript(output, mutate):
         "providerenv",
         "inherited",
         "warning",
+        "logswarning",
+        "cliwarning",
         "exit",
         "timeout",
         "stdin",
@@ -104,6 +106,13 @@ def test_rehashed_docker_transcript_is_consumed_completely(tmp_path, mutation):
             rows[inspect]["stdout_bytes"] = json.dumps(data)
         elif mutation == "warning":
             rows[stop]["stderr_bytes"] = "RuntimeWarning: hidden issue\n"
+        elif mutation == "logswarning":
+            logs = next(i for i, row in enumerate(rows) if row["argv"][1] == "logs")
+            rows[logs]["stderr_bytes"] = "x.py:1: DeprecationWarning: hidden\n"
+        elif mutation == "cliwarning":
+            rows[create]["stderr_bytes"] = (
+                "WARNING: Your kernel does not support memory limit\n"
+            )
         elif mutation == "exit":
             rows[stop]["exit_code"] = 1
         elif mutation == "timeout":
@@ -383,3 +392,31 @@ def test_reordered_input_map_cannot_redefine_producer_command_order(tmp_path):
     rehash(output)
     with pytest.raises(ValueError):
         validate(root, output, revision, 1)
+
+
+def test_container_log_levels_are_not_python_warnings(tmp_path):
+    from perf_evidence_fixture import bundle, rehash
+    from tools.ci.perf_evidence import validate
+
+    root, output, revision = bundle(tmp_path)
+
+    def change(rows):
+        for row in rows:
+            if row["argv"][1] == "logs":
+                row["stderr_bytes"] = (
+                    "app.auth WARNING Skipping user miguel: no seed password\n"
+                    "WARN qdrant: tmpfs storage\n"
+                    "warning: directory '/data' is not writable\n"
+                )
+
+    rewrite_transcript(output, change)
+    rows = json.loads((output / "docker-commands.json").read_text())
+    for row in rows:
+        retained = output / (row["argv"][-1] + ".log")
+        if row["argv"][1] == "logs" and retained.exists():
+            retained.write_text(
+                (output / row["stdout"]).read_text()
+                + (output / row["stderr"]).read_text()
+            )
+    rehash(output)
+    assert validate(root, output, revision, 1)["certifying"] is True

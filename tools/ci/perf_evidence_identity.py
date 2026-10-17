@@ -212,6 +212,10 @@ def bind_source(
     )
 
 
+ANY_WARNING = re.compile(r"\b\w*warning\b|never awaited|Exception ignored", re.I)
+PYTHON_WARNINGS = re.compile(r"\b[A-Z]\w*Warning\b|never awaited|Exception ignored")
+
+
 def raw_inventory(
     output: Path, report: dict[str, Any], rounds: int, prefix: str
 ) -> None:
@@ -304,12 +308,13 @@ def commands(output: Path) -> list[dict[str, Any]]:
             require(row.get(stream) == filename, "Raw stream identity differs")
             streams.add(filename)
             row[stream + "_text"] = (output / filename).read_text()
+            # Container logs carry log-level WARNING lines from the app's
+            # seed step and the disposable backends' tmpfs/locale setup; only
+            # Python warning signatures fail there. Docker CLI warnings (for
+            # example an unenforced resource limit) always fail.
+            pattern = PYTHON_WARNINGS if row["argv"][1:2] == ["logs"] else ANY_WARNING
             require(
-                not re.search(
-                    r"\b\w*warning\b|never awaited|Exception ignored",
-                    row[stream + "_text"],
-                    re.I,
-                ),
+                not pattern.search(row[stream + "_text"]),
                 "Warnings in actual Docker output",
             )
     require(
