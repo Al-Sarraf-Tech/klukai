@@ -4,8 +4,6 @@ import importlib.util
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
-from urllib.request import ProxyHandler, build_opener
 
 import pytest
 
@@ -78,21 +76,30 @@ def test_autoheal_liveness_stays_healthy_during_required_backend_outage(monkeypa
     with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        real = build_opener(ProxyHandler({}))
-
-        class LoopbackPort:
-            def open(self, url, **kwargs):
-                return real.open(
-                    f"http://127.0.0.1:{server.server_port}{urlsplit(url).path}",
-                    **kwargs,
-                )
-
-        monkeypatch.setattr(module, "build_opener", lambda *_: LoopbackPort())
+        base = f"http://127.0.0.1:{server.server_port}/api/health"
         try:
-            assert module.healthy() is True, (
+            assert module.healthy(base + "/live") is True, (
                 "Backend loss must not trigger an autoheal restart loop"
             )
-            assert module.healthy("http://127.0.0.1:8300/api/health/ready") is False
+            assert module.healthy(base + "/ready") is False
         finally:
             server.shutdown()
             thread.join(timeout=2)
+
+
+def test_probe_uses_only_c_modules_so_it_stays_cheap():
+    """Docker runs the probe every 15 s inside core's CPU budget (see module doc)."""
+    import ast
+
+    path = Path(__file__).resolve().parents[2] / "docker/core/healthcheck.py"
+    imported = {
+        alias.name
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.ImportFrom)
+    }
+    assert imported <= {"_json", "_socket", "sys"}, imported
