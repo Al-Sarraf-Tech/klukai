@@ -7,6 +7,7 @@ container environment are accepted. Every image input is immutable and cached.
 from __future__ import annotations
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import socket
@@ -15,6 +16,15 @@ import time
 from typing import Any
 
 from .perf_gate import image_reference
+from .perf_recording import (
+    ACTIVE,
+    CONTAINER_VIEW,
+    IMAGE_VIEW,
+    LABEL,
+    NETWORK_VIEW,
+    VOLUME_VIEW,
+    base_environment,
+)
 
 BACKEND_IMAGES = {
     "postgres": "sha256:650b442ec4f71f47b92505de963bbc4054f8c7df0df30956aef30e27d7e4dea4",
@@ -32,8 +42,16 @@ RESOURCES = {
 
 
 def docker(
-    *arguments: str, environment: dict[str, str] | None = None, stdin: str | None = None
+    *arguments: str,
+    environment: dict[str, str] | None = None,
+    stdin: str | None = None,
+    check: bool = True,
 ) -> str:
+    recorder = ACTIVE.get()
+    if recorder is not None:
+        return recorder.run(
+            *arguments, environment=environment, stdin=stdin, check=check
+        )
     result = subprocess.run(
         ["docker", *arguments],
         input=stdin,
@@ -42,7 +60,7 @@ def docker(
         timeout=50,
         env={**os.environ, **(environment or {})},
     )
-    if result.returncode:
+    if check and result.returncode:
         raise RuntimeError(f"Docker {arguments[0]} failed: {result.stderr[:500]}")
     return (
         result.stdout + result.stderr
@@ -51,11 +69,18 @@ def docker(
     )
 
 
-def inspect_image(reference: str) -> dict[str, Any]:
+def inspect_image(reference: str, *, role: str = "core") -> dict[str, Any]:
     image_reference(reference)
-    data = json.loads(docker("image", "inspect", reference))[0]
+    data = json.loads(docker("image", "inspect", "--format=" + IMAGE_VIEW, reference))
+    if isinstance(data, list):
+        data = data[0]
     for item in data.get("Config", {}).get("Env", []):
-        key, _, value = item.partition("=")
+        if isinstance(
+            item, str
+        ):  # Legacy test boundary; actual projection emits objects.
+            key, _, value = item.partition("=")
+        else:
+            key, value = item["key"], item.get("value", item.get("nonempty"))
         sensitive = any(
             marker in key.upper()
             for marker in ("API_KEY", "TOKEN", "PASSWORD", "SECRET", "CREDENTIAL")
@@ -64,11 +89,10 @@ def inspect_image(reference: str) -> dict[str, Any]:
             raise ValueError(
                 "Image contains baked credentials; use a credential-free input"
             )
+    base_environment(data["Config"], role)
     return {
         "id": data["Id"],
-        "revision": (data.get("Config", {}).get("Labels") or {}).get(
-            "org.opencontainers.image.revision"
-        ),
+        "revision": data.get("Config", {}).get("Revision"),
         "os": data["Os"],
         "architecture": data["Architecture"],
     }
@@ -90,6 +114,32 @@ def cpu_temperature() -> float:
     return max(readings)
 
 
+def verify_absent(kind: str, name: str) -> None:
+    view = {
+        "container": CONTAINER_VIEW,
+        "network": NETWORK_VIEW,
+        "volume": VOLUME_VIEW,
+    }[kind]
+    arguments = ["inspect"] if kind == "container" else [kind, "inspect"]
+    docker(*arguments, "--format=" + view, name, check=False)
+    recorder = ACTIVE.get()
+    if recorder is None:
+        return  # Noncertifying legacy callers have no retained command exit proof.
+    row = recorder.rows[-1]
+    error = (recorder.output / row["stderr"]).read_text()
+    if row["exit_code"] == 0 or not re.search(
+        r"(?:No such (?:object|container|network|volume): "
+        + re.escape(name)
+        + r"|(?:network|volume) "
+        + re.escape(name)
+        + r" not found|get "
+        + re.escape(name)
+        + r": no such volume)(?:\s|$)",
+        error,
+    ):
+        raise RuntimeError("Disposable resource absence unproven")
+
+
 class DisposableStack:
     """Own named containers/network/volume; cleanup errors are gate failures."""
 
@@ -100,7 +150,11 @@ class DisposableStack:
         self.volume = self.prefix + "-fixtures"
         self.containers: list[str] = []
         self.backends: dict[str, dict[str, Any]] = {}
+        self.backend_images = dict(BACKEND_IMAGES)
+        self.backend_inputs = dict(BACKEND_IMAGES)
         self.password = secrets.token_urlsafe(24)
+        if ACTIVE.get() is not None:
+            ACTIVE.get().secrets.append(self.password)
         self.maximum_temperature = cpu_temperature()
         self.cleanup_verified = False
         self.network_created = False
@@ -124,6 +178,8 @@ class DisposableStack:
             "--pull=never",
             "--name",
             name,
+            "--label",
+            LABEL + "=" + self.prefix,
             "--network",
             self.network,
             "--network-alias",
@@ -189,7 +245,9 @@ class DisposableStack:
         return name
 
     def inspect_container(self, name: str, dependency: str) -> dict[str, Any]:
-        info = json.loads(docker("inspect", name))[0]
+        info = json.loads(docker("inspect", "--format=" + CONTAINER_VIEW, name))
+        if isinstance(info, list):
+            info = info[0]
         actual = {
             "nano_cpus": info["HostConfig"]["NanoCpus"],
             "memory_bytes": info["HostConfig"]["Memory"],
@@ -208,8 +266,9 @@ class DisposableStack:
         }
 
     def _fixture_volume(self) -> None:
-        docker("volume", "create", self.volume)
+        docker("volume", "create", "--label", LABEL + "=" + self.prefix, self.volume)
         self.volume_created = True
+        docker("volume", "inspect", "--format=" + VOLUME_VIEW, self.volume)
         payload = {
             "perf_fixtures.py": (
                 self.repository / "tools/ci/perf_fixtures.py"
@@ -226,6 +285,8 @@ class DisposableStack:
             "--rm",
             "--name",
             writer,
+            "--label",
+            LABEL + "=" + self.prefix,
             "-i",
             "--pull=never",
             "--network",
@@ -243,14 +304,15 @@ class DisposableStack:
             f"type=volume,source={self.volume},target=/fixture",
             "--entrypoint",
             "/usr/local/bin/python",
-            BACKEND_IMAGES["fixture"],
+            self.backend_images["fixture"],
             "-c",
             program,
             stdin=json.dumps(payload),
         )
         self.containers.remove(writer)
+        verify_absent("container", writer)
 
-    def start(self) -> None:
+    def start(self, *, certifying: bool = True) -> None:
         endpoint = docker(
             "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"
         )
@@ -262,9 +324,24 @@ class DisposableStack:
             reference = os.environ.get(
                 f"KLUKAI_PERF_{dependency.upper()}_IMAGE", default
             )
-            BACKEND_IMAGES[dependency] = inspect_image(reference)["id"]
-        docker("network", "create", "--internal", self.network)
+            self.backend_inputs[dependency] = reference
+            self.backend_images[dependency] = inspect_image(reference, role=dependency)[
+                "id"
+            ]
+        if certifying and self.backend_images != BACKEND_IMAGES:
+            raise ValueError(
+                "Certifying performance requires reviewed backend image IDs"
+            )
+        docker(
+            "network",
+            "create",
+            "--internal",
+            "--label",
+            LABEL + "=" + self.prefix,
+            self.network,
+        )
         self.network_created = True
+        docker("network", "inspect", "--format=" + NETWORK_VIEW, self.network)
         self._fixture_volume()
         for dependency in ("postgres", "redis", "qdrant", "fixture"):
             environment: dict[str, str] = {}
@@ -287,7 +364,7 @@ class DisposableStack:
                 )
             name = self._create(
                 dependency,
-                BACKEND_IMAGES[dependency],
+                self.backend_images[dependency],
                 env=environment,
                 arguments=arguments,
                 entrypoint=entrypoint,
@@ -319,11 +396,14 @@ class DisposableStack:
 
     def stop_core(self, name: str) -> None:
         docker("stop", "--time", "25", name)
-        inspection = json.loads(docker("inspect", name))[0]
+        inspection = json.loads(docker("inspect", "--format=" + CONTAINER_VIEW, name))
+        if isinstance(inspection, list):
+            inspection = inspection[0]
         if inspection["State"]["OOMKilled"] or inspection["State"]["ExitCode"] != 0:
             raise RuntimeError("Candidate did not shut down gracefully")
         (self.output / f"{name}.log").write_text(docker("logs", name))
         docker("rm", "-v", name)
+        verify_absent("container", name)
         self.containers.remove(name)
 
     def close(self) -> None:
@@ -335,6 +415,7 @@ class DisposableStack:
                 errors.append(str(error))
             try:
                 docker("rm", "-fv", name)
+                verify_absent("container", name)
             except RuntimeError as error:
                 errors.append(str(error))
         for kind, name, created in (
@@ -345,6 +426,7 @@ class DisposableStack:
                 continue
             try:
                 docker(kind, "rm", name)
+                verify_absent(kind, name)
             except RuntimeError as error:
                 errors.append(str(error))
         remaining = docker("ps", "-aq", "--filter", f"name={self.prefix}")

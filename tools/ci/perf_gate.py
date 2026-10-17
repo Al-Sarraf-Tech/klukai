@@ -66,7 +66,8 @@ def _identity(
     image_reference(expected_image)
     revision(expected_revision)
     if (
-        report.get("schema") != 1
+        type(report.get("schema")) is not int
+        or report["schema"] != 1
         or report.get("role") != role
         or not report.get("run_id")
     ):
@@ -99,10 +100,16 @@ def _identity(
 
 def _configuration(report: dict[str, Any]) -> dict[str, Any]:
     config = object_dict(report.get("configuration"))
+    if (
+        set(config) != {"samples", "rounds", "warmup", "concurrency", "seed_version"}
+        or integer(config.get("seed_version")) != 1
+    ):
+        raise ValueError("Missing/noncanonical deterministic seed configuration")
     integer(config.get("samples"), MIN_SAMPLES)
     integer(config.get("rounds"), MIN_ROUNDS)
     integer(config.get("warmup"))
-    integer(config.get("concurrency"))
+    if integer(config.get("concurrency")) != 1:
+        raise ValueError("Comparable performance requires concurrency1")
     resources = object_dict(report.get("resources"))
     if set(resources) != {"core", "postgres", "redis", "qdrant", "fixture"}:
         raise ValueError("Incomplete resource evidence")
@@ -121,7 +128,11 @@ def _route(
 ) -> tuple[tuple[str, str], list[float], float]:
     identity = (str(row.get("method")), str(row.get("route")))
     expected = {(method, route): status for method, route, status in TARGETS}
-    if identity not in expected or row.get("warmup_count") != config["warmup"]:
+    if (
+        identity not in expected
+        or type(row.get("warmup_count")) is not int
+        or row["warmup_count"] != config["warmup"]
+    ):
         raise ValueError("Unknown route or missing warmup evidence")
     samples = object_list(row.get("samples"))
     if len(samples) != config["samples"]:
@@ -172,7 +183,7 @@ def validate_report(
     result = []
     for index, run in enumerate(rounds):
         run = object_dict(run)
-        if run.get("round") != index:
+        if type(run.get("round")) is not int or run["round"] != index:
             raise ValueError("Duplicate/mismatched round identity")
         actual = object_dict(run.get("actual_container"))
         if (

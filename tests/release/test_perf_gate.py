@@ -249,6 +249,23 @@ def test_exact_twenty_percent_is_permitted():
     assert compare(report(), report("candidate", 12), **arguments())["passed"] is True
 
 
+def test_concurrency_other_than_one_cannot_certify_comparable_samples():
+    baseline, candidate = report(), report("candidate")
+    baseline["configuration"]["concurrency"] = 2
+    candidate["configuration"]["concurrency"] = 2
+    with pytest.raises(ValueError):
+        compare(baseline, candidate, **arguments())
+
+
+@pytest.mark.parametrize("version", [99, True, "1"])
+def test_noncanonical_seed_configuration_cannot_certify(version):
+    baseline, candidate = report(), report("candidate")
+    for data in (baseline, candidate):
+        data["configuration"]["seed_version"] = version
+    with pytest.raises(ValueError):
+        compare(baseline, candidate, **arguments())
+
+
 def test_canonical_absolute_slo_failure_cannot_hide_behind_fast_baseline():
     baseline, candidate = report(millis=31), report("candidate", 31)
     result = compare(baseline, candidate, **arguments())

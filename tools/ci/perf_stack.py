@@ -18,7 +18,6 @@ from .perf_gate import compare, image_reference, revision
 from .perf_measure import Sampler
 from .perf_network import LoopbackProxy
 from .perf_resources import (
-    BACKEND_IMAGES,
     RESOURCES,
     DisposableStack,
     docker,
@@ -26,6 +25,9 @@ from .perf_resources import (
 )
 from .perf_schema import MIN_ROUNDS, MIN_SAMPLES, digest
 from .perf_seed import SEED_VERSION, create_database, redis_client, seed
+from . import core_source
+from .perf_recording import ACTIVE, Recorder
+from .perf_evidence_identity import helpers
 
 ROOT = Path(__file__).resolve().parents[2]
 POLICY = ROOT / "docker/core/app/observability/slos.json"
@@ -82,14 +84,23 @@ def provenance(stack: DisposableStack, policy: dict[str, Any]) -> dict[str, str]
         stack.output / "harness-sources.json",
         {"files": sources, "sha256": digest(sources)},
     )
+    docker_version = json.loads(docker("version", "--format", "{{json .}}"))
+    host = {
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "docker": docker("version", "--format", "{{json .}}"),
+        "cpu": Path("/proc/cpuinfo").read_text(),
+    }
     write_exclusive(
         stack.output / "inputs.json",
         {
             "python": platform.python_version(),
             "httpx": httpx.__version__,
-            "docker": json.loads(docker("version", "--format", "{{json .}}")),
+            "docker": docker_version,
+            "host": host,
             "backends": stack.backends,
-            "backend_images": BACKEND_IMAGES,
+            "backend_images": stack.backend_images,
+            "backend_inputs": stack.backend_inputs,
             "resources": RESOURCES,
             "policy": policy,
             "personality_sha256": digest(
@@ -103,19 +114,12 @@ def provenance(stack: DisposableStack, policy: dict[str, Any]) -> dict[str, str]
             {
                 "script": sources["perf_fixtures.py"],
                 "personality": (ROOT / "config/personality.yaml").read_text(),
-                "backends": BACKEND_IMAGES,
+                "backends": stack.backend_images,
             }
         ),
         "seed": digest(SEED_VERSION),
         "policy": digest(policy),
-        "host": digest(
-            {
-                "platform": platform.platform(),
-                "machine": platform.machine(),
-                "docker": docker("version", "--format", "{{json .}}"),
-                "cpu": Path("/proc/cpuinfo").read_text(),
-            }
-        ),
+        "host": digest(host),
     }
 
 
@@ -176,7 +180,7 @@ async def run_round(
         stack.stop_core(name)
 
 
-async def execute(args: argparse.Namespace) -> dict[str, Any]:
+async def _execute(args: argparse.Namespace) -> dict[str, Any]:
     images = {}
     for role in ("baseline", "candidate"):
         reference, source = (
@@ -198,6 +202,11 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
             "image_revision": info["revision"],
             "verified": verified,
         }
+    if not args.development and (
+        args.baseline_revision == args.candidate_revision
+        or images["baseline"]["id"] == images["candidate"]["id"]
+    ):
+        raise ValueError("Certifying performance needs a distinct previous baseline")
     if (
         args.samples < MIN_SAMPLES
         or args.rounds < MIN_ROUNDS
@@ -207,8 +216,6 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(
             "Need at least100 samples,3 rounds,positive warmup,concurrency1"
         )
-    args.out.mkdir(parents=True, exist_ok=False)
-    args.out.chmod(0o700)
     policy = json.loads(POLICY.read_text())
     config = {
         "samples": args.samples,
@@ -222,7 +229,7 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
     run_id = secrets.token_hex(16)
     reports: dict[str, Any] = {}
     try:
-        stack.start()
+        stack.start(certifying=not args.development)
         fingerprints = provenance(stack, policy)
         for role in ("baseline", "candidate"):
             reports[role] = {
@@ -274,6 +281,71 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+async def execute(args: argparse.Namespace) -> dict[str, Any]:
+    """Bind clean committed source before creating any benchmark target."""
+    root = getattr(args, "root", ROOT)
+    if args.out.exists():
+        raise FileExistsError("Never refresh an existing performance output")
+    core_source.require(
+        root == ROOT, "Producer must execute the selected repository helpers"
+    )
+    core_source.reserve_output(root, args.out)
+    captured = core_source.snapshot(
+        root, args.out, args.candidate_revision, development=args.development
+    )
+    if not args.development:
+        revision(args.baseline_revision)
+        core_source.require(
+            args.baseline_revision != args.candidate_revision,
+            "Distinct prior source is required",
+        )
+        core_source.git(root, "cat-file", "-e", args.baseline_revision + "^{commit}")
+        core_source.git(
+            root,
+            "merge-base",
+            "--is-ancestor",
+            args.baseline_revision,
+            args.candidate_revision,
+        )
+    producer = helpers(root)
+    recorder = Recorder(args.out)
+    token = ACTIVE.set(recorder)
+    started = datetime.now(UTC).isoformat()
+    try:
+        result = await _execute(args)
+        core_source.unchanged(root, args.out, captured)
+        if helpers(root) != producer:
+            raise ValueError("Executing performance helpers changed during execution")
+        raw = {
+            name: value
+            for name, value in core_source.inventory(args.out).items()
+            if not name.startswith("source/") and name != "source.tar"
+        }
+        write_exclusive(
+            args.out / "manifest.json",
+            {
+                "schema_version": 1,
+                "source_revision": args.candidate_revision,
+                "source": captured,
+                "producer_sha256": producer,
+                "raw_sha256": raw,
+                "started_at": started,
+                "finished_at": datetime.now(UTC).isoformat(),
+                "passed": result["passed"],
+                "certifying": result["certifying"],
+                "development": args.development,
+                "source_unchanged": True,
+            },
+        )
+        if not args.development:
+            from .perf_evidence import validate
+
+            validate(root, args.out, args.candidate_revision, 1)
+        return result
+    finally:
+        ACTIVE.reset(token)
+
+
 async def run_with_signals(args: argparse.Namespace) -> dict[str, Any]:
     loop = asyncio.get_running_loop()
     task = asyncio.current_task()
@@ -296,6 +368,7 @@ def main() -> int:
     ):
         parser.add_argument("--" + field, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--samples", type=int, default=100)
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=10)

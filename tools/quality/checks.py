@@ -258,6 +258,10 @@ def evaluate(
             run(["gitleaks", "git", "--no-banner", "--redact", "--log-opts=HEAD"], root)
             return "required secret scan passed"
         case "evidence":
+            if check["id"] == "PERF-1":
+                return performance(
+                    root, revision, limits["evidence_max_age_days"], evidence / "PERF-1"
+                )
             if (
                 check["id"] == "TEST-1"
                 and (evidence / "TEST-1/manifest.json").is_file()
@@ -276,3 +280,40 @@ def evaluate(
             )
         case _:
             raise InvalidEvidence("unknown check kind")
+
+
+def performance(root: Path, revision: str, max_age: int, evidence: Path) -> str:
+    """Actual producer output is mandatory; generic named assertions never suffice."""
+    raw = run(
+        [
+            sys.executable,
+            "-B",
+            "-m",
+            "tools.ci.perf_evidence",
+            "--root",
+            str(root),
+            "--output",
+            str(evidence),
+            "--revision",
+            revision,
+            "--max-age-days",
+            str(max_age),
+        ],
+        root,
+    )
+    try:
+        result = json.loads(raw)
+        ratio = result["max_p99_ratio"]
+        if (
+            result["certifying"] is not True
+            or result["source_revision"] != revision
+            or type(ratio) not in (int, float)
+            or not math.isfinite(ratio)
+            or not 0 < ratio <= 1.2
+            or type(result["comparisons"]) is not int
+            or result["comparisons"] < 40
+        ):
+            raise InvalidEvidence("invalid independently verified performance result")
+        return f"Source/lifecycle-verified performance: max p99 ratio={ratio:.4f}; {result['comparisons']} comparisons"
+    except (ValueError, KeyError, TypeError) as exc:
+        raise InvalidEvidence("invalid performance semantic verifier result") from exc
