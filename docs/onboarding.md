@@ -67,6 +67,8 @@ TOKEN=$(curl -s -X POST http://127.0.0.1:8300/api/auth/login \
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8300/api/session/info | jq .
 ```
 
+Expected: `{"user_id": "jalsarraf", "created_at": "…", "expires_at": "…"}`.
+
 The token is an opaque random bearer value (stored hashed server-side), not a
 JWT. Three failed logins from one IP within an hour trigger a temporary ban.
 

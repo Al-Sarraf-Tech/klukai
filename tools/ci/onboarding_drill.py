@@ -268,8 +268,8 @@ def drill(source: Path, revision: str) -> dict[str, Any]:
                     )
                 elif section == "4":
                     session = json.loads(output or "{}")
-                    step["ok"] = step["ok"] and session.get("username") == "jalsarraf"
-                    step["session_user"] = session.get("username")
+                    step["ok"] = step["ok"] and session.get("user_id") == "jalsarraf"
+                    step["session_user"] = session.get("user_id")
                 elif section == "3" and "compose ps" in command:
                     step["ok"] = step["ok"] and "healthy" in output
                 if not step["ok"]:
