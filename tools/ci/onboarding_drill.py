@@ -210,13 +210,20 @@ def drill(source: Path, revision: str) -> dict[str, Any]:
         "SEED_PASSWORD_JALSARRAF": secrets_env["SEED_PASSWORD_JALSARRAF"],
     }
     try:
-        subprocess.run(
-            ["git", "clone", "--quiet", "--no-local", str(source), str(checkout)],
-            check=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(checkout), "checkout", "--quiet", revision], check=True
-        )
+        # A developer's usual umask: the image copies source files with their
+        # modes and runs as UID 1000, so a private (077) clone cannot start.
+        previous_umask = os.umask(0o022)
+        try:
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-local", str(source), str(checkout)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(checkout), "checkout", "--quiet", revision],
+                check=True,
+            )
+        finally:
+            os.umask(previous_umask)
         provide_infrastructure(secrets_env["POSTGRES_PASSWORD"])
         for section, command in STEPS:
             step: dict[str, Any] = {"section": section, "command": command or section}

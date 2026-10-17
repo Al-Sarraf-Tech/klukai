@@ -123,6 +123,7 @@ unverified. The honest per-row status lives in the latest handoff document.
 | `docker compose` refuses to render | A required `.env` value is missing (`POSTGRES_PASSWORD`, `LM_STUDIO_TOKEN`, `VOICE_API_TOKEN`, `RABBITMQ_PASSWORD`) |
 | `network aichat_default not found` | Start the shared aichat infrastructure first (Prerequisites) |
 | `companion-core` exits immediately | `docker compose logs companion-core` — usually a missing env var or an unreachable `infra-postgres` |
+| `companion-core` restarts with `PermissionError` under `/app/app` | The checkout was made with a private umask (077). The image copies source files with their modes and runs as UID 1000; clone with umask 022 or `chmod -R a+rX` the checkout, then rebuild |
 | `voice` service is unavailable | Follow [voice-unreachable](runbooks/voice-unreachable.md); recover only the canonical `ops/dominus-nobara` Compose service after checking the game guard and GPU lease |
 | Flutter app login page is blank | Service worker intercepted; rebuild with `--base-href=/app/` (`scripts/deploy-web.sh` does) |
 | Images fail to load on web | `Image.network(headers:)` is ignored on web; use `http.get` + `Image.memory` |
