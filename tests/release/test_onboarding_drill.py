@@ -29,3 +29,15 @@ def test_fill_env_replaces_and_appends_without_touching_other_lines(tmp_path):
         env.read_text()
         == "# comment\nPOSTGRES_PASSWORD=a\nOTHER=keep\nVOICE_API_TOKEN=b\n"
     )
+
+
+def test_built_images_follow_the_pinned_compose_project_name(tmp_path):
+    (tmp_path / "docker-compose.yml").write_text(
+        "# header\nname: companion\nservices: {}\n"
+    )
+    assert drill.built_images(tmp_path) == [
+        "companion-companion-core",
+        "companion-events-bridge",
+    ]
+    repo = drill.built_images(Path(__file__).resolve().parents[2])
+    assert repo[0] == "companion-companion-core"

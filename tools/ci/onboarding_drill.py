@@ -26,7 +26,18 @@ import time
 from typing import Any
 
 NETWORKS = ("aichat_default", "infra", "klukai-obs")
-BUILT_IMAGES = ("klukai-companion-core", "klukai-events-bridge")
+BUILT_SERVICES = ("companion-core", "events-bridge")
+
+
+def built_images(checkout: Path) -> list[str]:
+    """Images compose builds for this checkout: `<project>-<service>`, where the
+    project is the compose file's `name:` (Klukai pins `companion`)."""
+    text = (checkout / "docker-compose.yml").read_text()
+    found = re.search(r"^name:\s*([\w.-]+)\s*$", text, re.M)
+    project = found.group(1) if found else checkout.name
+    return [f"{project}-{service}" for service in BUILT_SERVICES]
+
+
 INFRA = {
     "infra-postgres": "KLUKAI_PERF_POSTGRES_IMAGE",
     "aichat-redis": "KLUKAI_PERF_REDIS_IMAGE",
@@ -228,7 +239,8 @@ def drill(source: Path, revision: str) -> dict[str, Any]:
         # A fresh machine has no locally built image: remove any left by an
         # earlier drill so `docker compose up` really builds from this clone.
         subprocess.run(
-            ["docker", "image", "rm", "-f", *BUILT_IMAGES], capture_output=True
+            ["docker", "image", "rm", "-f", *built_images(checkout)],
+            capture_output=True,
         )
         provide_infrastructure(secrets_env["POSTGRES_PASSWORD"])
         for section, command in STEPS:
@@ -286,7 +298,7 @@ def drill(source: Path, revision: str) -> dict[str, Any]:
                         "--rm",
                         "--entrypoint",
                         "/opt/venv/bin/python",
-                        BUILT_IMAGES[0],
+                        built_images(checkout)[0],
                         "-c",
                         probe,
                     ],
@@ -301,7 +313,7 @@ def drill(source: Path, revision: str) -> dict[str, Any]:
                         "inspect",
                         "-f",
                         "{{.Id}} {{.Created}} {{.Config.User}}",
-                        BUILT_IMAGES[0],
+                        built_images(checkout)[0],
                     ],
                     capture_output=True,
                     text=True,
