@@ -223,19 +223,41 @@ def backup_and_verify(
         ]
     )
     try:
-        for _ in range(60):
-            if (
-                subprocess.run(
-                    ["docker", "exec", name, "pg_isready", "-U", "postgres"],
-                    capture_output=True,
-                ).returncode
-                == 0
-            ):
+        # The image's entrypoint first runs a temporary init server on the
+        # unix socket only, then restarts; only the final server listens on
+        # TCP, so readiness and every later command use 127.0.0.1.
+        for _ in range(90):
+            ready = subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    name,
+                    "pg_isready",
+                    "-h",
+                    "127.0.0.1",
+                    "-U",
+                    "postgres",
+                ],
+                capture_output=True,
+            )
+            if ready.returncode == 0:
                 break
             time.sleep(1)
         else:
             raise ReleaseError("isolated restore database did not start")
-        run(["docker", "exec", name, "createdb", "-U", "postgres", "aichat"])
+        run(
+            [
+                "docker",
+                "exec",
+                name,
+                "createdb",
+                "-h",
+                "127.0.0.1",
+                "-U",
+                "postgres",
+                "aichat",
+            ]
+        )
         with dump.open("rb") as data:
             restored = subprocess.run(
                 [
@@ -244,6 +266,8 @@ def backup_and_verify(
                     "-i",
                     name,
                     "pg_restore",
+                    "-h",
+                    "127.0.0.1",
                     "-U",
                     "postgres",
                     "-d",
