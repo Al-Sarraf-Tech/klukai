@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import Any
 import logging
+from datetime import timezone
 import httpx
 from .dependencies import http_request, json_objects, json_object
 from .memory_endpoints import DATA_URL
@@ -151,7 +152,9 @@ class MemoryFactsMixin:
 
         await self.store_fact(
             f"milestone:{milestone}",
-            memory.datetime.now().isoformat(),
+            # Aware UTC: the app renders milestones in his local time, and a
+            # naive container-clock stamp cannot be converted.
+            memory.datetime.now(timezone.utc).isoformat(),
             user_id=user_id,
         )
         logger.info("New milestone recorded: %s for %s", milestone, user_id)

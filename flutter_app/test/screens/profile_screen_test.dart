@@ -299,4 +299,96 @@ void main() {
     expect(find.byKey(const Key('profile-records-error')), findsOneWidget);
     expect(find.byKey(const Key('profile-records-empty')), findsNothing);
   });
+
+  testWidgets('the back control is labelled for assistive tech', (
+    tester,
+  ) async {
+    await _pump(tester, FakeWardrobeService());
+    expect(find.byTooltip('Back'), findsOneWidget);
+  });
+
+  testWidgets('a dead token bounces once even when every fetch fails', (
+    tester,
+  ) async {
+    // Five fetches fire at once on open; all of them 401 on an expired token.
+    tester.view.physicalSize = const Size(390, 3000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    var bounced = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProfileScreen(
+          serverUrl: 'http://127.0.0.1:1',
+          affectionScore: 420,
+          affectionLevel: 4,
+          affectionLevelName: 'Trusted',
+          wardrobeService: FakeWardrobeService(
+            outfits: [WardrobeServiceException(401)],
+            herDays: [WardrobeServiceException(401)],
+            logs: [WardrobeServiceException(401)],
+          ),
+          client: MockClient(
+            (_) async =>
+                http.Response('{"error":"Authentication required"}', 401),
+          ),
+          onAuthExpired: () => bounced++,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(bounced, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a wardrobe 401 alone still hands off to reauth', (tester) async {
+    tester.view.physicalSize = const Size(390, 3000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    var bounced = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProfileScreen(
+          serverUrl: 'http://127.0.0.1:1',
+          affectionScore: 420,
+          affectionLevel: 4,
+          affectionLevelName: 'Trusted',
+          wardrobeService: FakeWardrobeService(
+            outfits: [WardrobeServiceException(401)],
+          ),
+          client: MockClient((_) async => http.Response('{}', 404)),
+          onAuthExpired: () => bounced++,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(bounced, 1);
+  });
+
+  testWidgets('a 503 everywhere is not a dead token: no bounce', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 3000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    var bounced = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProfileScreen(
+          serverUrl: 'http://127.0.0.1:1',
+          affectionScore: 420,
+          affectionLevel: 4,
+          affectionLevelName: 'Trusted',
+          wardrobeService: FakeWardrobeService(
+            outfits: [WardrobeServiceException(503)],
+            herDays: [WardrobeServiceException(503)],
+            logs: [WardrobeServiceException(503)],
+          ),
+          client: MockClient((_) async => http.Response('{}', 503)),
+          onAuthExpired: () => bounced++,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(bounced, 0);
+  });
 }

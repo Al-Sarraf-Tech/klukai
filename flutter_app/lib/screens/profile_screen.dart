@@ -90,7 +90,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
       if (!mounted) return;
       if (milestonesR.statusCode == 401 || statsR.statusCode == 401) {
-        widget.onAuthExpired?.call();
+        _authExpired();
         setState(() => _records = _RecordPhase.error);
         return;
       }
@@ -150,9 +150,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
     ]);
   }
 
+  /// The dossier fires five fetches at once; a dead token fails all of them.
+  /// Hand the 401 to the chat logout/reauth path exactly once.
+  bool _authBounced = false;
+
+  void _authExpired() {
+    if (_authBounced || !mounted) return;
+    _authBounced = true;
+    widget.onAuthExpired?.call();
+  }
+
   Future<void> _guard(Future<void> Function() load) async {
     try {
       await load();
+    } on WardrobeServiceException catch (e) {
+      // Fail soft on anything but a dead token: that one gets the bounce.
+      if (e.isAuthExpired) _authExpired();
     } catch (_) {}
   }
 
@@ -211,6 +224,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       appBar: AppBar(
         backgroundColor: GFL2Colors.surface,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(Icons.arrow_back, color: GFL2Colors.textPrimary),
           onPressed: () => Navigator.pop(context),
         ),

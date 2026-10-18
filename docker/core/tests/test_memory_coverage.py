@@ -787,3 +787,27 @@ class TestStoreEpisodeStatusCheck:
         # PG fallback still ran — the episode is not lost.
         assert len(conn.calls) == 1
         assert "INSERT INTO companion_episodes" in conn.calls[0][0]
+
+
+class TestMilestoneStamp:
+    @pytest.mark.asyncio
+    async def test_new_milestone_is_stamped_in_aware_utc(self):
+        """The app renders milestones in his local time; a naive container
+        clock stamp cannot be converted, so it is stored as aware UTC."""
+        m = _mk_manager()
+        m.recall_fact = AsyncMock(return_value=None)
+        m.store_fact = AsyncMock()
+        assert await m.record_milestone("first_message", user_id="u1") is True
+        key, stamp = m.store_fact.await_args.args
+        assert key == "milestone:first_message"
+        parsed = datetime.fromisoformat(stamp)
+        assert parsed.utcoffset() is not None
+        assert parsed.utcoffset().total_seconds() == 0
+
+    @pytest.mark.asyncio
+    async def test_existing_milestone_is_not_restamped(self):
+        m = _mk_manager()
+        m.recall_fact = AsyncMock(return_value="2026-01-01T00:00:00+00:00")
+        m.store_fact = AsyncMock()
+        assert await m.record_milestone("first_message", user_id="u1") is False
+        m.store_fact.assert_not_awaited()

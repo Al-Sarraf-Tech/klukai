@@ -30,6 +30,10 @@ class HerPovScreen extends StatefulWidget {
   final MemoryService? memoryService;
   final http.Client? httpClient;
 
+  /// What to do on a 401. Defaults to clearing the token and returning to
+  /// login; tests inject a recorder so the browser is never navigated.
+  final VoidCallback? onAuthExpired;
+
   const HerPovScreen({
     super.key,
     required this.serverUrl,
@@ -37,7 +41,18 @@ class HerPovScreen extends StatefulWidget {
     required this.affectionLevelName,
     this.memoryService,
     this.httpClient,
+    this.onAuthExpired,
   });
+
+  /// What she says when the server throttles a request (429 on the POST,
+  /// which charges the image_gen bucket). The link is fine, and so is she, so
+  /// this must never read as "could not reach her".
+  static String rateLimitedLine(int? retryAfterSeconds) {
+    final s = retryAfterSeconds ?? 0;
+    if (s <= 0) return '…One at a time, Commander. Give me a moment.';
+    if (s <= 90) return '…One at a time, Commander. Give me a minute.';
+    return '…One at a time, Commander. Ask me again in ${(s / 60).ceil()} minutes.';
+  }
 
   @override
   State<HerPovScreen> createState() => _HerPovScreenState();
@@ -100,7 +115,17 @@ class _HerPovScreenState extends State<HerPovScreen>
     };
   }
 
+  bool _authBounced = false;
+
   void _handleAuthExpired() {
+    _poll?.cancel();
+    if (_authBounced) return;
+    _authBounced = true;
+    final redirect = widget.onAuthExpired;
+    if (redirect != null) {
+      redirect();
+      return;
+    }
     try {
       web.window.localStorage.removeItem('klukai_token');
     } catch (_) {}
@@ -160,6 +185,19 @@ class _HerPovScreenState extends State<HerPovScreen>
         headers: _headers,
       );
       if (!mounted || !_jobOwner.isCurrent(generation)) return;
+      if (resp.statusCode == 401) {
+        _handleAuthExpired();
+        return;
+      }
+      if (resp.statusCode == 429) {
+        // Throttled, not unreachable. Stand down (so the button re-arms)
+        // and tell him when to ask again.
+        setState(() {
+          _phase = _Phase.idle;
+          _status = HerPovScreen.rateLimitedLine(_retryAfter(resp));
+        });
+        return;
+      }
       if (resp.statusCode != 202 && resp.statusCode != 200) {
         throw Exception('HTTP ${resp.statusCode}');
       }
@@ -181,6 +219,21 @@ class _HerPovScreenState extends State<HerPovScreen>
     }
   }
 
+  /// Seconds until the bucket refills: the Retry-After header, else the
+  /// `retry_after` the structured error body carries. Null when neither.
+  static int? _retryAfter(http.Response resp) {
+    final header = int.tryParse(resp.headers['retry-after']?.trim() ?? '');
+    if (header != null) return header;
+    try {
+      final body = jsonDecode(resp.body);
+      final v = body is Map ? body['retry_after'] : null;
+      if (v is int) return v;
+      if (v is num) return v.ceil();
+      if (v is String) return int.tryParse(v);
+    } catch (_) {}
+    return null;
+  }
+
   // Caller-owned injected clients stay open. The screen can abort only its own
   // transport on disposal; no request cancels accepted work on the server.
   http.Client get _jobHttp =>
@@ -191,27 +244,42 @@ class _HerPovScreenState extends State<HerPovScreen>
     final poll = _jobOwner.claimPoll();
     if (poll == null) return;
     try {
-      final resp = await _jobHttp.get(
-        Uri.parse('${widget.serverUrl}/api/memories/her-pov/${poll.jobId}'),
-        headers: _headers,
-      );
+      final http.Response resp;
+      try {
+        resp = await _jobHttp.get(
+          Uri.parse('${widget.serverUrl}/api/memories/her-pov/${poll.jobId}'),
+          headers: _headers,
+        );
+      } catch (_) {
+        // A transport failure counts toward the give-up like a bad status:
+        // a dead link used to poll for the life of the tab with the button
+        // stuck disabled.
+        if (mounted && _jobOwner.ownsPoll(poll)) {
+          _pollFailed(poll, 'Lost the signal. Ask me again.');
+        }
+        return;
+      }
       if (!mounted || !_jobOwner.ownsPoll(poll)) return;
+      if (resp.statusCode == 401) {
+        _jobOwner.complete(poll);
+        _handleAuthExpired();
+        return;
+      }
       if (resp.statusCode != 200) {
         // The job board is in-process, so a core restart makes a live job
         // 404 forever. Give up instead of polling for the life of the tab
         // with the button stuck disabled.
-        if (++_pollFailures >= _maxPollFailures) {
-          _poll?.cancel();
-          _jobOwner.complete(poll);
-          setState(() {
-            _phase = _Phase.failed;
-            _status = 'Lost track of that one. Ask me again.';
-          });
-        }
+        _pollFailed(poll, 'Lost track of that one. Ask me again.');
+        return;
+      }
+      final Map<String, dynamic> data;
+      try {
+        data = jsonDecode(resp.body) as Map<String, dynamic>;
+      } catch (_) {
+        _pollFailed(poll, 'Lost track of that one. Ask me again.');
         return;
       }
       _pollFailures = 0;
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
       final phase = (data['phase'] as String?) ?? 'searching';
       final mapped = switch (phase) {
         'thinking' => _Phase.thinking,
@@ -241,6 +309,17 @@ class _HerPovScreenState extends State<HerPovScreen>
     } finally {
       _jobOwner.release(poll);
     }
+  }
+
+  /// One more strike against the poll. On the fifth, stop and say so.
+  void _pollFailed(HerPovPoll poll, String line) {
+    if (++_pollFailures < _maxPollFailures) return;
+    _poll?.cancel();
+    _jobOwner.complete(poll);
+    setState(() {
+      _phase = _Phase.failed;
+      _status = line;
+    });
   }
 
   @override

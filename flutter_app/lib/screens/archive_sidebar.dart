@@ -8,6 +8,7 @@ extension _ArchiveSidebar on _MemoryArchiveScreenState {
       backgroundColor: GFL2Colors.surface,
       elevation: 0,
       leading: IconButton(
+        tooltip: 'Back',
         icon: const Icon(Icons.arrow_back, color: GFL2Colors.primary, size: 20),
         onPressed: () => Navigator.of(context).pop(),
       ),

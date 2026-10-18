@@ -259,6 +259,7 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
                           ),
                           IconButton(
                             onPressed: () => Navigator.of(context).pop(),
+                            tooltip: 'Close',
                             icon: const Icon(
                               Icons.close,
                               color: GFL2Colors.textDim,

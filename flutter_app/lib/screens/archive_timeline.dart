@@ -207,21 +207,86 @@ extension _ArchiveTimeline on _MemoryArchiveScreenState {
                     parent: AlwaysScrollableScrollPhysics(),
                   ),
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                  itemCount: _memories.length,
-                  itemBuilder: (_, i) => MemoryTimelineEntry(
-                    // Keyed by memory id so a filter switch never reuses
-                    // a recycled State (and its stale thumbnail) for a
-                    // different memory.
-                    key: ValueKey(_memories[i].id),
-                    memory: _memories[i],
-                    serverUrl: widget.serverUrl,
-                    authToken: _authToken,
-                    isCompact: isCompact,
-                    onTap: () => _openMemoryDetail(_memories[i]),
-                  ),
+                  // One extra row, the load-more sentinel, while the
+                  // server may still hold older pages.
+                  itemCount: _memories.length + (_hasMore ? 1 : 0),
+                  itemBuilder: (_, i) {
+                    if (i == _memories.length) return _buildLoadMoreRow();
+                    return MemoryTimelineEntry(
+                      // Keyed by memory id so a filter switch never reuses
+                      // a recycled State (and its stale thumbnail) for a
+                      // different memory.
+                      key: ValueKey(_memories[i].id),
+                      memory: _memories[i],
+                      serverUrl: widget.serverUrl,
+                      authToken: _authToken,
+                      isCompact: isCompact,
+                      onTap: () => _openMemoryDetail(_memories[i]),
+                    );
+                  },
                 ),
         ),
       ],
+    );
+  }
+
+  /// The sentinel at the foot of the list. Being built means it scrolled
+  /// into (cache) range, so it asks for the next page; after a failure it
+  /// waits for a tap instead of hammering a dead link.
+  Widget _buildLoadMoreRow() {
+    if (_loadMoreFailed) {
+      return Padding(
+        key: const Key('archive-load-more'),
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        child: Center(
+          child: TextButton(
+            onPressed: _loadMore,
+            child: Text(
+              'SIGNAL DROPPED // TAP TO RETRIEVE OLDER',
+              style: TextStyle(
+                color: GFL2Colors.danger.withValues(alpha: 0.7),
+                fontSize: 10,
+                fontFamily: 'monospace',
+                letterSpacing: 1.2,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    // Not during build: the fetch flips state on this same widget.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadMore();
+    });
+    return Padding(
+      key: const Key('archive-load-more'),
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                color: GFL2Colors.primary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'RETRIEVING OLDER MEMORIES...',
+              style: TextStyle(
+                color: GFL2Colors.textDim.withValues(alpha: 0.6),
+                fontSize: 9,
+                fontFamily: 'monospace',
+                letterSpacing: 1.2,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

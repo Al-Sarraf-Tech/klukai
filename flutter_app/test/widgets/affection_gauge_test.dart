@@ -138,6 +138,63 @@ void main() {
     });
   });
 
+  group('AffectionGauge tier dividers', () {
+    testWidgets('sit at threshold x the bar\'s own width, inside the bar', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _wrap(const AffectionGauge(score: 250, level: 4, levelName: 'Trusted')),
+      );
+      final bar = tester.getSize(find.byType(ClipRRect));
+      expect(bar.width, 320);
+
+      final lefts = tester
+          .widgetList<Positioned>(find.byType(Positioned))
+          .map((p) => p.left!)
+          .toList();
+      expect(lefts, hasLength(AffectionGauge.tierDividerFractions.length));
+      for (var i = 0; i < lefts.length; i++) {
+        expect(
+          lefts[i],
+          closeTo(AffectionGauge.tierDividerFractions[i] * bar.width, 1e-6),
+          reason: 'divider $i',
+        );
+      }
+      // The old screen-width formula (800 x 0.85 = 680px here) pushed every
+      // divider past a 320px bar's right edge.
+      expect(lefts.every((l) => l < bar.width), isTrue);
+    });
+
+    testWidgets('follow the bar when it is laid out at a different width', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 200,
+              child: const AffectionGauge(
+                score: 530,
+                level: 6,
+                levelName: 'Devotion',
+              ),
+            ),
+          ),
+        ),
+      );
+      final bar = tester.getSize(find.byType(ClipRRect));
+      expect(bar.width, 200);
+      final lefts = tester
+          .widgetList<Positioned>(find.byType(Positioned))
+          .map((p) => p.left!)
+          .toList();
+      // The 530 threshold divider lands exactly where a 530/1000 fill ends.
+      expect(lefts, contains(closeTo(0.53 * 200, 1e-6)));
+      final fill = tester.getSize(find.byType(FractionallySizedBox));
+      expect(fill.width, closeTo(0.53 * 200, 1e-6));
+    });
+  });
+
   group('AffectionGauge delta popup', () {
     testWidgets('shows "+N" when lastDelta increases between builds', (
       tester,

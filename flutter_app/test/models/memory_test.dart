@@ -29,6 +29,26 @@ void main() {
       );
     });
 
+    test('created_at is rendered in local time, not left in UTC', () {
+      // The server sends an offset-qualified stamp; the archive used to show
+      // its digits as-is (UTC) while ThreadEntry already converted.
+      final m = Memory.fromJson({
+        'id': 'mem-1',
+        'created_at': '2026-04-20T09:15:00.000+00:00',
+      });
+      expect(m.createdAt.isUtc, isFalse);
+      expect(m.createdAt, DateTime.parse('2026-04-20T09:15:00.000Z').toLocal());
+      expect(m.createdAt.toUtc().hour, 9);
+    });
+
+    test('a non-UTC offset is honoured before converting to local', () {
+      final m = Memory.fromJson({
+        'id': 'mem-1',
+        'created_at': '2026-04-20T11:15:00.000+02:00',
+      });
+      expect(m.createdAt.toUtc(), DateTime.utc(2026, 4, 20, 9, 15));
+    });
+
     test('applies defaults for empty json', () {
       final m = Memory.fromJson({});
       expect(m.id, '');

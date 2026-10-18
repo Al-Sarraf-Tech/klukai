@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../main.dart' show GFL2Colors;
 import '../models/thread.dart';
+import '../services/session_auth.dart';
 import '../services/thread_service.dart';
 
 /// The Thread — the messages she sent every night at 0200 during the ten
@@ -15,11 +16,16 @@ class ThreadScreen extends StatefulWidget {
   final ThreadService? threadService;
   final Duration markReadDelay;
 
+  /// What to do on a 401. Defaults to the shared login bounce; tests inject
+  /// a recorder so the browser is never actually navigated.
+  final VoidCallback? onAuthExpired;
+
   const ThreadScreen({
     super.key,
     required this.serverUrl,
     this.threadService,
     this.markReadDelay = const Duration(milliseconds: 1400),
+    this.onAuthExpired,
   });
 
   @override
@@ -81,6 +87,17 @@ class _ThreadScreenState extends State<ThreadScreen> {
       if (!view.sealed && unread.isNotEmpty) {
         _markReadTimer = Timer(widget.markReadDelay, () => _markRead(unread));
       }
+    } on ThreadServiceException catch (e) {
+      if (!mounted) return;
+      if (e.isAuthExpired) {
+        // A dead token is not a down channel: Retry could never succeed.
+        _authExpired();
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -90,9 +107,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
     }
   }
 
+  void _authExpired() => (widget.onAuthExpired ?? handleAuthExpired)();
+
   Future<void> _markRead(List<String> stamps) async {
     try {
       await _service.markRead(stamps);
+    } on ThreadServiceException catch (e) {
+      if (e.isAuthExpired && mounted) _authExpired();
+      return; // receipts stay "Delivered"; they'll go through next time
     } catch (_) {
       return; // receipts stay "Delivered"; they'll go through next time
     }
