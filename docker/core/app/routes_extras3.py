@@ -46,9 +46,7 @@ def _internal_token_ok(request: Request) -> bool:
     if not expected:
         return False
     presented = request.headers.get("X-Internal-Token", "")
-    return secrets.compare_digest(
-        presented.encode("utf-8"), expected.encode("utf-8")
-    )
+    return secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
 
 
 def register_extras3(app: FastAPI) -> None:
