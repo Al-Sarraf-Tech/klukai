@@ -19,6 +19,19 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- Standby-branch audit fixes, ported onto main from `claude/klukai-standby-rqu97r`:
+  self-started missions stand down after 180 minutes and stale missions are not
+  restored on reconnect; voice letters are `Cache-Control: private`; the
+  `/health` DB probe is bounded; TTL-less rate-limit keys re-arm and a 409
+  refunds its token; Her POV starts charge the image_gen bucket; fee-settlement
+  and birthday scenes survive a dropped socket; outfit requests need a modal and
+  decision letters count only at a clause edge; outfit:tomorrow and the oath
+  gate follow her 05:00 day; DR restores per component behind a verified
+  pre-restore dump and every backup check requires the pg_dump trailer; the
+  memory seeder honours its watermark, dedups by fingerprint and is bounded by
+  a soft deadline plus an in-process SIGALRM; reannotation is append-only
+  (`annotation_history`, migration 230); the app bounces a 401 on every screen,
+  pages the archive and stops polling Her POV on a dead link.
 - Retry only explicitly unaccepted account-image requests with an atomic claim,
   and preserve original prompt/archive context when recovering a saved image.
   See [verification and migration notes](docs/handoff/2026-10-15-security-recovery-isolation-fixes.md).
