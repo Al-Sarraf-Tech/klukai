@@ -102,7 +102,14 @@ pytest -m integration                  # integration (needs testcontainers / doc
 pytest tests/golden/                   # golden / character regression
 pytest tests/property/                 # hypothesis-driven property tests
 pytest tests/perf/ -m perf             # perf gate (needs running stack)
+
+cd ../..                               # repo root
+make test-tgbot test-ops test-voice test-js test-shell   # the suites outside docker/core
+make test-all                          # everything above plus the core gate
 ```
+
+`make test-shell` needs shellcheck (`pip install shellcheck-py`); `make test-js`
+needs Node 20+ and, for the avatar tests, `npm ci` in `tools/avatar/`.
 
 ## 7. Run the audit harness
 
