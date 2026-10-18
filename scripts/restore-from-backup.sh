@@ -280,6 +280,10 @@ DUMP=$(find "${EXTRACT_DIR}" -type f -name 'klukai-db-*.sql.gz' \
   -print | LC_ALL=C sort | tail -n 1)
 [[ -n "${DUMP}" ]] || fail "no Klukai PostgreSQL dump found"
 gzip -t -- "${DUMP}" || fail "PostgreSQL dump failed gzip validation"
+# A dump truncated at a statement boundary is still valid gzip; a complete
+# plain pg_dump always ends with this trailer.
+gzip -cd -- "${DUMP}" | tail -n 5 | grep -q 'PostgreSQL database dump complete' || \
+  fail "PostgreSQL dump lacks the pg_dump completion trailer (truncated?)"
 
 log "starting unique scratch PostgreSQL container ${SCRATCH_NAME}"
 docker run -d --rm \
@@ -290,8 +294,10 @@ docker run -d --rm \
   "${PG_IMAGE}" >/dev/null || fail "scratch PostgreSQL failed to start"
 SCRATCH_CREATED=true
 
+# -h 127.0.0.1: the image's init script runs a socket-only temporary server
+# first, which socket-based pg_isready would report as ready too early.
 for attempt in {1..30}; do
-  if docker exec "${SCRATCH_NAME}" pg_isready -U aichat >/dev/null 2>&1; then
+  if docker exec "${SCRATCH_NAME}" pg_isready -h 127.0.0.1 -U aichat >/dev/null 2>&1; then
     log "scratch PostgreSQL ready after ${attempt}s"
     break
   fi

@@ -8,11 +8,14 @@
 # Checks:
 #   1. Today's kairi DB dump exists and > 1 KB
 #   2. Today's klukai DB dump exists and > 1 KB
-#   3. Klukai dumps are valid gzip
+#   3. Dumps are valid gzip AND end with the pg_dump completion trailer
+#      (a dump truncated at a statement boundary is still valid gzip)
 #   4. Klukai dumps contain at least one INSERT line (non-empty schema export)
 #   5. Qdrant snapshots for SACRED collections (companion_episodes,
-#      companion_exchanges) exist, are non-empty, and were refreshed today
-#   6. klukai images dir is non-empty (if the volume has data)
+#      companion_exchanges) exist, are non-empty, are valid tar, and were
+#      refreshed today
+#   6. klukai images backup is non-empty; fatal when the live volume has
+#      files but the backup dir is missing/empty, warn-only otherwise
 #
 # Exits:
 #   0 — all checks passed
@@ -23,6 +26,8 @@ set -euo pipefail
 TIMESTAMP=$(date +%Y%m%d)
 BACKUP_DIR="${BACKUP_DIR:-/mnt/nvmeINT/backups}"
 LOG="${LOG:-/mnt/nvmeINT/logs/backup-verify.log}"
+# Live companion-images volume (compose volume companion-images, project companion).
+IMAGES_VOLUME_DIR="${IMAGES_VOLUME_DIR:-/var/lib/docker/volumes/companion_companion-images/_data}"
 
 mkdir -p "$(dirname "$LOG")"
 echo "$(date) — starting backup verification" >> "$LOG"
@@ -46,10 +51,15 @@ if [ -z "$klukai_dump" ]; then
   fail "klukai DB dump missing or < 1KB for $TIMESTAMP"
 fi
 
-# -- 3. Validate gzip integrity
+# -- 3. Validate gzip integrity and the pg_dump completion trailer
 for dump in "$kairi_dump" "$klukai_dump"; do
   if ! gzip -t "$dump" 2>/dev/null; then
     fail "gzip integrity check failed: $dump"
+  fi
+  # A dump cut off at a statement boundary is still valid gzip; a complete
+  # plain pg_dump always ends with this trailer.
+  if ! gzip -cd "$dump" 2>/dev/null | tail -n 5 | grep -q 'PostgreSQL database dump complete'; then
+    fail "pg_dump completion trailer missing (truncated dump?): $dump"
   fi
 done
 
@@ -60,27 +70,45 @@ if ! zgrep -qE '^(INSERT|COPY)' "$klukai_dump" 2>/dev/null; then
 fi
 
 # -- 5. Qdrant snapshots present + fresh (SACRED: episodes + exchanges)
-# backup-companions.sh downloads collection snapshots to $BACKUP_DIR/qdrant/
-# as <collection>.snapshot (overwritten nightly), and offsite-backup.sh ships
-# that dir inside the tar. If episodes/exchanges snapshots are missing or
-# stale, Klukai's SACRED vector memory is NOT in tonight's offsite archive.
+# The nightly backup producer (it lives on amarillo outside this repository
+# and still needs to be committed) downloads collection snapshots to
+# $BACKUP_DIR/qdrant/ as <collection>.snapshot (overwritten nightly), and
+# offsite-backup.sh ships that dir inside the tar. If episodes/exchanges
+# snapshots are missing or stale, Klukai's SACRED vector memory is NOT in
+# tonight's offsite archive.
 for coll in companion_episodes companion_exchanges; do
   snap="$BACKUP_DIR/qdrant/${coll}.snapshot"
   if [ ! -s "$snap" ]; then
     fail "Qdrant snapshot missing/empty for SACRED collection: $coll ($snap)"
+  fi
+  # Qdrant snapshots are tar archives; a partial download is not restorable.
+  if ! tar -tf "$snap" >/dev/null 2>&1; then
+    fail "Qdrant snapshot is not a valid tar archive: $snap"
   fi
   if [ -z "$(find "$snap" -newermt "$(date +%Y-%m-%d)" -print -quit 2>/dev/null)" ]; then
     fail "Qdrant snapshot is STALE (not refreshed today): $snap"
   fi
 done
 
-# -- 6. Images dir non-empty check (warn-only, non-fatal)
+# -- 6. Images backup non-empty check
+# images-latest is the ONLY backup of the companion-images volume. When the
+# live volume holds files and the backup dir is missing or empty, that is a
+# failed backup, not a warning. When the live volume cannot be read (not
+# root) or is itself empty, keep the historical warn-only behaviour.
+live_image_count=0
+if [ -d "$IMAGES_VOLUME_DIR" ]; then
+  live_image_count=$(find "$IMAGES_VOLUME_DIR" -type f 2>/dev/null | wc -l || true)
+fi
+image_count=0
 if [ -d "$BACKUP_DIR/klukai/images-latest" ]; then
   image_count=$(find "$BACKUP_DIR/klukai/images-latest" -type f 2>/dev/null | wc -l)
-  if [ "$image_count" -lt 1 ]; then
-    echo "WARN: klukai images-latest is empty" >&2
-    echo "$(date) — WARN: images-latest is empty" >> "$LOG"
-  fi
+fi
+if [ "$live_image_count" -gt 0 ] && [ "$image_count" -lt 1 ]; then
+  fail "klukai images-latest is missing/empty while the live volume holds $live_image_count file(s): $BACKUP_DIR/klukai/images-latest"
+fi
+if [ "$image_count" -lt 1 ]; then
+  echo "WARN: klukai images-latest is empty" >&2
+  echo "$(date) — WARN: images-latest is empty" >> "$LOG"
 fi
 
 echo "$(date) — all backup checks passed" >> "$LOG"

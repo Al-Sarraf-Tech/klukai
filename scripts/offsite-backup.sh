@@ -5,7 +5,8 @@
 # RAID 0 and is not an independent backup of any data originating there.
 # This script never prunes or overwrites completed archives.
 #
-# Exit codes: 0 success, 2 no sufficiently recent DB dump, 1 fatal.
+# Exit codes: 0 success, 2 no sufficiently recent DB dump / Qdrant snapshot /
+# companion image file, 1 fatal.
 
 set -Eeuo pipefail
 
@@ -28,7 +29,7 @@ die() {
   exit 1
 }
 
-for command_name in awk chmod date dirname find findmnt grep gzip install mkdir mountpoint mv realpath sha256sum ssh stat tailscale tar tee wc; do
+for command_name in awk chmod date dirname find findmnt grep gzip install mkdir mountpoint mv realpath sha256sum ssh stat tail tailscale tar tee wc; do
   command -v "${command_name}" >/dev/null || die "missing required command: ${command_name}"
 done
 
@@ -184,6 +185,10 @@ for database_name in klukai kairi; do
 done
 for dump_path in "${recent_dumps[@]}"; do
   gzip -t -- "${dump_path}" || die "DB dump failed gzip validation: ${dump_path}"
+  # A dump truncated at a statement boundary is still valid gzip; a complete
+  # plain pg_dump always ends with this trailer.
+  gzip -cd -- "${dump_path}" | tail -n 5 | grep -q 'PostgreSQL database dump complete' || \
+    die "DB dump lacks the pg_dump completion trailer (truncated?): ${dump_path}"
 done
 for collection_name in companion_episodes companion_exchanges; do
   snapshot_path="${SRC}/qdrant/${collection_name}.snapshot"
@@ -194,6 +199,18 @@ for collection_name in companion_episodes companion_exchanges; do
     exit 2
   }
 done
+# images-latest is the only backup of the companion-images volume. It must be
+# a real directory on the same filesystem as SRC: tar --one-file-system below
+# would otherwise ship a mount point as an empty directory.
+images_path="${SRC}/klukai/images-latest"
+[[ -d "${images_path}" && ! -L "${images_path}" ]] || \
+  die "required companion images backup is absent or a symlink: ${images_path}"
+[[ "$(stat -c '%d' -- "${images_path}")" == "$(stat -c '%d' -- "${SRC}")" ]] || \
+  die "companion images backup is on a different filesystem than ${SRC}; tar --one-file-system would ship it empty: ${images_path}"
+[[ -n "$(find "${images_path}" -type f -mmin "-${recent_minutes}" -print -quit)" ]] || {
+  log "WARN: no companion image file newer than ${MAX_SOURCE_AGE_HOURS}h in ${images_path}; refusing to ship an incomplete snapshot"
+  exit 2
+}
 
 remote_preflight || die "Tailscale or destination RAID preflight failed"
 
@@ -274,7 +291,9 @@ printf '%s\n' "${size}"
 REMOTE
 ) || die "remote archive validation/finalization failed; completed backups were not touched"
 
-read -r snapshot_count old_count < <(
+# The archive is final from here on. A failed retention report must not turn
+# a successful backup into a non-zero exit (and a needless re-ship).
+if ! read -r snapshot_count old_count < <(
   ssh_transport "${DEST_HOST}" bash -s -- \
     "${SOURCE_TAILSCALE_IPV4}" "${DEST_TAILSCALE_IPV4}" \
     "${DEST_RAID_MOUNT}" "${DEST_PATH}" "${RETENTION_DAYS}" "${DEST_MARKER}" <<'REMOTE'
@@ -296,7 +315,11 @@ snapshot_count=$(find "${dest_path}" -maxdepth 1 -type f -name 'backups-*.tar.gz
 old_count=$(find "${dest_path}" -maxdepth 1 -type f -name 'backups-*.tar.gz' -mtime "+${retention_days}" | wc -l)
 printf '%s %s\n' "${snapshot_count}" "${old_count}"
 REMOTE
-)
+); then
+  snapshot_count=unknown
+  old_count=0
+  log "WARN: archive is final, but the retention report could not be read"
+fi
 
 log "backup complete: ${tar_name}, ${remote_size} bytes, ${#recent_dumps[@]} recent validated DB dump(s)"
 log "destination now has ${snapshot_count} snapshot(s); ${old_count} exceed ${RETENTION_DAYS}d"

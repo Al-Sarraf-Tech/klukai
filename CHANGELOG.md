@@ -81,7 +81,7 @@ in `docs/superpowers/plans/`.
 - **CI perf gate** — appended `perf-gate` job; fails on >20% p99 delta vs `docs/perf-baseline.json`.
 - **docker/core/app/circuit_breakers.py** — per-dep state machine (closed/half-open/open). Spec §5.4 thresholds for postgres/redis/qdrant/lm_studio/voice/comfyui. OTel span attrs + Prom gauge on transitions. 9 unit tests.
 - **scripts/chaos-kill-dep.sh** — drill harness. Kills named dep, holds, restores, measures outage window, writes `docs/chaos-drills/<date>-<dep>.{md,json}`.
-- **scripts/disaster-recovery.sh** — single-command DR drill. RTO target < 30 min. Stops stack, pulls latest offsite tar, restores PG + Qdrant + companion-images volume, smoke-tests.
+- **scripts/disaster-recovery.sh** — single-command DR drill. RTO target < 30 min. Stops only companion-core (shared PG/Qdrant stay up), pulls latest offsite tar, restores PG + Qdrant + companion-images volume, smoke-tests.
 - **Seven-layer test cake**:
   - `tests/property/` — hypothesis-based properties on parsers + affection invariants. Speech-routing regression guard.
   - `tests/contract/` — JSON-schema pin for `/health` + `/api/chat/turn`.

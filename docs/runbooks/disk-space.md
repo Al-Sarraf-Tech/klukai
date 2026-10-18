@@ -28,7 +28,13 @@
    - Container volumes (Qdrant snapshots, Docker overlay)
 4. Free space (in this order):
    - Rotate logs: `logrotate -f /etc/logrotate.d/klukai`
-   - Prune old backups: `find /mnt/nvmeINT/backups -mtime +30 -delete`
+   - Prune old **DB dumps only**, print first (never `klukai/images-latest/`,
+     the only images backup, and never `qdrant/`; retention is report-only
+     per ADR-0014):
+     ```bash
+     find /mnt/nvmeINT/backups/klukai /mnt/nvmeINT/backups/kairi \
+       -maxdepth 1 -type f -name '*-db-*.sql.gz' -mtime +30 -print  # review, then add -delete
+     ```
    - Docker prune: `docker system prune -f` (NOT `-a` — keeps images)
    - PG vacuum: `docker exec infra-postgres psql -U aichat -c "VACUUM FULL;"`
      **WARNING:** locks tables; schedule during low traffic.
@@ -57,7 +63,9 @@ must NEVER touch:
 
 - `/mnt/nvmeINT/data/postgres/` content (the DB itself)
 - `/mnt/nvmeINT/data/qdrant/` (vector storage)
-- `/var/lib/docker/volumes/companion-images/` (memory archive images)
+- `/var/lib/docker/volumes/companion_companion-images/_data` (memory archive images)
+- `/mnt/nvmeINT/backups/klukai/images-latest/` (the only backup of those images)
+  and `/mnt/nvmeINT/backups/qdrant/` (the snapshots the offsite archive ships)
 
 If you must reclaim from these, **restore from offsite backup first**.
 
@@ -65,7 +73,8 @@ If you must reclaim from these, **restore from offsite backup first**.
 
 - Add disk alert at 80% (not 90% — gives lead time)
 - Auto-trim old logs nightly via systemd timer
-- Auto-prune backups via timer (already exists; verify it's running)
+- Backup retention stays report-only (ADR-0014 invariant 7); there is no
+  auto-prune timer, and pruning is the reviewed manual step above
 - Capacity plan: track growth rate, predict full date
 
 ## Related
