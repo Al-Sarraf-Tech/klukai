@@ -75,6 +75,10 @@ class ReleaseError(RuntimeError):
     pass
 
 
+class MetricsUnavailable(RuntimeError):
+    """Prometheus could not say whether core served errors (not "no traffic")."""
+
+
 def run(argv: list[str], *, timeout: int = 600, **kwargs: Any) -> str:
     result = subprocess.run(
         argv, capture_output=True, text=True, timeout=timeout, **kwargs
@@ -131,11 +135,21 @@ def verify_artifact(
     ) != release_artifact.sha256(directory / "manifest.json"):
         raise ReleaseError("signed provenance does not bind this manifest")
     materials = release_artifact.verify_materials(directory, manifest)
-    tag = f"klukai-core:ci-{revision[:7]}"
-    found = release_artifact.identity(tag)
-    if found["layers"] != manifest["layers"] or found["revision"] != revision:
+    # Resolve the tag once, then check and deploy only that immutable ID: the
+    # layers, the revision label and the runtime configuration (entrypoint,
+    # command, environment, user, platform) must all match the signed manifest.
+    image_id = run(
+        ["docker", "image", "inspect", "-f", "{{.Id}}", f"klukai-core:ci-{revision[:7]}"]
+    ).strip()
+    found = release_artifact.identity(image_id)
+    if (
+        found["layers"] != manifest["layers"]
+        or found["revision"] != revision
+        or found.get("config_sha256") != manifest.get("config_sha256")
+    ):
         raise ReleaseError("local image differs from the signed CI manifest")
-    image_id = run(["docker", "image", "inspect", "-f", "{{.Id}}", tag]).strip()
+    tag = f"klukai-core:verified-{revision[:7]}-{image_id[7:19]}"
+    run(["docker", "tag", image_id, tag])
     return {
         "tag": tag,
         "image_id": image_id,
@@ -382,7 +396,16 @@ def watch(
             return False, f"{failures} consecutive failed checks during the hold"
     if failures:
         return False, f"the hold ended with {failures} failed check(s)"
-    burst = target.errors(started)
+    attempts = 0
+    while True:
+        try:
+            burst = target.errors(started)
+            break
+        except MetricsUnavailable as error:
+            attempts += 1
+            if attempts >= max_failures:
+                return False, f"5xx gate could not be evaluated: {error}"[:300]
+            sleep(interval)
     if burst is None:
         target.log.append("5xx check not evaluated (no request data in the window)")
     else:
@@ -418,11 +441,12 @@ def rollout(
         "previous_image_id": previous_id,
         "rollback_tag": previous_pin,
     }
-    # From here production may already be changed: any failure, timeout,
-    # SIGTERM (main turns it into SystemExit) or Ctrl-C must restore the
-    # previous image rather than escape with the candidate pinned.
-    target.write_pin(image)
+    # From the pin switch on, production may already be changed: any failure,
+    # timeout, SIGTERM (main turns it into SystemExit) or Ctrl-C must restore
+    # the previous image rather than escape with the candidate pinned, so the
+    # switch itself is inside the protected region.
     try:
+        target.write_pin(image)
         target.recreate()
         ok, detail = watch(
             target, image_id, ready_timeout=ready_timeout, hold=hold, **watch_args
@@ -479,20 +503,40 @@ def error_query(window: int) -> str:
     return f"({errors} or vector(0)) / {total}"
 
 
-def error_ratio(since: float, prometheus: str = PROMETHEUS) -> float | None:
-    """5xx share of core requests since the hold began; None if unknown."""
-    query = error_query(max(int(time.time() - since), 60))
+def _prometheus(query: str, prometheus: str) -> list[Any]:
     try:
         with urllib.request.urlopen(
             f"{prometheus}/api/v1/query?" + urllib.parse.urlencode({"query": query}),
             timeout=10,
         ) as response:
-            result = json.load(response)["data"]["result"]
-    except (urllib.error.URLError, OSError, ValueError, KeyError):
-        return None
+            doc = json.load(response)
+        if doc["status"] != "success" or not isinstance(doc["data"]["result"], list):
+            raise ValueError("unexpected Prometheus answer")
+        return doc["data"]["result"]
+    except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as error:
+        raise MetricsUnavailable(
+            f"Prometheus query failed: {type(error).__name__}"
+        ) from error
+
+
+def error_ratio(since: float, prometheus: str = PROMETHEUS) -> float | None:
+    """5xx share of core requests since the hold began. None means Prometheus
+    answered and core served no requests; MetricsUnavailable means it cannot be
+    told (Prometheus unreachable, a bad answer, or core not being scraped)."""
+    up = _prometheus('max(up{job="klukai-core"})', prometheus)
+    try:
+        scraped = bool(up) and float(up[0]["value"][1]) == 1
+    except (KeyError, IndexError, TypeError, ValueError):
+        scraped = False
+    if not scraped:
+        raise MetricsUnavailable("Prometheus is not scraping core")
+    result = _prometheus(error_query(max(int(time.time() - since), 60)), prometheus)
     if not result:
         return None
-    value = float(result[0]["value"][1])
+    try:
+        value = float(result[0]["value"][1])
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise MetricsUnavailable("unexpected 5xx query answer") from error
     return value if value == value else None  # NaN when there was no traffic
 
 

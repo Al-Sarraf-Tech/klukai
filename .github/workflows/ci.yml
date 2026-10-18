@@ -312,12 +312,15 @@ jobs:
           }
           build -t "$image"
           # PROC-2: a second controlled build from the same checkout and pinned
-          # inputs, without cache; layers are compared and the result retained.
+          # inputs, without cache. Layers may differ (timestamps); any content
+          # difference fails the job. The result is retained either way.
           build --no-cache -t "${image}-rebuild"
+          repro=0
           python3 -m tools.ci.release_artifact compare-builds --first "$image" \
-            --second "${image}-rebuild" --output "$M/reproducibility.json"
+            --second "${image}-rebuild" --output "$M/reproducibility.json" || repro=$?
           docker image rm "${image}-rebuild" >/dev/null
           cat "$M/reproducibility.json"
+          [ "$repro" -eq 0 ] || { echo "::error::the second build differs in content"; exit "$repro"; }
           trivy image --severity HIGH,CRITICAL --exit-code 1 --no-progress "$image"
           trivy image --scanners secret --exit-code 1 --no-progress "$image"
           trivy image --scanners license --format json --no-progress \

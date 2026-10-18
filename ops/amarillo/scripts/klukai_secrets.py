@@ -107,7 +107,10 @@ def encrypt(name: str, plaintext: bytes, store: Path = STORE) -> dict[str, objec
     recovery = store / "recovery"
     recovery.mkdir(mode=0o700, exist_ok=True)
     _check_private(recovery, 0o700)
-    staged = _sealed(name, plaintext, store, "auto")
+    # Primary copies need TPM2 and the host key; "auto" would quietly settle
+    # for the host key alone if the TPM were missing. Recovery copies use the
+    # host key so a replaced TPM cannot lock the owner out.
+    staged = _sealed(name, plaintext, store, "host+tpm2")
     rescue = _sealed(name, plaintext, recovery, "host")
     if target.exists():
         os.replace(target, target.with_suffix(".cred.prev"))

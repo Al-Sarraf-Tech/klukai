@@ -306,6 +306,7 @@ def fetch_image(
             "manifest_sha256": release_artifact.sha256(dest / "manifest.json"),
             "tar_sha256": manifest["tar_sha256"],
             "layers": manifest["layers"],
+            "config_sha256": manifest["config_sha256"],
             "materials": manifest["materials"],
             "verified": result,
             "verified_by": "amarillo klukai-fetch-ci-artifacts",
@@ -387,16 +388,21 @@ def fetch_nightly(guest: Guest, state: Path, sink: Path) -> list[str]:
         name = path.split("/")[-2]
         if name in known or not re.fullmatch(r"[0-9TZ:-]+-[0-9a-f]{7}", name):
             continue
-        local = state / f"{name}.json"
-        guest.read(path, local)
+        # Download beside the state (not matched by "*.json"), validate, then
+        # publish atomically: a lost connection never leaves a torn summary.
+        staged = state / f".{name}.part"
         try:
-            doc = json.loads(local.read_text())
-        except ValueError:
-            # Partly written or corrupt: retried next run, never blocks others.
-            doc = None
-        if not valid_summary(doc):
-            local.unlink()
-            continue
+            guest.read(path, staged)
+            try:
+                doc = json.loads(staged.read_text())
+            except ValueError:
+                # Partly written or corrupt on the guest: retried next run.
+                doc = None
+            if not valid_summary(doc):
+                continue
+            os.replace(staged, state / f"{name}.json")
+        finally:
+            staged.unlink(missing_ok=True)
         with sink.open("a") as out:
             for row in rows(doc):
                 out.write(json.dumps(row, sort_keys=True) + "\n")
@@ -409,7 +415,10 @@ def fetch_nightly(guest: Guest, state: Path, sink: Path) -> list[str]:
 def stale(state: Path, max_age: timedelta, now: datetime | None = None) -> bool:
     newest = None
     for path in state.glob("*.json"):
-        finished = _finished(json.loads(path.read_text()))
+        try:
+            finished = _finished(json.loads(path.read_text()))
+        except (OSError, ValueError, AttributeError):
+            continue  # unreadable: it must not stop the missing-summary warning
         if finished is not None and (newest is None or finished > newest):
             newest = finished
     return newest is None or (now or datetime.now(UTC)) - newest > max_age

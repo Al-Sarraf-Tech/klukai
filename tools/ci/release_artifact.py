@@ -6,9 +6,11 @@ licence inventory and policy verdict, second-build reproducibility result) and
 The manifest binds them to the revision, source tree, base images and tool
 versions. The deployment host (`verify`) checks the transferred tar against the
 manifest, loads it, and confirms the loaded image carries the same filesystem
-layers and revision label. Image IDs are not compared: the containerd and
-classic Docker stores report different IDs for the same image, while layer diff
-IDs are content addresses in both.
+layers, revision label and runtime configuration (entrypoint, command,
+environment, user, working directory, ports, health check, platform). Image IDs
+are not compared: the containerd and classic Docker stores report different IDs
+for the same image, while layer diff IDs are content addresses in both and the
+configuration is compared as a canonical digest.
 """
 
 from __future__ import annotations
@@ -26,7 +28,22 @@ import tarfile
 from typing import Any
 
 LABEL = "org.opencontainers.image.revision"
-SCHEMA = 2
+SCHEMA = 3
+# Everything in the image configuration that changes how the container runs.
+RUNTIME_KEYS = (
+    "Entrypoint",
+    "Cmd",
+    "Env",
+    "User",
+    "WorkingDir",
+    "ExposedPorts",
+    "Volumes",
+    "Labels",
+    "StopSignal",
+    "Healthcheck",
+    "Shell",
+    "OnBuild",
+)
 MATERIALS = (
     "sbom.cdx.json",
     "licenses.json",
@@ -50,6 +67,42 @@ def _revision(value: str) -> str:
     return value
 
 
+def _canonical(value: Any) -> Any:
+    """Drop unset values (None, empty, zero, false): the containerd store omits
+    keys the classic store prints, and both mean the same configuration."""
+    if isinstance(value, dict):
+        kept = ((k, _canonical(v)) for k, v in sorted(value.items()))
+        return {
+            k: v
+            for k, v in kept
+            if v not in (None, "", [], {})
+            and v is not False
+            and not (isinstance(v, (int, float)) and v == 0)
+        }
+    if isinstance(value, list):
+        return [_canonical(v) for v in value]
+    return value
+
+
+def runtime_config(info: dict[str, Any]) -> dict[str, Any]:
+    config = info.get("Config") or {}
+    return _canonical(
+        {
+            **{key: config.get(key) for key in RUNTIME_KEYS},
+            "Platform": {
+                "Architecture": info.get("Architecture"),
+                "Os": info.get("Os"),
+                "Variant": info.get("Variant"),
+            },
+        }
+    )
+
+
+def config_digest(info: dict[str, Any]) -> str:
+    canonical = json.dumps(runtime_config(info), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 def identity(image: str) -> dict[str, Any]:
     info = json.loads(_docker("image", "inspect", image))[0]
     labels = (info.get("Config") or {}).get("Labels") or {}
@@ -60,6 +113,8 @@ def identity(image: str) -> dict[str, Any]:
         "revision": labels.get(LABEL),
         "layers": layers,
         "user": info["Config"].get("User"),
+        "config_sha256": config_digest(info),
+        "image_id": info.get("Id"),
     }
 
 
@@ -105,6 +160,7 @@ def save(
     verdict = json.loads(materials["license-verdict.json"].read_text())
     if verdict.get("passed") is not True:
         raise ValueError("Licence policy did not pass")
+    _require_reproducible(json.loads(materials["reproducibility.json"].read_text()))
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     recorded = {}
     for name in MATERIALS:
@@ -121,6 +177,7 @@ def save(
         "image_ref": image,
         "layers": found["layers"],
         "user": found["user"],
+        "config_sha256": found["config_sha256"],
         "tar_sha256": sha256(tar),
         "tar_bytes": tar.stat().st_size,
         "base_images": base_images(dockerfile),
@@ -186,6 +243,17 @@ def reproducibility(first: str, second: str) -> dict[str, Any]:
     }
 
 
+def _require_reproducible(result: dict[str, Any]) -> None:
+    """Layer digests may differ (they include timestamps); content may not."""
+    if result.get("content_identical") is not True:
+        raise ValueError(
+            "The second build differs in content: "
+            + ", ".join(result.get("differing_paths") or ["no comparison recorded"])[
+                :300
+            ]
+        )
+
+
 def check_manifest(manifest: dict[str, Any], revision: str) -> None:
     materials = manifest.get("materials")
     if (
@@ -200,6 +268,7 @@ def check_manifest(manifest: dict[str, Any], revision: str) -> None:
         or not isinstance(manifest.get("tools"), dict)
         or not manifest["tools"]
         or not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("source_tree", "")))
+        or not re.fullmatch(r"[0-9a-f]{64}", str(manifest.get("config_sha256", "")))
     ):
         raise ValueError("Release manifest is malformed or for another revision")
 
@@ -216,6 +285,7 @@ def verify_materials(directory: Path, manifest: dict[str, Any]) -> dict[str, Any
     if sbom.get("bomFormat") != "CycloneDX" or not sbom.get("components"):
         raise ValueError("SBOM is not a populated CycloneDX document")
     repro = manifest["reproducibility"]
+    _require_reproducible(repro)
     return {
         "sbom_components": len(sbom["components"]),
         "licence_findings": verdict.get("findings"),
@@ -236,8 +306,18 @@ def verify(tar: Path, manifest_path: Path, revision: str, tag: str) -> dict[str,
     found = identity(match.group(1))
     if found["layers"] != manifest["layers"] or found["revision"] != revision:
         raise ValueError("Loaded image layers or revision differ from the CI manifest")
-    _docker("tag", match.group(1), tag)
-    return {"tag": tag, "revision": revision, "layers": len(found["layers"])}
+    if found["config_sha256"] != manifest["config_sha256"]:
+        raise ValueError(
+            "Loaded image runtime configuration differs from the CI manifest"
+        )
+    _docker("tag", found["image_id"] or match.group(1), tag)
+    return {
+        "tag": tag,
+        "revision": revision,
+        "layers": len(found["layers"]),
+        "image_id": found["image_id"],
+        "config_sha256": found["config_sha256"],
+    }
 
 
 def main() -> int:
@@ -278,7 +358,9 @@ def main() -> int:
             )
         elif args.command == "compare-builds":
             result = reproducibility(args.first, args.second)
+            # Written either way: a failed comparison is evidence too.
             args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+            _require_reproducible(result)
         else:
             result = verify(args.tar, args.manifest, args.revision, args.tag)
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:

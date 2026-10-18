@@ -2,7 +2,9 @@
 
 The summary is what amarillo pulls into the observability stack. A harness run
 that produced no gate result still yields a summary with `passed: false` and the
-failure type, so a broken night is visible instead of silently missing.
+failure type, so a broken night is visible instead of silently missing. The
+revision comes from the workflow, so even a harness that died before writing
+any evidence produces a revision-bound failed night.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -20,7 +23,13 @@ def _load(path: Path) -> Any:
     return json.loads(path.read_text()) if path.is_file() else None
 
 
-def summarize(evidence: Path) -> dict[str, Any]:
+def _revision(value: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise argparse.ArgumentTypeError("a full 40-character revision is required")
+    return value
+
+
+def summarize(evidence: Path, revision: str) -> dict[str, Any]:
     gate = _load(evidence / "gate.json")
     manifest = _load(evidence / "manifest.json") or {}
     failure = _load(evidence / "failure.json")
@@ -33,14 +42,16 @@ def summarize(evidence: Path) -> dict[str, Any]:
     }
     if not isinstance(gate, dict):
         summary.update(
-            revision=manifest.get("source_revision"),
+            revision=revision,
             passed=False,
             failure=(failure or {}).get("type", "no gate result"),
             routes=[],
         )
         return summary
+    if gate.get("candidate_revision") != revision:
+        raise ValueError("gate result is for another revision")
     summary.update(
-        revision=gate["candidate_revision"],
+        revision=revision,
         baseline_revision=gate["baseline_revision"],
         passed=gate["passed"] is True,
         certifying=gate["certifying"] is True,
@@ -66,10 +77,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--revision", type=_revision, required=True)
     args = parser.parse_args()
-    summary = summarize(args.evidence)
-    if not summary.get("revision"):
-        print("nightly summary refused: no revision in the evidence", file=sys.stderr)
+    try:
+        summary = summarize(args.evidence, args.revision)
+    except (ValueError, KeyError, TypeError) as error:
+        print(f"nightly summary refused: {error}", file=sys.stderr)
         return 1
     fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as handle:

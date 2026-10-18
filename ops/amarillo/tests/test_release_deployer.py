@@ -32,9 +32,12 @@ args = [a for a in sys.argv[1:] if a != "--user"]
 cmd, opts = args[0], [a for a in args[1:] if a.startswith("--")]
 src, dst = [a for a in args[1:] if not a.startswith("--")]
 name = next(o.split("=", 1)[1] for o in opts if o.startswith("--name="))
+key = next((o.split("=", 1)[1] for o in opts if o.startswith("--with-key=")), None)
 data = sys.stdin.buffer.read() if src == "-" else open(src, "rb").read()
 if cmd == "encrypt":
-    out = json.dumps({"name": name, "data": base64.b64encode(data).decode()}).encode()
+    out = json.dumps(
+        {"name": name, "key": key, "data": base64.b64encode(data).decode()}
+    ).encode()
 else:
     try:
         doc = json.loads(data)
@@ -85,6 +88,17 @@ class SecretStoreTests(unittest.TestCase):
         for name in klukai_secrets.TOKEN_NAMES:
             klukai_secrets.encrypt(name, b"t" * 64, self.store)
         self.assertTrue(klukai_secrets.check(self.store)["plaintext_absent"])
+
+    def test_primary_copies_require_tpm2_and_recovery_copies_the_host_key(
+        self,
+    ) -> None:
+        # Independent review finding 4: "auto" may silently fall back to the
+        # host key alone, so the primary policy is requested explicitly.
+        klukai_secrets.encrypt("compose-env", b"A=1\n", self.store)
+        primary = json.loads((self.store / "compose-env.cred").read_text())
+        rescue = json.loads((self.store / "recovery/compose-env.cred").read_text())
+        self.assertEqual(primary["key"], "host+tpm2")
+        self.assertEqual(rescue["key"], "host")
 
     def test_rollback_and_recovery_restore_the_previous_value(self) -> None:
         klukai_secrets.encrypt("compose-env", b"A=1\n", self.store)
@@ -315,20 +329,43 @@ class ReviewFindingTests(RolloutTests):
         self.assertNotIn("status=~", query)
         self.assertIn("or vector(0)", query)
 
-    def test_error_ratio_reports_the_value_or_unknown(self) -> None:
-        def response(value: object) -> mock.MagicMock:
-            body = json.dumps(
-                {"data": {"result": [] if value is None else [{"value": [0, value]}]}}
-            ).encode()
+    def test_error_ratio_tells_no_traffic_from_unreadable_metrics(self) -> None:
+        # Independent review finding 3: a failed query used to read as "no
+        # traffic" and pass the 5xx gate.
+        def response(result: object, status: str = "success") -> mock.MagicMock:
+            body = json.dumps({"status": status, "data": {"result": result}}).encode()
             handle = mock.MagicMock()
             handle.__enter__.return_value.read.return_value = body
             return handle
 
-        for value, expected in (("0.25", 0.25), ("NaN", None), (None, None)):
+        up = response([{"value": [0, "1"]}])
+        down = response([{"value": [0, "0"]}])
+        cases = (
+            ([up, response([{"value": [0, "0.25"]}])], 0.25),
+            ([up, response([{"value": [0, "NaN"]}])], None),
+            ([up, response([])], None),
+        )
+        for answers, expected in cases:
             with mock.patch.object(
-                release.urllib.request, "urlopen", return_value=response(value)
+                release.urllib.request, "urlopen", side_effect=answers
             ):
                 self.assertEqual(release.error_ratio(0), expected)
+        failing = (
+            [release.urllib.error.URLError("connection refused")],
+            [down],
+            [response([])],
+            [response([], status="error")],
+            [up, release.urllib.error.URLError("timed out")],
+            [up, response({"not": "a list"})],
+        )
+        for answers in failing:
+            with (
+                mock.patch.object(
+                    release.urllib.request, "urlopen", side_effect=answers
+                ),
+                self.assertRaises(release.MetricsUnavailable),
+            ):
+                release.error_ratio(0)
 
     def test_prune_keeps_the_newest_dumps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -381,6 +418,111 @@ class RollbackSafetyTests(unittest.TestCase):
                 unsafe = release.rollback_safety(migration, repo)
             self.assertFalse(unsafe["safe"])
             self.assertEqual(unsafe["changed"], ["docker/core/migrations/0099.sql"])
+
+
+class IndependentReviewTests(RolloutTests):
+    """Regressions for the 2026-10-18 independent Codex review (PROC-1)."""
+
+    def test_an_interrupt_right_after_the_pin_switch_rolls_back(self) -> None:
+        # Finding 2: the pin switch ran before the protected region, so an
+        # interrupt there left the unchecked candidate pinned.
+        target = self.target(bad=set())
+        real = target.write_pin
+
+        def write_then_interrupt(image: str | None) -> None:
+            real(image)
+            if image == "klukai-core:new":
+                raise KeyboardInterrupt
+
+        target.write_pin = write_then_interrupt  # type: ignore[method-assign]
+        result = release.rollout(target, "klukai-core:new", "sha256:new", **self.fast())
+        self.assertEqual(result["status"], "rolled_back")
+        self.assertIn("KeyboardInterrupt", result["detail"])
+        self.assertEqual(target.read_pin(), result["rollback_tag"])
+        self.assertEqual(target.running, "sha256:old")
+
+    def test_unreadable_metrics_fail_the_hold(self) -> None:
+        # Finding 3: the 5xx gate must be evaluated, not assumed.
+        target = self.target(bad=set())
+
+        def errors(since: float) -> float | None:
+            if target.running == "sha256:new":
+                raise release.MetricsUnavailable("Prometheus query failed")
+            return 0.0
+
+        target.errors = errors
+        result = release.rollout(target, "klukai-core:new", "sha256:new", **self.fast())
+        self.assertEqual(result["status"], "rolled_back")
+        self.assertIn("could not be evaluated", result["detail"])
+        self.assertEqual(target.running, "sha256:old")
+
+    def test_a_transient_metrics_failure_is_retried(self) -> None:
+        target = self.target(bad=set())
+        answers = iter([release.MetricsUnavailable("blip"), 0.0])
+
+        def errors(since: float) -> float | None:
+            answer = next(answers)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        target.errors = errors
+        result = release.rollout(target, "klukai-core:new", "sha256:new", **self.fast())
+        self.assertEqual(result["status"], "deployed")
+        self.assertIn("5xx ratio 0.00% during the hold", result["checks"])
+
+    def test_verified_image_is_bound_by_config_and_deployed_by_id(self) -> None:
+        # Finding 1: layers and the revision label alone let a config-only
+        # replacement (Entrypoint/Cmd/Env) through.
+        revision = "c" * 40
+        image_id = "sha256:" + "d" * 64
+        manifest = {"layers": ["sha256:" + "e" * 64], "config_sha256": "f" * 64}
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / revision
+            directory.mkdir()
+            (directory / "manifest.json").write_text(json.dumps(manifest))
+            (directory / "provenance.json").write_text(
+                json.dumps(
+                    {
+                        "revision": revision,
+                        "manifest_sha256": release.release_artifact.sha256(
+                            directory / "manifest.json"
+                        ),
+                    }
+                )
+            )
+            calls: list[list[str]] = []
+
+            def fake_run(argv: list[str], **kwargs: object) -> str:
+                calls.append(argv)
+                return image_id + "\n" if argv[:3] == ["docker", "image", "inspect"] else ""
+
+            def check(found: dict) -> dict:
+                with (
+                    mock.patch.object(release, "verify_signature"),
+                    mock.patch.object(release.release_artifact, "check_manifest"),
+                    mock.patch.object(
+                        release.release_artifact, "verify_materials", return_value={}
+                    ),
+                    mock.patch.object(
+                        release.release_artifact, "identity", return_value=found
+                    ) as identity,
+                    mock.patch.object(release, "run", side_effect=fake_run),
+                ):
+                    result = release.verify_artifact(revision, Path(tmp))
+                identity.assert_called_once_with(image_id)  # by immutable ID
+                return result
+
+            good = {**manifest, "revision": revision}
+            result = check(good)
+            self.assertEqual(result["image_id"], image_id)
+            self.assertEqual(
+                result["tag"], f"klukai-core:verified-{revision[:7]}-{'d' * 12}"
+            )
+            self.assertIn(["docker", "tag", image_id, result["tag"]], calls)
+            for name, value in (("config_sha256", "0" * 64), ("revision", "b" * 40)):
+                with self.assertRaises(release.ReleaseError):
+                    check({**good, name: value})
 
 
 class ArtifactGateTests(unittest.TestCase):

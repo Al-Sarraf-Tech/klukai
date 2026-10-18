@@ -69,7 +69,7 @@ def materials() -> dict[str, bytes]:
         ).encode(),
         "licenses.json": b'{"Results": []}',
         "license-verdict.json": b'{"passed": true, "findings": 1}',
-        "reproducibility.json": b'{"identical": true}',
+        "reproducibility.json": b'{"identical": false, "content_identical": true}',
     }
 
 
@@ -79,18 +79,19 @@ def manifest(
     files = materials() if files is None else files
     return json.dumps(
         {
-            "schema": 2,
+            "schema": release_artifact.SCHEMA,
             "revision": revision,
             "run": "9-1",
             "source_tree": "c" * 40,
             "tar_sha256": release_artifact.hashlib.sha256(payload).hexdigest(),
             "layers": [LAYER],
+            "config_sha256": "e" * 64,
             "tools": {"trivy": "Version: 0.71.0"},
             "materials": {
                 name: release_artifact.hashlib.sha256(body).hexdigest()
                 for name, body in files.items()
             },
-            "reproducibility": {"identical": True},
+            "reproducibility": {"identical": False, "content_identical": True},
         }
     ).encode()
 
@@ -445,6 +446,53 @@ class NightlyTests(unittest.TestCase):
             # The torn file is not marked seen, so a completed copy is picked up later.
             self.assertNotIn("2026-10-17T01-30Z", (state / "seen.txt").read_text())
 
+    def test_an_interrupted_transfer_leaves_nothing_behind(self) -> None:
+        # Independent review finding 7: a torn download used to stay in the
+        # state directory and crash the freshness scan before the owner warning.
+        path = "/opt/klukai-ci/artifacts/nightly/2026-10-17T01-30Z-c6d02f0/summary.json"
+
+        class Dropping(FakeAgent):
+            def agent(inner, command: dict) -> object:
+                if command["execute"] == "guest-file-read":
+                    data, _ = inner.handles[command["arguments"]["handle"]]
+                    if inner.handles[command["arguments"]["handle"]][1] == 0:
+                        inner.handles[command["arguments"]["handle"]][1] = 10
+                        return {
+                            "buf-b64": base64.b64encode(data[:10]).decode(),
+                            "count": 10,
+                            "eof": False,
+                        }
+                    raise RuntimeError("ssh: connection to Dominus lost")
+                return super().agent(command)
+
+        agent = Dropping(
+            {path: self.summary("2026-10-17T01:45:00+00:00")}, listing=f"{path}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            state, sink = Path(tmp) / "state", Path(tmp) / "sink.jsonl"
+            state.mkdir()
+            with self.assertRaises(RuntimeError):
+                relay.fetch_nightly(relay.Guest(agent), state, sink)
+            self.assertEqual(sorted(p.name for p in state.iterdir()), [])
+            self.assertTrue(
+                relay.stale(
+                    state, timedelta(days=2), datetime(2026, 10, 20, tzinfo=UTC)
+                )
+            )
+
+    def test_the_freshness_scan_survives_a_corrupt_state_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            (state / "2026-10-16T01-30Z-c6d02f0.json").write_text('{"revision": "')
+            (state / "2026-10-17T01-30Z-c6d02f0.json").write_bytes(
+                self.summary("2026-10-17T01:45:00+00:00")
+            )
+            now = datetime(2026, 10, 18, tzinfo=UTC)
+            self.assertFalse(relay.stale(state, timedelta(days=2), now))
+            self.assertTrue(
+                relay.stale(state, timedelta(days=2), now + timedelta(days=3))
+            )
+
     def test_finished_at_must_carry_a_timezone(self) -> None:
         doc = json.loads(self.summary("2026-10-17T01:45:00+00:00"))
         self.assertTrue(relay.valid_summary(doc))
@@ -471,6 +519,7 @@ class ReleaseManifestTests(unittest.TestCase):
             {**good, "materials": {}},
             {**good, "tools": {}},
             {**good, "source_tree": "short"},
+            {**good, "config_sha256": None},
         ):
             with self.assertRaises(ValueError):
                 release_artifact.check_manifest(broken, REV)

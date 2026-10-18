@@ -71,6 +71,20 @@ jobs:
           stamp=$(date -u +%Y-%m-%dT%H-%MZ)
           dir="${KLUKAI_NIGHTLY_ROOT}/${stamp}-${head:0:7}"
           install -d -m 0700 "$dir"
+          summarize() {
+            # The revision comes from the workflow, so a night that died before
+            # writing any evidence is still recorded as failed.
+            python -B -m tools.ci.perf_nightly --evidence "$dir/evidence" \
+              --output "$dir/summary.json" --revision "$head"
+          }
+          cleanup() {
+            [ -e "$dir/summary.json" ] || summarize || true
+            docker image rm "klukai-core:nightly-candidate-$GITHUB_RUN_ID" \
+              "klukai-core:nightly-baseline-$GITHUB_RUN_ID" >/dev/null 2>&1 || true
+          }
+          # Whatever fails below (a pull, a build, the harness), the night is
+          # summarized and the images go.
+          trap cleanup EXIT
           for image in "$KLUKAI_PERF_POSTGRES_IMAGE" "$KLUKAI_PERF_REDIS_IMAGE" \
                        "$KLUKAI_PERF_QDRANT_IMAGE" "$KLUKAI_PERF_FIXTURE_IMAGE"; do
             docker pull --quiet "$image" >/dev/null
@@ -87,15 +101,13 @@ jobs:
             --candidate-image "$(docker image inspect -f '{{.Id}}' "klukai-core:nightly-candidate-$GITHUB_RUN_ID")" \
             --baseline-revision "$base" --candidate-revision "$head" \
             --out "$dir/evidence" || status=$?
-          python -B -m tools.ci.perf_nightly --evidence "$dir/evidence" --output "$dir/summary.json"
+          summarize || { [ "$status" -ne 0 ] || status=1; }
           # Bound the guest disk: raw evidence bundles (~180 MB a night) older than
           # 14 days go; each night's small summary.json stays.
           find "$KLUKAI_NIGHTLY_ROOT" -mindepth 2 -maxdepth 2 -type d -name evidence \
             -mtime +14 -prune -print -exec rm -rf {} +
           find "$KLUKAI_NIGHTLY_ROOT/mutation" "$KLUKAI_NIGHTLY_ROOT/trivy" -mindepth 1 \
             -maxdepth 1 -type d -mtime +30 -prune -print -exec rm -rf {} + 2>/dev/null || true
-          docker image rm "klukai-core:nightly-candidate-$GITHUB_RUN_ID" \
-            "klukai-core:nightly-baseline-$GITHUB_RUN_ID" >/dev/null 2>&1 || true
           exit "$status"
 
   trivy-deep:
