@@ -12,6 +12,7 @@ from .dependencies import http_request
 import asyncio
 import json
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -40,6 +41,26 @@ logger = logging.getLogger(__name__)
 
 REFLECTION_MIN_HOURS_AWAY = 8
 REFLECTION_MAX_HOURS_AWAY = 72  # Over 3 days = too stale, skip
+
+# A mission still in the session on reconnect is restored only if it started
+# within this window. Field reports resuming half a day after "keep me posted
+# every 30 min" are about an operation that is long over.
+MISSION_RESTORE_MAX_HOURS = 12
+
+
+def _mission_is_stale(started_at: str | None) -> bool:
+    """True when the session's mission start (an isoformat stamp from the
+    container clock) is older than MISSION_RESTORE_MAX_HOURS. A missing or
+    unparseable stamp is not stale: older sessions never recorded one."""
+    if not started_at:
+        return False
+    try:
+        started = datetime.fromisoformat(started_at)
+    except (TypeError, ValueError):
+        return False
+    if started.tzinfo is not None:
+        started = started.astimezone().replace(tzinfo=None)
+    return datetime.now() - started > timedelta(hours=MISSION_RESTORE_MAX_HOURS)
 
 
 async def _handle_tap_interact(user_id: str) -> None:
@@ -190,6 +211,24 @@ async def _initialize_session(user_id: str) -> SessionState:
             await memory.save_session(key, session)
         if session.mood != "composed":
             await ws.send_mood(user_id, session.mood)
+        if (
+            session.mission_description
+            and session.mission_interval
+            and not proactive.get_mission_timer(user_id)
+            and _mission_is_stale(session.mission_started_at)
+        ):
+            # A mission from half a day ago is not one he still wants field
+            # reports on; restoring it would resume updates on a reconnect
+            # long after the operation it described was over.
+            logger.info(
+                "Mission from %s not restored (older than %dh); clearing it",
+                session.mission_started_at,
+                MISSION_RESTORE_MAX_HOURS,
+            )
+            session.mission_description = None
+            session.mission_interval = None
+            session.mission_started_at = None
+            await memory.save_session(key, session)
         if (
             session.mission_description
             and session.mission_interval

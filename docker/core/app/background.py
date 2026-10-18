@@ -22,6 +22,7 @@ from .image_gen import build_prompt, generate_image, is_couple_scene, is_landsca
 from .image_gen_constants import INTIMATE_MIN_LEVEL
 from .character_scenes import commit_oath_scene, oath_lines
 from .models import SessionState
+from .proactive.mission_timer import AUTO_MISSION_MAX_MINUTES
 from .memory_extraction import ExtractionRuntime
 from .personality import load_personality
 
@@ -99,8 +100,14 @@ async def _apply_extracted_state(
         await memory.save_session(key, session)
         proactive.set_last_mood(mood, user_id=user_id)
         if start_mission and session.mission_description is not None:
+            # Nobody asked for this mission, so it stands down on its own:
+            # without the ceiling it ran until the cancel phrase or a restart,
+            # ticking through the night.
             proactive.start_mission(
-                session.mission_description, interval_minutes=30, user_id=user_id
+                session.mission_description,
+                interval_minutes=30,
+                user_id=user_id,
+                max_duration_minutes=AUTO_MISSION_MAX_MINUTES,
             )
         await ws.send_mood(user_id, mood)
 

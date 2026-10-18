@@ -14,6 +14,13 @@ from .state import MAJOR_EVENTS
 
 logger = logging.getLogger(__name__)
 
+# A mission she starts on her own (a battle_ready mood, see
+# background._apply_extracted_state) ends by itself after this long. Nobody
+# asked for it, so nobody will say "stand down": without a ceiling it ticked
+# every ~30 minutes, through the night, until the cancel phrase or a restart.
+# A mission he asked for ("keep me posted every 30 min") has no ceiling.
+AUTO_MISSION_MAX_MINUTES = 180
+
 
 class MissionTimer:
     """Tracks an active mission with periodic field radio updates.
@@ -31,8 +38,10 @@ class MissionTimer:
         self.update_count: int = 0
         self.active_events: list[str] = []
         self.active: bool = False
+        self.max_duration_minutes: int | None = None
         self._task: asyncio.Task[Any] | None = None
         self._callback: Callable[[str], Awaitable[object]] | None = None
+        self._on_expire: Callable[[], object] | None = None
         self._affection_level: int = 0
 
     def start(
@@ -41,8 +50,15 @@ class MissionTimer:
         interval_minutes: int = 30,
         callback: Callable[[str], Awaitable[object]] | None = None,
         affection_level: int = 0,
+        max_duration_minutes: int | None = None,
+        on_expire: Callable[[], object] | None = None,
     ) -> None:
-        """Begin the mission timer as an asyncio.Task."""
+        """Begin the mission timer as an asyncio.Task.
+
+        ``max_duration_minutes`` sets a ceiling: the first tick at or past it
+        stands the mission down instead of firing, and ``on_expire`` (sync) is
+        called so the engine can close it out like a cancelled mission.
+        """
         self.mission_description = description
         self.base_interval_minutes = max(5, interval_minutes)  # Floor at 5 min
         self.started_at = time.monotonic()
@@ -50,7 +66,9 @@ class MissionTimer:
         self.update_count = 0
         self.active_events = []
         self.active = True
+        self.max_duration_minutes = max_duration_minutes
         self._callback = callback
+        self._on_expire = on_expire
         self._affection_level = affection_level
         self._task = asyncio.create_task(self._tick_loop())
         state._active_mission_timer = self
@@ -63,7 +81,13 @@ class MissionTimer:
     def stop(self) -> None:
         """Cancel the mission timer."""
         self.active = False
-        if self._task and not self._task.done():
+        # The ceiling closes a mission out from inside its own tick loop;
+        # that task is already ending and must not cancel itself.
+        if (
+            self._task
+            and not self._task.done()
+            and self._task is not asyncio.current_task()
+        ):
             self._task.cancel()
         state._active_mission_timer = None
         logger.info("Mission timer stopped after %d updates", self.update_count)
@@ -87,6 +111,21 @@ class MissionTimer:
                 await asyncio.sleep(wait_seconds)
 
                 if not self.active:
+                    break
+
+                if self._past_ceiling():
+                    logger.info(
+                        "Mission '%s' reached its %d-minute ceiling after %d updates — standing down",
+                        self.mission_description[:60],
+                        self.max_duration_minutes,
+                        self.update_count,
+                    )
+                    # The engine's close-out (aftermath, decompression,
+                    # physical state) only runs for a mission that is still
+                    # active, so it is called before the timer stops itself.
+                    if self._on_expire:
+                        self._on_expire()
+                    self.active = False
                     break
 
                 self.update_count += 1
@@ -129,6 +168,12 @@ class MissionTimer:
         except Exception as e:
             logger.error("Mission timer tick failed: %s", e)
             self.active = False
+
+    def _past_ceiling(self) -> bool:
+        """True once a ceilinged mission has run for its full allowance."""
+        if self.max_duration_minutes is None:
+            return False
+        return (time.monotonic() - self.started_at) >= self.max_duration_minutes * 60
 
     async def _fire_update(self, elapsed_minutes: int, major_event: str | None) -> None:
         """Generate an LLM update and deliver it via callback."""

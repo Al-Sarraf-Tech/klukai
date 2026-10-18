@@ -14,6 +14,7 @@ import time
 from datetime import timedelta
 from functools import partial
 
+from .mission_timer import AUTO_MISSION_MAX_MINUTES as AUTO_MISSION_MAX_MINUTES
 from .mission_timer import MissionTimer as MissionTimer
 from .base import _EngineBase
 from .state import now_local
@@ -161,9 +162,18 @@ class MissionMixin(_EngineBase):
         return timer if timer and timer.active else None
 
     def start_mission(
-        self, description: str, interval_minutes: int = 30, user_id: str = "jalsarraf"
+        self,
+        description: str,
+        interval_minutes: int = 30,
+        user_id: str = "jalsarraf",
+        max_duration_minutes: int | None = None,
     ) -> None:
-        """Start a per-user mission timer with periodic LLM-generated field reports."""
+        """Start a per-user mission timer with periodic LLM-generated field reports.
+
+        With ``max_duration_minutes`` the mission stands down by itself at the
+        ceiling and is closed out exactly like one he cancelled (aftermath
+        image, decompression line, physical state).
+        """
         if self._closing:
             return
         # Stop existing mission for this user if any
@@ -180,12 +190,24 @@ class MissionMixin(_EngineBase):
                 else None
             ),
             affection_level=self._affection_levels.get(user_id, 0),
+            max_duration_minutes=max_duration_minutes,
+            on_expire=(
+                partial(self._expire_mission, user_id, timer)
+                if max_duration_minutes is not None
+                else None
+            ),
         )
         if timer._task is not None:
             self._track_task(timer._task)
         self._mission_timers[user_id] = timer
         if user_id == "jalsarraf":
             self._mission_timer = timer  # Primary-owner scheduled context only
+
+    def _expire_mission(self, user_id: str, timer: MissionTimer) -> None:
+        """Close out a mission that reached its ceiling, unless a newer
+        mission has replaced it for this user in the meantime."""
+        if self._mission_timers.get(user_id) is timer:
+            self.stop_mission(user_id)
 
     def stop_mission(
         self, user_id: str = "jalsarraf", trigger_aftermath: bool = True
