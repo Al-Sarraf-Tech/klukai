@@ -258,6 +258,7 @@ async def _initialize_session(user_id: str) -> SessionState:
                     session.mission_interval,
                     user_id=user_id,
                     max_duration_minutes=max(1, math.ceil(left)),
+                    session_stamp=session.mission_started_at,
                 )
         return session
 

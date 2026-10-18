@@ -40,44 +40,40 @@ class TestLimitsRegistry:
 
 
 class TestCheckAndConsume:
+    @staticmethod
+    def _redis(count, ttl):
+        from tests.test_rate_limit_full import _redis
+
+        return _redis(count, ttl=ttl)
+
     @pytest.mark.asyncio
     async def test_first_call_returns_remaining_minus_one(self):
         from app.rate_limit import check_and_consume, LIMITS
-        fake_redis = AsyncMock()
-        fake_redis.incr = AsyncMock(return_value=1)
-        fake_redis.expire = AsyncMock(return_value=True)
-        fake_redis.ttl = AsyncMock(return_value=60)
+        fake_redis, pipe = self._redis(1, 60)
 
         with patch("app.rate_limit._get_redis", return_value=fake_redis):
             remaining, retry = await check_and_consume("alice", "stats")
 
         assert remaining == LIMITS["stats"].requests - 1
-        assert retry >= 0
-        fake_redis.expire.assert_called_once()
+        assert retry == 60
+        # The window is armed in the same transaction, only if not yet armed.
+        assert ("expire", pipe.calls[0][1], LIMITS["stats"].window_seconds, True) in pipe.calls
 
     @pytest.mark.asyncio
     async def test_subsequent_call_decrements(self):
-        from app.rate_limit import check_and_consume
-        fake_redis = AsyncMock()
-        fake_redis.incr = AsyncMock(return_value=5)
-        fake_redis.expire = AsyncMock(return_value=True)
-        fake_redis.ttl = AsyncMock(return_value=45)
+        from app.rate_limit import check_and_consume, LIMITS
+        fake_redis, _ = self._redis(5, 45)
 
         with patch("app.rate_limit._get_redis", return_value=fake_redis):
             remaining, retry = await check_and_consume("alice", "stats")
 
-        # expire only set on the first call (count==1)
-        fake_redis.expire.assert_not_called()
+        assert remaining == LIMITS["stats"].requests - 5
         assert retry == 45
 
     @pytest.mark.asyncio
     async def test_exceeded_raises(self):
         from app.rate_limit import check_and_consume, RateLimitExceeded, LIMITS
-        fake_redis = AsyncMock()
-        over = LIMITS["stats"].requests + 1
-        fake_redis.incr = AsyncMock(return_value=over)
-        fake_redis.expire = AsyncMock(return_value=True)
-        fake_redis.ttl = AsyncMock(return_value=30)
+        fake_redis, _ = self._redis(LIMITS["stats"].requests + 1, 30)
 
         with patch("app.rate_limit._get_redis", return_value=fake_redis):
             with pytest.raises(RateLimitExceeded) as exc:
@@ -104,10 +100,7 @@ class TestCheckAndConsume:
     @pytest.mark.asyncio
     async def test_unknown_bucket_uses_default(self):
         from app.rate_limit import check_and_consume, LIMITS
-        fake_redis = AsyncMock()
-        fake_redis.incr = AsyncMock(return_value=1)
-        fake_redis.expire = AsyncMock(return_value=True)
-        fake_redis.ttl = AsyncMock(return_value=60)
+        fake_redis, _ = self._redis(1, 60)
 
         with patch("app.rate_limit._get_redis", return_value=fake_redis):
             remaining, _ = await check_and_consume("alice", "no-such-bucket")

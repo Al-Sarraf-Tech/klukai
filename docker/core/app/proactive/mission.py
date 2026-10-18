@@ -15,7 +15,6 @@ from datetime import timedelta
 from functools import partial
 
 from .mission_timer import AUTO_MISSION_MAX_MINUTES as AUTO_MISSION_MAX_MINUTES
-from .mission_timer import ceiling_minutes_left
 from .mission_timer import MissionTimer as MissionTimer
 from .base import _EngineBase
 from .state import now_local
@@ -168,12 +167,15 @@ class MissionMixin(_EngineBase):
         interval_minutes: int = 30,
         user_id: str = "jalsarraf",
         max_duration_minutes: int | None = None,
+        session_stamp: str | None = None,
     ) -> None:
         """Start a per-user mission timer with periodic LLM-generated field reports.
 
         With ``max_duration_minutes`` the mission stands down by itself at the
         ceiling and is closed out exactly like one he cancelled (aftermath
-        image, decompression line, physical state).
+        image, decompression line, physical state). ``session_stamp`` is the
+        session's mission_started_at, so the close-out clears only this
+        mission from the session.
         """
         if self._closing:
             return
@@ -198,6 +200,7 @@ class MissionMixin(_EngineBase):
                 else None
             ),
         )
+        timer.session_stamp = session_stamp
         if timer._task is not None:
             self._track_task(timer._task)
         self._mission_timers[user_id] = timer
@@ -209,26 +212,30 @@ class MissionMixin(_EngineBase):
         mission has replaced it for this user in the meantime."""
         if self._mission_timers.get(user_id) is timer:
             self.stop_mission(user_id)
-            self._spawn(self._clear_expired_session_mission(user_id))
+            self._spawn(
+                self._clear_expired_session_mission(user_id, timer.session_stamp)
+            )
 
-    async def _clear_expired_session_mission(self, user_id: str) -> None:
+    async def _clear_expired_session_mission(
+        self, user_id: str, stamp: str | None
+    ) -> None:
         """Clear the stood-down mission from his session too, or a reconnect
-        would restore it. Only a ceilinged mission whose own allowance has run
-        out is cleared, so a newer or explicitly requested one is untouched."""
+        would restore it. Only the same mission (same start stamp, read under
+        session ownership) is cleared, so one that replaced it while this
+        waited for ownership is untouched."""
+        if not stamp:
+            return
         try:
             from ..context import memory, session_id
 
             key = session_id(user_id)
             async with memory.session_owner(key):
                 session = await memory.get_session(key)
-                if session is None or not session.mission_description:
-                    return
-                left = ceiling_minutes_left(
-                    session.mission_started_at, session.mission_max_minutes
-                )
-                # A minute of slack for clock skew between the session stamp
-                # and the timer's monotonic start.
-                if left is None or left > 1:
+                if (
+                    session is None
+                    or not session.mission_description
+                    or session.mission_started_at != stamp
+                ):
                     return
                 session.mission_description = None
                 session.mission_interval = None

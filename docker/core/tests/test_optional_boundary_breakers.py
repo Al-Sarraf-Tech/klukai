@@ -26,7 +26,12 @@ async def test_optional_redis_boundary_opens_and_stops_network_work(
 
         expected = None
     elif boundary == "rate_limit":
-        client.incr = operation
+        # The limiter's network work is one MULTI/EXEC transaction.
+        from tests.test_rate_limit_full import _Pipe
+
+        pipe = _Pipe([])
+        pipe.execute = operation
+        client.pipeline = MagicMock(return_value=pipe)
         monkeypatch.setattr(rate_limit, "_redis", client)
 
         async def invoke():

@@ -6,17 +6,19 @@ Three-pass approach:
   Pass 2: dolphin-24b writes annotations using ACTUAL conversation text
   Pass 3: ComfyUI generates Illustrious images for each memory
 
-Tracks last_seeded_at so only new exchanges are processed on each run.
+Tracks a watermark, the (created_at, id) of the last message a run fully
+processed, so each run continues exactly where the last one stopped: ties
+are ordered by id, and an exchange is never split across runs.
 Each saved memory carries conversation_id "seed:<exchange created_at>", the
 fingerprint that dedups it and lets reannotate_existing.py find its exchange.
 
 SEED_DEADLINE_SECONDS (optional) is a soft wall-clock budget: once spent, the
 run stops before its next unit of work, records a "deadline" failure, and
-leaves last_seeded_at untouched so the range is retried on a later run.
+leaves the unfinished exchanges past the watermark for a later run.
 SEED_MAX_EXCHANGES (default 40) bounds each run to the oldest unseeded
-exchanges, so a run can finish its prefix inside the budget and advance the
-watermark; a deadline hit on an unbounded backlog would otherwise repeat the
-same selection forever without saving or advancing.
+exchanges. Whatever ends a run (deadline, outage, a failed render), the
+watermark advances over the leading exchanges that were fully handled, so a
+backlog always drains and nothing unfinished is skipped.
 SEED_HARD_KILL_SECONDS (optional) is the hard bound: SIGALRM ends the process
 outright once it is spent, wherever it is stuck. The production image is
 distroless (no coreutils `timeout`), so the bound lives here.
@@ -34,6 +36,7 @@ import signal
 import sys
 import time
 from datetime import datetime
+from typing import Any
 
 import httpx
 import psycopg
@@ -157,48 +160,66 @@ def _clean_annotation(text: str) -> str | None:
 # ── Seeding State ────────────────────────────────────────────────────────────
 
 
-async def _get_last_seeded_at(conn, user_id: str = "jalsarraf") -> datetime | None:
-    """Get the timestamp of the last seeded exchange for a user."""
-    key = f"last_seeded_at:{user_id}"
-    # Try user-scoped key first, fall back to legacy key
-    row = await (
-        await conn.execute(
-            "SELECT value FROM companion_relationship WHERE key = %s", (key,)
-        )
-    ).fetchone()
-    if not row:
-        # Legacy fallback for jalsarraf
-        row = await (
-            await conn.execute(
-                "SELECT value FROM companion_relationship WHERE key = 'last_seeded_at'"
-            )
-        ).fetchone()
-    if row and row[0]:
-        val = row[0]
-        # value is JSONB, so psycopg hands back the bare ISO string already
-        # decoded. A legacy TEXT-encoded value still arrives as '"<iso>"' and
-        # needs one json.loads; a bare ISO string is not JSON and is kept as-is.
-        if isinstance(val, str):
-            try:
-                val = json.loads(val)
-            except ValueError:
-                pass
+def _decode_json_text(val: Any) -> Any:
+    """companion_relationship.value is JSONB: psycopg hands back decoded
+    values, while a legacy TEXT-encoded value still arrives as '"<iso>"'."""
+    if isinstance(val, str):
         try:
-            return datetime.fromisoformat(val)
-        except (ValueError, TypeError):
-            pass
-    return None
+            return json.loads(val)
+        except ValueError:
+            return val
+    return val
 
 
-async def _set_last_seeded_at(conn, ts: datetime, user_id: str = "jalsarraf") -> None:
-    """Record the timestamp of the most recent seeded exchange for a user."""
-    key = f"last_seeded_at:{user_id}"
-    await conn.execute(
+async def _relationship_value(conn, key: str) -> Any:
+    row = await (
+        await conn.execute("SELECT value FROM companion_relationship WHERE key = %s", (key,))
+    ).fetchone()
+    return _decode_json_text(row[0]) if row and row[0] else None
+
+
+async def _get_watermark(conn, user_id: str = "jalsarraf") -> tuple[datetime, str | None] | None:
+    """The (created_at, message id) the last run stopped after, or None.
+
+    ``last_seeded_at:<user>`` keeps the bare ISO timestamp older seeders read;
+    ``last_seeded_id:<user>`` adds the message id, used only when its
+    timestamp still matches (an older seeder may have moved the first key).
+    The legacy unscoped key is the jalsarraf fallback.
+    """
+    stamp = await _relationship_value(conn, f"last_seeded_at:{user_id}")
+    if stamp is None:
+        stamp = await _relationship_value(conn, "last_seeded_at")
+    try:
+        ts = datetime.fromisoformat(stamp)
+    except (ValueError, TypeError):
+        return None
+    marker = await _relationship_value(conn, f"last_seeded_id:{user_id}")
+    if isinstance(marker, dict) and marker.get("created_at") == ts.isoformat():
+        msg_id = marker.get("id")
+        if isinstance(msg_id, str) and msg_id:
+            return ts, msg_id
+    return ts, None
+
+
+async def _get_last_seeded_at(conn, user_id: str = "jalsarraf") -> datetime | None:
+    """The watermark's timestamp alone."""
+    mark = await _get_watermark(conn, user_id)
+    return mark[0] if mark else None
+
+
+async def _set_watermark(
+    conn, ts: datetime, msg_id: str, user_id: str = "jalsarraf"
+) -> None:
+    """Record the last fully processed message, both keys in one commit."""
+    upsert = (
         "INSERT INTO companion_relationship (key, value, updated_at) "
         "VALUES (%s, %s, NOW()) "
-        "ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = NOW()",
-        (key, json.dumps(ts.isoformat()), json.dumps(ts.isoformat())),
+        "ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = NOW()"
     )
+    stamp = json.dumps(ts.isoformat())
+    marker = json.dumps({"created_at": ts.isoformat(), "id": msg_id})
+    await conn.execute(upsert, (f"last_seeded_at:{user_id}", stamp, stamp))
+    await conn.execute(upsert, (f"last_seeded_id:{user_id}", marker, marker))
     await conn.commit()
 
 
@@ -251,6 +272,16 @@ def _past_deadline(deadline: float | None) -> bool:
     return deadline is not None and time.monotonic() >= deadline
 
 
+def _phase_cutoffs(deadline: float | None) -> tuple[float | None, float | None]:
+    """Monotonic cutoffs for the selection (30%) and annotation (60%) phases
+    of the budget remaining until ``deadline``; (None, None) without one."""
+    if deadline is None:
+        return None, None
+    now = time.monotonic()
+    budget = max(0.0, deadline - now)
+    return now + 0.3 * budget, now + 0.6 * budget
+
+
 def _max_exchanges_from_env() -> int:
     """Per-run exchange bound from SEED_MAX_EXCHANGES (default 40)."""
     raw = os.environ.get("SEED_MAX_EXCHANGES", "").strip()
@@ -264,23 +295,46 @@ def _max_exchanges_from_env() -> int:
     return value if value > 0 else DEFAULT_MAX_EXCHANGES
 
 
-def _bounded_prefix(stamps: list[datetime | None], limit: int) -> int:
-    """How many of the oldest exchanges this run takes: ``limit``, extended
-    over exchanges that share the last one's timestamp, because the next
-    run's query is ``created_at > watermark`` and would skip a tie."""
-    if len(stamps) <= limit:
-        return len(stamps)
-    end = limit
-    while end < len(stamps) and stamps[end] is not None and stamps[end] == stamps[end - 1]:
-        end += 1
-    return end
+def _pair_exchanges(rows: list[tuple]) -> list[dict]:
+    """Pair (id, role, content, created_at) rows, in (created_at, id) order,
+    into user->assistant exchanges. Each exchange's ``end`` is its assistant
+    row's (created_at, id): every row up to it is accounted for once the
+    exchange is handled, so a watermark there never splits a pair."""
+    exchanges = []
+    i = 0
+    while i < len(rows) - 1:
+        if rows[i][1] == "user" and rows[i + 1][1] == "assistant":
+            ts = rows[i][3]
+            exchanges.append(
+                {
+                    "user": rows[i][2][:500],
+                    "assistant": rows[i + 1][2][:500],
+                    "created_at": ts.isoformat() if ts else "",
+                    "end": (rows[i + 1][3], str(rows[i + 1][0])),
+                }
+            )
+            i += 2
+        else:
+            i += 1
+    return exchanges
+
+
+def _handled_prefix(
+    count: int, selected_ok: set[int], chosen: set[int], finished: set[int]
+) -> int:
+    """How many leading exchanges are fully handled: their selection batch
+    succeeded, and each one chosen was saved or confirmed as a duplicate."""
+    n = 0
+    while n < count and n in selected_ok and (n not in chosen or n in finished):
+        n += 1
+    return n
 
 
 def _arm_hard_kill() -> int | None:
     """Arm SIGALRM from SEED_HARD_KILL_SECONDS; returns the seconds armed.
 
     SIGALRM's default action terminates the process even inside a blocking
-    call, and last_seeded_at only moves after a completed run, so a killed
+    call, and the watermark only moves over finished exchanges, so a killed
     run's range is retried later. Python installs no handler for SIGALRM.
     """
     raw = os.environ.get("SEED_HARD_KILL_SECONDS", "").strip()
@@ -401,9 +455,16 @@ async def main() -> int:
         logger.info("Deadline: SEED_DEADLINE_SECONDS=%s", os.environ["SEED_DEADLINE_SECONDS"])
     pipeline_failures: list[str] = []
 
-    def _deadline_hit(stage: str) -> bool:
-        """True once the soft deadline has passed; records it exactly once."""
-        if not _past_deadline(deadline):
+    # Phase budgets inside the soft deadline: selection stops at 30% of it and
+    # annotation at 60%, leaving the rest to render the leading annotated
+    # exchanges in order. Without them a slow annotation pass could spend the
+    # whole budget, save nothing, and leave the watermark where it was.
+    selection_cutoff, annotation_cutoff = _phase_cutoffs(deadline)
+
+    def _deadline_hit(stage: str, cutoff: float | None = deadline) -> bool:
+        """True once ``cutoff`` (default: the soft deadline) has passed;
+        records a deadline failure exactly once."""
+        if not _past_deadline(cutoff):
             return False
         if "deadline" not in pipeline_failures:
             logger.error("Deadline reached during %s; stopping this run", stage)
@@ -412,55 +473,55 @@ async def main() -> int:
 
     conn = await psycopg.AsyncConnection.connect(DATABASE_URL)
 
-    # Get last seeded timestamp for incremental processing
-    last_seeded = await _get_last_seeded_at(conn, target_user)
-    if last_seeded:
-        logger.info("Last seeded at: %s — processing only newer exchanges", last_seeded)
+    # Continue exactly after the last fully processed message.
+    mark = await _get_watermark(conn, target_user)
+    params: tuple[Any, ...]
+    if mark and mark[1]:
+        logger.info("Last seeded at: %s (%s); processing what follows", mark[0], mark[1])
+        where_clause = "WHERE user_id = %s AND (created_at, id) > (%s, %s::uuid)"
+        params = (target_user, mark[0], mark[1])
+    elif mark:
+        logger.info("Last seeded at: %s; processing only newer messages", mark[0])
         where_clause = "WHERE user_id = %s AND created_at > %s"
-        params = (target_user, last_seeded)
+        params = (target_user, mark[0])
     else:
         logger.info("First run for %s — processing all exchanges", target_user)
         where_clause = "WHERE user_id = %s"
         params = (target_user,)
 
     cur = await conn.execute(
-        f"SELECT role, content, created_at FROM companion_messages "
-        f"{where_clause} ORDER BY created_at ASC",
+        f"SELECT id, role, content, created_at FROM companion_messages "
+        f"{where_clause} ORDER BY created_at ASC, id ASC",
         params,
     )
     rows = await cur.fetchall()
     logger.info("Found %d messages since last seed", len(rows))
 
-    # Pair into user→assistant exchanges
-    exchanges = []
-    stamps: list[datetime | None] = []
-    i = 0
-    while i < len(rows) - 1:
-        if rows[i][0] == "user" and rows[i + 1][0] == "assistant":
-            ts = rows[i][2]
-            exchanges.append(
-                {
-                    "user": rows[i][1][:500],
-                    "assistant": rows[i + 1][1][:500],
-                    "created_at": ts.isoformat() if ts else "",
-                }
-            )
-            stamps.append(ts)
-            i += 2
-        else:
-            i += 1
-
+    exchanges = _pair_exchanges(rows)
     logger.info("Grouped into %d exchanges", len(exchanges))
-    # Take a bounded prefix of the oldest exchanges; the watermark advances to
-    # the newest one in it, and the rest wait for the next run.
-    take = _bounded_prefix(stamps, _max_exchanges_from_env())
-    if take < len(exchanges):
-        logger.info(
-            "Processing the oldest %d of %d exchanges this run", take, len(exchanges)
-        )
-        exchanges = exchanges[:take]
-        stamps = stamps[:take]
-    newest_ts = max((ts for ts in stamps if ts), default=None)
+    # A bounded prefix of the oldest exchanges; the rest wait for a later run.
+    limit = _max_exchanges_from_env()
+    if len(exchanges) > limit:
+        logger.info("Processing the oldest %d of %d exchanges this run", limit, len(exchanges))
+        exchanges = exchanges[:limit]
+
+    # Progress, by exchange index: which selection batches succeeded, which
+    # exchanges the selector chose, and which of those reached a durable save
+    # (or were confirmed duplicates). The watermark moves over the handled
+    # leading prefix at every exit, whatever stopped the run.
+    selected_ok: set[int] = set()
+    chosen: set[int] = set()
+    finished: set[int] = set()
+
+    async def _advance() -> None:
+        n = _handled_prefix(len(exchanges), selected_ok, chosen, finished)
+        if n == 0:
+            logger.info("No exchange fully handled; the watermark stays")
+            return
+        ts, msg_id = exchanges[n - 1]["end"]
+        await _set_watermark(conn, ts, msg_id, target_user)
+        logger.info("Watermark advanced over %d/%d exchanges to %s", n, len(exchanges), ts)
+
     if not exchanges:
         logger.info("No new exchanges to process")
         await conn.close()
@@ -484,13 +545,23 @@ async def main() -> int:
 
     # ── PASS 1: Selection ────────────────────────────────────────────────
     logger.info("=== PASS 1: Selection (%s) ===", SELECTOR_MODEL)
-    selected = []
+    selected: list[dict] = []
     failed_batches = []
     unresolved_selector_batches: list[int] = []
 
+    def _record_batch(batch_start: int, batch: list[dict], picks: list[dict]) -> None:
+        """A batch answered: its exchanges are selected-over, and each pick is
+        kept once (a selector repeating an index must not render it twice)."""
+        selected_ok.update(range(batch_start, batch_start + len(batch)))
+        for pick in picks:
+            idx = pick["global_index"]
+            if idx not in chosen:
+                chosen.add(idx)
+                selected.append(pick)
+
     async with httpx.AsyncClient(timeout=60.0) as client:
         for batch_start in range(0, len(exchanges), BATCH_SIZE):
-            if _deadline_hit("selection"):
+            if _deadline_hit("selection", selection_cutoff):
                 break
             batch = exchanges[batch_start : batch_start + BATCH_SIZE]
             logger.info(
@@ -501,7 +572,7 @@ async def main() -> int:
             )
             try:
                 batch_selected = await _select_batch(client, batch, batch_start)
-                selected.extend(batch_selected)
+                _record_batch(batch_start, batch, batch_selected)
                 for s in batch_selected:
                     logger.info(
                         "  Selected exchange %d (%s)",
@@ -518,11 +589,11 @@ async def main() -> int:
         logger.info("Retrying %d failed batches...", len(failed_batches))
         async with httpx.AsyncClient(timeout=180.0) as client:
             for batch_start, batch in failed_batches:
-                if _deadline_hit("selection retry"):
+                if _deadline_hit("selection retry", selection_cutoff):
                     break
                 try:
                     batch_selected = await _select_batch(client, batch, batch_start)
-                    selected.extend(batch_selected)
+                    _record_batch(batch_start, batch, batch_selected)
                     for s in batch_selected:
                         logger.info(
                             "  RETRY: Selected exchange %d (%s)",
@@ -549,23 +620,18 @@ async def main() -> int:
 
     if not selected:
         if pipeline_failures:
-            logger.error(
-                "Seeding incomplete (%s); last_seeded_at remains unchanged",
-                ", ".join(pipeline_failures),
-            )
-            await conn.close()
-            return 1
-        logger.info("No memories selected; selection completed successfully")
-        if newest_ts:
-            await _set_last_seeded_at(conn, newest_ts, target_user)
+            logger.error("Seeding incomplete (%s)", ", ".join(pipeline_failures))
+        else:
+            logger.info("No memories selected; selection completed successfully")
+        await _advance()
         await conn.close()
-        return 0
+        return 1 if pipeline_failures else 0
 
     # ── PASS 2: Annotation ───────────────────────────────────────────────
     logger.info("=== PASS 2: Annotation (%s) ===", ANNOTATOR_MODEL)
     async with httpx.AsyncClient(timeout=120.0) as client:
         for mem in selected:
-            if _deadline_hit("annotation"):
+            if _deadline_hit("annotation", annotation_cutoff):
                 break
             ex = mem["exchange"]
             category = mem.get("category", "Precious Memories")
@@ -576,6 +642,7 @@ async def main() -> int:
                 if await _is_duplicate(conn, target_user, mem["conversation_id"]):
                     logger.info("  Skipping duplicate: %s", ex["user"][:50])
                     mem["skip"] = True
+                    finished.add(mem["global_index"])
                     continue
             except Exception:
                 pass  # If dedup check fails, proceed anyway
@@ -621,12 +688,8 @@ async def main() -> int:
 
     if not selected:
         if pipeline_failures:
-            logger.error(
-                "Seeding incomplete (%s); last_seeded_at remains unchanged",
-                ", ".join(pipeline_failures),
-            )
-        elif newest_ts:
-            await _set_last_seeded_at(conn, newest_ts, target_user)
+            logger.error("Seeding incomplete (%s)", ", ".join(pipeline_failures))
+        await _advance()
         await conn.close()
         return 1 if pipeline_failures else 0
 
@@ -705,6 +768,7 @@ async def main() -> int:
                 )
                 if memory_id:
                     saved_count += 1
+                    finished.add(mem["global_index"])
                     logger.info("  Saved: %s (%s)", memory_id[:12], mem.get("category"))
 
                     # Copy to shared_linux if accessible
@@ -735,17 +799,12 @@ async def main() -> int:
                 f"image/save exchange {mem.get('global_index', '?')}"
             )
 
-    # Advance only after every selector batch and every selected memory reached
-    # a durable save (or was confirmed as an existing duplicate). A partial
-    # outage must leave the range eligible for a later retry.
-    if not pipeline_failures and newest_ts:
-        await _set_last_seeded_at(conn, newest_ts, target_user)
-        logger.info("Updated last_seeded_at to %s", newest_ts)
-    elif pipeline_failures:
-        logger.error(
-            "Seeding incomplete (%s); last_seeded_at remains unchanged",
-            ", ".join(pipeline_failures),
-        )
+    # The watermark moves only over exchanges whose selection batch answered
+    # and whose chosen memory reached a durable save (or was a confirmed
+    # duplicate); anything after the first unfinished one is retried later.
+    if pipeline_failures:
+        logger.error("Seeding incomplete (%s)", ", ".join(pipeline_failures))
+    await _advance()
 
     await close_pool()
     await conn.close()

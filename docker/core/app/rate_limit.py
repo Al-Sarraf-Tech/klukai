@@ -1,7 +1,9 @@
 """Redis-backed per-user per-endpoint rate limiting.
 
-Each (user_id, bucket) combo gets a token counter in Redis with a sliding
-window (INCR + EXPIRE on first hit). Limits are defined per-bucket.
+Each (user_id, bucket) combo gets a token counter in Redis with a fixed
+window: INCR + EXPIRE NX in one MULTI/EXEC, so a counter is always armed and
+a window's count and identity are read together. Limits are defined
+per-bucket.
 
 Fail-open: if Redis is unavailable we allow the request and log a warning.
 Failing closed on rate limiter would be worse than letting the app work
@@ -131,35 +133,31 @@ async def check_and_consume(user_id: str, bucket: str) -> tuple[int, int]:
 async def consume(user_id: str, bucket: str) -> tuple[int, int, Consumption | None]:
     """check_and_consume plus a receipt for refund().
 
-    The receipt is None when no token was verifiably taken: the limiter
-    failed open, or the window's expiry could not be read.
+    The receipt is None when no token was verifiably taken (the limiter
+    failed open).
     """
     limit = LIMITS.get(bucket, LIMITS["default"])
     key = f"{limit.key_prefix}:{user_id}:{bucket}"
-    receipt: Consumption | None = None
     try:
         r = await _get_redis()
         async with get_breaker("redis").protect():
-            count = await r.incr(key)
-            if count == 1:
-                await r.expire(key, limit.window_seconds)
-            ttl = await r.ttl(key)
-            if ttl < 0:
-                # -1: the key has no TTL; the EXPIRE after the first INCR never
-                # landed, so the counter would outlive its window and the
-                # bucket would stay locked forever (a 429 whose retry_after
-                # never clears). Re-arm it and judge this request against a
-                # full window. (-2: the key vanished in between; EXPIRE is a
-                # no-op.)
-                await r.expire(key, limit.window_seconds)
-                ttl = limit.window_seconds
-            try:
-                # redis-py types its asyncio commands as the sync return value.
-                expires_at = int(await cast(Awaitable[Any], r.expiretime(key)))
-            except Exception:
-                expires_at = 0  # admission stands; this token just can't be refunded
-            if expires_at > 0:
-                receipt = Consumption(key, expires_at)
+            # One MULTI/EXEC: the count, the window's expiry and its identity
+            # come from the same window. Run as separate commands, the key
+            # could expire between INCR and EXPIRE and this request would be
+            # handed the next window's identity, letting its refund spend a
+            # token another request took. EXPIRE NX arms a fresh window and
+            # re-arms a counter whose EXPIRE was lost, and never extends a
+            # running window.
+            async with r.pipeline(transaction=True) as pipe:
+                pipe.incr(key)
+                pipe.expire(key, limit.window_seconds, nx=True)
+                pipe.ttl(key)
+                pipe.expiretime(key)
+                count, _armed, ttl, expires_at = await pipe.execute()
+        count, ttl, expires_at = int(count), int(ttl), int(expires_at)
+        receipt = Consumption(key, expires_at) if expires_at > 0 else None
+        if ttl < 0:
+            ttl = limit.window_seconds
         if count > limit.requests:
             raise RateLimitExceeded(bucket=bucket, retry_after=max(ttl, 1))
         return (limit.requests - count, max(ttl, 0), receipt)

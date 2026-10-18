@@ -63,6 +63,8 @@ class MissionTimer:
         self.active_events: list[str] = []
         self.active: bool = False
         self.max_duration_minutes: int | None = None
+        # The session's mission_started_at for this mission: its identity.
+        self.session_stamp: str | None = None
         self._task: asyncio.Task[Any] | None = None
         self._callback: Callable[[str], Awaitable[object]] | None = None
         self._on_expire: Callable[[], object] | None = None

@@ -109,6 +109,7 @@ async def _apply_extracted_state(
                 interval_minutes=30,
                 user_id=user_id,
                 max_duration_minutes=AUTO_MISSION_MAX_MINUTES,
+                session_stamp=session.mission_started_at,
             )
         await ws.send_mood(user_id, mood)
 
