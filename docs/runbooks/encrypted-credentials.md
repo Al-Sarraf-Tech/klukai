@@ -29,11 +29,9 @@ secrets and must not be used for companion-core. The release deployer and
 `scripts/disaster-recovery.sh` use the same path. `klukai_compose.py config`
 prints resolved values, secrets included, so do not run it into logs.
 
-Not in the store yet: the two internal bearer tokens in `.runtime-secrets/`
-(`metrics-token` for the core metrics scrape, `alert-bridge-token` for the
-Alertmanager bridge) are 0600 files mounted read-only into the obs containers,
-because those containers restart on boot before any user session could decrypt
-them. They gate only private endpoints on the `klukai-obs` network.
+The two internal bearer tokens (`metrics-token` for the core metrics scrape,
+`alert-bridge-token` for the Alertmanager bridge) are in the same store since
+2026-10-18; see "Runtime tokens" below.
 
 ### Commands (`ops/amarillo/scripts/klukai_secrets.py`)
 
@@ -50,6 +48,73 @@ python3 $S recover core-override                     # rebuild the primary from 
 After a rotation or rollback, recreate the consumer with
 `klukai_compose.py up -d --no-build --no-deps <service>` (core: use the release
 deployer) and read back health. Credential rollback never restores a database.
+
+### Runtime tokens (since 2026-10-18, SEC-3)
+
+`metrics-token.cred` and `alert-bridge-token.cred` sit in the same store, with
+the same `.prev` and `recovery/` copies, and `klukai_secrets.py check` covers
+them. Docker restarts companion-core, Prometheus and Alertmanager at boot,
+before any user session, so these two cannot be decrypted per command. The
+**system** unit `ops/amarillo/systemd/klukai-runtime-secrets.service` does it once
+per boot:
+
+- It is ordered `Before=docker.service` (ordering only; Docker and the other
+  stacks still start if it fails) and `After=tpm2.target`, and it requires the
+  home mount.
+- It runs as `jalsarraf`, never as root, because the credentials are
+  user-scoped. A system unit's `LoadCredentialEncrypted=` cannot decrypt
+  user-scoped credentials, so `klukai_runtime_tokens.py install` calls
+  `systemd-creds --user decrypt` through the system varlink service. It runs
+  hardened: no capabilities, `ProtectSystem=strict`, read-only home,
+  `AF_UNIX` only.
+- systemd creates `/run/klukai-secrets/{metrics,alert-bridge}/` (tmpfs, 0700,
+  owned by the user; a directory Docker created first as root is re-owned).
+  Each token is written 0400 into its own directory:
+
+| File | Mounted into | Reader |
+| --- | --- | --- |
+| `/run/klukai-secrets/metrics/metrics-token` | core `/run/klukai-secrets`, Prometheus `/etc/prometheus/secrets` | per request / per scrape |
+| `/run/klukai-secrets/alert-bridge/alert-bridge-token` | Alertmanager `/etc/alertmanager/secrets`; the bridge user unit reads it directly | at start |
+
+- Every consumer mounts a directory, never the file, so a rotated token is
+  visible without recreating. No consumer sees the other token.
+- Both credentials are decrypted and validated (`[A-Za-z0-9_-]{32,128}`)
+  before either file is written.
+- Stopping the unit deletes the files and keeps the directories
+  (`RuntimeDirectoryPreserve=yes`), so running containers' bind mounts stay
+  valid when it starts again.
+
+Fail closed:
+
+- Prometheus and Alertmanager start through a guard that exits 78 when their
+  token is missing or empty. `restart: unless-stopped` retries until the unit
+  has run.
+- Core still starts without the token and answers `/internal/metrics` with
+  401, because chat must not depend on monitoring.
+- The bridge exits on a missing token, and `Restart=on-failure` retries.
+
+Install or update (root via sudo; back up `/etc/systemd/system` first):
+
+```sh
+sudo install -m 0644 ops/amarillo/systemd/klukai-runtime-secrets.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now klukai-runtime-secrets.service
+python3 ops/amarillo/scripts/klukai_runtime_tokens.py check   # present, 0400, equal to the store
+```
+
+The obs project runs through `klukai_compose.py --obs ...`. It uses no store
+secrets and an empty env file, so a stray `.env` cannot move the mounts.
+
+Rotate a token:
+
+1. Write the new value to a private file in `$XDG_RUNTIME_DIR` and run
+   `klukai_secrets.py rotate <name> FILE --remove-source`.
+2. Run `sudo systemctl restart klukai-runtime-secrets.service`.
+3. For the alert token, also restart Alertmanager
+   (`docker restart klukai-alertmanager`) and
+   `systemctl --user restart klukai-alert-bridge`.
+
+`klukai_secrets.py rollback <name>` followed by the same restarts undoes a
+rotation.
 
 ### Migration record (2026-10-17)
 

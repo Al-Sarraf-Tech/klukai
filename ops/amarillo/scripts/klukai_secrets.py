@@ -15,6 +15,7 @@ is no fallback to a plaintext file.
     klukai-secrets rollback core-override                     # restore the previous version
     klukai-secrets recover core-override                      # rebuild from the host-key copy
     klukai-secrets check                                      # permissions + every cred decrypts
+    klukai-secrets migrate metrics-token .runtime-secrets/metrics-token --remove-source
 
 Values are never printed. Comparisons use SHA-256 in memory only.
 """
@@ -36,7 +37,13 @@ import time
 
 STORE = Path.home() / ".config/klukai/credentials"
 STALE_AFTER = 3600  # seconds; a live command never holds plaintext this long
-NAMES = ("compose-env", "core-override")
+# Decrypted per Compose command by klukai_compose.py.
+COMPOSE_NAMES = ("compose-env", "core-override")
+# Decrypted once per boot into /run/klukai-secrets by the system unit
+# klukai-runtime-secrets.service (klukai_runtime_tokens.py), before Docker
+# restarts the containers that read them.
+TOKEN_NAMES = ("metrics-token", "alert-bridge-token")
+NAMES = COMPOSE_NAMES + TOKEN_NAMES
 SYSTEMD_CREDS = "systemd-creds"
 
 

@@ -501,7 +501,7 @@ def production_target() -> Target:
     import klukai_secrets
 
     def compose(args: list[str]) -> None:
-        with klukai_secrets.materialized(klukai_secrets.NAMES) as paths:
+        with klukai_secrets.materialized(klukai_secrets.COMPOSE_NAMES) as paths:
             run(klukai_compose.argv(paths, args), cwd=REPO, timeout=900)
 
     return Target(

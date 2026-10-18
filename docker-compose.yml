@@ -108,9 +108,10 @@ services:
       - ./config:/config:ro
       - ${KLUKAI_MCP_SECRETS_DIR:-./.mcp-secrets}:/run/klukai-mcp:ro
       - ${KLUKAI_AGY_RUNTIME_DIR:-./.agy-runtime}:/run/klukai-agy:ro
-      # Only the dedicated metrics token is materialized here. The encrypted
-      # credential payload and account/API credentials are never mounted.
-      - ${KLUKAI_RUNTIME_SECRETS_DIR:-./.runtime-secrets}:/run/klukai-secrets:ro
+      # Only the dedicated metrics token's directory: a tmpfs copy written at boot
+      # from the encrypted store by klukai-runtime-secrets.service (system unit).
+      # Core starts without it; /internal/metrics then answers 401.
+      - ${KLUKAI_RUNTIME_SECRETS_DIR:-/run/klukai-secrets/metrics}:/run/klukai-secrets:ro
       - ./web-build:/app/static:ro
       - companion-images:/images
       - companion-audio:/audio

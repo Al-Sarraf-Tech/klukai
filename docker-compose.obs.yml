@@ -4,9 +4,11 @@
 # All five containers run on amarillo, bound to loopback (Tailscale
 # reaches them by source-routing; Cloudflare does not).
 #
-# Bring up:    docker compose -f docker-compose.obs.yml up -d
-# Bring down:  docker compose -f docker-compose.obs.yml down
-# Logs:        docker compose -f docker-compose.obs.yml logs -f
+# On amarillo: python3 ops/amarillo/scripts/klukai_compose.py --obs <args>
+#   (= docker compose -p klukai --env-file /dev/null -f docker-compose.obs.yml)
+# Bring up:    ... --obs up -d
+# Logs:        ... --obs logs -f
+# Prometheus and Alertmanager need klukai-runtime-secrets.service (their tokens).
 #
 # After bring-up, companion-core OTel exporters point at alloy:4317.
 # That wiring is Phase 3.2 work (companion-core needs OTel SDK init).
@@ -56,6 +58,13 @@ services:
     image: prom/alertmanager:v0.28.1@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
     container_name: klukai-alertmanager
     user: "1000:1000"
+    # No token, no start (exit 78): never post to the bridge with an empty one.
+    # restart: unless-stopped retries until klukai-runtime-secrets.service has run.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - '[ -s /etc/alertmanager/secrets/alert-bridge-token ] && [ -r /etc/alertmanager/secrets/alert-bridge-token ] || { echo "klukai: alert-bridge token missing (klukai-runtime-secrets.service)" >&2; exit 78; }; exec /bin/alertmanager "$$@"'
+      - alertmanager
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
@@ -65,8 +74,9 @@ services:
       - "127.0.0.1:19093:9093"   # +10000 to avoid host conflicts
     volumes:
       - ./obs/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      # Private bearer token shared with the host bridge (0600, outside Git).
-      - ${KLUKAI_RUNTIME_SECRETS_DIR:-./.runtime-secrets}/alert-bridge-token:/etc/alertmanager/secrets/alert-bridge-token:ro
+      # Bearer token shared with the host bridge: its own tmpfs directory, written
+      # at boot from the encrypted store. A directory mount, so rotation is visible.
+      - ${KLUKAI_ALERT_BRIDGE_SECRETS_DIR:-/run/klukai-secrets/alert-bridge}:/etc/alertmanager/secrets:ro
       - /mnt/nvmeINT/obs/klukai/alertmanager:/alertmanager
     restart: unless-stopped
     healthcheck:
@@ -79,6 +89,12 @@ services:
     image: prom/prometheus:v3.0.1
     container_name: klukai-prometheus
     user: "1000:1000"
+    # No token, no start (exit 78): never scrape core with an empty token.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - '[ -s /etc/prometheus/secrets/metrics-token ] && [ -r /etc/prometheus/secrets/metrics-token ] || { echo "klukai: metrics token missing (klukai-runtime-secrets.service)" >&2; exit 78; }; exec /bin/prometheus "$$@"'
+      - prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -94,8 +110,8 @@ services:
     volumes:
       - ./obs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./obs/prometheus/klukai-slo.rules.yml:/etc/prometheus/rules/klukai-slo.rules.yml:ro
-      # Same private scrape token core reads (0600, outside Git; see obs/README.md).
-      - ${KLUKAI_RUNTIME_SECRETS_DIR:-./.runtime-secrets}/metrics-token:/etc/prometheus/secrets/metrics-token:ro
+      # The same directory core mounts: only the metrics token (see obs/README.md).
+      - ${KLUKAI_RUNTIME_SECRETS_DIR:-/run/klukai-secrets/metrics}:/etc/prometheus/secrets:ro
       - /mnt/nvmeINT/obs/klukai/prometheus:/prometheus
     restart: unless-stopped
     healthcheck:

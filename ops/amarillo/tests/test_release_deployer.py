@@ -80,6 +80,10 @@ class SecretStoreTests(unittest.TestCase):
         self.assertTrue((self.store / "compose-env.cred.prev").is_file())
         mode = (self.store / "recovery/compose-env.cred").stat().st_mode & 0o777
         self.assertEqual(mode, 0o600)
+        with self.assertRaises(klukai_secrets.SecretError):
+            klukai_secrets.check(self.store)  # the runtime tokens are not stored yet
+        for name in klukai_secrets.TOKEN_NAMES:
+            klukai_secrets.encrypt(name, b"t" * 64, self.store)
         self.assertTrue(klukai_secrets.check(self.store)["plaintext_absent"])
 
     def test_rollback_and_recovery_restore_the_previous_value(self) -> None:
@@ -109,11 +113,14 @@ class SecretStoreTests(unittest.TestCase):
     def test_plaintext_lives_only_in_runtime_dir_for_one_command(self) -> None:
         klukai_secrets.encrypt("compose-env", b"A=1\n", self.store)
         klukai_secrets.encrypt("core-override", b"{}", self.store)
-        with klukai_secrets.materialized(klukai_secrets.NAMES, self.store) as paths:
+        with klukai_secrets.materialized(klukai_secrets.COMPOSE_NAMES, self.store) as paths:
             directory = paths["compose-env"].parent
             self.assertTrue(directory.is_relative_to(self.runtime))
             self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
             self.assertEqual(paths["compose-env"].read_bytes(), b"A=1\n")
+            # Compose never sees the runtime tokens; those live only in /run.
+            self.assertEqual(sorted(paths), ["compose-env", "core-override"])
+            self.assertEqual(sorted(p.name for p in directory.iterdir()), sorted(paths))
             argv = klukai_compose.argv(paths, ["ps"], pin=Path("/nonexistent"))
             self.assertEqual(
                 argv[:4], ["docker", "compose", "--env-file", str(paths["compose-env"])]
@@ -134,6 +141,9 @@ class SecretStoreTests(unittest.TestCase):
     def test_check_refuses_leftover_plaintext(self) -> None:
         klukai_secrets.encrypt("compose-env", b"A=1\n", self.store)
         klukai_secrets.encrypt("core-override", b"{}", self.store)
+        for name in klukai_secrets.TOKEN_NAMES:
+            klukai_secrets.encrypt(name, b"t" * 64, self.store)
+        self.assertTrue(klukai_secrets.check(self.store)["plaintext_absent"])
         leftover = Path(self.tmp.name) / ".env"
         leftover.write_text("A=1\n")
         with self.assertRaises(klukai_secrets.SecretError):

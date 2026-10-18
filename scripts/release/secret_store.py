@@ -42,6 +42,9 @@ RESERVED = frozenset(
 )
 
 
+TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{32,128}")
+
+
 class CredentialError(ValueError):
     """A safe, non-secret-bearing validation failure."""
 
@@ -74,7 +77,7 @@ def validate(data: object) -> Payload:
         if not isinstance(value, str) or "\0" in value:
             raise CredentialError("invalid environment value")
     token = data["metrics_token"]
-    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
+    if not isinstance(token, str) or not TOKEN_PATTERN.fullmatch(token):
         raise CredentialError("invalid metrics credential")
     return {
         "schema_version": 1,
@@ -117,7 +120,19 @@ def merge_environment(payload: Payload, base: Mapping[str, str]) -> dict[str, st
 
 
 def install_metrics_token(payload: Payload, runtime: Path) -> Path:
-    token = validate(payload)["metrics_token"]
+    return install_token(validate(payload)["metrics_token"], runtime, "metrics-token")
+
+
+def install_token(token: str, runtime: Path, name: str) -> Path:
+    """Atomically write one bearer token, mode 0400, into a private directory.
+
+    The directory is kept and only the file is replaced, so a container that
+    bind-mounts the directory sees a rotated token without being recreated.
+    """
+    if not TOKEN_PATTERN.fullmatch(token):
+        raise CredentialError(f"invalid {name} credential")
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+        raise CredentialError("invalid token file name")
     try:
         info = runtime.lstat()
         if (
@@ -126,7 +141,7 @@ def install_metrics_token(payload: Payload, runtime: Path) -> Path:
             or info.st_mode & 0o077
         ):
             raise CredentialError("runtime directory must be private and owned")
-        temporary = runtime / (".metrics-" + secrets.token_hex(12))
+        temporary = runtime / (f".{name}-" + secrets.token_hex(12))
         descriptor = os.open(
             temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
         )
@@ -136,12 +151,12 @@ def install_metrics_token(payload: Payload, runtime: Path) -> Path:
                 output.flush()
                 os.fsync(output.fileno())
                 os.fchmod(output.fileno(), 0o400)
-            target = runtime / "metrics-token"
+            target = runtime / name
             os.replace(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
     except OSError:
-        raise CredentialError("metrics credential cannot be materialized") from None
+        raise CredentialError(f"{name} credential cannot be materialized") from None
     return target
 
 
