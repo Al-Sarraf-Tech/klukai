@@ -152,4 +152,5 @@ def test_fix_hint_names_only_major_issues(check):
     hint = check.fix_hint(issues)
     assert "extra arm" in hint and "text in corner" in hint and "teardrop" not in hint
     assert check.fix_hint([{"severity": "minor", "what": "small"}]) == ""
+    assert check.fix_hint([object(), {"severity": "major"}, {"severity": "major", "what": 5}]) == ""
     assert len(check.fix_hint([{"severity": "major", "what": "z" * 500}] * 3)) <= 600

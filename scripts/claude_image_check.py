@@ -171,7 +171,8 @@ def run(candidate: bytes, value: dict, references: dict, *, timeout: float) -> d
 
 def fix_hint(issues: list[dict]) -> str:
     """Major issues as a short, bounded correction for one re-render."""
-    major = [i["what"] for i in issues if i["severity"] == "major"][:3]
+    major = [i["what"] for i in issues
+             if isinstance(i, dict) and i.get("severity") == "major" and isinstance(i.get("what"), str)][:3]
     if not major:
         return ""
     return ("\n\nThe previous render was rejected by the checker. Avoid: "

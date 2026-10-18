@@ -295,12 +295,17 @@ class Worker:
         except Exception:
             verdict = {"verdict": "unchecked", "issues": []}
         issues = verdict.get("issues") if isinstance(verdict.get("issues"), list) else []
+        seconds = verdict.get("seconds", 0.0)
+        seconds = float(seconds) if type(seconds) in (int, float) else 0.0
+        try:
+            issues_text = json.dumps(issues)[:4096]
+        except (TypeError, ValueError):
+            issues_text = "[]"
         with self.db_lock:
             self.db.execute("INSERT OR REPLACE INTO checks VALUES (?, ?, ?, ?, ?)",
-                            (value["request_id"], index, verdict["verdict"], json.dumps(issues)[:4096],
-                             float(verdict.get("seconds", 0.0))))
+                            (value["request_id"], index, verdict["verdict"], issues_text, seconds))
             self.db.commit()
-        return verdict
+        return {"verdict": verdict["verdict"], "issues": issues}
 
     def recover(self, value):
         """Read one existing claim. Never claims, rotates, renders, or fails over."""

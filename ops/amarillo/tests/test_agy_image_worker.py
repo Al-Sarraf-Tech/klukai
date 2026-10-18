@@ -707,7 +707,8 @@ def test_no_redo_when_the_deadline_cannot_fit_another_render(worker, setup_files
 
 
 @pytest.mark.parametrize("outcome", [RuntimeError("claude unavailable"), {"verdict": "maybe"}, None,
-                                     {"verdict": "unchecked", "issues": []}])
+                                     {"verdict": "unchecked", "issues": []},
+                                     {"verdict": "unchecked", "issues": [object()], "seconds": "soon"}])
 def test_checker_failure_delivers_unchecked(worker, setup_files, outcome):
     with running(worker, setup_files, checker=scripted_checker(outcome)) as path:
         value = payload()
