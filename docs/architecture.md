@@ -1,6 +1,6 @@
 # Klukai Architecture
 
-> Companion PWA + FastAPI core on a two-host private mesh. Provider configuration below reflects the owner's October 14, 2026 deployment. Since October 17, 2026 production runs the exact CI-built core image of `b93172d` (see [Release and secrets](#release-and-secrets)); the S-tier status per criterion is in the [ledger](handoff/2026-10-16-s-tier-finish.md#s-tier-ledger-honest). Source and tests alone are not deployment evidence. Earlier refactor history is in `handoff/2026-10-14-elite-refactor-progress.md`. Per-decision history lives in `docs/adr/`.
+> Companion PWA + FastAPI core on a two-host private mesh. Provider configuration below reflects the owner's October 14, 2026 deployment. Since October 18, 2026 production runs the exact CI-built core image of `e37e22b` (see [Release and secrets](#release-and-secrets)); the S-tier status per criterion is in the [ledger](handoff/2026-10-16-s-tier-finish.md#s-tier-ledger-honest). Source and tests alone are not deployment evidence. Earlier refactor history is in `handoff/2026-10-14-elite-refactor-progress.md`. Per-decision history lives in `docs/adr/`.
 
 **Redaction:** mesh IPs, MagicDNS names, and secret values are omitted. Use host roles **core host** and **GPU host**.
 

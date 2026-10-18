@@ -11,9 +11,13 @@ Production Compose secrets are encrypted at rest and never kept in plaintext:
 
 Both live in `~/.config/klukai/credentials/` (directory 0700, files 0600, owner
 UID 1000) as `systemd-creds --user` credentials: host key plus TPM2, bound to
-this machine, this user and the embedded name `klukai-<name>`. Each has a
-`.cred.prev` rollback copy and a host-key-only copy under `recovery/` that
-survives a TPM reset on this host. Losing the host itself (disk and host key)
+this machine, this user and the embedded name `klukai-<name>`. The deployer
+requests `--with-key=host+tpm2` explicitly, so sealing fails rather than
+falling back to the host key alone if the TPM is missing (`auto` would fall
+back; credentials sealed before 2026-10-18 used `auto` on this TPM2-equipped,
+non-container host and take the explicit policy at their next rotation). Each
+has a `.cred.prev` rollback copy and a host-key-only copy under `recovery/`
+that survives a TPM reset on this host. Losing the host itself (disk and host key)
 needs the owner to re-enter the values; the files are not a portable backup.
 
 `ops/amarillo/scripts/klukai_compose.py` is the only supported way to run Compose

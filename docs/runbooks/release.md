@@ -9,7 +9,9 @@ The `image-scan` job (`.github/workflows/ci.yml`) on the heavy runner:
 
 - builds the image from the commit with digest-pinned bases, hash-locked
   dependencies and network-less build stages, then builds it a second time
-  with `--no-cache` and records layer-by-layer reproducibility;
+  with `--no-cache` and compares the two: layer digests may differ (they
+  include timestamps), but any difference in file content, mode, owner or link
+  fails the job, and the comparison is kept as evidence either way;
 - installs Trivy from its release tarball, checked against a pinned SHA-256;
 - blocks on HIGH/CRITICAL vulnerabilities and on secrets found in the image;
 - writes a CycloneDX SBOM and a licence inventory, and blocks unless the
@@ -32,8 +34,9 @@ to its GitHub log; bytes another job writes on the shared heavy guest are refuse
 chunks. libvirt caps an agent reply at 10 MiB and virsh's RPC string at 4 MiB,
 and exceeding the first disables the agent channel. It then verifies the manifest,
 every material digest, the licence verdict, the tar hash, and the loaded image's
-layers and revision label, and tags `klukai-core:ci-<sha7>`. Only after all of
-that passes does it write `provenance.json` (CI run, manifest digest, layers,
+layers, revision label and runtime configuration digest, and tags
+`klukai-core:ci-<sha7>`. Only after all of that passes does it write
+`provenance.json` (CI run, manifest digest, layers, configuration digest,
 materials, verification result) and sign it with the amarillo release key
 (`~/.config/klukai/release-signing/release_ed25519`, never leaves the host)
 using `ssh-keygen -Y sign -n klukai-release`. The public key is committed in
@@ -58,7 +61,14 @@ Staged preflight, any failure refuses before production changes:
 
 1. **Artifact:** the signature verifies against the committed signer, the
    provenance binds the manifest by digest, the materials and licence verdict
-   check out, and the local tag has exactly the manifest's layers and revision.
+   check out (including content-identical second build), and the image the
+   local tag resolves to has exactly the manifest's layers, revision and
+   runtime configuration digest. The configuration digest covers entrypoint,
+   command, environment, user, working directory, ports, volumes, labels, stop
+   signal, health check and platform, with unset keys dropped so the CI guest's
+   containerd store and amarillo's classic store agree. The deployer resolves
+   the tag once and from then on uses only that image ID, pinned as the
+   immutable tag `klukai-core:verified-<sha7>-<id12>`.
 2. **Source:** the main checkout is at the release commit and
    `docker-compose.yml` is unmodified.
 3. **Rollback safety:** a rollback restores only the image. Core applies
@@ -76,14 +86,17 @@ Staged preflight, any failure refuses before production changes:
 
 Rollout: the running image gets an immutable `klukai-core:rollback-<time>-<id>`
 tag, the non-secret image pin `~/.local/state/klukai/release/core-image.json`
-is switched, and only companion-core is recreated through `klukai_compose.py`
+is switched to the verified tag (inside the rollback-protected region), and only companion-core is recreated through `klukai_compose.py`
 (secrets from the encrypted store, so runtime settings are preserved). The
 candidate must run the verified image ID, become healthy and ready within
 180 s, then pass every check of a 180 s hold (healthy, ready, no restarts; the
 hold may not end on a failed check) and keep its 5xx share
-(`status_class="5xx"`) at or below 5%. With no traffic in the window the 5xx
-check is recorded as not evaluated. Any failure, and also a compose error,
-timeout, Ctrl-C or SIGTERM after the pin switch, makes the deployer pin the
+(`status_class="5xx"`) at or below 5%. The 5xx check must be evaluated:
+Prometheus must answer and be scraping core (`up{job="klukai-core"}` is 1),
+otherwise the candidate is rejected after three attempts. Only a confirmed
+absence of traffic in the window passes, recorded as not evaluated. Any
+failure, and also a compose error, timeout, Ctrl-C or SIGTERM from the pin
+switch on, makes the deployer pin the
 rollback tag, recreate core, wait for health and exit 2 (`rolled_back`) or
 loudly report `rollback_failed`. Data and volumes are untouched, so newer
 writes survive. After a successful deploy it keeps the newest 10 release dumps
