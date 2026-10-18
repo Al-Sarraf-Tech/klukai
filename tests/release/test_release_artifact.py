@@ -175,6 +175,25 @@ def test_runtime_config_digest_ignores_omitted_empty_keys_only():
     assert ra.config_digest(other_platform) != ra.config_digest(classic)
 
 
+def test_runtime_config_digest_keeps_ports_volumes_and_empty_labels():
+    # Codex re-review: Docker stores port and volume declarations as keys with
+    # {} values and labels may be empty strings; none of that may vanish.
+    classic = inspect_doc()
+    for change in (
+        {"Volumes": {"/app": {}}},
+        {"ExposedPorts": {"8300/tcp": {}, "9229/tcp": {}}},
+        {"ExposedPorts": {"8301/tcp": {}}},
+        {"ExposedPorts": None},
+        {"Labels": {ra.LABEL: REV, "debug": ""}},
+        {"Labels": {}},
+        {"Healthcheck": None},
+        {"Healthcheck": {"Test": ["NONE"]}},
+    ):
+        assert ra.config_digest(inspect_doc(**change)) != ra.config_digest(classic), (
+            change
+        )
+
+
 def test_identity_reports_the_config_digest():
     doc = inspect_doc()
     with mock.patch.object(ra, "_docker", return_value=json.dumps([doc])):

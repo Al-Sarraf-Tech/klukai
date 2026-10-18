@@ -67,35 +67,37 @@ def _revision(value: str) -> str:
     return value
 
 
-def _canonical(value: Any) -> Any:
-    """Drop unset values (None, empty, zero, false): the containerd store omits
-    keys the classic store prints, and both mean the same configuration."""
-    if isinstance(value, dict):
-        kept = ((k, _canonical(v)) for k, v in sorted(value.items()))
-        return {
-            k: v
-            for k, v in kept
-            if v not in (None, "", [], {})
-            and v is not False
-            and not (isinstance(v, (int, float)) and v == 0)
-        }
-    if isinstance(value, list):
-        return [_canonical(v) for v in value]
-    return value
+def _unset(value: Any) -> bool:
+    """None, empty, zero or false: the containerd store omits such keys where
+    the classic store prints them, and both mean the same configuration."""
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, (int, float)):
+        return value == 0
+    return value in (None, "", [], {})
 
 
 def runtime_config(info: dict[str, Any]) -> dict[str, Any]:
+    """Field-aware canonical form: only whole unset fields are dropped. Port and
+    volume declarations are keys whose values are always {}, so they become
+    sorted key lists; labels keep every key, empty values included."""
     config = info.get("Config") or {}
-    return _canonical(
-        {
-            **{key: config.get(key) for key in RUNTIME_KEYS},
-            "Platform": {
-                "Architecture": info.get("Architecture"),
-                "Os": info.get("Os"),
-                "Variant": info.get("Variant"),
-            },
-        }
-    )
+    doc: dict[str, Any] = {}
+    for key in RUNTIME_KEYS:
+        value = config.get(key)
+        if key in ("ExposedPorts", "Volumes"):
+            value = sorted(value or {})
+        elif key == "Labels":
+            value = dict(sorted((value or {}).items()))
+        elif key == "Healthcheck" and isinstance(value, dict):
+            # Zero durations and retries mean "default"; the test command stays.
+            value = {k: v for k, v in sorted(value.items()) if not _unset(v)}
+        if not _unset(value):
+            doc[key] = value
+    doc["Platform"] = {
+        key: info[key] for key in ("Architecture", "Os", "Variant") if info.get(key)
+    }
+    return doc
 
 
 def config_digest(info: dict[str, Any]) -> str:
