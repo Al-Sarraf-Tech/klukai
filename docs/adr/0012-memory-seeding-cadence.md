@@ -40,6 +40,13 @@ docker compose exec -T -e SEED_DEADLINE_SECONDS=6000 \
   -e SEED_HARD_KILL_SECONDS=6600 companion-core python3 /app/seed_memories.py
 ```
 
+Each run takes only the oldest `SEED_MAX_EXCHANGES` (default 40) unseeded
+exchanges, extended over a timestamp tie at the cut, and advances
+`last_seeded_at` to the newest of them once that prefix is fully saved. A
+backlog therefore drains one finishable prefix per run; without the bound, a
+backlog that outlasted the soft deadline would repeat the same selection every
+run without saving or advancing.
+
 Model aliases remain application policy in `docker/core/seed_memories.py` and
 must resolve through `ops/dominus-nobara/models.lock.json`. The timer neither
 overrides model choice nor bypasses Tailscale, bearer authentication, the game

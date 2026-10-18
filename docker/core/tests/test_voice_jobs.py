@@ -242,9 +242,9 @@ async def test_poll_and_cancel_do_not_spend_synthesis_rate_limit(monkeypatch):
     async def consume(_identity, bucket):
         if bucket == "tts":
             raise RateLimitExceeded(bucket, 30)
-        return 100, 0
+        return 100, 0, None
 
-    monkeypatch.setattr("app.rate_limit.check_and_consume", consume)
+    monkeypatch.setattr("app.rate_limit.consume", consume)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         assert (await client.post("/api/tts")).status_code == 429
         assert (await client.get("/api/tts/jobs/test")).status_code == 200

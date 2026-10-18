@@ -92,6 +92,33 @@ class TestListMemories:
         # SQL should contain category filter
         assert any("category" in s for s in conn.executed_sqls)
 
+    @pytest.mark.asyncio
+    async def test_keyset_cursor_breaks_timestamp_ties_by_id(self):
+        """With before_id the cursor is (created_at, id): rows that share the
+        last row's timestamp are neither skipped nor repeated."""
+        from app.memory_archive import list_memories
+        conn = _FakeConn(rows=[])
+        with patch("app.memory_archive_query.get_conn", _mk_get_conn(conn)):
+            await list_memories(
+                user_id="alice",
+                before="2026-04-07T12:00:00.123456+00:00",
+                before_id="0b6b3f6e-7c43-4b5e-9a39-2b8a2f0f6d11",
+            )
+        sql = conn.executed_sqls[0]
+        assert "(created_at, id) < (%s::timestamptz, %s::uuid)" in sql
+        assert "created_at < %s" not in sql.replace("(created_at, id) < (", "")
+        assert "ORDER BY created_at DESC, id DESC" in sql
+
+    @pytest.mark.asyncio
+    async def test_timestamp_only_cursor_is_unchanged(self):
+        from app.memory_archive import list_memories
+        conn = _FakeConn(rows=[])
+        with patch("app.memory_archive_query.get_conn", _mk_get_conn(conn)):
+            await list_memories(user_id="alice", before="2026-04-07T12:00:00+00:00")
+        sql = conn.executed_sqls[0]
+        assert "created_at < %s" in sql
+        assert "::uuid" not in sql
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # get_timeline

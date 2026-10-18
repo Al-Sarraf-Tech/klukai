@@ -193,12 +193,19 @@ class TimelineScreen extends StatelessWidget {
   @visibleForTesting
   static String formatMilestoneDate(String dateStr) {
     try {
-      final parsed = DateTime.parse(dateStr);
-      final dt = (_hasZoneDesignator(dateStr)
-              ? parsed
-              : DateTime.utc(parsed.year, parsed.month, parsed.day, parsed.hour,
-                  parsed.minute, parsed.second, parsed.millisecond, parsed.microsecond))
-          .toLocal();
+      // Parse a naive stamp as UTC directly. Rebuilding it from a local
+      // parse would first normalise wall-clock times that do not exist
+      // locally (a DST gap) and shift the result by an hour.
+      var iso = dateStr.trim();
+      if (!iso.contains('T')) {
+        // "YYYY-MM-DD HH:MM:SS" or a bare date (midnight).
+        iso = iso.contains(' ')
+            ? iso.replaceFirst(' ', 'T')
+            : '${iso}T00:00:00';
+      }
+      final dt = DateTime.parse(
+        _hasZoneDesignator(iso) ? iso : '${iso}Z',
+      ).toLocal();
       return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
           '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     } catch (_) {

@@ -283,10 +283,20 @@ def register_extras(app: FastAPI) -> None:
         limit: int = 20,
         before: str | None = None,
         month: str | None = None,
+        before_id: str | None = None,
     ) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
+        if before_id is not None:
+            import uuid
+
+            try:
+                before_id = str(uuid.UUID(before_id))
+            except ValueError:
+                return JSONResponse(
+                    {"error": "before_id must be a memory id"}, status_code=400
+                )
         try:
             return await memory_archive.list_memories(
                 category=category,
@@ -294,6 +304,7 @@ def register_extras(app: FastAPI) -> None:
                 before=before,
                 month=month,
                 user_id=user_id,
+                before_id=before_id,
             )
         except Exception as e:
             logger.error("Failed to list memories: %s", e)

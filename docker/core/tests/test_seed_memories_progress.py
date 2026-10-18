@@ -399,3 +399,48 @@ class TestHardKill:
         assert seed_memories._arm_hard_kill() == 6600
         assert alarm == [6600]
         assert handlers == [(seed_memories.signal.SIGALRM, seed_memories.signal.SIG_DFL)]
+
+
+class TestBoundedPrefix:
+    """Each run takes a bounded prefix it can finish, so the watermark keeps
+    moving even when a backlog would not fit in the deadline."""
+
+    def test_short_backlog_is_taken_whole(self):
+        stamps = [datetime(2026, 8, 1, h) for h in range(3)]
+        assert seed_memories._bounded_prefix(stamps, 5) == 3
+
+    def test_prefix_is_cut_at_the_limit(self):
+        stamps = [datetime(2026, 8, 1, h) for h in range(10)]
+        assert seed_memories._bounded_prefix(stamps, 4) == 4
+
+    def test_prefix_extends_over_a_timestamp_tie(self):
+        t = datetime(2026, 8, 1, 3)
+        stamps = [datetime(2026, 8, 1, 1), datetime(2026, 8, 1, 2), t, t, t, datetime(2026, 8, 1, 4)]
+        assert seed_memories._bounded_prefix(stamps, 3) == 5
+
+    @pytest.mark.parametrize(("raw", "expected"), [("", 40), ("7", 7), ("abc", 40), ("0", 40)])
+    def test_env_bound(self, monkeypatch, raw, expected):
+        monkeypatch.setenv("SEED_MAX_EXCHANGES", raw)
+        assert seed_memories._max_exchanges_from_env() == expected
+
+
+@pytest.mark.asyncio
+async def test_a_backlog_advances_one_bounded_prefix_per_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = []
+    for h in range(6):
+        ts = datetime(2026, 8, 1, h)
+        rows += [("user", f"u{h}", ts), ("assistant", f"a{h}", ts)]
+    conn, set_watermark, _ = _configure_run(monkeypatch, rows)
+    monkeypatch.setenv("SEED_MAX_EXCHANGES", "2")
+    select = AsyncMock(return_value=[])
+    monkeypatch.setattr(seed_memories, "_select_batch", select)
+
+    assert await seed_memories.main() == 0
+
+    # Only the two oldest exchanges were offered, and the watermark moved to
+    # the newer of them, so the next run starts at the third.
+    offered = select.await_args.args[1]
+    assert [ex["user"] for ex in offered] == ["u0", "u1"]
+    set_watermark.assert_awaited_once_with(conn, datetime(2026, 8, 1, 1), "jalsarraf")

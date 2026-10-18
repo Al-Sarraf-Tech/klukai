@@ -56,9 +56,15 @@ async def legacy_schema(pool, before=None):
 
 async def test_fresh_schema_then_repeat_changes_nothing(migration_pool):
     applied = await apply_migrations(migration_pool, MIGRATIONS)
-    assert len(applied) == 23
+    assert len(applied) == 24
     assert await rows(migration_pool, "SELECT count(*) FROM companion_gifts") == [(1,)]
-    assert await rows(migration_pool, "SELECT count(*) FROM companion_schema_migrations") == [(23,)]
+    assert await rows(migration_pool, "SELECT count(*) FROM companion_schema_migrations") == [(24,)]
+    assert await rows(
+        migration_pool,
+        "SELECT data_type, is_nullable FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'companion_memories' "
+        "AND column_name = 'annotation_history'",
+    ) == [("jsonb", "NO")]
     assert await apply_migrations(migration_pool, MIGRATIONS) == []
     assert await rows(migration_pool, "SELECT count(*) FROM companion_gifts") == [(1,)]
 
@@ -187,3 +193,30 @@ async def test_seed_existence_is_scoped_to_user_and_item(migration_pool):
         ("jalsarraf", "different gift"),
         ("jalsarraf", "Klukadile plush"),
     ]
+
+
+async def test_reannotation_archives_the_annotation_the_update_replaces(migration_pool):
+    """Successive rewrites each archive the text they replace, so history is
+    the full chain and nothing is lost, even when the second writer read the
+    row before the first one committed."""
+    import reannotate_existing
+
+    await apply_migrations(migration_pool, MIGRATIONS)
+    async with migration_pool.connection() as conn:
+        mem_id = (
+            await (
+                await conn.execute(
+                    "INSERT INTO companion_memories (filename, annotation, user_id, conversation_id) "
+                    "VALUES ('m.webp', 'original', 'claude', 'seed:x') RETURNING id::text"
+                )
+            ).fetchone()
+        )[0]
+        await conn.commit()
+        assert await reannotate_existing._replace_annotation(conn, mem_id, "claude", "first")
+        assert await reannotate_existing._replace_annotation(conn, mem_id, "claude", "second")
+    rows_ = await rows(
+        migration_pool,
+        "SELECT annotation, jsonb_path_query_array(annotation_history, '$[*].annotation') "
+        "FROM companion_memories",
+    )
+    assert rows_ == [("second", ["original", "first"])]

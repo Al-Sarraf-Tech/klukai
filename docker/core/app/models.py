@@ -173,3 +173,5 @@ class SessionState(BaseModel):
     mission_description: str | None = None
     mission_interval: int | None = None  # minutes
     mission_started_at: str | None = None  # ISO timestamp
+    # Ceiling for a mission she started herself; None for one he asked for.
+    mission_max_minutes: int | None = None

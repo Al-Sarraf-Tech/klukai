@@ -37,6 +37,16 @@ void main() {
       final asZ = TimelineScreen.formatMilestoneDate('${naive}Z');
       expect(TimelineScreen.formatMilestoneDate(naive), asZ);
       expect(TimelineScreen.formatMilestoneDate('$naive+00:00'), asZ);
+      // A naive stamp inside a local DST gap (02:30 on 2026-03-08 does not
+      // exist in Chicago) is still the UTC instant, not a normalised one.
+      expect(
+        TimelineScreen.formatMilestoneDate('2026-03-08T02:30:00'),
+        TimelineScreen.formatMilestoneDate('2026-03-08T02:30:00Z'),
+      );
+      expect(
+        TimelineScreen.formatMilestoneDate('2026-03-08 02:30:00'),
+        TimelineScreen.formatMilestoneDate('2026-03-08T02:30:00Z'),
+      );
       expect(asZ, _shown(DateTime.parse('${naive}Z').toLocal()));
     });
 
@@ -66,24 +76,36 @@ void main() {
     });
   });
 
-  testWidgets('renders milestones with a labelled back control', (tester) async {
-    await tester.pumpWidget(const MaterialApp(
-      home: TimelineScreen(milestones: {
-        'first_conversation': '2026-04-01T12:00:00+00:00',
-        'affection_level_1': '2026-04-03T08:30:00+00:00',
-      }),
-    ));
+  testWidgets('renders milestones with a labelled back control', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: TimelineScreen(
+          milestones: {
+            'first_conversation': '2026-04-01T12:00:00+00:00',
+            'affection_level_1': '2026-04-03T08:30:00+00:00',
+          },
+        ),
+      ),
+    );
     expect(find.byTooltip('Back'), findsOneWidget);
     expect(find.text('FIRST CONTACT: Neural link established'), findsOneWidget);
     expect(find.text('TRUST EARNED: Professional Respect'), findsOneWidget);
     expect(
-      find.text(TimelineScreen.formatMilestoneDate('2026-04-01T12:00:00+00:00')),
+      find.text(
+        TimelineScreen.formatMilestoneDate('2026-04-01T12:00:00+00:00'),
+      ),
       findsOneWidget,
     );
   });
 
-  testWidgets('an empty timeline keeps the back control and her line', (tester) async {
-    await tester.pumpWidget(const MaterialApp(home: TimelineScreen(milestones: {})));
+  testWidgets('an empty timeline keeps the back control and her line', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: TimelineScreen(milestones: {})),
+    );
     expect(find.byTooltip('Back'), findsOneWidget);
     expect(find.text('No milestones recorded yet.'), findsOneWidget);
   });

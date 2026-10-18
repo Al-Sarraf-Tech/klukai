@@ -148,12 +148,18 @@ class TestRefresh:
         from app import main
 
         client.router.is_game_active = AsyncMock(return_value=True)
-        with patch("app.rate_limit.check_and_consume", new=AsyncMock(return_value=(0, 600))) as cac, \
-             patch("app.rate_limit.refund", new=AsyncMock()) as refund:
+        from app.rate_limit import Consumption
+
+        receipt = Consumption("k", 1)
+        with patch(
+            "app.rate_limit.consume", new=AsyncMock(return_value=(0, 600, receipt))
+        ) as cac, patch(
+            "app.rate_limit.refund", new=AsyncMock(return_value=True)
+        ) as refund:
             r = TestClient(main.app).post("/api/portrait/refresh", headers=AUTH)
         assert r.status_code == 409 and r.json()["code"] == "GPU_BUSY"
         cac.assert_awaited_once_with("claude", "portrait_refresh")
-        refund.assert_awaited_once_with("claude", "portrait_refresh")
+        refund.assert_awaited_once_with(receipt)
         assert r.headers["x-ratelimit-remaining"] == "1"
 
 

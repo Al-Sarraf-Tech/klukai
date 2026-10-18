@@ -7,6 +7,7 @@ import logging
 import random
 import time
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Any
 
 from . import state
@@ -20,6 +21,29 @@ logger = logging.getLogger(__name__)
 # every ~30 minutes, through the night, until the cancel phrase or a restart.
 # A mission he asked for ("keep me posted every 30 min") has no ceiling.
 AUTO_MISSION_MAX_MINUTES = 180
+
+
+def ceiling_minutes_left(
+    started_at: str | None, max_minutes: int | None, now: datetime | None = None
+) -> float | None:
+    """Minutes left before a session mission's ceiling (<= 0 once it passed).
+
+    ``started_at`` is the session's isoformat stamp from the container clock.
+    None means the mission has no ceiling. A ceilinged mission whose stamp is
+    missing or unparseable keeps its whole allowance.
+    """
+    if max_minutes is None:
+        return None
+    if not started_at:
+        return float(max_minutes)
+    try:
+        started = datetime.fromisoformat(started_at)
+    except (TypeError, ValueError):
+        return float(max_minutes)
+    if started.tzinfo is not None:
+        started = started.astimezone().replace(tzinfo=None)
+    elapsed = ((now or datetime.now()) - started).total_seconds() / 60
+    return max_minutes - elapsed
 
 
 class MissionTimer:

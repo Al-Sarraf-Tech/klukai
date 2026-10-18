@@ -20,6 +20,7 @@ class _Gallery extends MemoryService {
     int limit = 20,
     String? before,
     String? month,
+    String? beforeId,
   }) async => [];
 }
 

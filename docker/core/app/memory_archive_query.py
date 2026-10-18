@@ -74,8 +74,14 @@ async def list_memories(
     before: str | None = None,
     month: str | None = None,
     user_id: str = "jalsarraf",
+    before_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """List kept memories, optionally filtered by category and/or month (YYYY-MM), scoped to user.
+
+    Newest first, ties broken by id. ``before`` alone pages by timestamp;
+    with ``before_id`` the cursor is the (created_at, id) pair of the last row
+    already shown, so rows sharing its timestamp are neither skipped nor
+    repeated.
 
     Fails closed — mirror of get_timeline/get_categories: a DB outage
     propagates (the route returns 503) instead of rendering as an empty
@@ -89,7 +95,10 @@ async def list_memories(
             if category:
                 conditions.append("category = %s")
                 params.append(category)
-            if before:
+            if before and before_id:
+                conditions.append("(created_at, id) < (%s::timestamptz, %s::uuid)")
+                params.extend([before, before_id])
+            elif before:
                 conditions.append("created_at < %s")
                 params.append(before)
             if month:
@@ -105,7 +114,7 @@ async def list_memories(
                     f"mood, affection_level, kept_by, category, created_at "
                     # `where` uses fixed column predicates; values stay bound.
                     f"FROM companion_memories WHERE {where} "
-                    f"ORDER BY created_at DESC LIMIT %s",
+                    f"ORDER BY created_at DESC, id DESC LIMIT %s",
                     tuple(params),
                 )
             ).fetchall()

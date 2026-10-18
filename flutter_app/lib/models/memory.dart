@@ -8,6 +8,11 @@ class Memory {
   final String category;
   final DateTime createdAt;
 
+  /// The server's exact created_at string, the paging cursor. A DateTime on
+  /// the web keeps only milliseconds, so a cursor rebuilt from [createdAt]
+  /// could skip rows inside the lost microseconds.
+  final String? createdAtRaw;
+
   Memory({
     required this.id,
     this.annotation,
@@ -17,6 +22,7 @@ class Memory {
     this.keptBy = 'klukai',
     this.category = 'Mission Records',
     DateTime? createdAt,
+    this.createdAtRaw,
   }) : createdAt = createdAt ?? DateTime.now();
 
   factory Memory.fromJson(Map<String, dynamic> json) {
@@ -33,6 +39,7 @@ class Memory {
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at']).toLocal()
           : DateTime.now(),
+      createdAtRaw: json['created_at'] as String?,
     );
   }
 }

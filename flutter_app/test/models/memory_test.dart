@@ -49,6 +49,15 @@ void main() {
       expect(m.createdAt.toUtc(), DateTime.utc(2026, 4, 20, 9, 15));
     });
 
+    test('keeps the exact server timestamp as the paging cursor', () {
+      final m = Memory.fromJson({
+        'id': 'mem-1',
+        'created_at': '2026-04-07T12:00:00.123456+00:00',
+      });
+      expect(m.createdAtRaw, '2026-04-07T12:00:00.123456+00:00');
+      expect(Memory.fromJson({'id': 'mem-2'}).createdAtRaw, isNull);
+    });
+
     test('applies defaults for empty json', () {
       final m = Memory.fromJson({});
       expect(m.id, '');

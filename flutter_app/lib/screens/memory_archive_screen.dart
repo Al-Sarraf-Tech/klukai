@@ -169,7 +169,11 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
     }
     final generation = _loadGeneration;
     // The list is newest-first, so the last row is the oldest one we hold.
-    final before = _memories.last.createdAt.toUtc().toIso8601String();
+    // The cursor is its exact server timestamp plus its id: rows sharing the
+    // timestamp are neither skipped nor repeated.
+    final oldest = _memories.last;
+    final before =
+        oldest.createdAtRaw ?? oldest.createdAt.toUtc().toIso8601String();
     setState(() {
       _loadingMore = true;
       _loadMoreFailed = false;
@@ -179,6 +183,7 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
         category: _selectedCategory == 'All' ? null : _selectedCategory,
         month: _selectedMonth,
         before: before,
+        beforeId: oldest.id.isEmpty ? null : oldest.id,
         limit: _pageSize,
       );
       if (!mounted || generation != _loadGeneration) return;

@@ -141,7 +141,7 @@ class TestRateLimitMiddleware:
         mw = main._RateLimitMiddleware(app=MagicMock())
         resp = _response_factory()
         call_next = AsyncMock(return_value=resp)
-        with patch("app.rate_limit.check_and_consume") as cac:
+        with patch("app.rate_limit.consume") as cac:
             out = await mw.dispatch(_request(path="/health"), call_next)
         cac.assert_not_called()
         assert "X-RateLimit-Bucket" not in out.headers
@@ -150,8 +150,8 @@ class TestRateLimitMiddleware:
         mw = main._RateLimitMiddleware(app=MagicMock())
         resp = _response_factory()
         call_next = AsyncMock(return_value=resp)
-        with patch("app.rate_limit.check_and_consume",
-                   new=AsyncMock(return_value=(7, 0))) as cac:
+        with patch("app.rate_limit.consume",
+                   new=AsyncMock(return_value=(7, 0, None))) as cac:
             out = await mw.dispatch(
                 _request(path="/api/auth/login"), call_next
             )
@@ -167,8 +167,8 @@ class TestRateLimitMiddleware:
         resp = _response_factory()
         with patch("app.auth.get_user_from_token",
                    new=AsyncMock(side_effect=RuntimeError("bad token"))), \
-             patch("app.rate_limit.check_and_consume",
-                   new=AsyncMock(return_value=(1, 0))) as cac:
+             patch("app.rate_limit.consume",
+                   new=AsyncMock(return_value=(1, 0, None))) as cac:
             await mw.dispatch(
                 _request(path="/api/user/export", client_host="9.9.9.9",
                          headers={"Authorization": "Bearer broken"}),
@@ -181,8 +181,8 @@ class TestRateLimitMiddleware:
         resp = _response_factory()
         with patch("app.auth.get_user_from_token",
                    new=AsyncMock(return_value="alice")), \
-             patch("app.rate_limit.check_and_consume",
-                   new=AsyncMock(return_value=(3, 0))) as cac:
+             patch("app.rate_limit.consume",
+                   new=AsyncMock(return_value=(3, 0, None))) as cac:
             await mw.dispatch(
                 _request(path="/api/user/export",
                          headers={"Authorization": "Bearer good-token"}),
@@ -196,7 +196,7 @@ class TestRateLimitMiddleware:
         mw = main._RateLimitMiddleware(app=MagicMock())
         call_next = AsyncMock()
         exc = RateLimitExceeded("search", 30)
-        with patch("app.rate_limit.check_and_consume",
+        with patch("app.rate_limit.consume",
                    new=AsyncMock(side_effect=exc)):
             out = await mw.dispatch(
                 _request(path="/api/memories/search"), call_next
@@ -210,19 +210,23 @@ class TestRateLimitMiddleware:
         """The token is consumed before call_next; a 409 (GPU busy / already
         drawing) did none of the work the limit guards, so it goes back —
         else one 409 on the 1-per-10-min portrait bucket locks him out."""
+        from app.rate_limit import Consumption
+
+        receipt = Consumption("k", 1)
         mw = main._RateLimitMiddleware(app=MagicMock())
         resp = _response_factory(status_code=409)
         with patch("app.auth.get_user_from_token",
                    new=AsyncMock(return_value="alice")), \
-             patch("app.rate_limit.check_and_consume",
-                   new=AsyncMock(return_value=(0, 600))), \
-             patch("app.rate_limit.refund", new=AsyncMock()) as refund:
+             patch("app.rate_limit.consume",
+                   new=AsyncMock(return_value=(0, 600, receipt))), \
+             patch("app.rate_limit.refund",
+                   new=AsyncMock(return_value=True)) as refund:
             out = await mw.dispatch(
                 _request(path="/api/portrait/refresh",
                          headers={"Authorization": "Bearer good-token"}),
                 AsyncMock(return_value=resp),
             )
-        refund.assert_awaited_once_with("alice", "portrait_refresh")
+        refund.assert_awaited_once_with(receipt)
         # The 409 itself passes through, with the refunded count advertised.
         assert out.status_code == 409
         assert out.headers["X-RateLimit-Remaining"] == "1"
@@ -232,13 +236,27 @@ class TestRateLimitMiddleware:
     async def test_other_statuses_keep_the_token(self, status):
         mw = main._RateLimitMiddleware(app=MagicMock())
         resp = _response_factory(status_code=status)
-        with patch("app.rate_limit.check_and_consume",
-                   new=AsyncMock(return_value=(4, 0))), \
+        with patch("app.rate_limit.consume",
+                   new=AsyncMock(return_value=(4, 0, None))), \
              patch("app.rate_limit.refund", new=AsyncMock()) as refund:
             out = await mw.dispatch(_request(path="/api/portrait/refresh"),
                                     AsyncMock(return_value=resp))
         refund.assert_not_awaited()
         assert out.headers["X-RateLimit-Remaining"] == "4"
+
+    async def test_a_409_without_a_refunded_token_advertises_no_extra(self):
+        """A fail-open admission took no token: the 409 refunds nothing and
+        the remaining count is not inflated."""
+        mw = main._RateLimitMiddleware(app=MagicMock())
+        resp = _response_factory(status_code=409)
+        with patch("app.rate_limit.consume",
+                   new=AsyncMock(return_value=(999, 0, None))), \
+             patch("app.rate_limit.refund",
+                   new=AsyncMock(return_value=False)) as refund:
+            out = await mw.dispatch(_request(path="/api/portrait/refresh"),
+                                    AsyncMock(return_value=resp))
+        refund.assert_awaited_once_with(None)
+        assert out.headers["X-RateLimit-Remaining"] == "999"
 
 
 # ── _MetricsMiddleware ───────────────────────────────────────────────────────

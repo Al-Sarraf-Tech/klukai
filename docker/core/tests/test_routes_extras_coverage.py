@@ -216,7 +216,47 @@ class TestSimpleAuthGatesAndHappyPaths:
             "before": None,
             "month": "2026-04",
             "user_id": "alice",
+            "before_id": None,
         }
+
+    @pytest.mark.asyncio
+    async def test_memories_list_normalises_before_id(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/memories", "GET")
+        list_mock = AsyncMock(return_value=[])
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.memory_archive.list_memories", new=list_mock),
+        ):
+            await handler(
+                _mk_request(),
+                limit=50,
+                before="2026-04-07T12:00:00+00:00",
+                month=None,
+                before_id="0B6B3F6E-7C43-4B5E-9A39-2B8A2F0F6D11",
+            )
+        assert list_mock.call_args.kwargs["before_id"] == (
+            "0b6b3f6e-7c43-4b5e-9a39-2b8a2f0f6d11"
+        )
+
+    @pytest.mark.asyncio
+    async def test_memories_list_rejects_a_malformed_before_id(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/memories", "GET")
+        list_mock = AsyncMock(return_value=[])
+        with (
+            patch(
+                "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
+            ),
+            patch("app.routes_extras.memory_archive.list_memories", new=list_mock),
+        ):
+            resp = await handler(
+                _mk_request(), limit=50, before="x", month=None, before_id="not-a-uuid"
+            )
+        assert resp.status_code == 400
+        list_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_memory_categories_unauth_401(self):

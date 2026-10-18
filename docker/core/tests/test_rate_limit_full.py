@@ -7,7 +7,16 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app import rate_limit
-from app.rate_limit import LIMITS, Limit, RateLimitExceeded, check_and_consume, refund, reset
+from app.rate_limit import (
+    LIMITS,
+    Consumption,
+    Limit,
+    RateLimitExceeded,
+    check_and_consume,
+    consume,
+    refund,
+    reset,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -204,52 +213,94 @@ class TestCheckAndConsumeReArmsLostTtl:
         assert (remaining, retry) == (999, 0)
 
 
+class TestConsumeReceipt:
+    """consume() hands back a receipt naming the window its token came from."""
+
+    @pytest.mark.asyncio
+    async def test_receipt_carries_key_and_window_expiry(self):
+        r = AsyncMock()
+        r.incr = AsyncMock(return_value=1)
+        r.ttl = AsyncMock(return_value=600)
+        r.expiretime = AsyncMock(return_value=1_800_000_600)
+        with patch("app.rate_limit._get_redis", return_value=r):
+            remaining, retry, receipt = await consume("alice", "portrait_refresh")
+        assert (remaining, retry) == (LIMITS["portrait_refresh"].requests - 1, 600)
+        assert receipt == Consumption(
+            f"{LIMITS['portrait_refresh'].key_prefix}:alice:portrait_refresh",
+            1_800_000_600,
+        )
+
+    @pytest.mark.asyncio
+    async def test_fail_open_has_no_receipt(self):
+        with patch("app.rate_limit._get_redis", side_effect=RuntimeError("down")):
+            assert await consume("alice", "portrait_refresh") == (999, 0, None)
+
+    @pytest.mark.asyncio
+    async def test_unreadable_window_admits_without_a_receipt(self):
+        r = AsyncMock()
+        r.incr = AsyncMock(return_value=1)
+        r.ttl = AsyncMock(return_value=600)
+        r.expiretime = AsyncMock(side_effect=RuntimeError("unknown command"))
+        with patch("app.rate_limit._get_redis", return_value=r):
+            remaining, retry, receipt = await consume("alice", "portrait_refresh")
+        assert receipt is None
+        assert retry == 600
+
+    @pytest.mark.asyncio
+    async def test_rejected_request_still_raises(self):
+        r = AsyncMock()
+        r.incr = AsyncMock(return_value=LIMITS["portrait_refresh"].requests + 1)
+        r.ttl = AsyncMock(return_value=120)
+        r.expiretime = AsyncMock(return_value=1_800_000_120)
+        with patch("app.rate_limit._get_redis", return_value=r):
+            with pytest.raises(RateLimitExceeded) as exc:
+                await consume("alice", "portrait_refresh")
+        assert exc.value.retry_after == 120
+
+
 class TestRefund:
-    """refund() gives back a token for a request the handler turned away (409)."""
+    """refund() gives a token back only for a real receipt, atomically."""
+
+    RECEIPT = Consumption("klukai:rl:alice:portrait_refresh", 1_800_000_600)
 
     @pytest.mark.asyncio
-    async def test_decrements_the_bucket_key(self):
-        r = AsyncMock()
-        r.decr = AsyncMock(return_value=0)
-        r.delete = AsyncMock()
-        with patch("app.rate_limit._get_redis", return_value=r):
-            await refund("alice", "portrait_refresh")
-        r.decr.assert_awaited_once()
-        key = r.decr.await_args.args[0]
-        assert key.startswith(LIMITS["portrait_refresh"].key_prefix)
-        assert key.endswith(":alice:portrait_refresh")
-        # 1 → 0 is a clean, empty bucket: the key (and its TTL) stays as is.
-        r.delete.assert_not_awaited()
+    async def test_no_receipt_refunds_nothing(self):
+        with patch("app.rate_limit._get_redis") as get:
+            assert await refund(None) is False
+        get.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_deletes_key_that_goes_negative(self):
+    async def test_runs_the_window_bound_script(self):
         r = AsyncMock()
-        r.decr = AsyncMock(return_value=-1)
-        r.delete = AsyncMock()
+        r.eval = AsyncMock(return_value=1)
         with patch("app.rate_limit._get_redis", return_value=r):
-            await refund("alice", "portrait_refresh")
-        r.delete.assert_awaited_once_with(r.decr.await_args.args[0])
+            assert await refund(self.RECEIPT) is True
+        script, numkeys, key, window = r.eval.await_args.args
+        assert numkeys == 1
+        assert key == self.RECEIPT.key
+        assert window == "1800000600"
+        assert "EXPIRETIME" in script and "count <= 0" in script and "DECR" in script
+        r.decr.assert_not_called()
+        r.delete.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_unknown_bucket_uses_default_key(self):
+    async def test_a_refused_refund_reports_false(self):
         r = AsyncMock()
-        r.decr = AsyncMock(return_value=3)
+        r.eval = AsyncMock(return_value=0)
         with patch("app.rate_limit._get_redis", return_value=r):
-            await refund("alice", "bogus")
-        assert r.decr.await_args.args[0].startswith(LIMITS["default"].key_prefix)
+            assert await refund(self.RECEIPT) is False
 
     @pytest.mark.asyncio
     async def test_fails_soft_on_redis_error(self):
         with patch("app.rate_limit._get_redis", side_effect=RuntimeError("down")):
-            await refund("alice", "portrait_refresh")  # must not raise
+            assert await refund(self.RECEIPT) is False
 
     @pytest.mark.asyncio
-    async def test_fails_soft_when_decr_raises(self):
+    async def test_fails_soft_when_the_script_raises(self):
         r = AsyncMock()
-        r.decr = AsyncMock(side_effect=RuntimeError("OOM"))
+        r.eval = AsyncMock(side_effect=RuntimeError("NOSCRIPT"))
         with patch("app.rate_limit._get_redis", return_value=r):
-            await refund("alice", "portrait_refresh")
-        r.delete.assert_not_awaited()
+            assert await refund(self.RECEIPT) is False
 
 
 class TestReset:

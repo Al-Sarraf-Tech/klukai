@@ -9,7 +9,8 @@ slightly degraded.
 """
 
 from __future__ import annotations
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 
 import logging
@@ -90,6 +91,31 @@ class RateLimitExceeded(Exception):
         )
 
 
+@dataclass(frozen=True)
+class Consumption:
+    """The token one admitted request took: the only thing refund() accepts.
+
+    ``window_expires_at`` is the window's EXPIRETIME (unix seconds), which is
+    fixed for the life of a window, so a refund can never land in a later
+    window that other requests are spending.
+    """
+
+    key: str
+    window_expires_at: int
+
+
+# Give one token back, atomically, only to the window it came from and never
+# below zero. EXPIRETIME is -2 for a missing key and -1 without a TTL, so
+# neither can match a receipt.
+_REFUND_SCRIPT = """
+if redis.call('EXPIRETIME', KEYS[1]) ~= tonumber(ARGV[1]) then return 0 end
+local count = tonumber(redis.call('GET', KEYS[1]) or '0')
+if count == nil or count <= 0 then return 0 end
+redis.call('DECR', KEYS[1])
+return 1
+"""
+
+
 async def check_and_consume(user_id: str, bucket: str) -> tuple[int, int]:
     """Check the limit for (user_id, bucket). Consume one token.
 
@@ -98,8 +124,19 @@ async def check_and_consume(user_id: str, bucket: str) -> tuple[int, int]:
 
     Fail-open on Redis errors: logs a warning and returns (999, 0).
     """
+    remaining, retry_after, _ = await consume(user_id, bucket)
+    return remaining, retry_after
+
+
+async def consume(user_id: str, bucket: str) -> tuple[int, int, Consumption | None]:
+    """check_and_consume plus a receipt for refund().
+
+    The receipt is None when no token was verifiably taken: the limiter
+    failed open, or the window's expiry could not be read.
+    """
     limit = LIMITS.get(bucket, LIMITS["default"])
     key = f"{limit.key_prefix}:{user_id}:{bucket}"
+    receipt: Consumption | None = None
     try:
         r = await _get_redis()
         async with get_breaker("redis").protect():
@@ -116,9 +153,16 @@ async def check_and_consume(user_id: str, bucket: str) -> tuple[int, int]:
                 # no-op.)
                 await r.expire(key, limit.window_seconds)
                 ttl = limit.window_seconds
+            try:
+                # redis-py types its asyncio commands as the sync return value.
+                expires_at = int(await cast(Awaitable[Any], r.expiretime(key)))
+            except Exception:
+                expires_at = 0  # admission stands; this token just can't be refunded
+            if expires_at > 0:
+                receipt = Consumption(key, expires_at)
         if count > limit.requests:
             raise RateLimitExceeded(bucket=bucket, retry_after=max(ttl, 1))
-        return (limit.requests - count, max(ttl, 0))
+        return (limit.requests - count, max(ttl, 0), receipt)
     except RateLimitExceeded:
         raise
     except Exception as e:
@@ -128,32 +172,32 @@ async def check_and_consume(user_id: str, bucket: str) -> tuple[int, int]:
             user_id[:16],
             e,
         )
-        return (999, 0)
+        return (999, 0, None)
 
 
-async def refund(user_id: str, bucket: str) -> None:
-    """Give back the token check_and_consume took for one request.
+async def refund(receipt: Consumption | None) -> bool:
+    """Give back the token consume() took for one request.
 
     For requests the limiter admitted but the handler then turned away
     without doing the work the limit guards: a 409 "GPU busy" on the
-    1-per-10-minutes portrait bucket must not burn its only token. DECR
-    keeps the key's TTL; a counter that goes negative is deleted so the
-    bucket starts clean. Fail-soft: a Redis error only logs.
+    1-per-10-minutes portrait bucket must not burn its only token. Only a
+    real receipt refunds, only into the window it was taken from, and never
+    below zero, in one atomic script. Fail-soft: a Redis error only logs.
+    Returns True when a token went back.
     """
-    limit = LIMITS.get(bucket, LIMITS["default"])
-    key = f"{limit.key_prefix}:{user_id}:{bucket}"
+    if receipt is None:
+        return False
     try:
         r = await _get_redis()
         async with get_breaker("redis").protect():
-            if await r.decr(key) < 0:
-                await r.delete(key)
+            done = await cast(
+                Awaitable[Any],
+                r.eval(_REFUND_SCRIPT, 1, receipt.key, str(receipt.window_expires_at)),
+            )
+        return bool(done == 1)
     except Exception as e:
-        logger.debug(
-            "Rate limit refund failed for bucket=%s user=%s: %s",
-            bucket,
-            user_id[:16],
-            e,
-        )
+        logger.debug("Rate limit refund failed for %s: %s", receipt.key, e)
+        return False
 
 
 async def reset(user_id: str, bucket: str) -> None:

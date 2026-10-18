@@ -12,6 +12,7 @@ from .dependencies import http_request
 import asyncio
 import json
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -31,6 +32,7 @@ from .helpers import (
     create_conversation as _create_conversation,
 )
 from .models import SessionState, new_id
+from .proactive.mission_timer import ceiling_minutes_left
 from .memory import SessionUnavailable
 
 logger = logging.getLogger(__name__)
@@ -211,23 +213,30 @@ async def _initialize_session(user_id: str) -> SessionState:
             await memory.save_session(key, session)
         if session.mood != "composed":
             await ws.send_mood(user_id, session.mood)
+        left = ceiling_minutes_left(
+            session.mission_started_at, session.mission_max_minutes
+        )
         if (
             session.mission_description
             and session.mission_interval
             and not proactive.get_mission_timer(user_id)
-            and _mission_is_stale(session.mission_started_at)
+            and (
+                _mission_is_stale(session.mission_started_at)
+                or (left is not None and left <= 0)
+            )
         ):
-            # A mission from half a day ago is not one he still wants field
-            # reports on; restoring it would resume updates on a reconnect
-            # long after the operation it described was over.
+            # A mission from half a day ago, or one she started herself that
+            # has used up its ceiling, is not one he still wants field reports
+            # on; restoring it would resume updates on a reconnect long after
+            # the operation it described was over.
             logger.info(
-                "Mission from %s not restored (older than %dh); clearing it",
+                "Mission from %s not restored (stale or past its ceiling); clearing it",
                 session.mission_started_at,
-                MISSION_RESTORE_MAX_HOURS,
             )
             session.mission_description = None
             session.mission_interval = None
             session.mission_started_at = None
+            session.mission_max_minutes = None
             await memory.save_session(key, session)
         if (
             session.mission_description
@@ -236,9 +245,20 @@ async def _initialize_session(user_id: str) -> SessionState:
         ):
             aff_state = await affection.get_state(user_id)
             proactive.set_affection_level(aff_state.level, user_id=user_id)
-            proactive.start_mission(
-                session.mission_description, session.mission_interval, user_id=user_id
-            )
+            if left is None:
+                proactive.start_mission(
+                    session.mission_description,
+                    session.mission_interval,
+                    user_id=user_id,
+                )
+            else:
+                # A self-started mission keeps only what is left of its ceiling.
+                proactive.start_mission(
+                    session.mission_description,
+                    session.mission_interval,
+                    user_id=user_id,
+                    max_duration_minutes=max(1, math.ceil(left)),
+                )
         return session
 
 

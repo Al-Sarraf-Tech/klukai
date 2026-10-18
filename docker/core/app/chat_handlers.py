@@ -178,6 +178,7 @@ async def _handle_message(
             session.mission_description = None
             session.mission_interval = None
             session.mission_started_at = None
+            session.mission_max_minutes = None
             await memory.save_session(session_id(user_id), session)
             logger.info("Mission timer cancelled by user")
         # Don't return — let the message go through to get an in-character response
@@ -200,6 +201,7 @@ async def _handle_message(
         session.mission_description = starting_mission_desc
         session.mission_interval = interval
         session.mission_started_at = datetime.now().isoformat()
+        session.mission_max_minutes = None  # he asked for it: no ceiling
         await memory.save_session(session_id(user_id), session)
         # Record first mission milestone
         await proactive.record_first(user_id, "first_mission")

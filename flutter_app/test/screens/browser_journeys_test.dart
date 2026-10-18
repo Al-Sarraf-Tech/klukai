@@ -32,6 +32,7 @@ class _Gallery extends MemoryService {
     int limit = 20,
     String? before,
     String? month,
+    String? beforeId,
   }) async {
     if (unavailable) throw MemoryServiceException(503, '/api/memories');
     return [];

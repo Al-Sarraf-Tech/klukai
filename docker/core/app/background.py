@@ -93,6 +93,7 @@ async def _apply_extracted_state(
             session.mission_description = recent_text
             session.mission_interval = 30
             session.mission_started_at = datetime.now().isoformat()
+            session.mission_max_minutes = AUTO_MISSION_MAX_MINUTES
             logger.info(
                 "Mission auto-started from battle_ready mood: %s", recent_text[:60]
             )

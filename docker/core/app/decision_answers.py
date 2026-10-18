@@ -96,8 +96,11 @@ def _explicit_keys(text: str, original: str, keys: list[str]) -> set[str]:
                 found.append((k, 0))
     for rx in (_CUE_LETTER, _VERB_LETTER, _LEAD_LETTER):
         found += [(m.group(1).upper(), m.start()) for m in rx.finditer(text)]
+    # Negation is judged from the letter itself: a clause-opening match starts
+    # at the separator, and "not B, C" must not lend C the previous clause.
     found += [
-        (m.group(1) or m.group(2), m.start()) for m in _UPPER_LETTER.finditer(original)
+        (m.group(1), m.start(1)) if m.group(1) else (m.group(2), m.start(2))
+        for m in _UPPER_LETTER.finditer(original)
     ]
     for m in _ORDINAL_PHRASE.finditer(text):
         k = by_index(_ORDINALS[m.group(1) or m.group(2)])

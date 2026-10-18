@@ -15,6 +15,7 @@ from datetime import timedelta
 from functools import partial
 
 from .mission_timer import AUTO_MISSION_MAX_MINUTES as AUTO_MISSION_MAX_MINUTES
+from .mission_timer import ceiling_minutes_left
 from .mission_timer import MissionTimer as MissionTimer
 from .base import _EngineBase
 from .state import now_local
@@ -208,6 +209,34 @@ class MissionMixin(_EngineBase):
         mission has replaced it for this user in the meantime."""
         if self._mission_timers.get(user_id) is timer:
             self.stop_mission(user_id)
+            self._spawn(self._clear_expired_session_mission(user_id))
+
+    async def _clear_expired_session_mission(self, user_id: str) -> None:
+        """Clear the stood-down mission from his session too, or a reconnect
+        would restore it. Only a ceilinged mission whose own allowance has run
+        out is cleared, so a newer or explicitly requested one is untouched."""
+        try:
+            from ..context import memory, session_id
+
+            key = session_id(user_id)
+            async with memory.session_owner(key):
+                session = await memory.get_session(key)
+                if session is None or not session.mission_description:
+                    return
+                left = ceiling_minutes_left(
+                    session.mission_started_at, session.mission_max_minutes
+                )
+                # A minute of slack for clock skew between the session stamp
+                # and the timer's monotonic start.
+                if left is None or left > 1:
+                    return
+                session.mission_description = None
+                session.mission_interval = None
+                session.mission_started_at = None
+                session.mission_max_minutes = None
+                await memory.save_session(key, session)
+        except Exception as e:
+            logger.warning("Expired mission not cleared from the session: %s", e)
 
     def stop_mission(
         self, user_id: str = "jalsarraf", trigger_aftermath: bool = True

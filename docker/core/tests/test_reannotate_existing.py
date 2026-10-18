@@ -131,14 +131,18 @@ async def test_rewrite_keeps_old_annotation_in_history_and_scopes_update(
     updates = [w for w in db.writes if w[0].lstrip().startswith("UPDATE")]
     assert len(updates) == 1
     sql, params = updates[0]
-    assert "annotation_history = annotation_history || %s::jsonb" in sql
+    # The archived text is the row's annotation as the UPDATE sees it, so a
+    # concurrent rewrite can never make two runs archive the same original.
+    assert (
+        "SET annotation_history = annotation_history || jsonb_build_array("
+        "jsonb_build_object('annotation', annotation, 'replaced_at', %s::text))"
+    ) in sql
+    assert sql.index("annotation_history =") < sql.index("annotation = %s")
     assert "WHERE id = %s AND user_id = %s" in sql
-    new_annotation, history_json, mem_id, user_id = params
+    replaced_at, new_annotation, mem_id, user_id = params
     assert new_annotation == NEW
     assert (mem_id, user_id) == ("m1", "claude")
-    history = json.loads(history_json)
-    assert history[0]["annotation"] == OLD
-    datetime.fromisoformat(history[0]["replaced_at"])  # valid ISO timestamp
+    datetime.fromisoformat(replaced_at)  # valid ISO timestamp
     # Progress checkpoint lands only in rewrite mode.
     inserts = [w for w in db.writes if "reannotated_ids" in w[0]]
     assert len(inserts) == 1

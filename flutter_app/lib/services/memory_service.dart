@@ -42,10 +42,12 @@ class MemoryService {
     int limit = 20,
     String? before,
     String? month,
+    String? beforeId,
   }) async {
     final params = <String, String>{'limit': limit.toString()};
     if (category != null && category != 'All') params['category'] = category;
     if (before != null) params['before'] = before;
+    if (before != null && beforeId != null) params['before_id'] = beforeId;
     if (month != null) params['month'] = month;
 
     final uri = Uri.parse(

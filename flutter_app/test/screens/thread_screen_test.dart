@@ -118,16 +118,20 @@ void main() {
     expect(find.text('Delivered'), findsNWidgets(2));
   });
 
-  testWidgets('a dead token bounces to login instead of a futile retry', (tester) async {
+  testWidgets('a dead token bounces to login instead of a futile retry', (
+    tester,
+  ) async {
     var bounced = 0;
-    await tester.pumpWidget(MaterialApp(
-      home: ThreadScreen(
-        serverUrl: 'http://127.0.0.1:1',
-        threadService: _FakeThreadService([ThreadServiceException(401)]),
-        markReadDelay: const Duration(milliseconds: 10),
-        onAuthExpired: () => bounced++,
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ThreadScreen(
+          serverUrl: 'http://127.0.0.1:1',
+          threadService: _FakeThreadService([ThreadServiceException(401)]),
+          markReadDelay: const Duration(milliseconds: 10),
+          onAuthExpired: () => bounced++,
+        ),
       ),
-    ));
+    );
     await tester.pump();
     await tester.pump();
     expect(bounced, 1);
@@ -136,24 +140,28 @@ void main() {
     expect(find.text('Retry'), findsNothing);
   });
 
-  testWidgets('a 401 on the receipt write bounces too; other failures stay Delivered',
-      (tester) async {
-    var bounced = 0;
-    final fake = _FakeThreadService([_open], markReadFails: true);
-    await tester.pumpWidget(MaterialApp(
-      home: ThreadScreen(
-        serverUrl: 'http://127.0.0.1:1',
-        threadService: fake,
-        markReadDelay: const Duration(milliseconds: 10),
-        onAuthExpired: () => bounced++,
-      ),
-    ));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 20));
-    await tester.pumpAndSettle();
-    expect(bounced, 0); // a 503 is not a dead token
-    expect(find.text('Delivered'), findsNWidgets(2));
-  });
+  testWidgets(
+    'a 401 on the receipt write bounces too; other failures stay Delivered',
+    (tester) async {
+      var bounced = 0;
+      final fake = _FakeThreadService([_open], markReadFails: true);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ThreadScreen(
+            serverUrl: 'http://127.0.0.1:1',
+            threadService: fake,
+            markReadDelay: const Duration(milliseconds: 10),
+            onAuthExpired: () => bounced++,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 20));
+      await tester.pumpAndSettle();
+      expect(bounced, 0); // a 503 is not a dead token
+      expect(find.text('Delivered'), findsNWidgets(2));
+    },
+  );
 
   testWidgets('a down channel offers a retry', (tester) async {
     await _pump(

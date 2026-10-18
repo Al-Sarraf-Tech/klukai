@@ -15,6 +15,7 @@ import pytest
 from app.models import SessionState
 from app.proactive.engine import ProactiveEngine
 from app.proactive.mission import AUTO_MISSION_MAX_MINUTES, MissionTimer
+from app.proactive.mission_timer import ceiling_minutes_left
 
 
 class TestMissionTimerCeiling:
@@ -78,6 +79,7 @@ class TestEngineWiring:
         e.trigger_mission_aftermath_image = AsyncMock()
         e._decompression_message = AsyncMock()
         e._set_post_mission_physical = AsyncMock()
+        e._clear_expired_session_mission = AsyncMock()
         with patch("app.proactive.mission_timer.asyncio.sleep", AsyncMock()):
             e.start_mission("auto op", user_id="alice", max_duration_minutes=0)
             timer = e._mission_timers["alice"]
@@ -91,6 +93,8 @@ class TestEngineWiring:
         e.trigger_mission_aftermath_image.assert_awaited_once()
         e._decompression_message.assert_awaited_once_with("alice", False, 0)
         e._set_post_mission_physical.assert_awaited_once_with("alice", False)
+        # ...and the session forgets it, or a reconnect would restore it.
+        e._clear_expired_session_mission.assert_awaited_once_with("alice")
 
     @pytest.mark.asyncio
     async def test_a_replaced_mission_is_not_closed_by_the_old_ceiling(self):
@@ -146,6 +150,7 @@ class TestAutoStartPassesTheCeiling:
                 snapshot, "battle_ready", "u1"
             )
         assert applied is True
+        assert session.mission_max_minutes == AUTO_MISSION_MAX_MINUTES
         proactive.start_mission.assert_called_once_with(
             "contact front",
             interval_minutes=30,
@@ -218,3 +223,147 @@ class TestStaleMissionNotRestored:
         assert existing.mission_interval is None
         assert existing.mission_started_at is None
         memory.save_session.assert_awaited()
+
+
+class TestCeilingMinutesLeft:
+    def test_rules(self):
+        now = datetime(2026, 10, 18, 12, 0)
+        assert ceiling_minutes_left("2026-10-18T11:00:00", None, now) is None
+        assert ceiling_minutes_left(None, 180, now) == 180
+        assert ceiling_minutes_left("garbage", 180, now) == 180
+        assert ceiling_minutes_left("2026-10-18T11:00:00", 180, now) == 120
+        assert ceiling_minutes_left("2026-10-18T08:00:00", 180, now) == -60
+
+
+def _session_memory(session):
+    memory = MagicMock()
+    memory.session_owner = MagicMock(return_value=AsyncMock())
+    memory.get_session = AsyncMock(return_value=session)
+    memory.save_session = AsyncMock()
+    return memory
+
+
+class TestExpiredMissionLeavesTheSession:
+    @pytest.mark.asyncio
+    async def test_an_expired_self_started_mission_is_cleared(self):
+        session = SessionState(
+            conversation_id="c1",
+            mission_description="auto op",
+            mission_interval=30,
+            mission_started_at=(datetime.now() - timedelta(minutes=181)).isoformat(),
+            mission_max_minutes=180,
+        )
+        memory = _session_memory(session)
+        with patch("app.context.memory", memory), patch(
+            "app.context.session_id", lambda u: f"s:{u}"
+        ):
+            await ProactiveEngine()._clear_expired_session_mission("alice")
+        assert session.mission_description is None
+        assert session.mission_interval is None
+        assert session.mission_started_at is None
+        assert session.mission_max_minutes is None
+        memory.session_owner.assert_called_once_with("s:alice")
+        memory.save_session.assert_awaited_once_with("s:alice", session)
+
+    @pytest.mark.parametrize(
+        ("minutes_ago", "ceiling"),
+        [(181, None), (10, 180)],
+        ids=["he-asked-for-it", "a-newer-mission"],
+    )
+    @pytest.mark.asyncio
+    async def test_other_missions_are_left_alone(self, minutes_ago, ceiling):
+        session = SessionState(
+            conversation_id="c1",
+            mission_description="op",
+            mission_interval=30,
+            mission_started_at=(datetime.now() - timedelta(minutes=minutes_ago)).isoformat(),
+            mission_max_minutes=ceiling,
+        )
+        memory = _session_memory(session)
+        with patch("app.context.memory", memory), patch(
+            "app.context.session_id", lambda u: f"s:{u}"
+        ):
+            await ProactiveEngine()._clear_expired_session_mission("alice")
+        assert session.mission_description == "op"
+        memory.save_session.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_session_failure_is_logged_not_raised(self):
+        memory = MagicMock()
+        memory.session_owner = MagicMock(side_effect=RuntimeError("redis down"))
+        with patch("app.context.memory", memory), patch(
+            "app.context.session_id", lambda u: f"s:{u}"
+        ):
+            await ProactiveEngine()._clear_expired_session_mission("alice")
+
+
+class TestRestoreHonoursTheCeiling:
+    async def _connect(self, existing):
+        from tests.test_chat_coverage import (
+            _FakeConn,
+            _FakeWebSocket,
+            _capture_endpoint,
+            _fake_ws_manager,
+        )
+
+        endpoint, _ = _capture_endpoint()
+        memory = MagicMock()
+        memory.get_session = AsyncMock(return_value=existing)
+        memory.save_session = AsyncMock()
+        proactive = MagicMock()
+        proactive.get_mission_timer = MagicMock(return_value=None)
+        proactive.start_mission = MagicMock()
+        affection = MagicMock()
+        affection.get_state = AsyncMock(return_value=MagicMock(level=6))
+        with patch("app.chat.ws", _fake_ws_manager()), patch("app.chat.memory", memory), patch(
+            "app.chat.proactive", proactive
+        ), patch("app.chat.affection", affection), patch(
+            "app.auth.get_user_from_token", AsyncMock(return_value="u1")
+        ), patch(
+            "app.chat.get_conn", return_value=_FakeConn(("composed",))
+        ), patch(
+            "app.chat._maybe_reflect_on_return", AsyncMock()
+        ):
+            await endpoint(_FakeWebSocket(token="good"))
+        return proactive, memory
+
+    @pytest.mark.asyncio
+    async def test_a_self_started_mission_past_its_ceiling_is_cleared(self):
+        existing = SessionState(
+            conversation_id="c1",
+            mission_description="auto op",
+            mission_interval=30,
+            mission_started_at=(datetime.now() - timedelta(hours=4)).isoformat(),
+            mission_max_minutes=180,
+        )
+        proactive, memory = await self._connect(existing)
+        proactive.start_mission.assert_not_called()
+        assert existing.mission_description is None
+        assert existing.mission_max_minutes is None
+        memory.save_session.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_self_started_mission_keeps_only_what_is_left(self):
+        existing = SessionState(
+            conversation_id="c1",
+            mission_description="auto op",
+            mission_interval=30,
+            mission_started_at=(datetime.now() - timedelta(minutes=100)).isoformat(),
+            mission_max_minutes=180,
+        )
+        proactive, _ = await self._connect(existing)
+        proactive.start_mission.assert_called_once()
+        kwargs = proactive.start_mission.call_args.kwargs
+        assert kwargs["user_id"] == "u1"
+        assert 80 <= kwargs["max_duration_minutes"] <= 81
+
+    @pytest.mark.asyncio
+    async def test_a_mission_he_asked_for_restores_without_a_ceiling(self):
+        existing = SessionState(
+            conversation_id="c1",
+            mission_description="patrol",
+            mission_interval=20,
+            mission_started_at=(datetime.now() - timedelta(hours=4)).isoformat(),
+        )
+        proactive, _ = await self._connect(existing)
+        proactive.start_mission.assert_called_once_with("patrol", 20, user_id="u1")

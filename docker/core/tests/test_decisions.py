@@ -260,6 +260,14 @@ class TestParseAnswer:
         a clause ("B.", "ok, B", "Definitely B") names one."""
         assert dc.parse_decision_answer(msg, SQUAD) is None
 
+    @pytest.mark.parametrize("msg, expected", [
+        ("not B, C.", "C"), ("Not C; B", "B"), ("ok, B", "B"), ("B.", "B"),
+    ])
+    def test_a_negated_letter_does_not_negate_the_next_clause(self, msg, expected):
+        """A clause-opening letter is judged from its own position, so the
+        negation in "not B" stays with B."""
+        assert dc.parse_decision_answer(msg, SQUAD) == expected
+
     def test_keywords_only_count_in_short_messages(self):
         story = "Long day. " * 20
         assert dc.parse_decision_answer(story + "the titanium", EXHAUST) is None

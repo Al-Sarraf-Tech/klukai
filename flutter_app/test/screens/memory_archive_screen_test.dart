@@ -28,8 +28,16 @@ class _FakeMemoryService extends MemoryService {
   final List<Completer<List<Memory>>> memoryCalls = [];
 
   /// The arguments of each fetchMemories call, in call order.
-  final List<({String? category, int limit, String? before, String? month})>
-      memoryArgs = [];
+  final List<
+    ({
+      String? category,
+      int limit,
+      String? before,
+      String? month,
+      String? beforeId,
+    })
+  >
+  memoryArgs = [];
   List<MemoryCategory> categories = [];
   List<MonthGroup> timeline = [];
 
@@ -39,11 +47,17 @@ class _FakeMemoryService extends MemoryService {
     int limit = 20,
     String? before,
     String? month,
+    String? beforeId,
   }) {
     final completer = Completer<List<Memory>>();
     memoryCalls.add(completer);
-    memoryArgs.add(
-        (category: category, limit: limit, before: before, month: month));
+    memoryArgs.add((
+      category: category,
+      limit: limit,
+      before: before,
+      month: month,
+      beforeId: beforeId,
+    ));
     return completer.future;
   }
 
@@ -59,15 +73,18 @@ Memory _memory(String id, String annotation) =>
 
 /// [count] memories, newest first, one hour apart, ids `mem-<start>`…
 List<Memory> _page(int start, int count) => [
-      for (var i = 0; i < count; i++)
-        Memory(
-          id: 'mem-${start + i}',
-          annotation: 'entry ${start + i}',
-          createdAt: DateTime.utc(2026, 4, 7, 12).subtract(
-            Duration(hours: start + i),
-          ),
-        ),
-    ];
+  for (var i = 0; i < count; i++)
+    Memory(
+      id: 'mem-${start + i}',
+      annotation: 'entry ${start + i}',
+      createdAt: DateTime.utc(
+        2026,
+        4,
+        7,
+        12,
+      ).subtract(Duration(hours: start + i)),
+    ),
+];
 
 Future<_FakeMemoryService> _pumpArchive(
   WidgetTester tester, {
@@ -166,6 +183,8 @@ void main() {
         expect(fake.memoryCalls, hasLength(2));
         final args = fake.memoryArgs.last;
         expect(args.before, first.last.createdAt.toUtc().toIso8601String());
+        // The id breaks timestamp ties, so equal-time rows are not skipped.
+        expect(args.beforeId, first.last.id);
         expect(args.limit, 50);
         expect(args.category, isNull);
         expect(find.text('RETRIEVING OLDER MEMORIES...'), findsOneWidget);
@@ -175,10 +194,43 @@ void main() {
         await tester.pump();
         await tester.pump();
         expect(find.byKey(_sentinel), findsNothing);
-        await tester.drag(find.byType(Scrollable).first, const Offset(0, -5000));
+        await tester.drag(
+          find.byType(Scrollable).first,
+          const Offset(0, -5000),
+        );
         await tester.pump();
         expect(find.textContaining('entry 52'), findsOneWidget);
         expect(fake.memoryCalls, hasLength(2));
+      },
+    );
+
+    testWidgets(
+      'the cursor is the server\'s exact timestamp, not a rounded one',
+      (tester) async {
+        final fake = await _pumpArchive(tester);
+        // Microseconds survive only in the raw string; a web DateTime keeps
+        // milliseconds, which would skip rows inside the lost precision.
+        final page = [
+          for (var i = 0; i < 50; i++)
+            Memory.fromJson({
+              'id': 'mem-$i',
+              'annotation': 'entry $i',
+              'created_at': '2026-04-07T12:00:00.123456+00:00',
+            }),
+        ];
+        fake.memoryCalls.single.complete(page);
+        await tester.pump();
+        await tester.pump();
+        await tester.scrollUntilVisible(
+          find.byKey(_sentinel),
+          500,
+          scrollable: find.byType(Scrollable).first,
+        );
+        await tester.pump();
+        await tester.pump();
+        final args = fake.memoryArgs.last;
+        expect(args.before, '2026-04-07T12:00:00.123456+00:00');
+        expect(args.beforeId, 'mem-49');
       },
     );
 
@@ -215,7 +267,10 @@ void main() {
       );
       await tester.pump();
       await tester.pump();
-      expect(find.text('SIGNAL DROPPED // TAP TO RETRIEVE OLDER'), findsOneWidget);
+      expect(
+        find.text('SIGNAL DROPPED // TAP TO RETRIEVE OLDER'),
+        findsOneWidget,
+      );
       // The first page is still on screen — no fake-empty, no full-screen error.
       expect(find.text('SIGNAL LOST // ARCHIVE UNREACHABLE'), findsNothing);
       await tester.pump(const Duration(seconds: 1));

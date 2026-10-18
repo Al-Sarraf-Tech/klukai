@@ -235,23 +235,27 @@ async def _save_reannotated_ids(conn, ids: set[str]) -> bool:
 # ── Write Path ───────────────────────────────────────────────────────────────
 
 async def _replace_annotation(
-    conn, mem_id: str, user_id: str, old_annotation: str, new_annotation: str
+    conn, mem_id: str, user_id: str, new_annotation: str
 ) -> bool:
-    """Swap in the new annotation, keeping the old one in annotation_history.
+    """Swap in the new annotation, keeping the replaced one in annotation_history.
 
     One statement, one transaction: the history append and the replacement
-    either both land or neither does. Returns False (after rollback) on failure.
+    either both land or neither does. The history entry is built from the
+    row's annotation as the UPDATE sees it, not from the text this run read
+    earlier, so two concurrent rewrites archive each other's revision instead
+    of both archiving the original (READ COMMITTED re-evaluates the SET list
+    against the row the first writer committed). Returns False (after
+    rollback) on failure.
     """
-    history_entry = json.dumps([{
-        "annotation": old_annotation,
-        "replaced_at": datetime.now(timezone.utc).isoformat(),
-    }])
+    replaced_at = datetime.now(timezone.utc).isoformat()
     try:
         await conn.execute(
             "UPDATE companion_memories "
-            "SET annotation = %s, annotation_history = annotation_history || %s::jsonb "
+            "SET annotation_history = annotation_history || jsonb_build_array("
+            "jsonb_build_object('annotation', annotation, 'replaced_at', %s::text)), "
+            "annotation = %s "
             "WHERE id = %s AND user_id = %s",
-            (new_annotation, history_entry, mem_id, user_id),
+            (replaced_at, new_annotation, mem_id, user_id),
         )
         await conn.commit()
         return True
@@ -423,9 +427,7 @@ async def main(argv: list[str] | None = None) -> int:
                     continue
 
                 # Write the improved annotation, preserving the old one
-                if await _replace_annotation(
-                    conn, mem_id, user_id, existing_annotation, new_annotation
-                ):
+                if await _replace_annotation(conn, mem_id, user_id, new_annotation):
                     updated += 1
                     done_ids.add(mem_id)
                     logger.info("    -> UPDATED: %.2f -> %.2f", existing_score, new_score)

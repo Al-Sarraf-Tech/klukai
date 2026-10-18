@@ -13,6 +13,10 @@ fingerprint that dedups it and lets reannotate_existing.py find its exchange.
 SEED_DEADLINE_SECONDS (optional) is a soft wall-clock budget: once spent, the
 run stops before its next unit of work, records a "deadline" failure, and
 leaves last_seeded_at untouched so the range is retried on a later run.
+SEED_MAX_EXCHANGES (default 40) bounds each run to the oldest unseeded
+exchanges, so a run can finish its prefix inside the budget and advance the
+watermark; a deadline hit on an unbounded backlog would otherwise repeat the
+same selection forever without saving or advancing.
 SEED_HARD_KILL_SECONDS (optional) is the hard bound: SIGALRM ends the process
 outright once it is spent, wherever it is stuck. The production image is
 distroless (no coreutils `timeout`), so the bound lives here.
@@ -49,6 +53,7 @@ SELECTOR_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 ANNOTATOR_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
 BATCH_SIZE = 5
+DEFAULT_MAX_EXCHANGES = 40
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
@@ -246,6 +251,31 @@ def _past_deadline(deadline: float | None) -> bool:
     return deadline is not None and time.monotonic() >= deadline
 
 
+def _max_exchanges_from_env() -> int:
+    """Per-run exchange bound from SEED_MAX_EXCHANGES (default 40)."""
+    raw = os.environ.get("SEED_MAX_EXCHANGES", "").strip()
+    if not raw:
+        return DEFAULT_MAX_EXCHANGES
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Ignoring non-numeric SEED_MAX_EXCHANGES=%r", raw)
+        return DEFAULT_MAX_EXCHANGES
+    return value if value > 0 else DEFAULT_MAX_EXCHANGES
+
+
+def _bounded_prefix(stamps: list[datetime | None], limit: int) -> int:
+    """How many of the oldest exchanges this run takes: ``limit``, extended
+    over exchanges that share the last one's timestamp, because the next
+    run's query is ``created_at > watermark`` and would skip a tie."""
+    if len(stamps) <= limit:
+        return len(stamps)
+    end = limit
+    while end < len(stamps) and stamps[end] is not None and stamps[end] == stamps[end - 1]:
+        end += 1
+    return end
+
+
 def _arm_hard_kill() -> int | None:
     """Arm SIGALRM from SEED_HARD_KILL_SECONDS; returns the seconds armed.
 
@@ -403,7 +433,7 @@ async def main() -> int:
 
     # Pair into user→assistant exchanges
     exchanges = []
-    newest_ts = None
+    stamps: list[datetime | None] = []
     i = 0
     while i < len(rows) - 1:
         if rows[i][0] == "user" and rows[i + 1][0] == "assistant":
@@ -415,13 +445,22 @@ async def main() -> int:
                     "created_at": ts.isoformat() if ts else "",
                 }
             )
-            if ts and (newest_ts is None or ts > newest_ts):
-                newest_ts = ts
+            stamps.append(ts)
             i += 2
         else:
             i += 1
 
     logger.info("Grouped into %d exchanges", len(exchanges))
+    # Take a bounded prefix of the oldest exchanges; the watermark advances to
+    # the newest one in it, and the rest wait for the next run.
+    take = _bounded_prefix(stamps, _max_exchanges_from_env())
+    if take < len(exchanges):
+        logger.info(
+            "Processing the oldest %d of %d exchanges this run", take, len(exchanges)
+        )
+        exchanges = exchanges[:take]
+        stamps = stamps[:take]
+    newest_ts = max((ts for ts in stamps if ts), default=None)
     if not exchanges:
         logger.info("No new exchanges to process")
         await conn.close()

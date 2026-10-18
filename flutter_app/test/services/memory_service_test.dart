@@ -39,6 +39,30 @@ void main() {
       expect(mems.first.id, 'm1');
     });
 
+    test('a keyset cursor sends before and before_id together', () async {
+      Uri? seen;
+      final svc = MemoryService(
+        serverUrl: 'https://klukai.example.cc',
+        client: MockClient((req) async {
+          seen = req.url;
+          return http.Response('[]', 200);
+        }),
+      );
+      await svc.fetchMemories(
+        limit: 50,
+        before: '2026-04-07T12:00:00.123456+00:00',
+        beforeId: 'mem-49',
+      );
+      expect(
+        seen!.queryParameters['before'],
+        '2026-04-07T12:00:00.123456+00:00',
+      );
+      expect(seen!.queryParameters['before_id'], 'mem-49');
+
+      await svc.fetchMemories(beforeId: 'orphan');
+      expect(seen!.queryParameters.containsKey('before_id'), isFalse);
+    });
+
     test(
       'fetchMemories THROWS on a server error instead of returning []',
       () async {
