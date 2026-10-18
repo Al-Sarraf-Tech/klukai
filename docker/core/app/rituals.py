@@ -227,7 +227,10 @@ async def maybe_deliver_birthday(user_id: str) -> bool:
     lines = cfg.get("first_year" if first else "later_years", [])
     if not lines or not await claim_period(user_id, "birthday", str(today.year)):
         return False
-    await _deliver_scene(user_id, lines)
+    # The connect task is cancelled when his last socket drops, and the year
+    # is already claimed: the scene must finish regardless (every line lands
+    # in history even with nobody connected).
+    await asyncio.shield(_deliver_scene(user_id, lines))
     logger.info("Birthday greeting delivered for %s", user_id)
     return True
 
@@ -256,7 +259,7 @@ async def _days_checked_in(user_id: str, start: date, end: date) -> int:
 
 async def maybe_deliver_fee_settlement(user_id: str, delay: float = 0) -> bool:
     """The first time he connects each month, she presents her invoice for the
-    month just ended, ``delay`` seconds after claiming it. Never on his
+    month just ended, ``delay`` seconds after he connects. Never on his
     birthday — it waits for the next connect."""
     cfg = load_personality().get("fee_settlement", {})
     invoices = {int(k): v for k, v in cfg.get("invoices", {}).items()}
@@ -269,9 +272,22 @@ async def maybe_deliver_fee_settlement(user_id: str, delay: float = 0) -> bool:
     today = now_local().date()
     if days_until_birthday(await get_birthday(user_id), today) == 0:
         return False
+    # Wait BEFORE claiming: the connect task is cancelled when his last socket
+    # drops, and a month claimed during the wait would never be presented.
+    await asyncio.sleep(delay)
+    # From the claim on, nothing may be interrupted: the month is spoken for
+    # the moment the row lands, so the ledger read and the scene run shielded
+    # from the connect task's cancellation (every line is persisted to history
+    # even with nobody connected).
+    return await asyncio.shield(_settle_month(user_id, cfg, invoices[tier], today))
+
+
+async def _settle_month(
+    user_id: str, cfg: dict[str, Any], variants: list[Any], today: date
+) -> bool:
+    """Claim this month's settlement and present the invoice. Runs shielded."""
     if not await claim_period(user_id, "fee_settlement", today.strftime("%Y-%m")):
         return False
-    await asyncio.sleep(delay)
 
     this_month = today.replace(day=1)
     settled = (this_month - timedelta(days=1)).replace(day=1)
@@ -279,7 +295,7 @@ async def maybe_deliver_fee_settlement(user_id: str, delay: float = 0) -> bool:
         "month": settled.strftime("%B"),
         "days": await _days_checked_in(user_id, settled, this_month),
     }
-    lines = [line.format(**fields) for line in random.choice(invoices[tier])]
+    lines = [line.format(**fields) for line in random.choice(variants)]
     openers = cfg.get("late_openers", [])
     if today.day > cfg.get("late_after_day", 5) and openers:
         lines.insert(0, random.choice(openers).format(**fields))

@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import date, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -150,6 +150,13 @@ class TestOccasions:
         assert "commander_birthday" in w.occasions_on(SUNDAY, p, "10-04")
         assert "commander_birthday" not in w.occasions_on(SUNDAY, p, "03-14")
 
+    def test_leap_day_birthday_is_kept_on_feb_28_in_common_years(self, p):
+        """As rituals does: born on Feb 29, celebrated on Feb 28 when there is none."""
+        assert "commander_birthday" in w.occasions_on(date(2027, 2, 28), p, "02-29")
+        assert "commander_birthday" in w.occasions_on(date(2028, 2, 29), p, "02-29")
+        assert "commander_birthday" not in w.occasions_on(date(2028, 2, 28), p, "02-29")
+        assert "commander_birthday" in w.occasions_on(date(2028, 2, 28), p, "02-28")
+
     def test_wrapping_range(self):
         cfg = {"wardrobe_occasions": {"winter": ["12-30..01-02"], "none": None}}
         assert w.occasions_on(date(2027, 1, 1), cfg) == {"winter"}
@@ -184,6 +191,17 @@ class TestPickDailyOutfit:
         occ = w.occasions_on(date(2026, 10, 31), p)
         oid, _ = w.pick_daily_outfit(cat, date(2026, 10, 31), 2, occasions=occ)
         assert oid != "black_cat_ops"
+
+    def test_his_birthday_outranks_the_holidays(self, cat, p):
+        """Born in Christmas week: the birthday outfit, whatever the seed."""
+        day = date(2026, 12, 22)
+        occ = w.occasions_on(day, p, "12-22")
+        assert occ == {"christmas", "commander_birthday"}
+        picks = {w.pick_daily_outfit(cat, day, 7, occasions=occ, seed=s) for s in "abcdefghijklmnop"}
+        assert picks == {("formal_commission", "It's his birthday.")}
+        # The birthday also names the reason when the outfit's other occasion sorts first.
+        both = w.catalog({"costumes": {"x": {"occasions": ["christmas", "commander_birthday"]}}})
+        assert w.pick_daily_outfit(both, day, 0, occasions=occ) == ("x", "It's his birthday.")
 
     def test_wedding_gown_only_at_nine_on_white_day(self, cat, p):
         occ = w.occasions_on(date(2027, 3, 14), p)
@@ -305,6 +323,8 @@ class TestDetectOutfitRequest:
         ("try on the crocodile onesie", "klukadile_pajamas"),
         ("wear the coat over the maid uniform", "winter_patrol"),
         ("wear the maid dress", "immaculate_service"),
+        ("could you please wear the maid outfit", "immaculate_service"),
+        ("will you put on the coat", "winter_patrol"),
     ])
     def test_detects(self, msg, expected):
         assert w.detect_outfit_request(msg) == expected
@@ -318,6 +338,12 @@ class TestDetectOutfitRequest:
         "the maid outfit is ridiculous",
         "wear something",
         "I'll see you in the morning",
+        # A bare "you" before the verb is about her habits, not a request.
+        "I like it when you wear the hoodie",
+        "you look good when you wear the maid outfit",
+        "if you wear the coat you'll be fine",
+        "you wear coveralls when you work on the bike?",
+        "remember when you put on the cat ears last year",
     ])
     def test_ignores(self, msg):
         assert w.detect_outfit_request(msg) is None
@@ -705,10 +731,28 @@ class TestReviewFixes:
         ensure = AsyncMock()
         with patch("app.context.affection", aff), patch("app.wardrobe.ensure_today", ensure):
             await w.warm_today("claude")
-        ensure.assert_awaited_once_with("claude", 4)
+            await w.warm_today("claude", mood="tender")
+        # The session's mood reaches the pick — this warm-up usually wins the
+        # race against the chat turn's ensure_today(mood=...), which then only
+        # reads the cache.
+        assert ensure.await_args_list == [call("claude", 4, mood=None), call("claude", 4, mood="tender")]
         aff.get_state = AsyncMock(side_effect=RuntimeError("x"))
         with patch("app.context.affection", aff):
             await w.warm_today("claude")  # never raises
+
+
+class TestOccasionsFor:
+    async def test_spans_her_day_and_the_calendar_day(self):
+        """00:30 on his birthday: her day is still yesterday, but the rituals
+        greet him by the calendar — the oath gate must agree it is today."""
+        small_hours = datetime(2026, 10, 5, 0, 30)
+        her_day = w.her_date(small_hours)
+        assert her_day == date(2026, 10, 4)
+        for bday, expected in (("10-05", {"commander_birthday"}), ("10-04", {"commander_birthday"}),
+                               ("10-06", frozenset())):
+            with patch("app.wardrobe.now_local", return_value=small_hours), \
+                 patch("app.rituals.get_birthday", new=AsyncMock(return_value=bday)):
+                assert await w.occasions_for("claude", her_day) == expected, bday
 
 
 class TestDiscreetRefusals:

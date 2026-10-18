@@ -488,6 +488,36 @@ class TestWebSocketEndpoint:
         ws.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_connect_warms_her_day_with_the_session_mood(self):
+        """The connect-time outfit pick carries the mood the chat turn will
+        pass, so her mood counts even though this pick wins the race."""
+        endpoint, _ = _capture_endpoint()
+        sock = _FakeWebSocket(token="good")
+        ws = _fake_ws_manager()
+
+        memory = MagicMock()
+        memory.get_session = AsyncMock(return_value=None)
+        memory.save_session = AsyncMock()
+
+        proactive = MagicMock()
+        proactive.mission_active = False
+
+        with patch("app.chat.ws", ws), patch("app.chat.memory", memory), patch(
+            "app.chat.proactive", proactive
+        ), patch("app.auth.get_user_from_token", AsyncMock(return_value="u1")), patch(
+            "app.chat.get_conn", return_value=_FakeConn(("tender",))
+        ), patch(
+            "app.chat._create_conversation", AsyncMock()
+        ), patch(
+            "app.chat._maybe_reflect_on_return", AsyncMock()
+        ), patch(
+            "app.wardrobe.warm_today", AsyncMock()
+        ) as warm:
+            await endpoint(sock)
+
+        warm.assert_called_once_with("u1", mood="tender")
+
+    @pytest.mark.asyncio
     async def test_existing_session_mood_not_overwritten_by_db(self):
         """A second device must retain the current live mood."""
         endpoint, _ = _capture_endpoint()

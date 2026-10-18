@@ -59,7 +59,12 @@ _VERB_LETTER = re.compile(
     r"(?=\s*(?:$|[.!,;)]|\s+(?:please|then|for\s+sure|definitely|obviously|i\s+think)))"
 )
 _LEAD_LETTER = re.compile(r"^\s*([abc])\s*(?:[.!,:;)\-]|$)")
-_UPPER_LETTER = re.compile(r"(?<![A-Za-z'])([BC])(?![A-Za-z'\-])")
+# A bare capital B/C only where it opens or closes a clause ("B.", "ok, B",
+# "Definitely B"), not "Plan B fell through", "a B on the exam", "Vitamin C".
+_UPPER_LETTER = re.compile(
+    r"(?:^|[.,;:!?(]\s*)([BC])(?![A-Za-z'\-])"
+    r"|(?<![A-Za-z'])([BC])(?=\s*(?:$|[.!,;:)]))"
+)
 _ORDINAL_PHRASE = re.compile(
     r"\b(first|second|third|last)\s+(?:one|option|choice)\b"
     r"|\bthe\s+(former|latter)\b"
@@ -91,7 +96,9 @@ def _explicit_keys(text: str, original: str, keys: list[str]) -> set[str]:
                 found.append((k, 0))
     for rx in (_CUE_LETTER, _VERB_LETTER, _LEAD_LETTER):
         found += [(m.group(1).upper(), m.start()) for m in rx.finditer(text)]
-    found += [(m.group(1), m.start()) for m in _UPPER_LETTER.finditer(original)]
+    found += [
+        (m.group(1) or m.group(2), m.start()) for m in _UPPER_LETTER.finditer(original)
+    ]
     for m in _ORDINAL_PHRASE.finditer(text):
         k = by_index(_ORDINALS[m.group(1) or m.group(2)])
         if k:

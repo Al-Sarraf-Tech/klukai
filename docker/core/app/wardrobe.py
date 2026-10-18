@@ -271,13 +271,16 @@ async def ensure_today(
         return row
 
 
-async def warm_today(user_id: str) -> None:
-    """On connect: pick today's outfit in the background (never raises)."""
+async def warm_today(user_id: str, *, mood: str | None = None) -> None:
+    """On connect: pick today's outfit in the background (never raises).
+
+    ``mood`` is the session's mood, the same one the chat turn passes: this
+    pick usually wins the race, so without it her mood would never count."""
     from .context import affection
 
     try:
         level = (await affection.get_state(user_id)).level
-        await ensure_today(user_id, level)
+        await ensure_today(user_id, level, mood=mood)
         _prewarm_portrait(user_id, level)
     except Exception as e:
         logger.debug("Her Day warm-up skipped: %s", e)
@@ -339,9 +342,13 @@ async def set_requested(user_id: str, oid: str, level: int) -> None:
 
 
 async def occasions_for(user_id: str, day: date) -> frozenset[str]:
+    """Today's occasions for a request gate: those of her day (``day``) and of
+    the calendar day. Between midnight and 0500 on his birthday the rituals
+    already greet him, so the oath must not answer "not today"."""
     from .rituals import get_birthday
 
-    return occasions_on(day, None, await get_birthday(user_id))
+    bday = await get_birthday(user_id)
+    return occasions_on(day, None, bday) | occasions_on(now_local().date(), None, bday)
 
 
 async def handle_request(

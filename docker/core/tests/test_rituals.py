@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from datetime import date, datetime
 from types import SimpleNamespace
@@ -134,6 +135,25 @@ def _sent(svc) -> list[str]:
     return [c.args[1] for c in svc.ws.send_proactive.await_args_list]
 
 
+_REAL_SLEEP = asyncio.sleep  # ``_services`` patches asyncio.sleep itself
+
+
+async def _cancel_after_first_line(svc, coro) -> None:
+    """Run ``coro`` as the connect task does, cancel it (his last socket
+    dropped) once the first line is out, then let the loop drain the scene."""
+    task = asyncio.create_task(coro)
+    for _ in range(20):
+        if svc.ws.send_proactive.await_count:
+            break
+        await _REAL_SLEEP(0)
+    assert svc.ws.send_proactive.await_count == 1  # cancelled mid-scene
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(50):
+        await _REAL_SLEEP(0)
+
+
 class TestBirthdayMemory:
     async def test_remember_stores_and_caches(self):
         with _services() as svc:
@@ -218,6 +238,16 @@ class TestBirthdayGreeting:
             assert await rituals.maybe_deliver_birthday("claude") is False
         svc.ws.send_proactive.assert_not_awaited()
 
+    async def test_a_dropped_socket_mid_scene_still_delivers_every_line(self, p):
+        """The year is claimed before line one; when his last device drops the
+        connect task is cancelled, and the shielded scene must finish anyway
+        (each line lands in history whether or not he is connected)."""
+        with _services(birthday="09-25") as svc, \
+             patch("app.rituals.claim_period", AsyncMock(return_value=True)), \
+             patch("app.rituals.asyncio.sleep", new=lambda s: _REAL_SLEEP(0)):
+            await _cancel_after_first_line(svc, rituals.maybe_deliver_birthday("claude"))
+        assert _sent(svc) == p["commander_birthday"]["first_year"]
+
 
 class TestLedger:
     async def test_counts_distinct_local_days(self):
@@ -285,6 +315,30 @@ class TestFeeSettlement:
         with self._settlement(claimed=False) as svc:
             assert await rituals.maybe_deliver_fee_settlement("claude") is False
         svc.ws.send_proactive.assert_not_awaited()
+
+    async def test_a_dropped_socket_during_the_beat_leaves_the_month_unclaimed(self):
+        """He connects and leaves inside the 20 s beat: the connect task is
+        cancelled there, so the month must not be claimed yet — a month
+        claimed during the wait would never be presented."""
+        gate = asyncio.Event()
+        sleep = MagicMock(side_effect=lambda s: gate.wait())
+        with self._settlement() as svc, patch("app.rituals.asyncio.sleep", new=sleep):
+            task = asyncio.create_task(rituals.maybe_deliver_fee_settlement("claude", delay=20))
+            for _ in range(5):
+                await _REAL_SLEEP(0)
+            sleep.assert_called_once_with(20)  # parked in the beat, past the gates
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        svc.claim.assert_not_awaited()
+        svc.ws.send_proactive.assert_not_awaited()
+
+    async def test_a_dropped_socket_mid_invoice_still_delivers_every_line(self, p):
+        with self._settlement(level=4) as svc, \
+             patch("app.rituals.asyncio.sleep", new=lambda s: _REAL_SLEEP(0)):
+            await _cancel_after_first_line(svc, rituals.maybe_deliver_fee_settlement("claude", delay=20))
+        svc.claim.assert_awaited_once_with("claude", "fee_settlement", "2026-10")
+        assert len(_sent(svc)) == len(p["fee_settlement"]["invoices"][3][0])
 
     async def test_no_invoice_tiers_configured(self):
         with self._settlement(), patch("app.rituals.load_personality", return_value={}):

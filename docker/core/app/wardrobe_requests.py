@@ -19,11 +19,14 @@ _NEGATION = re.compile(
 )
 _QUESTION_ABOUT = re.compile(r"\b(?:do|did|have) you (?:ever |still |even )?$")
 # The wear-verb must be addressed to HER: an imperative opening a clause
-# ("Klukai, wear...", "please put on..."), or you-led ("can you", "would you",
-# "I want you to", "you should"). "I'm going to wear a coat" is about him.
+# ("Klukai, wear...", "please put on..."), or you-led with a modal ("can you",
+# "would you", "I want you to", "you should"). A bare "you" is not a request:
+# "I like it when you wear the hoodie", "if you wear the coat you'll be fine"
+# and "I'm going to wear a coat" are about her habits or about him.
 _ADDRESSED = re.compile(
     r"(?:^|[.!?;,:]\s*|\b(?:please|just|now|go|and|so|then|ok|okay|hey)\s+)$"
-    r"|\byou(?:'d| would| could| can| will| might| should| to)?\s+(?:please\s+|maybe\s+|just\s+)?$"
+    r"|\b(?:can|could|would|will|might|should)\s+you\s+(?:please\s+|maybe\s+|just\s+)?$"
+    r"|\byou(?:'d| would| could| can| will| might| should| to)\s+(?:please\s+|maybe\s+|just\s+)?$"
 )
 
 

@@ -329,7 +329,12 @@ async def apply_effect(memory: Any, user_id: str, effect: Any, now: datetime) ->
     outfit = effect.get("outfit")
     fact = effect.get("fact")
     if isinstance(outfit, str) and outfit.strip():
-        tomorrow = _local_today(now) + timedelta(days=1)
+        # Her Day's tomorrow, not the calendar's: her day turns over at 0500.
+        from .wardrobe import her_date
+
+        tomorrow = her_date(now.astimezone(LOCAL_TZ).replace(tzinfo=None)) + timedelta(
+            days=1
+        )
         await _store(
             memory,
             OUTFIT_TOMORROW_FACT,

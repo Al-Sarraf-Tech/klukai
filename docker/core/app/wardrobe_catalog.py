@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import hashlib
 import random
 from dataclasses import dataclass
@@ -196,6 +197,9 @@ def occasions_on(
         for key, specs in (p.get("wardrobe_occasions") or {}).items()
         if any(_mmdd_matches(str(s), mmdd) for s in specs or ())
     }
+    # A Feb 29 birthday is kept on Feb 28 in common years (as rituals does).
+    if commander_birthday == "02-29" and not calendar.isleap(day.year):
+        commander_birthday = "02-28"
     if commander_birthday and commander_birthday == mmdd:
         found.add("commander_birthday")
     return frozenset(found)
@@ -233,8 +237,14 @@ def _daily_score(
     score = float(daily.get("weight", 1.0))
     reasons: list[tuple[float, str]] = []
     if hit:
+        # +20 for an occasion, +5 more when it is his birthday: that outranks
+        # a holiday it falls inside (it was a coin flip).
         score += 20.0
-        reasons.append((20.0, _OCCASION_REASONS.get(hit[0], "An occasion.")))
+        reason = _OCCASION_REASONS.get(hit[0], "An occasion.")
+        if "commander_birthday" in hit:
+            score += 5.0
+            reason = _OCCASION_REASONS["commander_birthday"]
+        reasons.append((20.0, reason))
     if daily.get("conditions"):
         score += 2.0
         reasons.append((2.0, _CONDITION_REASONS.get(str(condition), "The weather.")))
