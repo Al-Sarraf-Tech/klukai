@@ -207,6 +207,18 @@ Handoff: `docs/handoff/2026-10-11-standby-hardening.md`.
   `memory_archive_query.py` already do. The s-tier audit scores 65/67 here;
   the two left need the live hosts (secret rotation, DR drill evidence).
 
+### Changed — CI runs every suite (2026-10-18)
+
+- `.github/workflows/ci.yml` gained four jobs on the same self-hosted
+  runner: `satellite-tests` (tgbot, the Dominus ops tests and the amarillo
+  seeder-unit test, the voice service with faster-whisper stubbed, and the
+  gateway in its own venv from its own lock), `shellcheck` (same selection
+  as `make test-shell`, warning level), and `stage-js` / `flutter`, which
+  run when node or the Flutter SDK exist on the runner and otherwise emit a
+  visible `::warning` and pass, the posture the image scan already takes.
+  Until now only docker/core was checked on push. The core image also
+  copies `reannotate_existing.py` so its documented `docker exec` works.
+
 ### Added — S+ Phase 2/3/4 uplift batch (2026-05-17)
 
 - **scripts/s-tier-audit.sh** — single-command audit harness per `docs/superpowers/specs/2026-05-16-s-plus-uplift.md` §5.8. Exit 0 = S+; exit 1 = floor. Walks all 8 tier dimensions. Score: 32→60 / 65. Floor: C → A+.

@@ -395,11 +395,17 @@ mypy app/ --config-file mypy.ini
 cd flutter_app
 flutter analyze
 flutter test --platform chrome
+
+# Everything outside docker/core: Telegram bot, Dominus/amarillo ops tests,
+# voice service, companion stage + avatar, shellcheck. No running stack needed.
+make test-tgbot test-ops test-voice test-js test-shell   # or: make test-all
 ```
 
 Golden snapshots in `docker/core/tests/golden/` pin the system prompt across affection × mood × time of day. Rotate them deliberately with `UPDATE_SNAPSHOTS=1` and review the diff.
 
-The live suite (`scripts/e2e_live.py`) exercises HTTP, WebSocket, Postgres, the delay rail, and the full Her POV path against a running stack. CI uses **self-hosted** runners only.
+The live suite (`scripts/e2e_live.py`) exercises HTTP, WebSocket, Postgres, the delay rail, and the full Her POV path against a running stack. CI (`.github/workflows/ci.yml`) runs the
+backend gate, ruff, mypy, bandit, pip-audit, the satellite suites and shellcheck on
+**self-hosted** runners only; the node and Flutter jobs run where the runner has that tooling.
 
 ---
 
