@@ -110,7 +110,7 @@ for ni, nd in skin_mesh_nodes:
     mesh_name = mesh.get("name", f"mesh_{mesh_idx}")
     node_name = nd.get("name", f"node_{ni}")
 
-    for pidx, prim in enumerate(mesh.get("primitives", [])):
+    for _pidx, prim in enumerate(mesh.get("primitives", [])):
         attrs = prim.get("attributes", {})
         if "JOINTS_0" not in attrs or "WEIGHTS_0" not in attrs:
             continue
@@ -159,7 +159,7 @@ for ni, nd in skin_mesh_nodes:
     mesh      = meshes[mesh_idx]
     mesh_name = mesh.get("name", f"mesh_{mesh_idx}")
     node_name = nd.get("name", f"node_{ni}")
-    for pidx, prim in enumerate(mesh.get("primitives", [])):
+    for _pidx, prim in enumerate(mesh.get("primitives", [])):
         attrs = prim.get("attributes", {})
         if "JOINTS_0" not in attrs or "WEIGHTS_0" not in attrs:
             continue
