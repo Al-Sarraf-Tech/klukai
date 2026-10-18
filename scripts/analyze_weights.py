@@ -132,6 +132,12 @@ def read_accessor(accessor_idx):
     byte_stride  = bv.get("byteStride", comp_size * n_comp)
 
     start = bv_offset + acc_offset
+    # A malformed accessor would otherwise read past its buffer view silently.
+    last_end = start + (count - 1) * byte_stride + comp_size * n_comp
+    if count and last_end > bv_offset + bv_byte_len:
+        raise ValueError(
+            f"accessor overruns its bufferView by {last_end - (bv_offset + bv_byte_len)} bytes"
+        )
     results = []
     for i in range(count):
         off = start + i * byte_stride
@@ -145,7 +151,7 @@ def read_accessor(accessor_idx):
 def analyze_bone(joint_slot, bone_name, joints_data, weights_data):
     total_verts = len(joints_data)
     refs = []          # (vertex_idx, slot_in_vec4, weight)
-    for vi, (jvec, wvec) in enumerate(zip(joints_data, weights_data)):
+    for vi, (jvec, wvec) in enumerate(zip(joints_data, weights_data, strict=True)):
         for slot in range(4):
             if jvec[slot] == joint_slot:
                 refs.append((vi, slot, wvec[slot]))

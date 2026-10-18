@@ -6,7 +6,6 @@ from klukai.glb, not just the first one.
 
 import struct
 import json
-import sys
 from collections import Counter
 
 GLB_PATH = "/home/jalsarraf/git/klukai/web-build/assets/models/klukai.glb"
