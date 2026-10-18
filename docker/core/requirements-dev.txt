@@ -1,0 +1,13 @@
+# Developer and CI tooling for docker/core. The runtime pins live in
+# requirements.txt (hash-locked, what the image installs); this file is the
+# tool set the CI jobs install on top of it, kept unpinned like they do.
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest
+pytest-asyncio
+pytest-timeout
+pytest-cov
+ruff
+mypy
+types-PyYAML
+bandit
+pip-audit
