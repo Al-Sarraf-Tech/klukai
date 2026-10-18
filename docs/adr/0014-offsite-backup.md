@@ -48,8 +48,10 @@ The following are mandatory invariants:
    marker. A non-empty unmarked directory is never adopted automatically.
 5. At least one recent database dump must exist before transfer, gzip-valid
    and ending with the pg_dump completion trailer. `klukai/images-latest/`
-   must be a real directory on the source filesystem with at least one recent
-   file; it is the only backup of the `companion-images` volume.
+   must be a real, non-empty directory on the source filesystem; it is the
+   only backup of the `companion-images` volume. (Not "recent": the producer
+   preserves mtimes, and a night on which no new image was drawn must still
+   ship.)
 6. Each archive is streamed to a unique partial name and validated remotely.
    Its SHA-256 sidecar is installed first; the validated archive is then
    atomically renamed into visibility. A completed archive is never
