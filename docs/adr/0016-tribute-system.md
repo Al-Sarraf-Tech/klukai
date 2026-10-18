@@ -102,7 +102,7 @@ phrases the block as instruction-to-LLM, not quote-block:
 ## Related
 
 - `app/tributes.py` — module
-- `app/routes.py` (4 new endpoints near line 645)
+- `app/routes_extras2.py` (the tribute endpoints; `TributeRequest` lives in `app/routes.py`)
 - `app/personality/state_blocks.py:build_crown_jewel_block`
 - `app/personality/system_prompt.py` (assemble_system_prompt accepts
   `crown_jewel` param)

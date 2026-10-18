@@ -59,7 +59,7 @@ Use three backends, each scoped to one pattern:
 
 ## Related
 
-- `app/memory.py` — three-tier memory manager
+- `app/memory.py` — three-tier memory manager (`app/memory_facts.py` holds the fact store mixin)
 - `app/db.py` — PG pool wrapper
 - `docs/runbooks/{db,redis,qdrant}-down.md`
 - `scripts/audit-memories.sh`

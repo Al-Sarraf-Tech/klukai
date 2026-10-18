@@ -54,7 +54,7 @@ ComfyUI on `dominus-nobara` with:
 
 ## Related
 
-- `app/image_gen.py`
+- `app/image_gen.py` (lease + orchestration), `app/image_gen_prompts.py`, `app/image_gen_comfy.py` (Comfy client)
 - `reference_illustrious.md` (global CLAUDE.md)
 - `feedback_comfyui_port.md`
 - `docs/runbooks/comfyui-down.md`

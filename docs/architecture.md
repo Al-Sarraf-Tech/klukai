@@ -38,15 +38,21 @@ Single FastAPI process. Important modules:
 
 | Module | Role |
 |---|---|
-| `chat.py` / `chat_handlers.py` | WebSocket pipeline, warm-on-connect hook |
+| `chat.py` / `chat_handlers.py` / `chat_prompt.py` | WebSocket pipeline, turn phases, system-prompt assembly and budgets |
 | `llm_router.py` | **Local-only** routing; no cloud fallback |
-| `memory_her_pov.py` | Her POV pipeline + durable job board |
+| `memory_her_pov.py` / `memory_her_pov_jobs.py` | Her POV pipeline / durable job board and rail |
 | `deferred.py` | One-shot future tasks (Postgres + bridge timer) |
-| `proactive/` | Cron engine + durability catch-up |
-| `memory*.py` | Three-tier memory + archive |
-| `image_gen.py` | Comfy via gateway + GPU lease |
+| `proactive/` | Cron engine (`engine.py` + mixins: `mission*.py`, `events*.py`, `schedule.py`, …) + durability catch-up |
+| `memory*.py` | Three-tier memory (`memory.py`, `memory_facts.py`) + archive (`memory_archive*.py`) |
+| `image_gen.py` / `image_gen_prompts.py` / `image_gen_comfy.py` | GPU lease + orchestration / prompt layer / Comfy client via gateway |
+| `routes*.py` | HTTP API by area (`routes_health.py` holds `/health*`, `routes_internal.py` the bridge-facing internal endpoints) |
+| `background.py` / `background_jobs.py` | Post-turn extraction and the scheduled background jobs |
+| `helpers.py` / `helpers_intent.py` | Text helpers and the intent detectors (goodbye, outfit, decisions) |
 | `events.py` | Redis publish (`companion:events`) |
 | `warmup.py` | Background model warm (not keepalive) |
+
+No file under `app/` is over 500 lines; splits are pure moves with re-exports, so the
+module a test patches is the module that looks the name up.
 
 ### LLM policy (non-negotiable)
 

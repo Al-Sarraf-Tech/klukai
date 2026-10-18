@@ -76,5 +76,5 @@ Fail-soft: bridge reconnect loops; core keeps serving chat if the bus is down.
 
 - `docker/events-bridge/bridge.py`
 - `docker/core/app/deferred.py`
-- `docker/core/app/memory_her_pov.py`
+- `docker/core/app/memory_her_pov.py` (pipeline) and `memory_her_pov_jobs.py` (job board and rail)
 - `docs/architecture.md`
