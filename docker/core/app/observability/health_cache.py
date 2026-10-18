@@ -138,7 +138,17 @@ async def running() -> AsyncIterator[None]:
 async def _check_database_fresh() -> dict[str, Any]:
     from ..db import check_health as db_health
 
-    return await db_health()
+    try:
+        return await asyncio.wait_for(db_health(), timeout=PING_TIMEOUT_SECONDS)
+    except TimeoutError:
+        # Under pool exhaustion the SELECT 1 waits for a connection with no
+        # bound of its own. Left alone, /health would hang past the compose
+        # healthcheck (timeout 5s x 3 retries) and autoheal would restart
+        # core mid-chat. Same shape db.check_health returns on failure.
+        logger.warning(
+            "database health probe timed out after %.1fs", PING_TIMEOUT_SECONDS
+        )
+        return {"status": "error", "detail": "probe timeout"}
 
 
 async def _check_redis_fresh() -> dict[str, Any]:

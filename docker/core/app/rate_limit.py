@@ -107,6 +107,15 @@ async def check_and_consume(user_id: str, bucket: str) -> tuple[int, int]:
             if count == 1:
                 await r.expire(key, limit.window_seconds)
             ttl = await r.ttl(key)
+            if ttl < 0:
+                # -1: the key has no TTL; the EXPIRE after the first INCR never
+                # landed, so the counter would outlive its window and the
+                # bucket would stay locked forever (a 429 whose retry_after
+                # never clears). Re-arm it and judge this request against a
+                # full window. (-2: the key vanished in between; EXPIRE is a
+                # no-op.)
+                await r.expire(key, limit.window_seconds)
+                ttl = limit.window_seconds
         if count > limit.requests:
             raise RateLimitExceeded(bucket=bucket, retry_after=max(ttl, 1))
         return (limit.requests - count, max(ttl, 0))
@@ -120,6 +129,31 @@ async def check_and_consume(user_id: str, bucket: str) -> tuple[int, int]:
             e,
         )
         return (999, 0)
+
+
+async def refund(user_id: str, bucket: str) -> None:
+    """Give back the token check_and_consume took for one request.
+
+    For requests the limiter admitted but the handler then turned away
+    without doing the work the limit guards: a 409 "GPU busy" on the
+    1-per-10-minutes portrait bucket must not burn its only token. DECR
+    keeps the key's TTL; a counter that goes negative is deleted so the
+    bucket starts clean. Fail-soft: a Redis error only logs.
+    """
+    limit = LIMITS.get(bucket, LIMITS["default"])
+    key = f"{limit.key_prefix}:{user_id}:{bucket}"
+    try:
+        r = await _get_redis()
+        async with get_breaker("redis").protect():
+            if await r.decr(key) < 0:
+                await r.delete(key)
+    except Exception as e:
+        logger.debug(
+            "Rate limit refund failed for bucket=%s user=%s: %s",
+            bucket,
+            user_id[:16],
+            e,
+        )
 
 
 async def reset(user_id: str, bucket: str) -> None:

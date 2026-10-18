@@ -43,6 +43,15 @@ class TestSignedUrls:
         assert verify("no-dot-at-all", "r1") is False
         assert verify("abc.def", "r1") is False  # exp not int
 
+    def test_non_ascii_signature_is_rejected_not_an_error(self):
+        """compare_digest on str raises TypeError for non-ASCII input, which
+        turned `?sig=1.%C3%BC` into a 500. Any such token verifies False."""
+        from app.signed_urls import sign, verify
+        exp = sign("r1", ttl_seconds=60).split(".", 1)[0]  # a live expiry
+        assert verify(f"{exp}.ü", "r1") is False
+        assert verify(f"{exp}.1.ü", "r1") is False
+        assert verify(f"{exp}.éèê", "r1", user_id="alice") is False
+
     def test_different_secret_rejects_token(self, monkeypatch):
         from app.signed_urls import sign, verify
         monkeypatch.setenv("SIGNED_URL_SECRET", "secret-A")

@@ -187,6 +187,37 @@ class TestFreshCheckImplementations:
         assert out == {"status": "ok"}
 
     @pytest.mark.asyncio
+    async def test_database_fresh_times_out_as_error(self, caplog):
+        """A probe stuck waiting on an exhausted pool is cut at
+        PING_TIMEOUT_SECONDS like the Redis/Qdrant ones — never left to hang
+        /health past the compose healthcheck (which would get core restarted
+        mid-chat). Reports the same shape db.check_health uses on failure."""
+        async def stuck():
+            await asyncio.sleep(30)
+            return {"status": "ok"}
+
+        with patch.object(hc, "PING_TIMEOUT_SECONDS", 0.01), \
+             patch("app.db.check_health", stuck), \
+             caplog.at_level("WARNING", logger=hc.logger.name):
+            out = await hc._check_database_fresh()
+        assert out == {"status": "error", "detail": "probe timeout"}
+        assert "database health probe timed out" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_database_timeout_rolls_up_as_unhealthy(self):
+        """The timed-out probe is a DB failure for the roll-up, not a hang."""
+        async def stuck():
+            await asyncio.sleep(30)
+
+        with patch.object(hc, "PING_TIMEOUT_SECONDS", 0.01), \
+             patch("app.db.check_health", stuck), \
+             patch.object(hc, "_check_redis_fresh", AsyncMock(return_value={"status": "ok"})), \
+             patch.object(hc, "_check_qdrant_fresh", AsyncMock(return_value={"status": "ok"})):
+            out = await hc.get_cached_health()
+        assert out["status"] == "unhealthy"
+        assert out["database"] == {"status": "error", "detail": "probe timeout"}
+
+    @pytest.mark.asyncio
     async def test_redis_fresh_ok_on_ping(self):
         # health_cache does `import redis.asyncio as aioredis` then
         # aioredis.from_url(...). Since `redis` is already imported, patch the

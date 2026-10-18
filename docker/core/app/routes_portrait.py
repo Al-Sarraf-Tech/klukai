@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 
+import asyncio
 import gzip
 import logging
 import os
@@ -51,6 +52,12 @@ def _etag_matches(header: str, etag: str) -> bool:
         return True
     tags = {t.strip().removeprefix("W/") for t in header.split(",")}
     return etag in tags
+
+
+def _gzip_file(path: Path) -> bytes:
+    """Read + deflate the model. Runs in a worker thread: tens of MB would
+    otherwise stall the event loop (chat WebSocket included) for seconds."""
+    return gzip.compress(path.read_bytes(), compresslevel=6)
 
 
 def register_portrait_routes(app: FastAPI) -> None:
@@ -134,7 +141,7 @@ def register_portrait_routes(app: FastAPI) -> None:
             # saves ~30% on a phone connection. Cache the most recently used version.
             body = _MODEL_GZ.get(etag)
             if body is None:
-                body = gzip.compress(path.read_bytes(), compresslevel=6)
+                body = await asyncio.to_thread(_gzip_file, path)
                 _MODEL_GZ.clear()
                 _MODEL_GZ[etag] = body
             return Response(

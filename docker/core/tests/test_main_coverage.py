@@ -206,6 +206,40 @@ class TestRateLimitMiddleware:
         assert out.status_code == 429
         assert out.headers["Retry-After"] == "30"
 
+    async def test_409_from_the_handler_refunds_the_token(self):
+        """The token is consumed before call_next; a 409 (GPU busy / already
+        drawing) did none of the work the limit guards, so it goes back —
+        else one 409 on the 1-per-10-min portrait bucket locks him out."""
+        mw = main._RateLimitMiddleware(app=MagicMock())
+        resp = _response_factory(status_code=409)
+        with patch("app.auth.get_user_from_token",
+                   new=AsyncMock(return_value="alice")), \
+             patch("app.rate_limit.check_and_consume",
+                   new=AsyncMock(return_value=(0, 600))), \
+             patch("app.rate_limit.refund", new=AsyncMock()) as refund:
+            out = await mw.dispatch(
+                _request(path="/api/portrait/refresh",
+                         headers={"Authorization": "Bearer good-token"}),
+                AsyncMock(return_value=resp),
+            )
+        refund.assert_awaited_once_with("alice", "portrait_refresh")
+        # The 409 itself passes through, with the refunded count advertised.
+        assert out.status_code == 409
+        assert out.headers["X-RateLimit-Remaining"] == "1"
+        assert out.headers["X-RateLimit-Bucket"] == "portrait_refresh"
+
+    @pytest.mark.parametrize("status", [200, 202, 400, 404, 500])
+    async def test_other_statuses_keep_the_token(self, status):
+        mw = main._RateLimitMiddleware(app=MagicMock())
+        resp = _response_factory(status_code=status)
+        with patch("app.rate_limit.check_and_consume",
+                   new=AsyncMock(return_value=(4, 0))), \
+             patch("app.rate_limit.refund", new=AsyncMock()) as refund:
+            out = await mw.dispatch(_request(path="/api/portrait/refresh"),
+                                    AsyncMock(return_value=resp))
+        refund.assert_not_awaited()
+        assert out.headers["X-RateLimit-Remaining"] == "4"
+
 
 # ── _MetricsMiddleware ───────────────────────────────────────────────────────
 

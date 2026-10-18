@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app import rate_limit
-from app.rate_limit import LIMITS, Limit, RateLimitExceeded, check_and_consume, reset
+from app.rate_limit import LIMITS, Limit, RateLimitExceeded, check_and_consume, refund, reset
 
 
 @pytest.fixture(autouse=True)
@@ -136,6 +136,120 @@ class TestCheckAndConsumeExceeded:
             with pytest.raises(RateLimitExceeded) as exc_info:
                 await check_and_consume("alice", "login")
         assert exc_info.value.retry_after == 1
+
+
+class TestCheckAndConsumeReArmsLostTtl:
+    """INCR then EXPIRE is two round trips: if the EXPIRE is lost the key has
+    no TTL, the counter never resets, and the bucket is locked for good (a 429
+    whose retry_after never clears). A TTL of -1 must re-arm the window."""
+
+    @pytest.mark.asyncio
+    async def test_missing_ttl_is_rearmed_and_request_judged_by_count(self):
+        r = AsyncMock()
+        r.incr = AsyncMock(return_value=5)
+        r.expire = AsyncMock()
+        r.ttl = AsyncMock(return_value=-1)
+        with patch("app.rate_limit._get_redis", return_value=r):
+            remaining, retry = await check_and_consume("alice", "login")
+        # Under the limit → allowed, by the normal count rule.
+        assert remaining == LIMITS["login"].requests - 5
+        # Re-armed with the bucket's window, and that window is what's reported.
+        r.expire.assert_awaited_once()
+        assert r.expire.await_args.args[1] == LIMITS["login"].window_seconds
+        assert retry == LIMITS["login"].window_seconds
+
+    @pytest.mark.asyncio
+    async def test_missing_ttl_over_limit_retry_after_is_the_window(self):
+        r = AsyncMock()
+        r.incr = AsyncMock(return_value=LIMITS["login"].requests + 1)
+        r.expire = AsyncMock()
+        r.ttl = AsyncMock(return_value=-1)
+        with patch("app.rate_limit._get_redis", return_value=r):
+            with pytest.raises(RateLimitExceeded) as exc_info:
+                await check_and_consume("alice", "login")
+        # Not a permanent "retry in 1s": the counter now expires with the window.
+        assert exc_info.value.retry_after == LIMITS["login"].window_seconds
+        r.expire.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_first_hit_whose_expire_did_not_stick_rearms(self):
+        r = AsyncMock()
+        r.incr = AsyncMock(return_value=1)
+        r.expire = AsyncMock()
+        r.ttl = AsyncMock(return_value=-1)
+        with patch("app.rate_limit._get_redis", return_value=r):
+            remaining, _ = await check_and_consume("alice", "login")
+        assert remaining == LIMITS["login"].requests - 1
+        assert r.expire.await_count == 2  # first-hit arm + re-arm
+
+    @pytest.mark.asyncio
+    async def test_live_ttl_is_left_alone(self):
+        r = AsyncMock()
+        r.incr = AsyncMock(return_value=2)
+        r.expire = AsyncMock()
+        r.ttl = AsyncMock(return_value=42)
+        with patch("app.rate_limit._get_redis", return_value=r):
+            _, retry = await check_and_consume("alice", "login")
+        r.expire.assert_not_awaited()
+        assert retry == 42
+
+    @pytest.mark.asyncio
+    async def test_rearm_failure_still_fails_open(self):
+        r = AsyncMock()
+        r.incr = AsyncMock(return_value=5)
+        r.ttl = AsyncMock(return_value=-1)
+        r.expire = AsyncMock(side_effect=RuntimeError("READONLY replica"))
+        with patch("app.rate_limit._get_redis", return_value=r):
+            remaining, retry = await check_and_consume("alice", "login")
+        assert (remaining, retry) == (999, 0)
+
+
+class TestRefund:
+    """refund() gives back a token for a request the handler turned away (409)."""
+
+    @pytest.mark.asyncio
+    async def test_decrements_the_bucket_key(self):
+        r = AsyncMock()
+        r.decr = AsyncMock(return_value=0)
+        r.delete = AsyncMock()
+        with patch("app.rate_limit._get_redis", return_value=r):
+            await refund("alice", "portrait_refresh")
+        r.decr.assert_awaited_once()
+        key = r.decr.await_args.args[0]
+        assert key.startswith(LIMITS["portrait_refresh"].key_prefix)
+        assert key.endswith(":alice:portrait_refresh")
+        # 1 → 0 is a clean, empty bucket: the key (and its TTL) stays as is.
+        r.delete.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_deletes_key_that_goes_negative(self):
+        r = AsyncMock()
+        r.decr = AsyncMock(return_value=-1)
+        r.delete = AsyncMock()
+        with patch("app.rate_limit._get_redis", return_value=r):
+            await refund("alice", "portrait_refresh")
+        r.delete.assert_awaited_once_with(r.decr.await_args.args[0])
+
+    @pytest.mark.asyncio
+    async def test_unknown_bucket_uses_default_key(self):
+        r = AsyncMock()
+        r.decr = AsyncMock(return_value=3)
+        with patch("app.rate_limit._get_redis", return_value=r):
+            await refund("alice", "bogus")
+        assert r.decr.await_args.args[0].startswith(LIMITS["default"].key_prefix)
+
+    @pytest.mark.asyncio
+    async def test_fails_soft_on_redis_error(self):
+        with patch("app.rate_limit._get_redis", side_effect=RuntimeError("down")):
+            await refund("alice", "portrait_refresh")  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_fails_soft_when_decr_raises(self):
+        r = AsyncMock()
+        r.decr = AsyncMock(side_effect=RuntimeError("OOM"))
+        with patch("app.rate_limit._get_redis", return_value=r):
+            await refund("alice", "portrait_refresh")
+        r.delete.assert_not_awaited()
 
 
 class TestReset:

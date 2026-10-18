@@ -446,7 +446,10 @@ def register_extras2(app: FastAPI) -> None:
         return Response(
             content=audio_bytes,
             media_type="audio/wav",
-            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+            # `private`, not `public`: this is a bearer-gated response, and
+            # `public` would let a shared cache on the cloudflared path store
+            # it and hand the letter to anyone who guesses the UUID.
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
         )
 
     @app.post("/api/voice-notes/{note_id}/played")

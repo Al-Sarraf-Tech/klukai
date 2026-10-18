@@ -32,6 +32,25 @@ async def _get_user_id(request: Request) -> str | None:
     return await get_user_from_token(auth[7:])
 
 
+def _internal_token_ok(request: Request) -> bool:
+    """Gate for the /internal/* hooks: X-Internal-Token vs CORE_INTERNAL_TOKEN.
+
+    Fails closed: an unset token means nobody can call them, not everybody.
+    Compares bytes, not str: compare_digest raises TypeError on non-ASCII
+    text, and Starlette hands a header byte >= 0x80 through as latin-1 text,
+    which must be a 403 rather than a 500.
+    """
+    import os
+
+    expected = os.environ.get("CORE_INTERNAL_TOKEN", "")
+    if not expected:
+        return False
+    presented = request.headers.get("X-Internal-Token", "")
+    return secrets.compare_digest(
+        presented.encode("utf-8"), expected.encode("utf-8")
+    )
+
+
 def register_extras3(app: FastAPI) -> None:
     """Register group-3 HTTP endpoints."""
 
@@ -385,6 +404,23 @@ def register_extras3(app: FastAPI) -> None:
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
+        # An LLM call plus a GPU render: charge the image_gen bucket here, on
+        # the POST only. main._RATE_LIMIT_BUCKETS is method-blind; a prefix
+        # there would throttle the GET status poll along with it.
+        from . import error_codes as ec
+        from .rate_limit import RateLimitExceeded, check_and_consume
+
+        try:
+            await check_and_consume(user_id, "image_gen")
+        except RateLimitExceeded as exc:
+            resp = ec.err(
+                ec.RATE_LIMITED,
+                "Too many requests",
+                status_code=429,
+                extra={"retry_after": exc.retry_after},
+            )
+            resp.headers["Retry-After"] = str(exc.retry_after)
+            return resp
         from . import memory_her_pov
 
         result = await memory_her_pov.start_her_pov(user_id)
@@ -435,11 +471,7 @@ def register_extras3(app: FastAPI) -> None:
         reachable from the public surface. Fails closed — an unset token means
         nobody can call it, rather than everybody.
         """
-        import os
-
-        expected = os.environ.get("CORE_INTERNAL_TOKEN", "")
-        presented = request.headers.get("X-Internal-Token", "")
-        if not expected or not secrets.compare_digest(presented, expected):
+        if not _internal_token_ok(request):
             return JSONResponse({"error": "Forbidden"}, status_code=403)
 
         try:
@@ -466,11 +498,7 @@ def register_extras3(app: FastAPI) -> None:
         (prefetch=1 = GPU lease). Same shared-secret gate as deferred/fire.
         Blocks until the pipeline is terminal so the bridge can ack safely.
         """
-        import os
-
-        expected = os.environ.get("CORE_INTERNAL_TOKEN", "")
-        presented = request.headers.get("X-Internal-Token", "")
-        if not expected or not secrets.compare_digest(presented, expected):
+        if not _internal_token_ok(request):
             return JSONResponse({"error": "Forbidden"}, status_code=403)
 
         try:

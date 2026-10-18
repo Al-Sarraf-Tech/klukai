@@ -56,8 +56,10 @@ def verify(token: str, resource_id: str, user_id: str | None = None) -> bool:
         return False
     payload = f"{resource_id}|{user_id or ''}|{exp}".encode("utf-8")
     expected = hmac.new(_secret(), payload, hashlib.sha256).digest()
-    expected_sig = base64.urlsafe_b64encode(expected).rstrip(b"=").decode("ascii")
-    return hmac.compare_digest(expected_sig, sig_part)
+    expected_sig = base64.urlsafe_b64encode(expected).rstrip(b"=")
+    # Compare bytes, not str: compare_digest raises TypeError on non-ASCII
+    # text, so a `?sig=1.%C3%BC` would 500 instead of being refused.
+    return hmac.compare_digest(expected_sig, sig_part.encode("utf-8"))
 
 
 def signed_path(

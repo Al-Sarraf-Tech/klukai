@@ -41,5 +41,12 @@ def register_entry_routes(app: FastAPI) -> None:
 
         login_path = Path("/app/static/login.html")
         if login_path.exists():
-            return FileResponse(login_path, media_type="text/html")
+            # Revalidate every load (an ETag 304 is ~free): with no policy
+            # Safari guesses and keeps a stale login.html for days after a
+            # redeploy. Same rule as the /app entry points; see static_cache.
+            return FileResponse(
+                login_path,
+                media_type="text/html",
+                headers={"Cache-Control": "no-cache"},
+            )
         return {"status": "companion-core running", "auth": "login page not deployed"}
