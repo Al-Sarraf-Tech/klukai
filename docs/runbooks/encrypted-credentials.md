@@ -127,6 +127,28 @@ fail-closed checks for a missing, corrupt and world-readable credential. The
 plaintext files were removed only after the encrypted path had deployed core
 (see `docs/runbooks/release.md`).
 
+### Migration record (2026-10-18, runtime tokens)
+
+Both token files were sealed with `migrate`, keeping the plaintext source until
+the end. The unit was then installed. Next, Prometheus and Alertmanager were
+recreated (`--obs`) and the bridge was restarted. Core went out as release
+`e37e22b` with `--accept-manual-rollback`, because only its mount line changed
+and the previous image reads the same in-container path.
+
+Only after the scrape worked from `/run` were `.runtime-secrets/` and its files
+deleted. A content scan of the 35,667 files under `~/git/klukai` found no copy.
+
+Checks after the switch:
+
+- The test alert was delivered and resolved.
+- e2e passed 8/10 with her-pov skipped.
+- With the unit stopped, both obs containers exited 78. Starting it again
+  recovered them.
+
+The backup, with the old token files, is in
+`~/.local/state/klukai/backup-20261018-sec3/` (0700). A reboot test of the boot
+ordering is pending an owner OK.
+
 ## Alternative design: service-owned credential (not activated)
 
 Codex's earlier design below, a `companion.service` user unit using
