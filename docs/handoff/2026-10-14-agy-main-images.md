@@ -119,6 +119,15 @@ authorized. Grok credentials are mounted read-only into an isolated fresh
 profile for the official client. Refresh requiring a write fails closed; use
 the owner's normal Grok login to refresh outside this worker.
 
+2026-10-18: the pin moved to Grok Build 1.0.62. The twice-daily CLI updater keeps
+only the newest two builds in `~/.grok/downloads` and had deleted 1.0.52, so every
+Grok attempt failed as unavailable. The renderer now prefers its own copy at
+`~/.local/share/klukai/agy-bridge/grok/grok-<VERSION>-linux-x86_64`, which the
+updater never touches; install it with
+`install -m 500 ~/.grok/downloads/grok-1.0.62-linux-x86_64 ~/.local/share/klukai/agy-bridge/grok/`.
+`grok models` printing "You are not authenticated" means the owner must run
+`grok login` again; the worker never logs in or refreshes by itself.
+
 `KLUKAI_ACCOUNT_IMAGE_PROVIDERS=agy,grok` in the private service environment
 enables deterministic alternating preferred providers. The durable counter
 advances only for an accepted new request. At most one attempt per provider

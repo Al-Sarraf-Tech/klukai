@@ -21,7 +21,10 @@ import agy_art_runtime as agy
 from agy_image_render import COMMANDER_APPEARANCE, MAX_BYTES, normalize
 from gemini_art_review import read_image
 
-VERSION = '1.0.52'
+VERSION = '1.0.62'
+# The CLI updater keeps only the newest two builds in ~/.grok/downloads, so the
+# worker keeps its own copy of the pinned build here and prefers it.
+PINNED_DIR = Path.home() / '.local/share/klukai/agy-bridge/grok'
 MAX_OUTPUT = 2_000_000
 
 CONFIG = '''
@@ -98,7 +101,10 @@ def prepare(root: Path, images: set[str]):
 
 def command(profile: Path, work: Path, args: list[str], *, auth=None, binary=None):
     home = Path.home()
-    binary = binary or home/'.grok/downloads'/f'grok-{VERSION}-linux-x86_64'
+    if binary is None:
+        name = f'grok-{VERSION}-linux-x86_64'
+        binary = next((path for path in (PINNED_DIR/name, home/'.grok/downloads'/name) if path.is_file()),
+                      PINNED_DIR/name)
     auth = auth or home/'.grok/auth.json'
     if not binary.is_file() or not auth.is_file() or auth.is_symlink():
         raise agy.ProviderUnavailable('Native Grok account credentials or pinned executable unavailable')

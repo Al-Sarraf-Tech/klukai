@@ -182,3 +182,21 @@ print('isolated')'''
     assert run.returncode == 0,run.stderr
     assert run.stdout.strip()=='isolated'
     assert auth.read_text()=='test credential fixture'
+
+
+def test_pinned_copy_is_preferred_and_downloads_are_the_fallback(tmp_path, monkeypatch):
+    m=module()
+    home=tmp_path/'home'; pinned=tmp_path/'pinned'; downloads=home/'.grok/downloads'
+    for d in (pinned, downloads): d.mkdir(parents=True)
+    auth=home/'.grok/auth.json'; auth.write_text('{}')
+    monkeypatch.setattr(m.Path, 'home', lambda: home)
+    monkeypatch.setattr(m, 'PINNED_DIR', pinned)
+    name=f'grok-{m.VERSION}-linux-x86_64'
+    profile=tmp_path/'p'; profile.mkdir(); work=tmp_path/'w'; work.mkdir()
+    with pytest.raises(m.agy.ProviderUnavailable):
+        m.command(profile, work, [])
+    (downloads/name).write_text('')
+    assert str(downloads/name) in m.command(profile, work, [])
+    (pinned/name).write_text('')
+    cmd=m.command(profile, work, [])
+    assert str(pinned/name) in cmd and str(downloads/name) not in cmd
