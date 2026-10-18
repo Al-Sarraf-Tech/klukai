@@ -63,7 +63,7 @@ per boot:
   home mount.
 - It runs as `jalsarraf`, never as root, because the credentials are
   user-scoped. A system unit's `LoadCredentialEncrypted=` cannot decrypt
-  user-scoped credentials, so `klukai_runtime_tokens.py install` calls
+  user-scoped credentials, so `klukai_runtime_secrets.py install` calls
   `systemd-creds --user decrypt` through the system varlink service. It runs
   hardened: no capabilities, `ProtectSystem=strict`, read-only home,
   `AF_UNIX` only.
@@ -98,7 +98,7 @@ Install or update (root via sudo; back up `/etc/systemd/system` first):
 ```sh
 sudo install -m 0644 ops/amarillo/systemd/klukai-runtime-secrets.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now klukai-runtime-secrets.service
-python3 ops/amarillo/scripts/klukai_runtime_tokens.py check   # present, 0400, equal to the store
+python3 ops/amarillo/scripts/klukai_runtime_secrets.py check   # present, 0400, equal to the store
 ```
 
 The obs project runs through `klukai_compose.py --obs ...`. It uses no store

@@ -18,7 +18,7 @@ REPO = OPS.parents[1]
 sys.path.insert(0, str(OPS / "scripts"))
 sys.path.insert(0, str(OPS / "tests"))
 import klukai_compose  # noqa: E402
-import klukai_runtime_tokens as tokens  # noqa: E402
+import klukai_runtime_secrets as tokens  # noqa: E402
 import klukai_secrets  # noqa: E402
 from test_release_deployer import FAKE_CREDS  # noqa: E402
 
@@ -109,7 +109,7 @@ class RuntimeTokenTests(unittest.TestCase):
 
     def test_cli_never_prints_a_token(self) -> None:
         env = dict(os.environ, PATH=f"{Path(self.tmp.name)}:{os.environ['PATH']}")
-        script = OPS / "scripts/klukai_runtime_tokens.py"
+        script = OPS / "scripts/klukai_runtime_secrets.py"
         for command in ("install", "check", "remove"):
             result = subprocess.run(
                 [sys.executable, "-I", str(script), command]
@@ -161,7 +161,7 @@ class BootUnitTests(unittest.TestCase):
             argv = line.split()
             self.assertEqual(argv[:2], ["/usr/bin/python3", "-I"])
             self.assertTrue(
-                argv[2].endswith("ops/amarillo/scripts/klukai_runtime_tokens.py")
+                argv[2].endswith("ops/amarillo/scripts/klukai_runtime_secrets.py")
             )
             self.assertEqual(argv[3:], [command])
 

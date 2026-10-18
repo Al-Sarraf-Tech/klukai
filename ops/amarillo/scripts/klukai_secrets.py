@@ -40,7 +40,7 @@ STALE_AFTER = 3600  # seconds; a live command never holds plaintext this long
 # Decrypted per Compose command by klukai_compose.py.
 COMPOSE_NAMES = ("compose-env", "core-override")
 # Decrypted once per boot into /run/klukai-secrets by the system unit
-# klukai-runtime-secrets.service (klukai_runtime_tokens.py), before Docker
+# klukai-runtime-secrets.service (klukai_runtime_secrets.py), before Docker
 # restarts the containers that read them.
 TOKEN_NAMES = ("metrics-token", "alert-bridge-token")
 NAMES = COMPOSE_NAMES + TOKEN_NAMES
