@@ -86,6 +86,125 @@ jobs:
       - name: Type-check with mypy
         run: mypy app/ --config-file mypy.ini
 
+  satellite-tests:
+    name: Satellite suites (tgbot, ops, voice, gateway)
+    # The suites that live outside docker/core. None needs a running stack;
+    # mirrors `make test-tgbot test-ops test-voice` plus the gateway suite.
+    runs-on: [self-hosted, dominus]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps into a venv (PATH-safe)
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/satenv"
+          . "${RUNNER_TEMP}/satenv/bin/activate"
+          python3 -m pip install --upgrade pip
+          # tgbot needs python-telegram-bot + redis + httpx; voice needs
+          # fastapi + python-multipart (faster-whisper is stubbed by its
+          # tests, so the heavy inference pins are NOT installed); the ops
+          # tests are stdlib-only.
+          pip install -r tgbot/requirements.txt
+          pip install "fastapi==0.115.12" "python-multipart==0.0.32" "pydantic==2.13.4"
+          pip install pytest pytest-asyncio pytest-timeout
+
+      - name: Telegram bot
+        env:
+          TELEGRAM_BOT_TOKEN: test-token-not-real
+          COMPANION_DIR: /tmp
+        run: |
+          . "${RUNNER_TEMP}/satenv/bin/activate"
+          python3 -m pytest tgbot/tests -q --tb=short
+
+      - name: Ops scripts (Dominus publish repair, compose contract, amarillo seeder unit)
+        run: |
+          . "${RUNNER_TEMP}/satenv/bin/activate"
+          python3 -m pytest ops/dominus-nobara/tests ops/amarillo/tests -q --tb=short
+
+      - name: Voice service
+        working-directory: docker/voice
+        run: |
+          . "${RUNNER_TEMP}/satenv/bin/activate"
+          python3 -m pytest tests -q --tb=short
+
+      - name: Dominus gateway (own pins)
+        # starlette 1.3.1 here against 1.6.0 in core: its own venv, its own lock.
+        working-directory: ops/dominus-nobara/lmstudio-compat
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/gwenv"
+          . "${RUNNER_TEMP}/gwenv/bin/activate"
+          python3 -m pip install --upgrade pip
+          pip install -r requirements-test.lock
+          python3 -m pytest tests -q --tb=short
+
+  shellcheck:
+    name: Shell scripts (shellcheck, warning level)
+    runs-on: [self-hosted, dominus]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck into a venv (PATH-safe)
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/shenv"
+          . "${RUNNER_TEMP}/shenv/bin/activate"
+          python3 -m pip install --upgrade pip
+          pip install shellcheck-py
+          command -v shellcheck
+          shellcheck --version
+
+      - name: Every tracked shell script at warning level (same selection as `make test-shell`)
+        run: |
+          . "${RUNNER_TEMP}/shenv/bin/activate"
+          git ls-files | grep -E '\.(sh|bash)$|^scripts/|^ops/.*/scripts/|^ops/.*/config/.*\.sh$' \
+            | xargs -r awk 'FNR==1 && /^#!.*sh/ {print FILENAME}' \
+            | xargs -r shellcheck -S warning
+
+  stage-js:
+    name: Companion stage + avatar (node --test)
+    runs-on: [self-hosted, dominus]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: node --test (visible warning and pass when node is absent on this runner)
+        # Same posture as the image scan: an environment limitation is
+        # reported, not faked as a clean run. Mirrors `make test-js`.
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            echo "::warning title=Stage JS tests skipped::node is not installed on this runner — run 'make test-js' on a host with Node 20+."
+            exit 0
+          fi
+          node --version
+          node --test --test-timeout=20000 tools/companion/test/*.test.mjs
+          if [ -d tools/avatar/test ]; then
+            if [ -f tools/avatar/package-lock.json ]; then
+              (cd tools/avatar && npm ci --no-audit --no-fund)
+            fi
+            (cd tools/avatar && node --test --test-timeout=60000 test/*.test.mjs)
+          fi
+
+  flutter:
+    name: Flutter PWA (analyze + VM tests)
+    runs-on: [self-hosted, dominus]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: flutter analyze + test (visible warning and pass when the SDK is absent)
+        # The browser suites (@TestOn('browser')) need Chrome and are run by
+        # hand per docs/handoff; this is the VM half.
+        working-directory: flutter_app
+        run: |
+          if ! command -v flutter >/dev/null 2>&1; then
+            echo "::warning title=Flutter checks skipped::Flutter SDK not on this runner — run 'flutter analyze && flutter test' in flutter_app/ on a host with the SDK."
+            exit 0
+          fi
+          flutter --version
+          flutter pub get
+          flutter analyze
+          flutter test
+
   security:
     name: Security Scan (bandit + safety)
     runs-on: [self-hosted, dominus]
