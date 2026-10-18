@@ -100,6 +100,16 @@ pytest tests/quality tests/release -q -o pythonpath=. \
   --deselect tests/release/test_image_runtime.py   # that file needs KLUKAI_TEST_IMAGE
 ```
 
+The suites outside `docker/core` run from the repo root:
+
+```bash
+make test-tgbot test-ops test-voice test-bridge test-js test-shell
+make test-all                          # everything above plus the core gate
+```
+
+`make test-shell` needs shellcheck; `make test-js` needs Node 20+ and, for the
+avatar tests, `npm ci --prefix tools/avatar --ignore-scripts`.
+
 The full core suite (5,400+ tests) runs in CI against a disposable PostgreSQL
 through `scripts/ci/core.sh`; the paired performance gate is
 `python -m tools.ci.perf_stack` (see [tools/ci/README.md](../tools/ci/README.md)).
