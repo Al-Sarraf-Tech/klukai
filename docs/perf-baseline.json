@@ -17,20 +17,6 @@
         "p99": 36.04,
         "mean": 15.19
       }
-    },
-    {
-      "label": "health-subsystems",
-      "method": "GET",
-      "path": "/api/health/subsystems",
-      "requests": 200,
-      "errors": 0,
-      "error_rate": 0.0,
-      "latency_ms": {
-        "p50": 12.47,
-        "p95": 32.12,
-        "p99": 33.34,
-        "mean": 14.77
-      }
     }
   ]
 }

@@ -28,7 +28,10 @@ python3 tools/load-test/probe.py \
 
 Exit code: `0` on success, `1` if any endpoint exceeded 5% error rate
 (smoke gate). The script writes a JSON artifact suitable for diffing
-against future runs.
+against future runs. Any status `>= 400` counts as an error, and a
+timed-out request is counted as an error *and* enters the latency sample
+at the timeout value (10 s), so percentiles cannot improve by shedding
+the slowest requests.
 
 ## What it measures
 
@@ -38,7 +41,16 @@ paths once a CI-friendly seed-user credential pattern is in place.
 | Endpoint | Method | Notes |
 |---|---|---|
 | `/health` | GET | Subsystem health rollup (DB pool, Redis, Qdrant) |
-| `/api/health/subsystems` | GET | Per-subsystem detail, includes voice + LM Studio |
+| `/api/health/live` | GET | Process-only liveness, no backend ping |
+
+`/api/health/subsystems` was dropped from the probe on 2026-10-11: it
+requires a bearer token, so the probe only ever measured a 401 (which the
+old `>= 500` rule counted as success). Its row was removed from
+`docs/perf-baseline.json` for the same reason: it was not a measurement.
+The gate therefore compares `/health` alone until the baseline is
+re-captured with `make perf-baseline` on an idle host, which also records
+`/api/health/live` for the first time. `perf_compare.py` only checks paths
+present in the baseline, so the unbaselined path does not fail the gate.
 
 ## Current baseline (2026-05-16)
 

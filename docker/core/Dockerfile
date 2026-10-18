@@ -48,7 +48,7 @@ COPY --from=builder /runtime/ /
 COPY --from=builder /opt/venv /opt/venv
 COPY app/ ./app/
 COPY migrations/ ./migrations/
-COPY seed_memories.py healthcheck.py ./
+COPY seed_memories.py reannotate_existing.py healthcheck.py ./
 USER 1000:1000
 EXPOSE 8300
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \

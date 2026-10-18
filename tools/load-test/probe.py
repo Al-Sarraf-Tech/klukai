@@ -17,6 +17,11 @@ Usage:
 By default targets unauthenticated endpoints only. Phase 2 will add
 bearer-token-aware auth-gated paths once the seed user creds are wired
 into a secrets file (out of scope here).
+
+Counting rules: any response with status >= 400 is an error (an auth-gated
+path answering 401 is a misconfigured probe, not a success); a request that
+times out is an error AND enters the latency sample at the timeout value, so
+the percentiles cannot improve by dropping the slowest requests.
 """
 
 from __future__ import annotations
@@ -33,11 +38,16 @@ from typing import Any
 import httpx
 
 # Endpoints to probe. Each is (label, method, path).
-# Only unauth or low-auth endpoints — auth-gated ones added in Phase 2.
+# Only unauthenticated endpoints — auth-gated ones added in Phase 2.
+# (/api/health/subsystems requires a bearer token and only ever answered 401
+# to this probe; it is not a measurement of anything.)
 TARGETS: list[tuple[str, str, str]] = [
-    ("health",            "GET", "/health"),
-    ("health-subsystems", "GET", "/api/health/subsystems"),
+    ("health",      "GET", "/health"),
+    ("health-live", "GET", "/api/health/live"),
 ]
+
+# Per-request timeout. A timed-out request is recorded at exactly this latency.
+REQUEST_TIMEOUT_S = 10.0
 
 
 @dataclass
@@ -91,12 +101,17 @@ class EndpointResult:
 async def _hit(client: httpx.AsyncClient, method: str, url: str, result: EndpointResult) -> None:
     start = time.perf_counter()
     try:
-        resp = await client.request(method, url, timeout=10.0)
-        ms = (time.perf_counter() - start) * 1000
-        result.latencies_ms.append(ms)
-        if resp.status_code >= 500:
-            result.errors += 1
+        resp = await client.request(method, url, timeout=REQUEST_TIMEOUT_S)
+    except httpx.TimeoutException:
+        # The slowest kind of sample, not a missing one.
+        result.latencies_ms.append(REQUEST_TIMEOUT_S * 1000)
+        result.errors += 1
+        return
     except Exception:
+        result.errors += 1
+        return
+    result.latencies_ms.append((time.perf_counter() - start) * 1000)
+    if resp.status_code >= 400:
         result.errors += 1
 
 

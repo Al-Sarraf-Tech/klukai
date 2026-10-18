@@ -48,7 +48,14 @@ The timer checks every day at 04:00 America/Chicago. Its `ExecCondition` runs
 only on even Unix-epoch calendar days, producing the required deterministic
 every-other-local-day cadence. The same condition rejects execution outside
 03:00–06:00, including a manual or delayed invocation. `Persistent=false`
-prevents boot catch-up, and the service timeout ends a stuck run before 06:00.
+prevents boot catch-up. A long run is ended before 06:00 by three nested
+bounds: the seeder honours `SEED_DEADLINE_SECONDS=6000` (passed with
+`docker compose exec -e`) and stops itself before its next unit of work, leaving
+`last_seeded_at` untouched so the range is retried on a later eligible day;
+`SEED_HARD_KILL_SECONDS=6600` arms SIGALRM inside the seeder (the distroless
+image has no coreutils `timeout`), so the seeder itself is ended (systemd's `TimeoutStartSec` only kills the
+`docker compose exec` client, and a seeder left running past 06:00 kept taking
+GPU leases while he chatted); `TimeoutStartSec=6900` remains the outer bound.
 
 Install the checked files on Amarillo without starting the timer during a GPU
 embargo:
