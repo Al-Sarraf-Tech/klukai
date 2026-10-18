@@ -130,7 +130,7 @@ def test_health_and_generation_require_token_before_reading_body(worker, setup_f
         assert status == 200
         assert json.loads(data) == {
             "status": "ready", "provider": "agy", "busy": False,
-            "providers": ["agy"], "rotation": "alternate",
+            "providers": ["agy"], "rotation": "alternate", "checker": None,
         }
         assert TOKEN.encode() not in data
 
@@ -611,3 +611,106 @@ def test_invalid_output_cannot_trigger_alternate_provider(worker, setup_files):
     with running(worker, setup_files, providers=[("agy", invalid), ("grok", alternate)]) as path:
         assert request(path, payload())[0] == 502
     assert calls == ["agy"]
+
+
+def checks_of(state, request_id):
+    with closing(sqlite3.connect(state / "requests.sqlite3")) as db:
+        return db.execute("SELECT attempt_index, verdict FROM checks WHERE request_id = ? ORDER BY attempt_index",
+                          (request_id,)).fetchall()
+
+
+def attempts_of(state, request_id):
+    with closing(sqlite3.connect(state / "requests.sqlite3")) as db:
+        return db.execute("SELECT attempt_index, provider, status, failure_category FROM attempts "
+                          "WHERE request_id = ? ORDER BY attempt_index", (request_id,)).fetchall()
+
+
+def scripted_checker(*verdicts, seen=None):
+    queue = list(verdicts)
+
+    def checker(output, value, references, *, timeout):
+        if seen is not None:
+            seen.append((output, value["prompt"], timeout))
+        item = queue.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+    checker.model = "claude-sonnet-5-5"
+    return checker
+
+
+REJECT = {"verdict": "reject", "issues": [{"severity": "major", "what": "six fingers on her left hand"}]}
+
+
+def test_health_names_the_checker(worker, setup_files):
+    with running(worker, setup_files, checker=scripted_checker()) as path:
+        assert json.loads(request(path, method="GET", target="/health")[2])["checker"] == "claude-sonnet-5-5"
+
+
+def test_passing_check_delivers_and_is_recorded(worker, setup_files):
+    seen = []
+    with running(worker, setup_files, checker=scripted_checker({"verdict": "pass", "issues": []}, seen=seen)) as path:
+        value = payload()
+        status, _, data = request(path, value)
+    assert (status, data) == (200, PNG)
+    assert seen[0][0] == PNG and seen[0][1] == value["prompt"] and 0 < seen[0][2] <= 90
+    assert checks_of(setup_files[1], value["request_id"]) == [(0, "pass")]
+
+
+def test_rejected_render_is_redone_once_with_a_fix_hint(worker, setup_files):
+    prompts = []
+
+    def render(data, references):
+        prompts.append(data["prompt"])
+        return PNG
+    checker = scripted_checker(REJECT, {"verdict": "pass", "issues": []})
+    with running(worker, setup_files, providers=[("grok", render)], checker=checker) as path:
+        value = payload()
+        status, _, data = request(path, value)
+    assert (status, data) == (200, PNG)
+    assert prompts[0] == value["prompt"]
+    assert prompts[1].startswith(value["prompt"]) and "six fingers on her left hand" in prompts[1]
+    state = setup_files[1]
+    assert attempts_of(state, value["request_id"]) == [
+        (0, "grok", "failed", "check_rejected"), (1, "grok", "completed", None)]
+    assert checks_of(state, value["request_id"]) == [(0, "reject"), (1, "pass")]
+
+
+def test_two_rejections_fail_and_are_never_replayed(worker, setup_files):
+    calls = []
+
+    def render(data, references):
+        calls.append(1)
+        return PNG
+    with running(worker, setup_files, providers=[("grok", render)],
+                 checker=scripted_checker(REJECT, REJECT)) as path:
+        value = payload()
+        assert request(path, value)[0] == 502
+        assert request(path, value)[0] == 409
+    assert len(calls) == 2
+    with closing(sqlite3.connect(setup_files[1] / "requests.sqlite3")) as db:
+        assert db.execute("SELECT status, failure_category, output FROM requests WHERE request_id = ?",
+                          (value["request_id"],)).fetchone() == ("failed", "check_rejected", None)
+
+
+def test_no_redo_when_the_deadline_cannot_fit_another_render(worker, setup_files, monkeypatch):
+    calls = []
+
+    def render(data, references):
+        calls.append(1)
+        return PNG
+    # One second short of room for another render plus its check.
+    monkeypatch.setattr(worker, "REQUEST_BUDGET", worker.RENDER_RESERVE + worker.CHECK_TIMEOUT - 1)
+    with running(worker, setup_files, providers=[("grok", render)], checker=scripted_checker(REJECT)) as path:
+        assert request(path, payload())[0] == 502
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("outcome", [RuntimeError("claude unavailable"), {"verdict": "maybe"}, None,
+                                     {"verdict": "unchecked", "issues": []}])
+def test_checker_failure_delivers_unchecked(worker, setup_files, outcome):
+    with running(worker, setup_files, checker=scripted_checker(outcome)) as path:
+        value = payload()
+        status, _, data = request(path, value)
+    assert (status, data) == (200, PNG)
+    assert checks_of(setup_files[1], value["request_id"]) == [(0, "unchecked")]

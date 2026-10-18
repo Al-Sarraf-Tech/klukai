@@ -15,6 +15,7 @@ import sqlite3
 import stat
 import sys
 import threading
+import time
 import uuid
 
 from agy_art_runtime import ProviderUnavailable
@@ -24,6 +25,11 @@ MAX_BODY = 80 * 1024
 MAX_IMAGE = 16 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 REQUEST_KEYS = {"request_id", "user_id", "prompt", "width", "height", "include_commander"}
+# Core waits 380 s for one /generate. A rejected render is redone only while one
+# more provider render (170 s) and its check still fit inside this budget.
+REQUEST_BUDGET = 360
+RENDER_RESERVE = 180
+CHECK_TIMEOUT = 90
 
 
 def private_directory(path):
@@ -123,8 +129,11 @@ def valid_image(data):
 
 
 class Worker:
-    def __init__(self, state_dir, token, references, allowed_users, renderer=None, *, providers=None):
+    def __init__(self, state_dir, token, references, allowed_users, renderer=None, *, providers=None,
+                 checker=None):
         self.token = token
+        # checker(output, value, references, timeout=) -> {"verdict": pass|reject|unchecked, ...}
+        self.checker = checker
         self.references = references
         self.allowed_users = frozenset(allowed_users)
         if providers is not None and renderer is not None:
@@ -158,6 +167,9 @@ class Worker:
         self.db.execute("CREATE TABLE IF NOT EXISTS attempts ("
                         "request_id TEXT NOT NULL, attempt_index INTEGER NOT NULL, provider TEXT NOT NULL, "
                         "status TEXT NOT NULL, failure_category TEXT, PRIMARY KEY (request_id, attempt_index))")
+        self.db.execute("CREATE TABLE IF NOT EXISTS checks ("
+                        "request_id TEXT NOT NULL, attempt_index INTEGER NOT NULL, verdict TEXT NOT NULL, "
+                        "issues TEXT NOT NULL, seconds REAL NOT NULL, PRIMARY KEY (request_id, attempt_index))")
         self.db.commit()
 
     def busy(self):
@@ -207,46 +219,88 @@ class Worker:
                 self.db.rollback()
                 self.slot.release()
                 raise
+        started = time.monotonic()
         try:
-            for index, (provider, renderer) in enumerate(ordered):
-                if index:
-                    # The alternate attempt gets its own durable attribution
-                    # before its native call; interrupted jobs remain pending.
-                    with self.db_lock:
-                        self.db.execute("INSERT INTO attempts VALUES (?, ?, ?, 'pending', NULL)",
-                                        (value["request_id"], index, provider))
-                        self.db.execute("UPDATE requests SET selected_provider = ? WHERE request_id = ?",
-                                        (provider, value["request_id"]))
-                        self.db.commit()
-                try:
-                    output = renderer(value, self.references)
-                    if not valid_image(output):
-                        raise ValueError("invalid generated image")
-                except Exception as error:
-                    eligible = isinstance(error, ProviderUnavailable)
-                    timeout = "timeout" in str(error).lower() or "timed out" in str(error).lower()
-                    category = "timeout" if timeout else ("unavailable" if eligible else "generation_failed")
-                    terminal = not eligible or index + 1 == len(ordered)
-                    with self.db_lock:
-                        self.db.execute("UPDATE attempts SET status = 'failed', failure_category = ? "
-                                        "WHERE request_id = ? AND attempt_index = ?",
-                                        (category, value["request_id"], index))
+            index = 0
+            for position, (provider, renderer) in enumerate(ordered):
+                request = value
+                redone = False
+                while True:
+                    if index:
+                        # Each later attempt gets its own durable attribution
+                        # before its native call; interrupted jobs remain pending.
+                        with self.db_lock:
+                            self.db.execute("INSERT INTO attempts VALUES (?, ?, ?, 'pending', NULL)",
+                                            (value["request_id"], index, provider))
+                            self.db.execute("UPDATE requests SET selected_provider = ? WHERE request_id = ?",
+                                            (provider, value["request_id"]))
+                            self.db.commit()
+                    try:
+                        output = renderer(request, self.references)
+                        if not valid_image(output):
+                            raise ValueError("invalid generated image")
+                    except Exception as error:
+                        eligible = isinstance(error, ProviderUnavailable)
+                        timeout = "timeout" in str(error).lower() or "timed out" in str(error).lower()
+                        category = "timeout" if timeout else ("unavailable" if eligible else "generation_failed")
+                        terminal = not eligible or position + 1 == len(ordered)
+                        self.fail_attempt(value["request_id"], index, category, terminal)
                         if terminal:
-                            self.db.execute("UPDATE requests SET status = 'failed', failure_category = ? WHERE request_id = ?",
-                                            (category, value["request_id"]))
-                        self.db.commit()
-                    if terminal:
-                        return (504 if timeout else 502), None
-                    continue
-                with self.db_lock:
-                    self.db.execute("UPDATE attempts SET status = 'completed' WHERE request_id = ? AND attempt_index = ?",
-                                    (value["request_id"], index))
-                    self.db.execute("UPDATE requests SET status = 'completed', output = ? WHERE request_id = ?",
-                                    (output, value["request_id"]))
-                    self.db.commit()
-                return 200, output
+                            return (504 if timeout else 502), None
+                        index += 1
+                        break
+                    verdict = self.check(output, value, index, started)
+                    if verdict["verdict"] != "reject":
+                        with self.db_lock:
+                            self.db.execute("UPDATE attempts SET status = 'completed' WHERE request_id = ? AND attempt_index = ?",
+                                            (value["request_id"], index))
+                            self.db.execute("UPDATE requests SET status = 'completed', output = ? WHERE request_id = ?",
+                                            (output, value["request_id"]))
+                            self.db.commit()
+                        return 200, output
+                    # One re-render with the same provider, told what to avoid,
+                    # and only while it and its check still fit the core deadline.
+                    retry = (not redone and REQUEST_BUDGET - (time.monotonic() - started)
+                             >= RENDER_RESERVE + CHECK_TIMEOUT)
+                    self.fail_attempt(value["request_id"], index, "check_rejected", not retry)
+                    if not retry:
+                        return 502, None
+                    redone = True
+                    index += 1
+                    from claude_image_check import fix_hint
+                    request = dict(value, prompt=value["prompt"] + fix_hint(verdict["issues"]))
+            return 502, None
         finally:
             self.slot.release()
+
+    def fail_attempt(self, request_id, index, category, terminal):
+        with self.db_lock:
+            self.db.execute("UPDATE attempts SET status = 'failed', failure_category = ? "
+                            "WHERE request_id = ? AND attempt_index = ?",
+                            (category, request_id, index))
+            if terminal:
+                self.db.execute("UPDATE requests SET status = 'failed', failure_category = ? WHERE request_id = ?",
+                                (category, request_id))
+            self.db.commit()
+
+    def check(self, output, value, index, started):
+        """Run the configured checker; with none, or on any checker failure, deliver unchecked."""
+        if self.checker is None:
+            return {"verdict": "unchecked", "issues": []}
+        remaining = REQUEST_BUDGET - (time.monotonic() - started) - 5
+        try:
+            verdict = self.checker(output, value, self.references, timeout=min(CHECK_TIMEOUT, remaining))
+            if type(verdict) is not dict or verdict.get("verdict") not in {"pass", "reject", "unchecked"}:
+                raise ValueError("invalid checker verdict")
+        except Exception:
+            verdict = {"verdict": "unchecked", "issues": []}
+        issues = verdict.get("issues") if isinstance(verdict.get("issues"), list) else []
+        with self.db_lock:
+            self.db.execute("INSERT OR REPLACE INTO checks VALUES (?, ?, ?, ?, ?)",
+                            (value["request_id"], index, verdict["verdict"], json.dumps(issues)[:4096],
+                             float(verdict.get("seconds", 0.0))))
+            self.db.commit()
+        return verdict
 
     def recover(self, value):
         """Read one existing claim. Never claims, rotates, renders, or fails over."""
@@ -336,8 +390,10 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path != "/health":
             self.reply(404)
         else:
-            self.reply(200, {"status": "ready", "provider": "agy", "busy": self.server.worker.busy(),
-                             "providers": [name for name, _ in self.server.worker.providers], "rotation": "alternate"})
+            worker = self.server.worker
+            self.reply(200, {"status": "ready", "provider": "agy", "busy": worker.busy(),
+                             "providers": [name for name, _ in worker.providers], "rotation": "alternate",
+                             "checker": getattr(worker.checker, "model", None) if worker.checker else None})
 
     def do_POST(self):
         if not self.authorized():
@@ -417,7 +473,19 @@ def load_providers(names):
     return providers
 
 
-def create_server(runtime_dir, state_dir, references, allowed_users, *, renderer=None, providers=None, read_timeout=10):
+def load_checker(name):
+    if name == "none":
+        return None
+    import claude_image_check
+
+    def checker(output, value, references, *, timeout):
+        return claude_image_check.run(output, value, references, timeout=timeout)
+    checker.model = claude_image_check.MODEL
+    return checker
+
+
+def create_server(runtime_dir, state_dir, references, allowed_users, *, renderer=None, providers=None, read_timeout=10,
+                  checker=None):
     runtime_dir, state_dir = private_directory(runtime_dir), private_directory(state_dir)
     token = private_read(runtime_dir / "token", 1024).strip()
     if not re.fullmatch(rb"[\x21-\x7e]{32,256}", token):
@@ -441,7 +509,7 @@ def create_server(runtime_dir, state_dir, references, allowed_users, *, renderer
             if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
                 raise ValueError("invalid worker socket")
             socket_path.unlink()
-        worker = Worker(state_dir, token, references, allowed_users, providers=providers)
+        worker = Worker(state_dir, token, references, allowed_users, providers=providers, checker=checker)
         server = UnixHTTPServer(str(socket_path), Handler)
         socket_path.chmod(0o600)
         server.worker = worker
@@ -466,11 +534,14 @@ def main():
     parser.add_argument("--references", type=Path, required=True)
     parser.add_argument("--allowed-users", required=True)
     parser.add_argument("--providers", default="agy", help="Ordered providers: agy, grok, or agy,grok")
+    parser.add_argument("--checker", default="none", choices=("none", "claude"),
+                        help="claude: Claude Sonnet 5.5 (effort high) checks every render (subscription login)")
     args = parser.parse_args()
     try:
         server = create_server(args.runtime_dir, args.state_dir, args.references,
                                {user.strip() for user in args.allowed_users.split(",") if user.strip()},
-                               providers=load_providers([name.strip() for name in args.providers.split(",")]))
+                               providers=load_providers([name.strip() for name in args.providers.split(",")]),
+                               checker=load_checker(args.checker))
     except Exception:
         print("Image worker configuration unavailable", file=sys.stderr)
         return 1

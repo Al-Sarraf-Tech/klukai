@@ -49,6 +49,15 @@ conditioning clips. Dominus XTTS retains its separately pinned
 excerpt and adoption record under `ops/amarillo/voice_xpu`; do not change the
 Dominus lock to deploy that release.
 
+## Klukai's pictures: Grok renders, Claude only checks
+
+Owner decision 2026-10-17. Production pictures come from Grok through the
+account image worker (`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok`). Claude Sonnet 5.5
+at effort `high` checks every render (`scripts/claude_image_check.py`) through
+the owner's subscription login. **Never generate art with Claude**, in any form:
+no SVG or code-drawn images, and no Claude image provider or fallback. The owner
+judged it atrocious. Details are in `docs/handoff/2026-10-14-agy-main-images.md`.
+
 ## Gemini artwork review
 
 The owner authorized advisory artwork review through the existing Agy Google

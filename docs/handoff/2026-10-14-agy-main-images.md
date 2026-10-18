@@ -39,7 +39,7 @@ Native output dimensions can differ from the requested orientation dimensions.
 - Unit: `ops/amarillo/systemd/klukai-agy-images.service`, installed under the
   owner's `~/.config/systemd/user/`.
 - Unit environment: `~/.config/klukai/agy-images.env`, containing the user allowlist and `KLUKAI_ACCOUNT_IMAGE_PROVIDERS`
-  (`agy,grok` for alternating preferred providers). The unit uses the owner's desktop keyring session.
+  (`grok` since 2026-10-17; `agy,grok` alternates the preferred provider). The unit uses the owner's desktop keyring session.
 - Private host root: `~/.local/share/klukai/agy-bridge/` (0700).
 - `runtime/token` (0600) and `runtime/image.sock` (0600), mounted read-only into
   core at `/run/klukai-agy`. The token is unrelated to Google credentials.
@@ -56,6 +56,41 @@ Make target, recreate Dominus containers or change GPU gaming/idle guards.
 `GET /health` on the socket checks worker configuration/liveness only; it does
 not prove a fresh Google login or available quota. A successful real generation
 is the end-to-end proof.
+
+## Grok renders, Claude checks (owner decision 2026-10-17)
+
+The owner chose Grok for Klukai's pictures: `KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok`.
+Agy/Gemini had completed none of its six attempts, and with alternation half of
+all requests waited on it first.
+
+Every render is checked by Claude Sonnet 5.5 at effort `high`
+(`scripts/claude_image_check.py`, `--checker claude`,
+`KLUKAI_IMAGE_CHECKER=claude`). Claude never generates art; that is an owner
+rule.
+
+- **How it runs:** Claude Code print mode under the owner's subscription login,
+  so a check never bills the API. It has no tools, no MCP and no session
+  persistence, and runs in an empty working directory. The environment carries
+  no keys.
+- **What it receives:** the Klukai reference, the Commander reference when the
+  Commander is in the scene, the candidate (downscaled to 1024 px) and the
+  request text.
+- **When it rejects:** only when it both says `reject` and names a major
+  defect: wrong identity or underage look, broken anatomy, an unexpected person
+  or a Commander who is not an adult man, a scene that contradicts the request,
+  or text, watermarks or collage.
+- **After a reject:** one re-render with the same provider, with the major
+  issues appended as things to avoid. It only happens while another 170 s render
+  plus a 90 s check still fit the 360 s worker budget, inside core's 380 s.
+  A second reject fails the request as `check_rejected`, so core gets no image.
+- **Fail-open:** any checker failure (timeout, refusal, quota, bad output) is
+  `unchecked`, and the image is delivered.
+- **Records:** every verdict lands in `state/requests.sqlite3` table `checks`
+  (verdict, bounded issue list, seconds). `GET /health` reports
+  `"checker": "claude-sonnet-5-5"`.
+
+Measured live on 2026-10-17: the canon portrait passed in 3.9 s, and a
+wrong-person candidate was rejected in 6.5 s with the identity and request named.
 
 ## Rollback
 
