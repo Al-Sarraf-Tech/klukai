@@ -43,14 +43,15 @@ extension _ChatNavigation on _ChatScreenState {
     );
   }
 
-  void _openArchive() {
+  /// Her threads (letters and running conversations). Lived behind the
+  /// archive button; now in the chat menu.
+  void _openThreads() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => MemoryArchiveScreen(
+        builder: (_) => ThreadScreen(
           serverUrl: widget.serverUrl,
-          affectionLevel: _state.affectionLevel,
-          affectionLevelName: _state.affectionLevelName,
+          onAuthExpired: _handleAuthExpired,
         ),
       ),
     );

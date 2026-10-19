@@ -9,6 +9,8 @@ import 'package:companion_app/screens/chat_screen.dart';
 import 'package:companion_app/screens/her_pov_screen.dart';
 import 'package:companion_app/services/memory_service.dart';
 import 'package:companion_app/services/speech_capture.dart';
+import 'package:companion_app/services/voice_settings_service.dart';
+import 'package:companion_app/widgets/chat_composer_bar.dart';
 import 'package:companion_app/widgets/message_bubble.dart';
 import 'package:companion_app/widgets/voice_button.dart';
 import 'package:flutter/material.dart';
@@ -67,6 +69,13 @@ Future<void> _chat(
             ),
         httpClient: speech,
         speechBridge: bridge,
+        voiceInputEnabled: bridge != null,
+        voiceSettings: VoiceSettingsService(
+          serverUrl: 'http://fixture.invalid',
+          client: MockClient(
+            (_) async => http.Response('{"language":"en"}', 200),
+          ),
+        ),
         onAuthExpired: revoked,
       ),
     ),
@@ -133,15 +142,15 @@ void main() {
       );
       expect(
         tester
-            .widget<IconButton>(find.widgetWithIcon(IconButton, Icons.send))
-            .onPressed,
+            .widget<HudSquareButton>(find.byKey(const Key('composer-send')))
+            .onTap,
         isNull,
       );
       restored = true;
       socket.link(true);
       await tester.pump();
       await tester.pump();
-      expect(find.text('LINK ACTIVE'), findsOneWidget);
+      expect(find.text('ONLINE'), findsOneWidget);
       expect(find.textContaining('I kept the watch.'), findsOneWidget);
       expect(
         tester.widget<TextField>(find.byType(TextField)).readOnly,
@@ -169,8 +178,8 @@ void main() {
       expect(find.text('LINK DOWN'), findsOneWidget);
       expect(
         tester
-            .widget<IconButton>(find.widgetWithIcon(IconButton, Icons.send))
-            .onPressed,
+            .widget<HudSquareButton>(find.byKey(const Key('composer-send')))
+            .onTap,
         isNull,
       );
       socket.link(true);

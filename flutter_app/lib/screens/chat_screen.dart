@@ -12,10 +12,17 @@ import '../models/companion_state.dart';
 import '../models/her_day.dart';
 import '../platform/browser.dart';
 import '../services/resume_policy.dart';
+import '../services/session_auth.dart';
 import '../services/speech_capture.dart';
+import '../services/tts_request.dart';
+import '../services/voice_settings_service.dart';
 import '../services/wardrobe_service.dart';
 import '../services/websocket_service.dart';
+import '../widgets/chat_composer_bar.dart';
+import '../widgets/companion_stage_view.dart';
 import '../widgets/message_bubble.dart';
+import '../widgets/message_footer.dart';
+import '../widgets/stage_hud.dart';
 import '../widgets/voice_button.dart';
 import '../widgets/tool_status_indicator.dart';
 import '../widgets/date_divider.dart';
@@ -30,6 +37,7 @@ import 'hud_album_screen.dart';
 import 'hud_day_screen.dart';
 import 'hud_kit_screen.dart';
 import 'hud_me_screen.dart';
+import 'thread_screen.dart';
 
 part 'chat_wire_events.dart';
 
@@ -46,6 +54,10 @@ part 'chat_navigation.dart';
 part 'chat_playback.dart';
 
 part 'chat_view.dart';
+
+part 'chat_stage.dart';
+
+part 'chat_voice_language.dart';
 
 @JS('audioRecorder.start')
 external JSPromise<JSBoolean> _jsStartRecording();
@@ -96,7 +108,8 @@ class ChatScreen extends StatefulWidget {
   /// Microphone bridge. Defaults to the page audioRecorder; tests inject a fake.
   final SpeechBridge? speechBridge;
 
-  /// HTTP client for speech transcription. History keeps the shared client.
+  /// HTTP client for speech transcription and the 3D view's voice fallback.
+  /// History keeps the shared client.
   final http.Client? httpClient;
 
   /// Optional deterministic history/affection boundary; caller owns the client.
@@ -104,6 +117,19 @@ class ChatScreen extends StatefulWidget {
 
   /// Optional login navigation handler, after credentials and chat are revoked.
   final VoidCallback? onAuthExpired;
+
+  /// Her voice language (EN | JP in the composer). Defaults to the real
+  /// /api/voice/settings client; tests inject one over a MockClient.
+  final VoiceSettingsService? voiceSettings;
+
+  /// Builds the embedded 3D stage. Defaults to the companion page in an
+  /// iframe; tests inject a stand-in.
+  final CompanionStageBuilder? stageBuilder;
+
+  /// Push-to-talk in the composer. Off: voice input is switched off on the
+  /// server (KLUKAI_VOICE_ENABLED), so the mic button is not shown. The
+  /// capture path stays wired for when it comes back.
+  final bool voiceInputEnabled;
 
   const ChatScreen({
     super.key,
@@ -117,6 +143,9 @@ class ChatScreen extends StatefulWidget {
     this.httpClient,
     this.historyClient,
     this.onAuthExpired,
+    this.voiceSettings,
+    this.stageBuilder,
+    this.voiceInputEnabled = false,
   });
 
   @override
@@ -139,6 +168,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     });
     if (tab == HudTab.chat) {
       _loadHerDay(); // a wardrobe change elsewhere shows here
+      _loadVoiceLanguage(); // so does a language change on the Me tab
     }
   }
 
@@ -187,6 +217,30 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       widget.webSocketService ?? WebSocketService();
   late final WardrobeService _wardrobe =
       widget.wardrobeService ?? WardrobeService(serverUrl: widget.serverUrl);
+  late final VoiceSettingsService _voiceSettings =
+      widget.voiceSettings ?? VoiceSettingsService(serverUrl: widget.serverUrl);
+
+  /// The Chat tab's face: transcript or her 3D stage (the CHAT | 3D flip).
+  ChatViewMode _view = ChatViewMode.chat;
+
+  /// Her voice language; English until the server says otherwise.
+  VoiceLanguage _voiceLanguage = VoiceLanguage.en;
+  bool _voiceLanguageSaving = false;
+
+  /// The embedded stage, while the 3D view is showing (no setState: the
+  /// iframe reports it during build and dispose).
+  CompanionStageLink? _stageLink;
+  bool _stageReady = false;
+  String? _stageNotice;
+  VoicePlayState _stageVoice = VoicePlayState.idle;
+  int _speakSeq = 0;
+  int? _pendingSpeakId;
+  ChatMessage? _pendingSpeakLine;
+  Timer? _stageSpeakTimer;
+
+  /// Voice letters with a recorded note: message id → voice id. The note
+  /// plays from that message's `▶ VOICE`, never by itself.
+  final Map<String, String> _voiceNotes = {};
 
   /// Where she is and what she's wearing. Null hides the header line; a
   /// failed fetch must never get in the way of chat.
@@ -278,10 +332,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               300;
       if (show != _showScrollFAB) setState(() => _showScrollFAB = show);
     });
+    _view = _prefersOpenIn3d() ? ChatViewMode.threeD : ChatViewMode.chat;
     _loadHistory();
     _loadAffection();
     _connectWS();
     _loadHerDay();
+    _loadVoiceLanguage();
     _herDayTimer = Timer.periodic(
       widget.herDayRefresh,
       (_) => _refreshHerDayIfVisible(),
@@ -327,6 +383,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
       case AppLifecycleState.inactive:
         break;
+    }
+  }
+
+  /// The Me tab's "open in 3D" setting, written either straight to
+  /// localStorage or through shared_preferences (which prefixes `flutter.`).
+  bool _prefersOpenIn3d() {
+    try {
+      final storage = web.window.localStorage;
+      return storage.getItem(kOpenIn3dPrefKey) == 'true' ||
+          storage.getItem('flutter.$kOpenIn3dPrefKey') == 'true';
+    } catch (_) {
+      return false;
     }
   }
 
@@ -420,6 +488,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _inputLockTimer?.cancel();
     _warmupTimer?.cancel();
     _herDayTimer?.cancel();
+    _stageSpeakTimer?.cancel();
     _resumeSub?.cancel();
     _speech.dispose();
     _outfitChanged.dispose();

@@ -122,43 +122,36 @@ extension _ChatWireEvents on _ChatScreenState {
 
       case 'affection_level_change':
         final levelName = msg['level_name'] as String? ?? '';
-        final direction = msg['direction'] as String? ?? 'up';
+        final up = (msg['direction'] as String? ?? 'up') == 'up';
         if (mounted) {
+          final color = up ? HudColors.violet : HudColors.danger;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Row(
                 children: [
                   Icon(
-                    direction == 'up'
-                        ? Icons.arrow_upward
-                        : Icons.arrow_downward,
-                    color: direction == 'up'
-                        ? GFL2Colors.success
-                        : GFL2Colors.danger,
+                    up ? Icons.arrow_upward : Icons.arrow_downward,
+                    color: color,
                     size: 16,
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    'TRUST LEVEL: $levelName',
-                    style: const TextStyle(
-                      color: GFL2Colors.textPrimary,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.8,
-                      fontFamily: 'monospace',
-                      fontSize: 12,
+                  Flexible(
+                    child: Text(
+                      'TRUST LEVEL: $levelName',
+                      style: HudText.label(
+                        size: 11,
+                        color: HudColors.text,
+                        weight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ],
               ),
-              backgroundColor: GFL2Colors.surface,
+              backgroundColor: const Color(0xFF0B1118),
               behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(4),
-                side: BorderSide(
-                  color: direction == 'up'
-                      ? GFL2Colors.primary.withValues(alpha: 0.4)
-                      : GFL2Colors.danger.withValues(alpha: 0.4),
-                ),
+              shape: CutCornerBorder(
+                cut: 8,
+                side: BorderSide(color: color.withValues(alpha: 0.5)),
               ),
               duration: const Duration(seconds: 4),
             ),
@@ -190,32 +183,30 @@ extension _ChatWireEvents on _ChatScreenState {
         });
 
       case 'voice_audio':
-        final audioData = msg['audio'] as String?;
-        if (audioData != null) {
-          _playAudio(audioData);
-        }
+        // The server's spoken reply to a push-to-talk turn (from any of his
+        // devices). Owner 2026-10-19: her voice plays only when he taps
+        // `▶ VOICE`, never by itself — the clip is dropped; her line is in
+        // the transcript and its VOICE reads it on demand.
+        break;
 
       case 'voice_letter':
         // A voice note she left while you were away. Show the text like a
-        // proactive line, then fetch + play the audio (fail-soft: text stands
-        // on its own if the audio can't be fetched).
+        // proactive line; her recorded note plays from that line's `▶ VOICE`
+        // (never by itself). Without a note, VOICE reads the text.
         final letter = msg['message'] as String? ?? '';
         final voiceId = msg['voice_id'] as String?;
         if (letter.isNotEmpty) {
+          final id = 'voice-letter-${DateTime.now().millisecondsSinceEpoch}';
           _update(() {
+            if (voiceId != null && voiceId.isNotEmpty) {
+              _voiceNotes[id] = voiceId;
+            }
             _messages.add(
-              ChatMessage(
-                id: 'voice-letter-${DateTime.now().millisecondsSinceEpoch}',
-                role: 'assistant',
-                content: letter,
-              ),
+              ChatMessage(id: id, role: 'assistant', content: letter),
             );
           });
           _scrollToBottom();
           _playNotificationSound();
-        }
-        if (voiceId != null && voiceId.isNotEmpty) {
-          _fetchAndPlayVoiceNote(voiceId);
         }
 
       case 'image':

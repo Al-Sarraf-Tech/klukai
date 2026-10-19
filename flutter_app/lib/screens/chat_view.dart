@@ -1,9 +1,24 @@
 part of 'chat_screen.dart';
 
-/// Chat header, transcript, tool status, and input presentation.
-/// Shares the screen's single State owner; no transport or state is duplicated.
+/// The Chat tab's transcript face: HUD header, messages, tool status and the
+/// composer. Shares the screen's single State owner; no transport or state is
+/// duplicated.
 extension _ChatView on _ChatScreenState {
+  /// The on-screen keyboard is up: the header folds to one line.
+  bool get _keyboardUp => MediaQuery.viewInsetsOf(context).bottom > 0;
+
   Widget _buildMobileLayout() {
+    // The iframe only lives while the 3D face of the Chat tab is on screen;
+    // another tab or the CHAT face tears it (and its socket) down.
+    if (_view == ChatViewMode.threeD) {
+      return _tab == HudTab.chat
+          ? _buildStageLayout()
+          : const ColoredBox(color: HudColors.ground);
+    }
+    return HudBackground(child: _buildChatLayout());
+  }
+
+  Widget _buildChatLayout() {
     return Stack(
       children: [
         Column(
@@ -13,24 +28,62 @@ extension _ChatView on _ChatScreenState {
             if (_activeTools.isNotEmpty) _buildToolStatus(),
             if (_state.isTyping && _streamingId == null)
               _buildProcessingIndicator(),
-            _buildInputBar(),
+            _buildComposer(),
           ],
         ),
         if (_showScrollFAB)
           Positioned(
-            bottom: 80,
+            bottom: 70,
             right: 16,
-            child: FloatingActionButton.small(
-              onPressed: () => _scrollToBottom(),
-              backgroundColor: GFL2Colors.surface,
-              child: const Icon(
-                Icons.keyboard_arrow_down,
-                color: GFL2Colors.primary,
-              ),
+            child: HudSquareButton(
+              key: const Key('chat-latest'),
+              tooltip: 'Latest',
+              onTap: () => _scrollToBottom(),
+              child: const Icon(Icons.keyboard_arrow_down),
             ),
           ),
       ],
     );
+  }
+
+  void _setView(ChatViewMode next) {
+    if (next == _view) return;
+    _stageSpeakTimer?.cancel();
+    _update(() {
+      _view = next;
+      _stageReady = false;
+      _stageNotice = null;
+      _stageVoice = VoicePlayState.idle;
+      _pendingSpeakId = null;
+      _pendingSpeakLine = null;
+    });
+    if (next == ChatViewMode.chat) _scrollToBottom(instant: true, retries: 2);
+  }
+
+  void _onMenu(ChatMenuAction action) {
+    switch (action) {
+      case ChatMenuAction.companion:
+        _openCompanion();
+      case ChatMenuAction.threads:
+        _openThreads();
+      case ChatMenuAction.herPov:
+        _openHerPov();
+      case ChatMenuAction.subscription:
+        _openSubscription();
+      case ChatMenuAction.ambient:
+        _toggleAmbient();
+      case ChatMenuAction.logout:
+        _logout();
+    }
+  }
+
+  void _toggleAmbient() {
+    try {
+      final isOn = _jsToggleAmbientMute().toDart;
+      _update(() => _ambientMuted = !isOn);
+    } catch (_) {
+      _update(() => _ambientMuted = !_ambientMuted);
+    }
   }
 
   Widget _buildHeader() {
@@ -39,116 +92,101 @@ extension _ChatView on _ChatScreenState {
       mood: _state.mood,
       glow: _moodGlowColor,
       bpm: _moodBPM,
-      heartbeatColor: _heartbeatSpikeOverride != null
-          ? const Color(0xFFFF1744) // red flash during a spike
-          : _moodGlowColor,
-      ambientMuted: _ambientMuted,
+      spiking: _heartbeatSpikeOverride != null,
       affectionScore: _state.affectionScore,
       affectionLevel: _state.affectionLevel,
       affectionLevelName: _state.affectionLevelName,
       lastAffectionDelta: _lastAffectionDelta,
       herDay: _herDay,
+      view: _view,
+      onViewChanged: _setView,
+      onMenu: _onMenu,
+      ambientMuted: _ambientMuted,
       onOpenProfile: _openProfile,
       onHerDayTap: _openHerDaySheet,
-      onToggleAmbient: () {
-        try {
-          final isOn = _jsToggleAmbientMute().toDart;
-          _update(() => _ambientMuted = !isOn);
-        } catch (_) {
-          _update(() => _ambientMuted = !_ambientMuted);
-        }
-      },
-      onCompanion: _openCompanion,
-      onHerPov: _openHerPov,
-      onArchive: _openArchive,
-      onSubscription: _openSubscription,
-      onLogout: _logout,
+      compact: _keyboardUp,
+    );
+  }
+
+  Widget _buildComposer() {
+    return ChatComposerBar(
+      controller: _textController,
+      focusNode: _focusNode,
+      language: _voiceLanguage,
+      onLanguageChanged: _voiceLanguageSaving ? null : _setVoiceLanguage,
+      onSend: _sendMessage,
+      onPicture: _requestPicture,
+      disabled: _inputDisabled,
+      locked: _state.isInputLocked,
+      lockReason: _state.inputLockReason,
+      lockColor: _moodGlowColor,
+      leading: widget.voiceInputEnabled
+          ? VoiceButton(
+              isRecording:
+                  _speech.phase == SpeechPhase.recording ||
+                  _speech.phase == SpeechPhase.requestingPermission,
+              enabled: !_inputDisabled,
+              onTapDown: () {
+                _onVoiceDown();
+              },
+              onTapUp: () {
+                _onVoiceUp();
+              },
+              onCancel: () {
+                _cancelVoice();
+              },
+            )
+          : null,
     );
   }
 
   Widget _buildMessageList() {
     if (_messages.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Large portrait
-            Container(
-              width: 96,
-              height: 96,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: GFL2Colors.primary.withValues(alpha: 0.3),
-                  width: 1.5,
+      return LayoutBuilder(
+        builder: (context, box) => SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: box.maxHeight),
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: GFL2Colors.primary.withValues(alpha: 0.08),
-                    blurRadius: 16,
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(5),
-                child: Image.asset(
-                  'assets/klukai_portrait.png',
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, e, s) => Container(
-                    color: GFL2Colors.panel,
-                    child: const Center(
-                      child: Text(
-                        'K',
-                        style: TextStyle(
-                          color: GFL2Colors.primary,
-                          fontSize: 36,
-                          fontWeight: FontWeight.w700,
-                        ),
+                child: Column(
+                  key: const Key('chat-empty'),
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'KLUKAI // SST-05',
+                      style: HudText.label(size: 12, color: HudColors.cyan),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'H.I.D.E. 404 — NEURAL LINK ESTABLISHED',
+                      textAlign: TextAlign.center,
+                      style: HudText.label(
+                        size: 9.5,
+                        color: HudColors.textMuted,
                       ),
                     ),
-                  ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Awaiting orders, Commander.',
+                      style: HudText.body(size: 15, color: HudColors.textDim),
+                    ),
+                    const SizedBox(height: 16),
+                    // Conversation starters — adapt to affection level
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      alignment: WrapAlignment.center,
+                      children: _getStarters().map(_starterChip).toList(),
+                    ),
+                  ],
                 ),
               ),
             ),
-            const SizedBox(height: 16),
-            Text(
-              'KLUKAI // SST-05',
-              style: TextStyle(
-                color: GFL2Colors.primary.withValues(alpha: 0.6),
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 2.0,
-                fontFamily: 'monospace',
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'H.I.D.E. 404 — NEURAL LINK ESTABLISHED',
-              style: TextStyle(
-                color: GFL2Colors.textDim.withValues(alpha: 0.35),
-                fontSize: 10,
-                letterSpacing: 1.0,
-                fontFamily: 'monospace',
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Awaiting orders, Commander.',
-              style: TextStyle(
-                color: GFL2Colors.textDim.withValues(alpha: 0.3),
-                fontSize: 13,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-            const SizedBox(height: 20),
-            // Conversation starters — adapt to affection level
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              alignment: WrapAlignment.center,
-              children: _getStarters().map(_starterChip).toList(),
-            ),
-          ],
+          ),
         ),
       );
     }
@@ -183,7 +221,14 @@ extension _ChatView on _ChatScreenState {
             );
             if (msgDate != prevDate) showDivider = true;
           }
-          final bubble = MessageBubble(message: msg, browser: widget.browser);
+          final voiceId = _voiceNotes[msg.id];
+          final bubble = MessageBubble(
+            message: msg,
+            browser: widget.browser,
+            voiceOverride: voiceId == null
+                ? null
+                : () => _fetchAndPlayVoiceNote(voiceId),
+          );
           if (showDivider) {
             return Column(
               mainAxisSize: MainAxisSize.min,
@@ -213,7 +258,7 @@ extension _ChatView on _ChatScreenState {
   Widget _buildProcessingIndicator() {
     final displayText = _thinkingText ?? 'PROCESSING';
     return Padding(
-      padding: const EdgeInsets.only(left: 14, right: 14, bottom: 4),
+      padding: const EdgeInsets.only(left: 16, right: 16, bottom: 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -225,19 +270,17 @@ extension _ChatView on _ChatScreenState {
                 height: 12,
                 child: CircularProgressIndicator(
                   strokeWidth: 1.5,
-                  color: GFL2Colors.primary.withValues(alpha: 0.5),
+                  color: HudColors.cyanA(0.6),
                 ),
               ),
               const SizedBox(width: 8),
               Flexible(
                 child: Text(
                   displayText.toUpperCase(),
-                  style: TextStyle(
-                    color: GFL2Colors.primary.withValues(alpha: 0.5),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: 'monospace',
-                    letterSpacing: 0.8,
+                  style: HudText.label(
+                    size: 10,
+                    color: HudColors.cyanA(0.7),
+                    weight: FontWeight.w600,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -251,111 +294,10 @@ extension _ChatView on _ChatScreenState {
           // Indeterminate on purpose: the wait varies from seconds to minutes,
           // so a guessed percentage would mislead.
           const SizedBox(height: 6),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(2),
-            child: LinearProgressIndicator(
-              minHeight: 2,
-              backgroundColor: GFL2Colors.primary.withValues(alpha: 0.12),
-              valueColor: AlwaysStoppedAnimation<Color>(
-                GFL2Colors.primary.withValues(alpha: 0.6),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInputBar() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-      decoration: BoxDecoration(
-        color: GFL2Colors.surface,
-        border: Border(
-          top: BorderSide(color: GFL2Colors.border.withValues(alpha: 0.4)),
-        ),
-      ),
-      child: Row(
-        children: [
-          VoiceButton(
-            isRecording:
-                _speech.phase == SpeechPhase.recording ||
-                _speech.phase == SpeechPhase.requestingPermission,
-            enabled: !_inputDisabled,
-            onTapDown: () {
-              _onVoiceDown();
-            },
-            onTapUp: () {
-              _onVoiceUp();
-            },
-            onCancel: () {
-              _cancelVoice();
-            },
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: _textController,
-              focusNode: _focusNode,
-              readOnly: _state.isInputLocked,
-              style: TextStyle(
-                color: _state.isInputLocked
-                    ? GFL2Colors.textDim.withValues(alpha: 0.3)
-                    : GFL2Colors.textPrimary,
-                fontSize: 14,
-              ),
-              maxLines: 4,
-              minLines: 1,
-              textInputAction: TextInputAction.send,
-              onSubmitted: _inputDisabled ? null : (_) => _sendMessage(),
-              decoration: InputDecoration(
-                hintText: _state.isInputLocked
-                    ? '// ${_state.inputLockReason ?? "STANDBY"}...'
-                    : '// ENTER COMMAND...',
-                hintStyle: TextStyle(
-                  color: _state.isInputLocked
-                      ? _moodGlowColor.withValues(alpha: 0.4)
-                      : GFL2Colors.textDim.withValues(alpha: 0.35),
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                ),
-                filled: true,
-                fillColor: GFL2Colors.background,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
-                ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
-                  borderSide: BorderSide(
-                    color: GFL2Colors.border.withValues(alpha: 0.3),
-                  ),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
-                  borderSide: BorderSide(
-                    color: GFL2Colors.border.withValues(alpha: 0.3),
-                  ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
-                  borderSide: const BorderSide(color: GFL2Colors.primary),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            tooltip: 'Send',
-            onPressed: _inputDisabled ? null : _sendMessage,
-            icon: const Icon(Icons.send, color: Colors.white, size: 20),
-            style: IconButton.styleFrom(
-              backgroundColor: _inputDisabled
-                  ? GFL2Colors.border
-                  : GFL2Colors.accent,
-              fixedSize: const Size(44, 44),
-              shape: const CircleBorder(),
-            ),
+          LinearProgressIndicator(
+            minHeight: 2,
+            backgroundColor: HudColors.cyanA(0.12),
+            valueColor: AlwaysStoppedAnimation<Color>(HudColors.cyanA(0.7)),
           ),
         ],
       ),

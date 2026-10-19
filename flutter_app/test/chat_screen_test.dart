@@ -34,12 +34,16 @@ import 'package:companion_app/models/her_day.dart';
 import 'package:companion_app/screens/chat_screen.dart';
 import 'package:companion_app/services/resume_policy.dart';
 import 'package:companion_app/services/speech_capture.dart';
+import 'package:companion_app/services/voice_settings_service.dart';
 import 'package:companion_app/services/wardrobe_service.dart';
 import 'package:companion_app/services/websocket_service.dart';
+import 'package:companion_app/widgets/chat_composer_bar.dart';
+import 'package:companion_app/widgets/chat_header.dart';
+import 'package:companion_app/widgets/companion_stage_view.dart';
+import 'package:companion_app/theme/hud.dart';
 import 'package:companion_app/widgets/voice_button.dart';
 import 'package:companion_app/widgets/canvas_message_bubble.dart';
 import 'package:companion_app/widgets/message_bubble.dart';
-import 'package:companion_app/widgets/heartbeat_sensor.dart';
 import 'package:companion_app/widgets/tool_status_indicator.dart';
 
 import 'support/fake_browser.dart';
@@ -164,10 +168,77 @@ class FakeWebSocketService implements WebSocketService {
 
 /// Pumps ChatScreen with an injected fake and a primed auth token (so the
 /// real `_connectWS` path doesn't bounce to the login page). Returns the fake.
+/// /api/voice/settings stand-in: answers [language] and records PUTs.
+class _VoiceSettingsBackend {
+  _VoiceSettingsBackend({this.language = 'en', this.putStatus = 200});
+  String language;
+  int putStatus;
+  final List<String> saved = [];
+
+  VoiceSettingsService service() => VoiceSettingsService(
+    serverUrl: 'http://localhost:0',
+    // No expect() in here: the client runs inside the tester's pumps.
+    client: MockClient((request) async {
+      if (request.url.path != '/api/voice/settings' ||
+          !(request.headers['Authorization'] ?? '').startsWith('Bearer ')) {
+        return http.Response('unexpected request', 400);
+      }
+      if (request.method == 'PUT') {
+        final next = jsonDecode(request.body)['language'] as String;
+        saved.add(next);
+        if (putStatus != 200) return http.Response('{}', putStatus);
+        language = next;
+      }
+      return http.Response(jsonEncode({'language': language}), 200);
+    }),
+  );
+}
+
+/// Opens the chat menu. (No pumpAndSettle: the heart trace never settles.)
+Future<void> _openMenu(WidgetTester tester) async {
+  await tester.tap(find.byKey(const Key('chat-menu')).first);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+}
+
+/// Records what the screen asked the embedded 3D stage to say.
+class _FakeStageLink implements CompanionStageLink {
+  final spoken = <(String, int)>[];
+  @override
+  bool speak(String text, {required int id}) {
+    spoken.add((text, id));
+    return true;
+  }
+}
+
+/// A 3D stage that loads nothing: hands the screen [link] and keeps the
+/// event handler so a test can play the stage's side of the conversation.
+class _FakeStage {
+  final link = _FakeStageLink();
+  StageEventHandler? onEvent;
+  String? src;
+
+  Widget build(
+    BuildContext context, {
+    required String src,
+    required ValueChanged<CompanionStageLink?> onLink,
+    required StageEventHandler onEvent,
+  }) {
+    this.src = src;
+    this.onEvent = onEvent;
+    onLink(link);
+    return const ColoredBox(key: Key('fake-stage'), color: Colors.black);
+  }
+}
+
 Future<FakeWebSocketService> _pumpChat(
   WidgetTester tester, {
   SpeechBridge? speechBridge,
   http.Client? httpClient,
+  VoiceSettingsService? voiceSettings,
+  _FakeStage? stage,
+  FakeBrowserPlatform? browser,
+  bool voiceInput = false,
 }) async {
   // ChatScreen redirects to "/" when no token is present; prime one.
   web.window.localStorage.setItem('klukai_token', 'test-token');
@@ -182,6 +253,10 @@ Future<FakeWebSocketService> _pumpChat(
         webSocketService: fake,
         speechBridge: speechBridge,
         httpClient: httpClient,
+        voiceSettings: voiceSettings ?? _VoiceSettingsBackend().service(),
+        stageBuilder: (stage ?? _FakeStage()).build,
+        browser: browser,
+        voiceInputEnabled: voiceInput,
       ),
     ),
   );
@@ -194,6 +269,8 @@ void main() {
   tearDown(() {
     try {
       web.window.localStorage.removeItem('klukai_token');
+      web.window.localStorage.removeItem(kOpenIn3dPrefKey);
+      web.window.localStorage.removeItem('flutter.$kOpenIn3dPrefKey');
     } catch (_) {}
   });
 
@@ -211,9 +288,9 @@ void main() {
       tester,
     ) async {
       final fake = await _pumpChat(tester);
-      // connect() set us connected -> "LINK ACTIVE".
+      // connect() set us connected -> "ONLINE".
       await tester.pump();
-      expect(find.text('LINK ACTIVE'), findsOneWidget);
+      expect(find.text('ONLINE'), findsOneWidget);
 
       fake.setConnected(false);
       await tester.pump();
@@ -300,7 +377,7 @@ void main() {
       await tester.enterText(find.byType(TextField), 'status report');
       await tester.pump();
       // Tap the send button.
-      await tester.tap(find.byIcon(Icons.send));
+      await tester.tap(find.byKey(const Key('composer-send')));
       await tester.pump();
 
       // The user's message bubble appears...
@@ -322,7 +399,7 @@ void main() {
 
         await tester.enterText(find.byType(TextField), 'status report');
         await tester.pump();
-        await tester.tap(find.byIcon(Icons.send));
+        await tester.tap(find.byKey(const Key('composer-send')));
         await tester.pump();
 
         // No fake echo in the transcript...
@@ -343,6 +420,7 @@ void main() {
     testWidgets('a transcript keeps the typed draft', (tester) async {
       final fake = await _pumpChat(
         tester,
+        voiceInput: true,
         speechBridge: SpeechBridge(
           start: () async => true,
           stop: () async => 'clip',
@@ -372,6 +450,7 @@ void main() {
     testWidgets('text still sends while voice is down', (tester) async {
       final fake = await _pumpChat(
         tester,
+        voiceInput: true,
         speechBridge: SpeechBridge(
           start: () async => false,
           stop: () async => null,
@@ -386,7 +465,7 @@ void main() {
         'typed while voice is down',
       );
       await tester.pump();
-      await tester.tap(find.byIcon(Icons.send));
+      await tester.tap(find.byKey(const Key('composer-send')));
       await tester.pump();
 
       expect(fake.sent.last['content'], 'typed while voice is down');
@@ -403,6 +482,7 @@ void main() {
       final gate = Completer<http.Response>();
       final fake = await _pumpChat(
         tester,
+        voiceInput: true,
         speechBridge: SpeechBridge(
           start: () async => true,
           stop: () async => 'clip',
@@ -441,7 +521,7 @@ void main() {
     ) async {
       final fake = await _pumpChat(tester);
       await tester.pump();
-      expect(find.text('LINK ACTIVE'), findsOneWidget);
+      expect(find.text('ONLINE'), findsOneWidget);
 
       // Drop the link, then restore it. The screen refetches history on the
       // false→true edge (merged by id, so this can never duplicate messages);
@@ -452,7 +532,7 @@ void main() {
 
       fake.setConnected(true);
       await tester.pump();
-      expect(find.text('LINK ACTIVE'), findsOneWidget);
+      expect(find.text('ONLINE'), findsOneWidget);
       // Allow the (failing) refetch future to settle.
       await tester.pump(const Duration(seconds: 1));
       expect(tester.takeException(), isNull);
@@ -468,10 +548,8 @@ void main() {
 
       // Default mood is "composed" -> 65 BPM, label COMPOSED.
       expect(find.text('COMPOSED'), findsOneWidget);
-      expect(
-        tester.widget<HeartbeatSensor>(find.byType(HeartbeatSensor)).bpm,
-        65,
-      );
+      expect(tester.widget<HudEcg>(find.byType(HudEcg)).bpm, 65);
+      expect(find.text('65 BPM'), findsOneWidget);
 
       // Drive a new mood; glow + BPM are sourced from the single _moodVisuals
       // map, so both the indicator and the heartbeat should follow.
@@ -483,9 +561,10 @@ void main() {
       expect(find.text('PASSIONATE'), findsOneWidget);
       expect(find.text('COMPOSED'), findsNothing);
       expect(
-        tester.widget<HeartbeatSensor>(find.byType(HeartbeatSensor)).bpm,
+        tester.widget<HudEcg>(find.byType(HudEcg)).bpm,
         115, // passionate -> 115 BPM (must match _moodVisuals)
       );
+      expect(find.text('115 BPM'), findsOneWidget);
       fake.dispose();
     });
   });
@@ -556,6 +635,7 @@ void main() {
             serverUrl: 'http://localhost:0',
             webSocketService: fake,
             wardrobeService: wardrobe,
+            voiceSettings: _VoiceSettingsBackend().service(),
           ),
         ),
       );
@@ -569,7 +649,8 @@ void main() {
     ) async {
       final (fake, wardrobe) = await pumpWithDay(tester, FakeWardrobeService());
       expect(find.text('Hangar \u00B7 tuning the suspension'), findsOneWidget);
-      expect(find.byKey(const Key('her-day-outfit-chip')), findsOneWidget);
+      expect(find.byKey(const Key('chat-chip-wearing')), findsOneWidget);
+      expect(find.byKey(const Key('chat-chip-now')), findsOneWidget);
       expect(tester.takeException(), isNull);
       expect(wardrobe.herDayCalls, greaterThanOrEqualTo(1));
       fake.dispose();
@@ -614,7 +695,8 @@ void main() {
         tester,
         FakeWardrobeService(herDays: [WardrobeServiceException(503)]),
       );
-      expect(find.byKey(const Key('her-day-status')), findsNothing);
+      expect(find.byKey(const Key('chat-chip-now')), findsNothing);
+      expect(find.byKey(const Key('chat-chip-wearing')), findsNothing);
       expect(find.text('KLUKAI'), findsOneWidget);
       expect(tester.takeException(), isNull);
       fake.dispose();
@@ -635,6 +717,7 @@ void main() {
             webSocketService: fake,
             wardrobeService: FakeWardrobeService(),
             browser: browser,
+            voiceSettings: _VoiceSettingsBackend().service(),
           ),
         ),
       );
@@ -650,7 +733,9 @@ void main() {
         tester,
         FakeBrowserPlatform(),
       );
-      await tester.tap(find.byKey(const Key('chat-header-companion')));
+      await _openMenu(tester);
+      await tester.tap(find.byKey(const Key('chat-menu-companion')));
+      await tester.pump();
       expect(browser.opened, [('companion.html', true)]);
       fake.dispose();
     });
@@ -662,7 +747,9 @@ void main() {
         tester,
         FakeBrowserPlatform(isIos: true, isStandalone: true),
       );
-      await tester.tap(find.byKey(const Key('chat-header-companion')));
+      await _openMenu(tester);
+      await tester.tap(find.byKey(const Key('chat-menu-companion')));
+      await tester.pump();
       expect(browser.opened, [('companion.html', false)]);
       fake.dispose();
     });
@@ -682,16 +769,14 @@ void main() {
       fake.dispose();
     });
 
-    testWidgets('voice frames go through the unlocked voice channel', (
-      tester,
-    ) async {
+    testWidgets('a voice_audio frame never plays by itself', (tester) async {
       final (fake, browser) = await pumpWithBrowser(
         tester,
         FakeBrowserPlatform(),
       );
       fake.emit({'type': 'voice_audio', 'audio': 'UklGRg=='});
       await tester.pump();
-      expect(browser.voices, ['data:audio/wav;base64,UklGRg==']);
+      expect(browser.voices, isEmpty);
       fake.dispose();
     });
   });
@@ -721,6 +806,7 @@ void main() {
             wardrobeService: FakeWardrobeService(),
             browser: browser,
             resumePolicy: policy,
+            voiceSettings: _VoiceSettingsBackend().service(),
           ),
         ),
       );
@@ -1044,5 +1130,431 @@ void main() {
         fake.dispose();
       },
     );
+  });
+
+  group('ChatScreen — HUD composer', () {
+    VoiceLanguage language(WidgetTester tester) => tester
+        .widget<HudSegmented<VoiceLanguage>>(
+          find.byKey(const Key('composer-language')),
+        )
+        .value;
+
+    Finder segment(String label) => find.descendant(
+      of: find.byKey(const Key('composer-language')),
+      matching: find.text(label),
+    );
+
+    testWidgets('EN | JP loads her saved language and saves a change', (
+      tester,
+    ) async {
+      final backend = _VoiceSettingsBackend(language: 'ja');
+      final fake = await _pumpChat(tester, voiceSettings: backend.service());
+      await tester.pump();
+      expect(language(tester), VoiceLanguage.ja);
+
+      await tester.tap(segment('EN'));
+      await tester.pump();
+      await tester.pump();
+      expect(backend.saved, ['en']);
+      expect(language(tester), VoiceLanguage.en);
+      expect(find.byKey(const Key('voice-language-error')), findsNothing);
+      fake.dispose();
+    });
+
+    testWidgets('a failed save puts the switch back and says so', (
+      tester,
+    ) async {
+      final backend = _VoiceSettingsBackend(putStatus: 503);
+      final fake = await _pumpChat(tester, voiceSettings: backend.service());
+      await tester.pump();
+      expect(language(tester), VoiceLanguage.en);
+
+      await tester.tap(segment('JP'));
+      await tester.pump();
+      await tester.pump();
+      expect(backend.saved, ['ja']);
+      expect(language(tester), VoiceLanguage.en);
+      expect(find.byKey(const Key('voice-language-error')), findsOneWidget);
+      expect(find.textContaining('NOT SAVED'), findsOneWidget);
+      fake.dispose();
+    });
+
+    testWidgets('no voice settings endpoint yet: English, quietly', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(
+        tester,
+        voiceSettings: VoiceSettingsService(
+          serverUrl: 'http://localhost:0',
+          client: MockClient((_) async => http.Response('Not Found', 404)),
+        ),
+      );
+      await tester.pump();
+      expect(language(tester), VoiceLanguage.en);
+      expect(find.byKey(const Key('voice-language-error')), findsNothing);
+      fake.dispose();
+    });
+
+    testWidgets('the picture button asks for one and leaves his draft alone', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+      await tester.enterText(find.byType(TextField), 'half-typed thought');
+      await tester.tap(find.byKey(const Key('composer-picture')));
+      await tester.pump();
+
+      expect(fake.sent.last['type'], 'message');
+      expect(fake.sent.last['content'], kPictureRequest);
+      expect(find.text(kPictureRequest), findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'half-typed thought',
+      );
+      fake.dispose();
+    });
+
+    testWidgets('picture and SEND are off while the link is down', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+      HudSquareButton button(String key) =>
+          tester.widget<HudSquareButton>(find.byKey(Key(key)));
+      expect(button('composer-picture').onTap, isNotNull);
+      expect(button('composer-send').onTap, isNotNull);
+
+      fake.setConnected(false);
+      await tester.pump();
+      expect(button('composer-picture').onTap, isNull);
+      expect(button('composer-send').onTap, isNull);
+      await tester.tap(find.byKey(const Key('composer-picture')));
+      await tester.pump();
+      expect(fake.sent, isEmpty);
+      fake.dispose();
+    });
+
+    testWidgets('the mic is hidden while voice input is off', (tester) async {
+      final off = await _pumpChat(tester);
+      expect(find.byType(VoiceButton), findsNothing);
+      off.dispose();
+      final on = await _pumpChat(
+        tester,
+        voiceInput: true,
+        speechBridge: SpeechBridge(
+          start: () async => false,
+          stop: () async {
+            return null;
+          },
+        ),
+      );
+      expect(find.byType(VoiceButton), findsOneWidget);
+      on.dispose();
+    });
+
+    testWidgets('the menu keeps Threads, Her POV, Subscription and logout', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+      await _openMenu(tester);
+      for (final action in ChatMenuAction.values) {
+        expect(
+          find.byKey(Key('chat-menu-${action.name}')),
+          findsOneWidget,
+          reason: action.name,
+        );
+      }
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — her voice only on a tap', () {
+    testWidgets('replies, proactive lines and voice letters stay silent', (
+      tester,
+    ) async {
+      final browser = FakeBrowserPlatform();
+      final fake = await _pumpChat(tester, browser: browser);
+      fake.emit({'type': 'token', 'text': 'You are late, Commander.'});
+      fake.emit({'type': 'done', 'text': 'You are late, Commander.'});
+      fake.emit({'type': 'proactive', 'message': 'The stars are clear.'});
+      fake.emit({'type': 'voice_audio', 'audio': 'UklGRg=='});
+      fake.emit({
+        'type': 'voice_letter',
+        'message': 'I kept your seat warm on the bike.',
+        'voice_id': 'note-7',
+      });
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+
+      expect(browser.voices, isEmpty);
+      // Every line of hers has its own VOICE, ready for a tap.
+      expect(find.byKey(const Key('voice-play')), findsNWidgets(3));
+      // The letter's VOICE plays her recorded note, not a re-read.
+      final letter = tester.widget<MessageBubble>(
+        find.byWidgetPredicate(
+          (w) =>
+              w is MessageBubble &&
+              w.message.content == 'I kept your seat warm on the bike.',
+        ),
+      );
+      expect(letter.voiceOverride, isNotNull);
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — the 3D view', () {
+    Future<(FakeWebSocketService, _FakeStage, FakeBrowserPlatform)> pump3d(
+      WidgetTester tester, {
+      http.Client? httpClient,
+    }) async {
+      final stage = _FakeStage();
+      final browser = FakeBrowserPlatform();
+      final fake = await _pumpChat(
+        tester,
+        stage: stage,
+        browser: browser,
+        httpClient: httpClient,
+      );
+      await tester.tap(find.byKey(const Key('view-flip-3d')));
+      await tester.pump();
+      return (fake, stage, browser);
+    }
+
+    Future<void> herLine(FakeWebSocketService fake, WidgetTester t) async {
+      fake.emit({'type': 'token', 'text': 'Sit. The stars are clear tonight.'});
+      fake.emit({'type': 'done', 'text': 'Sit. The stars are clear tonight.'});
+      await t.pump();
+    }
+
+    testWidgets('CHAT | 3D flips to her embedded stage and back', (
+      tester,
+    ) async {
+      final (fake, stage, _) = await pump3d(tester);
+      expect(find.byKey(const Key('fake-stage')), findsOneWidget);
+      expect(find.text('3D LINK // LIVE'), findsOneWidget);
+      expect(find.byKey(const Key('stage-tags')), findsOneWidget);
+      expect(find.byKey(const Key('stage-dialogue')), findsOneWidget);
+      expect(find.byKey(const Key('chat-composer')), findsOneWidget);
+      expect(stage.src, companionStageSrc());
+      expect(stage.src, startsWith('companion.html?embed=1&mode=3d'));
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.byKey(const Key('view-flip-chat')));
+      await tester.pump();
+      expect(find.byKey(const Key('fake-stage')), findsNothing);
+      expect(find.text('H.I.D.E. 404 // SECURE LINK'), findsOneWidget);
+      fake.dispose();
+    });
+
+    testWidgets('opens in 3D when his Me setting says so', (tester) async {
+      web.window.localStorage.setItem(kOpenIn3dPrefKey, 'true');
+      final fake = await _pumpChat(tester);
+      expect(find.byKey(const Key('fake-stage')), findsOneWidget);
+      fake.dispose();
+    });
+
+    testWidgets('…including when it was saved through shared_preferences', (
+      tester,
+    ) async {
+      web.window.localStorage.setItem('flutter.$kOpenIn3dPrefKey', 'true');
+      final fake = await _pumpChat(tester);
+      expect(find.byKey(const Key('fake-stage')), findsOneWidget);
+      fake.dispose();
+    });
+
+    testWidgets('opens in Chat by default', (tester) async {
+      final fake = await _pumpChat(tester);
+      expect(find.byKey(const Key('fake-stage')), findsNothing);
+      expect(find.byKey(const Key('chat-header')), findsOneWidget);
+      fake.dispose();
+    });
+
+    testWidgets('VOICE asks the stage to say her line, once per tap', (
+      tester,
+    ) async {
+      final (fake, stage, browser) = await pump3d(tester);
+      await herLine(fake, tester);
+      expect(find.text('Sit. The stars are clear tonight.'), findsOneWidget);
+      // Nothing is spoken until he taps.
+      expect(stage.link.spoken, isEmpty);
+      expect(browser.voices, isEmpty);
+
+      await tester.tap(find.byKey(const Key('voice-play')));
+      await tester.pump();
+      expect(stage.link.spoken, [('Sit. The stars are clear tonight.', 1)]);
+      // Synthesizing: the button is busy, a second tap is not a second line.
+      await tester.tap(find.byKey(const Key('voice-play')));
+      await tester.pump();
+      expect(stage.link.spoken, hasLength(1));
+
+      stage.onEvent!('klukai:speak-status', {'id': 1, 'status': 'playing'});
+      stage.onEvent!('klukai:speaking', {'on': true});
+      await tester.pump();
+      expect(find.text('◢ VOICE · LIP SYNC'), findsNothing); // not ready yet
+      stage.onEvent!('klukai:speaking', {'on': false});
+      await tester.pump();
+
+      await tester.tap(find.byKey(const Key('voice-play')));
+      await tester.pump();
+      expect(stage.link.spoken.last, ('Sit. The stars are clear tonight.', 2));
+      expect(browser.voices, isEmpty);
+      // The answer-timeout must not fire after the test.
+      stage.onEvent!('klukai:speak-status', {'id': 2, 'status': 'empty'});
+      await tester.pump();
+      fake.dispose();
+    });
+
+    testWidgets('when the stage cannot play, the PWA voice reads the line', (
+      tester,
+    ) async {
+      final paths = <String>[];
+      final tts = MockClient((request) async {
+        paths.add(request.url.path);
+        return http.Response(jsonEncode({'audio': 'UklGRg=='}), 200);
+      });
+      final (fake, stage, browser) = await pump3d(tester, httpClient: tts);
+      await herLine(fake, tester);
+      await tester.tap(find.byKey(const Key('voice-play')));
+      await tester.pump();
+      stage.onEvent!('klukai:speak-status', {'id': 1, 'status': 'unavailable'});
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      expect(find.textContaining('VOICE SYNTH OFFLINE'), findsNothing);
+      expect(paths, ['/api/tts', '/api/tts']);
+      // Her two sentences, read through the PWA's own channel.
+      expect(browser.voices, [
+        'data:audio/wav;base64,UklGRg==',
+        'data:audio/wav;base64,UklGRg==',
+      ]);
+      fake.dispose();
+    });
+
+    testWidgets('a synth failure says so once per tap', (tester) async {
+      final (fake, stage, _) = await pump3d(tester);
+      await herLine(fake, tester);
+      await tester.tap(find.byKey(const Key('voice-play')));
+      await tester.pump();
+      stage.onEvent!('klukai:speak-status', {'id': 1, 'status': 'playing'});
+      for (var i = 0; i < 3; i++) {
+        stage.onEvent!('klukai:voice-error', {});
+      }
+      await tester.pump();
+      expect(find.textContaining('VOICE SYNTH OFFLINE'), findsOneWidget);
+      // The control is ready for another tap.
+      expect(
+        tester.widget<InkWell>(find.byKey(const Key('voice-play'))).onTap,
+        isNotNull,
+      );
+      await tester.pump(const Duration(seconds: 5));
+      fake.dispose();
+    });
+
+    testWidgets('a stale answer for another tap is ignored', (tester) async {
+      final (fake, stage, browser) = await pump3d(tester);
+      await herLine(fake, tester);
+      await tester.tap(find.byKey(const Key('voice-play')));
+      await tester.pump();
+      stage.onEvent!('klukai:speak-status', {
+        'id': 99,
+        'status': 'unavailable',
+      });
+      await tester.pump();
+      expect(browser.voices, isEmpty);
+      stage.onEvent!('klukai:speak-status', {'id': 1, 'status': 'empty'});
+      await tester.pump();
+      fake.dispose();
+    });
+
+    testWidgets('the tracking readout follows what the stage reports', (
+      tester,
+    ) async {
+      final (fake, stage, _) = await pump3d(tester);
+      expect(find.text('◢ LINKING 3D…'), findsOneWidget);
+      stage.onEvent!('klukai:stage-notice', {'text': 'Loading her 3D model…'});
+      await tester.pump();
+      expect(find.text('◢ LOADING HER 3D MODEL…'), findsOneWidget);
+      stage.onEvent!('klukai:stage-notice', {'text': ''});
+      stage.onEvent!('klukai:stage-ready', {'ready': true});
+      await tester.pump();
+      expect(find.text('◢ TRACKING'), findsOneWidget);
+      expect(find.text('◢ IDLE · BREATH'), findsOneWidget);
+      fake.dispose();
+    });
+
+    testWidgets('her thinking status shows in the dialogue panel', (
+      tester,
+    ) async {
+      final (fake, _, _) = await pump3d(tester);
+      fake.emit({'type': 'thinking', 'content': 'Checking the hangar'});
+      await tester.pump();
+      expect(find.text('CHECKING THE HANGAR'), findsOneWidget);
+      expect(find.byKey(const Key('voice-play')), findsNothing);
+      fake.emit({'type': 'thinking', 'content': ''});
+      await tester.pump();
+      fake.dispose();
+    });
+
+    testWidgets('another tab tears the stage down; Chat brings it back', (
+      tester,
+    ) async {
+      final (fake, _, _) = await pump3d(tester);
+      await tester.tap(find.byKey(const Key('hud-tab-kit')));
+      await tester.pump();
+      expect(find.byKey(const Key('fake-stage')), findsNothing);
+      await tester.tap(find.byKey(const Key('hud-tab-chat')));
+      await tester.pump();
+      expect(find.byKey(const Key('fake-stage')), findsOneWidget);
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — phone widths', () {
+    for (final width in [360.0, 390.0, 430.0]) {
+      testWidgets('no overflow at ${width.toInt()}px, chat and 3D', (
+        tester,
+      ) async {
+        tester.view.physicalSize = Size(width, 780);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+        web.window.localStorage.setItem('klukai_token', 'test-token');
+        final fake = FakeWebSocketService();
+        final stage = _FakeStage();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ChatScreen(
+              serverUrl: 'http://localhost:0',
+              webSocketService: fake,
+              wardrobeService: FakeWardrobeService(),
+              voiceSettings: _VoiceSettingsBackend().service(),
+              stageBuilder: stage.build,
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump();
+        fake.emit({'type': 'mood', 'mood': 'quietly_pleased'});
+        fake.emit({'type': 'proactive', 'message': 'You are late, Commander.'});
+        await tester.pump(const Duration(milliseconds: 1600));
+        expect(find.byKey(const Key('chat-chip-wearing')), findsOneWidget);
+        expect(tester.takeException(), isNull);
+
+        await tester.tap(find.byKey(const Key('view-flip-3d')));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        fake.dispose();
+      });
+    }
+
+    testWidgets('the keyboard folds the header to one line', (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+      addTearDown(tester.view.reset);
+      final fake = await _pumpChat(tester);
+      expect(find.byKey(const Key('chat-header-portrait')), findsNothing);
+      expect(find.byKey(const Key('chat-header-link')), findsOneWidget);
+      expect(find.byKey(const Key('chat-composer')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      fake.dispose();
+    });
   });
 }

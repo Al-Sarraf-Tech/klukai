@@ -56,24 +56,40 @@ extension _ChatStarters on _ChatScreenState {
   }
 
   Widget _starterChip(String text) {
-    return GestureDetector(
-      onTap: () {
-        _textController.text = text;
-        _sendMessage();
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: GFL2Colors.surface,
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: GFL2Colors.primary.withValues(alpha: 0.3)),
-        ),
-        child: Text(
-          text,
-          style: TextStyle(
-            color: GFL2Colors.primary.withValues(alpha: 0.7),
-            fontSize: 12,
-            fontFamily: 'monospace',
+    const shape = CutCornerBorder(
+      cut: 8,
+      side: BorderSide(color: Color(0x594FD1FF)),
+    );
+    return Semantics(
+      button: true,
+      label: text,
+      excludeSemantics: true,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          customBorder: shape,
+          onTap: () {
+            _textController.text = text;
+            _sendMessage();
+          },
+          child: Ink(
+            decoration: ShapeDecoration(
+              color: HudColors.cyanA(0.05),
+              shape: shape,
+            ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Center(
+                  widthFactor: 1,
+                  child: Text(
+                    text,
+                    style: HudText.body(size: 14, color: HudColors.textDim),
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),

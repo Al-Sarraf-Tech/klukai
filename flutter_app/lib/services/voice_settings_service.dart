@@ -10,9 +10,9 @@ enum VoiceLanguage { en, ja }
 extension VoiceLanguageCode on VoiceLanguage {
   String get code => name;
   String get label => switch (this) {
-        VoiceLanguage.en => 'EN',
-        VoiceLanguage.ja => 'JP',
-      };
+    VoiceLanguage.en => 'EN',
+    VoiceLanguage.ja => 'JP',
+  };
   static VoiceLanguage parse(Object? value) =>
       value == 'ja' ? VoiceLanguage.ja : VoiceLanguage.en;
 }
@@ -21,15 +21,15 @@ extension VoiceLanguageCode on VoiceLanguage {
 /// Shared by the chat composer's EN/JP switch and the Me screen.
 class VoiceSettingsService {
   VoiceSettingsService({required this.serverUrl, http.Client? client})
-      : _client = client ?? http.Client();
+    : _client = client ?? http.Client();
 
   final String serverUrl;
   final http.Client _client;
 
   Map<String, String> get _headers => {
-        'Authorization': 'Bearer ${readAuthToken()}',
-        'Content-Type': 'application/json',
-      };
+    'Authorization': 'Bearer ${readAuthToken()}',
+    'Content-Type': 'application/json',
+  };
 
   /// The saved language; English when the server has no setting (or no
   /// voice settings endpoint yet). Throws on 401 so callers can re-login.
@@ -57,7 +57,9 @@ class VoiceSettingsService {
       throw VoiceSettingsError(response.statusCode);
     }
     final body = jsonDecode(response.body);
-    return VoiceLanguageCode.parse(body is Map ? body['language'] : language.code);
+    return VoiceLanguageCode.parse(
+      body is Map ? body['language'] : language.code,
+    );
   }
 }
 

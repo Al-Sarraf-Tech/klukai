@@ -1,0 +1,259 @@
+part of 'chat_screen.dart';
+
+/// The Chat tab's 3D face: her companion stage in an iframe under the HUD
+/// (status tags, tracking readout, her latest line with `▶ VOICE`, and the
+/// same composer). Shares the screen's single State owner.
+extension _ChatStage on _ChatScreenState {
+  /// How long to wait for the stage to answer a speak request.
+  static const _speakAnswerTimeout = Duration(seconds: 8);
+
+  /// Her latest line worth showing (not his, not an image-only frame).
+  ChatMessage? get _latestLine {
+    for (var i = _messages.length - 1; i >= 0; i--) {
+      final m = _messages[i];
+      if (m.role == 'user') continue;
+      final text = m.content.trim();
+      if (text.isEmpty || text == '[IMAGE]') continue;
+      return m;
+    }
+    return null;
+  }
+
+  List<String> get _trackingLines {
+    final notice = _stageNotice?.trim() ?? '';
+    if (notice.isNotEmpty) return [notice.toUpperCase()];
+    if (!_stageReady) return const ['LINKING 3D…'];
+    final doing = _stageVoice == VoicePlayState.playing
+        ? 'VOICE · LIP SYNC'
+        : _state.isTyping || _streamingId != null
+        ? 'THINKING'
+        : 'IDLE · BREATH';
+    return ['TRACKING', doing, 'GAZE: COMMANDER'];
+  }
+
+  Widget _buildStageLayout() {
+    final builder = widget.stageBuilder ?? defaultCompanionStage;
+    final keyboard = _keyboardUp;
+    final line = _latestLine;
+    final waiting = _state.isTyping && _streamingId == null;
+    return ColoredBox(
+      color: HudColors.ground,
+      child: Stack(
+        key: const Key('chat-stage'),
+        children: [
+          Positioned.fill(
+            child: builder(
+              context,
+              src: companionStageSrc(),
+              onLink: (link) => _stageLink = link,
+              onEvent: _onStageEvent,
+            ),
+          ),
+          Positioned(
+            top: 6,
+            left: 16,
+            right: 16,
+            child: HudPointerShield(
+              child: HudTopBar(
+                title: '3D LINK // LIVE',
+                view: _view,
+                onViewChanged: _setView,
+                onMenu: _onMenu,
+                ambientMuted: _ambientMuted,
+              ),
+            ),
+          ),
+          if (!keyboard) ...[
+            const Positioned(
+              top: 58,
+              left: 16,
+              child: IgnorePointer(child: _Bracket()),
+            ),
+            Positioned(
+              top: 56,
+              right: 16,
+              child: HudPointerShield(
+                child: GestureDetector(
+                  onTap: _openHerDaySheet,
+                  child: StageStatusTags(
+                    level: _state.affectionLevel.clamp(0, kMaxAffinityLevel),
+                    mood: moodLabel(_state.mood),
+                    bpm: _moodBPM,
+                    spiking: _heartbeatSpikeOverride != null,
+                    wearing: _herDay?.outfit?.name ?? '',
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 16,
+              top: 230,
+              child: TrackingReadout(lines: _trackingLines),
+            ),
+          ],
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: HudPointerShield(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_activeTools.isNotEmpty) _buildToolStatus(),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: DialoguePanel(
+                      line: line?.content ?? '',
+                      streaming: line?.isStreaming ?? false,
+                      status: waiting ? (_thinkingText ?? 'PROCESSING') : null,
+                      voiceState: _stageVoice,
+                      onVoice: line == null ? null : () => _speakInStage(line),
+                      maxTextHeight: keyboard ? 48 : 120,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  _buildComposer(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// `▶ VOICE` in 3D: the avatar says the line once, lip-synced. If the
+  /// stage cannot play audio (no stage yet, or its audio would not start),
+  /// the line plays through the PWA's own voice channel instead.
+  void _speakInStage(ChatMessage line) {
+    if (_stageVoice != VoicePlayState.idle) return;
+    final id = ++_speakSeq;
+    final link = _stageLink;
+    if (link == null || !link.speak(line.content, id: id)) {
+      _speakHere(line);
+      return;
+    }
+    _stageSpeakTimer?.cancel();
+    _update(() {
+      _stageVoice = VoicePlayState.loading;
+      _pendingSpeakId = id;
+      _pendingSpeakLine = line;
+    });
+    _stageSpeakTimer = Timer(_ChatStage._speakAnswerTimeout, () {
+      if (!mounted || _pendingSpeakId != id) return;
+      _update(() {
+        _stageVoice = VoicePlayState.idle;
+        _pendingSpeakId = null;
+        _pendingSpeakLine = null;
+      });
+      _showHudNotice('// 3D LINK DID NOT ANSWER — try again.');
+    });
+  }
+
+  void _onStageEvent(String type, Map<String, Object?> data) {
+    if (!mounted) return;
+    switch (type) {
+      case 'klukai:stage-ready':
+        _update(() => _stageReady = data['ready'] == true);
+      case 'klukai:stage-notice':
+        final text = data['text'];
+        _update(() => _stageNotice = text is String ? text : null);
+      case 'klukai:speaking':
+        final on = data['on'] == true;
+        if (on) {
+          _stageSpeakTimer?.cancel();
+          _update(() {
+            _stageVoice = VoicePlayState.playing;
+            _pendingSpeakId = null;
+            _pendingSpeakLine = null;
+          });
+        } else if (_stageVoice == VoicePlayState.playing) {
+          _update(() => _stageVoice = VoicePlayState.idle);
+        }
+      case 'klukai:speak-status':
+        final id = data['id'];
+        if (id is! num || id.toInt() != _pendingSpeakId) return;
+        _stageSpeakTimer?.cancel();
+        final line = _pendingSpeakLine;
+        final status = data['status'];
+        if (status == 'playing') {
+          // Synthesizing; `klukai:speaking` flips it to playing. Keep the
+          // spinner, but don't wait forever on a line that fails to arrive.
+          _stageSpeakTimer = Timer(const Duration(seconds: 30), () {
+            if (mounted && _stageVoice == VoicePlayState.loading) {
+              _update(() => _stageVoice = VoicePlayState.idle);
+            }
+          });
+          return;
+        }
+        _update(() {
+          _stageVoice = VoicePlayState.idle;
+          _pendingSpeakId = null;
+          _pendingSpeakLine = null;
+        });
+        if (status == 'unavailable' && line != null) _speakHere(line);
+      case 'klukai:voice-error':
+        // One notice per tap: the stage reports each failed sentence.
+        if (_stageVoice == VoicePlayState.idle) return;
+        _stageSpeakTimer?.cancel();
+        _update(() {
+          _stageVoice = VoicePlayState.idle;
+          _pendingSpeakId = null;
+          _pendingSpeakLine = null;
+        });
+        _showHudNotice('// VOICE SYNTH OFFLINE — her words stand.');
+      case 'klukai:auth-expired':
+        _handleAuthExpired();
+    }
+  }
+
+  /// Her line through the PWA's voice channel (/api/tts, then the
+  /// gesture-unlocked player): the 3D fallback when the stage can't play.
+  Future<void> _speakHere(ChatMessage line) async {
+    if (_stageVoice != VoicePlayState.idle) return;
+    _update(() => _stageVoice = VoicePlayState.loading);
+    // An injected client is the caller's to close; one we open here is ours.
+    final client = widget.httpClient ?? http.Client();
+    var heard = false;
+    try {
+      for (final chunk in chunkForTts(line.content)) {
+        if (!mounted) break;
+        final audio = await TtsAudioRequest(
+          client: client,
+          baseUrl: widget.serverUrl,
+          token: readAuthToken(),
+        ).run(chunk);
+        if (!mounted) break;
+        _update(() => _stageVoice = VoicePlayState.playing);
+        heard = await _browser.playVoice('data:audio/wav;base64,$audio');
+        if (!heard) break;
+      }
+    } catch (e) {
+      heard = false;
+      debugPrint('Voice playback failed: $e');
+    } finally {
+      if (widget.httpClient == null) client.close();
+    }
+    if (!mounted) return;
+    _update(() => _stageVoice = VoicePlayState.idle);
+    if (!heard) _showHudNotice('// VOICE SYNTH OFFLINE — her words stand.');
+  }
+}
+
+/// The reticle corner at the top-left of the 3D view.
+class _Bracket extends StatelessWidget {
+  const _Bracket();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 26,
+    height: 26,
+    decoration: const BoxDecoration(
+      border: Border(
+        top: BorderSide(color: HudColors.cyan, width: 2),
+        left: BorderSide(color: HudColors.cyan, width: 2),
+      ),
+    ),
+  );
+}

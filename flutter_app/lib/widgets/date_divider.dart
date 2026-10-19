@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../theme/gfl2_colors.dart';
+import '../theme/hud.dart';
 
 class DateDivider extends StatelessWidget {
   final DateTime date;
@@ -32,24 +32,24 @@ class DateDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final rule = Expanded(
+      child: Container(height: 1, color: HudColors.cyanA(0.18)),
+    );
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            color: GFL2Colors.surface,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            _label(),
-            style: TextStyle(
-              color: GFL2Colors.textDim.withValues(alpha: 0.6),
-              fontSize: 11,
-              fontFamily: 'monospace',
-              letterSpacing: 0.5,
+        child: Row(
+          children: [
+            rule,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Text(
+                _label(),
+                style: HudText.label(size: 10, color: HudColors.textMuted),
+              ),
             ),
-          ),
+            rule,
+          ],
         ),
       ),
     );

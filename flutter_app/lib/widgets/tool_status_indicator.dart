@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../theme/gfl2_colors.dart';
+import '../theme/hud.dart';
 
 String _frameToolName(String toolName) {
   final lower = toolName.toLowerCase();
@@ -26,15 +26,14 @@ class ToolStatusIndicator extends StatelessWidget {
     final framedName = _frameToolName(toolName);
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: GFL2Colors.surface,
-          borderRadius: BorderRadius.circular(2),
+          color: HudColors.cyanA(0.05),
           border: Border(
             left: BorderSide(
-              color: isDone ? GFL2Colors.success : GFL2Colors.primary,
+              color: isDone ? HudColors.online : HudColors.cyan,
               width: 2,
             ),
           ),
@@ -50,7 +49,7 @@ class ToolStatusIndicator extends StatelessWidget {
                   height: 10,
                   child: CircularProgressIndicator(
                     strokeWidth: 1.5,
-                    color: GFL2Colors.primary.withValues(alpha: 0.6),
+                    color: HudColors.cyanA(0.6),
                   ),
                 ),
               )
@@ -60,19 +59,21 @@ class ToolStatusIndicator extends StatelessWidget {
                 child: Icon(
                   Icons.check,
                   size: 12,
-                  color: GFL2Colors.success.withValues(alpha: 0.7),
+                  color: HudColors.online.withValues(alpha: 0.8),
                 ),
               ),
-            Text(
-              '$framedName // $toolName',
-              style: TextStyle(
-                color: isDone
-                    ? GFL2Colors.success.withValues(alpha: 0.5)
-                    : GFL2Colors.primary.withValues(alpha: 0.6),
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.8,
-                fontFamily: 'monospace',
+            Flexible(
+              child: Text(
+                '$framedName // $toolName',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: HudText.label(
+                  size: 10,
+                  weight: FontWeight.w600,
+                  color: isDone
+                      ? HudColors.online.withValues(alpha: 0.7)
+                      : HudColors.cyanA(0.8),
+                ),
               ),
             ),
           ],

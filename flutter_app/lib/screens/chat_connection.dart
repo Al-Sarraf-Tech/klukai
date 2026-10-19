@@ -82,20 +82,20 @@ extension _ChatConnection on _ChatScreenState {
     if (!mounted || _authExpired) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: const Text(
+        content: Text(
           "COULDN'T LOAD HISTORY",
-          style: TextStyle(
-            fontFamily: 'monospace',
-            letterSpacing: 1.0,
-            fontSize: 12,
-          ),
+          style: HudText.label(size: 11, color: HudColors.text),
         ),
-        backgroundColor: GFL2Colors.surface,
+        backgroundColor: const Color(0xFF0B1118),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 6),
+        shape: CutCornerBorder(
+          cut: 8,
+          side: BorderSide(color: HudColors.danger.withValues(alpha: 0.5)),
+        ),
         action: SnackBarAction(
           label: 'RETRY',
-          textColor: GFL2Colors.primary,
+          textColor: HudColors.cyan,
           onPressed: _loadHistory,
         ),
       ),

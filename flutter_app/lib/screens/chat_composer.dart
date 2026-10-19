@@ -7,11 +7,26 @@ extension _ChatComposer on _ChatScreenState {
     if (_inputDisabled) return;
     final text = _textController.text.trim();
     if (text.isEmpty) return;
+    if (!_transmit(text)) return; // draft stays in the composer for retry
+    _textController.clear();
+    _focusNode.requestFocus();
+  }
+
+  /// The camera button: asks her for a picture through the ordinary message
+  /// path (her image tool answers it). His draft is left alone.
+  void _requestPicture() {
+    if (_inputDisabled) return;
+    _transmit(kPictureRequest);
+  }
+
+  /// Sends [text] and echoes it in the transcript. False (and a notice) when
+  /// the link refused it, so nothing that never left is shown as sent.
+  bool _transmit(String text) {
     if (!_ws.sendMessage(text)) {
       // Channel is gone (race with a disconnect) — don't echo a message that
-      // never left, and keep the draft in the composer for retry.
+      // never left.
       _showSendError();
-      return;
+      return false;
     }
     _update(() {
       _messages.add(
@@ -22,10 +37,9 @@ extension _ChatComposer on _ChatScreenState {
         ),
       );
     });
-    _textController.clear();
-    _focusNode.requestFocus();
     _scrollToBottom();
     _startWarmupHint();
+    return true;
   }
 
   // When she's been idle the local model evicts (load-on-demand), so the first
@@ -58,53 +72,35 @@ extension _ChatComposer on _ChatScreenState {
     _warmupTimer = null;
   }
 
-  void _showSendError() {
+  /// A short HUD notice above the composer.
+  void _showHudNotice(String text, {Key? key}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger.showSnackBar(
       SnackBar(
-        content: const Text(
-          'TRANSMISSION FAILED // LINK DOWN',
-          style: TextStyle(
-            fontFamily: 'monospace',
-            letterSpacing: 1.0,
-            fontSize: 12,
-          ),
+        key: key,
+        content: Text(
+          text,
+          style: HudText.label(size: 11, color: HudColors.text),
         ),
-        backgroundColor: GFL2Colors.surface,
+        backgroundColor: const Color(0xFF0B1118),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 4),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(4),
-          side: BorderSide(color: GFL2Colors.danger.withValues(alpha: 0.4)),
+        shape: CutCornerBorder(
+          cut: 8,
+          side: BorderSide(color: HudColors.danger.withValues(alpha: 0.5)),
         ),
       ),
     );
   }
 
+  void _showSendError() => _showHudNotice('TRANSMISSION FAILED // LINK DOWN');
+
   /// The push-to-talk clip went nowhere: STT is down (the GPU host is off),
   /// timed out, or heard nothing. Short, in her register; the keyboard works.
-  void _showVoiceLinkError() {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text(
-          '// VOICE LINK GARBLED — try again or type.',
-          style: TextStyle(
-            fontFamily: 'monospace',
-            letterSpacing: 1.0,
-            fontSize: 12,
-          ),
-        ),
-        backgroundColor: GFL2Colors.surface,
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 4),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(4),
-          side: BorderSide(color: GFL2Colors.danger.withValues(alpha: 0.4)),
-        ),
-      ),
-    );
-  }
+  void _showVoiceLinkError() =>
+      _showHudNotice('// VOICE LINK GARBLED — try again or type.');
 
   /// Keyboard scroll-navigation for the message list: PageUp/PageDown jump a
   /// near-viewport, Home/End jump to the extremes. Returns

@@ -22,6 +22,8 @@ import 'package:companion_app/models/message.dart';
 
 import '../support/fake_browser.dart';
 
+const _voice = Key('voice-play');
+
 Widget _wrap(Widget child) => MaterialApp(
   home: Scaffold(body: SizedBox(width: 400, child: child)),
 );
@@ -139,14 +141,13 @@ void main() {
   );
 
   group('MessageBubble — companion (assistant) messages', () {
-    testWidgets('shows the KLUKAI comm tag and a voice (speaker) control', (
-      tester,
-    ) async {
+    testWidgets('shows the ▸ KLUKAI tag and a ▶ VOICE control', (tester) async {
       await tester.pumpWidget(_wrap(MessageBubble(message: _msg())));
       await tester.pump();
-      expect(find.text('KLUKAI // SST-05'), findsOneWidget);
-      // Idle speaker icon is shown for non-streaming companion messages.
-      expect(find.byIcon(Icons.volume_up_outlined), findsOneWidget);
+      expect(find.text('▸ KLUKAI'), findsOneWidget);
+      // Idle VOICE is shown for non-streaming companion messages.
+      expect(find.byKey(_voice), findsOneWidget);
+      expect(find.text('VOICE'), findsOneWidget);
       // Companion messages have no read/sent ticks.
       expect(find.byIcon(Icons.done_all), findsNothing);
       expect(find.byIcon(Icons.done), findsNothing);
@@ -180,8 +181,8 @@ void main() {
         ),
       );
       await tester.pump();
-      expect(find.text('KLUKAI // SST-05'), findsNothing);
-      expect(find.byIcon(Icons.volume_up_outlined), findsNothing);
+      expect(find.text('▸ KLUKAI'), findsNothing);
+      expect(find.byKey(_voice), findsNothing);
     });
 
     testWidgets('read status shows double-tick (done_all)', (tester) async {
@@ -221,8 +222,8 @@ void main() {
         ),
       );
       await tester.pump();
-      // Footer (with speaker + timestamp) is suppressed during streaming.
-      expect(find.byIcon(Icons.volume_up_outlined), findsNothing);
+      // VOICE and the timestamp wait until the line is complete.
+      expect(find.byKey(_voice), findsNothing);
       expect(find.text('14:07'), findsNothing);
       // Content is still visible.
       expect(find.text('typing...'), findsOneWidget);
@@ -287,17 +288,17 @@ void main() {
       );
       await tester.pump();
 
-      await tester.tap(find.byIcon(Icons.volume_up_outlined));
+      await tester.tap(find.byKey(_voice));
       await tester.pump();
-      // Request in flight: the speaker is a spinner.
+      // Request in flight: VOICE is a spinner.
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      expect(find.byIcon(Icons.volume_up_outlined), findsNothing);
+      expect(find.text('SYNTH'), findsOneWidget);
 
       gate.complete(http.Response('voice service unavailable', 502));
       await tester.pump();
       await tester.pump();
       expect(find.byType(CircularProgressIndicator), findsNothing);
-      expect(find.byIcon(Icons.volume_up_outlined), findsOneWidget);
+      expect(find.text('VOICE'), findsOneWidget);
       expect(find.text(offline), findsOneWidget);
       // Let the snackbar run its course.
       await tester.pump(const Duration(seconds: 5));
@@ -317,7 +318,9 @@ void main() {
       );
       await tester.pump();
 
-      await tester.tap(find.byIcon(Icons.volume_up_outlined));
+      // Nothing plays until he taps.
+      expect(browser.voices, isEmpty);
+      await tester.tap(find.byKey(_voice));
       await tester.pump();
       await tester.pump();
       expect(browser.voices, ['data:audio/wav;base64,UklGRg==']);
@@ -331,7 +334,12 @@ void main() {
   ) async {
     await tester.pumpWidget(_wrap(MessageBubble(message: _msg())));
     expect(find.byTooltip('Replay Klukai voice'), findsOneWidget);
-    expect(find.byType(IconButton), findsOneWidget);
+    expect(
+      find.descendant(of: find.byKey(_voice), matching: find.byType(InkWell)),
+      findsNothing,
+    );
+    expect(tester.widget<InkWell>(find.byKey(_voice)).onTap, isNotNull);
+    expect(tester.getSize(find.byKey(_voice)).height, greaterThanOrEqualTo(44));
   });
 
   testWidgets('invalid artwork bytes keep text and show an error', (
@@ -366,12 +374,9 @@ void main() {
     await tester.pumpWidget(
       _wrap(MessageBubble(message: _msg(), browser: browser, client: client)),
     );
-    final button = find.byWidgetPredicate(
-      (w) => w is IconButton && w.tooltip == 'Replay Klukai voice',
-    );
     Focus.of(
       tester.element(
-        find.descendant(of: button, matching: find.byType(Icon)).first,
+        find.descendant(of: find.byKey(_voice), matching: find.text('VOICE')),
       ),
     ).requestFocus();
     await tester.pump();
@@ -385,6 +390,53 @@ void main() {
       findsOneWidget,
     );
     await tester.pump(const Duration(seconds: 5));
+  });
+
+  testWidgets('a voice letter plays its recorded note, only on a tap', (
+    tester,
+  ) async {
+    var plays = 0;
+    final notes = Completer<bool>();
+    await tester.pumpWidget(
+      _wrap(
+        MessageBubble(
+          message: _msg(content: 'I kept your seat warm on the bike.'),
+          browser: FakeBrowserPlatform(),
+          client: MockClient((_) async => fail('the note is not re-read')),
+          voiceOverride: () {
+            plays++;
+            return notes.future;
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(plays, 0);
+    await tester.tap(find.byKey(_voice));
+    await tester.pump();
+    expect(plays, 1);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    await tester.tap(find.byKey(_voice)); // busy: not a second playback
+    expect(plays, 1);
+    notes.complete(true);
+    await tester.pump();
+    expect(find.text('VOICE'), findsOneWidget);
+    expect(
+      find.text('// VOICE SYNTH OFFLINE — her words stand.'),
+      findsNothing,
+    );
+  });
+
+  testWidgets('an image-only line has no VOICE', (tester) async {
+    await tester.pumpWidget(
+      _wrap(
+        MessageBubble(
+          message: _msg(content: '[IMAGE]', imageData: _pngB64),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(_voice), findsNothing);
   });
 
   group('MessageBubble — alignment', () {
