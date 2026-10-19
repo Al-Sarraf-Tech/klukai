@@ -127,6 +127,7 @@ class AlbumEventsMixin(_EngineBase):
         try:
             from .. import memory_archive
             from ..her_day import render_costume
+            from .. import wardrobe as _wardrobe
             from ..image_gen import INTIMATE_MIN_LEVEL, build_prompt, generate_image
 
             # She draws herself in what she has on today.
@@ -139,6 +140,7 @@ class AlbumEventsMixin(_EngineBase):
                 mood=self._last_mood,
                 time_of_day=_time_of_day(now.hour),
                 costume=costume,
+                costume_pinned=_wardrobe.granted_request_for("jalsarraf", costume),
             )
             img = await generate_image(
                 prompt,

@@ -292,6 +292,7 @@ async def background_image_gen(
         # Render what she is actually wearing right now (Her Day: today's pick,
         # his granted request, or block kit) — gated at the current level.
         from .her_day import render_costume
+        from . import wardrobe as _wardrobe
 
         costume = await render_costume(user_id, aff_level)
         full_prompt = build_prompt(
@@ -301,6 +302,7 @@ async def background_image_gen(
             context=full_context,
             squad_members=squad_members,
             costume=costume,
+            costume_pinned=_wardrobe.granted_request_for(user_id, costume),
             request=user_request,
         )
         logger.info("Image composition prepared (aff=%d)", aff_level)

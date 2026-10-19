@@ -29,6 +29,7 @@ class HerPOVPipeline:
         from .context import ws
         from .image_gen import INTIMATE_MIN_LEVEL, build_prompt, generate_image
         from .her_day import render_costume
+        from . import wardrobe as _wardrobe
 
         try:
             await self.set_job(
@@ -158,6 +159,7 @@ class HerPOVPipeline:
                 mood=pov["mood"],
                 time_of_day=tod,
                 costume=costume,
+                costume_pinned=_wardrobe.granted_request_for(user_id, costume),
             )
 
             img = await generate_image(

@@ -128,6 +128,23 @@ def granted_request(oid: str | None) -> bool:
     )
 
 
+def granted_request_for(user_id: str, oid: str | None) -> bool:
+    """Whether ``oid`` is the outfit this Commander asked for today and she agreed.
+
+    Cache-only like ``granted_request``, but for one user: callers that know
+    whose picture it is pass this as ``build_prompt(costume_pinned=...)``.
+    """
+    oid = canonical_id(oid)
+    cached = _today_cache.get(user_id)
+    if not oid or cached is None:
+        return False
+    row = cached[1]
+    return (
+        row.day == her_date(now_local())
+        and canonical_id(row.requested_outfit_id) == oid
+    )
+
+
 def _row_from_db(day: date, r: tuple[Any, ...]) -> HerDayRow:
     weather = r[4]
     if isinstance(weather, str):
