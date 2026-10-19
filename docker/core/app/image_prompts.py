@@ -156,6 +156,9 @@ def build_prompt(
     costume: str | None = None,
     request: str | None = None,
     affection_tags: bool = True,
+    pose: str | None = None,
+    variation_seed: int | str | None = None,
+    costume_pinned: bool | None = None,
 ) -> str:
     """Build the full positive prompt with quality tags, LoRA trigger, and character identities.
 
@@ -178,7 +181,21 @@ def build_prompt(
             her replies in ``context``) can make it an explicit bath/bed scene.
         affection_tags: Inject the affection-level expression/setting tags.
             Live Portrait turns this off: its frames set the expression
-            themselves and need a neutral, setting-free base.
+            themselves and need a neutral, setting-free base — so it also
+            gets no scene dressing and no per-render variety.
+        pose: The caller's own pose/composition tags, used verbatim instead
+            of a candid cue from the pool ("" = no composition cue at all).
+        variation_seed: Seed for the per-render choices (scene outfit pick,
+            composition, hairstyle, accessories). None derives it from the
+            other inputs, so the same render inputs give the same picture plan.
+        costume_pinned: ``costume`` is his granted request, so it is never
+            re-dressed for the scene. None asks the Her Day cache
+            (wardrobe.granted_request).
+
+    Who decides what she wears, highest first: an outfit he asks for in
+    ``request`` and she has on > an explicit bath/bed scene (at the intimacy
+    gate) > the outfit the scene calls for, if unlocked (app/wardrobe_scene.py)
+    > ``costume``.
     """
     parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
 
@@ -201,18 +218,86 @@ def build_prompt(
     outfit_context = f"{context} {scene_tags}" if context else scene_tags
     # What she is wearing today overrides the keyword-matched outfit, except
     # for an explicit bath/bed scene; otherwise fall back to keyword selection.
-    from . import wardrobe
+    from . import wardrobe, wardrobe_scene, wardrobe_variation
 
-    costume_tags = wardrobe.image_tags(costume) if costume else None
-    explicit = affection_level >= INTIMATE_MIN_LEVEL and _explicit_scene(
-        request if request is not None else outfit_context
+    # Live Portrait (affection_tags=False) keeps a fixed, neutral base.
+    vary = affection_tags
+    seed = (
+        variation_seed
+        if variation_seed is not None
+        else wardrobe_variation.derive_seed(
+            scene_tags,
+            context,
+            request,
+            costume,
+            affection_level,
+            mood,
+            time_of_day,
+            couple,
+        )
     )
-    if costume_tags and not explicit:
-        klukai_outfit = costume_tags
+    cat = wardrobe.catalog()
+    costume_id = wardrobe.canonical_id(costume, cat) if costume else None
+    costume_tags = wardrobe.image_tags(costume_id, cat) if costume_id else None
+    # An outfit he asks for in his own words, and that she has on (the request
+    # was granted), outranks everything below — the bath/bed rule included.
+    named = wardrobe.detect_outfit_request(request, cat) if request else None
+    honoured = named is not None and named == costume_id
+    explicit = (
+        not honoured
+        and affection_level >= INTIMATE_MIN_LEVEL
+        and _explicit_scene(request if request is not None else outfit_context)
+    )
+    # Only his words (or, with none, the picture's own scene tags) set the
+    # scene — never her replies in ``context``.
+    scene = (
+        wardrobe_scene.scene_of(request if request is not None else scene_tags)
+        if vary
+        else None
+    )
+    if costume_id and costume_tags and not explicit:
+        worn = costume_id
+        if scene and named is None:
+            pinned = (
+                costume_pinned
+                if costume_pinned is not None
+                else wardrobe.granted_request(costume_id)
+            )
+            if not pinned:
+                worn = (
+                    wardrobe_scene.scene_outfit(
+                        scene,
+                        affection_level,
+                        current=costume_id,
+                        cat=cat,
+                        rng=wardrobe_variation.variation_rng(seed, "scene"),
+                    )
+                    or costume_id
+                )
+        klukai_outfit = (
+            wardrobe_variation.styled_tags(cat[worn], affection_level, seed)
+            if vary
+            else costume_tags
+        )
     else:
         klukai_outfit = _select_outfit(
             outfit_context, _outfit_map_for(affection_level), KLUKAI_DEFAULT_OUTFIT
         )
+
+    # A candid camera/action cue, so pictures are not one posed portrait —
+    # never for Live Portrait or an explicit intimate scene, and a caller's own
+    # pose always wins.
+    if pose is not None:
+        composition = pose.strip()
+    elif vary and not explicit:
+        composition = wardrobe_variation.composition(
+            scene,
+            couple=couple,
+            framing_text=f"{scene_tags} {request or ''}",
+            seed=seed,
+        )
+    else:
+        composition = ""
 
     if couple:
         commander_outfit = _select_outfit(
@@ -234,6 +319,8 @@ def build_prompt(
         if total_girls > 1:
             parts.append(f"{total_girls}girls, multiple girls")
 
+    if composition:
+        parts.append(composition)
     parts.append(scene_tags)
     return ", ".join(parts)
 

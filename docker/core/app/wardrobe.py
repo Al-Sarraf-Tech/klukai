@@ -109,6 +109,25 @@ def clear_cache() -> None:
     _locks.clear()
 
 
+def granted_request(oid: str | None) -> bool:
+    """Whether ``oid`` is an outfit a Commander asked for today and she agreed.
+
+    Sync and cache-only, for image prompts (which carry no user id): every
+    render path asks Her Day what she wears (render_costume → ensure_today)
+    just before building the prompt, which fills this cache. A granted request
+    is never re-dressed for the scene. If two Commanders' days disagree, a
+    match for either keeps today's outfit — the fail-closed side.
+    """
+    oid = canonical_id(oid)
+    if not oid:
+        return False
+    day = her_date(now_local())
+    return any(
+        row.day == day and canonical_id(row.requested_outfit_id) == oid
+        for _, row in _today_cache.values()
+    )
+
+
 def _row_from_db(day: date, r: tuple[Any, ...]) -> HerDayRow:
     weather = r[4]
     if isinstance(weather, str):

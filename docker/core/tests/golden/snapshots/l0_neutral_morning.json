@@ -3,9 +3,9 @@
   "contains_commander": true,
   "contains_klukai": true,
   "first_line": "RESPONSE PRIORITY (apply in this order when guidance conflicts):",
-  "length": 14949,
+  "length": 15052,
   "level": 0,
   "mood": "neutral",
-  "sha256": "e45505843b953669453ecfb90b3e1004d5f262cd9b3038eca812900e748bd5f1",
+  "sha256": "871a0b899c23975b1bc0016aa393210bc94a12409f1097c3a7ed151ca0b90283",
   "time_of_day": "morning"
 }

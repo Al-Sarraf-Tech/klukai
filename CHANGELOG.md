@@ -29,6 +29,15 @@ in `docs/superpowers/plans/`.
   `/health` reports voice `disabled` without probing it.
 - Images never fall back to Dominus: compose defaults `KLUKAI_IMAGE_PROVIDER`
   to the private account worker (Grok, then Codex, then Agy).
+- Her outfits in pictures are dynamic: she dresses for the scene his request
+  sets (range kit at the gym, rain shell in the rain, coveralls in the hangar…)
+  when that outfit is unlocked, else keeps today's (`app/wardrobe_scene.py`);
+  seven new lore-anchored originals join the wardrobe (Cat Café Date, Stargazer,
+  Paddock Pass, Lantern Night, Fireworks Party, Tea Counter, Terrace Cover-Up);
+  and each render varies its candid composition, hairstyle and small canon
+  accessories from a seed (`app/wardrobe_variation.py`). His granted outfit
+  request still wins, the bath/bed intimacy gate is unchanged, and Live Portrait
+  keeps its fixed base. The new tag sets still need a render check.
 
 ### Security
 

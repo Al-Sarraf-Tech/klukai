@@ -62,11 +62,25 @@ class Outfit:
     occasions: tuple[str, ...]
     aliases: tuple[str, ...]
     stance: str
+    # Per-render variety (app/wardrobe_variation.py). None = her category's
+    # default pool; () = fixed (the gown is always hair down, the oath bare).
+    hair: tuple[str, ...] | None = None
+    accessories: tuple[str, ...] | None = None
 
     @property
     def blurb(self) -> str:
         """First sentence of the description (split on '. ' so "No.1" survives)."""
         return self.description.split(". ")[0].strip().rstrip(".")
+
+
+def _optional_list(raw: dict[str, Any], key: str) -> tuple[str, ...] | None:
+    """A YAML list as a tuple; absent/null stays None (use the default)."""
+    value = raw.get(key)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(v) for v in value)
 
 
 def _as_outfit(oid: str, raw: dict[str, Any]) -> Outfit:
@@ -86,6 +100,8 @@ def _as_outfit(oid: str, raw: dict[str, Any]) -> Outfit:
         occasions=tuple(raw.get("occasions") or ()),
         aliases=tuple(str(a).lower() for a in raw.get("aliases") or ()),
         stance=str(raw.get("stance", "")),
+        hair=_optional_list(raw, "hair"),
+        accessories=_optional_list(raw, "accessories"),
     )
 
 

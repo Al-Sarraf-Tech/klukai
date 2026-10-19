@@ -933,6 +933,7 @@ costumes:
       Dark formal military dress uniform, a peaked cap, white gloves, an
       aiguillette and two medal ribbons she pretends not to be proud of.
     image_tags: "high ponytail, military uniform, buttoned black jacket, white collared shirt, black necktie, peaked cap, aiguillette, medal, white gloves, black pleated skirt, black thighhighs"
+    hair: [high ponytail, low ponytail, single hair bun]  # regulation styles only
     occasions: [starwish_cn]
     aliases: ["dress uniform", "parade uniform", "ceremonial uniform", "medals"]
     stance: "For ceremony. If he wants a ceremony, he can arrange one."
@@ -1007,6 +1008,139 @@ costumes:
     occasions: [christmas]
     aliases: ["red scarf", "christmas outfit", "holiday outfit"]
     stance: "Seasonal. She wears it in December whether or not he asks."
+
+  # ── Originals, 2026-10-19 — each description names its canon anchor
+  # (docs/research/2026-10-04-canon-wardrobe-dossier.md §4). Her palette only:
+  # black, white, indigo/violet, pale blue, checkered racing motifs, red trim,
+  # silver jewelry. Tags still need a render check.
+  cat_cafe_date:
+    name: "Cat Café Date"
+    type: "Original — date day (canon: the cat café on her first-date plan, Across the Storm; the Turbokat Resonance cat-ear earphones from the Midnight Jetstream pack)"
+    source: original
+    category: off_duty
+    unlock_level: 4
+    description: >
+      Turbokat cat-ear earphones over her ponytail, a white ribbed sweater
+      under an open violet cardigan, a high-waisted black skirt, black
+      pantyhose, ankle boots and a thin silver necklace. Canon anchor: the cat
+      café on her first-date plan in Across the Storm ("the cats in this cafe
+      can help you relax") and the Turbokat Resonance earphones of the
+      Midnight Jetstream pack. The cats find her. She treats this as a
+      tactical problem.
+    image_tags: "high ponytail, cat ear headphones, white sweater, ribbed sweater, purple cardigan, open cardigan, black skirt, high-waist skirt, black pantyhose, ankle boots, silver necklace"
+    daily: {weight: 1.0, temp_min: 5, temp_max: 22, avoid_conditions: [storm], weekdays: [5, 6], moods: [playful, affectionate, content, amused]}
+    aliases: ["cat cafe outfit", "date outfit", "cat ear headphones", "cat earphones", "turbokat"]
+    stance: "A date is reconnaissance with better coffee. She booked the café; the cats were not her idea."
+
+  stargazing_night:
+    name: "Stargazer"
+    type: "Original — a night ride out to the stars (canon: the Wild Ride wish card; the 416 Day letter's back seat under the night sky)"
+    source: original
+    category: off_duty
+    unlock_level: 5
+    description: >
+      A black down jacket over a black turtleneck, a black-and-white checkered
+      scarf, fingerless riding gloves, black pants and boots, and a thermos
+      for two. Canon anchor: the Wild Ride wish card ("Riding in the night
+      wind feels good, no? ...I DID tell you to wear extra clothing"), the
+      stars she has wanted to watch with him since Griffin, and the back seat
+      under the night sky in her 416 Day letter. The spare scarf in her pocket
+      is his. She will say it was spare.
+    image_tags: "high ponytail, black jacket, down jacket, open jacket, black turtleneck, checkered scarf, scarf around neck, fingerless gloves, black pants, black boots, holding thermos"
+    accessories: [earrings, bracelet, scrunchie, cat_headphones]  # the jacket stays on at night
+    daily: {weight: 0.6, temp_max: 15, conditions: [clear], weekdays: [4, 5, 6], moods: [tender, longing, affectionate, content]}
+    aliases: ["stargazing outfit", "stargazer", "checkered scarf", "down jacket"]
+    stance: "Only for a night out under a clear sky. If he asks for it, she checks the forecast before she answers."
+
+  paddock_pass:
+    name: "Paddock Pass"
+    type: "Original — the powersports show (canon: her first-date plan ends at a powersports show to see new bike models; Astral Luminous's checkered racing jacket and Lightspeed Lens sunglasses)"
+    source: original
+    category: off_duty
+    unlock_level: 3
+    description: >
+      A white cropped racing jacket with checkered-flag panels and red trim
+      over a black shirt, sunglasses pushed up on her head, an exhibitor
+      lanyard, black cargo pants and tech sneakers. Canon anchor: the
+      powersports show on her first-date plan (Across the Storm), and Astral
+      Luminous — its checkered racing jacket and the Lightspeed Lens
+      sunglasses of the Midnight Jetstream pack. She has an opinion on every
+      bike on the floor and will share all of them.
+    image_tags: "high ponytail, eyewear on head, sunglasses, white jacket, cropped jacket, checkered clothes, red trim, black shirt, lanyard, black pants, cargo pants, sneakers"
+    daily: {weight: 1.0, temp_min: 10, temp_max: 30, avoid_conditions: [storm, snow], weekdays: [5, 6], moods: [excited, playful, competitive, content]}
+    aliases: ["paddock pass", "racing team jacket", "team jacket", "show outfit"]
+    stance: "For the show floor. If he wants to see it, he can come and look at bikes with her. For hours."
+
+  lantern_walk:
+    name: "Lantern Night"
+    type: "Original — a lantern-lit evening (canon: the official Mid-Autumn art — mooncakes, tea and lanterns)"
+    source: original
+    category: off_duty
+    unlock_level: 3
+    description: >
+      A long-sleeved, high-collared violet dress, a white shawl, silver
+      earrings and a paper lantern. Canon anchor: the official Mid-Autumn art,
+      where she shares mooncakes and tea under lanterns (there in her duty
+      kit; this is what she changes into afterwards). She says the lantern is
+      for visibility.
+    image_tags: "high ponytail, purple dress, long dress, high collar, long sleeves, white shawl, silver earrings, holding lantern, paper lantern"
+    accessories: [necklace, bracelet, scrunchie]
+    aliases: ["lantern dress", "mid-autumn outfit", "festival dress"]
+    stance: "An evening dress for an evening walk. She will not call it a festival outfit, and she will carry the lantern."
+
+  fireworks_party:
+    name: "Fireworks Party"
+    type: "Original — New Year's Eve (canon: the official New Year 2026 fireworks-party art; her Year-2 New Year line; the late-summer sparkler greeting)"
+    source: original
+    category: seasonal
+    unlock_level: 2
+    description: >
+      A sleeveless violet party dress under her black greatcoat, worn on the
+      shoulders, black pantyhose, ankle boots, silver earrings and a sparkler.
+      Canon anchor: the official New Year 2026 fireworks-party art and her
+      Year-2 New Year line ("Our cooperation will be closer than before this
+      year, right? Naturally, you don't get to refuse."). She times the
+      countdown to the second.
+    image_tags: "high ponytail, purple dress, sleeveless dress, black coat, coat on shoulders, black pantyhose, ankle boots, silver earrings, holding sparkler"
+    occasions: [new_year]
+    aliases: ["fireworks outfit", "new year outfit", "new year's outfit", "party dress"]
+    stance: "New Year's only. The rest of the year the sparklers stay in the armory, where they belong."
+
+  tea_counter:
+    name: "Tea Counter"
+    type: "Original — Tea Time counter duty in the Crew Deck lounge (canon: the Crew Deck's Tea Time and her special, Racing Calm)"
+    source: original
+    category: off_duty
+    unlock_level: 3
+    description: >
+      A white collared shirt with the sleeves rolled up, a black waistcoat, a
+      black waist apron and black trousers — counter uniform, worn like a
+      battle station. Canon anchor: the Crew Deck's Tea Time, where one Doll
+      works the lounge counter, and her own special, Racing Calm ("an extra
+      kick of mint hits like a gust of cold wind"). She has never made a bad
+      drink and would like that noted.
+    image_tags: "high ponytail, white shirt, collared shirt, sleeves rolled up, black vest, waist apron, black apron, black pants, holding cup"
+    daily: {weight: 0.5, weekdays: [5, 6], moods: [content, composed, amused]}
+    aliases: ["tea counter", "barista outfit", "counter uniform", "waistcoat"]
+    stance: "Counter uniform. She serves him like she does everything — precisely — and bills nothing, this once."
+
+  terrace_cover_up:
+    name: "Terrace Cover-Up"
+    type: "Original — poolside, out of the water (canon: Cerulean Breaker's visor, flower and pushed-up sunglasses; GFL1 HK416's White Negroni visor and white dress)"
+    source: original
+    category: off_duty
+    unlock_level: 2
+    description: >
+      A white visor with a pink flower, sunglasses pushed up, a loose white
+      sundress with short sleeves, a belt, a black choker and flat sandals —
+      dressed for the pool deck, not the water. Canon anchor: Cerulean
+      Breaker's visor, flower and sunglasses, and the visor and white dress of
+      GFL1 HK416's White Negroni. Whether there is a swimsuit underneath is
+      classified.
+    image_tags: "high ponytail, visor cap, eyewear on head, sunglasses, hair flower, pink flower, white dress, sundress, short sleeves, belt, black choker, sandals"
+    daily: {weight: 1.5, temp_min: 26, conditions: [clear, cloudy], weekdays: [5, 6], moods: [content, playful, amused]}
+    aliases: ["cover-up", "cover up", "sundress", "beach dress"]
+    stance: "Poolside, not in the pool. If he wants to see the swimsuit, he can ask properly."
 
 # Fixed-date occasions the daily picker knows (MM-DD; "a..b" inclusive range).
 # commander_birthday is dynamic (rituals: rel:commander_birthday).
