@@ -77,3 +77,10 @@ def test_archive_works_on_the_local_tree(local, tmp_path):
         names = tar.getnames()
     assert f"{'b' * 40}/9-1/release/manifest.json" in names
     assert not any(n.endswith("core-image.tar") for n in names)
+
+
+def test_a_tree_without_nightly_runs_yet_has_no_summaries(local, tmp_path):
+    guest, roots = local
+    state, sink = tmp_path / "state", tmp_path / "sink.jsonl"
+    state.mkdir()
+    assert relay.fetch_nightly(guest, state, sink) == []

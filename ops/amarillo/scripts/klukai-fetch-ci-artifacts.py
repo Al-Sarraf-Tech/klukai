@@ -445,14 +445,14 @@ def rows(doc: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def fetch_nightly(guest: Guest, state: Path, sink: Path) -> list[str]:
+    # A tree no nightly has written yet (a new runner) simply has no summaries.
     listing = guest.run(
         [
-            "/usr/bin/find",
+            "/bin/sh",
+            "-c",
+            '[ -d "$1" ] || exit 0; exec /usr/bin/find "$1" -maxdepth 2 -name summary.json',
+            "sh",
             f"{ARTIFACTS}/nightly",
-            "-maxdepth",
-            "2",
-            "-name",
-            "summary.json",
         ]
     )
     seen = state / "seen.txt"
