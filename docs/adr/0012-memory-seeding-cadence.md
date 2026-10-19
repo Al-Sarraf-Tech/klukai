@@ -40,20 +40,26 @@ docker compose exec -T -e SEED_DEADLINE_SECONDS=6000 \
   -e SEED_HARD_KILL_SECONDS=6600 companion-core python3 /app/seed_memories.py
 ```
 
-Each run reads messages strictly after its watermark in `(created_at, id)`
-order, pairs them into exchanges and takes the oldest `SEED_MAX_EXCHANGES`
-(default 40). The watermark is the `(created_at, id)` of the assistant row
-closing the last fully handled exchange: one whose selection batch answered
-and, if it was chosen, whose memory reached a durable save or was a confirmed
-duplicate. Whatever ends a run (the deadline, an outage, a failed render), the
-watermark moves over the handled leading exchanges and stops at the first
-unfinished one. Inside the soft deadline, selection stops at 30% of the budget
-and annotation at 60%, so the leading annotated exchanges are always rendered
-and saved. A backlog therefore always drains, an exchange is never split across
-runs, and timestamp ties are neither skipped nor re-read. It is stored as
-`last_seeded_at:<user>` (the bare timestamp older seeders read) plus
-`last_seeded_id:<user>` (`{"created_at", "id"}`, used only while its timestamp
-matches), written in one commit.
+Each run reads the messages after its watermark in `(created_at, id)` order
+and pairs them with `app/seed_exchanges.py`, one timestamp group at a time: a
+reply answers the newest unanswered user message from an earlier timestamp,
+never one at its own, so the random order of a tie cannot mispair anything.
+It takes the oldest `SEED_MAX_EXCHANGES` (default 40) exchanges. A handled
+exchange is one whose selection batch answered and, if it was chosen, whose
+memory reached a durable save or was a confirmed duplicate (fingerprint
+`seed:<user message id>`, unique even when timestamps tie). Whatever ends a
+run (the deadline, an outage, a failed render), the watermark moves over the
+handled leading exchanges and stops at the first unfinished one: it records
+the last handled reply's timestamp plus the "carry", the newest user message
+at that timestamp still waiting for its reply, which the next run reads
+again. Inside the soft deadline, selection stops at 30% of the budget and
+annotation at 60%, so the leading annotated exchanges are always rendered and
+saved; only annotated picks are rendered. A backlog therefore always drains,
+exchanges are never split or re-paired across runs, and ties are neither
+skipped nor re-read. The watermark is stored as `last_seeded_at:<user>` (the
+bare timestamp older seeders read) plus `last_seeded_carry:<user>`
+(`{"created_at", "carry"}`, used only while its timestamp matches), written
+in one commit.
 
 Model aliases remain application policy in `docker/core/seed_memories.py` and
 must resolve through `ops/dominus-nobara/models.lock.json`. The timer neither

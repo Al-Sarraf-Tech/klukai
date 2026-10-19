@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import seed_memories
+
+# A reply is always stored after the message it answers.
+REPLY = timedelta(seconds=30)
 
 
 def _configure_run(
@@ -22,7 +25,7 @@ def _configure_run(
         if rows is not None
         else [
             ("m1", "user", "Keep this memory safe.", newest),
-            ("m2", "assistant", "I will, Commander.", newest),
+            ("m2", "assistant", "I will, Commander.", newest + REPLY),
         ]
     )
     conn = MagicMock()
@@ -119,7 +122,7 @@ async def test_successful_zero_selection_advances_watermark(
     result = await seed_memories.main()
 
     assert result == 0
-    set_watermark.assert_awaited_once_with(conn, newest, "m2", "jalsarraf")
+    set_watermark.assert_awaited_once_with(conn, newest + REPLY, None, "jalsarraf")
     conn.close.assert_awaited_once()
 
 
@@ -265,11 +268,11 @@ async def test_saved_memory_carries_its_exchange_fingerprint(
     result = await seed_memories.main()
 
     assert result == 0
-    fingerprint = f"seed:{newest.isoformat()}"
+    fingerprint = "seed:m1"  # seed:<user message id>
     is_duplicate.assert_awaited_once_with(conn, "jalsarraf", fingerprint)
     assert save_image.await_args.args[2] == fingerprint
     assert save_image.await_args.kwargs["user_id"] == "jalsarraf"
-    set_watermark.assert_awaited_once_with(conn, newest, "m2", "jalsarraf")
+    set_watermark.assert_awaited_once_with(conn, newest + REPLY, None, "jalsarraf")
 
 
 @pytest.mark.asyncio
@@ -289,7 +292,7 @@ async def test_confirmed_duplicate_is_skipped_without_render(
     annotate.assert_not_awaited()
     generate_image.assert_not_awaited()
     save_image.assert_not_awaited()
-    set_watermark.assert_awaited_once_with(conn, newest, "m2", "jalsarraf")
+    set_watermark.assert_awaited_once_with(conn, newest + REPLY, None, "jalsarraf")
 
 
 # ── Unusable annotation fails closed ────────────────────────────────────────
@@ -339,8 +342,8 @@ async def test_deadline_stops_the_run_and_keeps_watermark(
     ts = datetime(2026, 8, 1, 12, 0, 0)
     rows = []
     for n in range(2 * seed_memories.BATCH_SIZE):  # two selector batches
-        rows.append((f"u{n}", "user", f"message {n}", ts))
-        rows.append((f"a{n}", "assistant", f"reply {n}", ts))
+        rows.append((f"u{n}", "user", f"message {n}", ts + timedelta(minutes=n)))
+        rows.append((f"a{n}", "assistant", f"reply {n}", ts + timedelta(minutes=n) + REPLY))
     conn, set_watermark, _ = _configure_run(monkeypatch, rows=rows)
     monkeypatch.setenv("SEED_DEADLINE_SECONDS", "0.2")
 
@@ -358,7 +361,9 @@ async def test_deadline_stops_the_run_and_keeps_watermark(
     # The first batch answered (nothing chosen), so its five exchanges are
     # handled and the watermark moves past them; the second batch waits.
     last = seed_memories.BATCH_SIZE - 1
-    set_watermark.assert_awaited_once_with(conn, ts, f"a{last}", "jalsarraf")
+    set_watermark.assert_awaited_once_with(
+        conn, ts + timedelta(minutes=last) + REPLY, None, "jalsarraf"
+    )
     conn.close.assert_awaited_once()
 
 
@@ -400,33 +405,8 @@ class TestHardKill:
         assert handlers == [(seed_memories.signal.SIGALRM, seed_memories.signal.SIG_DFL)]
 
 
-class TestPairingAndProgress:
-    """The watermark is the (created_at, id) of the last message a run fully
-    handled, so exchanges are never split or re-paired across runs."""
-
-    def test_each_exchange_ends_at_its_assistant_row(self):
-        t0, t1, t2 = (datetime(2026, 8, 1, h) for h in range(3))
-        rows = [
-            ("u0", "user", "hello", t0),
-            ("a0", "assistant", "hi", t1),
-            ("u1", "user", "again", t1),
-            ("a1", "assistant", "yes", t2),
-        ]
-        exchanges = seed_memories._pair_exchanges(rows)
-        assert [(e["user"], e["assistant"], e["end"]) for e in exchanges] == [
-            ("hello", "hi", (t1, "a0")),
-            ("again", "yes", (t2, "a1")),
-        ]
-
-    def test_unpaired_rows_are_passed_over(self):
-        t = datetime(2026, 8, 1)
-        rows = [
-            ("a", "assistant", "orphan", t),
-            ("u1", "user", "one", t),
-            ("u2", "user", "two", t),
-            ("a2", "assistant", "reply", t),
-        ]
-        assert [e["end"] for e in seed_memories._pair_exchanges(rows)] == [(t, "a2")]
+class TestProgress:
+    """The watermark moves over the handled leading exchanges only."""
 
     def test_handled_prefix_stops_at_the_first_unfinished_exchange(self):
         assert seed_memories._handled_prefix(5, {0, 1, 2, 3, 4}, set(), set()) == 5
@@ -447,7 +427,7 @@ async def test_a_backlog_advances_one_bounded_prefix_per_run(
     rows = []
     for h in range(6):
         ts = datetime(2026, 8, 1, h)
-        rows += [(f"u{h}", "user", f"u{h}", ts), (f"a{h}", "assistant", f"a{h}", ts)]
+        rows += [(f"u{h}", "user", f"u{h}", ts), (f"a{h}", "assistant", f"a{h}", ts + REPLY)]
     conn, set_watermark, _ = _configure_run(monkeypatch, rows)
     monkeypatch.setenv("SEED_MAX_EXCHANGES", "2")
     select = AsyncMock(return_value=[])
@@ -459,7 +439,9 @@ async def test_a_backlog_advances_one_bounded_prefix_per_run(
     # the second one's assistant row, so the next run starts at the third.
     offered = select.await_args.args[1]
     assert [ex["user"] for ex in offered] == ["u0", "u1"]
-    set_watermark.assert_awaited_once_with(conn, datetime(2026, 8, 1, 1), "a1", "jalsarraf")
+    set_watermark.assert_awaited_once_with(
+        conn, datetime(2026, 8, 1, 1) + REPLY, None, "jalsarraf"
+    )
 
 
 @pytest.mark.asyncio
@@ -471,7 +453,7 @@ async def test_a_failed_render_keeps_the_watermark_before_it(
     rows = []
     for h in range(3):
         ts = datetime(2026, 8, 1, h)
-        rows += [(f"u{h}", "user", f"u{h}", ts), (f"a{h}", "assistant", f"a{h}", ts)]
+        rows += [(f"u{h}", "user", f"u{h}", ts), (f"a{h}", "assistant", f"a{h}", ts + REPLY)]
     conn, set_watermark, _ = _configure_run(monkeypatch, rows)
 
     async def pick_all(_client, batch, batch_start):
@@ -492,7 +474,9 @@ async def test_a_failed_render_keeps_the_watermark_before_it(
     assert await seed_memories.main() == 1
 
     assert save_image.await_count == 2
-    set_watermark.assert_awaited_once_with(conn, datetime(2026, 8, 1, 0), "a0", "jalsarraf")
+    set_watermark.assert_awaited_once_with(
+        conn, datetime(2026, 8, 1, 0) + REPLY, None, "jalsarraf"
+    )
 
 
 @pytest.mark.asyncio
@@ -514,16 +498,16 @@ async def test_a_repeated_pick_is_rendered_once(monkeypatch: pytest.MonkeyPatch)
 
     assert await seed_memories.main() == 0
     assert save_image.await_count == 1
-    set_watermark.assert_awaited_once_with(conn, newest, "m2", "jalsarraf")
+    set_watermark.assert_awaited_once_with(conn, newest + REPLY, None, "jalsarraf")
 
 
 @pytest.mark.asyncio
-async def test_a_stored_message_id_continues_by_keyset(
+async def test_a_carried_message_is_read_again(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With an id beside the timestamp, the next run starts strictly after
-    that message in (created_at, id) order, so ties are neither skipped nor
-    re-read."""
+    """A user message at the watermark's timestamp still waiting for its
+    reply is carried: the next run reads everything after the timestamp
+    plus that one message."""
     watermark = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
     seen: dict[str, tuple] = {}
 
@@ -531,8 +515,8 @@ async def test_a_stored_message_id_continues_by_keyset(
         cursor = MagicMock()
         if "companion_relationship" in sql:
             value = (
-                {"created_at": watermark.isoformat(), "id": "a7"}
-                if params and str(params[0]).startswith("last_seeded_id:")
+                {"created_at": watermark.isoformat(), "carry": "u7"}
+                if params and str(params[0]).startswith("last_seeded_carry:")
                 else watermark.isoformat()
             )
             cursor.fetchone = AsyncMock(return_value=(value,))
@@ -551,9 +535,9 @@ async def test_a_stored_message_id_continues_by_keyset(
     monkeypatch.delenv("SEED_DEADLINE_SECONDS", raising=False)
 
     assert await seed_memories.main() == 0
-    assert "(created_at, id) > (%s, %s::uuid)" in seen["sql"]
+    assert "(created_at > %s OR id = %s::uuid)" in seen["sql"]
     assert "ORDER BY created_at ASC, id ASC" in seen["sql"]
-    assert seen["params"] == ("claude", watermark, "a7")
+    assert seen["params"] == ("claude", watermark, "u7")
 
 
 @pytest.mark.asyncio
@@ -562,8 +546,8 @@ async def test_a_stale_id_marker_falls_back_to_the_timestamp() -> None:
     timestamp no longer matches is ignored."""
     async def execute(sql: str, params: tuple = ()) -> MagicMock:
         cursor = MagicMock()
-        if str(params[0]).startswith("last_seeded_id:"):
-            value = {"created_at": "2026-07-01T00:00:00+00:00", "id": "old"}
+        if str(params[0]).startswith("last_seeded_carry:"):
+            value = {"created_at": "2026-07-01T00:00:00+00:00", "carry": "old"}
         else:
             value = "2026-08-01T12:00:00+00:00"
         cursor.fetchone = AsyncMock(return_value=(value,))
@@ -581,9 +565,10 @@ async def test_set_watermark_writes_both_keys_in_one_commit() -> None:
     conn.execute = AsyncMock()
     conn.commit = AsyncMock()
     ts = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
-    await seed_memories._set_watermark(conn, ts, "a7", "claude")
+    await seed_memories._set_watermark(conn, ts, "u7", "claude")
     keys = [c.args[1][0] for c in conn.execute.await_args_list]
-    assert keys == ["last_seeded_at:claude", "last_seeded_id:claude"]
+    assert keys == ["last_seeded_at:claude", "last_seeded_carry:claude"]
+    assert '"carry": "u7"' in conn.execute.await_args_list[1].args[1][1]
     assert conn.execute.await_args_list[0].args[1][1] == '"2026-08-01T12:00:00+00:00"'
     assert conn.commit.await_count == 1
 
@@ -601,7 +586,7 @@ async def test_slow_annotation_cannot_starve_the_watermark(
     rows = []
     for n in range(40):
         ts = datetime(2026, 8, 1, 0, n)
-        rows += [(f"u{n}", "user", f"u{n}", ts), (f"a{n}", "assistant", f"a{n}", ts)]
+        rows += [(f"u{n}", "user", f"u{n}", ts), (f"a{n}", "assistant", f"a{n}", ts + REPLY)]
     conn, set_watermark, _ = _configure_run(monkeypatch, rows)
     monkeypatch.setenv("SEED_DEADLINE_SECONDS", "6000")
 
@@ -633,6 +618,8 @@ async def test_slow_annotation_cannot_starve_the_watermark(
     saved = save_image.await_count
     assert saved > 0
     assert set_watermark.await_count == 1
-    _, ts, msg_id, _ = set_watermark.await_args.args
-    assert msg_id == f"a{saved - 1}"
-    assert ts == datetime(2026, 8, 1, 0, saved - 1)
+    _, ts, carry, _ = set_watermark.await_args.args
+    assert carry is None
+    assert ts == datetime(2026, 8, 1, 0, saved - 1) + REPLY
+    # Nothing past the annotation budget was rendered and thrown away.
+    assert generate_image.await_count == saved

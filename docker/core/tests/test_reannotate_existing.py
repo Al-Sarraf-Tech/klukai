@@ -12,7 +12,9 @@ import pytest
 import reannotate_existing as reann
 
 TS = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
-FINGERPRINT = f"seed:{TS.isoformat()}"
+REPLY_TS = datetime(2026, 8, 1, 12, 0, 5, tzinfo=timezone.utc)
+# seed:<user message id>, the fingerprint the seeder writes.
+FINGERPRINT = "seed:u1"
 OLD = "Whisper of a moment, souls entwined under moonlit sheets."
 NEW = (
     "He sat beside me at 0300 in the office with cold coffee and said nothing, "
@@ -79,7 +81,10 @@ def _wire(monkeypatch: pytest.MonkeyPatch, db: _Db, annotation: str | None = NEW
 
 
 def _messages() -> list[tuple]:
-    return [("user", "Stay a while?", TS), ("assistant", "...Fine. Just this once.", TS)]
+    return [
+        ("u1", "user", "Stay a while?", TS),
+        ("a1", "assistant", "...Fine. Just this once.", REPLY_TS),
+    ]
 
 
 @pytest.mark.asyncio

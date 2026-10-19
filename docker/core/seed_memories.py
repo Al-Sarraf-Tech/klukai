@@ -6,10 +6,11 @@ Three-pass approach:
   Pass 2: dolphin-24b writes annotations using ACTUAL conversation text
   Pass 3: ComfyUI generates Illustrious images for each memory
 
-Tracks a watermark, the (created_at, id) of the last message a run fully
-processed, so each run continues exactly where the last one stopped: ties
-are ordered by id, and an exchange is never split across runs.
-Each saved memory carries conversation_id "seed:<exchange created_at>", the
+Rows are paired by app.seed_exchanges, one timestamp group at a time, so a
+tie can never pair a reply with the wrong message. A watermark records how
+far a run got: every message up to a timestamp, except the newest user
+message at it if that one is still waiting for its reply (the "carry").
+Each saved memory carries conversation_id "seed:<user message id>", the
 fingerprint that dedups it and lets reannotate_existing.py find its exchange.
 
 SEED_DEADLINE_SECONDS (optional) is a soft wall-clock budget: once spent, the
@@ -42,6 +43,7 @@ import httpx
 import psycopg
 
 from app.image_gen import build_prompt, free_comfyui_vram, generate_image
+from app.seed_exchanges import pair_exchanges
 from app.lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -179,12 +181,13 @@ async def _relationship_value(conn, key: str) -> Any:
 
 
 async def _get_watermark(conn, user_id: str = "jalsarraf") -> tuple[datetime, str | None] | None:
-    """The (created_at, message id) the last run stopped after, or None.
+    """Where the last run stopped: (timestamp, carry), or None.
 
     ``last_seeded_at:<user>`` keeps the bare ISO timestamp older seeders read;
-    ``last_seeded_id:<user>`` adds the message id, used only when its
-    timestamp still matches (an older seeder may have moved the first key).
-    The legacy unscoped key is the jalsarraf fallback.
+    ``last_seeded_carry:<user>`` names the user message at that timestamp
+    still waiting for its reply, used only while its timestamp matches (an
+    older seeder may have moved the first key). The legacy unscoped key is
+    the jalsarraf fallback.
     """
     stamp = await _relationship_value(conn, f"last_seeded_at:{user_id}")
     if stamp is None:
@@ -193,11 +196,11 @@ async def _get_watermark(conn, user_id: str = "jalsarraf") -> tuple[datetime, st
         ts = datetime.fromisoformat(stamp)
     except (ValueError, TypeError):
         return None
-    marker = await _relationship_value(conn, f"last_seeded_id:{user_id}")
+    marker = await _relationship_value(conn, f"last_seeded_carry:{user_id}")
     if isinstance(marker, dict) and marker.get("created_at") == ts.isoformat():
-        msg_id = marker.get("id")
-        if isinstance(msg_id, str) and msg_id:
-            return ts, msg_id
+        carry = marker.get("carry")
+        if isinstance(carry, str) and carry:
+            return ts, carry
     return ts, None
 
 
@@ -208,27 +211,22 @@ async def _get_last_seeded_at(conn, user_id: str = "jalsarraf") -> datetime | No
 
 
 async def _set_watermark(
-    conn, ts: datetime, msg_id: str, user_id: str = "jalsarraf"
+    conn, ts: datetime, carry: str | None, user_id: str = "jalsarraf"
 ) -> None:
-    """Record the last fully processed message, both keys in one commit."""
+    """Record how far a run got, both keys in one commit."""
     upsert = (
         "INSERT INTO companion_relationship (key, value, updated_at) "
         "VALUES (%s, %s, NOW()) "
         "ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = NOW()"
     )
     stamp = json.dumps(ts.isoformat())
-    marker = json.dumps({"created_at": ts.isoformat(), "id": msg_id})
+    marker = json.dumps({"created_at": ts.isoformat(), "carry": carry})
     await conn.execute(upsert, (f"last_seeded_at:{user_id}", stamp, stamp))
-    await conn.execute(upsert, (f"last_seeded_id:{user_id}", marker, marker))
+    await conn.execute(upsert, (f"last_seeded_carry:{user_id}", marker, marker))
     await conn.commit()
 
 
 # ── Deduplication ────────────────────────────────────────────────────────────
-
-
-def _seed_conversation_id(created_at: str) -> str:
-    """Fingerprint a seed memory by the exchange it came from."""
-    return f"seed:{created_at}"
 
 
 async def _is_duplicate(conn, user_id: str, conversation_id: str) -> bool:
@@ -293,30 +291,6 @@ def _max_exchanges_from_env() -> int:
         logger.warning("Ignoring non-numeric SEED_MAX_EXCHANGES=%r", raw)
         return DEFAULT_MAX_EXCHANGES
     return value if value > 0 else DEFAULT_MAX_EXCHANGES
-
-
-def _pair_exchanges(rows: list[tuple]) -> list[dict]:
-    """Pair (id, role, content, created_at) rows, in (created_at, id) order,
-    into user->assistant exchanges. Each exchange's ``end`` is its assistant
-    row's (created_at, id): every row up to it is accounted for once the
-    exchange is handled, so a watermark there never splits a pair."""
-    exchanges = []
-    i = 0
-    while i < len(rows) - 1:
-        if rows[i][1] == "user" and rows[i + 1][1] == "assistant":
-            ts = rows[i][3]
-            exchanges.append(
-                {
-                    "user": rows[i][2][:500],
-                    "assistant": rows[i + 1][2][:500],
-                    "created_at": ts.isoformat() if ts else "",
-                    "end": (rows[i + 1][3], str(rows[i + 1][0])),
-                }
-            )
-            i += 2
-        else:
-            i += 1
-    return exchanges
 
 
 def _handled_prefix(
@@ -477,8 +451,8 @@ async def main() -> int:
     mark = await _get_watermark(conn, target_user)
     params: tuple[Any, ...]
     if mark and mark[1]:
-        logger.info("Last seeded at: %s (%s); processing what follows", mark[0], mark[1])
-        where_clause = "WHERE user_id = %s AND (created_at, id) > (%s, %s::uuid)"
+        logger.info("Last seeded at: %s (carrying %s); processing what follows", *mark)
+        where_clause = "WHERE user_id = %s AND (created_at > %s OR id = %s::uuid)"
         params = (target_user, mark[0], mark[1])
     elif mark:
         logger.info("Last seeded at: %s; processing only newer messages", mark[0])
@@ -497,7 +471,7 @@ async def main() -> int:
     rows = await cur.fetchall()
     logger.info("Found %d messages since last seed", len(rows))
 
-    exchanges = _pair_exchanges(rows)
+    exchanges = pair_exchanges(rows)
     logger.info("Grouped into %d exchanges", len(exchanges))
     # A bounded prefix of the oldest exchanges; the rest wait for a later run.
     limit = _max_exchanges_from_env()
@@ -518,8 +492,8 @@ async def main() -> int:
         if n == 0:
             logger.info("No exchange fully handled; the watermark stays")
             return
-        ts, msg_id = exchanges[n - 1]["end"]
-        await _set_watermark(conn, ts, msg_id, target_user)
+        ts, carry = exchanges[n - 1]["mark"]
+        await _set_watermark(conn, ts, carry, target_user)
         logger.info("Watermark advanced over %d/%d exchanges to %s", n, len(exchanges), ts)
 
     if not exchanges:
@@ -635,7 +609,7 @@ async def main() -> int:
                 break
             ex = mem["exchange"]
             category = mem.get("category", "Precious Memories")
-            mem["conversation_id"] = _seed_conversation_id(ex["created_at"])
+            mem["conversation_id"] = ex["fingerprint"]
 
             # Deduplication check
             try:
@@ -678,11 +652,13 @@ async def main() -> int:
 
             await asyncio.sleep(3)
 
-    # Filter out skipped (duplicates)
+    # Render only what was annotated: duplicates, failures and the picks the
+    # annotation budget never reached are left for a later run (a render
+    # without an annotation would be thrown away at the save).
     selected = [
         m
         for m in selected
-        if not m.get("skip") and not m.get("pipeline_failed")
+        if m.get("annotation") and not m.get("skip") and not m.get("pipeline_failed")
     ]
     logger.info("Pass 2 complete: %d annotations written (after dedup)", len(selected))
 

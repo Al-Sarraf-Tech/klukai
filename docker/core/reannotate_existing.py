@@ -9,7 +9,7 @@ tender, night") rather than the actual exchange text. This script:
   2. Loads that user's conversation exchanges from companion_messages
      (user→assistant pairs).
   3. Matches each memory to its exchange ONLY by the exact fingerprint
-     seed_memories.py stores in conversation_id ("seed:<exchange created_at>").
+     seed_memories.py stores in conversation_id ("seed:<user message id>").
      Legacy rows with the bare 'seed' id have no fingerprint and are skipped;
      nothing is ever matched by text similarity.
   4. Re-annotates via dolphin-24b with the actual exchange text.
@@ -40,6 +40,7 @@ import httpx
 import psycopg
 
 from app.lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
+from app.seed_exchanges import SEED_FINGERPRINT_PREFIX, pair_exchanges
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -52,8 +53,6 @@ ANNOTATOR_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
 BATCH_SIZE = 10
 SLEEP_BETWEEN_CALLS = 3  # seconds
-
-SEED_FINGERPRINT_PREFIX = "seed:"
 
 # ── Annotation Prompt ────────────────────────────────────────────────────────
 
@@ -144,7 +143,7 @@ def annotation_quality_score(text: str) -> float:
 def _match_exchange(conversation_id: str | None, exchanges: dict[str, dict]) -> dict | None:
     """Return the exchange a seed memory was made from, by exact fingerprint only.
 
-    ``exchanges`` is keyed by the same ``seed:<created_at>`` fingerprint that
+    ``exchanges`` is keyed by the same ``seed:<user message id>`` fingerprint that
     seed_memories.py writes into conversation_id. A memory without that
     fingerprint (legacy bare 'seed') never matches: there is no safe way to
     recover its exchange, and guessing by text overlap wrote other exchanges'
@@ -313,27 +312,15 @@ async def main(argv: list[str] | None = None) -> int:
 
     logger.info("Found %d seed memories", len(rows))
 
-    # Load this user's exchanges (user→assistant pairs), keyed by fingerprint.
+    # Load this user's exchanges, paired exactly as the seeder pairs them and
+    # keyed by the same fingerprint (seed:<user message id>).
     msg_rows = await (await conn.execute(
-        "SELECT role, content, created_at FROM companion_messages "
-        "WHERE user_id = %s ORDER BY created_at ASC",
+        "SELECT id, role, content, created_at FROM companion_messages "
+        "WHERE user_id = %s ORDER BY created_at ASC, id ASC",
         (user_id,),
     )).fetchall()
 
-    exchanges: dict[str, dict] = {}
-    i = 0
-    while i < len(msg_rows) - 1:
-        if msg_rows[i][0] == "user" and msg_rows[i + 1][0] == "assistant":
-            ts = msg_rows[i][2]
-            created_at = ts.isoformat() if ts else ""
-            exchanges[f"{SEED_FINGERPRINT_PREFIX}{created_at}"] = {
-                "user": msg_rows[i][1] or "",
-                "assistant": msg_rows[i + 1][1] or "",
-                "created_at": created_at,
-            }
-            i += 2
-        else:
-            i += 1
+    exchanges: dict[str, dict] = {ex["fingerprint"]: ex for ex in pair_exchanges(msg_rows)}
 
     logger.info("Loaded %d conversation exchanges for matching", len(exchanges))
 
