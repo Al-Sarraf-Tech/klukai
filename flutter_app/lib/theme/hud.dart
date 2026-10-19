@@ -1,12 +1,12 @@
 /// Tactical HUD design system (owner pick 2026-10-19): the H.I.D.E. 404 look.
 ///
 /// Gunmetal ground, a cyan primary and a violet secondary (her canon palette),
-/// cut-corner panels, Rajdhani for display and JetBrains Mono for labels.
+/// cut-corner panels, Rajdhani for display and JetBrains Mono for labels
+/// (both bundled under assets/fonts, OFL).
 /// Every screen of the new UI builds on these tokens and widgets.
 library;
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 class HudColors {
   HudColors._();
@@ -26,7 +26,8 @@ class HudColors {
 class HudText {
   HudText._();
   static TextStyle display({double size = 30, Color color = HudColors.text}) =>
-      GoogleFonts.rajdhani(
+      TextStyle(
+        fontFamily: 'Rajdhani',
         fontSize: size,
         fontWeight: FontWeight.w700,
         letterSpacing: size * 0.08,
@@ -37,7 +38,8 @@ class HudText {
     double size = 15,
     FontWeight weight = FontWeight.w500,
     Color color = HudColors.text,
-  }) => GoogleFonts.rajdhani(
+  }) => TextStyle(
+    fontFamily: 'Rajdhani',
     fontSize: size,
     fontWeight: weight,
     height: 1.3,
@@ -47,7 +49,8 @@ class HudText {
     double size = 10,
     Color color = HudColors.textDim,
     FontWeight weight = FontWeight.w400,
-  }) => GoogleFonts.jetBrainsMono(
+  }) => TextStyle(
+    fontFamily: 'JetBrainsMono',
     fontSize: size,
     letterSpacing: size * 0.14,
     fontWeight: weight,

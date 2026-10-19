@@ -131,8 +131,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _tab = tab;
       _visited.add(tab);
     });
-    if (tab == HudTab.chat)
+    if (tab == HudTab.chat) {
       _loadHerDay(); // a wardrobe change elsewhere shows here
+    }
   }
 
   Widget _tabBody(HudTab tab) {
