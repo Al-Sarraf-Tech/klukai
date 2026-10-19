@@ -130,7 +130,13 @@ def valid_image(data):
 
 class Worker:
     def __init__(self, state_dir, token, references, allowed_users, renderer=None, *, providers=None,
-                 checker=None):
+                 checker=None, rotation="alternate"):
+        if rotation not in ROTATIONS:
+            raise ValueError("invalid provider rotation")
+        # alternate: each new request starts with the next provider in turn.
+        # fixed: every request starts with the first provider; the later ones
+        # are only failovers (the owner keeps agy absolutely last).
+        self.rotation = rotation
         self.token = token
         # checker(output, value, references, timeout=) -> {"verdict": pass|reject|unchecked, ...}
         self.checker = checker
@@ -205,7 +211,7 @@ class Worker:
                 # busy/replay/invalid requests never consume a rotation turn.
                 self.db.execute("BEGIN IMMEDIATE")
                 turn = self.db.execute("SELECT value FROM worker_state WHERE key = 'rotation_next'").fetchone()[0]
-                first = turn % len(self.providers)
+                first = turn % len(self.providers) if self.rotation == "alternate" else 0
                 ordered = self.providers[first:] + self.providers[:first]
                 preferred = ordered[0][0]
                 self.db.execute("INSERT INTO requests (request_id, request_hash, status, preferred_provider, selected_provider) "
@@ -397,7 +403,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             worker = self.server.worker
             self.reply(200, {"status": "ready", "provider": "agy", "busy": worker.busy(),
-                             "providers": [name for name, _ in worker.providers], "rotation": "alternate",
+                             "providers": [name for name, _ in worker.providers], "rotation": worker.rotation,
                              "checker": getattr(worker.checker, "model", None) if worker.checker else None})
 
     def do_POST(self):
@@ -454,12 +460,16 @@ class UnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
         self.lock_fds = []
 
 
+ROTATIONS = ("alternate", "fixed")
+PROVIDER_NAMES = frozenset({"agy", "grok", "codex"})
+
+
 def validate_providers(providers):
-    if (not isinstance(providers, (list, tuple)) or not 1 <= len(providers) <= 2
+    if (not isinstance(providers, (list, tuple)) or not 1 <= len(providers) <= len(PROVIDER_NAMES)
             or any(not isinstance(item, (tuple, list)) or len(item) != 2 for item in providers)):
         raise ValueError("invalid image providers")
     names = [item[0] for item in providers]
-    if (any(type(name) is not str or name not in {"agy", "grok"} for name in names)
+    if (any(type(name) is not str or name not in PROVIDER_NAMES for name in names)
             or len(set(names)) != len(names) or any(not callable(item[1]) for item in providers)):
         raise ValueError("invalid image providers")
     return tuple(tuple(item) for item in providers)
@@ -472,6 +482,8 @@ def load_providers(names):
     for name in names:
         if name == "agy":
             from agy_image_render import render
+        elif name == "codex":
+            from codex_image_render import render
         else:
             from grok_image_render import render
         providers.append((name, render))
@@ -490,7 +502,7 @@ def load_checker(name):
 
 
 def create_server(runtime_dir, state_dir, references, allowed_users, *, renderer=None, providers=None, read_timeout=10,
-                  checker=None):
+                  checker=None, rotation="alternate"):
     runtime_dir, state_dir = private_directory(runtime_dir), private_directory(state_dir)
     token = private_read(runtime_dir / "token", 1024).strip()
     if not re.fullmatch(rb"[\x21-\x7e]{32,256}", token):
@@ -514,7 +526,8 @@ def create_server(runtime_dir, state_dir, references, allowed_users, *, renderer
             if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
                 raise ValueError("invalid worker socket")
             socket_path.unlink()
-        worker = Worker(state_dir, token, references, allowed_users, providers=providers, checker=checker)
+        worker = Worker(state_dir, token, references, allowed_users, providers=providers, checker=checker,
+                        rotation=rotation)
         server = UnixHTTPServer(str(socket_path), Handler)
         socket_path.chmod(0o600)
         server.worker = worker
@@ -538,7 +551,11 @@ def main():
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--references", type=Path, required=True)
     parser.add_argument("--allowed-users", required=True)
-    parser.add_argument("--providers", default="agy", help="Ordered providers: agy, grok, or agy,grok")
+    parser.add_argument("--providers", default="agy",
+                        help="Ordered providers from agy, grok and codex, e.g. grok,codex,agy")
+    parser.add_argument("--rotation", default="alternate", choices=ROTATIONS,
+                        help="alternate: rotate the first provider per request; fixed: always start with the "
+                             "first provider and use the rest only as failovers")
     parser.add_argument("--checker", default="none", choices=("none", "claude"),
                         help="claude: Claude Sonnet 5.5 (effort high) checks every render (subscription login)")
     args = parser.parse_args()
@@ -546,7 +563,7 @@ def main():
         server = create_server(args.runtime_dir, args.state_dir, args.references,
                                {user.strip() for user in args.allowed_users.split(",") if user.strip()},
                                providers=load_providers([name.strip() for name in args.providers.split(",")]),
-                               checker=load_checker(args.checker))
+                               checker=load_checker(args.checker), rotation=args.rotation)
     except Exception:
         print("Image worker configuration unavailable", file=sys.stderr)
         return 1

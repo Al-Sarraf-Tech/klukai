@@ -715,3 +715,51 @@ def test_checker_failure_delivers_unchecked(worker, setup_files, outcome):
         status, _, data = request(path, value)
     assert (status, data) == (200, PNG)
     assert checks_of(setup_files[1], value["request_id"]) == [(0, "unchecked")]
+
+
+def test_fixed_rotation_always_starts_with_the_first_provider(worker, setup_files):
+    """The owner keeps agy absolutely last: with fixed rotation every new
+    request starts with grok, and agy is never the first choice."""
+    calls = []
+    values = [payload() for _ in range(4)]
+
+    def render(name):
+        def generate(value, references):
+            calls.append((name, value["request_id"]))
+            return PNG
+        return generate
+
+    providers = [(name, render(name)) for name in ("grok", "agy")]
+    with running(worker, setup_files, providers=providers, rotation="fixed") as path:
+        health = json.loads(request(path, method="GET", target="/health")[2])
+        assert health["providers"] == ["grok", "agy"]
+        assert health["rotation"] == "fixed"
+        for value in values:
+            assert request(path, value)[0] == 200
+    assert calls == [("grok", v["request_id"]) for v in values]
+    rows = ledger(setup_files, "SELECT preferred_provider, selected_provider FROM requests ORDER BY rowid")
+    assert rows == [("grok", "grok")] * 4
+
+
+def test_fixed_rotation_uses_the_last_provider_only_as_a_failover(worker, setup_files):
+    from agy_art_runtime import ProviderUnavailable
+    calls = []
+
+    def grok(value, references):
+        calls.append("grok")
+        raise ProviderUnavailable("grok service down")
+
+    def agy(value, references):
+        calls.append("agy")
+        return PNG
+
+    with running(worker, setup_files, providers=[("grok", grok), ("agy", agy)], rotation="fixed") as path:
+        assert request(path, payload())[2] == PNG
+        assert request(path, payload())[2] == PNG
+    assert calls == ["grok", "agy", "grok", "agy"]
+
+
+def test_an_unknown_rotation_is_refused(worker, setup_files):
+    with pytest.raises(ValueError):
+        with running(worker, setup_files, rotation="random"):
+            pass

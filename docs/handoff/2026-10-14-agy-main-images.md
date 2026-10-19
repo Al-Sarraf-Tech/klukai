@@ -59,7 +59,13 @@ is the end-to-end proof.
 
 ## Grok renders, Claude checks (owner decision 2026-10-17)
 
-The owner chose Grok for Klukai's pictures: `KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok`.
+The owner chose Grok for Klukai's pictures. Since 2026-10-18 the order is fixed
+(`KLUKAI_IMAGE_ROTATION=fixed`, `KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok,codex,agy`):
+Grok first, Codex second (`scripts/codex_image_render.py`, the owner's Codex CLI
+login and its built-in image generation, 150 s cap, the render taken from
+`~/.codex/generated_images/<session>/` and removed), Agy absolutely last. A later
+provider runs only when the earlier one fails with a service error; core's 380 s
+deadline means Agy is reached only when time remains.
 Agy/Gemini had completed none of its six attempts, and with alternation half of
 all requests waited on it first.
 
