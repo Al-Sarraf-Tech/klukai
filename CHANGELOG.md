@@ -27,6 +27,8 @@ in `docs/superpowers/plans/`.
 
 ### Security
 
+- aiohttp 3.14.5 (with yarl 1.25.1) in the core and CI locks: fixes CVE-2026-111063,
+  CVE-2026-111064 and GHSA-2g87-pp6c-29x5, published 2026-10-19, which made pip-audit block CI.
 - Revalidate active WebSocket sessions and revoke connected devices after
   password changes or deactivation; isolate mission context and delivery by user.
 
