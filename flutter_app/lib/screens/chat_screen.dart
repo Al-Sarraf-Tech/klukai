@@ -21,6 +21,7 @@ import '../widgets/tool_status_indicator.dart';
 import '../widgets/date_divider.dart';
 import '../widgets/chat_header.dart';
 import '../widgets/her_day_widgets.dart';
+import '../theme/hud.dart';
 import 'profile_screen.dart';
 import 'memory_archive_screen.dart';
 import 'her_pov_screen.dart';
@@ -119,6 +120,47 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
+  // Tactical HUD shell (2026-10-19): five tabs; Chat stays mounted so its
+  // socket and state survive tab switches, the others build on first visit.
+  HudTab _tab = HudTab.chat;
+  final Set<HudTab> _visited = {HudTab.chat};
+
+  void _selectTab(HudTab tab) {
+    if (tab == _tab) return;
+    setState(() {
+      _tab = tab;
+      _visited.add(tab);
+    });
+    if (tab == HudTab.chat)
+      _loadHerDay(); // a wardrobe change elsewhere shows here
+  }
+
+  Widget _tabBody(HudTab tab) {
+    if (!_visited.contains(tab)) return const SizedBox.shrink();
+    switch (tab) {
+      case HudTab.chat:
+        return _buildMobileLayout();
+      case HudTab.album:
+        return MemoryArchiveScreen(
+          serverUrl: widget.serverUrl,
+          affectionLevel: _state.affectionLevel,
+          affectionLevelName: _state.affectionLevelName,
+          onAuthExpired: _handleAuthExpired,
+        );
+      case HudTab.day:
+      case HudTab.kit:
+      case HudTab.me:
+        return ProfileScreen(
+          serverUrl: widget.serverUrl,
+          affectionScore: _state.affectionScore,
+          affectionLevel: _state.affectionLevel,
+          affectionLevelName: _state.affectionLevelName,
+          wardrobeService: _wardrobe,
+          onAuthExpired: _handleAuthExpired,
+        );
+    }
+  }
+
   late final WebSocketService _ws =
       widget.webSocketService ?? WebSocketService();
   late final WardrobeService _wardrobe =
@@ -161,14 +203,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Timer? _inputLockTimer; // Safety timeout to auto-unlock input
   Timer?
   _warmupTimer; // Phased "waking up" status while a cold model loads + warms
-
-  bool get _isDormMode {
-    final hour = DateTime.now().hour;
-    return hour >= 21 && _state.affectionLevel >= 2;
-  }
-
-  Color get _bgColor =>
-      _isDormMode ? const Color(0xFF16131E) : GFL2Colors.background;
 
   /// Glow color for the current mood (shared source of truth: [kMoodVisuals]).
   Color get _moodGlowColor => moodVisualFor(_state.mood).glow;
@@ -376,8 +410,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bgColor,
-      body: SafeArea(child: _buildMobileLayout()),
+      backgroundColor: HudColors.ground,
+      body: SafeArea(
+        bottom: false,
+        child: IndexedStack(
+          index: _tab.index,
+          children: [for (final tab in HudTab.values) _tabBody(tab)],
+        ),
+      ),
+      bottomNavigationBar: HudTabBar(current: _tab, onSelect: _selectTab),
     );
   }
 }
