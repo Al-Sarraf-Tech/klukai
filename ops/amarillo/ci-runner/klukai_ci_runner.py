@@ -151,10 +151,16 @@ class GitHub:
                 "GET", f"/repos/{REPO}/actions/runs?status={status}&per_page=30"
             )
             for run in runs.get("workflow_runs", []):
-                listing = self.call(
-                    "GET",
-                    f"/repos/{REPO}/actions/runs/{int(run['id'])}/jobs?filter=latest&per_page=100",
-                )
+                try:
+                    listing = self.call(
+                        "GET",
+                        f"/repos/{REPO}/actions/runs/{int(run['id'])}/jobs?filter=latest&per_page=100",
+                    )
+                except RunnerError as error:
+                    # One unreadable run (GitHub has returned 502 for a wedged
+                    # one) must not stop every other run's jobs from starting.
+                    log.warning("skipping run %s: %s", int(run["id"]), error)
+                    continue
                 jobs += [
                     j for j in listing.get("jobs", []) if j.get("status") == "queued"
                 ]

@@ -407,3 +407,27 @@ def test_a_busy_guest_is_never_reaped_for_idleness(env):
     state["now"] += runner.IDLE_SECONDS * 3
     controller.tick()
     assert name in host.domains
+
+
+def test_one_unreadable_run_does_not_hide_the_others():
+    calls = []
+
+    def fake_call(method, path, body=None):
+        calls.append(path)
+        if path.startswith(f"/repos/{runner.REPO}/actions/runs?status=queued"):
+            return {"workflow_runs": [{"id": 1}, {"id": 2}]}
+        if path.startswith(f"/repos/{runner.REPO}/actions/runs?status=in_progress"):
+            return {"workflow_runs": []}
+        if "/runs/1/jobs" in path:
+            raise runner.RunnerError("GitHub GET /runs/1/jobs: HTTP 502")
+        return {
+            "jobs": [
+                job("klukai-amarillo-small"),
+                {"status": "completed", "labels": []},
+            ]
+        }
+
+    github = runner.GitHub("token")
+    github.call = fake_call
+    jobs = github.queued_jobs()
+    assert len(jobs) == 1 and runner.profile_for(jobs[0]) is SMALL
