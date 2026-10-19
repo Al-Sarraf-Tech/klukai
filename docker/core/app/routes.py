@@ -73,7 +73,12 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
     """Attach all HTTP endpoints to *app*."""
 
     from .voice_jobs import VoiceJobs, VoiceQueueFull
-    from .voice_client import async_voice_jobs_enabled, local_voice_enabled
+    from .voice_client import (
+        VOICE_OFF_MESSAGE,
+        async_voice_jobs_enabled,
+        local_voice_enabled,
+        voice_enabled,
+    )
 
     app.state.voice_jobs = VoiceJobs()
 
@@ -142,6 +147,8 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
 
+        if not voice_enabled():
+            return JSONResponse({"error": VOICE_OFF_MESSAGE}, status_code=503)
         tts_text = _strip_actions_for_tts(req.text)
         if not tts_text.strip():
             return JSONResponse({"error": "No speakable text"}, status_code=400)

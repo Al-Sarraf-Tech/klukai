@@ -84,7 +84,17 @@ async def _handle_voice(
     clears the client's "Listening..." indicator; a proactive toast leaves it
     spinning.
     """
-    from .voice_client import stt_url
+    from .voice_client import stt_url, voice_enabled
+
+    if not voice_enabled():
+        await ws.send(
+            user_id,
+            {
+                "type": "error",
+                "message": "...Voice is off for now, Commander. Type to me instead.",
+            },
+        )
+        return
 
     try:
         async with httpx.AsyncClient(

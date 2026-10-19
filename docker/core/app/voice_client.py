@@ -20,6 +20,19 @@ MAX_AUDIO_BYTES = 6 * 1024 * 1024
 logger = logging.getLogger(__name__)
 
 
+_OFF = {"false", "0", "no", "off"}
+VOICE_OFF_MESSAGE = "Voice is turned off"
+
+
+def voice_enabled() -> bool:
+    """The owner's switch. Off means core never sends voice work anywhere."""
+    return os.environ.get("KLUKAI_VOICE_ENABLED", "true").strip().lower() not in _OFF
+
+
+def voice_off_response() -> httpx.Response:
+    return httpx.Response(503, json={"error": VOICE_OFF_MESSAGE})
+
+
 def local_voice_enabled() -> bool:
     return os.environ.get("VOICE_BACKEND", "dominus") == "amarillo-xpu"
 
@@ -80,6 +93,10 @@ async def post_leased_tts(
     # Import lazily to avoid a helpers -> image_gen -> llm_router import cycle.
     from .llm_router import get_lm_gate
     from .helpers import voice_auth_headers
+
+    if not voice_enabled():
+        # No gate wait and no GPU lease: the voice host may be off entirely.
+        return voice_off_response()
 
     if local_voice_enabled():
         # The native supervisor enforces the Arc thermal/worker boundary.

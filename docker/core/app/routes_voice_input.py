@@ -22,6 +22,10 @@ def register_voice_input(
         user_id = await resolve_user(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from .voice_client import VOICE_OFF_MESSAGE, voice_enabled
+
+        if not voice_enabled():
+            return JSONResponse({"error": VOICE_OFF_MESSAGE}, status_code=503)
         try:
             from .helpers import voice_auth_headers
             from .voice_client import stt_url

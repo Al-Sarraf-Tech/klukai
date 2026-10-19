@@ -40,6 +40,9 @@ services:
       # GPU services on dominus-nobara over its literal Tailscale address.
       # Overrides are for isolated integration tests only; production must not
       # use an RFC1918/LAN endpoint.
+      # Owner switch (2026-10-19): voice is off for now. Off, core sends no
+      # speech or transcription work to Dominus. Set true to bring it back.
+      KLUKAI_VOICE_ENABLED: "${KLUKAI_VOICE_ENABLED:-false}"
       VOICE_URL: "${VOICE_URL:-http://100.107.121.5:8301}"
       VOICE_BACKEND: "${VOICE_BACKEND:-dominus}"
       # Keep long cold GPU synthesis off the browser's synchronous deadline.

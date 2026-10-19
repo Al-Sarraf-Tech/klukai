@@ -150,18 +150,23 @@ def register_health_routes(
         except Exception:
             results["embeddings"] = {"status": "down"}
 
-        # Voice service
-        try:
-            async with _hx.AsyncClient(timeout=5.0) as c:
-                resp = await c.get(f"{voice_url()}/health")
-                results["voice"] = {
-                    "status": "ok" if resp.status_code == 200 else "degraded"
-                }
-        except Exception:
-            results["voice"] = {"status": "down"}
+        # Voice service. Switched off, it is not probed and not counted.
+        from .voice_client import voice_enabled
+
+        if not voice_enabled():
+            results["voice"] = {"status": "disabled"}
+        else:
+            try:
+                async with _hx.AsyncClient(timeout=5.0) as c:
+                    resp = await c.get(f"{voice_url()}/health")
+                    results["voice"] = {
+                        "status": "ok" if resp.status_code == 200 else "degraded"
+                    }
+            except Exception:
+                results["voice"] = {"status": "down"}
 
         # Overall
-        statuses = [v["status"] for v in results.values()]
+        statuses = [v["status"] for v in results.values() if v["status"] != "disabled"]
         if all(s == "ok" for s in statuses):
             overall = "ok"
         elif results["database"]["status"] == "down":

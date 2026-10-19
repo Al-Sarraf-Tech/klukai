@@ -341,7 +341,7 @@ services:
       VOICE_URL: "${VOICE_URL:?Set the approved Dominus TTS endpoint}"
 ```
 
-`VOICE_URL` must name the already configured Dominus voice service; keep `VOICE_STT_URL` on the approved Dominus transcription endpoint. `VOICE_ASYNC_JOBS=true` keeps HTTP speech on submit/poll/cancel and allows longer cold-start deadlines for microphone and archived speech. The retained Arc service is selectable with `VOICE_BACKEND=amarillo-xpu` and its matching URL. Each backend retains its independently pinned Klukai reference.
+Voice is switched off for now (`KLUKAI_VOICE_ENABLED` defaults to `false` in compose); set it to `true` to use the settings below. `VOICE_URL` must name the already configured Dominus voice service; keep `VOICE_STT_URL` on the approved Dominus transcription endpoint. `VOICE_ASYNC_JOBS=true` keeps HTTP speech on submit/poll/cancel and allows longer cold-start deadlines for microphone and archived speech. The retained Arc service is selectable with `VOICE_BACKEND=amarillo-xpu` and its matching URL. Each backend retains its independently pinned Klukai reference.
 
 The [voice source baseline](docker/voice/reference/README.md) records the owner's selected full recording and checksums. That listening/curation source is distinct from the independently pinned conditioning clips used by Dominus and Arc; adopting a new clip requires the matching lock and guarded deployment.
 
@@ -480,6 +480,7 @@ python3 scripts/e2e_live.py --only her-pov
 | `KLUKAI_BRAVE_ENABLED` | `false` | Production explicitly enables the configured Brave MCP search route |
 | `KLUKAI_CREATIVE_TEXT_PROVIDER` | `local` | Local dream/Her POV writing; `anthropic` requires separate allowances |
 | `KLUKAI_CLOUD_{IMAGE,TEXT}_{DAILY,MONTHLY}_LIMIT` | `0` | Persistent global UTC attempt allowances; failures count |
+| `KLUKAI_VOICE_ENABLED` | `false` (compose), `true` (code) | Owner switch. Off, core sends no speech or transcription work anywhere: `/api/tts` and `/api/stt` answer 503 `Voice is turned off`, voice letters fall back to text, and `/health` reports voice `disabled` without probing it |
 | `VOICE_BACKEND` | `dominus` | `amarillo-xpu` selects the separately configured native Arc TTS service |
 | `VOICE_ASYNC_JOBS` | `false` | Production uses `true` for queued Dominus speech and longer synthesis deadlines; Arc always uses jobs |
 | `CORE_INTERNAL_TOKEN` | required in prod | Shared secret for bridge → core internal routes |

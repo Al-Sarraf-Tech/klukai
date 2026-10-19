@@ -12,6 +12,15 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+### Changed
+
+- Voice is switched off for now (`KLUKAI_VOICE_ENABLED=false` in compose): core
+  sends no speech or transcription work to Dominus, `/api/tts` and `/api/stt`
+  answer 503 `Voice is turned off`, voice letters fall back to text, and
+  `/health` reports voice `disabled` without probing it.
+- Images never fall back to Dominus: compose defaults `KLUKAI_IMAGE_PROVIDER`
+  to the private account worker (Grok, then Codex, then Agy).
+
 ### Security
 
 - Revalidate active WebSocket sessions and revoke connected devices after
