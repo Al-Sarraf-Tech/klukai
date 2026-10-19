@@ -31,9 +31,16 @@ extension _ChatStage on _ChatScreenState {
     return ['TRACKING', doing, 'GAZE: COMMANDER'];
   }
 
-  Widget _buildStageLayout() {
+  Widget _buildStageLayout() =>
+      LayoutBuilder(builder: (context, box) => _stageLayout(box.maxHeight));
+
+  /// The HUD thins out as the height shrinks (keyboard up, landscape, small
+  /// phone): the readout goes first, then the tags; her line gets shorter.
+  Widget _stageLayout(double height) {
     final builder = widget.stageBuilder ?? defaultCompanionStage;
     final keyboard = _keyboardUp;
+    final showTags = !keyboard && height >= 460;
+    final showReadout = !keyboard && height >= 620;
     final line = _latestLine;
     final waiting = _state.isTyping && _streamingId == null;
     return ColoredBox(
@@ -63,7 +70,7 @@ extension _ChatStage on _ChatScreenState {
               ),
             ),
           ),
-          if (!keyboard) ...[
+          if (showTags) ...[
             const Positioned(
               top: 58,
               left: 16,
@@ -85,11 +92,12 @@ extension _ChatStage on _ChatScreenState {
                 ),
               ),
             ),
-            Positioned(
-              left: 16,
-              top: 230,
-              child: TrackingReadout(lines: _trackingLines),
-            ),
+            if (showReadout)
+              Positioned(
+                left: 16,
+                top: 230,
+                child: TrackingReadout(lines: _trackingLines),
+              ),
           ],
           Positioned(
             left: 0,
@@ -109,7 +117,7 @@ extension _ChatStage on _ChatScreenState {
                       status: waiting ? (_thinkingText ?? 'PROCESSING') : null,
                       voiceState: _stageVoice,
                       onVoice: line == null ? null : () => _speakInStage(line),
-                      maxTextHeight: keyboard ? 48 : 120,
+                      maxTextHeight: keyboard || height < 560 ? 48 : 120,
                     ),
                   ),
                   const SizedBox(height: 2),

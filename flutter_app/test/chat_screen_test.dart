@@ -1467,6 +1467,9 @@ void main() {
     testWidgets('the tracking readout follows what the stage reports', (
       tester,
     ) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
       final (fake, stage, _) = await pump3d(tester);
       expect(find.text('◢ LINKING 3D…'), findsOneWidget);
       stage.onEvent!('klukai:stage-notice', {'text': 'Loading her 3D model…'});
@@ -1540,6 +1543,50 @@ void main() {
         await tester.tap(find.byKey(const Key('view-flip-3d')));
         await tester.pump();
         expect(tester.takeException(), isNull);
+        fake.dispose();
+      });
+    }
+
+    for (final size in const [
+      Size(320, 480),
+      Size(360, 560),
+      Size(390, 600),
+      Size(844, 390),
+      Size(800, 600),
+    ]) {
+      testWidgets('no overflow at ${size.width.toInt()}×${size.height.toInt()} '
+          'with tools, a status and a long draft, chat and 3D', (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+        final fake = await _pumpChat(tester);
+        for (var i = 0; i < 6; i++) {
+          fake.emit({'type': 'proactive', 'message': 'Line $i, Commander.'});
+        }
+        await tester.pump(const Duration(milliseconds: 1600));
+        fake.emit({'type': 'tool_use', 'tool': 'web_search'});
+        fake.emit({'type': 'tool_use', 'tool': 'read_file'});
+        fake.emit({'type': 'tool_use', 'tool': 'run_code'});
+        fake.emit({'type': 'thinking', 'content': 'Checking the hangar'});
+        await tester.pump();
+        await tester.enterText(
+          find.byType(TextField),
+          'one\ntwo\nthree\nfour\nfive',
+        );
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        expect(find.byKey(const Key('chat-composer')), findsOneWidget);
+        // Short screens get the one-line header.
+        expect(
+          find.byKey(const Key('chat-header-portrait')),
+          size.height - 70 < 500 ? findsNothing : findsOneWidget,
+        );
+
+        await tester.tap(find.byKey(const Key('view-flip-3d')));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        expect(find.byKey(const Key('stage-dialogue')), findsOneWidget);
+        fake.emit({'type': 'thinking', 'content': ''});
         fake.dispose();
       });
     }

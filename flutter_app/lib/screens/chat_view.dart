@@ -7,6 +7,10 @@ extension _ChatView on _ChatScreenState {
   /// The on-screen keyboard is up: the header folds to one line.
   bool get _keyboardUp => MediaQuery.viewInsetsOf(context).bottom > 0;
 
+  /// Below this body height the full header (about 240px) would leave the
+  /// transcript too little room: it folds to one line, as with the keyboard.
+  static const _compactHeaderBelow = 500.0;
+
   Widget _buildMobileLayout() {
     // The iframe only lives while the 3D face of the Chat tab is on screen;
     // another tab or the CHAT face tears it (and its socket) down.
@@ -18,31 +22,49 @@ extension _ChatView on _ChatScreenState {
     return HudBackground(child: _buildChatLayout());
   }
 
+  /// Overflow-free at any height: the header compresses (and past half the
+  /// height scrolls), tool status is capped, the transcript takes what is
+  /// left and the composer stays put.
   Widget _buildChatLayout() {
-    return Stack(
-      children: [
-        Column(
-          children: [
-            _buildHeader(),
-            Expanded(child: _buildMessageList()),
-            if (_activeTools.isNotEmpty) _buildToolStatus(),
-            if (_state.isTyping && _streamingId == null)
-              _buildProcessingIndicator(),
-            _buildComposer(),
-          ],
-        ),
-        if (_showScrollFAB)
-          Positioned(
-            bottom: 70,
-            right: 16,
-            child: HudSquareButton(
-              key: const Key('chat-latest'),
-              tooltip: 'Latest',
-              onTap: () => _scrollToBottom(),
-              child: const Icon(Icons.keyboard_arrow_down),
-            ),
+    return LayoutBuilder(
+      builder: (context, box) => Stack(
+        children: [
+          Column(
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: box.maxHeight * 0.5),
+                child: SingleChildScrollView(
+                  child: _buildHeader(
+                    compact:
+                        _keyboardUp ||
+                        box.maxHeight < _ChatView._compactHeaderBelow,
+                  ),
+                ),
+              ),
+              Expanded(child: _buildMessageList()),
+              if (_activeTools.isNotEmpty)
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: box.maxHeight * 0.2),
+                  child: SingleChildScrollView(child: _buildToolStatus()),
+                ),
+              if (_state.isTyping && _streamingId == null)
+                _buildProcessingIndicator(),
+              _buildComposer(),
+            ],
           ),
-      ],
+          if (_showScrollFAB)
+            Positioned(
+              bottom: 70,
+              right: 16,
+              child: HudSquareButton(
+                key: const Key('chat-latest'),
+                tooltip: 'Latest',
+                onTap: () => _scrollToBottom(),
+                child: const Icon(Icons.keyboard_arrow_down),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -86,7 +108,7 @@ extension _ChatView on _ChatScreenState {
     }
   }
 
-  Widget _buildHeader() {
+  Widget _buildHeader({required bool compact}) {
     return ChatHeader(
       connected: _state.isConnected,
       mood: _state.mood,
@@ -104,7 +126,7 @@ extension _ChatView on _ChatScreenState {
       ambientMuted: _ambientMuted,
       onOpenProfile: _openProfile,
       onHerDayTap: _openHerDaySheet,
-      compact: _keyboardUp,
+      compact: compact,
     );
   }
 
