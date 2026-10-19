@@ -273,6 +273,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _ambientMuted = true;
 
   bool _showScrollFAB = false;
+
+  /// He is reading the newest line. While true, a layout change that moves
+  /// the end of the transcript (the header growing once her day loads, a
+  /// bubble laid out taller than its estimate) keeps the newest line in view.
+  bool _pinnedToBottom = true;
   int? _heartbeatSpikeOverride; // Temporary BPM override from heartbeat_spike
   Timer? _spikeDecayTimer;
   Timer? _inputLockTimer; // Safety timeout to auto-unlock input

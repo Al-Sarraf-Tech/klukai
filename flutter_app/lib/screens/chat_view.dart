@@ -217,53 +217,78 @@ extension _ChatView on _ChatScreenState {
       // Keyboard scroll-nav (PageUp/PageDown/Home/End) for the message list.
       // Non-nav keys are returned as ignored so typing/shortcuts still work.
       onKeyEvent: _handleKeyScroll,
-      child: ListView.builder(
-        controller: _scrollController,
-        physics: const ClampingScrollPhysics(
-          parent: AlwaysScrollableScrollPhysics(),
+      child: NotificationListener<Notification>(
+        onNotification: _onTranscriptScroll,
+        child: ListView.builder(
+          controller: _scrollController,
+          physics: const ClampingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics(),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          itemCount: _messages.length,
+          itemBuilder: (context, index) {
+            final msg = _messages[index];
+            final msgDate = DateTime(
+              msg.createdAt.year,
+              msg.createdAt.month,
+              msg.createdAt.day,
+            );
+            bool showDivider = false;
+            if (index == 0) {
+              showDivider = true;
+            } else {
+              final prev = _messages[index - 1];
+              final prevDate = DateTime(
+                prev.createdAt.year,
+                prev.createdAt.month,
+                prev.createdAt.day,
+              );
+              if (msgDate != prevDate) showDivider = true;
+            }
+            final voiceId = _voiceNotes[msg.id];
+            final bubble = MessageBubble(
+              message: msg,
+              browser: widget.browser,
+              voiceOverride: voiceId == null
+                  ? null
+                  : () => _fetchAndPlayVoiceNote(voiceId),
+            );
+            if (showDivider) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DateDivider(date: msg.createdAt),
+                  bubble,
+                ],
+              );
+            }
+            return bubble;
+          },
         ),
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: _messages.length,
-        itemBuilder: (context, index) {
-          final msg = _messages[index];
-          final msgDate = DateTime(
-            msg.createdAt.year,
-            msg.createdAt.month,
-            msg.createdAt.day,
-          );
-          bool showDivider = false;
-          if (index == 0) {
-            showDivider = true;
-          } else {
-            final prev = _messages[index - 1];
-            final prevDate = DateTime(
-              prev.createdAt.year,
-              prev.createdAt.month,
-              prev.createdAt.day,
-            );
-            if (msgDate != prevDate) showDivider = true;
-          }
-          final voiceId = _voiceNotes[msg.id];
-          final bubble = MessageBubble(
-            message: msg,
-            browser: widget.browser,
-            voiceOverride: voiceId == null
-                ? null
-                : () => _fetchAndPlayVoiceNote(voiceId),
-          );
-          if (showDivider) {
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DateDivider(date: msg.createdAt),
-                bubble,
-              ],
-            );
-          }
-          return bubble;
-        },
       ),
     );
+  }
+
+  /// Tracks whether he is at the newest line, and keeps it there when the
+  /// transcript's end moves without him scrolling (see [_pinnedToBottom]).
+  bool _onTranscriptScroll(Notification notification) {
+    if (notification is ScrollUpdateNotification ||
+        notification is ScrollEndNotification) {
+      final metrics = (notification as ScrollNotification).metrics;
+      _pinnedToBottom = metrics.maxScrollExtent - metrics.pixels < 48;
+    } else if (notification is ScrollMetricsNotification && _pinnedToBottom) {
+      final metrics = notification.metrics;
+      if (metrics.maxScrollExtent - metrics.pixels > 1) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_pinnedToBottom && _scrollController.hasClients) {
+            _scrollController.jumpTo(
+              _scrollController.position.maxScrollExtent,
+            );
+          }
+        });
+      }
+    }
+    return false;
   }
 
   Widget _buildToolStatus() {

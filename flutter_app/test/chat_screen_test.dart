@@ -656,6 +656,44 @@ void main() {
       fake.dispose();
     });
 
+    testWidgets('the newest line stays in view when her day loads late', (
+      tester,
+    ) async {
+      final wardrobe = _LateDayWardrobe();
+      final (fake, _) = await pumpWithDay(tester, wardrobe);
+      expect(find.byKey(const Key('chat-chip-now')), findsNothing);
+
+      for (var i = 0; i < 40; i++) {
+        fake.emit({'type': 'token', 'text': 'line $i\n'});
+        fake.emit({'type': 'done'});
+        await tester.pump();
+      }
+      await tester.pump(const Duration(milliseconds: 600));
+      // The transcript is the list the keyboard scroll-nav Focus wraps.
+      ScrollPosition position() => tester
+          .widget<ListView>(
+            find.descendant(
+              of: find.byType(Focus),
+              matching: find.byType(ListView),
+            ),
+          )
+          .controller!
+          .position;
+      expect(position().maxScrollExtent, greaterThan(0));
+      expect(position().pixels, closeTo(position().maxScrollExtent, 1));
+
+      // Her day arrives: the header grows by the WEARING / NOW chips and the
+      // transcript's viewport shrinks. The newest line must stay in view.
+      wardrobe.release();
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.byKey(const Key('chat-chip-now')), findsOneWidget);
+      expect(position().pixels, closeTo(position().maxScrollExtent, 1));
+      expect(tester.takeException(), isNull);
+      fake.dispose();
+    });
+
     testWidgets('an outfit frame swaps the chip and refetches', (tester) async {
       final wardrobe = FakeWardrobeService(
         herDays: [
@@ -1604,4 +1642,18 @@ void main() {
       fake.dispose();
     });
   });
+}
+
+/// Her day only arrives when the test says so, after the transcript has
+/// loaded: the order a slow /api/her-day produces in production.
+class _LateDayWardrobe extends FakeWardrobeService {
+  final _gate = Completer<void>();
+
+  void release() => _gate.complete();
+
+  @override
+  Future<HerDay> fetchHerDay() async {
+    await _gate.future;
+    return super.fetchHerDay();
+  }
 }
