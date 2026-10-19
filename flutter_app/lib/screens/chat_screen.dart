@@ -30,7 +30,6 @@ import '../widgets/chat_header.dart';
 import '../widgets/her_day_widgets.dart';
 import '../theme/hud.dart';
 import 'profile_screen.dart';
-import 'memory_archive_screen.dart';
 import 'her_pov_screen.dart';
 import 'subscription_screen.dart';
 import 'hud_album_screen.dart';
