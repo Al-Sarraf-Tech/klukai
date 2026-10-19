@@ -20,14 +20,19 @@ apt-get -y install --no-install-recommends \
   docker.io docker-buildx docker-compose-v2 containerd runc \
   python3 python3-venv python3.12-venv build-essential \
   git jq curl xz-utils tar gzip rsync file ca-certificates tzdata \
-  shellcheck bubblewrap apparmor apparmor-utils sudo qemu-guest-agent zram-tools \
+  shellcheck bubblewrap apparmor apparmor-utils sudo qemu-guest-agent \
   libicu74 libssl3t64 zlib1g libkrb5-3 liblttng-ust1t64 \
   at-spi2-common fontconfig libasound2-data libasound2t64 libatk-bridge2.0-0t64 \
   libatk1.0-0t64 libatspi2.0-0t64 libavahi-client3 libavahi-common-data libavahi-common3 \
   libcups2t64 libdatrie1 libdrm-intel1 libgbm1 libgraphite2-3 libharfbuzz0b libllvm20 \
   libpango-1.0-0 libpciaccess0 libthai-data libthai0 libx11-xcb1 libxcb-dri3-0 \
   libxcb-present0 libxcb-randr0 libxcb-sync1 libxcb-xfixes0 libxcomposite1 libxdamage1 \
-  libxfixes3 libxi6 libxrandr2 libxshmfence1 mesa-libgallium libnss3 fonts-dejavu-core
+  libxfixes3 libxi6 libxrandr2 libxshmfence1 mesa-libgallium libnss3 fonts-dejavu-core \
+  libcairo2 libcairo-gobject2 libcairo-script-interpreter2 libpixman-1-0 libxcb-render0 \
+  libxcb-shm0 libxrender1 libsm6 libice6 x11-common libpcre2-16-0 libpcre2-32-0 \
+  libgirepository-2.0-0 libcares2 nodejs pkgconf pkg-config \
+  libcairo2-dev libffi-dev zlib1g-dev libbz2-dev libexpat1-dev libpng-dev libfreetype-dev \
+  libfontconfig-dev libglib2.0-dev libx11-dev libxext-dev libxrender-dev libsm-dev uuid-dev
 
 # The runner account: uid 1000 so evidence written through virtiofs maps to the
 # relay's user on amarillo. Its only root command is the heavy-userns AppArmor load.
@@ -60,6 +65,12 @@ chown -R root:root "$TOOLCHAIN/chrome"
 chmod -R u+rwX,go+rX,go-w "$TOOLCHAIN/chrome"
 chmod 0755 "$TOOLCHAIN/chrome/chrome" "$TOOLCHAIN/chrome/chrome-sandbox"
 echo "8f97fcd3099892c5cbd4ca62ea32ae21f0af25cc2a378f969a84f41b314bf11a  $TOOLCHAIN/chrome/chrome" | sha256sum -c -
+# Every shared library Chrome links must resolve (libcairo was missing once).
+if ldd "$TOOLCHAIN/chrome/chrome" | grep 'not found'; then
+  echo "Chrome is missing shared libraries" >&2
+  exit 1
+fi
+"$TOOLCHAIN/chrome/chrome" --version
 install -m 0644 "$IN/klukai-ci-chrome-b838d34bba223857" /etc/apparmor.d/
 apparmor_parser --replace /etc/apparmor.d/klukai-ci-chrome-b838d34bba223857
 
@@ -95,9 +106,12 @@ ssh_pwauth: false
 EOF
 systemctl disable ssh.service ssh.socket || true
 
-# Compressed swap: the frontend job's Flutter tests can briefly exceed 8 GiB.
-printf 'ALGO=zstd\nPERCENT=50\n' > /etc/default/zramswap
-systemctl enable zramswap.service
+# Swap file: the frontend job's Flutter tests can briefly exceed 8 GiB. (The
+# cloud kernel ships no zram module.) fallocate leaves the qcow2 base sparse.
+fallocate -l 4G /swapfile
+chmod 0600 /swapfile
+mkswap /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
 # Same guest-only mitigation as the Dominus heavy guest (QEMU 10.2.2/libvirt 12).
 printf 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT nousershstk"\n' \
   > /etc/default/grub.d/90-klukai-ci.cfg
@@ -117,7 +131,8 @@ docker images --digests --format '{{.Repository}}@{{.Digest}}' > "$OUT/images.tx
   echo "runner=2.338.0"
 } > "$OUT/versions.txt"
 
-# Seal: no logs, identity or caches carried into job VMs.
+# Seal: no logs, identity or caches carried into job VMs, and no builder mounts.
+sed -i '/build-inputs\|build-out/d' /etc/fstab
 systemctl stop docker containerd
 apt-get clean
 rm -rf /var/lib/apt/lists/* /var/log/journal/* /tmp/* /var/tmp/*

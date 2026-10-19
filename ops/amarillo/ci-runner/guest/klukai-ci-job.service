@@ -7,5 +7,9 @@ Requires=opt-klukai\x2dci-artifacts.mount
 [Service]
 Type=simple
 ExecStart=/usr/local/sbin/klukai-ci-job
+# The runner's own lines ("Running job", "completed with result") reach the
+# host's kept console log for diagnosis.
+StandardOutput=journal+console
+StandardError=journal+console
 ExecStopPost=/usr/bin/systemctl --no-block poweroff
 RuntimeMaxSec=4h

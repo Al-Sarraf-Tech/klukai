@@ -65,6 +65,7 @@ PAUSE_AT_C = 68.0
 RESUME_BELOW_C = 60.0
 MAX_JOB_SECONDS = 4 * 3600
 WARMUP_SECONDS = 300  # a VM this young may not have picked up its job yet
+IDLE_SECONDS = 900  # an idle runner this old never got a job: free its capacity
 SLOTS = 4  # static guest addresses 10.231.0.10-13
 
 ROOT = Path("/var/lib/libvirt/images/klukai-ci")
@@ -73,6 +74,7 @@ BASE_DIGEST = ROOT / "base" / "base.qcow2.sha256"
 JOBS = ROOT / "jobs"
 # virtlogd may only write virt_log_t paths under SELinux.
 CONSOLE_LOGS = Path("/var/log/libvirt/qemu")
+CONSOLE_LOG_DAYS = 3
 ARTIFACTS = Path("/docker/klukai/ci-artifacts")
 GUARD_TABLE = ("inet", "klukai_ci_guard")
 NETWORK = "klukai-ci"
@@ -185,15 +187,13 @@ class GitHub:
             if "HTTP 404" not in str(error):  # JIT runners remove themselves
                 raise
 
-    def runner_busy(self, runner_id: int) -> bool:
+    def runner_busy(self, runner_id: int) -> bool | None:
+        """True/False from GitHub; None when GitHub cannot say (never reap on None)."""
         try:
-            return bool(
-                self.call("GET", f"/repos/{REPO}/actions/runners/{int(runner_id)}").get(
-                    "busy"
-                )
-            )
+            runner = self.call("GET", f"/repos/{REPO}/actions/runners/{int(runner_id)}")
         except RunnerError:
-            return False
+            return None
+        return bool(runner.get("busy"))
 
 
 def profile_for(job: dict[str, Any]) -> Profile | None:
@@ -494,7 +494,6 @@ class Controller:
             self.github.delete_runner(guest.runner_id)
         if NAME_RE.fullmatch(name):
             shutil.rmtree(JOBS / name, ignore_errors=True)
-            (CONSOLE_LOGS / f"{name}.console.log").unlink(missing_ok=True)
         self.guests.pop(name, None)
         self._save()
         log.info("removed %s", name)
@@ -502,6 +501,7 @@ class Controller:
     def reap(self) -> None:
         domains = self.running_domains()
         now = self.clock()
+        known = set(self.guests)
         for name in list(self.guests):
             state = domains.get(name, "")
             if state not in ("running", "paused"):
@@ -509,12 +509,25 @@ class Controller:
             elif now - self.guests[name].started > MAX_JOB_SECONDS:
                 log.warning("%s exceeded %d s; destroying", name, MAX_JOB_SECONDS)
                 self.teardown(name)
-        for name in domains:  # never leave an unknown Klukai CI guest running
-            if name not in self.guests:
+        for name, state in domains.items():  # never leave an unknown guest running
+            if (
+                name not in self.guests
+                and name not in known
+                and state in ("running", "paused")
+            ):
                 self.teardown(name)
         for path in JOBS.glob("klukai-ci-*") if JOBS.is_dir() else ():
             if path.name not in self.guests and NAME_RE.fullmatch(path.name):
                 shutil.rmtree(path, ignore_errors=True)
+        # Console logs outlive their guests for diagnosis (boot output only; the
+        # JIT registration is never printed), then go after CONSOLE_LOG_DAYS.
+        for log_path in (
+            CONSOLE_LOGS.glob("klukai-ci-*.console.log")
+            if CONSOLE_LOGS.is_dir()
+            else ()
+        ):
+            if now - log_path.stat().st_mtime > CONSOLE_LOG_DAYS * 86400:
+                log_path.unlink(missing_ok=True)
 
     def thermal(self) -> None:
         temp = self.temp()
@@ -537,10 +550,15 @@ class Controller:
             if profile is not None:
                 wanted[profile.label] = wanted.get(profile.label, 0) + 1
         now = self.clock()
-        for guest in self.guests.values():
-            idle = now - guest.started < WARMUP_SECONDS or not self.github.runner_busy(
-                guest.runner_id
-            )
+        for guest in list(self.guests.values()):
+            busy = self.github.runner_busy(guest.runner_id)
+            if busy is False and now - guest.started > IDLE_SECONDS:
+                log.info(
+                    "%s never got a job in %d s; removing it", guest.name, IDLE_SECONDS
+                )
+                self.teardown(guest.name)
+                continue
+            idle = now - guest.started < WARMUP_SECONDS or busy is not True
             if idle and wanted.get(guest.profile.label):
                 wanted[guest.profile.label] -= 1
         order = sorted(PROFILES.values(), key=lambda p: -p.vcpus)

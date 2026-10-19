@@ -39,6 +39,7 @@ class FakeGitHub:
         self.registered: dict[int, str] = {}
         self.deleted: list[int] = []
         self.busy: set[int] = set()
+        self.unknown: set[int] = set()
 
     def queued_jobs(self):
         return list(self.jobs)
@@ -52,6 +53,8 @@ class FakeGitHub:
         self.deleted.append(runner_id)
 
     def runner_busy(self, runner_id):
+        if runner_id in self.unknown:
+            return None
         return runner_id in self.busy
 
 
@@ -375,3 +378,32 @@ def test_guest_written_files_go_to_the_tree_owner_without_setuid(tmp_path, monke
     assert exe.stat().st_mode & 0o6000 == 0
     assert str(tree / "rev" / "link") in chowned  # the link itself, never its target
     assert (tree / "rev" / "link").is_symlink()
+
+
+def test_a_guest_that_never_gets_a_job_is_reaped(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-heavy")])
+    controller.tick()
+    name = next(iter(host.domains))
+    state["now"] += runner.IDLE_SECONDS - 1
+    controller.tick()
+    assert name in host.domains  # still within its chance to get the job
+    github.unknown.add(100)  # GitHub cannot say: never reap on a guess
+    state["now"] += 10
+    controller.tick()
+    assert name in host.domains
+    github.unknown.clear()
+    github.jobs = []
+    controller.tick()
+    assert name not in host.domains and controller.guests == {}
+
+
+def test_a_busy_guest_is_never_reaped_for_idleness(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-heavy")])
+    controller.tick()
+    name = next(iter(host.domains))
+    github.busy.add(100)
+    state["now"] += runner.IDLE_SECONDS * 3
+    controller.tick()
+    assert name in host.domains
