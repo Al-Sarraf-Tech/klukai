@@ -26,6 +26,10 @@ import 'profile_screen.dart';
 import 'memory_archive_screen.dart';
 import 'her_pov_screen.dart';
 import 'subscription_screen.dart';
+import 'hud_album_screen.dart';
+import 'hud_day_screen.dart';
+import 'hud_kit_screen.dart';
+import 'hud_me_screen.dart';
 
 part 'chat_wire_events.dart';
 
@@ -124,6 +128,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   // socket and state survive tab switches, the others build on first visit.
   HudTab _tab = HudTab.chat;
   final Set<HudTab> _visited = {HudTab.chat};
+  // Bumped when Kit changes her outfit, so Her Day re-reads it.
+  final ValueNotifier<int> _outfitChanged = ValueNotifier<int>(0);
 
   void _selectTab(HudTab tab) {
     if (tab == _tab) return;
@@ -142,21 +148,36 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       case HudTab.chat:
         return _buildMobileLayout();
       case HudTab.album:
-        return MemoryArchiveScreen(
+        return HudAlbumScreen(
           serverUrl: widget.serverUrl,
           affectionLevel: _state.affectionLevel,
           affectionLevelName: _state.affectionLevelName,
           onAuthExpired: _handleAuthExpired,
         );
       case HudTab.day:
+        return HudDayScreen(
+          serverUrl: widget.serverUrl,
+          wardrobeService: _wardrobe,
+          refresh: _outfitChanged,
+          onAuthExpired: _handleAuthExpired,
+        );
       case HudTab.kit:
+        return HudKitScreen(
+          serverUrl: widget.serverUrl,
+          wardrobeService: _wardrobe,
+          onOutfitChanged: () {
+            _outfitChanged.value++;
+            _loadHerDay();
+          },
+          onAuthExpired: _handleAuthExpired,
+        );
       case HudTab.me:
-        return ProfileScreen(
+        return HudMeScreen(
           serverUrl: widget.serverUrl,
           affectionScore: _state.affectionScore,
           affectionLevel: _state.affectionLevel,
           affectionLevelName: _state.affectionLevelName,
-          wardrobeService: _wardrobe,
+          onLogout: _logout,
           onAuthExpired: _handleAuthExpired,
         );
     }
@@ -401,6 +422,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _herDayTimer?.cancel();
     _resumeSub?.cancel();
     _speech.dispose();
+    _outfitChanged.dispose();
     _ws.dispose();
     _textController.dispose();
     _scrollController.dispose();
