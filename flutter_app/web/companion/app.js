@@ -43,6 +43,8 @@ function savePrefs(p) {
 }
 
 function boot() {
+  // Her latest finished line, played only from the voice button.
+  let lastLine = "";
   const token = readToken();
   if (!token) { location.replace("/"); return; }
   const toLogin = () => { clearToken(); location.replace("/"); };
@@ -229,7 +231,9 @@ function boot() {
     for (const fx of effects) {
       // One voice channel: her reply is spoken from its `done` text. The
       // server's `voice_audio` clips are dropped in logic.js (see reduceFrame).
-      if (fx.kind === "speak") voice?.speak(fx.text);
+      // Owner 2026-10-19: her voice plays ONLY when he asks. A finished reply
+      // is remembered, never spoken; the voice button plays it on a tap.
+      if (fx.kind === "speak") { lastLine = fx.text; syncButtons(); }
       else if (fx.kind === "refresh-portrait") refreshPortrait();
       else if (fx.kind === "refresh-day") refreshDay();
     }
@@ -270,7 +274,7 @@ function boot() {
       onSpeaking: (on) => music?.duck(on),
       onError: () => notice("Her voice didn't come through.", 3000),
     });
-    voice.setEnabled(prefs.voice);
+    voice.setEnabled(true);  // speaks only from the voice button (tap-to-play)
     try {
       if (prefs.music) await music.start();
       if (ctx.state === "suspended") await ctx.resume();
@@ -314,8 +318,8 @@ function boot() {
 
   function syncButtons() {
     $("btn-music").setAttribute("aria-pressed", String(Boolean(music?.playing)));
-    $("btn-voice").setAttribute("aria-pressed", String(Boolean(voice?.enabled)));
-    $("btn-voice").textContent = voice?.enabled ? "🔊" : "🔈";
+    $("btn-voice").disabled = !lastLine;
+    $("btn-voice").setAttribute("aria-label", lastLine ? "Hear her last line" : "Her voice (nothing to play yet)");
     const m = prefs.mode === "model";
     $("btn-mode").textContent = m ? "2D" : "3D";
     $("btn-mode").setAttribute("aria-label", m ? "Switch to portrait" : "Switch to 3D");
@@ -396,10 +400,9 @@ function boot() {
       }
       showAudioStatus("");
     }
-    voice.setEnabled(!voice.enabled);
-    prefs.voice = voice.enabled;
-    savePrefs(prefs);
-    syncButtons();
+    if (!lastLine) { notice("Nothing for her to say yet.", 2000); return; }
+    voice.setEnabled(true);
+    voice.speak(lastLine);
   });
   $("composer").addEventListener("submit", (ev) => {
     ev.preventDefault();
