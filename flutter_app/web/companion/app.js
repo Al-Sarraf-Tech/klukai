@@ -13,10 +13,15 @@ import {
   applySubtitle, completedAnnouncement, clearDecorativeMotion, motionPreference,
   beginWake, portraitStatusNotice,
 } from "./stage_life.js";
+import { embedConfig, speakRequest, createSpeakGate, resumeWithin, postToParent } from "./embed.js";
 
 const $ = (id) => document.getElementById(id);
 const PREFS_KEY = "klukai_companion_prefs";
 const DAY_REFRESH_MS = 5 * 60 * 1000;
+const AUDIO_RESUME_MS = 3000; // resume() can wait forever without a gesture
+// Inside the PWA's 3D view (companion.html?embed=1): the PWA draws the HUD.
+const EMBED = embedConfig(globalThis.location?.search || "");
+if (EMBED.embed) document.documentElement.dataset.embed = "1";
 const PORTRAIT_POLL_MS = 15000;
 const FRAME_ERROR_REFRESH_MS = 500;    // several frames 403 at once: one refresh for all of them
 const FRAME_ERROR_COOLDOWN_MS = 15000; // and if the fresh URLs fail too, don't loop on it
@@ -42,15 +47,26 @@ function savePrefs(p) {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch { /* private mode */ }
 }
 
+// Back to the login page; embedded, the PWA owns that (it revokes and redirects).
+function leave() {
+  if (EMBED.embed) postToParent(window, { type: "klukai:auth-expired" });
+  else location.replace("/");
+}
+
 function boot() {
   // Her latest finished line, played only from the voice button.
   let lastLine = "";
   const token = readToken();
-  if (!token) { location.replace("/"); return; }
-  const toLogin = () => { clearToken(); location.replace("/"); };
+  if (!token) { leave(); return; }
+  const toLogin = () => { clearToken(); leave(); };
 
   const stage = $("stage");
   const prefs = loadPrefs();
+  // Embedded, the stage always shows 3D, without overwriting the mode he
+  // chose on the full stage.
+  const storedMode = prefs.mode;
+  if (EMBED.embed) prefs.mode = "model";
+  const persistPrefs = EMBED.embed ? (p) => savePrefs({ ...p, mode: storedMode }) : savePrefs;
   const api = createApi({ token, onAuthExpired: toLogin });
   const portrait = createPortrait($("portrait"), { onFrameError: onPortraitFrameError });
   const ambience = createAmbience($("ambience"));
@@ -66,8 +82,12 @@ function boot() {
   let lastFrameErrorRefresh = 0;
   let noticeTimer = null;
   let awake = false;
+  let audioCtx = null;
+  let reportedReady = null;
 
   const notice = (text, ms = 4000) => {
+    // Embedded, the notice element is hidden: the PWA's readout shows it.
+    if (EMBED.embed) postToParent(window, { type: "klukai:stage-notice", text: text || "" });
     const n = $("notice");
     n.textContent = text;
     n.hidden = !text;
@@ -129,6 +149,7 @@ function boot() {
   // its edges); tell the viewer how much of it they cover so it frames her
   // in the visible band. Not re-run when the subtitle grows: she'd jump.
   function syncInsets() {
+    if (EMBED.embed) { avatar?.setInsets?.(EMBED.insets); return; } // the PWA's HUD, not ours
     const box = $("model").getBoundingClientRect();
     if (!avatar?.setInsets || !box.height) return;
     const top = Math.max(0, document.querySelector(".topbar").getBoundingClientRect().bottom - box.top);
@@ -258,10 +279,11 @@ function boot() {
 
   // ── Wake: the one user gesture iOS needs before any audio can play ──────
   async function startAudio() {
-    if (voice && music) return true;
+    if (voice && music) return resumeWithin(audioCtx, AUDIO_RESUME_MS);
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return false;
     const ctx = new AC();
+    audioCtx = ctx;
     music = createMusic({ context: ctx });
     voice = createVoice({
       context: ctx,
@@ -271,17 +293,22 @@ function boot() {
         avatar?.setSpeaking(level);
         stage.classList.toggle("speaking", level > 0.06);
       },
-      onSpeaking: (on) => music?.duck(on),
-      onError: () => notice("Her voice didn't come through.", 3000),
+      onSpeaking: (on) => {
+        music?.duck(on);
+        if (EMBED.embed) postToParent(window, { type: "klukai:speaking", on });
+      },
+      onError: () => {
+        if (EMBED.embed) postToParent(window, { type: "klukai:voice-error" });
+        notice("Her voice didn't come through.", 3000);
+      },
     });
     voice.setEnabled(true);  // speaks only from the voice button (tap-to-play)
     try {
-      if (prefs.music) await music.start();
-      if (ctx.state === "suspended") await ctx.resume();
+      if (prefs.music && !EMBED.embed) await music.start(); // the PWA has its own ambience
     } catch {
       return false;
     }
-    return ctx.state !== "suspended";
+    return resumeWithin(ctx, AUDIO_RESUME_MS);
   }
 
   function showAudioStatus(text) {
@@ -327,10 +354,39 @@ function boot() {
     for (const button of $("camera-controls").querySelectorAll("button")) {
       button.disabled = !m || !avatar?.ready;
     }
+    if (EMBED.embed) reportReady();
+  }
+
+  // Embedded: tell the PWA when she is on screen (3D, or the portrait it
+  // falls back to when 3D can't load), so its readout says TRACKING.
+  function reportReady() {
+    const ready = awake && (prefs.mode === "model" ? Boolean(avatar?.ready) : true);
+    if (ready === reportedReady) return;
+    reportedReady = ready;
+    postToParent(window, { type: "klukai:stage-ready", ready });
+  }
+
+  // Embedded: the PWA's `▶ VOICE` (a tap there) asks for a line. Played once
+  // per request, lip-synced; replaces whatever she was saying. If audio
+  // can't start, the PWA is told and plays the line itself.
+  function listenForSpeech() {
+    const gate = createSpeakGate();
+    window.addEventListener("message", async (event) => {
+      const request = speakRequest(event, { origin: location.origin, parent: window.parent });
+      if (!gate.admit(request)) return;
+      const reply = (status) => postToParent(window, { type: "klukai:speak-status", id: request.id, status });
+      lastLine = request.text;
+      syncButtons();
+      let ready = false;
+      try { ready = await startAudio(); } catch { ready = false; }
+      if (!ready || !voice) { reply("unavailable"); return; }
+      voice.stop();
+      reply(voice.speak(request.text) ? "playing" : "empty");
+    });
   }
 
   const { refreshAppearances, setMode } = createStageAppearance({
-    $, api, prefs, savePrefs, notice, portrait, stage, syncButtons, syncInsets,
+    $, api, prefs, savePrefs: persistPrefs, notice, portrait, stage, syncButtons, syncInsets,
     runtime: {
       get avatar() { return avatar; },
       set avatar(value) { avatar = value; },
@@ -458,7 +514,15 @@ function boot() {
   window.addEventListener("pageshow", () => socket.resume());
   window.addEventListener("resize", () => { ambience.resize(); avatar?.resize(); syncInsets(); }, { passive: true });
 
-  coverForWake(true);
+  if (EMBED.embed) {
+    // The PWA already had his tap: no wake overlay. Visual wake only; audio
+    // starts with the first speak request (itself a tap in the PWA).
+    awake = true;
+    $("wake").hidden = true;
+    coverForWake(false);
+    listenForSpeech();
+    setMode("model");
+  } else coverForWake(true);
   portrait.setFrames({});
   ambience.start();
   // 3D was his last view: start fetching three.js + the model now, in

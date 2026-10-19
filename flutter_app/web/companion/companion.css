@@ -234,3 +234,29 @@ html[data-reduced-motion="reduce"] .subtitle.thinking::after {
   .portrait-motion { animation: none; }
   .stage.speaking .portrait-glow { animation: none; }
 }
+
+/* ── Embedded in the PWA's 3D view (companion.html?embed=1) ────────────── */
+/* The PWA draws the HUD (status, her line, VOICE, composer), so the stage's
+   own chrome is hidden; the avatar fills the frame on the HUD's gunmetal,
+   darkened top and bottom where the HUD sits. Taps on her still work. */
+html[data-embed] .topbar,
+html[data-embed] .notice,
+html[data-embed] .dock,
+html[data-embed] .wake { display: none !important; }
+html[data-embed] .stage {
+  background:
+    radial-gradient(120% 70% at 50% 38%, var(--tint), transparent 70%),
+    #06080c;
+}
+html[data-embed] .stage::after {
+  content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, rgba(6, 8, 12, 0.55) 0, rgba(6, 8, 12, 0) 22%,
+      rgba(6, 8, 12, 0) 52%, rgba(6, 8, 12, 0.92) 82%);
+}
+html[data-embed] .model canvas,
+html[data-embed] .model-view canvas { -webkit-mask-image: none; mask-image: none; }
+@media (min-width: 900px) {
+  html[data-embed] .portrait, html[data-embed] .model { left: 0; right: 0; width: auto; translate: none; }
+}
