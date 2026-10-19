@@ -1,0 +1,8 @@
+# Klukai private heavy guest: pinned native Chrome user-namespace sandbox.
+# Native ELF sha256: 8f97fcd3099892c5cbd4ca62ea32ae21f0af25cc2a378f969a84f41b314bf11a
+abi <abi/4.0>,
+include <tunables/global>
+
+profile klukai_ci_chrome_b838d34bba223857 /opt/klukai-ci/toolchains/b838d34bba223857b3cab6b924de31a9ddee0c1f7c81df7611f3a0cb883a17c7/chrome/chrome flags=(unconfined) {
+  userns,
+}

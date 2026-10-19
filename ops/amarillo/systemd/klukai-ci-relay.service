@@ -7,6 +7,6 @@ Type=oneshot
 UMask=0077
 WorkingDirectory=%h/git/klukai
 Environment=HOME=%h
-# Uses ssh to the Dominus host's guest agent; quietly fails while Dominus is off.
-ExecStart=/usr/bin/python3 %h/git/klukai/ops/amarillo/scripts/klukai-fetch-ci-artifacts.py nightly --warn-after-days 3
+# Nightly runs on amarillo's own CI VMs since 2026-10-19 (ops/amarillo/ci-runner).
+ExecStart=/usr/bin/python3 %h/git/klukai/ops/amarillo/scripts/klukai-fetch-ci-artifacts.py --source amarillo nightly --warn-after-days 3
 TimeoutStartSec=15min

@@ -1,0 +1,11 @@
+[Unit]
+Description=One Klukai GitHub Actions job, then power off
+After=network-online.target docker.service opt-klukai\x2dci-artifacts.mount
+Wants=network-online.target docker.service
+Requires=opt-klukai\x2dci-artifacts.mount
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/klukai-ci-job
+ExecStopPost=/usr/bin/systemctl --no-block poweroff
+RuntimeMaxSec=4h

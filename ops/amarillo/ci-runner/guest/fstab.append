@@ -1,0 +1,1 @@
+klukai-artifacts /opt/klukai-ci/artifacts virtiofs rw,nodev,nofail 0 0

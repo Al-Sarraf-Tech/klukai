@@ -1,0 +1,12 @@
+#!/bin/sh
+# Run exactly one GitHub Actions job with the single-use JIT registration that
+# the host put on the seed, then power off. The host deletes this whole VM.
+set -eu
+jit_file=/run/klukai-ci/jit
+for _ in $(seq 1 60); do [ -s "$jit_file" ] && break; sleep 1; done
+[ -s "$jit_file" ] || { echo "no JIT registration on the seed" >&2; exit 1; }
+jit=$(cat "$jit_file")
+rm -f "$jit_file"
+mountpoint -q /opt/klukai-ci/artifacts || { echo "CI evidence share not mounted" >&2; exit 1; }
+cd /opt/actions-runner
+exec runuser -u runner -- ./run.sh --jitconfig "$jit"

@@ -1,0 +1,377 @@
+"""Klukai's on-demand amarillo CI runner: admission, lifecycle and guest shape."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[3]
+SCRIPT = REPO / "ops/amarillo/ci-runner/klukai_ci_runner.py"
+SPEC = importlib.util.spec_from_file_location("klukai_ci_runner", SCRIPT)
+assert SPEC is not None and SPEC.loader is not None
+runner = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = runner
+SPEC.loader.exec_module(runner)
+
+HEAVY = runner.PROFILES["klukai-amarillo-heavy"]
+SMALL = runner.PROFILES["klukai-amarillo-small"]
+
+
+def job(label: str, created: str = "2026-10-19T10:00:00Z", **extra) -> dict:
+    return {
+        "id": hash(created) & 0xFFFF,
+        "status": "queued",
+        "created_at": created,
+        "labels": ["self-hosted", "Linux", "X64", label],
+        **extra,
+    }
+
+
+class FakeGitHub:
+    def __init__(self, jobs=()):
+        self.jobs = list(jobs)
+        self.registered: dict[int, str] = {}
+        self.deleted: list[int] = []
+        self.busy: set[int] = set()
+
+    def queued_jobs(self):
+        return list(self.jobs)
+
+    def jit_config(self, name, profile):
+        runner_id = 100 + len(self.registered)
+        self.registered[runner_id] = profile.label
+        return runner_id, "SECRET-JIT-" + name
+
+    def delete_runner(self, runner_id):
+        self.deleted.append(runner_id)
+
+    def runner_busy(self, runner_id):
+        return runner_id in self.busy
+
+
+class FakeHost:
+    """virsh, qemu-img, genisoimage and nft as the controller uses them."""
+
+    def __init__(self):
+        self.domains: dict[str, str] = {}
+        self.calls: list[list[str]] = []
+        self.guard = True
+        self.network_active = True
+
+    def __call__(self, argv, capture_output=True, text=True, timeout=None):
+        self.calls.append(argv)
+        out, rc = "", 0
+        if argv[0] == "virsh":
+            verb = argv[4]
+            if verb == "list":
+                out = "\n".join(self.domains)
+            elif verb == "domstate":
+                out = self.domains.get(argv[5], "")
+                rc = 0 if out else 1
+            elif verb == "net-info":
+                out = f"Name: klukai-ci\nActive: {'yes' if self.network_active else 'no'}\nBridge: kci-br0\n"
+            elif verb == "create":
+                name = ET.parse(argv[5]).getroot().findtext("name")
+                self.domains[name] = "running"
+            elif verb == "destroy":
+                self.domains.pop(argv[5], None)
+            elif verb in ("suspend", "resume"):
+                self.domains[argv[5]] = "paused" if verb == "suspend" else "running"
+        elif argv[0] == "nft":
+            out, rc = (
+                ("table inet klukai_ci_guard {}" if self.guard else ""),
+                (0 if self.guard else 1),
+            )
+        elif argv[0] == "qemu-img":
+            Path(argv[-2]).write_bytes(b"qcow2")
+        elif argv[0] == "genisoimage":
+            Path(argv[argv.index("-output") + 1]).write_bytes(b"iso")
+        return subprocess.CompletedProcess(argv, rc, stdout=out, stderr="")
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    root = tmp_path / "klukai-ci"
+    (root / "base").mkdir(parents=True)
+    (root / "base" / "base.qcow2").write_bytes(b"base")
+    (root / "base" / "base.qcow2.sha256").write_text("x")
+    artifacts = tmp_path / "ci-artifacts"
+    artifacts.mkdir()
+    monkeypatch.setattr(runner, "ROOT", root)
+    monkeypatch.setattr(runner, "BASE", root / "base" / "base.qcow2")
+    monkeypatch.setattr(runner, "BASE_DIGEST", root / "base" / "base.qcow2.sha256")
+    monkeypatch.setattr(runner, "JOBS", root / "jobs")
+    monkeypatch.setattr(runner, "CONSOLE_LOGS", tmp_path / "logs")
+    monkeypatch.setattr(runner, "ARTIFACTS", artifacts)
+    monkeypatch.setattr(runner.shutil, "chown", lambda *a, **k: None)
+    state = {"temp": 45.0, "mem": 17000, "now": 1000.0}
+
+    def make(jobs=()):
+        github, host = FakeGitHub(jobs), FakeHost()
+        controller = runner.Controller(
+            github,
+            run=host,
+            temp=lambda: state["temp"],
+            memory=lambda: state["mem"],
+            clock=lambda: state["now"],
+            state_file=tmp_path / "state.json",
+        )
+        return controller, github, host
+
+    return make, state, tmp_path
+
+
+def test_only_exact_klukai_labels_are_served():
+    assert runner.profile_for(job("klukai-amarillo-heavy")) is HEAVY
+    assert runner.profile_for(job("klukai-amarillo-small")) is SMALL
+    assert runner.profile_for(job("ci-heavy")) is None
+    assert runner.profile_for({"labels": ["fleet-ci-v1", "ci-small"]}) is None
+    assert (
+        runner.profile_for(
+            {"labels": ["self-hosted", "Linux", "X64", "klukai-amarillo-heavy", "gpu"]}
+        )
+        is None
+    )
+
+
+def test_a_queued_job_gets_one_fresh_guest(env):
+    make, state, tmp = env
+    controller, github, host = make([job("klukai-amarillo-heavy")])
+    controller.tick()
+    assert len(host.domains) == 1
+    name = next(iter(host.domains))
+    assert runner.NAME_RE.fullmatch(name)
+    job_dir = runner.JOBS / name
+    assert (job_dir / "disk.qcow2").exists() and (job_dir / "seed.iso").exists()
+    qemu_img = next(c for c in host.calls if c[0] == "qemu-img")
+    assert qemu_img[qemu_img.index("-b") + 1] == str(runner.BASE)
+    controller.tick()  # same queued job, guest still warming: no second guest
+    assert len(host.domains) == 1
+    assert json.loads((tmp / "state.json").read_text())[0]["name"] == name
+
+
+def test_finished_guest_is_torn_down_with_its_registration(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-small")])
+    controller.tick()
+    name = next(iter(host.domains))
+    github.jobs = []
+    host.domains.pop(name)  # guest powered off after its job
+    controller.tick()
+    assert controller.guests == {}
+    assert not (runner.JOBS / name).exists()
+    assert github.deleted == [100]
+
+
+def test_cpu_budget_never_exceeds_eight_threads(env):
+    make, state, _ = env
+    jobs = [
+        job("klukai-amarillo-heavy", "2026-10-19T10:00:00Z"),
+        job("klukai-amarillo-small", "2026-10-19T10:00:01Z"),
+    ]
+    controller, github, host = make(jobs)
+    controller.tick()
+    assert [g.profile for g in controller.guests.values()] == [HEAVY]
+    assert sum(g.profile.vcpus for g in controller.guests.values()) <= runner.MAX_VCPUS
+
+
+def test_small_jobs_share_the_budget(env):
+    make, state, _ = env
+    jobs = [job("klukai-amarillo-small", f"2026-10-19T10:00:0{i}Z") for i in range(5)]
+    controller, github, host = make(jobs)
+    state["mem"] = 40000
+    controller.tick()
+    assert len(controller.guests) == 4  # 4 x 2 threads = 8
+    assert {g.slot for g in controller.guests.values()} == {0, 1, 2, 3}
+
+
+@pytest.mark.parametrize(
+    "temp,mem,reason", [(62.0, 17000, "warm"), (45.0, 8192 + 4095, "memory")]
+)
+def test_admission_waits_for_heat_and_memory(env, temp, mem, reason):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-heavy")])
+    state["temp"], state["mem"] = temp, mem
+    controller.tick()
+    assert host.domains == {}
+    assert github.registered == {}
+
+
+def test_nothing_starts_without_the_guard_network_or_base(env):
+    make, state, _ = env
+    for breakage in ("guard", "network", "base"):
+        controller, github, host = make([job("klukai-amarillo-heavy")])
+        if breakage == "guard":
+            host.guard = False
+        elif breakage == "network":
+            host.network_active = False
+        else:
+            runner.BASE.unlink()
+        controller.tick()
+        assert host.domains == {}, breakage
+        if breakage == "base":
+            runner.BASE.write_bytes(b"base")
+
+
+def test_guests_pause_when_hot_and_resume_when_cool(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-heavy")])
+    controller.tick()
+    name = next(iter(host.domains))
+    state["temp"] = 68.0
+    controller.tick()
+    assert host.domains[name] == "paused" and controller.guests[name].paused
+    state["temp"] = 63.0  # between thresholds: stays paused
+    controller.tick()
+    assert host.domains[name] == "paused"
+    state["temp"] = 59.0
+    controller.tick()
+    assert host.domains[name] == "running" and not controller.guests[name].paused
+
+
+def test_a_stuck_guest_is_destroyed_after_the_deadline(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-heavy")])
+    controller.tick()
+    github.jobs = []
+    state["now"] += runner.MAX_JOB_SECONDS + 1
+    controller.tick()
+    assert host.domains == {} and controller.guests == {}
+
+
+def test_unknown_klukai_guests_and_dirs_are_reaped(env):
+    make, state, _ = env
+    controller, github, host = make()
+    host.domains["klukai-ci-0123456789ab"] = "running"
+    host.domains["lmstudio-sandbox"] = "running"
+    stray = runner.JOBS / "klukai-ci-ba9876543210"
+    stray.mkdir(parents=True)
+    controller.tick()
+    assert "klukai-ci-0123456789ab" not in host.domains
+    assert host.domains["lmstudio-sandbox"] == "running"  # never touched
+    assert not stray.exists()
+
+
+def test_a_failed_launch_leaves_no_registration_or_files(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-heavy")])
+    original = host.__call__
+
+    def failing(argv, **kw):
+        if argv[0] == "virsh" and argv[4] == "create":
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="boom")
+        return original(argv, **kw)
+
+    controller._run = failing
+    with pytest.raises(runner.RunnerError):
+        controller.tick()
+    assert github.deleted == [100]
+    assert not any(runner.JOBS.iterdir())
+
+
+def test_state_survives_a_controller_restart(env):
+    make, state, tmp = env
+    controller, github, host = make([job("klukai-amarillo-heavy")])
+    controller.tick()
+    again = runner.Controller(
+        github,
+        run=host,
+        temp=lambda: 45.0,
+        memory=lambda: 17000,
+        clock=lambda: state["now"],
+        state_file=tmp / "state.json",
+    )
+    assert set(again.guests) == set(controller.guests)
+
+
+def test_guest_definition_is_isolated_and_bounded(tmp_path):
+    xml = ET.fromstring(runner.domain_xml("klukai-ci-0123456789ab", HEAVY, 1, tmp_path))
+    assert xml.findtext("vcpu") == "8" and xml.findtext("memory") == "8192"
+    assert xml.find("memtune/hard_limit").text == "9216"
+    nic = xml.find("devices/interface")
+    assert (
+        nic.get("type") == "network"
+        and nic.find("source").get("network") == "klukai-ci"
+    )
+    assert nic.find("port").get("isolated") == "yes"
+    shares = xml.findall("devices/filesystem")
+    assert len(shares) == 1 and shares[0].find("source").get("dir") == str(
+        runner.ARTIFACTS
+    )
+    assert all(
+        xml.findtext(e) == "destroy" for e in ("on_poweroff", "on_reboot", "on_crash")
+    )
+    with pytest.raises(runner.RunnerError):
+        runner.domain_xml("../evil", HEAVY, 0, tmp_path)
+
+
+def test_guest_network_is_static_with_public_dns():
+    config = json.loads(runner.network_config(2))["ethernets"]["ci0"]
+    assert config["addresses"] == ["10.231.0.12/24"] and config["dhcp4"] is False
+    assert config["nameservers"]["addresses"] == ["1.1.1.1", "9.9.9.9"]
+
+
+def test_jit_config_reaches_only_the_seed():
+    data = runner.user_data("SECRET")
+    assert data.startswith("#cloud-config\n")
+    files = json.loads(data.split("\n", 1)[1])["write_files"]
+    assert files == [
+        {
+            "path": "/run/klukai-ci/jit",
+            "permissions": "0600",
+            "owner": "root:root",
+            "content": "SECRET",
+        }
+    ]
+
+
+def test_temperature_and_memory_readers(tmp_path):
+    hw = tmp_path / "hwmon"
+    (hw / "hwmon0").mkdir(parents=True)
+    (hw / "hwmon0" / "name").write_text("nvme\n")
+    (hw / "hwmon3").mkdir()
+    (hw / "hwmon3" / "name").write_text("coretemp\n")
+    (hw / "hwmon3" / "temp1_input").write_text("57000\n")
+    assert runner.cpu_temp_c(hw) == 57.0
+    assert runner.cpu_temp_c(tmp_path / "none") == float("inf")  # unknown = too hot
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal: 48000000 kB\nMemAvailable:   17825792 kB\n")
+    assert runner.mem_available_mib(meminfo) == 17408
+
+
+def test_guest_written_files_go_to_the_tree_owner_without_setuid(tmp_path, monkeypatch):
+    tree = tmp_path / "ci-artifacts"
+    (tree / "rev" / "run").mkdir(parents=True)
+    exe = tree / "rev" / "run" / "tool"
+    exe.write_bytes(b"x")
+    exe.chmod(0o4755)
+    (tree / "rev" / "link").symlink_to("/etc/passwd")
+    chowned = []
+    monkeypatch.setattr(runner.os, "lchown", lambda p, u, g: chowned.append(p))
+    real_lstat = runner.os.lstat
+
+    def lstat(path):  # pretend the guest wrote everything as root
+        info = real_lstat(path)
+        return runner.os.stat_result(
+            (
+                info.st_mode,
+                info.st_ino,
+                info.st_dev,
+                info.st_nlink,
+                0,
+                0,
+                *tuple(info)[6:10],
+            )
+        )
+
+    monkeypatch.setattr(runner.os, "lstat", lstat)
+    assert runner.normalize_ownership(tree) == 4
+    assert exe.stat().st_mode & 0o6000 == 0
+    assert str(tree / "rev" / "link") in chowned  # the link itself, never its target
+    assert (tree / "rev" / "link").is_symlink()

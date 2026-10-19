@@ -398,7 +398,7 @@ def test_required_frontend_job_has_no_optional_or_billable_escape():
     job = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())["jobs"][
         "frontend"
     ]
-    assert job["runs-on"] == ["self-hosted", "Linux", "X64", "ci-heavy"]
+    assert job["runs-on"] == ["self-hosted", "Linux", "X64", "klukai-amarillo-heavy"]
     assert "if" not in job
     assert job.get("continue-on-error") is not True
     # The existing heavy guest's runner-owned, private capacity was verified

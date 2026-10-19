@@ -22,7 +22,7 @@ jobs:
   # head on existing self-hosted capacity. No PR event executes fork source.
   source-policy:
     name: Authorized exact source
-    runs-on: [fleet-ci-v1, ci-small]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-small]
     timeout-minutes: 2
     steps:
       - name: Require reviewed exact source before checkout
@@ -46,7 +46,7 @@ jobs:
   ci-image:
     name: Pinned Python CI executor
     needs: source-policy
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 30
     outputs:
       image_id: ${{ steps.build.outputs.image_id }}
@@ -81,11 +81,23 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'image_id={image}\n')
           PY
+      - name: Hand the executor image to the test jobs' own VMs
+        # Each amarillo CI job runs in a fresh VM; only the evidence tree is shared.
+        shell: bash
+        env:
+          IMAGE_ID: ${{ steps.build.outputs.image_id }}
+          HANDOFF: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/ci-tool-image
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HANDOFF"
+          docker save "$IMAGE_ID" -o "$HANDOFF/image.tar"
+          sha256sum "$HANDOFF/image.tar" | cut -d' ' -f1 > "$HANDOFF/image.tar.sha256"
 
   components:
     name: Isolated component suites
     needs: source-policy
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 20
     env:
       # Light containers drop all capabilities and the Ubuntu heavy guest restricts
@@ -147,7 +159,7 @@ jobs:
   test:
     name: Test Suite
     needs: ci-image
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 25
     env:
       KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/core
@@ -158,13 +170,24 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Load the executor image built by the ci-image job
+        shell: bash
+        env:
+          HANDOFF: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/ci-tool-image
+        run: |
+          set -euo pipefail
+          if ! docker image inspect "$KLUKAI_CORE_CI_IMAGE" >/dev/null 2>&1; then
+            echo "$(cat "$HANDOFF/image.tar.sha256")  $HANDOFF/image.tar" | sha256sum -c --quiet -
+            docker load -q -i "$HANDOFF/image.tar"
+          fi
+          test "$(docker image inspect --format '{{.Id}}' "$KLUKAI_CORE_CI_IMAGE")" = "$KLUKAI_CORE_CI_IMAGE"
       - name: Run full core with disposable PostgreSQL and retained coverage
         run: scripts/ci/core.sh
 
   real-backends:
     name: Real PostgreSQL, Valkey and Qdrant recovery
     needs: ci-image
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 20
     env:
       KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/backends
@@ -177,13 +200,24 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Load the executor image built by the ci-image job
+        shell: bash
+        env:
+          HANDOFF: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/ci-tool-image
+        run: |
+          set -euo pipefail
+          if ! docker image inspect "$KLUKAI_CORE_CI_IMAGE" >/dev/null 2>&1; then
+            echo "$(cat "$HANDOFF/image.tar.sha256")  $HANDOFF/image.tar" | sha256sum -c --quiet -
+            docker load -q -i "$HANDOFF/image.tar"
+          fi
+          test "$(docker image inspect --format '{{.Id}}' "$KLUKAI_CORE_CI_IMAGE")" = "$KLUKAI_CORE_CI_IMAGE"
       - name: Require all nine real-driver fault and recovery cases
         run: scripts/ci/backends.sh
 
   lint:
     name: Lint
     needs: source-policy
-    runs-on: [fleet-ci-v1, ci-small]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-small]
     timeout-minutes: 20
     env:
       # Light containers drop all capabilities and the Ubuntu heavy guest restricts
@@ -213,7 +247,7 @@ jobs:
   typecheck:
     name: Type Check (mypy)
     needs: source-policy
-    runs-on: [fleet-ci-v1, ci-small]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-small]
     timeout-minutes: 20
     env:
       # Light containers drop all capabilities and the Ubuntu heavy guest restricts
@@ -241,7 +275,7 @@ jobs:
   security:
     name: Security Scan (bandit + safety)
     needs: source-policy
-    runs-on: [fleet-ci-v1, ci-small]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-small]
     timeout-minutes: 20
     env:
       # Light containers drop all capabilities and the Ubuntu heavy guest restricts
@@ -274,7 +308,7 @@ jobs:
   image-scan:
     name: Image Scan (trivy)
     needs: source-policy
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 60
 
     steps:
@@ -372,7 +406,7 @@ jobs:
   perf-gate:
     name: Perf Gate (p99 regression check)
     needs: source-policy
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 60
     env:
       KLUKAI_CI_NATIVE_SANDBOX: unavailable
@@ -440,7 +474,7 @@ jobs:
   frontend:
     name: Frontend validation and immutable PWA evidence
     needs: source-policy
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -470,7 +504,7 @@ jobs:
     name: Required CI gates
     if: always()
     needs: [source-policy, ci-image, components, test, real-backends, lint, typecheck, security, image-scan, perf-gate, frontend]
-    runs-on: [fleet-ci-v1, ci-small]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-small]
     timeout-minutes: 2
     env:
       REQUIRED_JOBS: '["source-policy","ci-image","components","test","real-backends","lint","typecheck","security","image-scan","perf-gate","frontend"]'

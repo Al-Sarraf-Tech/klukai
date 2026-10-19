@@ -69,6 +69,11 @@ ARCHIVE_DAYS = 90
 REVISION_NAME = re.compile(r"[0-9a-f]{40}")
 NIGHT_NAME = re.compile(r"nightly/\d{4}-\d\d-\d\dT\d\d-\d\dZ-[0-9a-f]{7}")
 LOCK = Path.home() / ".local/state/klukai/ci-relay.lock"
+# Amarillo's own CI VMs (ops/amarillo/ci-runner) write the same tree here.
+LOCAL_ROOTS = {
+    ARTIFACTS: Path("/docker/klukai/ci-artifacts"),
+    OUTBOX: Path("/docker/klukai/ci-outbox"),
+}
 # The guest clock, then "<newest mtime> <record>" for every top-level record.
 LIST_RECORDS = r"""cd "$1" || exit 1
 date +%s
@@ -133,6 +138,43 @@ class VirshAgent:
         if result.returncode:
             raise RuntimeError(f"guest agent failed: {result.stderr.strip()[:200]}")
         return json.loads(result.stdout)["return"]
+
+
+class LocalGuest:
+    """The same guest interface over amarillo's local CI tree (no agent, no ssh)."""
+
+    def __init__(self, roots: dict[str, Path] | None = None) -> None:
+        self.roots = dict(LOCAL_ROOTS if roots is None else roots)
+
+    def _map(self, value: str) -> str:
+        for remote, local in self.roots.items():
+            if value == remote or value.startswith(remote + "/"):
+                return str(local) + value[len(remote) :]
+        return value
+
+    def run(self, argv: list[str], timeout: float = 120) -> str:
+        result = subprocess.run(
+            [self._map(a) for a in argv],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"local command failed: {argv[:2]}")
+        return "".join(self._unmap(line) for line in result.stdout.splitlines(True))
+
+    def _unmap(self, line: str) -> str:
+        for remote, local in self.roots.items():
+            line = line.replace(str(local), remote)
+        return line
+
+    def read(self, path: str, dest: Path) -> None:
+        source = Path(self._map(path))
+        if source.is_symlink() or not source.is_file():
+            raise RuntimeError(f"no such CI file: {path}")
+        with source.open("rb") as src, dest.open("wb") as out:
+            for block in iter(lambda: src.read(CHUNK), b""):
+                out.write(block)
 
 
 class Guest:
@@ -600,6 +642,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="dominus-nobara")
     parser.add_argument("--domain", default="fleet-ci-heavy-nobara")
+    parser.add_argument(
+        "--source",
+        choices=("auto", "amarillo", "dominus"),
+        default="auto",
+        help="amarillo: local CI VMs' tree; dominus: the heavy guest; auto: "
+        "image from wherever its run is (amarillo first), nightly/archive from dominus",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     i = sub.add_parser("image")
     i.add_argument("revision")
@@ -626,7 +675,13 @@ def main() -> int:
         "--state", type=Path, default=Path.home() / ".local/state/klukai/perf-nightly"
     )
     args = parser.parse_args()
-    guest = Guest(VirshAgent(args.host, args.domain))
+    guest: Any = Guest(VirshAgent(args.host, args.domain))
+    if args.source == "amarillo" or (
+        args.source == "auto"
+        and args.command == "image"
+        and (LOCAL_ROOTS[ARTIFACTS] / args.revision).is_dir()
+    ):
+        guest = LocalGuest()
     try:
         with guest_lock():
             return _run(args, guest)

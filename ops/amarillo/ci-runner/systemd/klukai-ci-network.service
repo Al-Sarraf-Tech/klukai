@@ -1,0 +1,13 @@
+[Unit]
+Description=Firewalled libvirt network for Klukai's disposable CI VMs
+After=virtqemud.socket virtnetworkd.socket nftables.service firewalld.service
+Wants=virtnetworkd.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/klukai-ci/network-up.sh
+ExecStop=-/usr/bin/virsh -q -c qemu:///system net-destroy klukai-ci
+
+[Install]
+WantedBy=multi-user.target

@@ -40,7 +40,7 @@ jobs:
   perf-nightly:
     name: Nightly paired performance (retained)
     if: ${{ github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","perf"]'), inputs.only) }}
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 45
     env:
       KLUKAI_CI_NATIVE_SANDBOX: unavailable
@@ -114,7 +114,7 @@ jobs:
     name: Trivy deep scan
     needs: perf-nightly
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","trivy"]'), inputs.only)) }}
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -171,7 +171,7 @@ jobs:
     name: Onboarding drill (clean clone, docs/onboarding.md)
     needs: [perf-nightly, trivy-deep]
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","onboarding"]'), inputs.only)) }}
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 30
     env:
       KLUKAI_PERF_POSTGRES_IMAGE: postgres@sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1
@@ -198,7 +198,7 @@ jobs:
     name: Mutation test (critical paths, >=80% killed)
     needs: [perf-nightly, trivy-deep, onboarding]
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","mutation"]'), inputs.only)) }}
-    runs-on: [self-hosted, Linux, X64, ci-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 150
     env:
       KLUKAI_CI_NATIVE_SANDBOX: unavailable

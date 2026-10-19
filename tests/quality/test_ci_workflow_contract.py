@@ -90,9 +90,10 @@ def test_existing_required_names_are_preserved_and_every_job_is_aggregated():
     assert set(required["needs"]) == set(jobs) - {"all-required"}
     for key, job in jobs.items():
         labels = job["runs-on"]
+        # Owner decision 2026-10-19: Klukai CI runs only on amarillo's one-job VMs.
         assert labels in (
-            ["self-hosted", "Linux", "X64", "ci-heavy"],
-            ["fleet-ci-v1", "ci-small"],
+            ["self-hosted", "Linux", "X64", "klukai-amarillo-heavy"],
+            ["self-hosted", "Linux", "X64", "klukai-amarillo-small"],
         )
         if key not in {"source-policy", "all-required"}:
             dependencies = job["needs"]

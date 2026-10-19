@@ -1,0 +1,29 @@
+#!/usr/sbin/nft -f
+# Fail-closed guard for Klukai's CI VMs on kci-br0. A drop in any base chain is
+# final, so firewalld, libvirt or Docker accept rules cannot reopen these paths.
+table inet klukai_ci_guard
+delete table inet klukai_ci_guard
+table inet klukai_ci_guard {
+  set private4 {
+    type ipv4_addr
+    flags interval
+    elements = { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8,
+                 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16,
+                 198.18.0.0/15, 224.0.0.0/3 }
+  }
+
+  chain input {
+    type filter hook input priority -50; policy accept;
+    # Guests talk to nothing on amarillo itself (no DHCP, DNS, SSH or services).
+    iifname "kci-br0" drop
+  }
+
+  chain forward {
+    type filter hook forward priority -50; policy accept;
+    iifname "kci-br0" meta nfproto ipv6 drop
+    oifname "kci-br0" meta nfproto ipv6 drop
+    iifname "kci-br0" ip daddr @private4 drop
+    # Replies from the internet only; nothing private may open a path in.
+    oifname "kci-br0" ip saddr @private4 drop
+  }
+}

@@ -1,0 +1,22 @@
+[Unit]
+Description=On-demand one-job VMs for Klukai's GitHub Actions jobs
+Requires=klukai-ci-network.service
+After=klukai-ci-network.service network-online.target virtqemud.socket
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/klukai-ci/klukai_ci_runner.py
+# Owner's GitHub token, encrypted to this host (systemd-creds, TPM2 + host key).
+LoadCredentialEncrypted=github-token:/etc/klukai-ci/github-token.cred
+Restart=on-failure
+RestartSec=30s
+Nice=5
+ProtectHome=read-only
+ReadWritePaths=/var/lib/libvirt/images/klukai-ci /var/lib/klukai-ci
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
