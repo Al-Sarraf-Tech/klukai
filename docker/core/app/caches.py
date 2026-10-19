@@ -1,4 +1,4 @@
-"""Redis-backed caches: embeddings and affection state.
+"""Redis-backed caches: embeddings, affection state, voice translations.
 
 These caches trade a small amount of freshness for large savings on hot
 paths (every chat turn embeds text; every request reads affection).
@@ -30,6 +30,7 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://aichat-redis:6379/1")
 # TTLs — tuned for freshness vs. hit-rate
 EMBEDDING_TTL = 3600  # 1h — same text embedding is always the same
 AFFECTION_TTL = 15  # 15s — score changes per interaction
+VOICE_TRANSLATION_TTL = 30 * 24 * 3600  # 30d — a replayed line never pays twice
 
 _redis: aioredis.Redis | None = None
 
@@ -56,6 +57,15 @@ async def close() -> None:
 def _text_key(text: str) -> str:
     h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
     return f"cache:embed:{h}"
+
+
+# Bump to retire every cached translation when the translation prompt changes.
+VOICE_TRANSLATION_VERSION = "1"
+
+
+def _voice_key(text: str) -> str:
+    h = hashlib.sha256(f"{VOICE_TRANSLATION_VERSION}\n{text}".encode()).hexdigest()
+    return f"cache:voice:ja:{h[:32]}"
 
 
 async def get_embedding(text: str) -> list[float] | None:
@@ -121,6 +131,28 @@ async def invalidate_affection(user_id: str) -> None:
         await get_breaker("redis").call(r.delete, f"cache:aff:{user_id}")
     except Exception:
         pass
+
+
+async def get_voice_translation(text: str) -> str | None:
+    """Return her cached Japanese line for an English line, or None."""
+    try:
+        r = await _get()
+        raw = await get_breaker("redis").call(r.get, _voice_key(text))
+        return raw if isinstance(raw, str) and raw else None
+    except Exception as e:
+        logger.debug("voice translation cache read miss via error: %s", e)
+        return None
+
+
+async def put_voice_translation(text: str, japanese: str) -> None:
+    """Cache her Japanese line. Silent-fail on Redis error."""
+    try:
+        r = await _get()
+        await get_breaker("redis").call(
+            r.set, _voice_key(text), japanese, ex=VOICE_TRANSLATION_TTL
+        )
+    except Exception as e:
+        logger.debug("voice translation cache write failed: %s", e)
 
 
 def cosine(a: list[float], b: list[float]) -> float:

@@ -481,8 +481,13 @@ python3 scripts/e2e_live.py --only her-pov
 | `KLUKAI_CREATIVE_TEXT_PROVIDER` | `local` | Local dream/Her POV writing; `anthropic` requires separate allowances |
 | `KLUKAI_CLOUD_{IMAGE,TEXT}_{DAILY,MONTHLY}_LIMIT` | `0` | Persistent global UTC attempt allowances; failures count |
 | `KLUKAI_VOICE_ENABLED` | `false` (compose), `true` (code) | Owner switch. Off, core sends no speech or transcription work anywhere: `/api/tts` and `/api/stt` answer 503 `Voice is turned off`, voice letters fall back to text, and `/health` reports voice `disabled` without probing it |
-| `VOICE_BACKEND` | `dominus` | `amarillo-xpu` selects the separately configured native Arc TTS service |
+| `VOICE_BACKEND` | `dominus` | `amarillo-xpu` selects the separately configured native Arc TTS service; `fish` selects the Fish Audio cloud voice (no LM gate or GPU lease). With `fish` she speaks only when tapped: `/api/stt` answers 503 `Voice input is off`, a spoken chat message gets an error frame, voice letters stay text-only, and `/health` reports voice `ok` / `fish` without calling Fish |
 | `VOICE_ASYNC_JOBS` | `false` | Production uses `true` for queued Dominus speech and longer synthesis deadlines; Arc always uses jobs |
+| `FISH_API_KEY` | empty | Fish Audio API key, from the encrypted env file. Empty, every `fish` synthesis is refused with 503 before anything is sent; never logged |
+| `KLUKAI_FISH_VOICE_ID` | `47fc35b7311944bc9fa238ed856de1f3` | Fish `reference_id`: the public community "Klukai" model by Danastico |
+| `KLUKAI_FISH_MODEL` | `s2.1-pro-free` | Sent as the `model` header on every Fish request (free through 2026-11-30). The account must never be billed: an empty value or any model not ending in `-free` is refused with 503 |
+
+With `VOICE_BACKEND=fish`, each Commander chooses the language she speaks (`GET`/`PUT /api/voice/settings`, `{"language": "en"|"ja"}`, stored in `companion_user_settings`). English reads her reply as written; Japanese first translates it through the chat LLM path (polite です/ます, elegant and calm, "404" read ヨンマルヨン), caches it in Redis for 30 days by text hash, and falls back to English speech if translation fails. `/api/tts`'s `language` stays the language of the text: `"en"` (what clients send) follows the setting, `"ja"` text is spoken as written.
 | `CORE_INTERNAL_TOKEN` | required in prod | Shared secret for bridge → core internal routes |
 | `LM_STUDIO_URL` / `LM_STUDIO_TOKEN` | mesh gateway | Local LLM path only |
 

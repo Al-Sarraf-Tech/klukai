@@ -74,8 +74,10 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
     from .voice_jobs import VoiceJobs, VoiceQueueFull
     from .voice_client import (
+        FISH_LANGUAGES,
         VOICE_OFF_MESSAGE,
         async_voice_jobs_enabled,
+        fish_voice_enabled,
         local_voice_enabled,
         voice_enabled,
     )
@@ -152,20 +154,31 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         tts_text = _strip_actions_for_tts(req.text)
         if not tts_text.strip():
             return JSONResponse({"error": "No speakable text"}, status_code=400)
-        if async_voice_jobs_enabled():
-            if len(tts_text) > 500:
+        queued = async_voice_jobs_enabled()
+        if queued and len(tts_text) > 500:
+            return JSONResponse(
+                {"error": "Split speech into chunks of at most 500 characters"},
+                status_code=400,
+            )
+        if queued and local_voice_enabled() and req.language != "en":
+            return JSONResponse(
+                {"error": "This voice currently supports English text"},
+                status_code=400,
+            )
+        language = req.language
+        if fish_voice_enabled():
+            if language not in FISH_LANGUAGES:
                 return JSONResponse(
-                    {"error": "Split speech into chunks of at most 500 characters"},
+                    {"error": "This voice reads English or Japanese text"},
                     status_code=400,
                 )
-            if local_voice_enabled() and req.language != "en":
-                return JSONResponse(
-                    {"error": "This voice currently supports English text"},
-                    status_code=400,
-                )
+            tts_text, language = await _fish_speech(
+                user_id, tts_text if queued else _tts_clip(tts_text), language
+            )
+        if queued:
             try:
                 job = app.state.voice_jobs.submit(
-                    user_id, {"text": tts_text, "language": req.language}
+                    user_id, {"text": tts_text, "language": language}
                 )
                 return JSONResponse(
                     job, status_code=202, headers={"Cache-Control": "no-store"}
@@ -187,7 +200,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                 r = await asyncio.wait_for(
                     post_leased_tts(
                         client,
-                        {"text": _tts_clip(tts_text), "language": req.language},
+                        {"text": _tts_clip(tts_text), "language": language},
                         timeout=60.0,
                     ),
                     timeout=45.0,
@@ -421,6 +434,21 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
 
 # ── Private helpers (used by routes above) ─────────────────────────────────
+
+
+async def _fish_speech(user_id: str, text: str, language: str) -> tuple[str, str]:
+    """What the Fish voice says for one tap: ``(text, language)``.
+
+    ``language`` on the request is the language of the TEXT. Her lines are
+    English, and every client sends ``"en"``; then the Commander's setting
+    decides what she speaks, translating to Japanese when he chose it. A
+    request whose text is already Japanese (``"ja"``) is spoken as written.
+    """
+    if language == "ja":
+        return text, "ja"
+    from .voice_language import speech_for, voice_language_for
+
+    return await speech_for(text, await voice_language_for(user_id))
 
 
 async def _run_mission(user_id: str, affection_level: int) -> None:

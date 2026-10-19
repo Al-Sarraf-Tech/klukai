@@ -151,10 +151,13 @@ def register_health_routes(
             results["embeddings"] = {"status": "down"}
 
         # Voice service. Switched off, it is not probed and not counted.
-        from .voice_client import voice_enabled
+        from .voice_client import fish_voice_enabled, voice_enabled
 
         if not voice_enabled():
             results["voice"] = {"status": "disabled"}
+        elif fish_voice_enabled():
+            # A cloud API: probing it would spend a request on every check.
+            results["voice"] = {"status": "ok", "backend": "fish"}
         else:
             try:
                 async with _hx.AsyncClient(timeout=5.0) as c:

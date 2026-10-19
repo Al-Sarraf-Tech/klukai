@@ -50,6 +50,13 @@ services:
       VOICE_STT_URL: "${VOICE_STT_URL:-http://100.107.121.5:8301}"
       # Must match the canonical target stack's VOICE_API_TOKEN.
       VOICE_API_TOKEN: "${VOICE_API_TOKEN:?VOICE_API_TOKEN is required}"
+      # VOICE_BACKEND=fish: the Fish Audio community "Klukai" model (Danastico).
+      # The account has no credit and must never be billed: the model header
+      # stays a free model (s2.1-pro-free is free through 2026-11-30); core
+      # refuses an empty key/model and any model not ending in "-free".
+      FISH_API_KEY: "${FISH_API_KEY:-}"
+      KLUKAI_FISH_VOICE_ID: "${KLUKAI_FISH_VOICE_ID:-47fc35b7311944bc9fa238ed856de1f3}"
+      KLUKAI_FISH_MODEL: "${KLUKAI_FISH_MODEL:-s2.1-pro-free}"
       # LM Studio backend. Default: dominus-nobara RTX 3090 over Tailscale (auth required).
       # Override LM_STUDIO_URL only for isolated integration testing. The core
       # always sends the required bearer header; test backends may ignore it.

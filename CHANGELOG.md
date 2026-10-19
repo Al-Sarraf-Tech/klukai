@@ -14,6 +14,16 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- Her voice can be the Fish Audio community "Klukai" model (`VOICE_BACKEND=fish`, owner
+  decision 2026-10-19): core calls `https://api.fish.audio/v1/tts` with no LM gate or GPU
+  lease, always with the free `model: s2.1-pro-free` header, and refuses (503) an empty key or
+  model or any model not ending in `-free`, so the account is never billed. She speaks English
+  by default; `GET`/`PUT /api/voice/settings` lets each Commander choose Japanese, translated
+  through the chat LLM path in her polite, calm register, cached in Redis, falling back to
+  English (migration 240 `companion_user_settings`). Audio plays only when he taps: with Fish,
+  mic input is off (`/api/stt` 503 `Voice input is off`, spoken chat gets an error frame) and
+  voice letters arrive as text with no `voice_id`. `/health` reports voice `ok` / `fish`
+  without calling Fish.
 - Pictures may show tasteful nudity of Klukai alone (owner decision 2026-10-19): only at
   affection level 8+, without the Commander, when his request or her scene asks for it
   (nude/naked/bath/onsen/shower; never "bed" alone, a meteor shower or a bathing suit). The

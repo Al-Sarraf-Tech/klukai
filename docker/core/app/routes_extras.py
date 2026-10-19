@@ -17,6 +17,7 @@ from .auth import is_admin
 from .passwords import PasswordWorkBusy
 from .db import get_pool
 from .routes_voice_input import register_voice_input
+from .routes_voice_settings import register_voice_settings
 from .runtime_tasks import ApplicationClosing, spawn
 
 from .routes import _run_mission
@@ -223,6 +224,10 @@ def register_extras(app: FastAPI) -> None:
     # ── STT proxy ──────────────────────────────────────────────────────────
 
     register_voice_input(app, lambda request: _get_user_id(request))
+
+    # ── Voice settings (which language she speaks) ────────────────────────
+
+    register_voice_settings(app, lambda request: _get_user_id(request))
 
     # ── Conversation history ───────────────────────────────────────────────
 

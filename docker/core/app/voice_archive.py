@@ -21,6 +21,10 @@ Design:
 - What she reads aloud is the text minus stage directions ("(she smiles)",
   "*nods*"), clipped at a sentence end; the full text is stored as the prompt.
 
+FISH: with ``VOICE_BACKEND=fish`` no letter is synthesized at all. The PWA
+plays a ``voice_letter``'s audio unasked, and she speaks only when he taps, so
+``save_voice_note`` returns ``None`` and the greeting arrives as text.
+
 FAIL-SOFT: every failure mode — voice service down/non-200, disk write error,
 DB insert error — is logged at WARNING and returns ``None`` (no row, no partial
 state the caller can mistake for success). The reflection hook falls back to the
@@ -79,6 +83,15 @@ async def save_voice_note(
         The voice-note id (UUID string) on success, else ``None``.
     """
     if not text or not text.strip():
+        return None
+
+    from .voice_client import voice_letters_enabled
+
+    if not voice_letters_enabled():
+        # Off, or the Fish voice: the PWA auto-plays a letter's audio and Fish
+        # speaks only when he taps. No synthesis and no voice_id; the
+        # greeting goes out as text instead.
+        logger.info("Voice letter for %s stays text-only", user_id)
         return None
 
     # Stage directions are not read aloud; a letter that is nothing but

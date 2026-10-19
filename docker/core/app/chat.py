@@ -84,7 +84,7 @@ async def _handle_voice(
     clears the client's "Listening..." indicator; a proactive toast leaves it
     spinning.
     """
-    from .voice_client import stt_url, voice_enabled
+    from .voice_client import stt_url, voice_enabled, voice_input_enabled
 
     if not voice_enabled():
         await ws.send(
@@ -92,6 +92,17 @@ async def _handle_voice(
             {
                 "type": "error",
                 "message": "...Voice is off for now, Commander. Type to me instead.",
+            },
+        )
+        return
+    if not voice_input_enabled():
+        # Fish speaks when he taps, but nothing transcribes his microphone.
+        await ws.send(
+            user_id,
+            {
+                "type": "error",
+                "message": "...Voice input is off for now, Commander. "
+                "Type to me instead.",
             },
         )
         return

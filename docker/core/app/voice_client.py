@@ -1,4 +1,15 @@
-"""Backend-specific GPU admission and audio normalization for companion voice."""
+"""Backend-specific admission and audio normalization for companion voice.
+
+Backends (``VOICE_BACKEND``):
+
+- ``dominus`` (default): remote XTTS behind the shared LM gate + GPU lease.
+- ``amarillo-xpu``: the native Arc worker, serialized by a local lock.
+- ``fish``: the Fish Audio cloud API speaking with the community "Klukai"
+  model. No gate and no lease: nothing local is loaded. The account has no
+  credit and must never be billed, so every request carries the free model
+  header and a non-free model is refused before anything is sent. Fish
+  speaks only when he taps: no microphone input and no voice letters.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 _OFF = {"false", "0", "no", "off"}
 VOICE_OFF_MESSAGE = "Voice is turned off"
+VOICE_INPUT_OFF_MESSAGE = "Voice input is off"
 
 
 def voice_enabled() -> bool:
@@ -35,6 +47,23 @@ def voice_off_response() -> httpx.Response:
 
 def local_voice_enabled() -> bool:
     return os.environ.get("VOICE_BACKEND", "dominus") == "amarillo-xpu"
+
+
+def fish_voice_enabled() -> bool:
+    """True when her voice is the Fish Audio cloud model."""
+    return os.environ.get("VOICE_BACKEND", "dominus").strip().lower() == "fish"
+
+
+def voice_input_enabled() -> bool:
+    """Microphone transcription. Off with Fish: its STT is paid and the
+    Dominus transcriber is gone. ``KLUKAI_VOICE_ENABLED`` still rules first."""
+    return voice_enabled() and not fish_voice_enabled()
+
+
+def voice_letters_enabled() -> bool:
+    """Proactive voice letters. The PWA auto-plays a letter's audio, and with
+    Fish she speaks only when he taps, so letters stay text-only."""
+    return voice_enabled() and not fish_voice_enabled()
 
 
 def async_voice_jobs_enabled() -> bool:
@@ -82,13 +111,95 @@ async def _unload_local_voice() -> None:
         logger.warning("Voice cancellation cleanup unavailable: %s", type(exc).__name__)
 
 
+# ── Fish Audio ────────────────────────────────────────────────────────────
+
+FISH_TTS_URL = "https://api.fish.audio/v1/tts"
+# Public community model "Klukai" by Danastico (owner decision 2026-10-19).
+DEFAULT_FISH_VOICE_ID = "47fc35b7311944bc9fa238ed856de1f3"
+# Free through 2026-11-30. A missing or different header bills a paid model.
+DEFAULT_FISH_MODEL = "s2.1-pro-free"
+FISH_LANGUAGES = frozenset({"en", "ja"})
+FISH_TTS_TIMEOUT = 60.0
+FISH_OFF_MESSAGE = "Voice is not configured"
+_FISH_FAILED_MESSAGE = "Voice service unavailable"
+
+
+def _fish_response(status: int, message: str) -> httpx.Response:
+    # Never echo Fish's body: errors can quote the account or the request.
+    return httpx.Response(
+        status,
+        json={"error": message},
+        request=httpx.Request("POST", FISH_TTS_URL),
+    )
+
+
+def _is_wav(audio: bytes) -> bool:
+    return len(audio) > 12 and audio[:4] == b"RIFF" and audio[8:12] == b"WAVE"
+
+
+async def _post_fish_tts(
+    payload: dict[str, Any], *, timeout: float | None = None
+) -> httpx.Response:
+    """One Fish synthesis. No LM gate, no GPU lease; WAV bytes or a non-200."""
+    key = os.environ.get("FISH_API_KEY", "").strip()
+    model = os.environ.get("KLUKAI_FISH_MODEL", DEFAULT_FISH_MODEL).strip()
+    voice_id = os.environ.get("KLUKAI_FISH_VOICE_ID", DEFAULT_FISH_VOICE_ID).strip()
+    if not key or not model or not voice_id:
+        logger.warning("Fish voice refused: key, model or voice id is not set")
+        return _fish_response(503, FISH_OFF_MESSAGE)
+    if not model.endswith("-free"):
+        # The account has no credit and must never be billed: refuse a paid
+        # model here rather than discover it in Fish's 402.
+        logger.error("Fish voice refused: model %r is not a free model", model)
+        return _fish_response(503, FISH_OFF_MESSAGE)
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return _fish_response(400, "No speakable text")
+    language = payload.get("language")
+    body = {
+        "text": text,
+        "reference_id": voice_id,
+        "format": "wav",
+        "sample_rate": 24000,
+        "latency": "normal",
+        "language": language if language in FISH_LANGUAGES else "en",
+    }
+    headers = {"Authorization": f"Bearer {key}", "model": model}
+    deadline = min(timeout or FISH_TTS_TIMEOUT, FISH_TTS_TIMEOUT)
+    async with httpx.AsyncClient(
+        timeout=deadline, trust_env=False, follow_redirects=False
+    ) as fish:
+        response = await http_request(
+            "voice",
+            fish,
+            "post",
+            FISH_TTS_URL,
+            json=body,
+            headers=headers,
+            timeout=deadline,
+        )
+    if response.status_code != 200:
+        logger.warning("Fish TTS HTTP %s", response.status_code)
+        return _fish_response(502, _FISH_FAILED_MESSAGE)
+    audio = response.content
+    if not audio or len(audio) > MAX_AUDIO_BYTES or not _is_wav(audio):
+        raise ValueError("Invalid voice audio result")
+    # Preserve the binary WAV contract; the request carries no credentials.
+    return httpx.Response(
+        200,
+        content=audio,
+        headers={"Content-Type": "audio/wav"},
+        request=httpx.Request("POST", FISH_TTS_URL),
+    )
+
+
 async def post_leased_tts(
     client: httpx.AsyncClient,
     payload: dict[str, Any],
     *,
     timeout: float | None = None,
 ) -> httpx.Response:
-    """Serialize Arc synthesis, or retain Dominus's shared GPU lease boundary."""
+    """Serialize Arc synthesis, call Fish directly, or take Dominus's GPU lease."""
 
     # Import lazily to avoid a helpers -> image_gen -> llm_router import cycle.
     from .llm_router import get_lm_gate
@@ -97,6 +208,10 @@ async def post_leased_tts(
     if not voice_enabled():
         # No gate wait and no GPU lease: the voice host may be off entirely.
         return voice_off_response()
+
+    if fish_voice_enabled():
+        # A cloud model: nothing local to admit, so no gate and no lease.
+        return await _post_fish_tts(payload, timeout=timeout)
 
     if local_voice_enabled():
         # The native supervisor enforces the Arc thermal/worker boundary.

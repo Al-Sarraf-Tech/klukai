@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 from .passwords import MAX_PASSWORD_BYTES
 
@@ -14,7 +14,14 @@ class LoginRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str = Field(min_length=1)
+    # The language of the TEXT. With the Fish voice, the Commander's voice
+    # setting decides what she speaks; "ja" text is spoken as written.
     language: str = "en"
+
+
+class VoiceSettingsRequest(BaseModel):
+    # The language she speaks when he taps to hear a line.
+    language: Literal["en", "ja"]
 
 
 class STTRequest(BaseModel):

@@ -36,6 +36,9 @@ if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
     os.environ.setdefault("LM_STUDIO_TOKEN", "pytest-local-lm-token")
     os.environ["VOICE_URL"] = "http://127.0.0.1:1"
     os.environ["COMFYUI_URL"] = "http://127.0.0.1:1"
+    # Fish is a paid cloud API: unit tests never see a real key or backend.
+    os.environ.pop("FISH_API_KEY", None)
+    os.environ.pop("VOICE_BACKEND", None)
 
 # ── Psycopg shim ─────────────────────────────────────────────────────────────
 # Mock psycopg/psycopg_pool at the module level before any app code imports
