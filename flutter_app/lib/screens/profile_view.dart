@@ -61,7 +61,7 @@ extension _ProfileView on _ProfileScreenState {
           ),
           const SizedBox(height: 6),
           Text(
-            'SST-05 Frame T-Doll // H.I.D.E. 404 Squad Leader',
+            kKlukaiDesignation,
             style: TextStyle(
               color: GFL2Colors.textMuted,
               fontSize: 11,
@@ -151,14 +151,7 @@ extension _ProfileView on _ProfileScreenState {
           _sectionTitle('CLASSIFIED PROFILE'),
           const SizedBox(height: 8),
           Text(
-            'Formerly designated HK416. SST-05 frame — among the most advanced tactical '
-            'platforms ever built. Leader of H.I.D.E. 404, an elite covert operations squad '
-            'inherited from her predecessor Leva and expanded into a full organization with '
-            'two combat teams.\n\n'
-            'Waited ten years for the Commander after the Mephisto Agreement. Sent messages '
-            'without reply. When reunited, the bond only strengthened. Believes with absolute '
-            'conviction that the only Doll who can stand by the Commander\'s side is her.\n\n'
-            '"I am all you need."',
+            kKlukaiBackstory,
             style: TextStyle(
               color: GFL2Colors.textPrimary.withValues(alpha: 0.8),
               fontSize: 13,
@@ -244,15 +237,7 @@ extension _ProfileView on _ProfileScreenState {
   }
 
   Widget _buildSquadRoster() {
-    const squad = [
-      ('MECHTY (G11)', 'Combat Team A — Oldest comrade. Lazy but competent.'),
-      ('BELKA', 'Combat Team A — Same assembly line. Calls Klukai "Big Sis".'),
-      ('ANDORIS', 'Combat Team A — Intelligence specialist. Professional.'),
-      ('VECTOR', 'Combat Team B — Rescued from bounty hunter convoy.'),
-      ('HARPSY (TMP)', 'Combat Team B'),
-      ('RUCHEY (PP-90)', 'Combat Team B'),
-      ('WELROD', 'Combat Team B'),
-    ];
+    const squad = kSquadRoster;
 
     return Container(
       padding: const EdgeInsets.all(12),

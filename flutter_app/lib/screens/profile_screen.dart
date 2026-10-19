@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../models/dossier.dart';
 import '../models/her_day.dart';
 import '../services/session_auth.dart';
 import '../services/wardrobe_service.dart';

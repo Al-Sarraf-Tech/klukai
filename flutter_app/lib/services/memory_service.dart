@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:web/web.dart' as web;
 import '../models/memory.dart';
+import 'session_auth.dart';
 
 /// Thrown when an archive endpoint answers with a non-200 — so the UI can
 /// distinguish "you truly have no memories" from "the server errored" (which
@@ -26,16 +26,12 @@ class MemoryService {
   MemoryService({required this.serverUrl, http.Client? client})
     : _client = client ?? http.Client();
 
-  Map<String, String> get _authHeaders {
-    String token = '';
-    try {
-      token = web.window.localStorage.getItem('klukai_token') ?? '';
-    } catch (_) {}
-    return {
-      'Authorization': 'Bearer $token',
-      'Content-Type': 'application/json',
-    };
-  }
+  /// Bearer token from `klukai_token` via session_auth (the VM build reads
+  /// an empty token), so the service compiles and tests off the browser too.
+  Map<String, String> get _authHeaders => {
+    'Authorization': 'Bearer ${readAuthToken()}',
+    'Content-Type': 'application/json',
+  };
 
   Future<List<Memory>> fetchMemories({
     String? category,

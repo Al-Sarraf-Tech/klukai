@@ -3,6 +3,26 @@ part of 'memory_archive_screen.dart';
 /// Authenticated full-size image retrieval, export, and confirmed discard.
 // ── Full-Screen Detail Dialog ────────────────────────────────────────────────
 
+/// Opens a memory's full-size detail: the authenticated image, DOWNLOAD and
+/// a confirmed DISCARD. [onDiscarded] gets the id once the server hid it.
+/// Shared by the archive screen and the HUD album tab.
+Future<void> showMemoryDetail(
+  BuildContext context, {
+  required Memory memory,
+  required String serverUrl,
+  required String authToken,
+  void Function(String id)? onDiscarded,
+}) => showDialog<void>(
+  context: context,
+  barrierColor: Colors.black.withValues(alpha: 0.88),
+  builder: (_) => _MemoryDetailDialog(
+    memory: memory,
+    serverUrl: serverUrl,
+    authToken: authToken,
+    onDiscarded: onDiscarded,
+  ),
+);
+
 class _MemoryDetailDialog extends StatefulWidget {
   final Memory memory;
   final String serverUrl;

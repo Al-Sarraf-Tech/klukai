@@ -250,17 +250,14 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
   }
 
   void _openMemoryDetail(Memory memory) {
-    showDialog(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.88),
-      builder: (_) => _MemoryDetailDialog(
-        memory: memory,
-        serverUrl: widget.serverUrl,
-        authToken: _authToken,
-        onDiscarded: (id) {
-          if (mounted) setState(() => _memories.removeWhere((m) => m.id == id));
-        },
-      ),
+    showMemoryDetail(
+      context,
+      memory: memory,
+      serverUrl: widget.serverUrl,
+      authToken: _authToken,
+      onDiscarded: (id) {
+        if (mounted) setState(() => _memories.removeWhere((m) => m.id == id));
+      },
     );
   }
 
