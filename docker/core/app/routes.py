@@ -245,6 +245,8 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         if selected_provider() == "agy" or uses_agy_images(user_id):
             from .account_images import complete_archive, fulfill_account_image
             from .image_gen import is_couple_scene, is_landscape
+            from .image_gen_constants import INTIMATE_MIN_LEVEL
+            from .image_provider import nudity_allowed
 
             width, height = (1216, 832) if is_landscape(req.prompt) else (832, 1216)
             aff_state = await affection.get_state(user_id)
@@ -256,6 +258,11 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                     height=height,
                     include_commander=is_couple_scene(req.prompt),
                     request_id=req.request_id,
+                    nudity=nudity_allowed(
+                        req.prompt,
+                        intimate=aff_state.level >= INTIMATE_MIN_LEVEL,
+                        include_commander=is_couple_scene(req.prompt),
+                    ),
                     archive_context={
                         "conversation_id": "api",
                         "mood": "composed",

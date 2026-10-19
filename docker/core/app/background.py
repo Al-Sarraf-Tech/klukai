@@ -314,7 +314,7 @@ async def background_image_gen(
         outcome = None
         if use_agy:
             from .account_images import explicit_request_id, fulfill_account_image
-            from .image_provider import cloud_prompt
+            from .image_provider import cloud_prompt, nudity_allowed
 
             full_prompt = f"{user_request}\n\n{cloud_prompt(full_prompt, sfw=aff_level < INTIMATE_MIN_LEVEL)}"
             # The id is the explicit sentence, so a repeat finds this journal row.
@@ -337,6 +337,12 @@ async def background_image_gen(
                 include_commander=couple,
                 request_id=request_id,
                 archive_context=archive_context,
+                # Only his own words can ask for it, never her replies.
+                nudity=nudity_allowed(
+                    user_request,
+                    intimate=aff_level >= INTIMATE_MIN_LEVEL,
+                    include_commander=couple,
+                ),
             )
             img_bytes = outcome.get("image")
         else:

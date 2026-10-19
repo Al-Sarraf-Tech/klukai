@@ -192,6 +192,30 @@ def _plain_description(text: str) -> str:
     return "; ".join(tags)
 
 
+# Owner decision 2026-10-19: tasteful nudity of Klukai, alone, past the intimacy
+# gate, when the scene itself asks for it. Only a renderer whose rules allow it
+# (Grok, in the account worker) receives that permission; every other renderer
+# is told to keep her covered. Whole words; "bed" alone is not a cue, nor is a
+# meteor shower or a bathing suit.
+_NUDITY_CUE = re.compile(
+    r"\b(nude|nudity|naked|undress(?:ed|ing)?|topless|skinny[- ]dip(?:ping)?|"
+    r"bath|bathing(?! suits?\b)|bathtub|onsen|hot springs?|(?<!meteor )shower(?:ing)?)\b",
+    re.IGNORECASE,
+)
+
+
+def nudity_allowed(
+    text: str | None, *, intimate: bool, include_commander: bool
+) -> bool:
+    """True only past the intimacy gate, for Klukai alone, when the scene asks."""
+    return bool(
+        intimate
+        and not include_commander
+        and isinstance(text, str)
+        and _NUDITY_CUE.search(text)
+    )
+
+
 def cloud_prompt(
     prompt: str, *, sfw: bool = False, negative_extra: str | None = None
 ) -> str:

@@ -89,6 +89,7 @@ async def test_own_insert_race_recovers_journaled_payload_without_submitting(
         height=1216,
         include_commander=False,
         request_id=REQUEST_ID,
+        nudity=False,
     )
     worker_calls[2].assert_not_awaited()
 

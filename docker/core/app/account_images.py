@@ -220,6 +220,12 @@ async def claim_unsubmitted_request(request_id: str, user_id: str) -> bool:
     return row is not None
 
 
+def _granted_nudity(row: dict[str, Any]) -> bool:
+    """The grant recorded with the request, so recovery resends the same payload."""
+    context = row.get("archive_context") or {}
+    return context.get("nudity") is True and not row["include_commander"]
+
+
 async def _submit_saved(row: dict[str, Any]) -> dict[str, Any]:
     from . import agy_image_provider
 
@@ -231,6 +237,7 @@ async def _submit_saved(row: dict[str, Any]) -> dict[str, Any]:
         height=row["height"],
         include_commander=row["include_commander"],
         request_id=request_id,
+        nudity=_granted_nudity(row),
     )
     status = submitted.get("status")
     if status == "completed" and submitted.get("image"):
@@ -296,6 +303,7 @@ async def _recover_saved(row: dict[str, Any]) -> dict[str, Any]:
         height=row["height"],
         include_commander=row["include_commander"],
         request_id=request_id,
+        nudity=_granted_nudity(row),
     )
     if recovered.get("status") == "completed" and recovered.get("image"):
         await update_request(request_id, phase="completed")
@@ -333,8 +341,16 @@ async def fulfill_account_image(
     include_commander: bool,
     request_id: str | None = None,
     archive_context: dict[str, Any] | None = None,
+    nudity: bool = False,
 ) -> dict[str, Any]:
-    """Accept one explicit picture, or return the image already stored for that id."""
+    """Accept one explicit picture, or return the image already stored for that id.
+
+    ``nudity`` (granted by the caller through image_provider.nudity_allowed) is
+    journalled in ``archive_context`` with the request, never re-derived later.
+    """
+    archive_context = dict(archive_context or {})
+    if nudity and not include_commander:
+        archive_context["nudity"] = True
     request_id = _normalize_request_id(request_id)
     digest = payload_digest(
         canonical_payload(

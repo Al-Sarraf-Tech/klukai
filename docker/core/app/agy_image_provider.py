@@ -217,6 +217,7 @@ async def _validated_payload(
     height: int,
     include_commander: bool,
     request_id: str | None,
+    nudity: bool = False,
 ) -> dict[str, Any] | None:
     if not uses_agy_images(user_id):
         return None
@@ -229,9 +230,11 @@ async def _validated_payload(
         or min(width, height) <= 0
         or width * height > MAX_IMAGE_PIXELS
         or type(include_commander) is not bool
+        or type(nudity) is not bool
+        or (nudity and include_commander)
     ):
         raise ValueError("Invalid Agy image request")
-    return {
+    payload: dict[str, Any] = {
         "request_id": _request_id(request_id),
         "user_id": user_id,
         "prompt": prompt,
@@ -239,6 +242,10 @@ async def _validated_payload(
         "height": height,
         "include_commander": include_commander,
     }
+    if nudity:
+        # Present only when granted, so every earlier request keeps its digest.
+        payload["nudity"] = True
+    return payload
 
 
 async def submit_agy_image(
@@ -249,6 +256,7 @@ async def submit_agy_image(
     height: int = 1216,
     include_commander: bool = False,
     request_id: str | None = None,
+    nudity: bool = False,
 ) -> dict[str, Any]:
     """POST /generate once. A miss is not retried and never falls back."""
     try:
@@ -259,6 +267,7 @@ async def submit_agy_image(
             height=height,
             include_commander=include_commander,
             request_id=request_id,
+            nudity=nudity,
         )
         if payload is None:
             return {"status": "refused", "image": None}
@@ -284,6 +293,7 @@ async def recover_agy_image(
     height: int,
     include_commander: bool,
     request_id: str,
+    nudity: bool = False,
 ) -> dict[str, Any]:
     """POST /recover only. This never submits, rotates, or renders."""
     try:
@@ -294,6 +304,7 @@ async def recover_agy_image(
             height=height,
             include_commander=include_commander,
             request_id=request_id,
+            nudity=nudity,
         )
         if payload is None:
             return {"status": "refused", "image": None}
@@ -319,6 +330,7 @@ async def generate_agy_image(
     height: int = 1216,
     include_commander: bool = False,
     request_id: str | None = None,
+    nudity: bool = False,
 ) -> bytes | None:
     """Submit exactly one request; failures are generic and never fall back."""
     result = await submit_agy_image(
@@ -328,6 +340,7 @@ async def generate_agy_image(
         height=height,
         include_commander=include_commander,
         request_id=request_id,
+        nudity=nudity,
     )
     if result.get("status") == "completed":
         return result.get("image")

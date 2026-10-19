@@ -14,6 +14,11 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- Pictures may show tasteful nudity of Klukai alone (owner decision 2026-10-19): only at
+  affection level 8+, without the Commander, when his request or her scene asks for it
+  (nude/naked/bath/onsen/shower; never "bed" alone, a meteor shower or a bathing suit). The
+  grant travels as `"nudity": true`; only Grok receives the permission (adult, no sexual acts);
+  Codex and Agy are told to keep her covered, and the Claude checker never sees Grok's render.
 - Old CI records move off the heavy guest's 61 GB disk into
   `/docker/klukai/ci-records/` on amarillo every hour (`klukai-ci-archive.timer`,
   relay `archive` command), verified by SHA-256 before the guest copy is deleted;

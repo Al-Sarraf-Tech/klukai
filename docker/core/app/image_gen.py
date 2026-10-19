@@ -241,6 +241,9 @@ async def generate_image(
             width=width,
             height=height,
             include_commander=include_commander,
+            nudity=image_provider.nudity_allowed(
+                prompt, intimate=not sfw, include_commander=include_commander
+            ),
         )
     if provider == "openai":
         return await image_provider.generate_cloud_image(

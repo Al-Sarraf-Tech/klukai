@@ -763,3 +763,72 @@ def test_an_unknown_rotation_is_refused(worker, setup_files):
     with pytest.raises(ValueError):
         with running(worker, setup_files, rotation="random"):
             pass
+
+
+def test_granted_nudity_reaches_only_grok_and_skips_the_checker(worker, setup_files):
+    seen_prompts, checked = [], []
+
+    def grok(value, references):
+        seen_prompts.append(value)
+        return PNG
+
+    value = payload(prompt="Klukai bathing in an onsen", nudity=True)
+    with running(worker, setup_files, providers=[("grok", grok)],
+                 checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as path:
+        assert request(path, value)[0] == 200
+    (sent,) = seen_prompts
+    assert "nudity" not in sent
+    assert sent["prompt"] == value["prompt"] + worker.NUDITY_PERMITTED
+    assert "adult woman" in sent["prompt"] and "No sexual acts" in sent["prompt"]
+    assert checked == []  # Claude never receives a nude render
+
+
+def test_other_providers_get_the_covered_version_and_are_checked(worker, setup_files):
+    from agy_art_runtime import ProviderUnavailable
+
+    seen, checked = [], []
+
+    def grok(value, references):
+        seen.append(("grok", value["prompt"]))
+        raise ProviderUnavailable("quota")
+
+    def codex(value, references):
+        seen.append(("codex", value["prompt"]))
+        return PNG
+
+    value = payload(prompt="Klukai bathing in an onsen", nudity=True)
+    with running(worker, setup_files, providers=[("grok", grok), ("codex", codex)], rotation="fixed",
+                 checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as path:
+        assert request(path, value)[0] == 200
+    assert seen[1] == ("codex", value["prompt"] + worker.NUDITY_COVERED)
+    assert worker.NUDITY_PERMITTED not in seen[1][1]
+    assert len(checked) == 1 and checked[0][1].endswith(worker.NUDITY_COVERED)
+
+
+def test_without_a_grant_prompts_are_unchanged(worker, setup_files):
+    seen = []
+
+    def grok(value, references):
+        seen.append(value["prompt"])
+        return PNG
+
+    value = payload(prompt="Klukai bathing in an onsen")
+    with running(worker, setup_files, providers=[("grok", grok)]) as path:
+        assert request(path, value)[0] == 200
+    assert seen == [value["prompt"]]
+
+
+@pytest.mark.parametrize("change", [
+    {"nudity": False}, {"nudity": "yes"}, {"nudity": 1},
+    {"nudity": True, "include_commander": True},
+])
+def test_only_a_literal_grant_without_the_commander_is_accepted(worker, setup_files, change):
+    calls = []
+
+    def render(value, references):
+        calls.append(value)
+        return PNG
+
+    with running(worker, setup_files, render) as path:
+        assert request(path, payload(**change))[0] == 400
+    assert calls == []

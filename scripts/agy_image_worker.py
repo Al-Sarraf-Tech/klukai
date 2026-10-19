@@ -25,6 +25,17 @@ MAX_BODY = 80 * 1024
 MAX_IMAGE = 16 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 REQUEST_KEYS = {"request_id", "user_id", "prompt", "width", "height", "include_commander"}
+# Owner decision 2026-10-19: core grants tasteful nudity of Klukai alone past the
+# intimacy gate ("nudity": true, present only when granted). Only Grok's rules
+# allow it; every other provider is told to keep her covered, and the Claude
+# checker never receives Grok's renders of such a request.
+NUDITY_PROVIDER = "grok"
+NUDITY_PERMITTED = (
+    "\n\nKlukai is an adult woman in her mid-twenties with a mature adult figure; never depict "
+    "her as childlike. Tasteful artistic nudity of Klukai alone is permitted where this scene "
+    "calls for it. No sexual acts, no explicit sexual poses, no other people."
+)
+NUDITY_COVERED = "\n\nKeep Klukai covered, with a towel or swimwear in bathing scenes; no nudity."
 # Core waits 380 s for one /generate. A rejected render is redone only while one
 # more provider render (170 s) and its check still fit inside this budget.
 REQUEST_BUDGET = 360
@@ -93,7 +104,10 @@ def load_references(path):
 
 
 def validate_request(value):
-    if type(value) is not dict or set(value) != REQUEST_KEYS:
+    if type(value) is not dict or set(value) - {"nudity"} != REQUEST_KEYS:
+        raise ValueError("invalid request")
+    # Only the literal grant, and never with the Commander's reference.
+    if "nudity" in value and (value["nudity"] is not True or value["include_commander"] is not False):
         raise ValueError("invalid request")
     if type(value["request_id"]) is not str or len(value["request_id"]) != 36:
         raise ValueError("invalid request")
@@ -115,6 +129,15 @@ def validate_request(value):
     value["prompt"].encode("utf-8")
     value["user_id"].encode("utf-8")
     return value
+
+
+def provider_request(provider, value):
+    """What one provider sees: the brief plus its nudity clause, never the flag itself."""
+    request = {key: item for key, item in value.items() if key != "nudity"}
+    if value.get("nudity") is True:
+        request["prompt"] = value["prompt"] + (
+            NUDITY_PERMITTED if provider == NUDITY_PROVIDER else NUDITY_COVERED)
+    return request
 
 
 def request_digest(value):
@@ -229,7 +252,7 @@ class Worker:
         try:
             index = 0
             for position, (provider, renderer) in enumerate(ordered):
-                request = value
+                request = provider_request(provider, value)
                 redone = False
                 while True:
                     if index:
@@ -255,7 +278,11 @@ class Worker:
                             return (504 if timeout else 502), None
                         index += 1
                         break
-                    verdict = self.check(output, value, index, started)
+                    if value.get("nudity") is True and provider == NUDITY_PROVIDER:
+                        verdict = {"verdict": "unchecked", "issues": []}
+                    else:
+                        # Judged against what this provider was actually asked.
+                        verdict = self.check(output, request, index, started)
                     if verdict["verdict"] != "reject":
                         with self.db_lock:
                             self.db.execute("UPDATE attempts SET status = 'completed' WHERE request_id = ? AND attempt_index = ?",
@@ -274,7 +301,8 @@ class Worker:
                     redone = True
                     index += 1
                     from claude_image_check import fix_hint
-                    request = dict(value, prompt=value["prompt"] + fix_hint(verdict["issues"]))
+                    request = provider_request(
+                        provider, dict(value, prompt=value["prompt"] + fix_hint(verdict["issues"])))
             return 502, None
         finally:
             self.slot.release()
