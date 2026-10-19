@@ -409,6 +409,8 @@ class _HudMeScreenState extends State<HudMeScreen> {
             title: 'Relationship timeline',
             subtitle: _milestones.isEmpty
                 ? 'Your milestones together'
+                : _milestones.length == 1
+                ? '1 milestone together'
                 : '${_milestones.length} milestones together',
             onTap: _openTimeline,
             trailing: const Icon(Icons.chevron_right, color: HudColors.textDim),

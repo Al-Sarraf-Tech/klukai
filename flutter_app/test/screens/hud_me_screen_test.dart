@@ -242,7 +242,7 @@ void main() {
     tester,
   ) async {
     await _pump(tester);
-    expect(find.text('1 milestones together'), findsOneWidget);
+    expect(find.text('1 milestone together'), findsOneWidget);
     await tester.tap(find.text('CLASSIFIED PROFILE'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Formerly designated HK416'), findsOneWidget);
