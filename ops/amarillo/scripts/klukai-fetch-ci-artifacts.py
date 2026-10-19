@@ -15,13 +15,24 @@ software:
   (ssh-keygen, namespace klukai-release) for the release deployer.
 * `nightly`: copy new nightly performance summaries into a JSON-lines file the
   observability stack ingests; optionally warn the owner when none is recent.
+* `archive`: move finished CI records off the guest's small disk into
+  /docker/klukai/ci-records on amarillo (owner decision 2026-10-19). The guest
+  keeps its newest three revisions (so `image` can still relay them) and the
+  newest two nightly runs; older ones that have been idle for two hours (and,
+  for a nightly run, whose summary `nightly` has already relayed) are
+  tarred on the guest (image tars excluded: their manifests are the record),
+  copied, checked by SHA-256, and only then deleted on the guest. Archives
+  older than 90 days are removed from amarillo.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 from datetime import UTC, datetime, timedelta
+import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -49,6 +60,29 @@ LIBVIRT_AGENT_REPLY_MAX = 10 * 1024 * 1024
 LIBVIRT_RPC_STRING_MAX = 4 * 1024 * 1024
 CHUNK = 2 * 1024 * 1024
 WARN_EVERY = timedelta(days=1)
+ARCHIVE = Path("/docker/klukai/ci-records")
+OUTBOX = "/opt/klukai-ci/outbox"
+KEEP_REVISIONS = 3
+KEEP_NIGHTS = 2
+IDLE = timedelta(hours=2)
+ARCHIVE_DAYS = 90
+REVISION_NAME = re.compile(r"[0-9a-f]{40}")
+NIGHT_NAME = re.compile(r"nightly/\d{4}-\d\d-\d\dT\d\d-\d\dZ-[0-9a-f]{7}")
+LOCK = Path.home() / ".local/state/klukai/ci-relay.lock"
+# The guest clock, then "<newest mtime> <record>" for every top-level record.
+LIST_RECORDS = r"""cd "$1" || exit 1
+date +%s
+for d in */ nightly/*/; do
+  d=${d%/}
+  [ -d "$d" ] || continue
+  printf '%s %s\n' "$(find "$d" -printf '%T@\n' | sort -n | tail -n 1)" "$d"
+done
+"""
+PACK_RECORD = r"""set -e
+mkdir -p "$1"
+tar -C "$2" --exclude='*/release/core-image.tar' -cf "$3" "$4"
+sha256sum "$3"
+"""
 
 
 class HostUnreachable(RuntimeError):
@@ -412,6 +446,112 @@ def fetch_nightly(guest: Guest, state: Path, sink: Path) -> list[str]:
     return added
 
 
+def archive_candidates(
+    listing: str, relayed: frozenset[str] = frozenset()
+) -> list[str]:
+    """Records safe to move: beyond the newest kept ones and idle long enough.
+
+    A nightly record also waits until `nightly` has relayed its summary.
+    """
+    lines = listing.splitlines()
+    now = float(lines[0])
+    revisions: list[tuple[float, str]] = []
+    nights: list[tuple[float, str]] = []
+    for line in lines[1:]:
+        stamp, _, record = line.partition(" ")
+        try:
+            newest = float(stamp)
+        except ValueError:
+            continue
+        if REVISION_NAME.fullmatch(record):
+            revisions.append((newest, record))
+        elif NIGHT_NAME.fullmatch(record):
+            nights.append((newest, record))
+    idle = IDLE.total_seconds()
+    chosen = []
+    for group, keep in ((revisions, KEEP_REVISIONS), (nights, KEEP_NIGHTS)):
+        group.sort(reverse=True)
+        chosen += [
+            r
+            for newest, r in group[keep:]
+            if now - newest >= idle
+            and (group is revisions or r.split("/")[1] in relayed)
+        ]
+    return sorted(chosen)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+        os.fsync(source.fileno())
+    return digest.hexdigest()
+
+
+def archive_record(guest: Guest, record: str, dest: Path) -> dict[str, Any]:
+    """Copy one record to amarillo and delete it on the guest only once verified."""
+    if not (REVISION_NAME.fullmatch(record) or NIGHT_NAME.fullmatch(record)):
+        raise ValueError(f"not a CI record: {record!r}")
+    name = record.replace("/", "-")
+    packed = f"{OUTBOX}/{name}.tar"
+    final = dest / f"{name}.tar"
+    partial = dest / f".{name}.tar.partial"
+    try:
+        out = guest.run(
+            ["/bin/sh", "-c", PACK_RECORD, "sh", OUTBOX, ARTIFACTS, packed, record],
+            timeout=900,
+        )
+        digest = out.split()[0] if out.split() else ""
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise RuntimeError(f"guest returned no digest for {record}")
+        guest.read(packed, partial)
+        if _sha256(partial) != digest:
+            raise RuntimeError(f"archive of {record} does not match the guest copy")
+        os.replace(partial, final)
+    finally:
+        partial.unlink(missing_ok=True)
+        with contextlib.suppress(RuntimeError, HostUnreachable):
+            guest.run(["/bin/rm", "-f", "--", packed])
+    guest.run(["/bin/rm", "-rf", "--", f"{ARTIFACTS}/{record}"])
+    return {"record": record, "file": str(final), "bytes": final.stat().st_size}
+
+
+def prune_archive(
+    dest: Path, days: int = ARCHIVE_DAYS, now: float | None = None
+) -> list[str]:
+    cutoff = (time.time() if now is None else now) - days * 86400
+    removed = []
+    for path in sorted(dest.glob("*.tar")):
+        if path.stat().st_mtime < cutoff:
+            path.unlink()
+            removed.append(path.name)
+    return removed
+
+
+def archive(
+    guest: Guest, dest: Path, limit: int, relayed: frozenset[str] = frozenset()
+) -> dict[str, Any]:
+    if not dest.is_dir():
+        raise ValueError(f"archive directory missing: {dest}")
+    moved = [
+        archive_record(guest, record, dest)
+        for record in archive_candidates(
+            guest.run(["/bin/sh", "-c", LIST_RECORDS, "sh", ARTIFACTS]), relayed
+        )[:limit]
+    ]
+    return {"archived": moved, "pruned": prune_archive(dest)}
+
+
+@contextlib.contextmanager
+def guest_lock(path: Path = LOCK) -> Any:
+    """One relay command talks to the guest agent at a time."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open("w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
 def stale(state: Path, max_age: timedelta, now: datetime | None = None) -> bool:
     newest = None
     for path in state.glob("*.json"):
@@ -478,43 +618,63 @@ def main() -> int:
         default=Path("/mnt/nvmeINT/obs/klukai/perf-nightly/summaries.jsonl"),
     )
     n.add_argument("--warn-after-days", type=int, default=0)
+    a = sub.add_parser("archive")
+    a.add_argument("--dest", type=Path, default=ARCHIVE)
+    # About 1 MB/s through the agent: two records fit one hourly window.
+    a.add_argument("--limit", type=int, default=2, help="records per invocation")
+    a.add_argument(
+        "--state", type=Path, default=Path.home() / ".local/state/klukai/perf-nightly"
+    )
     args = parser.parse_args()
     guest = Guest(VirshAgent(args.host, args.domain))
     try:
-        if args.command == "image":
-            token = os.environ.get("GH_TOKEN") or os.environ.get(
-                "GITHUB_PERSONAL_ACCESS_TOKEN"
-            )
-            if not token:
-                raise ValueError("Set GH_TOKEN to check CI status")
-            if not args.signing_key.is_file():
-                raise ValueError(f"Release signing key missing: {args.signing_key}")
-            run = green_run(args.repo, args.revision, token)
-            result = fetch_image(
-                guest,
-                run,
-                args.revision,
-                args.dest / args.revision,
-                manifest_sha256=ci_manifest_digest(args.repo, run, token),
-                key=args.signing_key,
-            )
-        else:
-            args.state.mkdir(mode=0o700, parents=True, exist_ok=True)
-            args.sink.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                result = {"added": fetch_nightly(guest, args.state, args.sink)}
-            except HostUnreachable:
-                # Dominus is off most of the day by design: not a failure.
-                result = {"added": [], "skipped": "Dominus host unreachable"}
-            if args.warn_after_days and stale(
-                args.state, timedelta(days=args.warn_after_days)
-            ):
-                result["stale"] = True
-                if should_warn(args.state):
-                    warn_missing(args.warn_after_days)
+        with guest_lock():
+            return _run(args, guest)
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
         print(f"fetch refused: {error}", file=sys.stderr)
         return 1
+
+
+def _run(args: argparse.Namespace, guest: Guest) -> int:
+    if args.command == "image":
+        token = os.environ.get("GH_TOKEN") or os.environ.get(
+            "GITHUB_PERSONAL_ACCESS_TOKEN"
+        )
+        if not token:
+            raise ValueError("Set GH_TOKEN to check CI status")
+        if not args.signing_key.is_file():
+            raise ValueError(f"Release signing key missing: {args.signing_key}")
+        run = green_run(args.repo, args.revision, token)
+        result = fetch_image(
+            guest,
+            run,
+            args.revision,
+            args.dest / args.revision,
+            manifest_sha256=ci_manifest_digest(args.repo, run, token),
+            key=args.signing_key,
+        )
+    elif args.command == "archive":
+        try:
+            seen = args.state / "seen.txt"
+            relayed = frozenset(seen.read_text().split() if seen.exists() else ())
+            result = archive(guest, args.dest, args.limit, relayed)
+        except HostUnreachable:
+            # Dominus is off most of the day by design: not a failure.
+            result = {"archived": [], "skipped": "Dominus host unreachable"}
+    else:
+        args.state.mkdir(mode=0o700, parents=True, exist_ok=True)
+        args.sink.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            result = {"added": fetch_nightly(guest, args.state, args.sink)}
+        except HostUnreachable:
+            # Dominus is off most of the day by design: not a failure.
+            result = {"added": [], "skipped": "Dominus host unreachable"}
+        if args.warn_after_days and stale(
+            args.state, timedelta(days=args.warn_after_days)
+        ):
+            result["stale"] = True
+            if should_warn(args.state):
+                warn_missing(args.warn_after_days)
     print(json.dumps(result, sort_keys=True))
     return 0
 

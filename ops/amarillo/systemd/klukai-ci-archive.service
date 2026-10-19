@@ -1,0 +1,14 @@
+[Unit]
+Description=Move old Klukai CI records off the heavy guest into /docker/klukai/ci-records
+After=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+WorkingDirectory=%h/git/klukai
+Environment=HOME=%h
+# Same guest-agent route and lock as klukai-ci-relay; a no-op while Dominus is off.
+ExecStart=/usr/bin/python3 %h/git/klukai/ops/amarillo/scripts/klukai-fetch-ci-artifacts.py archive
+TimeoutStartSec=45min
+Nice=10
+IOSchedulingClass=idle

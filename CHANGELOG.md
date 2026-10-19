@@ -14,6 +14,10 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- Old CI records move off the heavy guest's 61 GB disk into
+  `/docker/klukai/ci-records/` on amarillo every hour (`klukai-ci-archive.timer`,
+  relay `archive` command), verified by SHA-256 before the guest copy is deleted;
+  the guest keeps its newest three revisions and two nights, amarillo keeps 90 days.
 - Voice is switched off for now (`KLUKAI_VOICE_ENABLED=false` in compose): core
   sends no speech or transcription work to Dominus, `/api/tts` and `/api/stt`
   answer 503 `Voice is turned off`, voice letters fall back to text, and

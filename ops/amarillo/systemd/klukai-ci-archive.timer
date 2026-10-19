@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly move of old Klukai CI records to amarillo
+
+[Timer]
+OnCalendar=*-*-* *:33:00
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

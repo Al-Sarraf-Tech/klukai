@@ -71,8 +71,14 @@ stamped with each night's `finished_at` (so re-reading the file after an Alloy
 restart cannot file old nights under today). While Dominus is off the relay
 skips quietly; when no summary has arrived for 3 days it sends the owner one bus
 note a day. Lines arriving more than 3 h after `finished_at` become queryable
-once Loki flushes the chunk. The guest keeps raw evidence bundles 14 days and
-every summary indefinitely; CI image tars are kept 7 days. In Grafana:
+once Loki flushes the chunk. CI image tars are kept 7 days on the guest. The
+hourly `klukai-ci-archive.timer` (owner decision 2026-10-19) moves older CI
+records off the guest's 61 GB disk into `/docker/klukai/ci-records/` on
+amarillo, one tar per revision or night: the guest keeps its newest three
+revisions and newest two nights, a record moves only after two idle hours (a
+night only after its summary was relayed), and the guest copy is deleted only
+once the amarillo copy matches its SHA-256. Archives older than 90 days are
+removed. In Grafana:
 
 ```logql
 avg_over_time({job="klukai-perf-nightly"} | json | kind="route" | unwrap candidate_p99_ms [1d]) by (route)
@@ -84,6 +90,9 @@ Enable on amarillo after the change is on `main`:
 install -d -m 0750 /mnt/nvmeINT/obs/klukai/perf-nightly   # before Alloy, or Docker creates it root-owned
 install -m 0644 ops/amarillo/systemd/klukai-ci-relay.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now klukai-ci-relay.timer
+sudo install -d -o "$USER" -g "$USER" -m 0755 /docker/klukai && install -d -m 0750 /docker/klukai/ci-records
+install -m 0644 ops/amarillo/systemd/klukai-ci-archive.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now klukai-ci-archive.timer
 docker compose -p klukai -f docker-compose.obs.yml up -d --no-deps alloy
 ```
 
