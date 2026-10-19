@@ -327,7 +327,7 @@ services:
   companion-core:
     environment:
       KLUKAI_CLAUDE_PRIMARY: "false"
-      KLUKAI_IMAGE_PROVIDER: "comfyui"
+      KLUKAI_IMAGE_PROVIDER: "agy"
       KLUKAI_CHAT_IMAGE_PROVIDER: ""
       KLUKAI_AGY_ALLOWED_USERS: ""
       KLUKAI_CREATIVE_TEXT_PROVIDER: "local"
@@ -474,7 +474,7 @@ python3 scripts/e2e_live.py --only her-pov
 | `HER_POV_EXECUTION` | `queue` | Durable rail; `inline` is available only for local generation |
 | `KLUKAI_DISABLE_WARMUP` | unset | Pass `1` through a deployment override for local load-on-demand; Sonnet-primary mode already skips secondary warm-up |
 | `KLUKAI_CLAUDE_PRIMARY` | `false` | Separately authorized Anthropic interactive primary, requiring its key |
-| `KLUKAI_IMAGE_PROVIDER` | `comfyui` | Production uses `agy` with the private account worker; `openai` requires separate references and attempt allowances |
+| `KLUKAI_IMAGE_PROVIDER` | `agy` (compose) | The private account worker (Grok, then Codex, then Agy); images never render on Dominus. `comfyui` is the legacy local path; `openai` requires separate references and attempt allowances |
 | `KLUKAI_CHAT_IMAGE_PROVIDER` | unset | Optional chat-only account-provider selection; clear it too when disabling account images |
 | `KLUKAI_AGY_ALLOWED_USERS` | empty | Authenticated identities allowed to call the private account worker; the worker enforces its own allowlist |
 | `KLUKAI_BRAVE_ENABLED` | `false` | Production explicitly enables the configured Brave MCP search route |

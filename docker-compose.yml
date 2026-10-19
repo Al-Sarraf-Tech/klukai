@@ -57,7 +57,10 @@ services:
       KLUKAI_CLAUDE_PRIMARY: "${KLUKAI_CLAUDE_PRIMARY:-false}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       # Separate opt-in for cloud images/creative text; no billable defaults.
-      KLUKAI_IMAGE_PROVIDER: "${KLUKAI_IMAGE_PROVIDER:-comfyui}"
+      # Images never render on Dominus: a missing setting must not route them to
+      # ComfyUI there (game guard, sleeping host). agy = the account worker
+      # (Grok, then Codex, then Agy).
+      KLUKAI_IMAGE_PROVIDER: "${KLUKAI_IMAGE_PROVIDER:-agy}"
       # Account-quota Agy worker on Amarillo; no credentials enter this container.
       KLUKAI_CHAT_IMAGE_PROVIDER: "${KLUKAI_CHAT_IMAGE_PROVIDER:-}"
       KLUKAI_AGY_ALLOWED_USERS: "${KLUKAI_AGY_ALLOWED_USERS:-}"
