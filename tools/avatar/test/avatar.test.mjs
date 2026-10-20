@@ -18,17 +18,17 @@ import { uvIslands, rng } from '../lib/atlas-assign.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../../..');
 
-/** Backend source of truth: docker/core/app/fact_extractor.py VALID_MOODS. */
+/** Backend source of truth: the Mood enum in docker/core/app/models.py
+ *  (fact_extractor.VALID_MOODS is built from it). */
 function backendMoods() {
-  const src = fs.readFileSync(path.join(repo, 'docker/core/app/fact_extractor.py'), 'utf8');
-  const m = src.match(/VALID_MOODS\s*=\s*frozenset\(\s*\{([\s\S]*?)\}\s*\)/);
-  assert.ok(m, 'VALID_MOODS not found in fact_extractor.py');
-  return [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+  const src = fs.readFileSync(path.join(repo, 'docker/core/app/models.py'), 'utf8');
+  const m = src.match(/class Mood\(str, Enum\):([\s\S]*?)\n(?:class |\S)/);
+  assert.ok(m, 'Mood enum not found in models.py');
+  return [...m[1].matchAll(/^\s+([a-z_]+)\s*=\s*"([a-z_]+)"/gm)].map((x) => x[2]);
 }
 
-/** The fifteen moods that came with her live heart rate (2026-10-19). The core
- *  adds them to VALID_MOODS in a parallel change; listed here so the stage
- *  covers them either way (the union is the same set before and after). */
+/** The fifteen moods that came with her live heart rate (2026-10-19); the
+ *  backend's Mood enum carries them too. */
 const NEW_MOODS = Object.freeze([
   'serene', 'cozy', 'wistful', 'lonely', 'stern', 'smug', 'hopeful', 'sulking',
   'admiring', 'teasing', 'restless', 'heartbroken', 'giddy', 'overwhelmed', 'breathless',

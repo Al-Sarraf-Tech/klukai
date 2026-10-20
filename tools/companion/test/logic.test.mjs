@@ -8,10 +8,8 @@ import {
 } from "../../../flutter_app/web/companion/logic.js";
 
 /**
- * The fifteen moods that came with her live heart rate (2026-10-19). The core
- * adds them to VALID_MOODS in a parallel change; until that lands they are
- * listed here so the stage covers them either way (the union is the same
- * set before and after).
+ * The fifteen moods that came with her live heart rate (2026-10-19); the
+ * backend's Mood enum must carry every one of them.
  */
 const NEW_MOODS = Object.freeze([
   "serene", "cozy", "wistful", "lonely", "stern", "smug", "hopeful", "sulking",
@@ -19,16 +17,19 @@ const NEW_MOODS = Object.freeze([
 ]);
 
 function backendMoods() {
-  const src = readFileSync(new URL("../../../docker/core/app/fact_extractor.py", import.meta.url), "utf8");
-  const block = src.match(/VALID_MOODS\s*=\s*frozenset\(\s*\{([\s\S]*?)\}\s*\)/);
-  assert.ok(block, "backend VALID_MOODS literal must be found");
-  return [...block[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+  // The backend's source of truth is the Mood enum in models.py
+  // (fact_extractor.VALID_MOODS is built from it).
+  const src = readFileSync(new URL("../../../docker/core/app/models.py", import.meta.url), "utf8");
+  const block = src.match(/class Mood\(str, Enum\):([\s\S]*?)\n(?:class |\S)/);
+  assert.ok(block, "backend Mood enum must be found");
+  return [...block[1].matchAll(/^\s+([a-z_]+)\s*=\s*"([a-z_]+)"/gm)].map((m) => m[2]);
 }
 
-test("the mood list matches the backend's VALID_MOODS (plus the new fifteen) exactly", () => {
+test("the mood list matches the backend's Mood enum exactly", () => {
   const backend = backendMoods();
   for (const m of backend) assert.ok(MOODS.includes(m), `backend mood ${m} missing from MOODS`);
-  assert.deepEqual(new Set(MOODS), new Set([...backend, ...NEW_MOODS]));
+  for (const m of NEW_MOODS) assert.ok(backend.includes(m), `new mood ${m} missing from the backend`);
+  assert.deepEqual(new Set(MOODS), new Set(backend));
   assert.equal(MOODS.length, 65);
 });
 
