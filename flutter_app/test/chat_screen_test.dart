@@ -41,6 +41,7 @@ import 'package:companion_app/widgets/chat_composer_bar.dart';
 import 'package:companion_app/widgets/chat_header.dart';
 import 'package:companion_app/widgets/companion_stage_view.dart';
 import 'package:companion_app/theme/hud.dart';
+import 'package:companion_app/theme/mood_visuals.dart';
 import 'package:companion_app/widgets/voice_button.dart';
 import 'package:companion_app/widgets/canvas_message_bubble.dart';
 import 'package:companion_app/widgets/message_bubble.dart';
@@ -201,12 +202,20 @@ Future<void> _openMenu(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 400));
 }
 
-/// Records what the screen asked the embedded 3D stage to say.
+/// Records what the screen asked the embedded 3D stage to say and the HUD
+/// snapshots it sent it.
 class _FakeStageLink implements CompanionStageLink {
   final spoken = <(String, int)>[];
+  final huds = <Map<String, Object?>>[];
   @override
   bool speak(String text, {required int id}) {
     spoken.add((text, id));
+    return true;
+  }
+
+  @override
+  bool sendHud(Map<String, Object?> snapshot) {
+    huds.add(Map.of(snapshot));
     return true;
   }
 }
@@ -303,6 +312,7 @@ Future<FakeWebSocketService> _pumpChat(
   FakeBrowserPlatform? browser,
   bool voiceInput = false,
   http.Client? historyClient,
+  WardrobeService? wardrobe,
 }) async {
   // ChatScreen redirects to "/" when no token is present; prime one.
   web.window.localStorage.setItem('klukai_token', 'test-token');
@@ -322,6 +332,7 @@ Future<FakeWebSocketService> _pumpChat(
         browser: browser,
         voiceInputEnabled: voiceInput,
         historyClient: historyClient,
+        wardrobeService: wardrobe,
       ),
     ),
   );
@@ -1408,6 +1419,8 @@ void main() {
     Future<(FakeWebSocketService, _FakeStage, FakeBrowserPlatform)> pump3d(
       WidgetTester tester, {
       http.Client? httpClient,
+      http.Client? historyClient,
+      WardrobeService? wardrobe,
     }) async {
       final stage = _FakeStage();
       final browser = FakeBrowserPlatform();
@@ -1416,10 +1429,20 @@ void main() {
         stage: stage,
         browser: browser,
         httpClient: httpClient,
+        historyClient: historyClient,
+        wardrobe: wardrobe,
       );
+      await tester.pump();
       await tester.tap(find.byKey(const Key('view-flip-3d')));
       await tester.pump();
       return (fake, stage, browser);
+    }
+
+    // In 3D nothing animates, so no frame is pending when a frame arrives
+    // from the socket: the first pump delivers it, the second draws it.
+    Future<void> settle(WidgetTester t) async {
+      await t.pump();
+      await t.pump();
     }
 
     Future<void> herLine(FakeWebSocketService fake, WidgetTester t) async {
@@ -1701,6 +1724,121 @@ void main() {
       fake.dispose();
     });
 
+    testWidgets('the stage gets her whole HUD once it is ready', (
+      tester,
+    ) async {
+      final (fake, stage, _) = await pump3d(
+        tester,
+        historyClient: _historyBackend(),
+        wardrobe: FakeWardrobeService(),
+      );
+      fake.emit({'type': 'mood', 'mood': 'quietly_pleased'});
+      await settle(tester);
+      stage.onEvent!('klukai:stage-ready', {'ready': true});
+      await tester.pump();
+      final hud = stage.link.huds.last;
+      expect(hud, {
+        'level': 1,
+        'mood': moodLabel('quietly_pleased'),
+        'bpm': moodVisualFor('quietly_pleased').bpm,
+        'spiking': false,
+        'wearing': 'Speed Star',
+        'line': 'Report, Commander.',
+        'lineId': 'm1',
+        'streaming': false,
+        'status': null,
+      });
+      // The mood is the label the CHAT header shows.
+      await tester.tap(find.byKey(const Key('view-flip-chat')));
+      await tester.pump();
+      expect(
+        tester.widget<Text>(find.byKey(const Key('chat-header-mood'))).data,
+        hud['mood'],
+      );
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(milliseconds: 200)); // scroll retries
+      }
+      fake.dispose();
+    });
+
+    testWidgets('it hears each change once; a reloaded stage hears it again', (
+      tester,
+    ) async {
+      final (fake, stage, _) = await pump3d(tester);
+      stage.onEvent!('klukai:stage-ready', {'ready': true});
+      await tester.pump();
+      final heard = stage.link.huds.length;
+      expect(heard, greaterThan(0));
+      // Rebuilds that change nothing it shows send nothing.
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('view-flip-chat')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('view-flip-3d')));
+      await tester.pump();
+      expect(stage.link.huds, hasLength(heard));
+
+      fake.emit({'type': 'mood', 'mood': 'irritated'});
+      await settle(tester);
+      expect(stage.link.huds, hasLength(heard + 1));
+      expect(stage.link.huds.last['mood'], moodLabel('irritated'));
+      fake.emit({'type': 'mood', 'mood': 'irritated'});
+      await settle(tester);
+      expect(stage.link.huds, hasLength(heard + 1));
+
+      // The page came back (a reload): it gets the snapshot again.
+      stage.onEvent!('klukai:stage-ready', {'ready': true});
+      await tester.pump();
+      expect(stage.link.huds, hasLength(heard + 2));
+      expect(stage.link.huds.last, stage.link.huds[heard]);
+      await tester.pump(const Duration(seconds: 1)); // CHAT's scroll retries
+      fake.dispose();
+    });
+
+    testWidgets('while she works on a reply the stage gets her status, then '
+        'her line as it streams', (tester) async {
+      final (fake, stage, _) = await pump3d(tester);
+      stage.onEvent!('klukai:stage-ready', {'ready': true});
+      await settle(tester);
+      fake.emit({'type': 'thinking', 'content': 'Checking the hangar'});
+      await settle(tester);
+      expect(stage.link.huds.last['status'], 'Checking the hangar');
+
+      fake.emit({'type': 'token', 'text': 'Sit.'});
+      await settle(tester);
+      var hud = stage.link.huds.last;
+      expect(hud['line'], 'Sit.');
+      expect(hud['streaming'], isTrue);
+      expect(hud['status'], isNull);
+      expect(hud['lineId'], isNotNull);
+
+      fake.emit({'type': 'done', 'text': 'Sit. The stars are clear.'});
+      await settle(tester);
+      hud = stage.link.huds.last;
+      expect(hud['line'], 'Sit. The stars are clear.');
+      expect(hud['streaming'], isFalse);
+      expect(hud['status'], isNull);
+      fake.dispose();
+    });
+
+    testWidgets('her WEARING in the stage opens her day', (tester) async {
+      final (fake, stage, _) = await pump3d(
+        tester,
+        wardrobe: FakeWardrobeService(),
+      );
+      stage.onEvent!('klukai:herday', {});
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(BottomSheet), findsOneWidget);
+      expect(stage.visible, isTrue);
+
+      await tester.tapAt(const Offset(10, 10)); // the barrier closes it
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(stage.created, 1);
+      fake.dispose();
+    });
+
     testWidgets('another tab tears the stage down; Chat brings it back', (
       tester,
     ) async {
@@ -1709,6 +1847,11 @@ void main() {
       await tester.pump();
       expect(find.byKey(const Key('fake-stage')), findsNothing);
       expect(stage.disposed, 1);
+      // No stage, no HUD.
+      final heard = stage.link.huds.length;
+      fake.emit({'type': 'mood', 'mood': 'irritated'});
+      await settle(tester);
+      expect(stage.link.huds, hasLength(heard));
       await tester.tap(find.byKey(const Key('hud-tab-chat')));
       await tester.pump();
       expect(find.byKey(const Key('fake-stage')), findsOneWidget);

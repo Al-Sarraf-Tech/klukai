@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -247,6 +248,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   int? _pendingSpeakId;
   ChatMessage? _pendingSpeakLine;
   Timer? _stageSpeakTimer;
+
+  /// The `klukai:hud` snapshot the stage last got (null: it has none yet).
+  Map<String, Object?>? _sentHud;
+  bool _hudSyncScheduled = false;
 
   /// Voice letters with a recorded note: message id → voice id. The note
   /// plays from that message's `▶ VOICE`, never by itself.

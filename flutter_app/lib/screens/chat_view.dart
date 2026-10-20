@@ -25,6 +25,7 @@ extension _ChatView on _ChatScreenState {
     // stack stops painting the Chat tab, and a parked scene is too much to
     // hold on a phone meanwhile; Chat loads it again.
     final threeD = _view == ChatViewMode.threeD;
+    _scheduleHudSync();
     final Widget face;
     if (!threeD) {
       face = HudBackground(child: _buildChatLayout());

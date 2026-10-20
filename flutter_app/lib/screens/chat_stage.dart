@@ -37,6 +37,8 @@ extension _ChatStage on _ChatScreenState {
   /// No setState: the iframe reports it during build and dispose.
   void _onStageLink(CompanionStageLink? link) {
     _stageLink = link;
+    // A new stage (or none) has not heard her HUD yet.
+    _sentHud = null;
     if (link == null) {
       // Gone: the next stage loads from scratch and reports for itself.
       _stageReady = false;
@@ -93,6 +95,46 @@ extension _ChatStage on _ChatScreenState {
       return m;
     }
     return null;
+  }
+
+  /// Everything the stage's HUD shows, as one `klukai:hud` snapshot: the
+  /// readouts of the CHAT header, her latest line, and her status while she
+  /// is working on a reply that has not started yet.
+  Map<String, Object?> get _hudSnapshot {
+    final line = _latestLine;
+    final waiting = _state.isTyping && _streamingId == null;
+    return {
+      'level': _state.affectionLevel.clamp(0, kMaxAffinityLevel),
+      'mood': moodLabel(_state.mood),
+      'bpm': _moodBPM,
+      'spiking': _heartbeatSpikeOverride != null,
+      'wearing': _herDay?.outfit?.name ?? '',
+      'line': line?.content ?? '',
+      'lineId': line?.id,
+      'streaming': line?.isStreaming ?? false,
+      'status': waiting ? (_thinkingText ?? 'PROCESSING') : null,
+    };
+  }
+
+  /// Tells the stage its HUD after this frame. Every change to what it shows
+  /// goes through setState and so rebuilds the Chat tab, which calls this.
+  void _scheduleHudSync() {
+    if (_hudSyncScheduled) return;
+    _hudSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _hudSyncScheduled = false;
+      if (mounted) _syncHud();
+    });
+  }
+
+  /// Sends the snapshot, unless the stage already has exactly this one.
+  void _syncHud() {
+    final link = _stageLink;
+    if (link == null) return;
+    final hud = _hudSnapshot;
+    final sent = _sentHud;
+    if (sent != null && mapEquals(sent, hud)) return;
+    if (link.sendHud(hud)) _sentHud = hud;
   }
 
   List<String> get _trackingLines {
@@ -233,7 +275,13 @@ extension _ChatStage on _ChatScreenState {
     if (!mounted) return;
     switch (type) {
       case 'klukai:stage-ready':
-        _update(() => _stageReady = data['ready'] == true);
+        final ready = data['ready'] == true;
+        _update(() => _stageReady = ready);
+        // It is listening now: whatever it was sent before may be lost.
+        if (ready) {
+          _sentHud = null;
+          _syncHud();
+        }
       case 'klukai:stage-notice':
         final text = data['text'];
         _update(() => _stageNotice = text is String ? text : null);
@@ -281,6 +329,8 @@ extension _ChatStage on _ChatScreenState {
           _pendingSpeakLine = null;
         });
         _showHudNotice('// VOICE SYNTH OFFLINE — her words stand.');
+      case 'klukai:herday':
+        _openHerDaySheet();
       case 'klukai:auth-expired':
         _handleAuthExpired();
     }

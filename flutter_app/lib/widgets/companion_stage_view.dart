@@ -3,6 +3,7 @@
 /// own chrome and keeps its own socket so the avatar reacts to the chat.
 /// The Chat tab keeps it loaded across its CHAT ⇄ 3D flip: under the CHAT
 /// face it is parked (not drawn, no taps, its render loop and sound stopped).
+/// The stage is sent the PWA's HUD state as `klukai:hud` snapshots.
 ///
 /// Browser-only (package:web); the chat screen is the only importer.
 library;
@@ -37,10 +38,15 @@ abstract class CompanionStageLink {
   /// Ask her avatar to say [text] once, lip-synced. [id] identifies this tap
   /// (the stage drops a repeated id). False when there is no stage to ask.
   bool speak(String text, {required int id});
+
+  /// Send the stage its HUD: a full [snapshot] of what it shows (see
+  /// [stageHudMessage]). False when there is no stage to tell.
+  bool sendHud(Map<String, Object?> snapshot);
 }
 
 /// A `klukai:*` message from the stage (`klukai:speak-status`,
-/// `klukai:stage-notice`, `klukai:stage-ready`, `klukai:speaking`).
+/// `klukai:stage-notice`, `klukai:stage-ready`, `klukai:speaking`,
+/// `klukai:herday`).
 typedef StageEventHandler =
     void Function(String type, Map<String, Object?> data);
 
@@ -72,6 +78,25 @@ Widget defaultCompanionStage(
 /// The `klukai:visibility` message: the stage parks (no render loop, no
 /// sound, her voice stopped) or carries on, silently.
 const String kStageVisibilityMessage = 'klukai:visibility';
+
+/// The `klukai:hud` message: what the stage's own HUD shows.
+const String kStageHudMessage = 'klukai:hud';
+
+/// The `klukai:hud` message for [snapshot]: `level`, `mood`, `bpm`,
+/// `spiking`, `wearing`, `line`, `lineId`, `streaming` and `status`.
+Map<String, Object?> stageHudMessage(Map<String, Object?> snapshot) => {
+  ...snapshot,
+  'type': kStageHudMessage,
+};
+
+/// Posts [message] to the stage [frame], on this page's origin only. False
+/// when the frame has no window yet.
+bool postToStage(web.HTMLIFrameElement frame, Map<String, Object?> message) {
+  final win = frame.contentWindow;
+  if (win == null) return false;
+  win.postMessage(message.jsify(), web.window.location.origin.toJS);
+  return true;
+}
 
 /// Shows or parks the stage [frame]. Parked, it stays loaded but is not drawn
 /// and takes no pointer events (the Flutter content over it does), and the
@@ -152,13 +177,16 @@ class _CompanionStageViewState extends State<CompanionStageView>
 
   @override
   bool speak(String text, {required int id}) {
-    final win = _frame?.contentWindow;
-    if (win == null) return false;
-    win.postMessage(
-      {'type': 'klukai:speak', 'text': text, 'id': id}.jsify(),
-      web.window.location.origin.toJS,
-    );
-    return true;
+    final frame = _frame;
+    if (frame == null) return false;
+    return postToStage(frame, {'type': 'klukai:speak', 'text': text, 'id': id});
+  }
+
+  @override
+  bool sendHud(Map<String, Object?> snapshot) {
+    final frame = _frame;
+    if (frame == null) return false;
+    return postToStage(frame, stageHudMessage(snapshot));
   }
 
   void _created(Object element) {

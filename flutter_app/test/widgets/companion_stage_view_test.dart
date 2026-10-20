@@ -2,7 +2,8 @@
 library;
 
 // The embedded 3D stage's side of the CHAT ⇄ 3D flip: a parked iframe is not
-// drawn, takes no pointer events, and is told so on this page's origin only.
+// drawn, takes no pointer events, and is told so on this page's origin only;
+// and the HUD snapshot it is sent.
 //   flutter test --platform chrome test/widgets/companion_stage_view_test.dart
 import 'dart:async';
 import 'dart:js_interop';
@@ -45,8 +46,16 @@ void main() {
             // Cloned into the frame's realm: read it field by field.
             final data = event.data as JSObject;
             heard.add({
-              'type': data.getProperty<JSAny?>('type'.toJS).dartify(),
-              'visible': data.getProperty<JSAny?>('visible'.toJS).dartify(),
+              for (final key in const [
+                'type',
+                'visible',
+                'level',
+                'line',
+                'lineId',
+                'status',
+              ])
+                if (data.hasProperty(key.toJS).toDart)
+                  key: data.getProperty<JSAny?>(key.toJS).dartify(),
             });
             origins.add(event.origin);
           });
@@ -88,6 +97,29 @@ void main() {
 
     test('the message is the one embed.js listens for', () {
       expect(kStageVisibilityMessage, 'klukai:visibility');
+    });
+
+    test('its HUD goes to the stage on this origin, as klukai:hud', () async {
+      final message = stageHudMessage({
+        'level': 3,
+        'line': 'Report.',
+        'lineId': 'm7',
+        'status': null,
+      });
+      expect(message['type'], 'klukai:hud');
+      expect(kStageHudMessage, 'klukai:hud');
+      expect(postToStage(frame, message), isTrue);
+      await delivered(1);
+      expect(heard, [
+        {
+          'type': 'klukai:hud',
+          'level': 3,
+          'line': 'Report.',
+          'lineId': 'm7',
+          'status': null,
+        },
+      ]);
+      expect(origins, [web.window.location.origin]);
     });
   });
 
