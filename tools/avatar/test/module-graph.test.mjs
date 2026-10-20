@@ -49,7 +49,7 @@ test('the public avatar module retains its original callable and constant interf
     'STATES', 'STATE_CLIPS', 'STRONG_MOODS', 'blinkCurve', 'cameraFarPlane', 'cameraFraming',
     'closestOnSegment', 'collidePoint', 'coneClamp', 'createAvatar3D', 'createAvatarGesture',
     'createCameraView', 'createPassiveController', 'createReactionController', 'createStateMachine',
-    'detectIOS', 'iosMajorVersion', 'lookSplit', 'mappedMoods', 'moodCoverage', 'moodGate',
+    'detectIOS', 'forgetAvatarModels', 'iosMajorVersion', 'lookSplit', 'mappedMoods', 'moodCoverage', 'moodGate',
     'moodToState', 'nextPixelRatio', 'nextQuality', 'nodCurve', 'parseTint', 'pickFidget',
     'poseJumped', 'renderSettings', 'softLimit', 'speechMouthDelta', 'speechMouthLevel',
     'springHang', 'springStep', 'springSubsteps', 'stepEnvelope', 'warmAvatar3D',

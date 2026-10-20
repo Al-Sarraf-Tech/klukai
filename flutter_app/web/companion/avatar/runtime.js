@@ -5,7 +5,7 @@ import { initializeSprings, installSprings } from './runtime-springs.js';
 import { initializeCamera, installCamera } from './runtime-camera.js';
 import { initializeLifecycle, initializeLoop, installLifecycle } from './runtime-lifecycle.js';
 import { BASE_FOV, cameraFarPlane, createCameraView, detectIOS, iosMajorVersion, normalizeFraming, renderSettings } from './camera.js';
-import { importLibs, modelPrefetch } from './loader.js';
+import { importLibs, modelCache } from './loader.js';
 import { awaitWithAbort } from '../appearance.js';
 import { LIGHT } from './shaders.js';
 import { RIM_TINTS } from './state.js';
@@ -39,9 +39,10 @@ export async function createAvatar3D(container, opts = {}) {
 
   ctx.stats = { t0: performance.now() };
   ctx.mark = (k) => { ctx.stats[k] = Math.round(performance.now() - ctx.stats.t0); };
-  // Model download and library imports run in parallel (and may already be
-  // in flight from warmAvatar3D()).
-  ctx.modelPromise = modelPrefetch.take(ctx.opts.modelKey || 'default', ctx.loadModel);
+  // Model download and library imports run in parallel. The download is
+  // shared per model id (modelCache): it may already be in flight from
+  // warmAvatar3D(), or already here from an earlier load on this page.
+  ctx.modelPromise = modelCache.get(ctx.opts.modelKey || 'default', ctx.loadModel);
   ctx.modelPromise.then(() => ctx.mark('fetchMs'), () => {});
   ctx.THREE = undefined; ctx.GLTFLoader = undefined; ctx.MeshoptDecoder = undefined; ctx.OrbitControls = undefined;
   try {
@@ -197,7 +198,11 @@ export async function createAvatar3D(container, opts = {}) {
   ctx.hasHeadCenter = false;
   ctx.hasChains = false;
 
-  if (!(await loadScene(ctx))) return ctx.stub;
+  if (!(await loadScene(ctx))) {
+    // Bytes that would not parse must not be handed to the next attempt.
+    if (ctx.loadError) modelCache.forget(ctx.modelPromise);
+    return ctx.stub;
+  }
 
   initializeCamera(ctx);
 

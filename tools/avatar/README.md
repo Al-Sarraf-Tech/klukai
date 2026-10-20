@@ -224,6 +224,11 @@ av.setFraming('full'); av.resize(); av.dispose();
     import.
   - `warmAvatar3D({loadModel})` can start both earlier, for example at page
     init when the saved mode is 3D.
+  - The download is shared per model id (`loader.js` `modelCache`): the
+    warm-up, the viewer and any retry on the page get one fetch and one
+    ArrayBuffer, in whatever order they ask. Another id replaces it (and
+    aborts it if still running); a failed or unparseable download is
+    forgotten; `forgetAvatarModels()` drops it when the session ends.
   - Shaders compile through `renderer.compileAsync` before the first frame.
   - `av.stats` reports load timings, draw calls and fps.
 - **Adaptive quality:** every ~2 s the pixel ratio steps by 0.25 between 1
