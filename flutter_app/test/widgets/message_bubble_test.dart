@@ -327,6 +327,172 @@ void main() {
       expect(find.text(offline), findsNothing);
       expect(find.byType(CircularProgressIndicator), findsNothing);
     });
+
+    // "Voice synth works but stops after sentences": every sentence was its
+    // own request, made only after the previous clip had finished playing.
+    testWidgets('a reply of several sentences is one request, one clip', (
+      tester,
+    ) async {
+      const reply =
+          'Sit. The stars are clear tonight, Commander. Stay a while? '
+          'I kept the coffee warm.';
+      final browser = FakeBrowserPlatform();
+      final posted = <String>[];
+      final client = MockClient((req) async {
+        posted.add(jsonDecode(req.body)['text'] as String);
+        return http.Response(jsonEncode({'audio': 'UklGRg=='}), 200);
+      });
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: _msg(content: reply),
+            client: client,
+            browser: browser,
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(_voice));
+      await tester.pump();
+      await tester.pump();
+      expect(posted, [reply]);
+      expect(browser.voices, ['data:audio/wav;base64,UklGRg==']);
+      expect(find.text(offline), findsNothing);
+    });
+
+    // Two clips of 300 characters: A plays while B is synthesized.
+    final clipA = 'A${'a' * 298}.';
+    final clipB = 'B${'b' * 298}.';
+
+    /// Room for a 600-character line on one screen.
+    void tall(WidgetTester tester) {
+      tester.view.physicalSize = const Size(800, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+    }
+
+    testWidgets('a long reply makes the next clip while this one plays', (
+      tester,
+    ) async {
+      tall(tester);
+      final browser = _GatedBrowser();
+      final posted = <String>[];
+      final client = MockClient((req) async {
+        final text = jsonDecode(req.body)['text'] as String;
+        posted.add(text);
+        final audio = base64Encode(utf8.encode(text.substring(0, 1)));
+        return http.Response(jsonEncode({'audio': audio}), 200);
+      });
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: _msg(content: '$clipA $clipB'),
+            client: client,
+            browser: browser,
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(_voice));
+      await tester.pump();
+      await tester.pump();
+      // A is playing, and B was asked for without waiting for A to end.
+      expect(browser.voices, ['data:audio/wav;base64,QQ==']);
+      expect(posted, [clipA, clipB]);
+      expect(find.text('▮▮'), findsOneWidget);
+
+      browser.plays[0].complete(true);
+      await tester.pump();
+      await tester.pump();
+      // B follows at once: no new request, no spinner in between.
+      expect(browser.voices.last, 'data:audio/wav;base64,Qg==');
+      expect(posted, hasLength(2));
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.text('▮▮'), findsOneWidget);
+
+      browser.plays[1].complete(true);
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('▶'), findsOneWidget);
+      expect(find.text(offline), findsNothing);
+    });
+
+    testWidgets('leaving the screen cancels the clip being made ahead', (
+      tester,
+    ) async {
+      tall(tester);
+      final browser = _GatedBrowser();
+      final calls = <String>[];
+      final client = MockClient((req) async {
+        calls.add('${req.method} ${req.url.path}');
+        if (req.method == 'POST') {
+          final text = jsonDecode(req.body)['text'] as String;
+          if (text.startsWith('A')) {
+            return http.Response(jsonEncode({'audio': 'QQ=='}), 200);
+          }
+          return http.Response(
+            jsonEncode({'job_id': 'job-b', 'status': 'queued'}),
+            202,
+          );
+        }
+        if (req.method == 'DELETE') return http.Response('{}', 200);
+        return http.Response(jsonEncode({'status': 'running'}), 200);
+      });
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: _msg(content: '$clipA $clipB'),
+            client: client,
+            browser: browser,
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(_voice));
+      await tester.pump();
+      await tester.pump();
+      expect(calls, ['POST /api/tts', 'POST /api/tts']);
+
+      // He leaves while A plays and B is still queued on the server.
+      await tester.pumpWidget(_wrap(const SizedBox()));
+      await tester.pump();
+      expect(calls.last, 'DELETE /api/tts/jobs/job-b');
+      browser.plays[0].complete(true);
+      await tester.pump();
+      expect(browser.voices, hasLength(1)); // B never plays
+      await tester.pump(const Duration(seconds: 2));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a clip that fails stops the reply and says so', (
+      tester,
+    ) async {
+      tall(tester);
+      final browser = _GatedBrowser();
+      final client = MockClient((req) async {
+        final text = jsonDecode(req.body)['text'] as String;
+        if (text.startsWith('B')) return http.Response('down', 502);
+        return http.Response(jsonEncode({'audio': 'QQ=='}), 200);
+      });
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: _msg(content: '$clipA $clipB'),
+            client: client,
+            browser: browser,
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(_voice));
+      await tester.pump();
+      await tester.pump();
+      // B already failed while A plays; A still finishes.
+      expect(find.text(offline), findsNothing);
+      browser.plays[0].complete(true);
+      await tester.pump();
+      await tester.pump();
+      expect(browser.voices, hasLength(1));
+      expect(find.text('▶'), findsOneWidget);
+      expect(find.text(offline), findsOneWidget);
+      await tester.pump(const Duration(seconds: 5));
+    });
   });
 
   testWidgets('completed replay is a labeled keyboard-accessible button', (
@@ -466,4 +632,17 @@ void main() {
       expect(botRow.mainAxisAlignment, MainAxisAlignment.start);
     });
   });
+}
+
+/// Her voice channel, playing each clip until the test says it has ended.
+class _GatedBrowser extends FakeBrowserPlatform {
+  final plays = <Completer<bool>>[];
+
+  @override
+  Future<bool> playVoice(String url) {
+    voices.add(url);
+    final ended = Completer<bool>();
+    plays.add(ended);
+    return ended.future;
+  }
 }

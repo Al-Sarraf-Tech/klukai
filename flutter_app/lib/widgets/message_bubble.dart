@@ -41,12 +41,30 @@ class _MessageBubbleState extends State<MessageBubble> {
   bool _isPlaying = false;
   bool _isLoading = false;
 
-  TtsAudioRequest? _activeTts;
+  /// Synthesis in flight: the clip about to play and the one made ahead of
+  /// it. Leaving the screen cancels them, and their jobs on the server.
+  final Set<TtsAudioRequest> _activeTts = {};
 
   @override
   void dispose() {
-    unawaited(_activeTts?.cancel());
+    for (final request in _activeTts) {
+      unawaited(request.cancel());
+    }
+    _activeTts.clear();
     super.dispose();
+  }
+
+  /// Starts synthesizing [text] in the background.
+  _Clip _synthesize(http.Client client, String serverUrl, String text) {
+    final request = TtsAudioRequest(
+      client: client,
+      baseUrl: serverUrl,
+      token: readAuthToken(),
+    );
+    _activeTts.add(request);
+    final clip = _Clip(request, request.run(text));
+    clip.settled.whenComplete(() => _activeTts.remove(request));
+    return clip;
   }
 
   Future<void> _playVoice() async {
@@ -71,34 +89,37 @@ class _MessageBubbleState extends State<MessageBubble> {
     var spoke = false;
     // An injected client is the caller's to close; one we open here is ours.
     final client = widget.client ?? http.Client();
+    final clips = <_Clip>[];
     try {
       // Get server URL from the page origin
       final serverUrl = Uri.base.origin.contains('localhost')
           ? 'http://localhost:8300'
           : Uri.base.origin;
 
-      for (final chunk in chunkForTts(widget.message.content)) {
+      // As few clips as fit (usually one), each made while the one before
+      // it plays, so a long reply runs on without a pause between clips.
+      final chunks = chunkForTts(widget.message.content);
+      for (var i = 0; i < chunks.length; i++) {
+        if (i == 0) clips.add(_synthesize(client, serverUrl, chunks[0]));
+        final clip = clips[i];
+        if (!clip.done) {
+          setState(() {
+            _isLoading = true;
+            _isPlaying = false;
+          });
+        }
+        final audioB64 = await clip.audio;
         if (!mounted) break;
-        setState(() {
-          _isLoading = true;
-          _isPlaying = false;
-        });
-        final request = TtsAudioRequest(
-          client: client,
-          baseUrl: serverUrl,
-          token: readAuthToken(),
-        );
-        _activeTts = request;
-        final audioB64 = await request.run(chunk);
-        _activeTts = null;
-        if (!mounted) break;
+        if (i + 1 < chunks.length) {
+          clips.add(_synthesize(client, serverUrl, chunks[i + 1]));
+        }
         spoke = true;
         setState(() {
           _isLoading = false;
           _isPlaying = true;
         });
-        // Reuse the gesture-unlocked channel and await each clip so every
-        // sentence plays in order, including replies longer than 500 chars.
+        // Reuse the gesture-unlocked channel and await each clip so they
+        // play in order, including replies longer than 500 chars.
         final played = await (widget.browser ?? defaultBrowserPlatform())
             .playVoice('data:audio/wav;base64,$audioB64');
         if (!played) throw StateError('Browser voice playback unavailable');
@@ -107,7 +128,12 @@ class _MessageBubbleState extends State<MessageBubble> {
       spoke = false;
       debugPrint('Voice playback failed: $e');
     } finally {
-      _activeTts = null;
+      // A clip made ahead that will not play now: cancel it (and its job),
+      // and let every request settle before its client closes.
+      for (final clip in clips) {
+        if (!clip.done) unawaited(clip.request.cancel());
+      }
+      await Future.wait(clips.map((clip) => clip.settled));
       if (widget.client == null) client.close();
     }
 
@@ -366,4 +392,23 @@ class _BlinkingCursorState extends State<_BlinkingCursor>
       },
     );
   }
+}
+
+/// One voice clip being synthesized.
+class _Clip {
+  _Clip(this.request, this.audio) {
+    settled = audio.then<void>((_) {}, onError: (Object _) {});
+    settled.whenComplete(() => done = true);
+  }
+
+  final TtsAudioRequest request;
+
+  /// Her clip as base64 WAV; fails if synthesis does.
+  final Future<String> audio;
+
+  /// Completes, without an error, once [audio] has.
+  late final Future<void> settled;
+
+  /// [audio] has completed.
+  bool done = false;
 }

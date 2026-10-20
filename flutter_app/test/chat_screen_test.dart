@@ -1627,12 +1627,9 @@ void main() {
         await tester.pump(const Duration(milliseconds: 10));
       }
       expect(find.textContaining('VOICE SYNTH OFFLINE'), findsNothing);
-      expect(paths, ['/api/tts', '/api/tts']);
-      // Her two sentences, read through the PWA's own channel.
-      expect(browser.voices, [
-        'data:audio/wav;base64,UklGRg==',
-        'data:audio/wav;base64,UklGRg==',
-      ]);
+      // Her two sentences, one clip, read through the PWA's own channel.
+      expect(paths, ['/api/tts']);
+      expect(browser.voices, ['data:audio/wav;base64,UklGRg==']);
       fake.dispose();
     });
 
