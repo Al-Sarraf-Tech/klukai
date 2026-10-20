@@ -1,7 +1,8 @@
 """Live Portrait + avatar model routes.
 
 GET  /api/portrait                               frames for what she is wearing now (Bearer)
-POST /api/portrait/refresh                        re-render the set (Bearer; 1 per 10 min)
+POST /api/portrait/refresh                        re-render the set (Bearer; 1 per 10 min;
+                                                  GPU renderer only, else 409)
 GET  /api/portrait/frame/{user}/{outfit}/{f}.webp a frame, by short-lived signature (no Bearer,
                                                   so it works as a plain <img src>)
 GET  /api/avatar/model                            the GLB (Bearer; game-ripped, never public;
@@ -94,7 +95,9 @@ def register_portrait_routes(app: FastAPI) -> None:
     async def _context(user_id: str) -> tuple[int, str, bool]:
         level = (await context.affection.get_state(user_id)).level
         outfit = await portrait.current_outfit(user_id, level)
-        return level, outfit, await context.router.is_game_active()
+        # The game guard belongs to Dominus's GPU; off it, never ask Dominus.
+        game = await context.router.is_game_active() if portrait.uses_gpu() else False
+        return level, outfit, game
 
     @app.get("/api/portrait")
     async def api_portrait(request: Request) -> Any:
@@ -109,6 +112,12 @@ def register_portrait_routes(app: FastAPI) -> None:
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
+        if not portrait.can_redraw():
+            return ec.err(
+                "REDRAW_UNAVAILABLE",
+                "Her portrait is kept as drawn; redrawing it needs the local renderer.",
+                status_code=409,
+            )
         level, outfit, game = await _context(user_id)
         if game:
             return ec.err(
