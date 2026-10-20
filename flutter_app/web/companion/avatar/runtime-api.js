@@ -1,5 +1,5 @@
 import { STATES, parseTint } from './state.js';
-import { renderSettings } from './camera.js';
+import { normalizeFraming, renderSettings } from './camera.js';
 import { DEG, clamp } from './common.js';
 import { SPRING } from './physics.js';
 
@@ -37,7 +37,8 @@ export function createPublicApi(ctx) {
         if (ctx.passives.active) ctx.passives.cancel();
       }
     },
-    setFraming(f) { ctx.framing = f === 'full' ? 'full' : 'upper'; if (ctx.root) ctx.frame(); },
+    /** The user-view limits stay those of the framing it was created with. */
+    setFraming(f) { ctx.framing = normalizeFraming(f); if (ctx.root) ctx.frame(); },
     /** Distance multiplier: below 1 zooms in, above 1 zooms out. */
     zoomBy(factor) { ctx.changeView(() => ctx.orbit.zoomBy(factor)); },
     /** Horizontal camera angle in radians, relative to the current view. */
@@ -46,7 +47,11 @@ export function createPublicApi(ctx) {
     moveBy(metres) { ctx.changeView(() => ctx.orbit.moveBy(metres)); },
     getView() { if (!ctx.disposed) ctx.absorbCameraInput(); return ctx.orbit.state; },
     setView(view) { ctx.changeView(() => ctx.orbit.set(view)); },
-    resetView() { ctx.changeView(() => ctx.orbit.reset()); },
+    /** Back to the automatic view; `animate` eases there (~0.4 s) when she is on screen. */
+    resetView({ animate = false } = {}) {
+      if (animate && ctx.animateView(null)) return;
+      ctx.changeView(() => ctx.orbit.reset());
+    },
     react: ctx.react,
     getReactions() { return ctx.disposed ? [] : ctx.reactions.choices; },
     getMotionStatus() { return ctx.motionLibraryStatus; },

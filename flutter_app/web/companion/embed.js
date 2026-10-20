@@ -1,9 +1,11 @@
 // Embedded stage: the PWA's Chat tab shows this page in a same-origin iframe,
-// companion.html?embed=1&mode=3d, under its own HUD. Embedded, the stage
-// hides its chrome, always shows 3D, keeps its socket (the avatar reacts to
-// the chat) and speaks only when the PWA asks, once per tap. The PWA keeps it
-// loaded behind its CHAT face and says when it is on screen (`hidden=1` in
-// the URL when it starts behind it); off screen it neither draws nor plays.
+// companion.html?embed=1&mode=3d, between its top bar and its composer (no
+// PWA widget overlaps the frame: Flutter overlays over an iframe flicker on
+// iOS). Embedded, the stage hides its own chrome, always shows 3D framed
+// waist-up, keeps its socket (the avatar reacts to the chat) and speaks only
+// on a tap. The PWA keeps it loaded behind its CHAT face and says when it is
+// on screen (`hidden=1` in the URL when it starts behind it); off screen it
+// neither draws nor plays.
 // Pure helpers, so node --test can check the contract without a browser.
 
 export const SPEAK = "klukai:speak";
@@ -13,7 +15,9 @@ const INSET_MAX = 600;
 
 /**
  * Embed flags from location.search; the 3D view is forced when embedded.
- * `hidden` means the PWA loaded the stage behind its CHAT face.
+ * `hidden` means the PWA loaded the stage behind its CHAT face. The insets
+ * (CSS px of the frame covered by PWA chrome) are 0 unless given: the PWA no
+ * longer draws over the frame.
  */
 export function embedConfig(search = "") {
   const params = new URLSearchParams(search);
@@ -27,7 +31,7 @@ export function embedConfig(search = "") {
     embed,
     mode: embed ? "model" : null,
     hidden: embed && params.get("hidden") === "1",
-    insets: { top: inset("inset_top", 120), bottom: inset("inset_bottom", 210) },
+    insets: { top: inset("inset_top", 0), bottom: inset("inset_bottom", 0) },
   };
 }
 

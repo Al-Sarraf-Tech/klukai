@@ -8,20 +8,20 @@ import { createPortrait } from "./portrait.js";
 import { createAmbience, ambienceKind } from "./ambience.js";
 import { createMusic } from "./music.js";
 import { createVoice } from "./voice.js?v=20ea8f11";
-import { createStageAppearance } from "./stage_appearance.js?v=08da9810";
+import { createStageAppearance } from "./stage_appearance.js?v=7289639b";
 import {
   applySubtitle, completedAnnouncement, clearDecorativeMotion, motionPreference,
   beginWake, portraitStatusNotice,
 } from "./stage_life.js";
 import {
   embedConfig, speakRequest, visibilityRequest, stageActivity, createSpeakGate, resumeWithin, postToParent,
-} from "./embed.js?v=25e5a0b8";
+} from "./embed.js?v=0d2a67d5";
 
 const $ = (id) => document.getElementById(id);
 const PREFS_KEY = "klukai_companion_prefs";
 const DAY_REFRESH_MS = 5 * 60 * 1000;
 const AUDIO_RESUME_MS = 3000; // resume() can wait forever without a gesture
-// Inside the PWA's 3D view (companion.html?embed=1): the PWA draws the HUD.
+// Inside the PWA's 3D view (companion.html?embed=1): framed waist-up, own camera prefs.
 const EMBED = embedConfig(globalThis.location?.search || "");
 if (EMBED.embed) document.documentElement.dataset.embed = "1";
 const PORTRAIT_POLL_MS = 15000;
@@ -426,6 +426,9 @@ function boot() {
 
   const { refreshAppearances, setMode } = createStageAppearance({
     $, api, prefs, savePrefs: persistPrefs, notice, portrait, stage, syncButtons, syncInsets,
+    framing: EMBED.embed ? "waist" : "full",
+    viewKey: EMBED.embed ? "embedView" : "view",
+    doubleTapReset: EMBED.embed,
     runtime: {
       get avatar() { return avatar; },
       set avatar(value) { avatar = value; },
@@ -553,6 +556,11 @@ function boot() {
     awake = true;
     $("wake").hidden = true;
     coverForWake(false);
+    // iOS Safari pinch-zooms the page on a two-finger gesture (it ignores
+    // user-scalable): here the pinch belongs to her camera.
+    for (const type of ["gesturestart", "gesturechange"]) {
+      document.addEventListener(type, (event) => event.preventDefault(), { passive: false });
+    }
     listenForVisibility();
     listenForSpeech();
     setMode("model");
@@ -563,7 +571,7 @@ function boot() {
   // parallel with the socket and the tap-to-begin, so it's ready on wake.
   if (prefs.mode === "model") {
     const modelKey = prefs.appearance || "default";
-    import("./avatar3d.js?v=fcbb2d7504d9").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
+    import("./avatar3d.js?v=297fb50b742a").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
   }
   socket.start();
   refreshAppearances();

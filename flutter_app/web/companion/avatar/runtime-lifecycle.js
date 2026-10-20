@@ -1,4 +1,4 @@
-import { nextQuality } from './camera.js';
+import { followGoal, nextQuality } from './camera.js';
 import { DEG } from './common.js';
 
 // Lifecycle operations on the single avatar runtime owner.
@@ -78,8 +78,12 @@ export function installLifecycle(ctx) {
     ctx.updateSway(dt, t);
     ctx.updateShadow(dt);
 
+    if (ctx.viewTween) ctx.stepViewTween(performance.now());
     if (ctx.bones.Hips && !ctx.sideView) { // keep her centred on a narrow phone without chasing every sway
-      ctx.follow += (ctx.bones.Hips.getWorldPosition(ctx._v1).x * 0.85 - ctx.follow) * (1 - Math.exp(-dt * 0.8));
+      const head = ctx.head || ctx.neck;
+      const goal = followGoal({ framing: ctx.framing, state: ctx.stateName, zoom: ctx.orbit.state.zoom,
+        hipsX: ctx.bones.Hips.getWorldPosition(ctx._v1).x, headX: head ? head.getWorldPosition(ctx._v2).x : Number.NaN });
+      ctx.follow += (goal.x - ctx.follow) * (1 - Math.exp(-dt * goal.rate));
       ctx.camGoal.target.x = ctx.follow;
     }
     ctx.placeCamera(dt);
@@ -189,6 +193,7 @@ export function initializeLifecycle(ctx) {
   ctx.onViewPointerDown = (e) => {
     if (ctx.disposed || ctx.paused || (e.pointerType === 'mouse' && e.button !== 0)) return;
     ctx.gesture.down(e.pointerId, e.clientX, e.clientY, performance.now());
+    ctx.viewTween = null; // his finger takes over from an easing reset, where it is now
     ctx.canvas.setPointerCapture?.(e.pointerId);
     ctx.orbitDragging = true;
     ctx.passives.cancel();
@@ -197,6 +202,7 @@ export function initializeLifecycle(ctx) {
     if (ctx.disposed || ctx.paused) return;
     const delta = ctx.gesture.move(e.pointerId, e.clientX, e.clientY);
     if (!delta) return;
+    ctx.doubleTap.reset(); // a drag between two taps is not a double tap
     const height = Math.max(1, ctx.canvas.clientHeight);
     const distance = ctx.camera.position.distanceTo(ctx.viewTarget);
     const metresPerPixel = 2 * distance * Math.tan(ctx.camera.fov * DEG / 2) / height;
@@ -218,7 +224,9 @@ export function initializeLifecycle(ctx) {
     // sphere test so a hand outside the previous animation frame is hittable.
     for (const mesh of ctx.skinned) mesh.computeBoundingSphere();
     ctx.raycaster.setFromCamera({ x: 2 * (tap.x - rect.left) / rect.width - 1, y: 1 - 2 * (tap.y - rect.top) / rect.height }, ctx.camera);
-    if (ctx.raycaster.intersectObjects(ctx.skinned, false).length) ctx.react();
+    if (ctx.raycaster.intersectObjects(ctx.skinned, false).length) { ctx.doubleTap.reset(); ctx.react(); return; }
+    // Embedded view: a double tap on empty space eases back to the default view.
+    if (ctx.opts.doubleTapReset && ctx.doubleTap.tap(tap.x, tap.y, tap.downAt, tap.upAt)) ctx.api.resetView({ animate: true });
   };
   ctx.onViewPointerCancel = (e) => { ctx.gesture.cancel(e.pointerId); ctx.orbitDragging = ctx.gesture.active; ctx.settleView(); };
   ctx.onMotionPref = () => {

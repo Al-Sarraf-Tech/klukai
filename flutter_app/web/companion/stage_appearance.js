@@ -3,14 +3,17 @@
 import { createAppearanceSwitcher } from './appearance.js';
 import { moodToExpression } from './logic.js';
 
+// `framing`/`viewKey`: the embedded view frames her waist-up and keeps its
+// own saved camera (prefs.embedView), so a full-body view saved on the full
+// stage never overrides it; `doubleTapReset` eases back to that framing.
 export function createStageAppearance({ $, api, prefs, savePrefs, notice, portrait, stage,
-  runtime, syncButtons, syncInsets }) {
+  runtime, syncButtons, syncInsets, framing = "full", viewKey = "view", doubleTapReset = false }) {
   // ── Portrait ⇄ 3D window ─────────────────────────────────────────────────
   let models = [];
   let requestedAppearance = prefs.appearance || "default";
   const appearances = createAppearanceSwitcher({
     async build(id, signal) {
-      const { createAvatar3D } = await import("./avatar3d.js?v=fcbb2d7504d9");
+      const { createAvatar3D } = await import("./avatar3d.js?v=297fb50b742a");
       const host = document.createElement("div");
       host.className = "model-view";
       host.style.visibility = "hidden";
@@ -19,11 +22,12 @@ export function createStageAppearance({ $, api, prefs, savePrefs, notice, portra
       let error, candidate;
       try {
         const av = await createAvatar3D(host, {
-          framing: "full",
-          view: prefs.view,
+          framing,
+          view: prefs[viewKey],
+          doubleTapReset,
           onViewChange: (view) => {
             if (runtime.avatar !== candidate) return;
-            prefs.view = view;
+            prefs[viewKey] = view;
             savePrefs(prefs);
           },
           modelKey: id, signal, loadModel: () => api.model(id, { signal }),
@@ -39,10 +43,10 @@ export function createStageAppearance({ $, api, prefs, savePrefs, notice, portra
     },
     commit(av, id) {
       // A user may move the current model while the replacement is loading.
-      av.setView(runtime.avatar?.getView() ?? prefs.view);
+      av.setView(runtime.avatar?.getView() ?? prefs[viewKey]);
       av.reveal();
       runtime.avatar = av;
-      prefs.view = av.getView();
+      prefs[viewKey] = av.getView();
       prefs.appearance = id;
       savePrefs(prefs);
       $("appearance-select").value = id;

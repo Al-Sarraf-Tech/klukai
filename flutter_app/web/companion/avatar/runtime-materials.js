@@ -1,6 +1,7 @@
 import { OUTLINE, OUTLINE_FRAG_CUT, OUTLINE_FRAG_PARS, OUTLINE_VERT_PARS, OUTLINE_VERT_PROJECT, SHADE, SHADOW_FRAG, SHADOW_VERT, SWAY_VERT_PARS, TOON_FRAG_AO, TOON_FRAG_FX, TOON_FRAG_PARS, TOON_LIGHTS, TOON_VERT_NORMAL, TOON_VERT_PARS, TOON_VERT_SWAY } from './shaders.js';
 import { smoothstep } from './common.js';
 import { speechMouthDelta, speechMouthLevel } from './presence.js';
+import { contactShadowWanted } from './camera.js';
 
 // Materials operations on the single avatar runtime owner.
 export function installMaterials(ctx) {
@@ -269,7 +270,7 @@ export function installMaterials(ctx) {
 
   ctx.updateShadow = function updateShadow(dt) {
     if (!ctx.shadowMesh || !ctx.bones.Hips) return;
-    const want = ctx.framing === 'full' || ctx.stateName === 'sleep' ? 1 : 0;
+    const want = contactShadowWanted({ framing: ctx.framing, state: ctx.stateName, zoom: ctx.orbit?.state.zoom }) ? 1 : 0;
     ctx.shadowA += (want - ctx.shadowA) * (1 - Math.exp(-dt * 3));
     ctx.shadowMesh.visible = ctx.shadowA > 0.01;
     if (!ctx.shadowMesh.visible) return;

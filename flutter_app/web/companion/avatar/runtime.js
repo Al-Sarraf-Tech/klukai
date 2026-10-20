@@ -4,7 +4,7 @@ import { initializePresence, installPresence } from './runtime-presence.js';
 import { initializeSprings, installSprings } from './runtime-springs.js';
 import { initializeCamera, installCamera } from './runtime-camera.js';
 import { initializeLifecycle, initializeLoop, installLifecycle } from './runtime-lifecycle.js';
-import { BASE_FOV, cameraFarPlane, createCameraView, detectIOS, iosMajorVersion, renderSettings } from './camera.js';
+import { BASE_FOV, cameraFarPlane, createCameraView, detectIOS, iosMajorVersion, normalizeFraming, renderSettings } from './camera.js';
 import { importLibs, modelPrefetch } from './loader.js';
 import { awaitWithAbort } from '../appearance.js';
 import { LIGHT } from './shaders.js';
@@ -23,7 +23,7 @@ export async function createAvatar3D(container, opts = {}) {
   installLifecycle(ctx);
 
   ({ loadModel: ctx.loadModel, onReady: ctx.onReady, onError: ctx.onError } = ctx.opts);
-  ctx.framing = ctx.opts.framing === 'full' ? 'full' : 'upper';
+  ctx.framing = normalizeFraming(ctx.opts.framing);
   ctx.fail = (err) => {
     try { ctx.onError?.(err instanceof Error ? err : new Error(String(err))); } catch { /* caller's handler threw */ }
   };

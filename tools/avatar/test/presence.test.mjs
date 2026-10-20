@@ -27,7 +27,7 @@ test('taps tolerate hand jitter but dragging, holding and pinching never trigger
   const g = avatar.createAvatarGesture();
   g.down(1, 10, 10, 0);
   assert.equal(g.move(1, 13, 12), null);
-  assert.deepEqual(g.up(1, 13, 12, 120), { x: 13, y: 12 });
+  assert.deepEqual(g.up(1, 13, 12, 120), { x: 13, y: 12, downAt: 0, upAt: 120 });
   g.down(2, 10, 10, 200);
   assert.deepEqual(g.move(2, 10, 40), { dx: 0, dy: 30 });
   assert.equal(g.up(2, 10, 40, 300), null);
@@ -77,7 +77,7 @@ test('lifting and replacing a pinch finger keeps the surviving finger in the sam
   assert.equal(g.up(3, 240, 300, 160), null);
   g.cancel(3);
   g.down(5, 120, 300, 200);
-  assert.deepEqual(g.up(5, 120, 300, 240), { x: 120, y: 300 }, 'a later independent tap still works');
+  assert.deepEqual(g.up(5, 120, 300, 240), { x: 120, y: 300, downAt: 200, upAt: 240 }, 'a later independent tap still works');
 });
 
 test('speech opens the authored lip gap while keeping eyes, hair and closed rest unchanged', () => {
