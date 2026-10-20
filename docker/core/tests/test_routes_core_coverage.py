@@ -220,6 +220,38 @@ class TestSubsystemHealth:
         assert result["subsystems"]["images"] == {"provider": "disabled", "status": "disabled"}
         assert "comfyui" not in result["subsystems"]
 
+    @pytest.mark.parametrize("primary", [True, False])
+    async def test_dominus_off_is_standby_when_claude_answers(self, monkeypatch, primary):
+        """Dominus powered off is normal: with Claude primary configured the
+        local model is only the fallback, so it reads "standby" and does not
+        degrade the overall status. Without Claude it is still "down"."""
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("LM_STUDIO_URL", "http://lm.test:1234")
+        monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "true" if primary else "false")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        handler = _find_route(_app_with_routes(), "/api/health/subsystems", "GET")
+        redis_mock = MagicMock(ping=AsyncMock(), aclose=AsyncMock())
+
+        async def get(url, **kwargs):
+            if url.startswith("http://lm.test:1234"):
+                raise RuntimeError("Dominus is off")
+            return _Resp(200, {})
+
+        client = _fake_async_client()
+        client._client.get = AsyncMock(side_effect=get)
+        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
+             patch("redis.asyncio.from_url", return_value=redis_mock), \
+             patch("httpx.AsyncClient", return_value=client), \
+             patch("app.agy_image_provider.agy_images_ready", new=AsyncMock(return_value=True)):
+            result = await handler(_mk_request())
+        if primary:
+            assert result["subsystems"]["lm_studio"] == {"status": "standby", "role": "fallback"}
+            assert result["status"] == "ok"
+        else:
+            assert result["subsystems"]["lm_studio"] == {"status": "down"}
+            assert result["status"] == "degraded"
+
     @pytest.mark.asyncio
     async def test_requires_auth(self):
         app = _app_with_routes()

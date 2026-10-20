@@ -134,7 +134,16 @@ def register_health_routes(
                     "models": models,
                 }
         except Exception:
-            results["lm_studio"] = {"status": "down"}
+            from .llm_router import claude_primary_configured
+
+            # Dominus powered off is normal. With Claude primary configured the
+            # local model is only the fallback: report it as standing by, not
+            # as an outage that degrades the overall status.
+            results["lm_studio"] = (
+                {"status": "standby", "role": "fallback"}
+                if claude_primary_configured()
+                else {"status": "down"}
+            )
 
         results.update(await _image_subsystems())
 
@@ -168,8 +177,12 @@ def register_health_routes(
             except Exception:
                 results["voice"] = {"status": "down"}
 
-        # Overall
-        statuses = [v["status"] for v in results.values() if v["status"] != "disabled"]
+        # Overall ("standby": an idle fallback, e.g. Dominus off behind Claude)
+        statuses = [
+            v["status"]
+            for v in results.values()
+            if v["status"] not in {"disabled", "standby"}
+        ]
         if all(s == "ok" for s in statuses):
             overall = "ok"
         elif results["database"]["status"] == "down":
