@@ -258,13 +258,23 @@ app.add_middleware(
 )
 
 
+# The PWA's Chat tab shows her 3D stage in an iframe of this one page, so it
+# alone may be framed, and only by Klukai's own origin. Everything else stays
+# unframeable.
+_SAME_ORIGIN_FRAME_PATHS = frozenset({"/app/companion.html"})
+
+
 class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> StarletteResponse:
         response: StarletteResponse = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        if request.url.path in _SAME_ORIGIN_FRAME_PATHS:
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            response.headers["Content-Security-Policy"] = "frame-ancestors 'self'"
+        else:
+            response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response

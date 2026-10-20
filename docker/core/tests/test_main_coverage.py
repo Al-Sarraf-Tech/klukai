@@ -107,6 +107,20 @@ class TestSecurityHeadersMiddleware:
         assert out.headers["X-Frame-Options"] == "DENY"
         assert out.headers["X-XSS-Protection"] == "1; mode=block"
         assert out.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+        assert "Content-Security-Policy" not in out.headers
+
+    async def test_only_the_3d_stage_may_be_framed_and_only_by_klukai(self):
+        mw = main._SecurityHeadersMiddleware(app=MagicMock())
+        call_next = AsyncMock(return_value=_response_factory())
+        out = await mw.dispatch(_request("/app/companion.html"), call_next)
+        assert out.headers["X-Frame-Options"] == "SAMEORIGIN"
+        assert out.headers["Content-Security-Policy"] == "frame-ancestors 'self'"
+        assert out.headers["X-Content-Type-Options"] == "nosniff"
+        for path in ("/app/", "/app/index.html", "/app/login.html", "/api/messages"):
+            call_next = AsyncMock(return_value=_response_factory())
+            out = await mw.dispatch(_request(path), call_next)
+            assert out.headers["X-Frame-Options"] == "DENY", path
+            assert "Content-Security-Policy" not in out.headers, path
 
 
 # ── _RequestIdMiddleware ─────────────────────────────────────────────────────
