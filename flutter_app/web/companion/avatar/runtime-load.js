@@ -79,6 +79,7 @@ export async function loadScene(ctx) {
     if (ctx.talkAction) { ctx.talkAction.setEffectiveWeight(0); ctx.talkAction.play(); }
     ctx.shadowMesh = ctx.makeContactShadow();
   } catch (e) {
+    ctx.loadError = e;
     ctx.fail(e);
     ctx.teardown();
     return false;

@@ -2,13 +2,13 @@
 // a generative score, and a chat dock, all on the same session as the PWA
 // (messages sent here appear there too: the server fans out to every device).
 
-import { readToken, clearToken, createApi, AuthExpired, wsUrl, createSocket } from "./net.js?v=ed5305f8";
+import { readToken, clearToken, createApi, AuthExpired, wsUrl, createSocket } from "./net.js?v=040ec968";
 import { moodToExpression, sceneFor, reduceFrame, abandonTurn, avatarCue } from "./logic.js";
 import { createPortrait } from "./portrait.js";
 import { createAmbience, ambienceKind } from "./ambience.js";
 import { createMusic } from "./music.js";
 import { createVoice } from "./voice.js?v=20ea8f11";
-import { createStageAppearance } from "./stage_appearance.js?v=ca580007";
+import { createStageAppearance } from "./stage_appearance.js?v=de4fa2ed";
 import {
   applySubtitle, completedAnnouncement, clearDecorativeMotion, motionPreference,
   beginWake, portraitStatusNotice,
@@ -61,7 +61,9 @@ function boot() {
   let lastLine = "";
   const token = readToken();
   if (!token) { leave(); return; }
-  const toLogin = () => { clearToken(); leave(); };
+  // His session ended: drop the token and her downloaded model, then leave.
+  let forgetModel = () => {}; // set once the stage appearance exists
+  const toLogin = () => { clearToken(); forgetModel(); leave(); };
 
   const stage = $("stage");
   const prefs = loadPrefs();
@@ -518,7 +520,7 @@ function boot() {
     });
   }
 
-  const { refreshAppearances, setMode } = createStageAppearance({
+  const { refreshAppearances, setMode, warmModel, forgetModels: forgetStageModels } = createStageAppearance({
     $, api, prefs, savePrefs: persistPrefs, notice, portrait, stage, syncButtons, syncInsets,
     framing: EMBED.embed ? "waist" : "full",
     viewKey: EMBED.embed ? "embedView" : "view",
@@ -531,6 +533,7 @@ function boot() {
       get hidden() { return document.hidden || embedHidden; },
     },
   });
+  forgetModel = forgetStageModels;
 
   // ── Controls ─────────────────────────────────────────────────────────────
   $("wake").addEventListener("click", wake, { once: true });
@@ -664,10 +667,8 @@ function boot() {
   if (!embedHidden) ambience.start();
   // 3D was his last view: start fetching three.js + the model now, in
   // parallel with the socket and the tap-to-begin, so it's ready on wake.
-  if (prefs.mode === "model") {
-    const modelKey = prefs.appearance || "default";
-    import("./avatar3d.js?v=297fb50b742a").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
-  }
+  // (Embedded, setMode above is already loading it: this joins that download.)
+  warmModel();
   socket.start();
   refreshAppearances();
   refreshDay();

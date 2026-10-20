@@ -11,7 +11,8 @@ Pure policies are separate from rendering: `state.js` owns mood/clip/reaction
 selection, `camera.js` owns framing/gestures/quality, `presence.js` owns look and
 speech constraints, and `physics.js` owns envelope/spring math. `common.js` holds
 their shared numeric helpers. Shader source/constants live in `shaders.js`.
-`loader.js` retains the one shared library promise and model-prefetch cache.
+`loader.js` retains the one shared library promise and the model cache (one
+download per model id per page, shared by the warm-up and every viewer).
 
 `runtime.js` creates one context per avatar. Renderer, scene, model, animation,
 camera and disposal state have that single owner. The `runtime-*` modules

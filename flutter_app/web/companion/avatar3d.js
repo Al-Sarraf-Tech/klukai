@@ -32,5 +32,5 @@ export { STATES, STATE_CLIPS, moodToState, mappedMoods, moodCoverage, createReac
 export { renderSettings, iosMajorVersion, cameraFraming, CAMERA_ZOOM_RANGE, cameraFarPlane, createCameraView, createAvatarGesture, detectIOS, nextPixelRatio, nextQuality } from './avatar/camera.js';
 export { speechMouthDelta, speechMouthLevel, LOOK_WEIGHT, lookSplit, EYE_GUARD, softLimit } from './avatar/presence.js';
 export { stepEnvelope, nodCurve, blinkCurve, closestOnSegment, collidePoint, coneClamp, springStep, springHang, springSubsteps, poseJumped, SPRING } from './avatar/physics.js';
-export { warmAvatar3D } from './avatar/loader.js';
+export { warmAvatar3D, forgetAvatarModels } from './avatar/loader.js';
 export { createAvatar3D } from './avatar/runtime.js';

@@ -47,20 +47,34 @@ export function awaitWithAbort(promise, signal) {
   });
 }
 
-// Keep at most one prefetched model, matched by identity rather than timing.
-export function createModelPrefetch() {
+// One model download per model id, shared by everyone who asks for it: the
+// boot warm-up, the stage's load and any retry all get the same promise (and,
+// once it lands, the same ArrayBuffer), whatever order they ask in. At most
+// one model is kept, matched by id rather than timing: asking for another id
+// drops the old one and aborts its download if it is still running. A failed
+// download is forgotten, so the next ask fetches again. `load(signal)` gets
+// the cache's own signal: one caller giving up never cancels a download
+// another caller is waiting for (each caller bounds its own wait).
+export function createModelCache() {
   let entry = null;
+  function start(key, load) {
+    const old = entry;
+    const controller = new AbortController();
+    const next = { key, controller, promise: Promise.resolve().then(() => load(controller.signal)) };
+    entry = next;
+    old?.controller.abort();
+    next.promise.catch(() => { if (entry === next) entry = null; });
+    return next;
+  }
   return {
-    warm(key, load) {
-      if (entry?.key === key) return;
-      const next = { key, promise: Promise.resolve().then(load) };
-      entry = next;
-      next.promise.catch(() => { if (entry === next) entry = null; });
-    },
-    take(key, load) {
-      const promise = entry?.key === key ? entry.promise : Promise.resolve().then(load);
-      entry = null;
-      return promise;
-    },
+    get key() { return entry?.key ?? null; },
+    /** Start fetching `key` unless it is already fetched or on its way. */
+    warm(key, load) { if (entry?.key !== key) start(key, load); },
+    /** The model for `key`: the shared download, or a new one. */
+    get(key, load) { return (entry?.key === key ? entry : start(key, load)).promise; },
+    /** Drop this download (a model that would not parse) so the next ask refetches. */
+    forget(promise) { if (entry?.promise === promise) entry = null; },
+    /** Drop everything (his session ended); a running download is aborted. */
+    clear() { const old = entry; entry = null; old?.controller.abort(); },
   };
 }

@@ -1,4 +1,4 @@
-import { createModelPrefetch } from '../appearance.js';
+import { createModelCache } from '../appearance.js';
 
 export let libsPromise = null;
 export function importLibs(withOrbit = true) {
@@ -13,14 +13,22 @@ export function importLibs(withOrbit = true) {
   return libsPromise;
 }
 
-export const modelPrefetch = createModelPrefetch();
+// Every createAvatar3D() and warmAvatar3D() on this page shares it: one
+// download per model id per page, whatever order they run in.
+export const modelCache = createModelCache();
 /**
  * Optional: call as soon as the 3D window is the selected mode (e.g. at page
  * init when the saved preference is 3D) to start the three.js imports and the
  * model download while the rest of the page boots. The next createAvatar3D()
- * reuses both. Safe to call repeatedly; never throws.
+ * with the same modelKey reuses both, and a warm-up for a model that is
+ * already loading or loaded does nothing. Safe to call repeatedly; never throws.
  */
 export function warmAvatar3D({ loadModel, modelKey = 'default' } = {}) {
   importLibs().catch(() => {});
-  if (typeof loadModel === 'function') modelPrefetch.warm(modelKey, loadModel);
+  if (typeof loadModel === 'function') modelCache.warm(modelKey, loadModel);
+}
+
+/** Forget the downloaded model (his session ended): the next load fetches again. */
+export function forgetAvatarModels() {
+  modelCache.clear();
 }

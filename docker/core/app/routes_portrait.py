@@ -4,7 +4,8 @@ GET  /api/portrait                               frames for what she is wearing 
 POST /api/portrait/refresh                        re-render the set (Bearer; 1 per 10 min)
 GET  /api/portrait/frame/{user}/{outfit}/{f}.webp a frame, by short-lived signature (no Bearer,
                                                   so it works as a plain <img src>)
-GET  /api/avatar/model                            the GLB (Bearer; game-ripped, never public)
+GET  /api/avatar/model                            the GLB (Bearer; game-ripped, never public;
+                                                  private ETag, 304 on If-None-Match)
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from typing import Any
 
 import asyncio
 import gzip
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -27,10 +29,18 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_AVATAR_MODEL_PATH = "/avatar/klukai.glb"
 FRAME_CACHE = "private, max-age=1800"
-# Revalidate every load (a 304 is ~free): a rebuilt model reaches him on his
-# next open instead of after a day. The ETag changes with the file.
+# The model is personal-use, game-derived content behind the bearer token.
+# `private`: only his browser may keep it, never Cloudflare or any shared
+# cache. `no-cache`: the browser revalidates on every load, so each load
+# still passes the auth check (a revoked token gets a 401, not his cached
+# copy) and a rebuilt model reaches him at once; an unchanged one costs a
+# 304 with no body. The ETag is a strong hash of the bytes.
 MODEL_CACHE = "private, no-cache"
+# The response differs by content coding and is only for this bearer.
+MODEL_VARY = "Accept-Encoding, Authorization"
 _MODEL_GZ: dict[str, bytes] = {}  # etag -> gzipped model (one entry)
+# str(path) -> (size, mtime_ns, sha256 hex): hashed once per file version.
+_MODEL_DIGEST: dict[str, tuple[int, int, str]] = {}
 
 
 async def _get_user_id(request: Request) -> str | None:
@@ -42,9 +52,29 @@ async def _get_user_id(request: Request) -> str | None:
     return await get_user_from_token(auth[7:])
 
 
-def _etag(path: Path) -> str:
+def _digest_file(path: Path) -> str:
+    """sha256 of the model, read in chunks. Runs in a worker thread."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+async def _model_digest(path: Path) -> str:
+    """The model's content hash, computed once per file version (size and
+    mtime) and off the event loop; after that a request costs one stat. A
+    file that changes while it is hashed is hashed again next time."""
     st = path.stat()
-    return f'"{st.st_size:x}-{st.st_mtime_ns:x}"'
+    version = (st.st_size, st.st_mtime_ns)
+    cached = _MODEL_DIGEST.get(str(path))
+    if cached is not None and cached[:2] == version:
+        return cached[2]
+    digest = await asyncio.to_thread(_digest_file, path)
+    after = path.stat()
+    if (after.st_size, after.st_mtime_ns) == version:
+        _MODEL_DIGEST[str(path)] = (*version, digest)
+    return digest
 
 
 def _etag_matches(header: str, etag: str) -> bool:
@@ -121,22 +151,26 @@ def register_portrait_routes(app: FastAPI) -> None:
 
     @app.get("/api/avatar/model")
     async def api_avatar_model(request: Request, model: str = "default") -> Any:
+        # Auth first: without a valid bearer there is no 304 and no bytes.
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
         default = Path(os.environ.get("AVATAR_MODEL_PATH", DEFAULT_AVATAR_MODEL_PATH))
         path = avatar_models.model_path(model, default)
+        not_found = JSONResponse({"error": "Avatar model not found"}, status_code=404)
         if path is None or not path.is_file():
-            return JSONResponse({"error": "Avatar model not found"}, status_code=404)
-        etag = f'"{model}-{_etag(path)[1:-1]}"'
-        headers = {
-            "Cache-Control": MODEL_CACHE,
-            "ETag": etag,
-            "Vary": "Accept-Encoding",
-        }
+            return not_found
+        try:
+            digest = await _model_digest(path)
+        except OSError:  # removed or replaced mid-request
+            return not_found
+        use_gzip = "gzip" in request.headers.get("accept-encoding", "").lower()
+        # Strong tag per representation: the gzip body is a different one.
+        etag = f'"{model}-{digest[:32]}{"-gz" if use_gzip else ""}"'
+        headers = {"Cache-Control": MODEL_CACHE, "ETag": etag, "Vary": MODEL_VARY}
         if _etag_matches(request.headers.get("if-none-match", ""), etag):
             return Response(status_code=304, headers=headers)
-        if "gzip" in request.headers.get("accept-encoding", "").lower():
+        if use_gzip:
             # Binary glTF isn't compressed by Cloudflare or StaticFiles; gzip
             # saves ~30% on a phone connection. Cache the most recently used version.
             body = _MODEL_GZ.get(etag)

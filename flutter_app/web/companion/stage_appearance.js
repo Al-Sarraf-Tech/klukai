@@ -11,9 +11,17 @@ export function createStageAppearance({ $, api, prefs, savePrefs, notice, portra
   // ── Portrait ⇄ 3D window ─────────────────────────────────────────────────
   let models = [];
   let requestedAppearance = prefs.appearance || "default";
+  // The avatar module, imported in this one place: its model cache is shared
+  // only within one module instance, so a second import URL would mean a
+  // second download. Her model comes through the authenticated API, once per
+  // model id per page (the cache passes its own abort signal).
+  let avatarLib = null;
+  const loadAvatarLib = () => (avatarLib ||= import("./avatar3d.js?v=9b6eaa258bac")
+    .catch((e) => { avatarLib = null; throw e; }));
+  const modelLoader = (id) => (signal) => api.model(id, { signal });
   const appearances = createAppearanceSwitcher({
     async build(id, signal) {
-      const { createAvatar3D } = await import("./avatar3d.js?v=297fb50b742a");
+      const { createAvatar3D } = await loadAvatarLib();
       const host = document.createElement("div");
       host.className = "model-view";
       host.style.visibility = "hidden";
@@ -30,7 +38,7 @@ export function createStageAppearance({ $, api, prefs, savePrefs, notice, portra
             prefs[viewKey] = view;
             savePrefs(prefs);
           },
-          modelKey: id, signal, loadModel: () => api.model(id, { signal }),
+          modelKey: id, signal, loadModel: modelLoader(id),
           onError: (e) => { error = e; },
         });
         candidate = av;
@@ -143,5 +151,19 @@ export function createStageAppearance({ $, api, prefs, savePrefs, notice, portra
     setMode("model", id);
   });
 
-  return { refreshAppearances, setMode };
+  // 3D was his last view: start fetching three.js and her model while the
+  // page boots, so it's ready on wake. The load that follows shares the
+  // download (and one that has already started makes this a no-op).
+  function warmModel() {
+    if (prefs.mode !== "model") return;
+    const id = requestedAppearance;
+    loadAvatarLib().then((m) => m.warmAvatar3D?.({ modelKey: id, loadModel: modelLoader(id) })).catch(() => {});
+  }
+
+  // His session ended: drop the downloaded model (only if 3D was ever loaded).
+  function forgetModels() {
+    avatarLib?.then((m) => m.forgetAvatarModels?.()).catch(() => {});
+  }
+
+  return { refreshAppearances, setMode, warmModel, forgetModels };
 }

@@ -21,12 +21,15 @@ export class AuthExpired extends Error {}
 /** Thin API client. `onAuthExpired` runs once on the first 401. */
 export function createApi({ token, fetchImpl = globalThis.fetch, base = "", onAuthExpired = () => {}, voicePollMs = 1000, voiceDeadlineMs = 610000 }) {
   let expired = false;
-  async function call(path, { method = "GET", body, raw = false, signal } = {}) {
+  // `cache`: API answers are never stored ("no-store"), except where the
+  // server sends a private validator (the model: "default" lets the browser
+  // keep it and revalidate with If-None-Match, still sending the bearer).
+  async function call(path, { method = "GET", body, raw = false, signal, cache = "no-store" } = {}) {
     const headers = { Authorization: `Bearer ${token}` };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     const res = await fetchImpl(`${base}${path}`, {
       method, headers, body: body === undefined ? undefined : JSON.stringify(body),
-      cache: "no-store", credentials: "omit", signal,
+      cache, credentials: "omit", signal,
     });
     if (res.status === 401) {
       if (!expired) { expired = true; onAuthExpired(); }
@@ -104,7 +107,9 @@ export function createApi({ token, fetchImpl = globalThis.fetch, base = "", onAu
     affection: () => call("/api/affection"),
     tts,
     models: () => call("/api/avatar/models"),
-    model: async (id = "default", { signal } = {}) => (await call(`/api/avatar/model${id === "default" ? "" : `?model=${encodeURIComponent(id)}`}`, { raw: true, signal })).arrayBuffer(),
+    // Her model: private, ETag'd, so a repeat load is a 304 from the browser's
+    // own cache (never a shared one: the server says `private`).
+    model: async (id = "default", { signal } = {}) => (await call(`/api/avatar/model${id === "default" ? "" : `?model=${encodeURIComponent(id)}`}`, { raw: true, signal, cache: "default" })).arrayBuffer(),
   };
 }
 

@@ -124,6 +124,29 @@ test("the model arrives as an ArrayBuffer", async () => {
   assert.equal(f.calls[0].url, "/api/avatar/model");
 });
 
+test("the model may come from the browser's private cache; other calls are never stored", async () => {
+  const f = fakeFetch([{ status: 200, buf: new ArrayBuffer(4) }, { status: 200, body: {} }, { status: 200, body: { models: [] } }]);
+  const api = createApi({ token: "t0k", fetchImpl: f.impl });
+  await api.model("garf_dorm");
+  await api.herDay();
+  await api.models();
+  const [model, day, catalog] = f.calls.map((c) => c.init);
+  // "default": the browser keeps it and revalidates (If-None-Match → 304),
+  // still with the bearer and without cookies.
+  assert.equal(model.cache, "default");
+  assert.equal(model.headers.Authorization, "Bearer t0k");
+  assert.equal(model.credentials, "omit");
+  assert.equal(day.cache, "no-store");
+  assert.equal(catalog.cache, "no-store");
+});
+
+test("a 401 on the model still ends the session", async () => {
+  let n = 0;
+  const f = fakeFetch([{ status: 401 }]);
+  await assert.rejects(createApi({ token: "t", fetchImpl: f.impl, onAuthExpired: () => n++ }).model(), AuthExpired);
+  assert.equal(n, 1);
+});
+
 test("ws url follows the page scheme", () => {
   assert.equal(wsUrl({ protocol: "https:", host: "klukai.appnest.cc" }, "a b"), "wss://klukai.appnest.cc/ws?token=a%20b");
   assert.equal(wsUrl({ protocol: "http:", host: "localhost:8300" }, "t"), "ws://localhost:8300/ws?token=t");

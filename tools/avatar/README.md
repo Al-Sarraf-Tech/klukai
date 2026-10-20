@@ -224,6 +224,11 @@ av.setFraming('full'); av.resize(); av.dispose();
     import.
   - `warmAvatar3D({loadModel})` can start both earlier, for example at page
     init when the saved mode is 3D.
+  - The download is shared per model id (`loader.js` `modelCache`): the
+    warm-up, the viewer and any retry on the page get one fetch and one
+    ArrayBuffer, in whatever order they ask. Another id replaces it (and
+    aborts it if still running); a failed or unparseable download is
+    forgotten; `forgetAvatarModels()` drops it when the session ends.
   - Shaders compile through `renderer.compileAsync` before the first frame.
   - `av.stats` reports load timings, draw calls and fps.
 - **Adaptive quality:** every ~2 s the pixel ratio steps by 0.25 between 1
@@ -340,9 +345,13 @@ On the server side (outside this tool):
 - **Compression:** the GLB gzips to about 0.95 MB, but `/api/avatar/model`
   sends it uncompressed. gzip or brotli on that route and on `/app/companion/`
   JS would save another ~30%.
-- **Cache:** done. `/api/avatar/model` sends `Cache-Control: private, no-cache`
-  plus an ETag, and `net.js` fetches with `no-store`, so a rebuilt GLB reaches
-  devices on their next open.
+- **Cache:** done. `/api/avatar/model` sends `Cache-Control: private, no-cache`,
+  `Vary: Accept-Encoding, Authorization` and a strong ETag (a sha256 of the
+  bytes, computed once per file size/mtime; `-gz` on the gzip body). `net.js`
+  fetches the model with `cache: "default"` (still with the bearer), so the
+  browser keeps a private copy and each load revalidates it: an unchanged
+  model is a 304 without a body, a rebuilt one arrives on the next open, and
+  the auth check runs first on every request (no token: 401, never a 304).
 
 ## Personal appearances
 

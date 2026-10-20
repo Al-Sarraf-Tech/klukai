@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createAppearanceSwitcher, createModelPrefetch } from '../../../flutter_app/web/companion/appearance.js';
+import { createAppearanceSwitcher, createModelCache } from '../../../flutter_app/web/companion/appearance.js';
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return {promise,resolve,reject}; };
 const view = () => ({ready:true, disposed:0,dispose(){this.disposed++;}});
 
@@ -32,13 +32,32 @@ test('a failed inert viewer is disposed, never committed',async()=>{
  const v={...view(),ready:false};const s=createAppearanceSwitcher({build:async()=>v,commit:()=>assert.fail('committed failed viewer')});
  await assert.rejects(s.select('x'));assert.equal(v.disposed,1);
 });
-test('prefetch is consumed only by its own model key; stale rejection cannot clear newer entry',async()=>{
- const p=createModelPrefetch();const a=deferred();let loads=0;
- p.warm('a',()=>a.promise);p.warm('b',async()=>{loads++;return 'B';});
+test('model cache: one download per id, whichever of warm-up and load asks first',async()=>{
+ const c=createModelCache();const d=deferred();let loads=0;const load=()=>{loads++;return d.promise;};
+ const first=c.get('a',load);c.warm('a',load);const second=c.get('a',load);
+ assert.equal(first,second);
+ d.resolve('A');assert.equal(await first,'A');assert.equal(loads,1);
+ c.warm('a',load);assert.equal(await c.get('a',load),'A');assert.equal(loads,1,'the downloaded bytes are kept for the next load');
+ const w=createModelCache();let wl=0;w.warm('b',async()=>{wl++;return 'B';});w.warm('b',async()=>{wl++;return 'B2';});
+ assert.equal(await w.get('b',()=>assert.fail('lost the warm-up')),'B');assert.equal(wl,1);assert.equal(w.key,'b');
+});
+test('model cache keeps one model: another id replaces it and aborts its running download',async()=>{
+ const c=createModelCache();const a=deferred();let signalA,signalB;
+ c.warm('a',(s)=>{signalA=s;return a.promise;});await Promise.resolve();
+ assert.equal(await c.get('b',async(s)=>{signalB=s;return 'B';}),'B');
+ assert.equal(signalA.aborted,true);assert.equal(signalB.aborted,false);
  a.reject(Error('old'));await Promise.resolve();await Promise.resolve();
- assert.equal(await p.take('b',()=>assert.fail('lost prefetch')),'B');assert.equal(loads,1);
- p.warm('a',async()=>'A');assert.equal(await p.take('b',async()=>'new B'),'new B');
- assert.equal(await p.take('a',async()=>'new A'),'new A');
+ assert.equal(await c.get('b',()=>assert.fail('a stale rejection cleared the newer model')),'B');
+ assert.equal(await c.get('a',async()=>'A again'),'A again');assert.equal(c.key,'a');
+});
+test('model cache forgets failures, unparseable bytes, and everything on clear',async()=>{
+ const c=createModelCache();let n=0;
+ await assert.rejects(c.get('a',async()=>{n++;throw Error('offline');}),/offline/);
+ assert.equal(c.key,null);assert.equal(await c.get('a',async()=>{n++;return 'A';}),'A');assert.equal(n,2);
+ const kept=c.get('a',()=>assert.fail('refetched'));c.forget(Promise.resolve('other'));assert.equal(c.get('a',()=>assert.fail('refetched')),kept);
+ c.forget(kept);assert.equal(c.key,null);assert.equal(await c.get('a',async()=>{n++;return 'A2';}),'A2');assert.equal(n,3);
+ const d=deferred();let signal;c.get('b',(s)=>{signal=s;return d.promise;}).catch(()=>{});await Promise.resolve();
+ c.clear();assert.equal(signal.aborted,true);assert.equal(c.key,null);
 });
 
 test('superseding a load aborts it immediately, before its result settles',async()=>{
