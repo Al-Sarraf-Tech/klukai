@@ -24,6 +24,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("AVATAR_MODEL_PATH", str(tmp_path / "klukai.glb"))
     pt._inflight.clear()
     pt._failed_at.clear()
+    from app import routes_portrait as rp
+    rp._MODEL_GZ.clear()
+    rp._MODEL_DIGEST.clear()
     aff = MagicMock()
     aff.get_state = AsyncMock(return_value=SimpleNamespace(level=4))
     router = MagicMock()
@@ -220,7 +223,7 @@ class TestAvatarModel:
         assert r.content.startswith(b"glTF")
         assert r.headers["content-type"] == "model/gltf-binary"
         assert r.headers["cache-control"] == "private, no-cache"  # a rebuild reaches him at once
-        assert r.headers["vary"] == "Accept-Encoding"
+        assert r.headers["vary"] == "Accept-Encoding, Authorization"
         etag = r.headers["etag"]
         assert etag.startswith('"') and etag.endswith('"')
 
@@ -282,6 +285,115 @@ class TestAvatarModel:
         assert first.content == raw == second.content  # the client inflates it
         assert gzip.decompress(routes_portrait._MODEL_GZ[first.headers["etag"]]) == raw
 
+    def test_etag_is_a_strong_content_hash_that_survives_a_touch(self, client, tmp_path):
+        import hashlib
+        import os
+        raw = b"glTF" + bytes(range(256)) * 8
+        model = tmp_path / "klukai.glb"
+        model.write_bytes(raw)
+        plain = {**AUTH, "Accept-Encoding": "identity"}
+        first = client.get("/api/avatar/model", headers=plain).headers["etag"]
+        assert first == f'"default-{hashlib.sha256(raw).hexdigest()[:32]}"'
+        assert not first.startswith("W/")
+        # Same bytes, new mtime (a redeploy copying the file): same tag, so
+        # his cached copy stays good.
+        st = model.stat()
+        os.utime(model, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+        assert client.get("/api/avatar/model", headers=plain).headers["etag"] == first
+        model.write_bytes(raw + b"rebuilt")
+        changed = client.get("/api/avatar/model", headers={**plain, "If-None-Match": first})
+        assert changed.status_code == 200 and changed.content.endswith(b"rebuilt")
+        assert changed.headers["etag"] != first
+
+    def test_gzip_and_identity_are_distinct_strong_representations(self, client, tmp_path):
+        (tmp_path / "klukai.glb").write_bytes(b"glTF" + b"\x02" * 2048)
+        plain = client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": "identity"})
+        gz = client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": "gzip"})
+        assert gz.headers["etag"] == plain.headers["etag"][:-1] + '-gz"'
+        # A cached identity copy can't be revalidated into a gzip response …
+        cross = client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": "gzip", "If-None-Match": plain.headers["etag"]})
+        assert cross.status_code == 200 and cross.headers["content-encoding"] == "gzip"
+        # … each variant revalidates against its own tag.
+        same = client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": "gzip", "If-None-Match": gz.headers["etag"]})
+        assert same.status_code == 304 and same.headers["etag"] == gz.headers["etag"]
+        ident = client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": "identity", "If-None-Match": plain.headers["etag"]})
+        assert ident.status_code == 304
+
+    def test_hash_once_per_file_version_and_a_304_never_reads_the_file(self, client, tmp_path):
+        """The content hash is computed once per (size, mtime), off the event
+        loop. A revalidation after that is a stat and a 304: the model is not
+        opened, hashed or compressed again."""
+        from app import routes_portrait
+
+        model = tmp_path / "klukai.glb"
+        model.write_bytes(b"glTF" + b"\x03" * 4096)
+        real = routes_portrait._digest_file
+        calls: list[tuple[Path, bool]] = []
+
+        def spy(path):
+            try:
+                asyncio.get_running_loop()
+                on_loop = True
+            except RuntimeError:
+                on_loop = False
+            calls.append((path, on_loop))
+            return real(path)
+
+        with patch.object(routes_portrait, "_digest_file", spy):
+            first = client.get("/api/avatar/model", headers=AUTH)
+            again = client.get("/api/avatar/model", headers=AUTH)
+        assert first.status_code == again.status_code == 200
+        assert calls == [(model, False)]
+        etag = first.headers["etag"]
+
+        def no_reads(*_a, **_k):
+            raise AssertionError("a 304 must not read the model")
+
+        with patch.object(routes_portrait, "_digest_file", no_reads), \
+             patch.object(routes_portrait, "_gzip_file", no_reads), \
+             patch.object(Path, "read_bytes", no_reads), \
+             patch.object(Path, "open", no_reads):
+            r = client.get("/api/avatar/model", headers={**AUTH, "If-None-Match": etag})
+        assert r.status_code == 304 and r.content == b""
+        assert r.headers["etag"] == etag
+        assert r.headers["cache-control"] == "private, no-cache"
+        assert r.headers["vary"] == "Accept-Encoding, Authorization"
+
+    @pytest.mark.parametrize("auth", [{}, {"Authorization": "Bearer bad"}, {"Authorization": "good"}])
+    def test_auth_comes_before_any_304(self, client, tmp_path, auth):
+        """Without a valid bearer: 401, never a 304 (which would confirm his
+        cached copy) and never the bytes, whatever validator is sent."""
+        (tmp_path / "klukai.glb").write_bytes(b"glTF" + b"\x04" * 64)
+        etag = client.get("/api/avatar/model", headers=AUTH).headers["etag"]
+        for validator in (etag, "*"):
+            r = client.get("/api/avatar/model", headers={**auth, "If-None-Match": validator})
+            assert r.status_code == 401
+            assert "etag" not in r.headers
+            assert b"glTF" not in r.content
+
+    def test_never_cacheable_by_a_shared_cache(self, client, tmp_path):
+        """Cloudflare sits in front of the site: the model must stay private."""
+        (tmp_path / "klukai.glb").write_bytes(b"glTF" + b"\x05" * 64)
+        for enc in ("identity", "gzip"):
+            r = client.get("/api/avatar/model", headers={**AUTH, "Accept-Encoding": enc})
+            cc = [d.strip() for d in r.headers["cache-control"].split(",")]
+            assert "private" in cc and "no-cache" in cc
+            assert not {"public", "immutable"} & set(cc)
+            assert not any(d.startswith("s-maxage") for d in cc)
+            assert {"Accept-Encoding", "Authorization"} <= {v.strip() for v in r.headers["vary"].split(",")}
+
+    def test_a_model_removed_mid_request_is_a_404_not_an_error(self, client, tmp_path):
+        from app import routes_portrait
+
+        (tmp_path / "klukai.glb").write_bytes(b"glTF")
+
+        def gone(_path):
+            raise FileNotFoundError("removed")
+
+        with patch.object(routes_portrait, "_digest_file", gone):
+            r = client.get("/api/avatar/model", headers=AUTH)
+        assert r.status_code == 404 and r.json() == {"error": "Avatar model not found"}
+
     def test_default_path(self, client, monkeypatch):
         monkeypatch.delenv("AVATAR_MODEL_PATH")
         from app import routes_portrait
@@ -295,3 +407,34 @@ def test_registered_on_the_real_app():
     for p in ("/api/portrait", "/api/portrait/refresh", "/api/avatar/model",
               "/api/portrait/frame/{user_id}/{outfit_id}/{frame}.webp"):
         assert p in paths
+
+
+def test_real_app_middleware_keeps_the_model_cache_headers(tmp_path, monkeypatch):
+    """Through the real app's middleware stack (CORS, security headers,
+    request id, rate limit, metrics): the private validator headers arrive
+    unchanged, a 304 stays a 304, and no auth still means 401."""
+    from app import routes_portrait
+    from app.main import app
+
+    model = tmp_path / "klukai.glb"
+    model.write_bytes(b"glTF" + b"\x06" * 128)
+    monkeypatch.setenv("AVATAR_MODEL_PATH", str(model))
+    routes_portrait._MODEL_GZ.clear()
+    routes_portrait._MODEL_DIGEST.clear()
+
+    async def _user(token):
+        return "claude" if token == "good" else None
+
+    with patch("app.auth.get_user_from_token", side_effect=_user):
+        c = TestClient(app)  # no lifespan: only the HTTP path is exercised
+        r = c.get("/api/avatar/model", headers=AUTH)
+        assert r.status_code == 200 and r.content.startswith(b"glTF")
+        assert r.headers["cache-control"] == "private, no-cache"
+        assert r.headers["vary"] == "Accept-Encoding, Authorization"
+        assert r.headers["x-content-type-options"] == "nosniff"
+        again = c.get("/api/avatar/model", headers={**AUTH, "If-None-Match": r.headers["etag"]})
+        assert again.status_code == 304 and again.content == b""
+        assert again.headers["etag"] == r.headers["etag"]
+        assert c.get("/api/avatar/model", headers={"If-None-Match": r.headers["etag"]}).status_code == 401
+    routes_portrait._MODEL_GZ.clear()
+    routes_portrait._MODEL_DIGEST.clear()
