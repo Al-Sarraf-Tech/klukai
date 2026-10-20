@@ -14,7 +14,7 @@ ExecCondition=/home/jalsarraf/.local/bin/klukai-memory-seed-day-condition
 # Compose run by hand cannot interpolate this stack (its secrets are only in the
 # encrypted store, so interpolation fails); exec straight into the running
 # core container, which already has its whole environment.
-ExecStartPre=/usr/bin/docker inspect -f '{{.State.Running}}' companion-core
+ExecStartPre=/bin/sh -c 'test "$$(/usr/bin/docker inspect -f {{.State.Running}} companion-core)" = true'
 # Dominus-free (owner order 2026-10-19): with KLUKAI_IMAGE_PROVIDER=agy the
 # seeder selects/annotates through the background text helper and renders
 # through the account worker. It does nothing unless core's environment sets
