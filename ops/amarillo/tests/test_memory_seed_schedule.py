@@ -61,6 +61,15 @@ class MemorySeedScheduleTests(unittest.TestCase):
         self.assertIn("Persistent=false", timer)
         self.assertIn("RandomizedDelaySec=0", timer)
 
+    def test_the_render_switch_lives_in_core_not_the_unit(self) -> None:
+        """Enabling the timer alone draws nothing: KLUKAI_ALBUM_SEED_RENDERS
+        in core's environment is the owner's switch, never overridden here."""
+        service = SERVICE.read_text(encoding="utf-8")
+        exec_start = service.split("ExecStart=", 1)[1].splitlines()[0]
+        self.assertNotIn("KLUKAI_ALBUM_SEED_RENDERS", exec_start)
+        self.assertNotIn("KLUKAI_IMAGE_PROVIDER", exec_start)
+        self.assertIn("KLUKAI_ALBUM_SEED_RENDERS", service)
+
 
 if __name__ == "__main__":
     unittest.main()

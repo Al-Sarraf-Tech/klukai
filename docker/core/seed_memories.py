@@ -2,9 +2,26 @@
 """Seed Klukai's memory archive from conversation history.
 
 Three-pass approach:
-  Pass 1: gpt-oss-20b selects which exchanges to keep (reliable JSON)
-  Pass 2: dolphin-24b writes annotations using ACTUAL conversation text
-  Pass 3: ComfyUI generates Illustrious images for each memory
+  Pass 1: the selector picks which exchanges to keep (JSON)
+  Pass 2: the annotator writes her journal entry from the ACTUAL exchange
+  Pass 3: one picture per kept memory
+
+Two pipelines, chosen by KLUKAI_IMAGE_PROVIDER:
+
+- ``agy`` (the default; Dominus is never asked): selection and annotation go
+  through the background text helper (Claude Haiku via app/extraction_llm.py,
+  no local fallback) and each picture through the journalled account-worker
+  path his chat pictures use (allowlist, Grok -> Codex -> Agy, Claude
+  checker), inside the background-render marker so his own picture waits for
+  it. Off unless KLUKAI_ALBUM_SEED_RENDERS is 1 or 2: at most that many
+  renders a run and a local day, never more than two whatever it says.
+  Selection stops once that many memories are chosen. The journal id is
+  derived from the exchange, so a busy or interrupted render is recovered on
+  a later run, never drawn twice; a definitive refusal skips that exchange.
+  Pictures are always covered, carry no chat text out of core, and include
+  the Commander only in the owner's own couple moments.
+- ``comfyui`` (explicit legacy option): the Dominus LLM selects (dolphin,
+  reliable JSON) and annotates, and ComfyUI renders under the GPU lease.
 
 Rows are paired by app.seed_exchanges, one timestamp group at a time, so a
 tie can never pair a reply with the wrong message. A watermark records how
@@ -36,6 +53,7 @@ import re
 import signal
 import sys
 import time
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -59,6 +77,19 @@ ANNOTATOR_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
 
 BATCH_SIZE = 5
 DEFAULT_MAX_EXCHANGES = 40
+
+# Account-worker pipeline (owner order 2026-10-19: Dominus-free, and never
+# eat his Grok quota). Renders per run AND per local day; 0 (default) = off.
+RENDERS_ENV = "KLUKAI_ALBUM_SEED_RENDERS"
+MAX_RENDERS_PER_RUN = 2
+ALBUM_KIND = "album_seed"
+_SEED_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "klukai:album-seed:v1")
+# Album pictures are always covered: these never reach the account brief.
+_UNCOVERED_TAG = re.compile(
+    r"\b(lingerie|underwear|nude|nudity|naked|topless|undress\w*|bath\w*|onsen|"
+    r"hot springs?|shower\w*|skinny[- ]dip\w*|intimate|seductive|sexy)\b",
+    re.IGNORECASE,
+)
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
@@ -330,14 +361,37 @@ def _arm_hard_kill() -> int | None:
 # ── LLM Calls ───────────────────────────────────────────────────────────────
 
 
+def _account_mode() -> bool:
+    """Images on the account worker: the Dominus-free pipeline."""
+    from app.image_provider import selected_provider
+
+    return selected_provider() == "agy"
+
+
+async def _background_text(prompt: str, *, route: str) -> str:
+    """One background text call, never the Dominus LLM. The seam for the
+    shared background-text helper; budgeted and capped by it."""
+    from app import extraction_llm
+
+    return await extraction_llm.complete(
+        prompt, max_tokens=extraction_llm.EXTRACTION_MAX_TOKENS, route=route
+    )
+
+
 async def _call_llm(
     client: httpx.AsyncClient,
     model: str,
     prompt: str,
     max_tokens: int = 2048,
     temperature: float = 0.1,
+    *,
+    route: str = "album_seed",
 ) -> str:
     """Make a single LLM call and return cleaned text."""
+    if _account_mode():
+        return _clean_llm_response(
+            {"content": await _background_text(prompt, route=route)}
+        )
     r = await client.post(
         f"{LM_STUDIO_URL}/v1/chat/completions",
         headers=lm_studio_auth_headers(),
@@ -366,7 +420,12 @@ async def _select_batch(
 
     prompt = SELECTION_PROMPT.format(count=len(batch), exchanges=exchange_text)
     content = await _call_llm(
-        client, SELECTOR_MODEL, prompt, max_tokens=2048, temperature=0.1
+        client,
+        SELECTOR_MODEL,
+        prompt,
+        max_tokens=2048,
+        temperature=0.1,
+        route="album_seed_select",
     )
     result = _extract_json(content)
     selected = []
@@ -389,9 +448,147 @@ async def _annotate(
         category=category,
     )
     content = await _call_llm(
-        client, ANNOTATOR_MODEL, prompt, max_tokens=300, temperature=0.85
+        client,
+        ANNOTATOR_MODEL,
+        prompt,
+        max_tokens=300,
+        temperature=0.85,
+        route="album_seed_annotate",
     )
     return _clean_annotation(content)
+
+
+# ── Account-worker renders ───────────────────────────────────────────────────
+
+
+def _render_cap_from_env() -> int:
+    """Renders allowed this run: KLUKAI_ALBUM_SEED_RENDERS clamped to 0..2."""
+    raw = os.environ.get(RENDERS_ENV, "").strip()
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Ignoring non-numeric %s=%r; album seeding is off", RENDERS_ENV, raw
+        )
+        return 0
+    return max(0, min(value, MAX_RENDERS_PER_RUN))
+
+
+async def _album_renders_today(conn) -> int:
+    """Album pictures journalled since his local midnight (every run today)."""
+    from app.account_images import local_day_start
+
+    row = await (
+        await conn.execute(
+            "SELECT count(*) FROM companion_account_image_requests "
+            "WHERE archive_context->>'kind' = %s AND created_at >= %s",
+            (ALBUM_KIND, local_day_start()),
+        )
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _seed_request_id(user_id: str, fingerprint: str) -> str:
+    """One journal id per exchange: a later run recovers, never redraws."""
+    return str(uuid.uuid5(_SEED_NAMESPACE, f"{user_id}:{fingerprint}"))
+
+
+ALBUM_CATEGORIES = frozenset(
+    {
+        "Tactical Operations",
+        "Mission Records",
+        "Squad Moments",
+        "The Commander",
+        "Quiet Hours",
+        "Precious Memories",
+    }
+)
+
+
+# Tags the prompt builder adds for intimate scenes (his shirt open, her bare
+# shoulders); an album picture drops them along with the scene's own.
+_UNDRESSED_TAG = re.compile(
+    r"\b(shirtless|bare \w+|open shirt|nsfw|boxers|towel|cleavage|sweat\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def _covered_prompt(prompt: str) -> str:
+    """The builder's comma-separated tags minus any that undress anyone."""
+    return ", ".join(
+        tag
+        for tag in prompt.split(", ")
+        if not _UNCOVERED_TAG.search(tag) and not _UNDRESSED_TAG.search(tag)
+    )
+
+
+def _covered_tags(tags: list[str]) -> list[str]:
+    """Short scene tags only (at most 12), none that would undress her."""
+    kept = [
+        t.strip()
+        for t in tags
+        if isinstance(t, str)
+        and 0 < len(t.strip()) <= 40
+        and not _UNCOVERED_TAG.search(t)
+    ]
+    return kept[:12]
+
+
+async def _render_account(
+    mem: dict, user_id: str, tags: list[str]
+) -> tuple[bytes | None, str, str | None, str]:
+    """Draw one album picture through the account worker.
+
+    Returns (image, request id, phase, brief). Only scene tags leave core,
+    never the exchange text; covered, no nudity grant; the Commander only in
+    a couple moment of the owner's own (the worker refuses anyone else)."""
+    from app import account_images
+    from app.image_gen_constants import INTIMATE_MIN_LEVEL
+    from app.image_prompts import is_couple_scene, is_landscape
+    from app.image_provider import cloud_prompt
+
+    ex = mem["exchange"]
+    tags = _covered_tags(tags)
+    couple = user_id == "jalsarraf" and (
+        any(t.strip().lower() == "couple" for t in tags) or is_couple_scene(ex["user"])
+    )
+    scene = ", ".join(tags)
+    prompt = _covered_prompt(
+        build_prompt(scene, couple=couple, affection_level=INTIMATE_MIN_LEVEL - 1)
+    )
+    category = mem.get("category")
+    if category not in ALBUM_CATEGORIES:
+        category = "Precious Memories"
+    brief = (
+        f"A moment Klukai keeps in her photo album ({category}).\n\n"
+        + cloud_prompt(prompt, sfw=True)
+    )
+    width, height = (1216, 832) if is_landscape(scene) else (832, 1216)
+    request_id = _seed_request_id(user_id, mem["conversation_id"])
+    async with account_images.background_render(ALBUM_KIND):
+        outcome = await account_images.fulfill_account_image(
+            user_id,
+            brief,
+            width=width,
+            height=height,
+            include_commander=couple,
+            request_id=request_id,
+            archive_context={
+                "kind": ALBUM_KIND,
+                "conversation_id": mem["conversation_id"],
+                "mood": "tender",
+                "affection_level": 8,
+            },
+            nudity=False,
+        )
+    return outcome.get("image"), request_id, outcome.get("phase"), brief
+
+
+# Worker answers that settle an exchange without a picture, and ones that mean
+# the worker is busy or uncertain (stop; the same id is recovered next run).
+_TERMINAL_PHASES = frozenset({"refused", "failed", "conflict"})
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -402,7 +599,8 @@ async def main() -> int:
     from app.image_provider import uses_cloud_images
 
     try:
-        remote = uses_cloud_text() or uses_cloud_images()
+        account = _account_mode()
+        remote = not account and (uses_cloud_text() or uses_cloud_images())
     except Exception as error:
         logger.error("Invalid creative provider configuration (%s)", type(error).__name__)
         return 1
@@ -421,8 +619,25 @@ async def main() -> int:
         elif arg.startswith("--user="):
             target_user = arg.split("=", 1)[1]
 
+    render_cap: int | None = None
+    if account:
+        from app.agy_image_provider import uses_agy_images
+
+        render_cap = _render_cap_from_env()
+        if render_cap <= 0:
+            logger.info("Album seeding is off (%s is not 1 or 2)", RENDERS_ENV)
+            return 0
+        if not uses_agy_images(target_user):
+            logger.error("Album seeding: %s is not an account-worker user", target_user)
+            return 1
+
     logger.info("=== Memory Seeder Starting (user: %s) ===", target_user)
-    logger.info("Selector: %s | Annotator: %s", SELECTOR_MODEL, ANNOTATOR_MODEL)
+    if account:
+        logger.info(
+            "Pipeline: background text + account worker, up to %d renders", render_cap
+        )
+    else:
+        logger.info("Selector: %s | Annotator: %s", SELECTOR_MODEL, ANNOTATOR_MODEL)
 
     deadline = _deadline_from_env()
     if deadline is not None:
@@ -446,6 +661,16 @@ async def main() -> int:
         return True
 
     conn = await psycopg.AsyncConnection.connect(DATABASE_URL)
+
+    if render_cap is not None:
+        # Every run today shares the cap: a second run never draws more.
+        render_cap = min(
+            render_cap, MAX_RENDERS_PER_RUN - await _album_renders_today(conn)
+        )
+        if render_cap <= 0:
+            logger.info("Today's album renders are spent; nothing to do")
+            await conn.close()
+            return 0
 
     # Continue exactly after the last fully processed message.
     mark = await _get_watermark(conn, target_user)
@@ -508,7 +733,8 @@ async def main() -> int:
     # keepalive prompts are forbidden because they create false activity and
     # extend model residency.
     try:
-        cleanup_ready = await free_comfyui_vram()
+        # The account pipeline never touches the GPU.
+        cleanup_ready = True if account else await free_comfyui_vram()
     except Exception as error:
         logger.error("Initial GPU cleanup failed (%s)", type(error).__name__)
         cleanup_ready = False
@@ -525,16 +751,28 @@ async def main() -> int:
 
     def _record_batch(batch_start: int, batch: list[dict], picks: list[dict]) -> None:
         """A batch answered: its exchanges are selected-over, and each pick is
-        kept once (a selector repeating an index must not render it twice)."""
-        selected_ok.update(range(batch_start, batch_start + len(batch)))
-        for pick in picks:
+        kept once (a selector repeating an index must not render it twice).
+        With a render cap, a pick past it ends the batch there: it and the
+        exchanges after it are left for a later run."""
+        end = batch_start + len(batch)
+        for pick in sorted(picks, key=lambda p: p["global_index"]):
             idx = pick["global_index"]
-            if idx not in chosen:
-                chosen.add(idx)
-                selected.append(pick)
+            if idx in chosen:
+                continue
+            if render_cap is not None and len(chosen) >= render_cap:
+                end = idx
+                break
+            chosen.add(idx)
+            selected.append(pick)
+        selected_ok.update(range(batch_start, end))
+
+    def _selection_full() -> bool:
+        return render_cap is not None and len(chosen) >= render_cap
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         for batch_start in range(0, len(exchanges), BATCH_SIZE):
+            if _selection_full():
+                break
             if _deadline_hit("selection", selection_cutoff):
                 break
             batch = exchanges[batch_start : batch_start + BATCH_SIZE]
@@ -563,6 +801,8 @@ async def main() -> int:
         logger.info("Retrying %d failed batches...", len(failed_batches))
         async with httpx.AsyncClient(timeout=180.0) as client:
             for batch_start, batch in failed_batches:
+                if _selection_full():
+                    break
                 if _deadline_hit("selection retry", selection_cutoff):
                     break
                 try:
@@ -670,9 +910,10 @@ async def main() -> int:
         return 1 if pipeline_failures else 0
 
     # ── PASS 3: Image Generation ─────────────────────────────────────────
-    # generate_image acquires the authenticated exclusive GPU lease, drains
-    # active inference, and unloads llama.cpp before ComfyUI can allocate.
-    logger.info("Preparing exclusive GPU handoff for image generation...")
+    # Legacy: generate_image acquires the authenticated exclusive GPU lease,
+    # drains active inference, and unloads llama.cpp before ComfyUI allocates.
+    if not account:
+        logger.info("Preparing exclusive GPU handoff for image generation...")
 
     logger.info("=== PASS 3: Image Generation ===")
     from app.memory_archive import save_image
@@ -700,6 +941,56 @@ async def main() -> int:
             if not tags:
                 tags = _infer_scene_tags(exchange_text, mem.get("category", ""))
                 logger.info("  Inferred tags: %s", tags)
+
+            if account:
+                img_bytes, request_id, phase, full_prompt = await _render_account(
+                    mem, target_user, tags
+                )
+                if img_bytes:
+                    memory_id = await save_image(
+                        img_bytes,
+                        full_prompt,
+                        mem["conversation_id"],
+                        mood="tender",
+                        affection_level=8,
+                        curation={
+                            "keep": True,
+                            "annotation": mem.get("annotation", ""),
+                            "category": mem.get("category", "Precious Memories"),
+                            "image_tags": tags,
+                        },
+                        user_id=target_user,
+                        memory_id=request_id,
+                    )
+                    from app.account_images import complete_archive
+
+                    await complete_archive(
+                        request_id, memory_id, img_bytes, target_user
+                    )
+                    if memory_id:
+                        saved_count += 1
+                        finished.add(mem["global_index"])
+                        logger.info(
+                            "  Saved: %s (%s)", memory_id[:12], mem.get("category")
+                        )
+                    else:
+                        logger.warning("  Save failed")
+                        pipeline_failures.append(
+                            f"save exchange {mem.get('global_index', '?')}"
+                        )
+                elif phase in _TERMINAL_PHASES:
+                    # Settled without a picture: skipped for good, never redrawn.
+                    logger.warning("  Render %s; the album skips this moment", phase)
+                    finished.add(mem["global_index"])
+                else:
+                    logger.warning("  Render %s; retried by a later run", phase)
+                    pipeline_failures.append(
+                        f"render exchange {mem.get('global_index', '?')}"
+                    )
+                    break
+                if i < len(selected) - 1:
+                    await asyncio.sleep(30)
+                continue
 
             scene_tags = ", ".join(tags)
             couple = any(

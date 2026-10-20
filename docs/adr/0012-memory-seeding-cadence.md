@@ -1,7 +1,7 @@
 # ADR-0012: Memory archive seeding cadence — every other local day, 03:00–06:00
 
 - **Date:** 2026-04 (formalized 2026-05-16)
-- **Updated:** 2026-08-01 (Amarillo timer reconstruction); 2026-10-11 (in-container deadline)
+- **Updated:** 2026-08-01 (Amarillo timer reconstruction); 2026-10-11 (in-container deadline); 2026-10-19 (Dominus-free account pipeline)
 - **Status:** Accepted
 - **Authors:** jalsarraf
 
@@ -65,6 +65,36 @@ Model aliases remain application policy in `docker/core/seed_memories.py` and
 must resolve through `ops/dominus-nobara/models.lock.json`. The timer neither
 overrides model choice nor bypasses Tailscale, bearer authentication, the game
 guard, or the GPU lease.
+
+## Update 2026-10-19: seeding without Dominus
+
+Owner order: close every gap that relied on Dominus, and no Dominus image
+work (so the game guard is never tripped). With `KLUKAI_IMAGE_PROVIDER=agy`
+(the default) the same schedule, watermark and deadlines run a different
+pipeline:
+
+- selection and annotation use the background text helper (Claude Haiku via
+  `app/extraction_llm.py`, budgeted by its daily cap), never the Dominus LLM
+  and never a local fallback;
+- each kept memory is drawn through the journalled account-worker path that
+  explicit chat pictures use (user allowlist, Grok, then Codex, then Agy, the
+  Claude checker), inside the background-render marker so a chat picture that
+  arrives meanwhile waits for it instead of failing;
+- `KLUKAI_ALBUM_SEED_RENDERS` (core environment, default `0` = off) is the
+  owner's switch: renders per run and per America/Chicago day, clamped to at
+  most 2 whatever it says; selection stops once that many memories are
+  chosen and the watermark stops before the first one left over;
+- the journal id derives from the exchange fingerprint, so a busy or
+  interrupted render is recovered by a later run, never drawn twice, while a
+  definitive refusal settles that exchange without a picture;
+- album pictures are always covered (no nudity grant, intimate tags dropped),
+  carry only scene tags out of core (never the exchange text), and include the
+  Commander's reference only in the owner's own couple moments.
+
+The timer stays disabled until the owner enables it; enabling it draws
+nothing until `KLUKAI_ALBUM_SEED_RENDERS` is set to 1 or 2. The Dominus LLM +
+ComfyUI pipeline below remains only behind the explicit
+`KLUKAI_IMAGE_PROVIDER=comfyui`.
 
 ## Consequences
 

@@ -74,9 +74,12 @@ services:
       # Account-quota Agy worker on Amarillo; no credentials enter this container.
       KLUKAI_CHAT_IMAGE_PROVIDER: "${KLUKAI_CHAT_IMAGE_PROVIDER:-}"
       KLUKAI_AGY_ALLOWED_USERS: "${KLUKAI_AGY_ALLOWED_USERS:-}"
-      # A missing Live Portrait base, drawn by the same worker (allowlisted
-      # users only): at most this many new ones a local day (0 = off).
+      # Background pictures through the same worker (allowlisted users only).
+      # A missing Live Portrait base: at most this many new ones a local day
+      # (0 = off). Album seeding: renders per run and per local day, 0 = off,
+      # never more than 2; also needs the amarillo seed timer enabled.
       KLUKAI_PORTRAIT_DAILY_LIMIT: "${KLUKAI_PORTRAIT_DAILY_LIMIT:-3}"
+      KLUKAI_ALBUM_SEED_RENDERS: "${KLUKAI_ALBUM_SEED_RENDERS:-0}"
       KLUKAI_AGY_SOCKET: "/run/klukai-agy/image.sock"
       KLUKAI_AGY_TOKEN_FILE: "/run/klukai-agy/token"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
