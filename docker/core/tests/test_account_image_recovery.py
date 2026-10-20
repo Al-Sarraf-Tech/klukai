@@ -482,7 +482,9 @@ async def test_chat_picture_survives_disconnect_and_repeats_without_another_rend
             await ws.disconnect(user_id)
     assert len(composed) == 2
     assert composed[0] != composed[1]
-    assert "slight smile" in composed[0] and "professional setting" in composed[0]
+    # The scene brief sets the place; the affection tags keep only the mood.
+    assert "slight smile" in composed[0] and "professional setting" not in composed[0]
+    assert "a garden" in composed[0]
     assert "towel around neck" in composed[0]
     assert "fully clothed" in composed[0]
     assert "devoted" in composed[1] and "holding helmet" in composed[1]

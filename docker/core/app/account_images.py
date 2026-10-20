@@ -50,16 +50,25 @@ def explicit_request_id(
     width: int,
     height: int,
     include_commander: bool,
+    scene: str | None = None,
 ) -> str:
-    """One id for one explicit picture, stable across a closed tab or a new process."""
+    """One id for one explicit picture, stable across a closed tab or a new process.
+
+    ``scene`` is the place the picture is set in when it came from outside
+    the sentence (his earlier words, where she is): "take a picture of us" in
+    his room and at the beach are two pictures. None keeps the original id.
+    """
+    identity: dict[str, Any] = {
+        "height": height,
+        "include_commander": include_commander,
+        "prompt": prompt,
+        "user_id": user_id,
+        "width": width,
+    }
+    if scene is not None:
+        identity["scene"] = scene
     raw = json.dumps(
-        {
-            "height": height,
-            "include_commander": include_commander,
-            "prompt": prompt,
-            "user_id": user_id,
-            "width": width,
-        },
+        identity,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,

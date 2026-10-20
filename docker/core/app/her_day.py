@@ -278,6 +278,18 @@ async def render_costume(user_id: str, level: int) -> str | None:
     return now.outfit.id if now.outfit.image_tags else None
 
 
+async def render_place(user_id: str, level: int) -> tuple[str, str] | None:
+    """Where a picture of her is set right now: (location, activity) exactly
+    as the PWA may show them — her private blocks stay "Off duty" below the
+    bond that shows them, and a mission puts her in the field. None on error."""
+    try:
+        now = await her_now(user_id, level, mission=active_mission(user_id))
+        status = now.status(level)
+    except Exception:
+        return None
+    return str(status["location"]), str(status["activity"])
+
+
 _DRINK = re.compile(
     r"\b(?:tea|coffee|latte|espresso|cocoa|drink|something to drink|thirsty|a cup|racing calm)\b"
 )

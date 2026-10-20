@@ -13,6 +13,10 @@ from .ws_manager import WSManager
 
 logger = logging.getLogger(__name__)
 
+# Recent turns the picture's setting is read from (his last eight, with hers).
+SCENE_TURNS = 16
+SCENE_TURN_CHARS = 600
+
 
 @dataclass
 class ChatFollowups:
@@ -71,6 +75,15 @@ class ChatFollowups:
             from .image_gen import detect_squad_members
 
             mentioned_squad = detect_squad_members(f"{content} {chat_ctx}")
+            # Who said what, so the picture's setting follows HIS words
+            # (app/image_scene.py) — her replies only ever place her alone.
+            scene_turns = [
+                {
+                    "role": str(t.get("role", "")),
+                    "content": str(t.get("content", ""))[:SCENE_TURN_CHARS],
+                }
+                for t in session.turns[-SCENE_TURNS:]
+            ]
             self.ws.track_task(
                 user_id,
                 asyncio.create_task(
@@ -79,6 +92,7 @@ class ChatFollowups:
                         chat_context=chat_ctx,
                         squad_members=mentioned_squad,
                         user_id=user_id,
+                        recent_turns=scene_turns,
                     )
                 ),
                 survive_disconnect=True,

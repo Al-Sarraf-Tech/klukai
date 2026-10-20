@@ -258,6 +258,41 @@ MISSION_SCENE_TAGS = {
     "victory": "victory, mission complete, relieved, exhausted but smiling, sun rising",
 }
 
+# Keyword → tags for an image request (helpers.enhance_image_prompt). The
+# place/weather map is the legacy, brief-less path only: with a scene brief
+# (app/image_scene.py) the setting comes from the brief, never from keywords.
+IMAGE_SCENE_MAP = {
+    "sunset": "sunset, orange sky, golden hour lighting",
+    "night": "night, moonlight, dark sky, stars",
+    "rain": "rain, wet, umbrella, overcast",
+    "snow": "snow, winter, cold breath, scarf",
+    "beach": "beach, ocean, sand, swimsuit, summer",
+    "cafe": "cafe, table, coffee cup, indoor, cozy",
+    "battle": "battlefield, smoke, debris, action pose",
+    "motorcycle": "motorcycle, riding, wind, speed lines, road",
+    "bed": "bedroom, bed, pillows, soft lighting, intimate",
+    "rooftop": "rooftop, city skyline, wind, evening",
+    "garden": "garden, flowers, natural lighting, peaceful",
+    "office": "office, desk, computer, indoor lighting",
+    "forest": "forest, trees, nature, sunlight through leaves",
+    "city": "city, urban, street, buildings, neon",
+}
+
+IMAGE_MOOD_MAP = {
+    "kiss": "kiss, eyes closed, romantic",
+    "hug": "hug, embrace, close, warm",
+    "cuddle": "cuddling, lying down, comfortable, close",
+    "hold": "holding hands, close, side by side",
+    "smile": "smile, happy, cheerful",
+    "blush": "blush, embarrassed, looking away",
+    "cry": "tears, emotional, sad",
+    "fight": "fighting stance, action, dynamic pose",
+    "sleep": "sleeping, peaceful, eyes closed",
+    "eat": "eating, food, table",
+    "cook": "cooking, kitchen, apron",
+    "read": "reading, book, sitting, quiet",
+}
+
 SITUATION_KEYWORDS = {
     "bed": "bedroom, lying on bed, pillows, blankets, soft lighting, intimate",
     "sleep": "sleeping, peaceful, eyes closed, bedroom, night",

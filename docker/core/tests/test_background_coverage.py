@@ -735,6 +735,127 @@ class TestImageGen:
         )
         assert bg_mocks.memory_archive.save_image.await_args.kwargs["user_id"] == "u1"
 
+    @staticmethod
+    def _agy_patches(generate, place):
+        from contextlib import ExitStack
+
+        from app import agy_image_provider
+
+        stack = ExitStack()
+        for target, value in (
+            ("app.account_images.fetch_request", AsyncMock(return_value=None)),
+            ("app.account_images.insert_request", AsyncMock()),
+            ("app.account_images.update_request", AsyncMock()),
+            ("app.her_day.render_costume", AsyncMock(return_value="blazing_star")),
+            ("app.her_day.render_place", place),
+            (
+                "app.image_gen.check_comfyui_ready",
+                AsyncMock(side_effect=AssertionError("GPU readiness")),
+            ),
+        ):
+            stack.enter_context(patch(target, new=value))
+        stack.enter_context(
+            patch.object(agy_image_provider, "submit_agy_image", new=generate)
+        )
+        return stack
+
+    async def test_agy_picture_is_set_where_he_said_not_where_she_is(
+        self, bg_mocks, monkeypatch, caplog
+    ):
+        from datetime import datetime
+
+        from app.account_images import explicit_request_id
+
+        caplog.set_level(logging.INFO, logger="app.background")
+        monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
+        generate = AsyncMock(return_value={"status": "completed", "image": b"PNG"})
+        place = AsyncMock(side_effect=AssertionError("Her Day for a couple picture"))
+        turns = [
+            {"role": "user", "content": "we are in my room, secret plans tonight"},
+            {"role": "assistant", "content": "It's 2254 and I'm in the rec room."},
+            {"role": "user", "content": "take a picture of us"},
+            {"role": "assistant", "content": "Hold still."},
+        ]
+        with (
+            self._agy_patches(generate, place),
+            patch(
+                "app.proactive.state.now_local",
+                return_value=datetime(2026, 10, 19, 23, 0),
+            ),
+        ):
+            await bg.background_image_gen(
+                "take a picture of us", user_id="u1", recent_turns=turns
+            )
+        prompt = generate.await_args.args[0]
+        assert prompt.startswith(
+            "take a picture of us\n\nSetting: Indoors - the Commander's bedroom"
+        )
+        assert "night, warm lamp light, city lights through the window" in prompt
+        assert "rec room" not in prompt and "secret plans" not in prompt
+        assert "moonlight" not in prompt and "floating hair" not in prompt
+        assert "Avoid these visual elements: outdoor scenery; open sky." in prompt
+        assert generate.await_args.kwargs["include_commander"] is True
+        assert generate.await_args.kwargs["request_id"] == explicit_request_id(
+            "u1", "take a picture of us", 832, 1216, True, "his_bedroom"
+        )
+        assert (
+            "Image scene: place=his_bedroom (his bedroom) source=his-history setting=indoor "
+            "time=night(clock) weather=clear"
+        ) in caplog.text
+        assert "secret plans" not in caplog.text
+
+    async def test_agy_picture_of_her_alone_asks_her_day(self, bg_mocks, monkeypatch):
+        from app.account_images import explicit_request_id
+
+        monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
+        generate = AsyncMock(return_value={"status": "completed", "image": b"PNG"})
+        place = AsyncMock(return_value=("Hangar", "tuning the bike"))
+        with self._agy_patches(generate, place):
+            await bg.background_image_gen("draw yourself", user_id="u1")
+        place.assert_awaited_once_with("u1", 5)
+        prompt = generate.await_args.args[0]
+        assert "the vehicle hangar inside a colossal armored land vehicle" in prompt
+        assert "naval vessel" in prompt  # the avoid list, never the scene
+        assert generate.await_args.kwargs["request_id"] == explicit_request_id(
+            "u1", "draw yourself", 832, 1216, False, "hangar"
+        )
+
+    async def test_agy_without_her_day_falls_back_to_a_neutral_setting(
+        self, bg_mocks, monkeypatch
+    ):
+        from app.account_images import explicit_request_id
+
+        monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
+        generate = AsyncMock(return_value={"status": "completed", "image": b"PNG"})
+        with self._agy_patches(generate, AsyncMock(return_value=None)):
+            await bg.background_image_gen("draw yourself", user_id="u1")
+        assert "Setting: " in generate.await_args.args[0]
+        assert generate.await_args.kwargs["request_id"] == explicit_request_id(
+            "u1", "draw yourself", 832, 1216, False
+        )
+
+    async def test_local_renderer_follows_his_request_and_avoids_ships(self, bg_mocks):
+        gen = AsyncMock(return_value=None)
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+            patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),
+            patch.object(bg, "generate_image", new=gen),
+        ):
+            await bg.background_image_gen(
+                "draw yourself in the hangar",
+                chat_context="assistant: we are together at the beach",
+                user_id="u1",
+            )
+        prompt = gen.await_args.args[0]
+        assert "the vehicle hangar" in prompt and "beach" not in prompt
+        assert "1boy" not in prompt  # her "we" never adds him
+        assert "ship" in gen.await_args.kwargs["negative_extra"]
+
     async def test_agy_explicit_couple_request_selects_commander_and_landscape(
         self, bg_mocks, monkeypatch
     ):
@@ -814,9 +935,12 @@ class TestImageGen:
             ),
         ):
             await bg.background_image_gen(
-                "Draw Klukai", chat_context="sunset", user_id="u1"
+                "Draw Klukai",
+                chat_context="user: let's watch the sunset from the rooftop",
+                user_id="u1",
             )
-        assert "sunset" in local.await_args.args[0]
+        # His words in the flattened context still set the scene.
+        assert "a city rooftop" in local.await_args.args[0]
         assert any(
             call.args[1].get("type") == "image"
             for call in bg_mocks.ws.send.await_args_list
