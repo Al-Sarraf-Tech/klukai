@@ -174,17 +174,28 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
                 system_prompt, user_prompt, max_tokens=1024
             )
         else:
-            resp = await router.complete_local(
-                system_prompt=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-                config=config,
-            )
+            from . import background_llm
+
+            async def local() -> str:
+                resp = await router.complete_local(
+                    system_prompt=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    config=config,
+                )
+                content = (
+                    resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+                )
+                return content if isinstance(content, str) else ""
+
             greeting = (
-                resp.get("choices", [{}])[0]
-                .get("message", {})
-                .get("content", "")
-                .strip()
-            )
+                await background_llm.text(
+                    "return_greeting",
+                    user_prompt,
+                    system=system_prompt,
+                    max_tokens=180,
+                    local=local,
+                )
+            ).strip()
         if not greeting or len(greeting) < 10:
             return
 

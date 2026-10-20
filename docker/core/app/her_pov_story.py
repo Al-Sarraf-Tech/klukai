@@ -194,18 +194,25 @@ async def compose_pov(
             raise CreativeTextError("Malformed creative memory JSON") from None
         raw = _validate_cloud_scene(raw)
     else:
-        try:
+        from . import background_llm
+
+        async def local() -> dict[str, Any]:
             async with get_lm_gate():
-                raw = await call_llm(
+                return await call_llm(
                     LM_STUDIO_URL,
                     model,
                     prompt,
                     max_tokens=512,
                     temperature=0.4,
                 )
-        except Exception as e:
-            logger.warning("compose_pov LLM failed: %s", e)
-            raw = {}
+
+        # Never raises: Haiku, else Dominus while it is up, else the defaults.
+        raw = (
+            await background_llm.json_object(
+                "her_pov", prompt, max_tokens=512, local=local, local_model=model
+            )
+            or {}
+        )
 
     if not isinstance(raw, dict):
         raw = {}

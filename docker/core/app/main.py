@@ -114,18 +114,24 @@ async def generate_daily_recap(
             f"Use first person. Reference specific topics discussed.\n\n{conversation}"
         )
 
-        config = await router.route("recap", SessionState(conversation_id="recap"))
-        full = []
-        async for token in router.stream(
-            prompt, [{"role": "user", "content": prompt}], config
-        ):
-            full.append(token)
-        recap = "".join(full)
-        # With the GPU host down the stream is the sentinel — that is not her
-        # evening log, and delivering it would push an outage notice as her words.
-        if not recap or recap.startswith(FAILURE_SENTINEL):
-            return None
-        return recap
+        from . import background_llm
+
+        async def local() -> str:
+            config = await router.route("recap", SessionState(conversation_id="recap"))
+            full = []
+            async for token in router.stream(
+                prompt, [{"role": "user", "content": prompt}], config
+            ):
+                full.append(token)
+            recap = "".join(full)
+            # With the GPU host down the stream is the sentinel — that is not her
+            # evening log, and delivering it would push an outage notice as her words.
+            return "" if recap.startswith(FAILURE_SENTINEL) else recap
+
+        recap = await background_llm.text(
+            "daily_recap", prompt, max_tokens=2048, local=local
+        )
+        return recap or None
     except Exception as e:
         logger.warning("Daily recap generation failed: %s", e)
         return None

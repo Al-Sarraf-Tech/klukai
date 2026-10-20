@@ -99,14 +99,21 @@ class DreamEventsMixin(_EngineBase):
                     "Write Klukai's dream message.", prompt, max_tokens=1024
                 )
             else:
-                async with get_lm_gate():
-                    message = await call_llm_text(
-                        LM_STUDIO_URL,
-                        EXTRACTION_MODEL,
-                        prompt,
-                        max_tokens=200,
-                        temperature=0.8,
-                    )
+                from .. import background_llm
+
+                async def local() -> str:
+                    async with get_lm_gate():
+                        return await call_llm_text(
+                            LM_STUDIO_URL,
+                            EXTRACTION_MODEL,
+                            prompt,
+                            max_tokens=200,
+                            temperature=0.8,
+                        )
+
+                message = await background_llm.text(
+                    "dream", prompt, max_tokens=200, local=local
+                )
 
             if message and self._on_message_callback:
                 self._dream_delivered_today = True

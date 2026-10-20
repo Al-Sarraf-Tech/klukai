@@ -253,26 +253,35 @@ class AlbumEventsMixin(_EngineBase):
 
         message = ""
         try:
+            from .. import background_llm
             from ..fact_extractor import EXTRACTION_MODEL, LM_STUDIO_URL
             from ..llm_json import call_llm_text
             from ..llm_router import get_lm_gate
 
-            gate = get_lm_gate()
-            async with gate:
-                message = await call_llm_text(
-                    LM_STUDIO_URL,
-                    EXTRACTION_MODEL,
-                    f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
-                    f"You are NOT an AI. A real memory just surfaced and you want to share it "
-                    f"warmly — a quiet 'remember when…' message to the Commander. "
-                    f"Recall the MOMENT in your own words (2-3 short sentences). Be tender but "
-                    f"composed. Do NOT quote the journal entry verbatim — evoke the feeling of it. "
-                    f"Affection {self._affection_level}/9.\n"
-                    f"Memory to recall (do not quote directly): {annotation[:200]}\n"
-                    f"Write ONLY the message. No explanation.",
-                    max_tokens=160,
-                    temperature=0.8,
-                )
+            prompt = (
+                f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
+                f"You are NOT an AI. A real memory just surfaced and you want to share it "
+                f"warmly — a quiet 'remember when…' message to the Commander. "
+                f"Recall the MOMENT in your own words (2-3 short sentences). Be tender but "
+                f"composed. Do NOT quote the journal entry verbatim — evoke the feeling of it. "
+                f"Affection {self._affection_level}/9.\n"
+                f"Memory to recall (do not quote directly): {annotation[:200]}\n"
+                f"Write ONLY the message. No explanation."
+            )
+
+            async def local() -> str:
+                async with get_lm_gate():
+                    return await call_llm_text(
+                        LM_STUDIO_URL,
+                        EXTRACTION_MODEL,
+                        prompt,
+                        max_tokens=160,
+                        temperature=0.8,
+                    )
+
+            message = await background_llm.text(
+                "memory_recall", prompt, max_tokens=160, local=local
+            )
         except Exception as e:
             logger.warning("Memory recall LLM failed, falling back to template: %s", e)
             message = ""

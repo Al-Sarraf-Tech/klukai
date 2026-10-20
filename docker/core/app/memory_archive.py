@@ -16,7 +16,7 @@ import httpx
 from PIL import Image
 
 from .db import get_conn, get_conn_autocommit
-from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
+from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers, lm_timeout
 from .shared_http import client as http_client, close as close_http_client
 
 logger = logging.getLogger(__name__)
@@ -376,11 +376,14 @@ Write ONLY the caption. Nothing else.
 async def backfill_annotations(user_id: str = "jalsarraf") -> dict[str, Any]:
     """Find memory archive entries with NULL/empty annotation and generate one.
 
-    Scoped to a specific user. Uses dolphin through the LM Studio gate.
+    Scoped to a specific user. Caption text comes from the shared background
+    route (app/background_llm.py): Haiku when enabled, else dolphin through the
+    LM Studio gate while Dominus is up; each caption is one capped attempt.
 
     Returns:
         dict with "total" (entries needing backfill) and "updated" (successful).
     """
+    from . import background_llm
     from .llm_router import get_lm_gate
 
     try:
@@ -417,7 +420,11 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict[str, Any]:
             prompt=prompt[:300], category=category, tags=tags
         )
 
-        try:
+        answered: list[bool] = []  # the local model replied, even if blank
+
+        async def local(
+            llm_prompt: str = llm_prompt, answered: list[bool] = answered
+        ) -> str:
             async with gate:
                 client = _get_http()
                 r = await http_request(
@@ -434,9 +441,26 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict[str, Any]:
                         "stream": False,
                         "ttl": LM_TTL_SECONDS,
                     },
+                    timeout=lm_timeout(60.0),
                 )
                 r.raise_for_status()
-                content = r.json()["choices"][0]["message"]["content"].strip()
+                content = r.json()["choices"][0]["message"]["content"]
+                answered.append(True)
+                return content.strip() if isinstance(content, str) else ""
+
+        try:
+            content = await background_llm.text(
+                "archive_caption",
+                llm_prompt,
+                max_tokens=150,
+                local=local,
+                local_model=EXTRACTION_MODEL,
+            )
+            if not content and not answered:
+                # No model answered (Haiku capped/failed and Dominus down):
+                # leave the entry for the next run instead of a placeholder.
+                logger.warning("Backfill skipped %s: no model available", mem_id)
+                continue
 
             # Strip thinking tags if present
             content = re.sub(

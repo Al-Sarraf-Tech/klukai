@@ -7,7 +7,7 @@ import logging
 import httpx
 
 from .dependencies import http_request
-from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
+from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers, lm_timeout
 
 CLASSIFICATION_PROMPT = """\
 Classify ONLY the Commander's message below. Ignore Klukai's response tone entirely.
@@ -44,12 +44,19 @@ async def classify_interaction(
     model: str,
     prompt_template: str,
 ) -> tuple[str, int]:
-    """Use LLM to classify the Commander's message type and intensity."""
+    """Use LLM to classify the Commander's message type and intensity.
+
+    On the shared background route (app/background_llm.py): Haiku when
+    enabled, else or on failure the local request while Dominus is up, else
+    ("neutral", 5). Never raises.
+    """
+    from . import background_llm
+
     prompt = prompt_template.format(
         user_message=user_message[:500],
     )
 
-    try:
+    async def local() -> object:
         from .llm_router import get_lm_gate
 
         gate = get_lm_gate()
@@ -70,6 +77,7 @@ async def classify_interaction(
                     "stream": False,
                     "ttl": LM_TTL_SECONDS,
                 },
+                timeout=lm_timeout(12.0),
             )
             r.raise_for_status()
             content = r.json()["choices"][0]["message"]["content"].strip()
@@ -79,7 +87,18 @@ async def classify_interaction(
             content = content.split("\n", 1)[1]
             content = content.rsplit("```", 1)[0]
 
-        result = json.loads(content)
+        return json.loads(content)
+
+    result = await background_llm.json_object(
+        "affection_classification",
+        prompt,
+        max_tokens=100,
+        local=local,
+        local_model=model,
+    )
+    try:
+        if result is None:
+            raise ValueError("no classification")
         itype = result.get("type", "neutral")
         intensity = max(1, min(10, int(result.get("intensity", 5))))
         return itype, intensity
