@@ -169,7 +169,9 @@ async def background_compaction(
     """Compact older session turns into a summary to reduce prefill tokens.
 
     Triggered when session.turns >= COMPACT_THRESHOLD. Summarizes the oldest
-    turns via dolphin, keeps the last COMPACT_KEEP_RAW turns verbatim.
+    turns with the extraction provider (Claude Haiku when
+    KLUKAI_EXTRACTION_PROVIDER=anthropic, else the local model; see
+    fact_extractor.compact_turns), keeps the last COMPACT_KEEP_RAW turns verbatim.
     """
     from .fact_extractor import compact_turns
 

@@ -28,6 +28,10 @@ if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
     os.environ["KLUKAI_AGY_SOCKET"] = "/tmp/pytest-klukai-agy-unavailable/image.sock"
     os.environ["KLUKAI_AGY_TOKEN_FILE"] = "/tmp/pytest-klukai-agy-unavailable/token"
     os.environ["KLUKAI_CREATIVE_TEXT_PROVIDER"] = "local"
+    # Haiku extraction is a paid route: off, with no allowance, in unit tests.
+    os.environ["KLUKAI_EXTRACTION_PROVIDER"] = "local"
+    os.environ["KLUKAI_EXTRACTION_DAILY_LIMIT"] = "0"
+    os.environ.pop("KLUKAI_EXTRACTION_MODEL", None)
     os.environ["KLUKAI_IMAGE_REFERENCE_FILES"] = "[]"
     for _creative_kind in ("IMAGE", "TEXT"):
         for _creative_period in ("DAILY", "MONTHLY"):

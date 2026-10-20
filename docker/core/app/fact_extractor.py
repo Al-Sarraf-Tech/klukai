@@ -11,12 +11,19 @@ from typing import Any
 import logging
 import os
 
-from .llm_json import call_llm, call_llm_text
+from . import extraction_llm
+from .extraction_llm import CallReport
+from .llm_json import call_llm, call_llm_text, parse_json
 
 logger = logging.getLogger(__name__)
 
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
 EXTRACTION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
+
+# Paid-route compaction bounds (app/extraction_llm.py); the local path is unchanged.
+MAX_COMPACT_TURNS = 24
+MAX_PRIOR_SUMMARY_CHARS = 2000
+MAX_COMPACT_SUMMARY_CHARS = 1500
 
 # ── Valid moods (must match models.py Mood enum) ─────────────────────────
 
@@ -209,19 +216,73 @@ Commander: {user_message}"""
 # ── Public API ───────────────────────────────────────────────────────────
 
 
+def _local_circuit_closed() -> bool:
+    """True when the Dominus breaker would admit a request right now."""
+    from .circuit_breakers import State, get_breaker
+
+    return get_breaker("lm_studio").state is State.CLOSED
+
+
+async def _local_extraction(prompt: str) -> dict[str, Any]:
+    """The original Dominus extraction request, unchanged."""
+    from .llm_router import get_lm_gate
+
+    gate = get_lm_gate()
+    async with gate:
+        result = await call_llm(
+            LM_STUDIO_URL,
+            EXTRACTION_MODEL,
+            prompt,
+            max_tokens=2048,
+            temperature=0.1,
+        )
+    return result
+
+
+async def _haiku_extraction(prompt: str, report: CallReport) -> dict[str, Any] | None:
+    """One budgeted Haiku extraction; None (with the reason) on any problem."""
+    report.provider, report.model = "anthropic", extraction_llm.model()
+    try:
+        text = await extraction_llm.complete(
+            prompt,
+            max_tokens=extraction_llm.EXTRACTION_MAX_TOKENS,
+            route="extraction",
+        )
+    except extraction_llm.ExtractionUnavailable:
+        report.outcome = "unavailable"
+        return None
+    except extraction_llm.ExtractionLLMError as error:
+        logger.warning("Haiku extraction failed: %s", error)
+        report.outcome = "failed"
+        return None
+    parsed = parse_json(text)
+    if not isinstance(parsed, dict):
+        logger.warning("Haiku extraction returned no JSON object")
+        report.outcome = "unparsable"
+        return None
+    report.outcome = "ok"
+    return parsed
+
+
 async def extract_facts(
     user_message: str,
     assistant_message: str,
     image_generated: bool = False,
     affection_level: int = 0,
+    report: CallReport | None = None,
 ) -> dict[str, Any]:
     """Extract mood, facts, interaction classification in one LLM call.
 
     Returns dict with: mood, interaction, facts, topics, should_remember.
     Never raises — returns safe defaults on any failure.
-    """
-    from .llm_router import get_lm_gate
 
+    With ``KLUKAI_EXTRACTION_PROVIDER=anthropic`` the call goes to Claude
+    Haiku (app/extraction_llm.py). If Haiku is unavailable, capped, fails or
+    returns no JSON object, the local model is tried when its circuit is
+    closed, else the safe defaults are used. ``report`` (optional) records
+    which provider/model answered and the outcome, never content.
+    """
+    report = report if report is not None else CallReport()
     prompt = EXTRACTION_PROMPT.format(
         user_message=user_message[:800],
         assistant_message=assistant_message[:800],
@@ -234,15 +295,20 @@ async def extract_facts(
         cats = ", ".join(available_categories(affection_level))
         prompt += IMAGE_CURATION_ADDENDUM.format(categories=cats)
 
-    gate = get_lm_gate()
-    async with gate:
-        result = await call_llm(
-            LM_STUDIO_URL,
-            EXTRACTION_MODEL,
-            prompt,
-            max_tokens=2048,
-            temperature=0.1,
-        )
+    result: object = None
+    if extraction_llm.uses_anthropic():
+        result = await _haiku_extraction(prompt, report)
+        if result is None:
+            reason = report.outcome
+            if _local_circuit_closed():
+                report.provider, report.model = "local", EXTRACTION_MODEL
+                result = await _local_extraction(prompt)
+            usable = isinstance(result, dict) and bool(result)
+            report.outcome = f"{reason}->{'local' if usable else 'defaults'}"
+    else:
+        report.provider, report.model = "local", EXTRACTION_MODEL
+        result = await _local_extraction(prompt)
+        report.outcome = "ok" if isinstance(result, dict) and result else "defaults"
 
     # parse_json hands back whatever the model emitted; a top-level list or
     # string has no .get and would escape a function that promises not to raise.
@@ -474,10 +540,62 @@ async def generate_romance_message(
     return text or "...The evening is quiet. I was thinking about today."
 
 
+def _bounded_transcript(turns: list[dict[str, Any]]) -> str:
+    """Compaction input for the paid route: newest turns, each one capped."""
+    lines: list[str] = []
+    rest = turns
+    if turns and turns[0].get("role") == "system":
+        prior = str(turns[0].get("content") or "")[:MAX_PRIOR_SUMMARY_CHARS]
+        lines.append(f"Earlier summary: {prior}")
+        rest = turns[1:]
+    for t in rest[-MAX_COMPACT_TURNS:]:
+        speaker = "Commander" if t.get("role") == "user" else "Klukai"
+        lines.append(f"{speaker}: {str(t.get('content') or '')[:300]}")
+    return "\n".join(lines)
+
+
+async def _haiku_compaction(turns: list[dict[str, Any]]) -> str | None:
+    """One budgeted Haiku summary; None on any problem (logged without content)."""
+    outcome = "ok"
+    text = ""
+    try:
+        text = await extraction_llm.complete(
+            COMPACTION_PROMPT.format(conversation=_bounded_transcript(turns)),
+            max_tokens=extraction_llm.COMPACTION_MAX_TOKENS,
+            route="compaction",
+        )
+    except extraction_llm.ExtractionUnavailable:
+        outcome = "unavailable"
+    except extraction_llm.ExtractionLLMError as error:
+        logger.warning("Haiku compaction failed: %s", error)
+        outcome = "failed"
+    summary = text.strip()[:MAX_COMPACT_SUMMARY_CHARS]
+    if outcome == "ok" and not summary:
+        outcome = "empty"
+    logger.info(
+        "Compaction summary: provider=anthropic model=%s outcome=%s",
+        extraction_llm.model(),
+        outcome,
+    )
+    return summary if outcome == "ok" else None
+
+
 async def compact_turns(turns: list[dict[str, Any]]) -> str | None:
-    """Summarize conversation turns into a compact recap."""
+    """Summarize conversation turns into a compact recap.
+
+    Shares the extraction provider: on Haiku when enabled, falling back to
+    the local model only while its circuit is closed (else None, and the
+    raw turns stay in the session).
+    """
     if len(turns) < 2:
         return None
+
+    if extraction_llm.uses_anthropic():
+        summary = await _haiku_compaction(turns)
+        if summary:
+            return summary
+        if not _local_circuit_closed():
+            return None
 
     from .llm_router import get_lm_gate
 

@@ -86,6 +86,13 @@ services:
       KLUKAI_CLOUD_TEXT_DAILY_LIMIT: "${KLUKAI_CLOUD_TEXT_DAILY_LIMIT:-0}"
       KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT: "${KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT:-0}"
       KLUKAI_CREATIVE_LEDGER: "/images/.creative/attempts.sqlite3"
+      # Owner authorized Claude Haiku (high effort) for the per-turn mood /
+      # affection / facts extraction and compaction summaries on 2026-10-19.
+      # Paid calls need both provider=anthropic and a positive daily cap
+      # (UTC-day attempts shared by extraction + compaction, same ledger).
+      KLUKAI_EXTRACTION_PROVIDER: "${KLUKAI_EXTRACTION_PROVIDER:-local}"
+      KLUKAI_EXTRACTION_MODEL: "${KLUKAI_EXTRACTION_MODEL:-claude-haiku-5-5}"
+      KLUKAI_EXTRACTION_DAILY_LIMIT: "${KLUKAI_EXTRACTION_DAILY_LIMIT:-0}"
       # ComfyUI has no published raw port. Every operation is proxied by the
       # authenticated gateway and authorized again with the active GPU lease.
       COMFYUI_URL: "${COMFYUI_URL:-http://100.107.121.5:1234/api/v1/comfy}"

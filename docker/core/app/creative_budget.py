@@ -39,7 +39,26 @@ def _ledger_path() -> Path:
     return path
 
 
+def _extraction_limits() -> tuple[int, int]:
+    """Haiku extraction + compaction share one UTC-day cap (app/extraction_llm.py).
+
+    There is no monthly cap of its own: the month bound is the daily cap over
+    the longest month, so it can never bind before the daily one does.
+    """
+    try:
+        daily = int(os.environ.get("KLUKAI_EXTRACTION_DAILY_LIMIT", "0"))
+    except ValueError:
+        raise CreativeBudgetError(
+            "Extraction limit must be a positive integer"
+        ) from None
+    if daily <= 0:
+        raise CreativeBudgetError("Extraction has no enabled daily allowance")
+    return daily, daily * 31
+
+
 def _limits(kind: str) -> tuple[int, int]:
+    if kind == "extraction":
+        return _extraction_limits()
     if kind not in {"image", "text"}:
         raise CreativeBudgetError("Unknown creative request kind")
     try:
