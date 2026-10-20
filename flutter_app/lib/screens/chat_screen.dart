@@ -162,12 +162,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void _selectTab(HudTab tab) {
     if (tab == _tab) return;
     setState(() {
+      if (_tab == HudTab.chat) _dropStage();
       _tab = tab;
       _visited.add(tab);
     });
     if (tab == HudTab.chat) {
       _loadHerDay(); // a wardrobe change elsewhere shows here
       _loadVoiceLanguage(); // so does a language change on the Me tab
+      _scheduleStageWarmUp();
     }
   }
 
@@ -226,9 +228,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   VoiceLanguage _voiceLanguage = VoiceLanguage.en;
   bool _voiceLanguageSaving = false;
 
-  /// The embedded stage, while the 3D view is showing (no setState: the
-  /// iframe reports it during build and dispose).
+  /// The embedded stage, while it is loaded (no setState: the iframe reports
+  /// it during build and dispose).
   CompanionStageLink? _stageLink;
+
+  /// The stage stays loaded under the CHAT face (see [_stageMounted]).
+  bool _stageKept = false;
+
+  /// Its URL, fixed when it loads.
+  String? _stageSrc;
+
+  /// Loads it in the background a little after the transcript.
+  Timer? _stageWarmTimer;
   bool _stageReady = false;
   String? _stageNotice;
   VoicePlayState _stageVoice = VoicePlayState.idle;
@@ -493,6 +504,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _warmupTimer?.cancel();
     _herDayTimer?.cancel();
     _stageSpeakTimer?.cancel();
+    _stageWarmTimer?.cancel();
     _resumeSub?.cancel();
     _speech.dispose();
     _outfitChanged.dispose();

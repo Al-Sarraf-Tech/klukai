@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  SPEAK, MAX_SPEAK_CHARS, embedConfig, speakRequest, createSpeakGate, resumeWithin, postToParent,
+  SPEAK, VISIBILITY, MAX_SPEAK_CHARS, embedConfig, speakRequest, visibilityRequest, stageActivity,
+  createSpeakGate, resumeWithin, postToParent,
 } from "../../../flutter_app/web/companion/embed.js";
 
 const root = new URL("../../../", import.meta.url);
@@ -14,14 +15,22 @@ const speak = (data, over = {}) => ({ origin: ORIGIN, source: parent, data, ...o
 
 test("embed=1 forces 3D and reads clamped insets; no flag is the full stage", () => {
   assert.deepEqual(embedConfig("?embed=1&mode=3d&inset_top=96&inset_bottom=240"), {
-    embed: true, mode: "model", insets: { top: 96, bottom: 240 },
+    embed: true, mode: "model", hidden: false, insets: { top: 96, bottom: 240 },
   });
   // mode=portrait cannot turn embedded 3D off
   assert.equal(embedConfig("?embed=1&mode=portrait").mode, "model");
   assert.deepEqual(embedConfig("?embed=1&inset_top=-5&inset_bottom=99999").insets, { top: 0, bottom: 600 });
   assert.deepEqual(embedConfig("?embed=1&inset_top=abc&inset_bottom=").insets, { top: 120, bottom: 210 });
-  assert.deepEqual(embedConfig(""), { embed: false, mode: null, insets: { top: 120, bottom: 210 } });
+  assert.deepEqual(embedConfig(""), { embed: false, mode: null, hidden: false, insets: { top: 120, bottom: 210 } });
   assert.equal(embedConfig("?embed=true").embed, false);
+});
+
+test("hidden=1 starts the embedded stage parked behind the PWA's CHAT face", () => {
+  assert.equal(embedConfig("?embed=1&mode=3d&hidden=1").hidden, true);
+  assert.equal(embedConfig("?embed=1&mode=3d").hidden, false);
+  assert.equal(embedConfig("?embed=1&hidden=true").hidden, false);
+  // Only the embedded stage can be parked; the full stage always shows.
+  assert.equal(embedConfig("?hidden=1").hidden, false);
 });
 
 test("only the same-origin parent can ask her to speak", () => {
@@ -39,6 +48,38 @@ test("only the same-origin parent can ask her to speak", () => {
   const long = speakRequest(speak({ type: SPEAK, text: "a".repeat(MAX_SPEAK_CHARS + 50) }), ctx);
   assert.equal(long.text.length, MAX_SPEAK_CHARS);
   assert.equal(long.id, null);
+});
+
+test("only the same-origin parent can show or hide the stage", () => {
+  const ctx = { origin: ORIGIN, parent };
+  const show = (data, over) => speak(data, over);
+  assert.deepEqual(visibilityRequest(show({ type: VISIBILITY, visible: false }), ctx), { visible: false });
+  assert.deepEqual(visibilityRequest(show({ type: VISIBILITY, visible: true }), ctx), { visible: true });
+  assert.equal(visibilityRequest(show({ type: VISIBILITY, visible: true }, { origin: "https://evil.example" }), ctx), null);
+  assert.equal(visibilityRequest(show({ type: VISIBILITY, visible: true }, { source: { name: "other frame" } }), ctx), null);
+  assert.equal(visibilityRequest(show({ type: VISIBILITY, visible: true }), { origin: ORIGIN, parent: null }), null);
+  assert.equal(visibilityRequest(show({ type: VISIBILITY, visible: "yes" }), ctx), null);
+  assert.equal(visibilityRequest(show({ type: VISIBILITY }), ctx), null);
+  assert.equal(visibilityRequest(show({ type: SPEAK, visible: true }), ctx), null);
+  assert.equal(visibilityRequest(show(VISIBILITY), ctx), null);
+  assert.equal(visibilityRequest(null, ctx), null);
+  // A visibility message is never a speak request, and the other way round.
+  assert.equal(speakRequest(show({ type: VISIBILITY, visible: true, text: "hi" }), ctx), null);
+});
+
+test("off screen the stage neither draws nor plays", () => {
+  const on = { shown: true, render: true, portrait: false, ambience: true, audio: true };
+  const off = { shown: false, render: false, portrait: false, ambience: false, audio: false };
+  assert.deepEqual(stageActivity({ mode: "model", awake: true }), on);
+  // Parked behind the PWA's CHAT face, or the whole page in the background.
+  assert.deepEqual(stageActivity({ embedHidden: true, mode: "model", awake: true }), off);
+  assert.deepEqual(stageActivity({ documentHidden: true, mode: "model", awake: true }), off);
+  assert.deepEqual(stageActivity({ documentHidden: true, embedHidden: true, mode: "portrait", awake: true }), off);
+  // The portrait blinks only when she is awake in portrait mode, on screen.
+  assert.deepEqual(stageActivity({ mode: "portrait", awake: true }),
+    { shown: true, render: false, portrait: true, ambience: true, audio: true });
+  assert.equal(stageActivity({ mode: "portrait", awake: false }).portrait, false);
+  assert.equal(stageActivity({ embedHidden: true, mode: "portrait", awake: true }).portrait, false);
 });
 
 test("each tap plays once: a repeated id is dropped, a new tap is admitted", () => {
@@ -98,6 +139,34 @@ test("app.js wires embed mode without bringing back auto-play", () => {
   assert.match(app, /prefs\.music && !EMBED\.embed/);
   assert.match(app, /savePrefs\(\{ \.\.\.p, mode: storedMode \}\)/);
   assert.match(app, /if \(EMBED\.embed\) postToParent\(window, \{ type: "klukai:auth-expired" \}\)/);
+});
+
+test("app.js parks the stage while the PWA hides it, and never speaks on show", () => {
+  const app = source("flutter_app/web/companion/app.js");
+  // Same strict origin + source check as a speak request.
+  assert.match(app, /visibilityRequest\(event, \{ origin: location\.origin, parent: window\.parent \}\)/);
+  // It starts parked when the PWA loads it behind the CHAT face.
+  assert.match(app, /let embedHidden = EMBED\.hidden;/);
+  // One rule for what runs, shared by page visibility and the PWA's flip.
+  assert.match(app, /stageActivity\(\{ documentHidden: document\.hidden, embedHidden,/);
+  assert.match(app, /avatar\?\.setPaused\(!run\.render\)/);
+  assert.match(app, /if \(run\.ambience\) ambience\.start\(\); else ambience\.stop\(\);/);
+  assert.match(app, /music\?\.setHidden\(!run\.audio\)/);
+  // Hidden: her voice stops; a speak request while hidden is refused.
+  assert.match(app, /if \(embedHidden\) voice\?\.stop\(\);/);
+  assert.match(app, /if \(embedHidden\) \{ reply\("hidden"\); return; \}/);
+  // The appearance switcher parks a model that finishes loading off screen.
+  assert.match(app, /get hidden\(\) \{ return document\.hidden \|\| embedHidden; \}/);
+  const appearance = source("flutter_app/web/companion/stage_appearance.js");
+  assert.doesNotMatch(appearance, /document\.hidden/);
+  assert.equal((appearance.match(/prefs\.mode !== "model" \|\| runtime\.hidden/g) || []).length, 2);
+  // Showing her again never makes a sound: still only two speak() calls.
+  assert.equal((app.match(/voice\.speak\(/g) || []).length, 2);
+});
+
+test("a timed notice clears itself in the PWA's readout too", () => {
+  const app = source("flutter_app/web/companion/app.js");
+  assert.match(app, /if \(EMBED\.embed\) postToParent\(window, \{ type: "klukai:stage-notice", text: "" \}\);/);
 });
 
 test("embedded CSS hides the stage chrome; the page loads the current files", () => {

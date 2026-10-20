@@ -27,6 +27,7 @@ extension _ChatConnection on _ChatScreenState {
         if (!mounted || _authExpired) return;
         _mergeHistory(messages);
         _scrollToBottom(instant: true);
+        _scheduleStageWarmUp(); // her 3D view, quietly, once this has shown
       } else if (response.statusCode == 401) {
         // Expired token. Don't wait for the WebSocket's 4001 close — under
         // uvicorn that close never reaches the client, and the app would sit

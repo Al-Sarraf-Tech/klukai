@@ -7,6 +7,82 @@ extension _ChatStage on _ChatScreenState {
   /// How long to wait for the stage to answer a speak request.
   static const _speakAnswerTimeout = Duration(seconds: 8);
 
+  /// How long after her transcript arrives the stage starts loading behind
+  /// the CHAT face: the transcript, its pictures and the socket go first.
+  static const _stageWarmUpDelay = Duration(seconds: 3);
+
+  /// The stage is loaded under the Chat tab: while the 3D face shows, and
+  /// from his first flip (or the warm-up) until he leaves the tab.
+  bool get _stageMounted =>
+      _tab == HudTab.chat && (_view == ChatViewMode.threeD || _stageKept);
+
+  /// The stage itself, kept at one place in the tree so it is never rebuilt
+  /// (that would reload the page). Under the CHAT face it is parked: the
+  /// page stops drawing and playing, and it takes no taps.
+  Widget _buildStage({required bool visible}) {
+    final builder = widget.stageBuilder ?? defaultCompanionStage;
+    return IgnorePointer(
+      key: const Key('chat-stage-layer'),
+      ignoring: !visible,
+      child: builder(
+        context,
+        src: _stageSrc ??= companionStageSrc(hidden: !visible),
+        visible: visible,
+        onLink: _onStageLink,
+        onEvent: _onStageEvent,
+      ),
+    );
+  }
+
+  /// No setState: the iframe reports it during build and dispose.
+  void _onStageLink(CompanionStageLink? link) {
+    _stageLink = link;
+    if (link == null) {
+      // Gone: the next stage loads from scratch and reports for itself.
+      _stageReady = false;
+      _stageNotice = null;
+    }
+  }
+
+  /// Loads the stage behind the CHAT face a little after the transcript, so
+  /// his first flip finds her there. Only on a device where he has opened
+  /// 3D before: otherwise a three.js scene would sit in a phone's memory for
+  /// a view he never uses.
+  void _scheduleStageWarmUp() {
+    if (_stageMounted || (_stageWarmTimer?.isActive ?? false)) return;
+    if (!_stageUsedHere()) return;
+    _stageWarmTimer = Timer(_ChatStage._stageWarmUpDelay, () {
+      if (!mounted || _tab != HudTab.chat || _stageMounted) return;
+      _update(() => _stageKept = true);
+    });
+  }
+
+  /// Leaving the Chat tab tears the stage down (see _buildMobileLayout).
+  void _dropStage() {
+    _stageWarmTimer?.cancel();
+    _stageSpeakTimer?.cancel();
+    _stageKept = false;
+    _stageSrc = null;
+    _stageVoice = VoicePlayState.idle;
+    _pendingSpeakId = null;
+    _pendingSpeakLine = null;
+  }
+
+  bool _stageUsedHere() {
+    try {
+      return web.window.localStorage.getItem(kStageUsedKey) == '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _rememberStageUsed() {
+    if (_stageUsedHere()) return;
+    try {
+      web.window.localStorage.setItem(kStageUsedKey, '1');
+    } catch (_) {}
+  }
+
   /// Her latest line worth showing (not his, not an image-only frame).
   ChatMessage? get _latestLine {
     for (var i = _messages.length - 1; i >= 0; i--) {
@@ -37,25 +113,16 @@ extension _ChatStage on _ChatScreenState {
   /// The HUD thins out as the height shrinks (keyboard up, landscape, small
   /// phone): the readout goes first, then the tags; her line gets shorter.
   Widget _stageLayout(double height) {
-    final builder = widget.stageBuilder ?? defaultCompanionStage;
     final keyboard = _keyboardUp;
     final showTags = !keyboard && height >= 460;
     final showReadout = !keyboard && height >= 620;
     final line = _latestLine;
     final waiting = _state.isTyping && _streamingId == null;
-    return ColoredBox(
-      color: HudColors.ground,
+    // The stage itself is under this layer (see _buildMobileLayout).
+    return SizedBox.expand(
       child: Stack(
         key: const Key('chat-stage'),
         children: [
-          Positioned.fill(
-            child: builder(
-              context,
-              src: companionStageSrc(),
-              onLink: (link) => _stageLink = link,
-              onEvent: _onStageEvent,
-            ),
-          ),
           Positioned(
             top: 6,
             left: 16,

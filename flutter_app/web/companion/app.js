@@ -8,12 +8,14 @@ import { createPortrait } from "./portrait.js";
 import { createAmbience, ambienceKind } from "./ambience.js";
 import { createMusic } from "./music.js";
 import { createVoice } from "./voice.js?v=12e6e4bd";
-import { createStageAppearance } from "./stage_appearance.js";
+import { createStageAppearance } from "./stage_appearance.js?v=08da9810";
 import {
   applySubtitle, completedAnnouncement, clearDecorativeMotion, motionPreference,
   beginWake, portraitStatusNotice,
 } from "./stage_life.js";
-import { embedConfig, speakRequest, createSpeakGate, resumeWithin, postToParent } from "./embed.js";
+import {
+  embedConfig, speakRequest, visibilityRequest, stageActivity, createSpeakGate, resumeWithin, postToParent,
+} from "./embed.js?v=25e5a0b8";
 
 const $ = (id) => document.getElementById(id);
 const PREFS_KEY = "klukai_companion_prefs";
@@ -84,6 +86,9 @@ function boot() {
   let awake = false;
   let audioCtx = null;
   let reportedReady = null;
+  // Embedded: the PWA parks this page behind its CHAT face instead of
+  // unloading it, so 3D is instant when he flips back (klukai:visibility).
+  let embedHidden = EMBED.hidden;
 
   const notice = (text, ms = 4000) => {
     // Embedded, the notice element is hidden: the PWA's readout shows it.
@@ -92,7 +97,13 @@ function boot() {
     n.textContent = text;
     n.hidden = !text;
     clearTimeout(noticeTimer);
-    if (text && ms) noticeTimer = setTimeout(() => { n.hidden = true; }, ms);
+    if (text && ms) {
+      noticeTimer = setTimeout(() => {
+        n.hidden = true;
+        // The PWA keeps the stage across flips: don't leave it a stale notice.
+        if (EMBED.embed) postToParent(window, { type: "klukai:stage-notice", text: "" });
+      }, ms);
+    }
   };
 
   function renderLine({ jumpToLatest = false } = {}) {
@@ -375,13 +386,41 @@ function boot() {
       const request = speakRequest(event, { origin: location.origin, parent: window.parent });
       if (!gate.admit(request)) return;
       const reply = (status) => postToParent(window, { type: "klukai:speak-status", id: request.id, status });
+      if (embedHidden) { reply("hidden"); return; }
       lastLine = request.text;
       syncButtons();
       let ready = false;
       try { ready = await startAudio(); } catch { ready = false; }
+      // He flipped back to CHAT while the audio was starting: stay quiet.
+      if (embedHidden) { music?.setHidden(true); reply("hidden"); return; }
       if (!ready || !voice) { reply("unavailable"); return; }
       voice.stop();
       reply(voice.speak(request.text) ? "playing" : "empty");
+    });
+  }
+
+  // What runs follows one rule (embed.js stageActivity): on screen means the
+  // page is visible and, embedded, the PWA shows its 3D face. Off screen the
+  // render loop, ambience and portrait stop and the audio context suspends.
+  function applyActivity() {
+    const run = stageActivity({ documentHidden: document.hidden, embedHidden, mode: prefs.mode, awake });
+    music?.setHidden(!run.audio);
+    avatar?.setPaused(!run.render);
+    portrait.setActive(run.portrait);
+    if (run.ambience) ambience.start(); else ambience.stop();
+  }
+
+  // Embedded: the PWA's CHAT ⇄ 3D flip. Hidden, she stops talking (as if the
+  // page were gone) and nothing draws; shown, she picks up where she was —
+  // silently: only a tap on ▶ VOICE ever makes her speak.
+  function listenForVisibility() {
+    window.addEventListener("message", (event) => {
+      const request = visibilityRequest(event, { origin: location.origin, parent: window.parent });
+      if (!request || request.visible === !embedHidden) return;
+      embedHidden = !request.visible;
+      if (embedHidden) voice?.stop();
+      applyActivity();
+      if (!embedHidden) socket.resume();
     });
   }
 
@@ -392,6 +431,7 @@ function boot() {
       set avatar(value) { avatar = value; },
       get state() { return state; },
       get awake() { return awake; },
+      get hidden() { return document.hidden || embedHidden; },
     },
   });
 
@@ -497,16 +537,9 @@ function boot() {
 
   // ── iOS / Safari lifecycle: suspend in the background, heal on return ──
   document.addEventListener("visibilitychange", () => {
-    const hidden = document.hidden;
-    music?.setHidden(hidden);
-    avatar?.setPaused(hidden || prefs.mode !== "model");
-    if (hidden) {
-      portrait.setActive(false);
-      ambience.stop();
-    } else {
+    applyActivity();
+    if (!document.hidden) {
       socket.resume();
-      ambience.start();
-      portrait.setActive(awake && prefs.mode === "portrait");
       refreshDay();
       refreshPortrait(); // her frames may have expired, or finished drawing, while away
     }
@@ -520,11 +553,12 @@ function boot() {
     awake = true;
     $("wake").hidden = true;
     coverForWake(false);
+    listenForVisibility();
     listenForSpeech();
     setMode("model");
   } else coverForWake(true);
   portrait.setFrames({});
-  ambience.start();
+  if (!embedHidden) ambience.start();
   // 3D was his last view: start fetching three.js + the model now, in
   // parallel with the socket and the tap-to-begin, so it's ready on wake.
   if (prefs.mode === "model") {
