@@ -10,7 +10,14 @@
 
 export const SPEAK = "klukai:speak";
 export const VISIBILITY = "klukai:visibility";
+export const HUD = "klukai:hud";         // PWA → stage: what the stage's HUD shows
+export const HERDAY = "klukai:herday";   // stage → PWA: he tapped WEARING (open her day)
 export const MAX_SPEAK_CHARS = 4000;
+export const MAX_LINE_CHARS = 4000;
+const MAX_LABEL_CHARS = 60;
+const MAX_WEARING_CHARS = 120;
+const MAX_STATUS_CHARS = 240;
+const MAX_ID_CHARS = 128;
 const INSET_MAX = 600;
 
 /**
@@ -57,6 +64,54 @@ export function speakRequest(event, { origin, parent }) {
   const id = typeof data.id === "number" && Number.isFinite(data.id) ? data.id
     : typeof data.id === "string" && data.id ? data.id : null;
   return { text, id };
+}
+
+/** What the HUD shows before (or without) a snapshot. */
+export const EMPTY_HUD = Object.freeze({
+  level: 0, mood: "", bpm: 0, spiking: false, wearing: "", line: "", lineId: null, streaming: false, status: null,
+});
+
+/** Trim and cap a string without splitting a UTF-16 surrogate pair. */
+function capText(text, max) {
+  const value = text.trim();
+  if (value.length <= max) return value;
+  let cut = max;
+  const last = value.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut--;
+  return value.slice(0, cut);
+}
+
+/**
+ * The PWA's `klukai:hud` snapshot, applied over the previous one, or null
+ * when the message is not one (same checks as a speak request: this origin,
+ * the parent window only). Each snapshot is complete: a field it leaves out
+ * goes back to its default (so a stale status can't stick), while a field of
+ * the wrong type is ignored and keeps its last good value. Numbers are
+ * clamped (level 0-9, bpm 0-300), text is trimmed and capped. A snapshot
+ * never makes a sound: only his tap on VOICE does.
+ */
+export function hudUpdate(event, { origin, parent }, prev = EMPTY_HUD) {
+  const data = fromParent(event, { origin, parent }, HUD);
+  if (!data) return null;
+  const last = { ...EMPTY_HUD, ...prev };
+  const next = { ...EMPTY_HUD };
+  const take = (key, valid, value) => {
+    if (data[key] === undefined) return;            // left out: default
+    next[key] = valid ? value() : last[key];       // malformed: keep the last good value
+  };
+  const int = (v) => typeof v === "number" && Number.isFinite(v);
+  take("level", int(data.level), () => Math.min(9, Math.max(0, Math.round(data.level))));
+  take("bpm", int(data.bpm), () => Math.min(300, Math.max(0, Math.round(data.bpm))));
+  take("mood", typeof data.mood === "string", () => capText(data.mood, MAX_LABEL_CHARS));
+  take("wearing", typeof data.wearing === "string", () => capText(data.wearing, MAX_WEARING_CHARS));
+  take("line", typeof data.line === "string", () => capText(data.line, MAX_LINE_CHARS));
+  take("spiking", typeof data.spiking === "boolean", () => data.spiking);
+  take("streaming", typeof data.streaming === "boolean", () => data.streaming);
+  take("lineId", data.lineId === null || int(data.lineId)
+    || (typeof data.lineId === "string" && data.lineId.length <= MAX_ID_CHARS), () => data.lineId === "" ? null : data.lineId);
+  take("status", data.status === null || typeof data.status === "string",
+    () => (data.status === null ? null : capText(data.status, MAX_STATUS_CHARS) || null));
+  return next;
 }
 
 /**

@@ -131,11 +131,13 @@ test("app.js wires embed mode without bringing back auto-play", () => {
   // A finished reply is remembered, never spoken by itself.
   assert.match(app, /if \(fx\.kind === "speak"\) \{ lastLine = fx\.text; syncButtons\(\); \}/);
   assert.doesNotMatch(app, /fx\.kind === "speak"\) voice\?\.speak/);
-  // The only speak() calls: the stage's voice button and the PWA's request.
+  // The only speak() calls: the full stage's voice button, the PWA's
+  // request, and the embedded HUD's VOICE tap.
   const speaks = app.match(/voice\.speak\(/g) || [];
-  assert.equal(speaks.length, 2);
+  assert.equal(speaks.length, 3);
   assert.match(app, /voice\.speak\(lastLine\)/);
   assert.match(app, /voice\.speak\(request\.text\)/);
+  assert.match(app, /voice\.speak\(line\)/);
   assert.match(app, /speakRequest\(event, \{ origin: location\.origin, parent: window\.parent \}\)/);
   assert.match(app, /gate\.admit\(request\)/);
   // Embedded: no music of its own, no overwriting his saved mode, no login page in the frame.
@@ -156,15 +158,17 @@ test("app.js parks the stage while the PWA hides it, and never speaks on show", 
   assert.match(app, /if \(run\.ambience\) ambience\.start\(\); else ambience\.stop\(\);/);
   assert.match(app, /music\?\.setHidden\(!run\.audio\)/);
   // Hidden: her voice stops; a speak request while hidden is refused.
-  assert.match(app, /if \(embedHidden\) voice\?\.stop\(\);/);
+  assert.match(app, /if \(embedHidden\) \{\s*voice\?\.stop\(\);/);
   assert.match(app, /if \(embedHidden\) \{ reply\("hidden"\); return; \}/);
   // The appearance switcher parks a model that finishes loading off screen.
   assert.match(app, /get hidden\(\) \{ return document\.hidden \|\| embedHidden; \}/);
   const appearance = source("flutter_app/web/companion/stage_appearance.js");
   assert.doesNotMatch(appearance, /document\.hidden/);
   assert.equal((appearance.match(/prefs\.mode !== "model" \|\| runtime\.hidden/g) || []).length, 2);
-  // Showing her again never makes a sound: still only two speak() calls.
-  assert.equal((app.match(/voice\.speak\(/g) || []).length, 2);
+  // Showing her again never makes a sound: still only the three tap/request speak() calls.
+  assert.equal((app.match(/voice\.speak\(/g) || []).length, 3);
+  const visibility = app.slice(app.indexOf("function listenForVisibility()"), app.indexOf("const { refreshAppearances"));
+  assert.doesNotMatch(visibility, /\.speak\(|startAudio\(|unlockAudio\(/);
 });
 
 test("a timed notice clears itself in the PWA's readout too", () => {
@@ -194,4 +198,24 @@ test("the embedded view frames her waist-up with its own saved camera and a doub
   assert.match(appearance, /prefs\[viewKey\] = av\.getView\(\);/);
   assert.doesNotMatch(appearance, /prefs\.view\b/, "no path writes the full stage's saved view from embed");
   assert.match(appearance, /framing = "full", viewKey = "view", doubleTapReset = false/, "standalone defaults unchanged");
+});
+
+test("the embedded HUD: strict snapshots, VOICE only on his tap inside the frame, WEARING asks for her day", () => {
+  const app = source("flutter_app/web/companion/app.js");
+  assert.match(app, /const hud = EMBED\.embed\s*\? createHud\(document,/, "the HUD exists only embedded");
+  assert.match(app, /hudUpdate\(event, \{ origin: location\.origin, parent: window\.parent \}, hudState \|\| undefined\)/);
+  assert.match(app, /onHerDay: \(\) => postToParent\(window, \{ type: HERDAY \}\)/);
+  // A snapshot only renders: never speaks or starts audio.
+  const listen = app.slice(app.indexOf("function listenForHud()"), app.indexOf("async function onHudVoice()"));
+  assert.ok(listen.length > 50);
+  assert.doesNotMatch(listen, /\.speak\(|startAudio\(|unlockAudio\(/);
+  // VOICE: unlock audio synchronously inside the tap, then speak the shown line once.
+  const tap = app.slice(app.indexOf("async function onHudVoice()"), app.indexOf("// What runs follows one rule"));
+  assert.ok(tap.indexOf("unlockAudio();") > 0 && tap.indexOf("unlockAudio();") < tap.indexOf("await startAudio()"),
+    "the context is created/resumed before the first await");
+  assert.match(tap, /voice\.speak\(line\)/);
+  assert.match(tap, /if \(voicePhase !== "idle"\) \{\s*voiceTicket\+\+;\s*voice\?\.stop\(\);/, "a tap while busy stops her");
+  assert.match(tap, /if \(ticket !== voiceTicket \|\| embedHidden\) return;/, "a stop or a flip back to CHAT wins over a pending start");
+  // Hidden: she stops and the button resets; the HUD is parked.
+  assert.match(app, /voiceTicket\+\+;\s*setVoicePhase\("done"\);\s*\}\s*hud\?\.hold\(embedHidden\);/);
 });

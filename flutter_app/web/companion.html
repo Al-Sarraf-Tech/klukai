@@ -15,7 +15,7 @@
   <title>Klukai — Companion</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
-  <link rel="stylesheet" href="companion/companion.css?v=f59e22ab4701">
+  <link rel="stylesheet" href="companion/companion.css?v=da7b701aea41">
 </head>
 <body>
   <main id="stage" class="stage" data-mode="portrait">
@@ -32,6 +32,26 @@
     </section>
 
     <section id="model" class="model" aria-label="Klukai 3D" hidden></section>
+
+    <!-- Embedded (?embed=1) only: the 3D view's HUD, filled from the PWA's
+         klukai:hud snapshots (hud.js). Hidden until the first one arrives. -->
+    <div class="hud" id="hud" hidden>
+      <span class="hud-bracket" aria-hidden="true"></span>
+      <div class="hud-tags" id="hud-tags" role="group" aria-label="Status">
+        <span class="hud-tag"><span class="hud-k">AFFINITY</span><span class="hud-v" id="hud-level">LV0</span></span>
+        <span class="hud-tag"><span class="hud-k">MOOD</span><span class="hud-v" id="hud-mood">—</span></span>
+        <span class="hud-tag" id="hud-heart-tag"><span class="hud-k">HEART</span><span class="hud-v" id="hud-heart">0 bpm</span></span>
+        <button class="hud-tag hud-wearing" id="hud-wearing" type="button" aria-label="Her day" hidden><span class="hud-k">WEARING</span><span class="hud-v" id="hud-wearing-v"></span></button>
+      </div>
+      <section class="hud-card" id="hud-card" aria-label="Her latest line" aria-busy="false">
+        <div class="hud-card-head">
+          <span class="hud-name">▸ KLUKAI</span>
+          <button class="hud-voice" id="hud-voice" type="button" data-state="idle" aria-label="Hear her line" hidden><span class="hud-voice-icon" id="hud-voice-icon" aria-hidden="true">▶</span><span class="hud-voice-label" id="hud-voice-label">VOICE</span></button>
+        </div>
+        <p class="hud-status" id="hud-status" role="status" hidden></p>
+        <p class="hud-line" id="hud-line"></p>
+      </section>
+    </div>
 
     <header class="topbar">
       <a class="btn icon" href="./" aria-label="Back to chat">‹</a>
@@ -105,6 +125,6 @@
   </main>
 
   <noscript>The companion view needs JavaScript.</noscript>
-  <script type="module" src="companion/app.js?v=97987318e2a9"></script>
+  <script type="module" src="companion/app.js?v=85ca44cd2f87"></script>
 </body>
 </html>
