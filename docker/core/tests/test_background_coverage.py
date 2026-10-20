@@ -938,6 +938,11 @@ class TestImageGen:
         ]
         assert img_frames and img_frames[0].args[1]["memory_id"] == "mem-123"
         bg_mocks.proactive.record_first.assert_any_await("u1", "first_image")
+        # The "Compiling tactical visualization" line is cleared once the
+        # picture is out, so the chat is not left looking busy.
+        frames = [c.args[1] for c in bg_mocks.ws.send.await_args_list]
+        image_at = next(i for i, f in enumerate(frames) if f.get("type") == "image")
+        assert {"type": "thinking", "content": ""} in frames[image_at + 1 :]
 
     async def test_failed_generation_sends_graceful_message(self, bg_mocks):
         with (

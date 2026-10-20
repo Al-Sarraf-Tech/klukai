@@ -510,6 +510,8 @@ async def _deliver_generated_image(
         frame["memory_id"] = memory_id
     await ws.send(user_id, frame)
     logger.info("Image sent to UI (%d bytes)", len(img_bytes))
+    # Take down "Compiling tactical visualization": the picture is here.
+    await ws.send(user_id, {"type": "thinking", "content": ""})
 
     # Record first image milestone (both DB table and fact store)
     await proactive.record_first(user_id, "first_image")
