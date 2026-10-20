@@ -1,7 +1,9 @@
-// Her voice on the companion stage: fetches TTS for each sentence she says, plays
-// it through an analyser, and reports a live loudness level (mouth flaps,
-// the 3D talking layer, music ducking). Playback never overlaps; one next
-// sentence may synthesize while the current clip plays.
+// Her voice on the companion stage: fetches TTS for what she says, plays it
+// through an analyser, and reports a live loudness level (mouth flaps, the 3D
+// talking layer, music ducking). A reply goes out in as few requests as the
+// server's 500-character cap allows (usually one), so it plays as one clip
+// instead of pausing after every sentence. Playback never overlaps; the next
+// clip may synthesize while the current one plays.
 // Each reply is spoken once, from its `done` text; see speak().
 
 import { speakable } from "./logic.js";
@@ -19,30 +21,35 @@ const ABBREVIATIONS = new Set([
   "vs", "etc", "approx", "dept", "fig", "vol", "inc", "ltd", "ref",
 ]);
 /**
- * Speak the whole reply in sentence-sized requests, each within the server's
- * 500-character cap. Oversized sentences split at whitespace; only a single
- * oversized token is hard-split (never through a UTF-16 surrogate pair).
+ * Her line as sentence-sized pieces, each within the cap, with the separator
+ * that preceded each piece in the whitespace-normalized text (" ", or "" for
+ * CJK sentences and hard cuts). Oversized sentences split at whitespace; only
+ * a single oversized token is hard-split (never through a UTF-16 surrogate pair).
  */
-export function chunkForSpeech(text, limit = SPEAK_LIMIT) {
+function speechUnits(text, limit) {
   if (!Number.isInteger(limit) || limit < 2) throw new RangeError("Speech limit must be at least 2");
   const line = String(text || "").replace(/\s+/g, " ").trim();
-  const chunks = [];
+  const units = [];
   function append(sentence) {
+    let sep = /^\s/.test(sentence) ? " " : "";
     let rest = sentence.trim();
     while (rest.length > limit) {
       let cut = rest.lastIndexOf(" ", limit);
+      let next = " ";
       if (cut <= 0) {
         cut = limit;
+        next = "";
         const previous = rest.charCodeAt(cut - 1);
         if (previous >= 0xd800 && previous <= 0xdbff) cut--;
       }
-      chunks.push(rest.slice(0, cut));
+      units.push({ text: rest.slice(0, cut), sep });
       rest = rest.slice(cut).trimStart();
+      sep = next;
     }
-    if (rest) chunks.push(rest);
+    if (rest) units.push({ text: rest, sep });
   }
   // Keep common abbreviations and initials in context. Ambiguous endings like
-  // "in the U.S. Tomorrow..." may share a request; punctuation stays intact.
+  // "in the U.S. Tomorrow..." may share a sentence; punctuation stays intact.
   // Decimal/version dots need following whitespace to be a possible boundary.
   const ends = /[.!?…]+["'”’」』]*(?=\s|$)|[。！？]+["'”’」』]*/g;
   let start = 0;
@@ -58,6 +65,32 @@ export function chunkForSpeech(text, limit = SPEAK_LIMIT) {
     start = end;
   }
   append(line.slice(start));
+  return units;
+}
+
+/** Her line split into sentences, each within the cap (see speechUnits). */
+export function speechSentences(text, limit = SPEAK_LIMIT) {
+  return speechUnits(text, limit).map((unit) => unit.text);
+}
+
+/**
+ * The TTS requests for one reply: consecutive sentences packed greedily into
+ * chunks of at most `limit` characters, so a typical reply is ONE clip and a
+ * long one uses as few as possible (greedy packing is optimal when the order
+ * is fixed and sentences stay whole). A sentence is only ever split when it
+ * alone is over the cap; the original separators are kept.
+ */
+export function chunkForSpeech(text, limit = SPEAK_LIMIT) {
+  const chunks = [];
+  let current = "";
+  for (const { text: piece, sep } of speechUnits(text, limit)) {
+    if (current && current.length + sep.length + piece.length <= limit) current += sep + piece;
+    else {
+      if (current) chunks.push(current);
+      current = piece;
+    }
+  }
+  if (current) chunks.push(current);
   return chunks;
 }
 
@@ -73,11 +106,19 @@ export function rmsLevel(samples) {
 }
 
 export function createVoice({
-  context, tts, onLevel = () => {}, onSpeaking = () => {}, onError = () => {},
+  context, tts, onLevel = () => {}, onSpeaking = () => {}, onError = () => {}, onBusy = () => {},
   setTick = (fn) => setInterval(fn, 40), clearTick = clearInterval,
 }) {
   const queue = [];
   let enabled = true;
+  // Busy spans a whole reply (synthesis, every clip, the gaps between them):
+  // a voice button can show one state per tap instead of flickering per clip.
+  let busy = false;
+  function setBusy(on) {
+    if (busy === on) return;
+    busy = on;
+    onBusy(on);
+  }
   // Each drain owns its requests/playback. A stopped drain may still finish
   // decoding, but it must never play or reset the next drain's output.
   let active = null;
@@ -164,6 +205,7 @@ export function createVoice({
     if (active) return;
     const run = { controller: new AbortController(), cancelPlay: null, playing: false, next: null };
     active = run;
+    setBusy(true);
     try {
       while (isActive(run)) {
         const request = run.next || requestNext(run);
@@ -183,6 +225,7 @@ export function createVoice({
         active = null;
         meter(false);
         onSpeaking(false);
+        setBusy(false);
       }
     }
   }
@@ -219,7 +262,10 @@ export function createVoice({
       }
       meter(false);
       onSpeaking(false);
+      setBusy(false);
     },
     get pending() { return queue.length + (active?.next ? 1 : 0); },
+    /** A reply is being synthesized or played (between speak() and its end or stop()). */
+    get busy() { return busy; },
   };
 }

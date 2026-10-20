@@ -7,7 +7,7 @@ import { moodToExpression, sceneFor, reduceFrame, abandonTurn, avatarCue } from 
 import { createPortrait } from "./portrait.js";
 import { createAmbience, ambienceKind } from "./ambience.js";
 import { createMusic } from "./music.js";
-import { createVoice } from "./voice.js?v=12e6e4bd";
+import { createVoice } from "./voice.js?v=20ea8f11";
 import { createStageAppearance } from "./stage_appearance.js?v=08da9810";
 import {
   applySubtitle, completedAnnouncement, clearDecorativeMotion, motionPreference,
