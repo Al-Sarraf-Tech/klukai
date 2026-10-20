@@ -213,23 +213,86 @@ class _FakeStageLink implements CompanionStageLink {
 
 /// A 3D stage that loads nothing: hands the screen [link] and keeps the
 /// event handler so a test can play the stage's side of the conversation.
+/// Like the real iframe, it reports its link once when it is created and
+/// null when it is gone, and counts both: a stage built twice is a reload.
 class _FakeStage {
   final link = _FakeStageLink();
   StageEventHandler? onEvent;
   String? src;
+  bool? visible;
+  int created = 0;
+  int disposed = 0;
+
+  /// Taps that reached the stage itself (not the Flutter content over it).
+  int taps = 0;
 
   Widget build(
     BuildContext context, {
     required String src,
+    required bool visible,
     required ValueChanged<CompanionStageLink?> onLink,
     required StageEventHandler onEvent,
   }) {
     this.src = src;
+    this.visible = visible;
     this.onEvent = onEvent;
-    onLink(link);
-    return const ColoredBox(key: Key('fake-stage'), color: Colors.black);
+    return _FakeStageView(stage: this, onLink: onLink);
   }
 }
+
+class _FakeStageView extends StatefulWidget {
+  const _FakeStageView({required this.stage, required this.onLink})
+    : super(key: const Key('fake-stage'));
+  final _FakeStage stage;
+  final ValueChanged<CompanionStageLink?> onLink;
+
+  @override
+  State<_FakeStageView> createState() => _FakeStageViewState();
+}
+
+class _FakeStageViewState extends State<_FakeStageView> {
+  @override
+  void initState() {
+    super.initState();
+    widget.stage.created++;
+    widget.onLink(widget.stage.link);
+  }
+
+  @override
+  void dispose() {
+    widget.stage.disposed++;
+    widget.onLink(null);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTap: () => widget.stage.taps++,
+    child: const ColoredBox(color: Colors.black),
+  );
+}
+
+/// /api/messages with one line of hers, /api/affection with a score: the
+/// transcript loads, which is what starts the stage's background warm-up.
+http.Client _historyBackend() => MockClient((request) async {
+  if (request.url.path == '/api/messages') {
+    return http.Response(
+      jsonEncode({
+        'messages': [
+          {
+            'id': 'm1',
+            'role': 'assistant',
+            'content': 'Report, Commander.',
+            'created_at': '2026-10-19T08:00:00Z',
+          },
+        ],
+      }),
+      200,
+    );
+  }
+  return http.Response(jsonEncode({'score': 10, 'level': 1}), 200);
+});
 
 Future<FakeWebSocketService> _pumpChat(
   WidgetTester tester, {
@@ -239,6 +302,7 @@ Future<FakeWebSocketService> _pumpChat(
   _FakeStage? stage,
   FakeBrowserPlatform? browser,
   bool voiceInput = false,
+  http.Client? historyClient,
 }) async {
   // ChatScreen redirects to "/" when no token is present; prime one.
   web.window.localStorage.setItem('klukai_token', 'test-token');
@@ -257,6 +321,7 @@ Future<FakeWebSocketService> _pumpChat(
         stageBuilder: (stage ?? _FakeStage()).build,
         browser: browser,
         voiceInputEnabled: voiceInput,
+        historyClient: historyClient,
       ),
     ),
   );
@@ -271,6 +336,7 @@ void main() {
       web.window.localStorage.removeItem('klukai_token');
       web.window.localStorage.removeItem(kOpenIn3dPrefKey);
       web.window.localStorage.removeItem('flutter.$kOpenIn3dPrefKey');
+      web.window.localStorage.removeItem(kStageUsedKey);
     } catch (_) {}
   });
 
@@ -1377,8 +1443,112 @@ void main() {
 
       await tester.tap(find.byKey(const Key('view-flip-chat')));
       await tester.pump();
-      expect(find.byKey(const Key('fake-stage')), findsNothing);
+      // Still loaded, parked under the CHAT face; the 3D HUD is gone.
+      expect(find.byKey(const Key('fake-stage')), findsOneWidget);
+      expect(stage.visible, isFalse);
+      expect(find.text('3D LINK // LIVE'), findsNothing);
       expect(find.text('H.I.D.E. 404 // SECURE LINK'), findsOneWidget);
+      fake.dispose();
+    });
+
+    testWidgets('her stage loads once and stays loaded across flips', (
+      tester,
+    ) async {
+      final (fake, stage, _) = await pump3d(tester);
+      for (var i = 0; i < 3; i++) {
+        await tester.tap(find.byKey(const Key('view-flip-chat')));
+        await tester.pump();
+        expect(stage.visible, isFalse);
+        await tester.tap(find.byKey(const Key('view-flip-3d')));
+        await tester.pump();
+        expect(stage.visible, isTrue);
+        expect(find.text('3D LINK // LIVE'), findsOneWidget);
+      }
+      // Built once, never torn down: no reload, no new socket.
+      expect(stage.created, 1);
+      expect(stage.disposed, 0);
+      expect(stage.src, companionStageSrc());
+      expect(tester.takeException(), isNull);
+      fake.dispose();
+    });
+
+    testWidgets('parked under CHAT, the stage takes no taps; in 3D it does', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final (fake, stage, _) = await pump3d(tester);
+      final middle = tester.getCenter(find.byType(ChatScreen));
+      await tester.tapAt(middle);
+      await tester.pump();
+      expect(stage.taps, 1); // as before: the open middle of 3D is hers
+
+      await tester.tap(find.byKey(const Key('view-flip-chat')));
+      await tester.pump();
+      expect(
+        tester
+            .widget<IgnorePointer>(find.byKey(const Key('chat-stage-layer')))
+            .ignoring,
+        isTrue,
+      );
+      await tester.tapAt(middle);
+      await tester.pump();
+      expect(stage.taps, 1);
+      // The CHAT face is fully his: the composer still takes his words.
+      await tester.enterText(find.byType(TextField), 'Status?');
+      await tester.pump();
+      expect(find.text('Status?'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('view-flip-3d')));
+      await tester.pump();
+      await tester.tapAt(middle);
+      await tester.pump();
+      expect(stage.taps, 2);
+      fake.dispose();
+    });
+
+    testWidgets('back in 3D she is already tracking: no LINKING 3D again', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final (fake, stage, _) = await pump3d(tester);
+      stage.onEvent!('klukai:stage-ready', {'ready': true});
+      await tester.pump();
+      expect(find.text('◢ TRACKING'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('view-flip-chat')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('view-flip-3d')));
+      await tester.pump();
+      expect(find.text('◢ TRACKING'), findsOneWidget);
+      expect(find.text('◢ LINKING 3D…'), findsNothing);
+      fake.dispose();
+    });
+
+    testWidgets('a flip stops waiting on her voice; the next tap is fresh', (
+      tester,
+    ) async {
+      final (fake, stage, browser) = await pump3d(tester);
+      await herLine(fake, tester);
+      await tester.tap(find.byKey(const Key('voice-play')));
+      await tester.pump();
+      expect(stage.link.spoken, hasLength(1));
+      // He flips away mid-synth: the parked stage drops the line.
+      await tester.tap(find.byKey(const Key('view-flip-chat')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('view-flip-3d')));
+      await tester.pump();
+      // A late answer for that tap changes nothing; nothing plays by itself.
+      stage.onEvent!('klukai:speak-status', {'id': 1, 'status': 'unavailable'});
+      await tester.pump();
+      expect(browser.voices, isEmpty);
+      await tester.tap(find.byKey(const Key('voice-play')));
+      await tester.pump();
+      expect(stage.link.spoken.last, ('Sit. The stars are clear tonight.', 2));
+      stage.onEvent!('klukai:speak-status', {'id': 2, 'status': 'empty'});
+      await tester.pump(const Duration(seconds: 1)); // CHAT's scroll retries
       fake.dispose();
     });
 
@@ -1537,15 +1707,109 @@ void main() {
     testWidgets('another tab tears the stage down; Chat brings it back', (
       tester,
     ) async {
-      final (fake, _, _) = await pump3d(tester);
+      final (fake, stage, _) = await pump3d(tester);
       await tester.tap(find.byKey(const Key('hud-tab-kit')));
       await tester.pump();
       expect(find.byKey(const Key('fake-stage')), findsNothing);
+      expect(stage.disposed, 1);
       await tester.tap(find.byKey(const Key('hud-tab-chat')));
       await tester.pump();
       expect(find.byKey(const Key('fake-stage')), findsOneWidget);
+      expect(stage.created, 2);
       fake.dispose();
     });
+
+    testWidgets('…also when it was parked under CHAT', (tester) async {
+      final (fake, stage, _) = await pump3d(tester);
+      await tester.tap(find.byKey(const Key('view-flip-chat')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('hud-tab-kit')));
+      await tester.pump();
+      expect(find.byKey(const Key('fake-stage')), findsNothing);
+      expect(stage.disposed, 1);
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — the stage warms up behind CHAT', () {
+    testWidgets('once he has used 3D here, it loads parked after history', (
+      tester,
+    ) async {
+      web.window.localStorage.setItem(kStageUsedKey, '1');
+      final stage = _FakeStage();
+      final fake = await _pumpChat(
+        tester,
+        stage: stage,
+        historyClient: _historyBackend(),
+      );
+      await tester.pump();
+      expect(find.text('Report, Commander.'), findsOneWidget);
+      // Not with the transcript: it goes first.
+      expect(find.byKey(const Key('fake-stage')), findsNothing);
+      await tester.pump(const Duration(seconds: 3));
+      expect(find.byKey(const Key('fake-stage')), findsOneWidget);
+      expect(stage.visible, isFalse);
+      expect(stage.src, companionStageSrc(hidden: true));
+      expect(stage.src, contains('&hidden=1'));
+      // Still the CHAT face, fully his.
+      expect(find.byKey(const Key('chat-header')), findsOneWidget);
+      expect(
+        tester
+            .widget<IgnorePointer>(find.byKey(const Key('chat-stage-layer')))
+            .ignoring,
+        isTrue,
+      );
+
+      // His first flip finds her there: the same stage, now shown.
+      await tester.tap(find.byKey(const Key('view-flip-3d')));
+      await tester.pump();
+      expect(stage.visible, isTrue);
+      expect(stage.created, 1);
+      expect(find.text('3D LINK // LIVE'), findsOneWidget);
+      fake.dispose();
+    });
+
+    testWidgets('not on a device where he has never opened 3D', (tester) async {
+      final stage = _FakeStage();
+      final fake = await _pumpChat(
+        tester,
+        stage: stage,
+        historyClient: _historyBackend(),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 10));
+      expect(find.byKey(const Key('fake-stage')), findsNothing);
+      expect(stage.created, 0);
+      // Opening 3D remembers it for next time.
+      await tester.tap(find.byKey(const Key('view-flip-3d')));
+      await tester.pump();
+      expect(web.window.localStorage.getItem(kStageUsedKey), '1');
+      fake.dispose();
+    });
+
+    testWidgets(
+      'leaving the Chat tab first cancels it; coming back re-arms it',
+      (tester) async {
+        web.window.localStorage.setItem(kStageUsedKey, '1');
+        final stage = _FakeStage();
+        final fake = await _pumpChat(
+          tester,
+          stage: stage,
+          historyClient: _historyBackend(),
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('hud-tab-kit')));
+        await tester.pump(const Duration(seconds: 5));
+        expect(stage.created, 0);
+        await tester.tap(find.byKey(const Key('hud-tab-chat')));
+        await tester.pump();
+        expect(find.byKey(const Key('fake-stage')), findsNothing);
+        await tester.pump(const Duration(seconds: 3));
+        expect(find.byKey(const Key('fake-stage')), findsOneWidget);
+        expect(stage.visible, isFalse);
+        fake.dispose();
+      },
+    );
   });
 
   group('ChatScreen — phone widths', () {

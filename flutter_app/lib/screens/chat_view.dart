@@ -12,14 +12,38 @@ extension _ChatView on _ChatScreenState {
   static const _compactHeaderBelow = 500.0;
 
   Widget _buildMobileLayout() {
-    // The iframe only lives while the 3D face of the Chat tab is on screen;
-    // another tab or the CHAT face tears it (and its socket) down.
-    if (_view == ChatViewMode.threeD) {
-      return _tab == HudTab.chat
-          ? _buildStageLayout()
-          : const ColoredBox(color: HudColors.ground);
+    // Two layers. Underneath, her stage iframe: it loads on his first flip to
+    // 3D (or quietly a few seconds after the transcript, once he has used 3D
+    // on this device) and then stays loaded, socket and all, across every
+    // CHAT ⇄ 3D flip, so 3D shows her at once instead of reloading. On top,
+    // the face: the 3D HUD over the stage, or the opaque CHAT face covering
+    // it. While covered, the stage is parked: told to stop its render loop
+    // and sound (klukai:visibility), hidden and deaf to taps, and once its
+    // page has loaded not even painted, so the transcript renders as if it
+    // were not there (see paintStage). It is never moved or rebuilt: that
+    // would reload it. Another tab tears it (and its socket) down — the tab
+    // stack stops painting the Chat tab, and a parked scene is too much to
+    // hold on a phone meanwhile; Chat loads it again.
+    final threeD = _view == ChatViewMode.threeD;
+    final Widget face;
+    if (!threeD) {
+      face = HudBackground(child: _buildChatLayout());
+    } else if (_tab == HudTab.chat) {
+      face = _buildStageLayout();
+    } else {
+      face = const SizedBox.shrink();
     }
-    return HudBackground(child: _buildChatLayout());
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ColoredBox(
+          key: const Key('chat-stage-base'),
+          color: HudColors.ground,
+          child: _stageMounted ? _buildStage(visible: threeD) : null,
+        ),
+        face,
+      ],
+    );
   }
 
   /// Overflow-free at any height: the header compresses (and past half the
@@ -71,10 +95,14 @@ extension _ChatView on _ChatScreenState {
   void _setView(ChatViewMode next) {
     if (next == _view) return;
     _stageSpeakTimer?.cancel();
+    _stageWarmTimer?.cancel();
+    if (next == ChatViewMode.threeD) _rememberStageUsed();
     _update(() {
       _view = next;
-      _stageReady = false;
-      _stageNotice = null;
+      // Either way the stage has been, or is about to be, on screen: keep
+      // it. Its readiness and notices still hold; her voice stops (a parked
+      // stage stops it), so the voice control starts over.
+      _stageKept = true;
       _stageVoice = VoicePlayState.idle;
       _pendingSpeakId = null;
       _pendingSpeakLine = null;
