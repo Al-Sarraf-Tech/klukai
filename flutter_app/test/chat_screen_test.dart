@@ -648,6 +648,41 @@ void main() {
       expect(find.text('115 BPM'), findsOneWidget);
       fake.dispose();
     });
+
+    testWidgets('each new mood shows its own label and resting BPM', (
+      tester,
+    ) async {
+      const resting = <String, int>{
+        'serene': 60,
+        'cozy': 62,
+        'wistful': 66,
+        'lonely': 70,
+        'stern': 70,
+        'smug': 74,
+        'hopeful': 76,
+        'sulking': 78,
+        'admiring': 80,
+        'teasing': 82,
+        'restless': 88,
+        'heartbroken': 92,
+        'giddy': 104,
+        'overwhelmed': 118,
+        'breathless': 140,
+      };
+      final fake = await _pumpChat(tester, wardrobe: FakeWardrobeService());
+      for (final MapEntry(key: mood, value: bpm) in resting.entries) {
+        fake.emit({'type': 'mood', 'mood': mood});
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 900));
+        expect(
+          tester.widget<Text>(find.byKey(const Key('chat-header-mood'))).data,
+          mood.toUpperCase(),
+        );
+        expect(tester.widget<HudEcg>(find.byType(HudEcg)).bpm, bpm);
+        expect(find.text('$bpm BPM'), findsOneWidget, reason: mood);
+      }
+      fake.dispose();
+    });
   });
 
   group('ChatScreen — keyboard scroll-nav wiring', () {

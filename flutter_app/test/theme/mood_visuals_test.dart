@@ -11,10 +11,30 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:companion_app/theme/mood_visuals.dart';
 
+/// The fifteen moods added with her live heart rate, and the resting BPM the
+/// core contract gives each.
+const kNewMoodBpm = <String, int>{
+  'serene': 60,
+  'cozy': 62,
+  'wistful': 66,
+  'lonely': 70,
+  'stern': 70,
+  'smug': 74,
+  'hopeful': 76,
+  'sulking': 78,
+  'admiring': 80,
+  'teasing': 82,
+  'restless': 88,
+  'heartbroken': 92,
+  'giddy': 104,
+  'overwhelmed': 118,
+  'breathless': 140,
+};
+
 void main() {
   group('kMoodVisuals table integrity', () {
     test('contains the full mood roster (no mood left behind)', () {
-      const expectedMoods = [
+      final expectedMoods = [
         // Core
         'composed', 'focused', 'prideful', 'exasperated', 'protective',
         'quietly_pleased', 'competitive', 'tender', 'longing', 'battle_ready',
@@ -33,6 +53,8 @@ void main() {
         // Additional
         'nostalgic', 'curious', 'irritated', 'defiant', 'vulnerable',
         'grateful', 'worried', 'embarrassed',
+        // Live heart rate (2026-10-19)
+        ...kNewMoodBpm.keys,
       ];
       for (final mood in expectedMoods) {
         expect(
@@ -60,6 +82,31 @@ void main() {
       expect(kMoodVisuals['passionate']!.bpm, 115);
       expect(kMoodVisuals['flustered']!.glow, const Color(0xFFF472B6));
       expect(kMoodVisuals['battle_ready']!.bpm, 130);
+    });
+
+    test('the fifteen new moods rest at the contract BPM', () {
+      expect(kNewMoodBpm, hasLength(15));
+      kNewMoodBpm.forEach((mood, bpm) {
+        expect(
+          moodVisualFor(mood),
+          isNot(same(kDefaultMoodVisual)),
+          reason: mood,
+        );
+        expect(kMoodVisuals[mood]!.bpm, bpm, reason: mood);
+      });
+    });
+
+    test('each new mood glows in a colour no other mood uses', () {
+      for (final mood in kNewMoodBpm.keys) {
+        final glow = kMoodVisuals[mood]!.glow;
+        final sharing = kMoodVisuals.entries
+            .where((e) => e.key != mood && e.value.glow == glow)
+            .map((e) => e.key)
+            .toList();
+        expect(sharing, isEmpty, reason: '$mood shares its glow with $sharing');
+        expect(glow, isNot(kDefaultMoodVisual.glow), reason: mood);
+        expect(glow.a, 1.0, reason: '$mood glow must be opaque');
+      }
     });
   });
 

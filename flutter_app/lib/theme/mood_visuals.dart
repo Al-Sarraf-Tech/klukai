@@ -80,4 +80,21 @@ const Map<String, MoodVisual> kMoodVisuals = {
   'grateful': MoodVisual(Color(0xFF2DD4BF), 73), // thankful turquoise
   'worried': MoodVisual(Color(0xFFFCD34D), 88), // anxious yellow
   'embarrassed': MoodVisual(Color(0xFFFF6B9D), 96), // mortified coral
+  // Live heart rate (2026-10-19) — fifteen more, each its own colour, at the
+  // resting BPM the core's `heartbeat` contract gives them.
+  'serene': MoodVisual(Color(0xFFA5F3FC), 60), // still-water cyan
+  'cozy': MoodVisual(Color(0xFF4DB6AC), 62), // warm teal
+  'wistful': MoodVisual(Color(0xFFA5B4FC), 66), // faded lavender
+  'lonely': MoodVisual(Color(0xFF5C6BC0), 70), // dusk indigo
+  'stern': MoodVisual(Color(0xFF4682B4), 70), // steel blue
+  'smug': MoodVisual(Color(0xFFD4AF37), 74), // antique gold
+  'hopeful': MoodVisual(Color(0xFFFFB74D), 76), // dawn amber
+  'sulking': MoodVisual(Color(0xFFB5838D), 78), // dusky rose
+  'admiring': MoodVisual(Color(0xFFFDE68A), 80), // soft gold
+  'teasing': MoodVisual(Color(0xFFD946EF), 82), // playful magenta
+  'restless': MoodVisual(Color(0xFFFF9800), 88), // amber-orange
+  'heartbroken': MoodVisual(Color(0xFF9F1239), 92), // deep crimson
+  'giddy': MoodVisual(Color(0xFFFF3EA5), 104), // bright pink
+  'overwhelmed': MoodVisual(Color(0xFFE9C6FF), 118), // white-hot violet
+  'breathless': MoodVisual(Color(0xFFF43F5E), 140), // rose-red
 };

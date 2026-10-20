@@ -76,6 +76,22 @@ export const MOOD_STATE = Object.freeze({
   grateful: 'happy',
   worried: 'flustered',
   embarrassed: 'flustered',
+  // Live heart rate (2026-10-19)
+  serene: 'idle',
+  cozy: 'happy',
+  wistful: 'sad',
+  lonely: 'sad',
+  stern: 'idle',
+  smug: 'idle',
+  hopeful: 'happy',
+  sulking: 'sad',
+  admiring: 'bashful',
+  teasing: 'happy',
+  restless: 'flustered',
+  heartbroken: 'sad',
+  giddy: 'excited',
+  overwhelmed: 'flustered',
+  breathless: 'flustered',
 });
 
 /** Pure: one of her moods → viewer state (unknown/empty → 'idle'). */
@@ -160,6 +176,7 @@ export function parseTint(c) {
 /** Moods that switch her state at once, even inside the hysteresis window. */
 export const STRONG_MOODS = Object.freeze([
   'scared', 'terrified', 'panicked', 'furious', 'adrenaline', 'desperate', 'grieving', 'flustered', 'embarrassed',
+  'heartbroken', 'overwhelmed', 'breathless',
 ]);
 export const MOOD_HOLD_MS = 4000;
 

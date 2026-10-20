@@ -235,6 +235,9 @@ void main() {
   test('moodLabel uses the shared mood names', () {
     expect(moodLabel('composed'), 'COMPOSED');
     expect(moodLabel('quietly_pleased'), 'PLEASED');
-    expect(moodLabel('some_new_mood'), 'SOME_NEW_MOOD');
+    expect(moodLabel('some_new_mood'), 'SOME NEW MOOD');
+    expect(moodLabel('heartbroken'), 'HEARTBROKEN');
+    expect(moodLabel('longing'), 'LONGING');
+    expect(moodLabel('wistful'), 'WISTFUL');
   });
 }

@@ -7,12 +7,29 @@ import {
   sceneFor, nextBlink, mouthOpen, reduceFrame, speakable, isFailureSentinel, abandonTurn, avatarCue,
 } from "../../../flutter_app/web/companion/logic.js";
 
-test("the mood list matches the backend's VALID_MOODS exactly", () => {
+/**
+ * The fifteen moods that came with her live heart rate (2026-10-19). The core
+ * adds them to VALID_MOODS in a parallel change; until that lands they are
+ * listed here so the stage covers them either way (the union is the same
+ * set before and after).
+ */
+const NEW_MOODS = Object.freeze([
+  "serene", "cozy", "wistful", "lonely", "stern", "smug", "hopeful", "sulking",
+  "admiring", "teasing", "restless", "heartbroken", "giddy", "overwhelmed", "breathless",
+]);
+
+function backendMoods() {
   const src = readFileSync(new URL("../../../docker/core/app/fact_extractor.py", import.meta.url), "utf8");
   const block = src.match(/VALID_MOODS\s*=\s*frozenset\(\s*\{([\s\S]*?)\}\s*\)/);
   assert.ok(block, "backend VALID_MOODS literal must be found");
-  const backend = new Set([...block[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
-  assert.deepEqual(new Set(MOODS), backend);
+  return [...block[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+}
+
+test("the mood list matches the backend's VALID_MOODS (plus the new fifteen) exactly", () => {
+  const backend = backendMoods();
+  for (const m of backend) assert.ok(MOODS.includes(m), `backend mood ${m} missing from MOODS`);
+  assert.deepEqual(new Set(MOODS), new Set([...backend, ...NEW_MOODS]));
+  assert.equal(MOODS.length, 65);
 });
 
 test("every mood maps to a known portrait frame", () => {
@@ -25,11 +42,30 @@ test("every mood maps to a known portrait frame", () => {
   assert.equal(moodToExpression("not-a-mood"), "base");
 });
 
+test("the new moods show the portrait frame that fits them", () => {
+  const frames = {
+    serene: "smile", cozy: "smile", smug: "smile", hopeful: "smile", admiring: "smile",
+    teasing: "smile", giddy: "smile",
+    breathless: "blush", overwhelmed: "blush",
+    stern: "annoyed", sulking: "annoyed",
+    wistful: "base", lonely: "base", restless: "base", heartbroken: "base",
+  };
+  assert.deepEqual(Object.keys(frames).sort(), [...NEW_MOODS].sort());
+  for (const [mood, frame] of Object.entries(frames)) assert.equal(moodToExpression(mood), frame, mood);
+});
+
 test("brightness follows the mood's warmth", () => {
   assert.ok(moodBrightness("affectionate") > 0);
   assert.ok(moodBrightness("furious") < 0);
   assert.ok(moodBrightness("grieving") < moodBrightness("irritated"));
   assert.equal(moodBrightness("composed"), 0);
+  // The new ones: warm brightens, hurt darkens, quiet longing stays neutral.
+  assert.ok(moodBrightness("giddy") > 0);
+  assert.ok(moodBrightness("cozy") > 0);
+  assert.ok(moodBrightness("sulking") < 0);
+  assert.ok(moodBrightness("heartbroken") < moodBrightness("sulking"));
+  assert.ok(moodBrightness("lonely") < 0);
+  assert.equal(moodBrightness("wistful"), 0);
 });
 
 test("every scene's chords resolve and stay in a sane register", () => {
