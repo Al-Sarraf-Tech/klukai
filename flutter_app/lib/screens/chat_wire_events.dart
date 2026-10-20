@@ -214,6 +214,13 @@ extension _ChatWireEvents on _ChatScreenState {
         if (imgData != null) {
           _lockInput('IMAGE INCOMING', timeout: const Duration(seconds: 2));
           _update(() {
+            // The picture ends the wait for it: take down "Compiling tactical
+            // visualization" now, not on his next message. A reply that is
+            // still streaming keeps its own state.
+            if (_streamingId == null) {
+              _state = _state.copyWith(isTyping: false);
+              _thinkingText = null;
+            }
             _messages.add(
               ChatMessage(
                 id: 'image-${DateTime.now().millisecondsSinceEpoch}',

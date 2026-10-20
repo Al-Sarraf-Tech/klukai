@@ -1037,6 +1037,50 @@ void main() {
       },
     );
 
+    testWidgets('the picture arriving takes down her "compiling" status', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+      fake.emit({
+        'type': 'thinking',
+        'content': 'Compiling tactical visualization, Commander...',
+      });
+      await tester.pump();
+      const status = 'COMPILING TACTICAL VISUALIZATION, COMMANDER...';
+      expect(find.text(status), findsOneWidget);
+
+      // The image frame alone ends the wait, even if the server never sends
+      // its own empty thinking frame.
+      fake.emit({'type': 'image', 'data': _pngB64});
+      await tester.pump();
+      expect(find.text(status), findsNothing);
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      await drainImageTimers(tester);
+      fake.dispose();
+    });
+
+    testWidgets('a picture mid-reply leaves the streaming reply alone', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+      fake.emit({'type': 'token', 'text': 'Hold still, Commander'});
+      await tester.pump();
+      fake.emit({'type': 'image', 'data': _pngB64});
+      await tester.pump();
+      fake.emit({'type': 'token', 'text': ' — there.'});
+      fake.emit({'type': 'done'});
+      await tester.pump();
+      expect(
+        find.textContaining(
+          'Hold still, Commander — there.',
+          findRichText: true,
+        ),
+        findsOneWidget,
+      );
+      await drainImageTimers(tester);
+      fake.dispose();
+    });
+
     testWidgets(
       'with the canvas renderer ready, an image still goes through MessageBubble',
       (tester) async {
