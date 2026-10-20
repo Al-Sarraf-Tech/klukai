@@ -50,7 +50,7 @@ export function createStageAppearance({ $, api, prefs, savePrefs, notice, portra
       runtime.avatar.setTint?.(moodToExpression(runtime.state.mood));
       runtime.avatar.setMood(runtime.state.mood);
       if (runtime.state.thinking) runtime.avatar.setState("thinking");
-      runtime.avatar.setPaused(prefs.mode !== "model" || document.hidden);
+      runtime.avatar.setPaused(prefs.mode !== "model" || runtime.hidden);
       syncInsets();
       notice("");
     },
@@ -123,7 +123,7 @@ export function createStageAppearance({ $, api, prefs, savePrefs, notice, portra
       model.hidden = true;
       portrait.setActive(runtime.awake);
     }
-    runtime.avatar?.setPaused(prefs.mode !== "model" || document.hidden);
+    runtime.avatar?.setPaused(prefs.mode !== "model" || runtime.hidden);
     syncButtons();
     syncInsets();
   }
