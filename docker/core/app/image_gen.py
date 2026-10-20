@@ -1,4 +1,9 @@
-"""Image generation via ComfyUI with NoobAI-XL (Illustrious) for anime-realistic scenes."""
+"""Image generation: prompts for every renderer, and the legacy ComfyUI path.
+
+ComfyUI with NoobAI-XL (Illustrious) on Dominus runs only when
+``KLUKAI_IMAGE_PROVIDER=comfyui`` is set explicitly; every other provider is
+dispatched before any GPU gate, lease or Dominus request.
+"""
 
 from __future__ import annotations
 
@@ -204,7 +209,8 @@ async def generate_image(
     user_id: str | None = None,
     include_commander: bool = False,
 ) -> bytes | None:
-    """Generate through the configured scene provider, defaulting to ComfyUI.
+    """Generate through the configured scene provider (default: the account
+    worker; ComfyUI on Dominus only with ``KLUKAI_IMAGE_PROVIDER=comfyui``).
 
     ``sfw=True`` (wardrobe-driven renders below the intimacy gate) adds
     SFW_NEGATIVE_TAGS to the negative prompt; ``negative_extra`` appends a
