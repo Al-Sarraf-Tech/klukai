@@ -7,17 +7,85 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 void main() {
-  test('full replies are chunked without losing their final words', () {
-    final text =
-        '${'The hangar is quiet tonight. ' * 30}Final report complete.';
-    final chunks = chunkForTts(text);
-    expect(chunks.length, greaterThan(1));
-    expect(chunks.every((part) => part.length <= 500), isTrue);
-    expect(chunks.join(' '), text.trim());
-    expect(chunkForTts('Dr. Smith is here. Ready!'), [
-      'Dr. Smith is here.',
-      'Ready!',
-    ]);
+  group('chunkForTts', () {
+    test('a typical reply is one clip, so it plays without a pause', () {
+      const reply =
+          'Sit. The stars are clear tonight, Commander. You are late again — '
+          'I kept the coffee warm anyway! Will you stay a while?';
+      expect(chunkForTts(reply), [reply]);
+      // Whitespace is folded; nothing she said is dropped.
+      expect(chunkForTts('  Report.\n\nAll   quiet.  '), [
+        'Report. All quiet.',
+      ]);
+    });
+
+    test('a long reply is as few clips as fit, each ending a sentence', () {
+      final text =
+          '${'The hangar is quiet tonight. ' * 30}Final report complete.';
+      final chunks = chunkForTts(text);
+      // 892 characters: two clips, not 31 one-sentence clips.
+      expect(chunks, hasLength(2));
+      expect(chunks.every((part) => part.length <= kTtsMaxChars), isTrue);
+      expect(chunks.every((part) => part.endsWith('.')), isTrue);
+      expect(chunks.join(' '), text.trim());
+      // Greedy: the first clip holds every sentence that fits.
+      expect(
+        chunks.first.length + 1 + 'The hangar is quiet tonight.'.length,
+        greaterThan(kTtsMaxChars),
+      );
+    });
+
+    test('sentences join up to the limit and never across it', () {
+      final a = 'A${'a' * 198}.'; // 200 characters each
+      final b = 'B${'b' * 198}.';
+      final c = 'C${'c' * 198}.';
+      expect(chunkForTts('$a $b $c'), ['$a $b', c]);
+      expect(chunkForTts('$a $b $c', limit: 200), [a, b, c]);
+    });
+
+    test('an abbreviation does not end a sentence', () {
+      // Split wrongly after "Dr.", the first clip would be "Ready! I saw Dr."
+      expect(chunkForTts('Ready! I saw Dr. Smith.', limit: 16), [
+        'Ready!',
+        'I saw Dr. Smith.',
+      ]);
+      expect(chunkForTts('Dr. Smith is here. Ready!', limit: 20), [
+        'Dr. Smith is here.',
+        'Ready!',
+      ]);
+      expect(chunkForTts('Dr. Smith is here. Ready!'), [
+        'Dr. Smith is here. Ready!',
+      ]);
+    });
+
+    test('an oversized sentence splits at word boundaries', () {
+      final words = List.generate(300, (i) => 'word$i').join(' ');
+      final chunks = chunkForTts('$words. Done.');
+      expect(chunks.length, greaterThan(1));
+      expect(chunks.every((part) => part.length <= kTtsMaxChars), isTrue);
+      expect(chunks.join(' '), '$words. Done.');
+      for (final part in chunks) {
+        expect(part, isNot(startsWith(' ')));
+        expect(part, isNot(endsWith(' ')));
+      }
+    });
+
+    test('a cut with no space never splits a surrogate pair', () {
+      final text = 'a${'😀' * 300}'; // 601 UTF-16 code units, no spaces
+      final chunks = chunkForTts(text);
+      expect(chunks.join(), text);
+      expect(chunks.every((part) => part.length <= kTtsMaxChars), isTrue);
+      for (final part in chunks) {
+        final last = part.codeUnitAt(part.length - 1);
+        final first = part.codeUnitAt(0);
+        expect(last >= 0xd800 && last <= 0xdbff, isFalse); // no lone high
+        expect(first >= 0xdc00 && first <= 0xdfff, isFalse); // no lone low
+      }
+    });
+
+    test('nothing to say is no clips', () {
+      expect(chunkForTts('   '), isEmpty);
+    });
   });
 
   test('queued voice is polled and completed audio is returned', () async {

@@ -1,15 +1,20 @@
 part of 'chat_screen.dart';
 
-/// The Chat tab's 3D face: her companion stage in an iframe under the HUD
-/// (status tags, tracking readout, her latest line with `▶ VOICE`, and the
-/// same composer). Shares the screen's single State owner.
+/// The Chat tab's 3D face: her companion stage in an iframe, between a solid
+/// top bar (title, CHAT | 3D, menu) and a solid composer strip, with nothing
+/// Flutter draws over it. (On the web, Flutter content painted over a
+/// platform view goes into overlay canvases, and iOS Safari flickers as they
+/// repaint.) The stage draws her HUD itself — status, her line, `▶ VOICE`
+/// (a tap inside the iframe is what lets iOS start its audio) — from the
+/// `klukai:hud` snapshots sent here. Shares the screen's single State owner.
 extension _ChatStage on _ChatScreenState {
-  /// How long to wait for the stage to answer a speak request.
-  static const _speakAnswerTimeout = Duration(seconds: 8);
-
   /// How long after her transcript arrives the stage starts loading behind
   /// the CHAT face: the transcript, its pictures and the socket go first.
   static const _stageWarmUpDelay = Duration(seconds: 3);
+
+  /// One voice-error notice covers this long: the stage may report each
+  /// failed sentence of a line.
+  static const _voiceErrorQuiet = Duration(seconds: 4);
 
   /// The stage is loaded under the Chat tab: while the 3D face shows, and
   /// from his first flip (or the warm-up) until he leaves the tab.
@@ -28,6 +33,8 @@ extension _ChatStage on _ChatScreenState {
         context,
         src: _stageSrc ??= companionStageSrc(hidden: !visible),
         visible: visible,
+        // A menu or sheet open over her gets his taps, not the iframe.
+        interactive: ModalRoute.isCurrentOf(context) ?? true,
         onLink: _onStageLink,
         onEvent: _onStageEvent,
       ),
@@ -37,6 +44,8 @@ extension _ChatStage on _ChatScreenState {
   /// No setState: the iframe reports it during build and dispose.
   void _onStageLink(CompanionStageLink? link) {
     _stageLink = link;
+    // A new stage (or none) has not heard her HUD yet.
+    _sentHud = null;
     if (link == null) {
       // Gone: the next stage loads from scratch and reports for itself.
       _stageReady = false;
@@ -60,12 +69,9 @@ extension _ChatStage on _ChatScreenState {
   /// Leaving the Chat tab tears the stage down (see _buildMobileLayout).
   void _dropStage() {
     _stageWarmTimer?.cancel();
-    _stageSpeakTimer?.cancel();
     _stageKept = false;
     _stageSrc = null;
     _stageVoice = VoicePlayState.idle;
-    _pendingSpeakId = null;
-    _pendingSpeakLine = null;
   }
 
   bool _stageUsedHere() {
@@ -95,192 +101,155 @@ extension _ChatStage on _ChatScreenState {
     return null;
   }
 
-  List<String> get _trackingLines {
-    final notice = _stageNotice?.trim() ?? '';
-    if (notice.isNotEmpty) return [notice.toUpperCase()];
-    if (!_stageReady) return const ['LINKING 3D…'];
-    final doing = _stageVoice == VoicePlayState.playing
-        ? 'VOICE · LIP SYNC'
-        : _state.isTyping || _streamingId != null
-        ? 'THINKING'
-        : 'IDLE · BREATH';
-    return ['TRACKING', doing, 'GAZE: COMMANDER'];
-  }
-
-  Widget _buildStageLayout() =>
-      LayoutBuilder(builder: (context, box) => _stageLayout(box.maxHeight));
-
-  /// The HUD thins out as the height shrinks (keyboard up, landscape, small
-  /// phone): the readout goes first, then the tags; her line gets shorter.
-  Widget _stageLayout(double height) {
-    final keyboard = _keyboardUp;
-    final showTags = !keyboard && height >= 460;
-    final showReadout = !keyboard && height >= 620;
+  /// Everything the stage's HUD shows, as one `klukai:hud` snapshot: the
+  /// readouts of the CHAT header, her latest line, and her status while she
+  /// is working on a reply that has not started yet.
+  Map<String, Object?> get _hudSnapshot {
     final line = _latestLine;
     final waiting = _state.isTyping && _streamingId == null;
-    // The stage itself is under this layer (see _buildMobileLayout).
-    return SizedBox.expand(
-      child: Stack(
-        key: const Key('chat-stage'),
-        children: [
-          Positioned(
-            top: 6,
-            left: 16,
-            right: 16,
-            child: HudPointerShield(
-              child: HudTopBar(
-                title: '3D LINK // LIVE',
-                view: _view,
-                onViewChanged: _setView,
-                onMenu: _onMenu,
-                ambientMuted: _ambientMuted,
-              ),
-            ),
-          ),
-          // Only real controls are shielded: everywhere else a drag or pinch
-          // reaches her. Decorative parts ignore pointers; of the status
-          // tags only WEARING (her day) is a control, shielded on its box.
-          if (showTags) ...[
-            const Positioned(
-              top: 58,
-              left: 16,
-              child: IgnorePointer(
-                key: Key('stage-bracket'),
-                child: _Bracket(),
-              ),
-            ),
-            Positioned(
-              top: 56,
-              right: 16,
-              child: StageStatusTags(
-                level: _state.affectionLevel.clamp(0, kMaxAffinityLevel),
-                mood: moodLabel(_state.mood),
-                bpm: _moodBPM,
-                spiking: _heartbeatSpikeOverride != null,
-                wearing: _herDay?.outfit?.name ?? '',
-                onTap: _openHerDaySheet,
-                shield: (tag) => HudPointerShield(child: tag),
-              ),
-            ),
-            if (showReadout)
-              Positioned(
-                left: 16,
-                top: 230,
-                child: TrackingReadout(lines: _trackingLines),
-              ),
-          ],
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: HudPointerShield(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (_activeTools.isNotEmpty) _buildToolStatus(),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: DialoguePanel(
-                      line: line?.content ?? '',
-                      streaming: line?.isStreaming ?? false,
-                      status: waiting ? (_thinkingText ?? 'PROCESSING') : null,
-                      voiceState: _stageVoice,
-                      onVoice: line == null ? null : () => _speakInStage(line),
-                      maxTextHeight: keyboard || height < 560 ? 48 : 120,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  _buildComposer(),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+    return {
+      'level': _state.affectionLevel.clamp(0, kMaxAffinityLevel),
+      'mood': moodLabel(_state.mood),
+      'bpm': _moodBPM,
+      'spiking': _heartbeatSpikeOverride != null,
+      'wearing': _herDay?.outfit?.name ?? '',
+      'line': line?.content ?? '',
+      'lineId': line?.id,
+      'streaming': line?.isStreaming ?? false,
+      'status': waiting ? (_thinkingText ?? 'PROCESSING') : null,
+    };
   }
 
-  /// `▶ VOICE` in 3D: the avatar says the line once, lip-synced. If the
-  /// stage cannot play audio (no stage yet, or its audio would not start),
-  /// the line plays through the PWA's own voice channel instead.
-  void _speakInStage(ChatMessage line) {
-    if (_stageVoice != VoicePlayState.idle) return;
-    final id = ++_speakSeq;
-    final link = _stageLink;
-    if (link == null || !link.speak(line.content, id: id)) {
-      _speakHere(line);
-      return;
-    }
-    _stageSpeakTimer?.cancel();
-    _update(() {
-      _stageVoice = VoicePlayState.loading;
-      _pendingSpeakId = id;
-      _pendingSpeakLine = line;
-    });
-    _stageSpeakTimer = Timer(_ChatStage._speakAnswerTimeout, () {
-      if (!mounted || _pendingSpeakId != id) return;
-      _update(() {
-        _stageVoice = VoicePlayState.idle;
-        _pendingSpeakId = null;
-        _pendingSpeakLine = null;
-      });
-      _showHudNotice('// 3D LINK DID NOT ANSWER — try again.');
+  /// Tells the stage its HUD after this frame. Every change to what it shows
+  /// goes through setState and so rebuilds the Chat tab, which calls this.
+  void _scheduleHudSync() {
+    if (_hudSyncScheduled) return;
+    _hudSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _hudSyncScheduled = false;
+      if (mounted) _syncHud();
     });
   }
+
+  /// Sends the snapshot, unless the stage already has exactly this one.
+  void _syncHud() {
+    final link = _stageLink;
+    if (link == null) return;
+    final hud = _hudSnapshot;
+    final sent = _sentHud;
+    if (sent != null && mapEquals(sent, hud)) return;
+    if (link.sendHud(hud)) _sentHud = hud;
+  }
+
+  /// The top bar's title in 3D: what the stage is doing.
+  String get _stageTitle {
+    final notice = _stageNotice?.trim() ?? '';
+    final String doing;
+    if (notice.isNotEmpty) {
+      doing = notice.toUpperCase();
+    } else if (!_stageReady) {
+      doing = 'LINKING…';
+    } else if (_stageVoice == VoicePlayState.playing) {
+      doing = 'VOICE';
+    } else {
+      doing = 'LIVE';
+    }
+    return '3D LINK // $doing';
+  }
+
+  /// Above her stage: the same top bar as the CHAT face, in the same place,
+  /// on solid ground.
+  Widget _buildStageTopStrip() => DecoratedBox(
+    key: const Key('chat-stage-top'),
+    decoration: BoxDecoration(
+      color: HudColors.ground,
+      border: Border(bottom: BorderSide(color: HudColors.cyanA(0.25))),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
+      child: HudTopBar(
+        title: _stageTitle,
+        view: _view,
+        onViewChanged: _setView,
+        onMenu: _onMenu,
+        ambientMuted: _ambientMuted,
+      ),
+    ),
+  );
+
+  /// Under her stage: tool status while a tool runs, and the composer, on
+  /// solid ground. With the keyboard up it stays; the stage gives way.
+  Widget _buildStageBottomStrip() => LayoutBuilder(
+    builder: (context, box) => DecoratedBox(
+      key: const Key('chat-stage-bottom'),
+      decoration: BoxDecoration(
+        color: HudColors.ground,
+        border: Border(top: BorderSide(color: HudColors.cyanA(0.25))),
+      ),
+      // Scrolls, rather than overflowing, only in a window too short for it.
+      child: SingleChildScrollView(
+        reverse: true,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_activeTools.isNotEmpty)
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: box.maxHeight * 0.2),
+                child: SingleChildScrollView(child: _buildToolStatus()),
+              ),
+            _buildComposer(),
+          ],
+        ),
+      ),
+    ),
+  );
 
   void _onStageEvent(String type, Map<String, Object?> data) {
     if (!mounted) return;
     switch (type) {
       case 'klukai:stage-ready':
-        _update(() => _stageReady = data['ready'] == true);
+        final ready = data['ready'] == true;
+        _update(() => _stageReady = ready);
+        // It is listening now: whatever it was sent before may be lost.
+        if (ready) {
+          _sentHud = null;
+          _syncHud();
+        }
       case 'klukai:stage-notice':
         final text = data['text'];
         _update(() => _stageNotice = text is String ? text : null);
       case 'klukai:speaking':
         final on = data['on'] == true;
         if (on) {
-          _stageSpeakTimer?.cancel();
-          _update(() {
-            _stageVoice = VoicePlayState.playing;
-            _pendingSpeakId = null;
-            _pendingSpeakLine = null;
-          });
+          _update(() => _stageVoice = VoicePlayState.playing);
         } else if (_stageVoice == VoicePlayState.playing) {
           _update(() => _stageVoice = VoicePlayState.idle);
         }
       case 'klukai:speak-status':
+        // Her `▶ VOICE` in the stage could not start its audio: the line
+        // plays through the PWA's own voice channel instead. Only a line of
+        // hers, named by its id; anything else is ignored.
+        if (data['status'] != 'unavailable') return;
         final id = data['id'];
-        if (id is! num || id.toInt() != _pendingSpeakId) return;
-        _stageSpeakTimer?.cancel();
-        final line = _pendingSpeakLine;
-        final status = data['status'];
-        if (status == 'playing') {
-          // Synthesizing; `klukai:speaking` flips it to playing. Keep the
-          // spinner, but don't wait forever on a line that fails to arrive.
-          _stageSpeakTimer = Timer(const Duration(seconds: 30), () {
-            if (mounted && _stageVoice == VoicePlayState.loading) {
-              _update(() => _stageVoice = VoicePlayState.idle);
-            }
-          });
+        final line = _messages.where(
+          (m) => m.role != 'user' && id != null && m.id == '$id',
+        );
+        if (line.isNotEmpty) _speakHere(line.last);
+      case 'klukai:voice-error':
+        if (_stageVoice == VoicePlayState.playing) {
+          _update(() => _stageVoice = VoicePlayState.idle);
+        }
+        final now = DateTime.now();
+        final last = _voiceErrorShownAt;
+        if (last != null &&
+            now.difference(last) < _ChatStage._voiceErrorQuiet) {
           return;
         }
-        _update(() {
-          _stageVoice = VoicePlayState.idle;
-          _pendingSpeakId = null;
-          _pendingSpeakLine = null;
-        });
-        if (status == 'unavailable' && line != null) _speakHere(line);
-      case 'klukai:voice-error':
-        // One notice per tap: the stage reports each failed sentence.
-        if (_stageVoice == VoicePlayState.idle) return;
-        _stageSpeakTimer?.cancel();
-        _update(() {
-          _stageVoice = VoicePlayState.idle;
-          _pendingSpeakId = null;
-          _pendingSpeakLine = null;
-        });
+        _voiceErrorShownAt = now;
         _showHudNotice('// VOICE SYNTH OFFLINE — her words stand.');
+      case 'klukai:herday':
+        _openHerDaySheet();
       case 'klukai:auth-expired':
         _handleAuthExpired();
     }
@@ -319,19 +288,64 @@ extension _ChatStage on _ChatScreenState {
   }
 }
 
-/// The reticle corner at the top-left of the 3D view.
-class _Bracket extends StatelessWidget {
-  const _Bracket();
+/// The Chat tab's parts: the CHAT face, or the 3D strips; and her stage.
+enum _ChatTabSlot { face, top, bottom, stage }
+
+/// The strip heights her stage last had in 3D. Behind the CHAT face it keeps
+/// that rect, so a flip shows her at once without resizing (and reframing)
+/// her page.
+class _StageFrame {
+  double top = 54;
+  double bottom = 60;
+}
+
+/// Lays out the Chat tab. CHAT: the face fills it. 3D: the top strip and
+/// the composer strip take what they need, and her stage gets exactly the
+/// rect between them, so nothing Flutter paints overlaps the iframe.
+///
+/// Paint order is child order, and the stage is always the last child: in
+/// 3D everything Flutter draws comes before it (the engine needs no overlay
+/// canvas), and under the CHAT face the parked stage is hidden anyway.
+class _ChatTabLayout extends MultiChildLayoutDelegate {
+  _ChatTabLayout(this.frame);
+
+  final _StageFrame frame;
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: 26,
-    height: 26,
-    decoration: const BoxDecoration(
-      border: Border(
-        top: BorderSide(color: HudColors.cyan, width: 2),
-        left: BorderSide(color: HudColors.cyan, width: 2),
-      ),
-    ),
-  );
+  void performLayout(Size size) {
+    if (hasChild(_ChatTabSlot.face)) {
+      layoutChild(_ChatTabSlot.face, BoxConstraints.tight(size));
+      positionChild(_ChatTabSlot.face, Offset.zero);
+    }
+    final strip = BoxConstraints(
+      minWidth: size.width,
+      maxWidth: size.width,
+      maxHeight: size.height,
+    );
+    if (hasChild(_ChatTabSlot.top)) {
+      frame.top = layoutChild(_ChatTabSlot.top, strip).height;
+      positionChild(_ChatTabSlot.top, Offset.zero);
+    }
+    if (hasChild(_ChatTabSlot.bottom)) {
+      final room = (size.height - frame.top).clamp(0.0, size.height);
+      frame.bottom = layoutChild(
+        _ChatTabSlot.bottom,
+        strip.copyWith(maxHeight: room),
+      ).height;
+      positionChild(_ChatTabSlot.bottom, Offset(0, size.height - frame.bottom));
+    }
+    if (hasChild(_ChatTabSlot.stage)) {
+      final top = frame.top.clamp(0.0, size.height);
+      final height = (size.height - top - frame.bottom).clamp(0.0, size.height);
+      layoutChild(
+        _ChatTabSlot.stage,
+        BoxConstraints.tight(Size(size.width, height)),
+      );
+      positionChild(_ChatTabSlot.stage, Offset(0, top));
+    }
+  }
+
+  /// A flip changes the children, which lays them out again by itself.
+  @override
+  bool shouldRelayout(_ChatTabLayout oldDelegate) => oldDelegate.frame != frame;
 }

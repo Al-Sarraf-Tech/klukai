@@ -2,7 +2,8 @@
 library;
 
 // The embedded 3D stage's side of the CHAT ⇄ 3D flip: a parked iframe is not
-// drawn, takes no pointer events, and is told so on this page's origin only.
+// drawn, takes no pointer events, and is told so on this page's origin only;
+// and the HUD snapshot it is sent.
 //   flutter test --platform chrome test/widgets/companion_stage_view_test.dart
 import 'dart:async';
 import 'dart:js_interop';
@@ -16,12 +17,14 @@ import 'package:companion_app/widgets/companion_stage_view.dart';
 
 void main() {
   group('companionStageSrc', () {
-    test('a stage loaded behind the CHAT face starts parked', () {
+    test('nothing covers the stage, so it frames her with no insets', () {
       expect(
         companionStageSrc(),
-        'companion.html?embed=1&mode=3d&inset_top=$kStageInsetTop'
-        '&inset_bottom=$kStageInsetBottom',
+        'companion.html?embed=1&mode=3d&inset_top=0&inset_bottom=0',
       );
+    });
+
+    test('a stage loaded behind the CHAT face starts parked', () {
       expect(companionStageSrc(hidden: true), endsWith('&hidden=1'));
       expect(companionStageSrc(hidden: false), isNot(contains('hidden')));
     });
@@ -45,8 +48,16 @@ void main() {
             // Cloned into the frame's realm: read it field by field.
             final data = event.data as JSObject;
             heard.add({
-              'type': data.getProperty<JSAny?>('type'.toJS).dartify(),
-              'visible': data.getProperty<JSAny?>('visible'.toJS).dartify(),
+              for (final key in const [
+                'type',
+                'visible',
+                'level',
+                'line',
+                'lineId',
+                'status',
+              ])
+                if (data.hasProperty(key.toJS).toDart)
+                  key: data.getProperty<JSAny?>(key.toJS).dartify(),
             });
             origins.add(event.origin);
           });
@@ -88,6 +99,40 @@ void main() {
 
     test('the message is the one embed.js listens for', () {
       expect(kStageVisibilityMessage, 'klukai:visibility');
+    });
+
+    test('shown under a menu or sheet: drawn, but the taps are the PWA\'s', () {
+      setStageVisible(frame, visible: true, interactive: false);
+      expect(frame.style.visibility, 'visible');
+      expect(frame.style.pointerEvents, 'none');
+      setStageInteractive(frame, visible: true);
+      expect(frame.style.pointerEvents, 'auto');
+      // Parked, it never takes taps.
+      setStageInteractive(frame, visible: false);
+      expect(frame.style.pointerEvents, 'none');
+    });
+
+    test('its HUD goes to the stage on this origin, as klukai:hud', () async {
+      final message = stageHudMessage({
+        'level': 3,
+        'line': 'Report.',
+        'lineId': 'm7',
+        'status': null,
+      });
+      expect(message['type'], 'klukai:hud');
+      expect(kStageHudMessage, 'klukai:hud');
+      expect(postToStage(frame, message), isTrue);
+      await delivered(1);
+      expect(heard, [
+        {
+          'type': 'klukai:hud',
+          'level': 3,
+          'line': 'Report.',
+          'lineId': 'm7',
+          'status': null,
+        },
+      ]);
+      expect(origins, [web.window.location.origin]);
     });
   });
 

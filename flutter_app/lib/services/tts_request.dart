@@ -37,25 +37,39 @@ String clipForTts(String text, {int limit = kTtsMaxChars}) {
   return text.substring(0, cut + 1); // keep the punctuation, drop the space
 }
 
-/// Speak every sentence, splitting an oversized sentence at word boundaries.
-/// This follows the stage's chunkForSpeech rules, including UTF-16 safety.
+/// Her line in as few voice clips as possible, so it plays without pauses:
+/// whole sentences, grouped greedily into clips of at most [limit]
+/// characters. A sentence longer than that is cut at word boundaries (never
+/// inside a UTF-16 surrogate pair). Sentence ends follow the stage's
+/// chunkForSpeech rules (an abbreviation or an initial doesn't end one).
+/// Whitespace is folded; nothing else changes.
 List<String> chunkForTts(String text, {int limit = kTtsMaxChars}) {
   if (limit < 2) throw ArgumentError.value(limit, 'limit');
   final line = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-  final chunks = <String>[];
-  void append(String sentence) {
-    var rest = sentence.trim();
-    while (rest.length > limit) {
-      var cut = rest.lastIndexOf(' ', limit);
-      if (cut <= 0) {
-        cut = limit;
-        final previous = rest.codeUnitAt(cut - 1);
-        if (previous >= 0xd800 && previous <= 0xdbff) cut--;
-      }
-      chunks.add(rest.substring(0, cut));
-      rest = rest.substring(cut).trimLeft();
+  const space = 0x20;
+  // Spans of [line], each at most [limit] long, without outer spaces: her
+  // sentences, an oversized one cut into pieces.
+  final spans = <(int, int)>[];
+  void sentence(int start, int end) {
+    while (start < end && line.codeUnitAt(start) == space) {
+      start++;
     }
-    if (rest.isNotEmpty) chunks.add(rest);
+    while (end > start && line.codeUnitAt(end - 1) == space) {
+      end--;
+    }
+    while (end - start > limit) {
+      var cut = line.lastIndexOf(' ', start + limit);
+      var next = cut + 1;
+      if (cut <= start) {
+        cut = start + limit;
+        final previous = line.codeUnitAt(cut - 1);
+        if (previous >= 0xd800 && previous <= 0xdbff) cut--;
+        next = cut;
+      }
+      spans.add((start, cut));
+      start = next;
+    }
+    if (end > start) spans.add((start, end));
   }
 
   const abbreviations = {
@@ -101,10 +115,26 @@ List<String> chunkForTts(String text, {int limit = kTtsMaxChars}) {
         continue;
       }
     }
-    append(line.substring(start, match.end));
+    sentence(start, match.end);
     start = match.end;
   }
-  append(line.substring(start));
+  sentence(start, line.length);
+
+  // Consecutive spans share a clip while it stays within the limit. A clip
+  // is cut from [line] itself, so the spacing between sentences is kept.
+  final chunks = <String>[];
+  int? from;
+  var to = 0;
+  for (final (start, end) in spans) {
+    if (from != null && end - from <= limit) {
+      to = end;
+      continue;
+    }
+    if (from != null) chunks.add(line.substring(from, to));
+    from = start;
+    to = end;
+  }
+  if (from != null) chunks.add(line.substring(from, to));
   return chunks;
 }
 
