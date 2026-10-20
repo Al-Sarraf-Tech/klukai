@@ -23,7 +23,6 @@ import '../widgets/chat_composer_bar.dart';
 import '../widgets/companion_stage_view.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_footer.dart';
-import '../widgets/stage_hud.dart';
 import '../widgets/voice_button.dart';
 import '../widgets/tool_status_indicator.dart';
 import '../widgets/date_divider.dart';
@@ -243,15 +242,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Timer? _stageWarmTimer;
   bool _stageReady = false;
   String? _stageNotice;
+
+  /// Her voice in 3D: the stage speaking, or the PWA's fallback reading.
   VoicePlayState _stageVoice = VoicePlayState.idle;
-  int _speakSeq = 0;
-  int? _pendingSpeakId;
-  ChatMessage? _pendingSpeakLine;
-  Timer? _stageSpeakTimer;
+  DateTime? _voiceErrorShownAt;
 
   /// The `klukai:hud` snapshot the stage last got (null: it has none yet).
   Map<String, Object?>? _sentHud;
   bool _hudSyncScheduled = false;
+
+  /// Where her stage sits in 3D (see _ChatTabLayout).
+  final _StageFrame _stageFrame = _StageFrame();
 
   /// Voice letters with a recorded note: message id → voice id. The note
   /// plays from that message's `▶ VOICE`, never by itself.
@@ -508,7 +509,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _inputLockTimer?.cancel();
     _warmupTimer?.cancel();
     _herDayTimer?.cancel();
-    _stageSpeakTimer?.cancel();
     _stageWarmTimer?.cancel();
     _resumeSub?.cancel();
     _speech.dispose();

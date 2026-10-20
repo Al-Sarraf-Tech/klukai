@@ -17,12 +17,14 @@ import 'package:companion_app/widgets/companion_stage_view.dart';
 
 void main() {
   group('companionStageSrc', () {
-    test('a stage loaded behind the CHAT face starts parked', () {
+    test('nothing covers the stage, so it frames her with no insets', () {
       expect(
         companionStageSrc(),
-        'companion.html?embed=1&mode=3d&inset_top=$kStageInsetTop'
-        '&inset_bottom=$kStageInsetBottom',
+        'companion.html?embed=1&mode=3d&inset_top=0&inset_bottom=0',
       );
+    });
+
+    test('a stage loaded behind the CHAT face starts parked', () {
       expect(companionStageSrc(hidden: true), endsWith('&hidden=1'));
       expect(companionStageSrc(hidden: false), isNot(contains('hidden')));
     });
@@ -97,6 +99,17 @@ void main() {
 
     test('the message is the one embed.js listens for', () {
       expect(kStageVisibilityMessage, 'klukai:visibility');
+    });
+
+    test('shown under a menu or sheet: drawn, but the taps are the PWA\'s', () {
+      setStageVisible(frame, visible: true, interactive: false);
+      expect(frame.style.visibility, 'visible');
+      expect(frame.style.pointerEvents, 'none');
+      setStageInteractive(frame, visible: true);
+      expect(frame.style.pointerEvents, 'auto');
+      // Parked, it never takes taps.
+      setStageInteractive(frame, visible: false);
+      expect(frame.style.pointerEvents, 'none');
     });
 
     test('its HUD goes to the stage on this origin, as klukai:hud', () async {

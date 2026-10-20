@@ -24,6 +24,7 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -229,6 +230,7 @@ class _FakeStage {
   StageEventHandler? onEvent;
   String? src;
   bool? visible;
+  bool? interactive;
   int created = 0;
   int disposed = 0;
 
@@ -239,11 +241,13 @@ class _FakeStage {
     BuildContext context, {
     required String src,
     required bool visible,
+    required bool interactive,
     required ValueChanged<CompanionStageLink?> onLink,
     required StageEventHandler onEvent,
   }) {
     this.src = src;
     this.visible = visible;
+    this.interactive = interactive;
     this.onEvent = onEvent;
     return _FakeStageView(stage: this, onLink: onLink);
   }
@@ -1448,7 +1452,7 @@ void main() {
     Future<void> herLine(FakeWebSocketService fake, WidgetTester t) async {
       fake.emit({'type': 'token', 'text': 'Sit. The stars are clear tonight.'});
       fake.emit({'type': 'done', 'text': 'Sit. The stars are clear tonight.'});
-      await t.pump();
+      await settle(t);
     }
 
     testWidgets('CHAT | 3D flips to her embedded stage and back', (
@@ -1456,20 +1460,22 @@ void main() {
     ) async {
       final (fake, stage, _) = await pump3d(tester);
       expect(find.byKey(const Key('fake-stage')), findsOneWidget);
-      expect(find.text('3D LINK // LIVE'), findsOneWidget);
-      expect(find.byKey(const Key('stage-tags')), findsOneWidget);
-      expect(find.byKey(const Key('stage-dialogue')), findsOneWidget);
+      expect(find.byKey(const Key('chat-stage-top')), findsOneWidget);
+      expect(find.byKey(const Key('chat-stage-bottom')), findsOneWidget);
       expect(find.byKey(const Key('chat-composer')), findsOneWidget);
       expect(stage.src, companionStageSrc());
       expect(stage.src, startsWith('companion.html?embed=1&mode=3d'));
+      expect(stage.visible, isTrue);
+      expect(stage.interactive, isTrue);
       expect(tester.takeException(), isNull);
 
       await tester.tap(find.byKey(const Key('view-flip-chat')));
       await tester.pump();
-      // Still loaded, parked under the CHAT face; the 3D HUD is gone.
+      // Still loaded, parked under the CHAT face; the 3D strips are gone.
       expect(find.byKey(const Key('fake-stage')), findsOneWidget);
       expect(stage.visible, isFalse);
-      expect(find.text('3D LINK // LIVE'), findsNothing);
+      expect(find.byKey(const Key('chat-stage-top')), findsNothing);
+      expect(find.byKey(const Key('chat-stage-bottom')), findsNothing);
       expect(find.text('H.I.D.E. 404 // SECURE LINK'), findsOneWidget);
       fake.dispose();
     });
@@ -1485,7 +1491,7 @@ void main() {
         await tester.tap(find.byKey(const Key('view-flip-3d')));
         await tester.pump();
         expect(stage.visible, isTrue);
-        expect(find.text('3D LINK // LIVE'), findsOneWidget);
+        expect(find.byKey(const Key('chat-stage-top')), findsOneWidget);
       }
       // Built once, never torn down: no reload, no new socket.
       expect(stage.created, 1);
@@ -1505,7 +1511,7 @@ void main() {
       final middle = tester.getCenter(find.byType(ChatScreen));
       await tester.tapAt(middle);
       await tester.pump();
-      expect(stage.taps, 1); // as before: the open middle of 3D is hers
+      expect(stage.taps, 1); // the open middle of 3D is hers
 
       await tester.tap(find.byKey(const Key('view-flip-chat')));
       await tester.pump();
@@ -1531,196 +1537,47 @@ void main() {
       fake.dispose();
     });
 
-    testWidgets('back in 3D she is already tracking: no LINKING 3D again', (
-      tester,
-    ) async {
-      tester.view.physicalSize = const Size(390, 844);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
+    testWidgets('the top bar says what the stage is doing', (tester) async {
       final (fake, stage, _) = await pump3d(tester);
+      expect(find.text('3D LINK // LINKING…'), findsOneWidget);
+      stage.onEvent!('klukai:stage-notice', {'text': 'Loading her 3D model…'});
+      await tester.pump();
+      expect(find.text('3D LINK // LOADING HER 3D MODEL…'), findsOneWidget);
+      stage.onEvent!('klukai:stage-notice', {'text': ''});
       stage.onEvent!('klukai:stage-ready', {'ready': true});
       await tester.pump();
-      expect(find.text('◢ TRACKING'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('view-flip-chat')));
+      expect(find.text('3D LINK // LIVE'), findsOneWidget);
+      stage.onEvent!('klukai:speaking', {'on': true});
       await tester.pump();
-      await tester.tap(find.byKey(const Key('view-flip-3d')));
+      expect(find.text('3D LINK // VOICE'), findsOneWidget);
+      stage.onEvent!('klukai:speaking', {'on': false});
       await tester.pump();
-      expect(find.text('◢ TRACKING'), findsOneWidget);
-      expect(find.text('◢ LINKING 3D…'), findsNothing);
-      fake.dispose();
-    });
+      expect(find.text('3D LINK // LIVE'), findsOneWidget);
 
-    testWidgets('a flip stops waiting on her voice; the next tap is fresh', (
-      tester,
-    ) async {
-      final (fake, stage, browser) = await pump3d(tester);
-      await herLine(fake, tester);
-      await tester.tap(find.byKey(const Key('voice-play')));
-      await tester.pump();
-      expect(stage.link.spoken, hasLength(1));
-      // He flips away mid-synth: the parked stage drops the line.
+      // Back in 3D she is still live: no LINKING again.
       await tester.tap(find.byKey(const Key('view-flip-chat')));
       await tester.pump();
       await tester.tap(find.byKey(const Key('view-flip-3d')));
       await tester.pump();
-      // A late answer for that tap changes nothing; nothing plays by itself.
-      stage.onEvent!('klukai:speak-status', {'id': 1, 'status': 'unavailable'});
-      await tester.pump();
-      expect(browser.voices, isEmpty);
-      await tester.tap(find.byKey(const Key('voice-play')));
-      await tester.pump();
-      expect(stage.link.spoken.last, ('Sit. The stars are clear tonight.', 2));
-      stage.onEvent!('klukai:speak-status', {'id': 2, 'status': 'empty'});
+      expect(find.text('3D LINK // LIVE'), findsOneWidget);
       await tester.pump(const Duration(seconds: 1)); // CHAT's scroll retries
       fake.dispose();
     });
 
-    testWidgets('opens in 3D when his Me setting says so', (tester) async {
-      web.window.localStorage.setItem(kOpenIn3dPrefKey, 'true');
-      final fake = await _pumpChat(tester);
-      expect(find.byKey(const Key('fake-stage')), findsOneWidget);
-      fake.dispose();
-    });
-
-    testWidgets('…including when it was saved through shared_preferences', (
-      tester,
-    ) async {
-      web.window.localStorage.setItem('flutter.$kOpenIn3dPrefKey', 'true');
-      final fake = await _pumpChat(tester);
-      expect(find.byKey(const Key('fake-stage')), findsOneWidget);
-      fake.dispose();
-    });
-
-    testWidgets('opens in Chat by default', (tester) async {
-      final fake = await _pumpChat(tester);
-      expect(find.byKey(const Key('fake-stage')), findsNothing);
-      expect(find.byKey(const Key('chat-header')), findsOneWidget);
-      fake.dispose();
-    });
-
-    testWidgets('VOICE asks the stage to say her line, once per tap', (
+    testWidgets('her line, status and VOICE are the stage\'s to draw', (
       tester,
     ) async {
       final (fake, stage, browser) = await pump3d(tester);
       await herLine(fake, tester);
-      expect(find.text('Sit. The stars are clear tonight.'), findsOneWidget);
-      // Nothing is spoken until he taps.
+      fake.emit({'type': 'thinking', 'content': 'Checking the hangar'});
+      await settle(tester);
+      // Nothing of hers is drawn by Flutter over the stage in 3D.
+      expect(find.text('Sit. The stars are clear tonight.'), findsNothing);
+      expect(find.textContaining('HANGAR'), findsNothing);
+      expect(find.byKey(const Key('voice-play')), findsNothing);
       expect(stage.link.spoken, isEmpty);
       expect(browser.voices, isEmpty);
-
-      await tester.tap(find.byKey(const Key('voice-play')));
-      await tester.pump();
-      expect(stage.link.spoken, [('Sit. The stars are clear tonight.', 1)]);
-      // Synthesizing: the button is busy, a second tap is not a second line.
-      await tester.tap(find.byKey(const Key('voice-play')));
-      await tester.pump();
-      expect(stage.link.spoken, hasLength(1));
-
-      stage.onEvent!('klukai:speak-status', {'id': 1, 'status': 'playing'});
-      stage.onEvent!('klukai:speaking', {'on': true});
-      await tester.pump();
-      expect(find.text('◢ VOICE · LIP SYNC'), findsNothing); // not ready yet
-      stage.onEvent!('klukai:speaking', {'on': false});
-      await tester.pump();
-
-      await tester.tap(find.byKey(const Key('voice-play')));
-      await tester.pump();
-      expect(stage.link.spoken.last, ('Sit. The stars are clear tonight.', 2));
-      expect(browser.voices, isEmpty);
-      // The answer-timeout must not fire after the test.
-      stage.onEvent!('klukai:speak-status', {'id': 2, 'status': 'empty'});
-      await tester.pump();
-      fake.dispose();
-    });
-
-    testWidgets('when the stage cannot play, the PWA voice reads the line', (
-      tester,
-    ) async {
-      final paths = <String>[];
-      final tts = MockClient((request) async {
-        paths.add(request.url.path);
-        return http.Response(jsonEncode({'audio': 'UklGRg=='}), 200);
-      });
-      final (fake, stage, browser) = await pump3d(tester, httpClient: tts);
-      await herLine(fake, tester);
-      await tester.tap(find.byKey(const Key('voice-play')));
-      await tester.pump();
-      stage.onEvent!('klukai:speak-status', {'id': 1, 'status': 'unavailable'});
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 10));
-      }
-      expect(find.textContaining('VOICE SYNTH OFFLINE'), findsNothing);
-      // Her two sentences, one clip, read through the PWA's own channel.
-      expect(paths, ['/api/tts']);
-      expect(browser.voices, ['data:audio/wav;base64,UklGRg==']);
-      fake.dispose();
-    });
-
-    testWidgets('a synth failure says so once per tap', (tester) async {
-      final (fake, stage, _) = await pump3d(tester);
-      await herLine(fake, tester);
-      await tester.tap(find.byKey(const Key('voice-play')));
-      await tester.pump();
-      stage.onEvent!('klukai:speak-status', {'id': 1, 'status': 'playing'});
-      for (var i = 0; i < 3; i++) {
-        stage.onEvent!('klukai:voice-error', {});
-      }
-      await tester.pump();
-      expect(find.textContaining('VOICE SYNTH OFFLINE'), findsOneWidget);
-      // The control is ready for another tap.
-      expect(
-        tester.widget<InkWell>(find.byKey(const Key('voice-play'))).onTap,
-        isNotNull,
-      );
-      await tester.pump(const Duration(seconds: 5));
-      fake.dispose();
-    });
-
-    testWidgets('a stale answer for another tap is ignored', (tester) async {
-      final (fake, stage, browser) = await pump3d(tester);
-      await herLine(fake, tester);
-      await tester.tap(find.byKey(const Key('voice-play')));
-      await tester.pump();
-      stage.onEvent!('klukai:speak-status', {
-        'id': 99,
-        'status': 'unavailable',
-      });
-      await tester.pump();
-      expect(browser.voices, isEmpty);
-      stage.onEvent!('klukai:speak-status', {'id': 1, 'status': 'empty'});
-      await tester.pump();
-      fake.dispose();
-    });
-
-    testWidgets('the tracking readout follows what the stage reports', (
-      tester,
-    ) async {
-      tester.view.physicalSize = const Size(390, 844);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
-      final (fake, stage, _) = await pump3d(tester);
-      expect(find.text('◢ LINKING 3D…'), findsOneWidget);
-      stage.onEvent!('klukai:stage-notice', {'text': 'Loading her 3D model…'});
-      await tester.pump();
-      expect(find.text('◢ LOADING HER 3D MODEL…'), findsOneWidget);
-      stage.onEvent!('klukai:stage-notice', {'text': ''});
-      stage.onEvent!('klukai:stage-ready', {'ready': true});
-      await tester.pump();
-      expect(find.text('◢ TRACKING'), findsOneWidget);
-      expect(find.text('◢ IDLE · BREATH'), findsOneWidget);
-      fake.dispose();
-    });
-
-    testWidgets('her thinking status shows in the dialogue panel', (
-      tester,
-    ) async {
-      final (fake, _, _) = await pump3d(tester);
-      fake.emit({'type': 'thinking', 'content': 'Checking the hangar'});
-      await tester.pump();
-      expect(find.text('CHECKING THE HANGAR'), findsOneWidget);
-      expect(find.byKey(const Key('voice-play')), findsNothing);
       fake.emit({'type': 'thinking', 'content': ''});
-      await tester.pump();
       fake.dispose();
     });
 
@@ -1820,7 +1677,8 @@ void main() {
       fake.dispose();
     });
 
-    testWidgets('her WEARING in the stage opens her day', (tester) async {
+    testWidgets('her WEARING in the stage opens her day; the stage takes no '
+        'taps while it is open', (tester) async {
       final (fake, stage, _) = await pump3d(
         tester,
         wardrobe: FakeWardrobeService(),
@@ -1829,13 +1687,76 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.byType(BottomSheet), findsOneWidget);
+      expect(stage.interactive, isFalse);
       expect(stage.visible, isTrue);
 
       await tester.tapAt(const Offset(10, 10)); // the barrier closes it
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.byType(BottomSheet), findsNothing);
+      expect(stage.interactive, isTrue);
       expect(stage.created, 1);
+      fake.dispose();
+    });
+
+    testWidgets('the menu, open over her, gets his taps', (tester) async {
+      final (fake, stage, _) = await pump3d(tester);
+      await _openMenu(tester);
+      expect(find.byKey(const Key('chat-menu-threads')), findsOneWidget);
+      expect(stage.interactive, isFalse);
+      await tester.tapAt(const Offset(10, 400)); // dismissed
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byKey(const Key('chat-menu-threads')), findsNothing);
+      expect(stage.interactive, isTrue);
+      fake.dispose();
+    });
+
+    testWidgets('when her own VOICE cannot start, the PWA voice reads it', (
+      tester,
+    ) async {
+      final paths = <String>[];
+      final tts = MockClient((request) async {
+        paths.add(request.url.path);
+        return http.Response(jsonEncode({'audio': 'UklGRg=='}), 200);
+      });
+      final (fake, stage, browser) = await pump3d(
+        tester,
+        httpClient: tts,
+        historyClient: _historyBackend(),
+      );
+      // Not for a line that isn't hers, nor for any other status.
+      stage.onEvent!('klukai:speak-status', {
+        'id': 99,
+        'status': 'unavailable',
+      });
+      stage.onEvent!('klukai:speak-status', {'id': 'm1', 'status': 'playing'});
+      await tester.pump();
+      expect(paths, isEmpty);
+
+      stage.onEvent!('klukai:speak-status', {
+        'id': 'm1',
+        'status': 'unavailable',
+      });
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      expect(find.textContaining('VOICE SYNTH OFFLINE'), findsNothing);
+      expect(paths, ['/api/tts']);
+      expect(browser.voices, ['data:audio/wav;base64,UklGRg==']);
+      fake.dispose();
+    });
+
+    testWidgets('a voice failure in the stage says so once', (tester) async {
+      final (fake, stage, _) = await pump3d(tester);
+      stage.onEvent!('klukai:speaking', {'on': true});
+      for (var i = 0; i < 3; i++) {
+        stage.onEvent!('klukai:voice-error', {});
+      }
+      await tester.pump();
+      expect(find.textContaining('VOICE SYNTH OFFLINE'), findsOneWidget);
+      expect(find.text('3D LINK // LINKING…'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 5));
       fake.dispose();
     });
 
@@ -1905,7 +1826,7 @@ void main() {
       await tester.pump();
       expect(stage.visible, isTrue);
       expect(stage.created, 1);
-      expect(find.text('3D LINK // LIVE'), findsOneWidget);
+      expect(find.byKey(const Key('chat-stage-top')), findsOneWidget);
       fake.dispose();
     });
 
@@ -2027,7 +1948,8 @@ void main() {
         await tester.tap(find.byKey(const Key('view-flip-3d')));
         await tester.pump();
         expect(tester.takeException(), isNull);
-        expect(find.byKey(const Key('stage-dialogue')), findsOneWidget);
+        expect(find.byKey(const Key('chat-stage-top')), findsOneWidget);
+        expect(find.byKey(const Key('chat-stage-bottom')), findsOneWidget);
         fake.emit({'type': 'thinking', 'content': ''});
         fake.dispose();
       });
@@ -2047,147 +1969,131 @@ void main() {
     });
   });
 
-  // Anything shielded (HudPointerShield) keeps drags and pinches from her
-  // stage, so only the real controls may be.
-  group('ChatScreen — 3D: she takes drags around the HUD', () {
-    const readOnlyTags = [
-      Key('stage-tag-affinity'),
-      Key('stage-tag-mood'),
-      Key('stage-tag-heart'),
-    ];
-    const wearingTag = Key('stage-tag-wearing');
-
-    Future<FakeWebSocketService> pumpStage(
-      WidgetTester tester,
-      FakeWardrobeService wardrobe,
-    ) async {
+  // On the web, anything Flutter paints over a platform view goes into an
+  // overlay canvas, and iOS Safari flickers as those repaint. In 3D nothing
+  // may: the stage gets its own rect, and paints last.
+  group('ChatScreen — 3D: nothing Flutter draws covers her stage', () {
+    Future<(FakeWebSocketService, _FakeStage)> pumpStage(
+      WidgetTester tester, {
+      double keyboard = 0,
+    }) async {
       tester.view.physicalSize = const Size(390, 844);
       tester.view.devicePixelRatio = 1.0;
+      tester.view.viewInsets = FakeViewPadding(bottom: keyboard);
       addTearDown(tester.view.reset);
-      web.window.localStorage.setItem('klukai_token', 'test-token');
-      final fake = FakeWebSocketService();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ChatScreen(
-            serverUrl: 'http://localhost:0',
-            webSocketService: fake,
-            wardrobeService: wardrobe,
-            voiceSettings: _VoiceSettingsBackend().service(),
-            stageBuilder: _FakeStage().build,
-          ),
-        ),
+      final stage = _FakeStage();
+      final fake = await _pumpChat(
+        tester,
+        stage: stage,
+        wardrobe: FakeWardrobeService(),
       );
-      await tester.pump();
       await tester.pump();
       await tester.tap(find.byKey(const Key('view-flip-3d')));
       await tester.pump();
-      return fake;
+      return (fake, stage);
     }
 
-    List<Rect> shields(WidgetTester tester) => [
-      for (var i = 0; i < find.byType(HudPointerShield).evaluate().length; i++)
-        tester.getRect(find.byType(HudPointerShield).at(i)),
-    ];
+    Rect rect(WidgetTester tester, String key) =>
+        tester.getRect(find.byKey(Key(key)));
 
-    bool ignored(WidgetTester tester, Finder finder) => tester
-        .widgetList<IgnorePointer>(
-          find.ancestor(
-            of: finder,
-            matching: find.byType(IgnorePointer),
-            matchRoot: true,
-          ),
-        )
-        .any((w) => w.ignoring);
+    void expectFramed(WidgetTester tester) {
+      final tab = rect(tester, 'chat-tab');
+      final top = rect(tester, 'chat-stage-top');
+      final stage = rect(tester, 'chat-stage-layer');
+      final bottom = rect(tester, 'chat-stage-bottom');
+      expect(top.top, tab.top);
+      expect(stage.top, top.bottom);
+      expect(stage.bottom, bottom.top);
+      expect(bottom.bottom, tab.bottom);
+      expect(stage.left, tab.left);
+      expect(stage.width, tab.width);
+      expect(stage.height, greaterThan(0));
+      expect(stage.overlaps(top), isFalse);
+      expect(stage.overlaps(bottom), isFalse);
+    }
 
-    testWidgets('only the controls are shielded; WEARING on its own box', (
+    testWidgets('her stage fills exactly the room between the two strips', (
       tester,
     ) async {
-      final fake = await pumpStage(tester, FakeWardrobeService());
-      fake.emit({'type': 'token', 'text': 'Sit.'});
-      fake.emit({'type': 'done', 'text': 'Sit.'});
+      final (fake, _) = await pumpStage(tester);
+      expectFramed(tester);
+      // The top bar, the composer, no shields: the only platform view in 3D
+      // is her stage (a stand-in here).
+      expect(find.byType(HtmlElementView), findsNothing);
+      // The CHAT | 3D switch is where the CHAT face has it.
+      final flip = tester.getCenter(find.byKey(const Key('view-flip-chat')));
+      await tester.tap(find.byKey(const Key('view-flip-chat')));
       await tester.pump();
+      expect(tester.getCenter(find.byKey(const Key('view-flip-chat'))), flip);
+      await tester.pump(const Duration(seconds: 1)); // CHAT's scroll retries
+      fake.dispose();
+    });
 
-      final rects = shields(tester);
-      // The top bar, the dialogue + composer, and the WEARING tag.
-      expect(rects, hasLength(3));
-      expect(rects, contains(tester.getRect(find.byKey(wearingTag))));
-      bool shielded(Offset p) => rects.any((r) => r.contains(p));
-      for (final control in [
-        find.byKey(const Key('view-flip-chat')),
-        find.byKey(const Key('voice-play')),
-        find.byKey(const Key('chat-composer')),
-      ]) {
-        expect(shielded(tester.getCenter(control)), isTrue, reason: '$control');
-      }
+    testWidgets('her stage paints last in the tab, in 3D and behind CHAT', (
+      tester,
+    ) async {
+      final (fake, _) = await pumpStage(tester);
+      RenderBox last() => tester
+          .renderObject<RenderCustomMultiChildLayoutBox>(
+            find.byKey(const Key('chat-tab')),
+          )
+          .lastChild!;
+      final stage = tester.renderObject(
+        find.byKey(const Key('chat-stage-layer')),
+      );
+      expect(last(), same(stage));
+      await tester.tap(find.byKey(const Key('view-flip-chat')));
+      await tester.pump();
+      expect(last(), same(stage));
+      await tester.pump(const Duration(seconds: 1)); // CHAT's scroll retries
+      fake.dispose();
+    });
 
-      final stage = tester.getRect(find.byKey(const Key('chat-stage')));
-      final column = tester.getRect(find.byKey(const Key('stage-tags')));
-      final affinity = tester.getRect(find.byKey(readOnlyTags[0]));
-      final wearing = tester.getRect(find.byKey(wearingTag));
-      final open = {
-        'right edge, mid-height': Offset(stage.right - 40, stage.center.dy),
-        'right edge, under the tags': Offset(
-          stage.right - 24,
-          wearing.bottom + 16,
-        ),
-        for (final key in readOnlyTags)
-          'the $key tag': tester.getCenter(find.byKey(key)),
-        'beside a short tag': Offset(column.left + 2, affinity.center.dy),
-        'the bracket': tester.getCenter(find.byKey(const Key('stage-bracket'))),
-        'the readout': tester.getCenter(
-          find.byKey(const Key('stage-tracking')),
-        ),
-      };
-      open.forEach((where, point) {
-        expect(stage.contains(point), isTrue, reason: where);
-        expect(shielded(point), isFalse, reason: where);
-      });
-      // Decorative and read-only parts let every pointer through.
-      for (final key in const [
-        Key('stage-bracket'),
-        Key('stage-tracking'),
-        ...readOnlyTags,
-      ]) {
-        expect(ignored(tester, find.byKey(key)), isTrue, reason: '$key');
-        expect(
-          find.ancestor(
-            of: find.byKey(key),
-            matching: find.byType(HudPointerShield),
-          ),
-          findsNothing,
-        );
-      }
+    testWidgets('behind CHAT it keeps its 3D rect: a flip never resizes her', (
+      tester,
+    ) async {
+      final (fake, _) = await pumpStage(tester);
+      final in3d = rect(tester, 'chat-stage-layer');
+      await tester.tap(find.byKey(const Key('view-flip-chat')));
+      await tester.pump();
+      expect(rect(tester, 'chat-stage-layer'), in3d);
+      await tester.tap(find.byKey(const Key('view-flip-3d')));
+      await tester.pump();
+      expect(rect(tester, 'chat-stage-layer'), in3d);
+      fake.dispose();
+    });
+
+    testWidgets('a longer draft and tool status grow the composer strip, '
+        'never over her', (tester) async {
+      final (fake, _) = await pumpStage(tester);
+      final before = rect(tester, 'chat-stage-layer');
+      await tester.enterText(find.byType(TextField), 'one\ntwo\nthree\nfour');
+      fake.emit({'type': 'tool_use', 'tool': 'web_search'});
+      await tester.pump();
+      expect(find.byType(ToolStatusIndicator), findsOneWidget);
+      expectFramed(tester);
+      expect(rect(tester, 'chat-stage-layer').height, lessThan(before.height));
       expect(tester.takeException(), isNull);
       fake.dispose();
     });
 
-    testWidgets('WEARING opens her day; before it loads, nothing is shielded', (
-      tester,
-    ) async {
-      final wardrobe = _LateDayWardrobe();
-      final fake = await pumpStage(tester, wardrobe);
-      expect(find.byKey(const Key('stage-tags')), findsOneWidget);
-      expect(find.byKey(wearingTag), findsNothing);
-      // Just the top bar and the dialogue + composer.
-      expect(shields(tester), hasLength(2));
-
-      wardrobe.release();
-      await tester.pump();
-      await tester.pump();
-      expect(shields(tester), hasLength(3));
-      // A read-only tag opens nothing.
-      await tester.tap(find.byKey(readOnlyTags[1]), warnIfMissed: false);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      expect(find.byType(BottomSheet), findsNothing);
-
-      await tester.tap(find.byKey(wearingTag));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      expect(find.byType(BottomSheet), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      fake.dispose();
-    });
+    testWidgets(
+      'with the keyboard up the strips stay and her stage gives way',
+      (tester) async {
+        final (fake, _) = await pumpStage(tester);
+        final open = rect(tester, 'chat-stage-layer');
+        final topStrip = rect(tester, 'chat-stage-top');
+        final composer = rect(tester, 'chat-stage-bottom').height;
+        tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+        await tester.pump();
+        expectFramed(tester);
+        expect(rect(tester, 'chat-stage-top'), topStrip);
+        expect(rect(tester, 'chat-stage-bottom').height, composer);
+        expect(rect(tester, 'chat-stage-layer').height, lessThan(open.height));
+        expect(tester.takeException(), isNull);
+        fake.dispose();
+      },
+    );
   });
 }
 

@@ -3,7 +3,8 @@
 /// own chrome and keeps its own socket so the avatar reacts to the chat.
 /// The Chat tab keeps it loaded across its CHAT ⇄ 3D flip: under the CHAT
 /// face it is parked (not drawn, no taps, its render loop and sound stopped).
-/// The stage is sent the PWA's HUD state as `klukai:hud` snapshots.
+/// In 3D nothing Flutter draws covers it: the stage draws its own HUD (her
+/// status, her line, `▶ VOICE`) from the `klukai:hud` snapshots it is sent.
 ///
 /// Browser-only (package:web); the chat screen is the only importer.
 library;
@@ -14,23 +15,15 @@ import 'dart:js_interop';
 import 'package:flutter/material.dart';
 import 'package:web/web.dart' as web;
 
-/// Where the embedded stage frames her: the HUD covers this much of the top
-/// and bottom of the iframe. Passed in the URL; the stage clamps them.
-const int kStageInsetTop = 120;
-const int kStageInsetBottom = 210;
-
 /// Set once he has opened her 3D view on this device; from then on the Chat
 /// tab loads the stage in the background so his first flip finds her there.
 const String kStageUsedKey = 'klukai_3d_used';
 
-/// The embedded stage's URL, relative to `<base href>` (/app/). [hidden]: it
-/// is loaded behind the CHAT face and starts parked.
-String companionStageSrc({
-  int insetTop = kStageInsetTop,
-  int insetBottom = kStageInsetBottom,
-  bool hidden = false,
-}) =>
-    'companion.html?embed=1&mode=3d&inset_top=$insetTop&inset_bottom=$insetBottom'
+/// The embedded stage's URL, relative to `<base href>` (/app/). Nothing
+/// covers the iframe, so it frames her with no insets. [hidden]: it is
+/// loaded behind the CHAT face and starts parked.
+String companionStageSrc({bool hidden = false}) =>
+    'companion.html?embed=1&mode=3d&inset_top=0&inset_bottom=0'
     '${hidden ? '&hidden=1' : ''}';
 
 /// The PWA's handle on the embedded stage.
@@ -44,20 +37,23 @@ abstract class CompanionStageLink {
   bool sendHud(Map<String, Object?> snapshot);
 }
 
-/// A `klukai:*` message from the stage (`klukai:speak-status`,
-/// `klukai:stage-notice`, `klukai:stage-ready`, `klukai:speaking`,
-/// `klukai:herday`).
+/// A `klukai:*` message from the stage (`klukai:stage-ready`,
+/// `klukai:stage-notice`, `klukai:speaking`, `klukai:voice-error`,
+/// `klukai:speak-status`, `klukai:herday`, `klukai:auth-expired`).
 typedef StageEventHandler =
     void Function(String type, Map<String, Object?> data);
 
 /// Builds the stage. Production uses [CompanionStageView]; tests inject a
 /// stand-in so no page loads. [visible] is false while the CHAT face covers
 /// it: the same stage must stay built (rebuilding it reloads the page).
+/// [interactive] is false while something of the PWA's (a menu, a sheet)
+/// is open over it, so that gets his taps instead.
 typedef CompanionStageBuilder =
     Widget Function(
       BuildContext context, {
       required String src,
       required bool visible,
+      required bool interactive,
       required ValueChanged<CompanionStageLink?> onLink,
       required StageEventHandler onEvent,
     });
@@ -66,11 +62,13 @@ Widget defaultCompanionStage(
   BuildContext context, {
   required String src,
   required bool visible,
+  required bool interactive,
   required ValueChanged<CompanionStageLink?> onLink,
   required StageEventHandler onEvent,
 }) => CompanionStageView(
   src: src,
   visible: visible,
+  interactive: interactive,
   onLink: onLink,
   onEvent: onEvent,
 );
@@ -98,17 +96,27 @@ bool postToStage(web.HTMLIFrameElement frame, Map<String, Object?> message) {
   return true;
 }
 
+/// Lets the stage [frame] take pointer events, or not: only while it is
+/// shown and nothing of the PWA's is open over it.
+void setStageInteractive(
+  web.HTMLIFrameElement frame, {
+  required bool visible,
+  bool interactive = true,
+}) {
+  frame.style.pointerEvents = visible && interactive ? 'auto' : 'none';
+}
+
 /// Shows or parks the stage [frame]. Parked, it stays loaded but is not drawn
 /// and takes no pointer events (the Flutter content over it does), and the
 /// page is told so; shown, it is told to carry on. Same origin only.
-void setStageVisible(web.HTMLIFrameElement frame, {required bool visible}) {
-  frame.style
-    ..visibility = visible ? 'visible' : 'hidden'
-    ..pointerEvents = visible ? 'auto' : 'none';
-  frame.contentWindow?.postMessage(
-    {'type': kStageVisibilityMessage, 'visible': visible}.jsify(),
-    web.window.location.origin.toJS,
-  );
+void setStageVisible(
+  web.HTMLIFrameElement frame, {
+  required bool visible,
+  bool interactive = true,
+}) {
+  frame.style.visibility = visible ? 'visible' : 'hidden';
+  setStageInteractive(frame, visible: visible, interactive: interactive);
+  postToStage(frame, {'type': kStageVisibilityMessage, 'visible': visible});
 }
 
 /// Whether the stage iframe is painted. A shown stage always is. A parked one
@@ -127,6 +135,7 @@ class CompanionStageView extends StatefulWidget {
     super.key,
     required this.src,
     this.visible = true,
+    this.interactive = true,
     required this.onLink,
     required this.onEvent,
   });
@@ -136,6 +145,9 @@ class CompanionStageView extends StatefulWidget {
 
   /// False while the CHAT face covers it (see [setStageVisible]).
   final bool visible;
+
+  /// False while a menu or sheet of the PWA's is open over it.
+  final bool interactive;
 
   /// Called with the link once the iframe exists, and with null when it is
   /// gone. Must not call setState (it runs during dispose).
@@ -202,22 +214,35 @@ class _CompanionStageViewState extends State<CompanionStageView>
       ..display = 'block'
       ..backgroundColor = '#06080c';
     _frame = frame;
-    setStageVisible(frame, visible: widget.visible);
+    _show(frame);
     // Said before the page loads, it reaches the blank document and is lost:
     // say it again once the stage is listening.
     _loads = web.EventStreamProviders.loadEvent.forElement(frame).listen((_) {
-      setStageVisible(frame, visible: widget.visible);
+      _show(frame);
       if (mounted && !_loaded) setState(() => _loaded = true);
     });
     widget.onLink(this);
   }
 
+  void _show(web.HTMLIFrameElement frame) => setStageVisible(
+    frame,
+    visible: widget.visible,
+    interactive: widget.interactive,
+  );
+
   @override
   void didUpdateWidget(CompanionStageView oldWidget) {
     super.didUpdateWidget(oldWidget);
     final frame = _frame;
-    if (frame != null && oldWidget.visible != widget.visible) {
-      setStageVisible(frame, visible: widget.visible);
+    if (frame == null) return;
+    if (oldWidget.visible != widget.visible) {
+      _show(frame);
+    } else if (oldWidget.interactive != widget.interactive) {
+      setStageInteractive(
+        frame,
+        visible: widget.visible,
+        interactive: widget.interactive,
+      );
     }
   }
 
@@ -238,23 +263,5 @@ class _CompanionStageViewState extends State<CompanionStageView>
       tagName: 'iframe',
       onElementCreated: _created,
     ),
-  );
-}
-
-/// Lets Flutter controls drawn over the iframe receive their taps: an
-/// invisible DOM element under [child] catches pointer events that would
-/// otherwise land in the iframe (the pattern of package:pointer_interceptor).
-class HudPointerShield extends StatelessWidget {
-  const HudPointerShield({super.key, required this.child});
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => Stack(
-    children: [
-      Positioned.fill(
-        child: HtmlElementView.fromTagName(tagName: 'div', isVisible: false),
-      ),
-      child,
-    ],
   );
 }
