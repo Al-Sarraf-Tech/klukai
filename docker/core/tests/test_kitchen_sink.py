@@ -1031,20 +1031,22 @@ class TestHeartbeatSpikeAlerts:
         assert "if mood in HIGH_INTENSITY_MOODS and intensity >= 7:" in src
 
     def test_spike_map_matches_source(self):
-        """This test's BPM map must mirror the literal one in memory_extraction.py.
+        """This test's BPM map must mirror the one memory_extraction.py uses.
 
         Guards against drift: if someone retunes a BPM in the source, this
         test (which other assertions in the class rely on) must be updated too.
+        The map lives in app/heartbeat.py since the per-turn heart rate.
         """
-        import inspect
-
         from app import memory_extraction
+        from app.heartbeat import HIGH_INTENSITY_MOODS
 
-        src = inspect.getsource(memory_extraction)
+        assert memory_extraction.HIGH_INTENSITY_MOODS is HIGH_INTENSITY_MOODS
         for mood, bpm in self.HIGH_INTENSITY_MOODS.items():
-            assert f'"{mood}": {bpm}' in src, (
-                f"{mood}:{bpm} not in memory_extraction.py spike map"
-            )
+            assert HIGH_INTENSITY_MOODS[mood] == bpm, f"{mood}:{bpm} drifted"
+        # Added with the 2026-10-19 moods.
+        assert HIGH_INTENSITY_MOODS["heartbroken"] == 150
+        assert HIGH_INTENSITY_MOODS["overwhelmed"] == 158
+        assert HIGH_INTENSITY_MOODS["breathless"] == 162
 
     def test_bpm_ordering_by_danger(self):
         """More dangerous moods should have higher BPM."""

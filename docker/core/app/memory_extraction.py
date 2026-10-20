@@ -14,6 +14,13 @@ from typing import Any
 import uuid
 
 from .affection import AffectionManager, AffectionChange
+from .extraction_llm import CallReport
+from .heartbeat import (
+    DEFAULT_INTENSITY,
+    HIGH_INTENSITY_MOODS,
+    coerce_intensity,
+    heart_rate,
+)
 from .memory import MemoryManager
 from .models import SessionState
 from .proactive import ProactiveEngine
@@ -54,11 +61,13 @@ class ExtractionRuntime:
         await asyncio.sleep(3)  # Let main response finish streaming first
         try:
             aff_state_bg = await self.affection.get_state(user_id)
+            report = CallReport()
             result = await self.extract_facts(
                 user_msg,
                 assistant_msg,
                 image_generated=image_generated,
                 affection_level=aff_state_bg.level,
+                report=report,
             )
 
             # Apply curation if image was generated and curation data came back
@@ -96,7 +105,8 @@ class ExtractionRuntime:
             except Exception as e:
                 logger.debug("Mood contagion skipped: %s", e)
 
-            await self.apply_state(session, mood, user_id)
+            applied = await self.apply_state(session, mood, user_id)
+            await self.send_heartbeat(result, mood, user_id, applied, report)
 
             # Record "firsts" for anniversary tracking (scoped to user)
             if session.turn_count == 1:
@@ -122,6 +132,44 @@ class ExtractionRuntime:
             logger.error(
                 "Background extraction failed: %s\n%s", e, traceback.format_exc()
             )
+
+    async def send_heartbeat(
+        self,
+        result: dict[str, Any],
+        mood: str,
+        user_id: str,
+        applied: bool,
+        report: CallReport,
+    ) -> None:
+        """Her heart rate for this turn, right after the mood frame.
+
+        Also writes the turn's single extraction log line (provider, model,
+        outcome, mood, intensity, bpm; never message content). A stale turn
+        (its mood was not applied) sends no frame; a WS failure is logged and
+        never skips affection or memory storage.
+        """
+        interaction = result.get("interaction")
+        intensity = coerce_intensity(
+            interaction.get("intensity")
+            if isinstance(interaction, dict)
+            else DEFAULT_INTENSITY
+        )
+        bpm = heart_rate(mood, intensity)
+        logger.info(
+            "Turn extraction: provider=%s model=%s outcome=%s mood=%s intensity=%d bpm=%d",
+            report.provider,
+            report.model or "-",
+            report.outcome,
+            mood,
+            intensity,
+            bpm,
+        )
+        if not applied:
+            return
+        try:
+            await self.ws.send_heartbeat(user_id, bpm, mood, intensity)
+        except Exception as e:
+            logger.warning("Heartbeat frame failed: %s", type(e).__name__)
 
     async def store_facts(self, result: dict[str, Any], user_id: str) -> None:
         # Store new facts (scoped to user). LLM output is untrusted — skip any
@@ -210,22 +258,12 @@ class ExtractionRuntime:
             elif not isinstance(interaction, dict):
                 interaction = {"type": "neutral", "intensity": 5}
             interaction_type = interaction.get("type", "neutral")
-            intensity = max(1, min(10, int(interaction.get("intensity", 5))))
+            intensity = coerce_intensity(interaction.get("intensity", 5))
             aff_change = await self.affection.apply_classification(
                 interaction_type, intensity, user_id
             )
 
-            # Heartbeat spike detection (feature: heartbeat spike alerts)
-            HIGH_INTENSITY_MOODS = {
-                "passionate": 165,
-                "terrified": 175,
-                "panicked": 180,
-                "desperate": 170,
-                "furious": 160,
-                "adrenaline": 155,
-                "yearning": 150,
-                "infatuated": 152,
-            }
+            # Heartbeat spike alert (app/heartbeat.py holds the BPM map).
             if mood in HIGH_INTENSITY_MOODS and intensity >= 7:
                 bpm = HIGH_INTENSITY_MOODS[mood]
                 await self.ws.send_heartbeat_spike(user_id, bpm, mood)

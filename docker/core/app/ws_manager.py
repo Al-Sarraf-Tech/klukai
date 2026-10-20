@@ -309,6 +309,15 @@ class WSManager:
     async def send_mood(self, user_id: str, mood: str) -> None:
         await self.send(user_id, {"type": "mood", "mood": mood})
 
+    async def send_heartbeat(
+        self, user_id: str, bpm: int, mood: str, intensity: int
+    ) -> None:
+        """Her live heart rate for this turn (app/heartbeat.py), after the mood frame."""
+        await self.send(
+            user_id,
+            {"type": "heartbeat", "bpm": bpm, "mood": mood, "intensity": intensity},
+        )
+
     async def send_outfit(self, user_id: str, outfit: dict[str, Any]) -> None:
         """She changed (his request was granted) — the PWA updates its chip."""
         await self.send(user_id, {"type": "outfit", "outfit": outfit})

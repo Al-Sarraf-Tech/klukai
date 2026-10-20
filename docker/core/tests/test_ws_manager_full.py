@@ -255,6 +255,23 @@ class TestTypedSenders:
         assert "140" in sent
         assert "passionate" in sent
 
+    @pytest.mark.asyncio
+    async def test_send_heartbeat_frame_contract(self):
+        import json
+
+        m = WSManager()
+        ws = _mk_ws()
+        await m.connect(ws, user_id="alice")
+        ws.send_text.reset_mock()
+        await m.send_heartbeat("alice", 86, "admiring", 7)
+        sent = json.loads(ws.send_text.call_args.args[0])
+        assert sent == {
+            "type": "heartbeat",
+            "bpm": 86,
+            "mood": "admiring",
+            "intensity": 7,
+        }
+
 
 class TestConnectedProperty:
     def test_property_false_when_empty(self):

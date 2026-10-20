@@ -43,6 +43,7 @@ AT_HIM = {
 @pytest.mark.parametrize("mood", NEW_MOODS)
 def test_new_mood_is_known_everywhere(mood):
     from app.fact_extractor import VALID_MOODS
+    from app.heartbeat import BASE_BPM
     from app.models import Mood
     from app.personality.moods import MOOD_CATEGORIES, MOOD_SPECIFIC_BLEED
 
@@ -50,6 +51,7 @@ def test_new_mood_is_known_everywhere(mood):
     assert mood in VALID_MOODS
     assert mood in MOOD_CATEGORIES
     assert mood in MOOD_SPECIFIC_BLEED
+    assert mood in BASE_BPM
 
 
 @pytest.mark.parametrize("mood", NEW_MOODS)
