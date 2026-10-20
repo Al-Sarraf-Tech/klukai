@@ -1,0 +1,247 @@
+"""A down Dominus never holds back her mood, heart rate or affection.
+
+Production, 2026-10-19 (bbaef74, extraction on Haiku): with Dominus off, the
+still-local promise detection waited out a 120 s connect inside the turn's
+background step, ahead of the mood and heartbeat, so both arrived minutes
+late. Mood, heartbeat and affection now come straight after the extraction
+result; local requests connect with a short timeout and, as Haiku's
+fallback, run under a deadline that includes the wait for the LM gate.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
+import httpx
+import pytest
+
+from app import background_llm as bg
+from app import chat
+from app import extraction_llm as xl
+from app.circuit_breakers import get_breaker
+from app.lm_gateway import LM_CONNECT_TIMEOUT_SECONDS, lm_timeout
+from app.memory import MemoryManager
+from app.models import SessionState
+
+from .test_session_authority import StoredRedis
+from .test_turn_heartbeat import _result, _session, rt  # noqa: F401 (fixture)
+
+
+# ── turn order ───────────────────────────────────────────────────────────
+
+
+async def test_mood_heartbeat_and_affection_do_not_wait_for_promises(
+    rt,  # noqa: F811
+    monkeypatch,
+):
+    hang = asyncio.Event()  # never set: a local call that never returns
+
+    async def stuck(*_args, **_kwargs):
+        await hang.wait()
+
+    monkeypatch.setattr("app.fact_extractor.extract_promises", stuck)
+    rt.state["result"] = _result(
+        mood="tender",
+        interaction={"type": "warm", "intensity": 6},
+        facts=[{"key": "drink", "value": "coffee"}],
+    )
+    task = asyncio.create_task(
+        rt.runtime.process("I'll call you later.", "a", _session(), user_id="u1")
+    )
+    try:
+        # (The fixture stubs asyncio.sleep, so give the task real loop time.)
+        done, _ = await asyncio.wait({task}, timeout=0.5)
+        assert not done
+        assert [entry[0] for entry in rt.order[:2]] == ["mood", "heartbeat"]
+        rt.ws.send_heartbeat.assert_awaited_once()
+        rt.affection.apply_classification.assert_awaited_once_with("warm", 6, "u1")
+        rt.ws.send_affection.assert_awaited_once()
+        # Facts are stored too; only the stuck promise step and what follows wait.
+        rt.memory.set_relationship_fact.assert_awaited()
+        rt.memory.store_exchange.assert_not_awaited()
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+async def test_mood_lands_before_the_bookkeeping(rt, monkeypatch):  # noqa: F811
+    seen: list[str] = []
+    rt.ws.send_affection.side_effect = lambda *a, **k: seen.append("affection")
+    rt.memory.set_relationship_fact.side_effect = lambda *a, **k: seen.append("fact")
+
+    async def promises(*_a, **_k):
+        seen.append("promises")
+        return {}
+
+    monkeypatch.setattr("app.fact_extractor.extract_promises", promises)
+    rt.memory.store_exchange.side_effect = lambda *a, **k: seen.append("exchange")
+    rt.state["result"] = _result(facts=[{"key": "k", "value": "v"}])
+    await rt.runtime.process("u", "a", _session(), user_id="u1")
+    assert rt.order[0][0] == "mood"
+    assert seen == ["affection", "fact", "promises", "exchange"]
+
+
+async def test_session_storage_failure_still_keeps_the_turns_record(
+    rt,  # noqa: F811
+):
+    async def broken(*_a, **_k):
+        raise RuntimeError("redis offline")
+
+    rt.runtime.apply_state = broken
+    rt.state["result"] = _result(facts=[{"key": "k", "value": "v"}])
+    await rt.runtime.process("u", "a", _session(), user_id="u1")
+    rt.ws.send_heartbeat.assert_not_awaited()
+    rt.affection.apply_classification.assert_awaited_once()
+    rt.memory.set_relationship_fact.assert_awaited()
+    rt.memory.store_exchange.assert_awaited_once()
+
+
+# ── short connects and bounded fallbacks ─────────────────────────────────
+
+
+def test_local_requests_connect_with_a_short_timeout():
+    timeout = lm_timeout(120.0)
+    assert timeout.connect == LM_CONNECT_TIMEOUT_SECONDS <= 5.0
+    assert timeout.read == 120.0
+
+
+async def test_complete_local_sends_the_short_connect_timeout():
+    from app.llm_router import LLMRouter
+    from app.models import LLMConfig
+
+    router = LLMRouter()
+    seen = {}
+
+    async def post(url, **kwargs):
+        seen.update(kwargs)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "ok"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    router._http = MagicMock()
+    router._http.post = post
+    get_breaker("lm_studio").force_close()
+    config = LLMConfig(provider="lmstudio", model="m", base_url="http://x")
+    await router.complete_local("s", [{"role": "user", "content": "u"}], config)
+    assert seen["timeout"].connect == LM_CONNECT_TIMEOUT_SECONDS
+
+
+@pytest.fixture
+def closed_circuit():
+    breaker = get_breaker("lm_studio")
+    breaker.force_close()
+    yield
+    breaker.force_close()
+
+
+async def test_a_hanging_fallback_is_cut_off_at_its_deadline(
+    monkeypatch, closed_circuit
+):
+    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "anthropic")
+    monkeypatch.setattr(
+        xl, "complete", AsyncMock(side_effect=xl.ExtractionLLMError("boom"))
+    )
+    monkeypatch.setattr(bg, "LOCAL_FALLBACK_DEADLINE_SECONDS", 0.05)
+    gate = asyncio.Lock()
+    await gate.acquire()  # someone else holds the LM gate and never lets go
+
+    async def local():
+        async with gate:
+            return "never"
+
+    report = xl.CallReport()
+    out = await asyncio.wait_for(
+        bg.text("promises", "p", max_tokens=640, local=local, report=report), 2.0
+    )
+    assert out == ""
+    assert report.outcome == "failed->defaults"
+    assert not gate._waiters  # the cancelled waiter left the queue
+
+
+async def test_local_provider_has_a_backstop_too(monkeypatch, closed_circuit):
+    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "local")
+    monkeypatch.setattr(bg, "LOCAL_PRIMARY_DEADLINE_SECONDS", 0.05)
+
+    async def local():
+        await asyncio.Event().wait()
+
+    out = await asyncio.wait_for(
+        bg.text("dream", "p", max_tokens=200, local=local), 2.0
+    )
+    assert out == ""
+
+
+# ── compaction never makes a turn look stale ─────────────────────────────
+
+
+@pytest.fixture
+def store(monkeypatch):
+    from app import background
+
+    manager = MemoryManager()
+    manager._redis = StoredRedis()
+    monkeypatch.setattr(chat, "memory", manager)
+    monkeypatch.setattr(background, "memory", manager)
+    monkeypatch.setattr(background, "ws", AsyncMock())
+    monkeypatch.setattr(background, "proactive", MagicMock())
+    monkeypatch.setattr(
+        background, "get_conn_autocommit", MagicMock(side_effect=RuntimeError("db"))
+    )
+    monkeypatch.setattr(background.context, "COMPACT_THRESHOLD", 6)
+    monkeypatch.setattr(background.context, "COMPACT_KEEP_RAW", 2)
+
+    async def compact(_turns):
+        return "summary"
+
+    monkeypatch.setattr("app.fact_extractor.compact_turns", compact)
+    return manager
+
+
+def _turn_session():
+    return SessionState(
+        conversation_id="c",
+        revision=3,
+        turns=[
+            {"role": "user" if n % 2 == 0 else "assistant", "content": str(n)}
+            for n in range(8)
+        ],
+    )
+
+
+@pytest.mark.parametrize("compaction_first", [True, False])
+async def test_compaction_and_extraction_both_apply(store, compaction_first):
+    from app import background
+
+    sid = chat.session_id("alice")
+    turn = _turn_session()
+    await store.save_session(sid, turn)
+    snapshot = turn.model_copy(deep=True)
+    if compaction_first:
+        await background.background_compaction(turn.model_copy(deep=True), "alice")
+        assert await background._apply_extracted_state(snapshot, "tender", "alice")
+    else:
+        assert await background._apply_extracted_state(snapshot, "tender", "alice")
+        await background.background_compaction(turn.model_copy(deep=True), "alice")
+    live = await store.get_session(sid)
+    assert live.revision == 3
+    assert live.mood == "tender"
+    assert live.context_summary == "summary"
+    assert [t["content"] for t in live.turns] == ["6", "7"]
+    background.ws.send_mood.assert_awaited_once_with("alice", "tender")
+
+
+async def test_a_newer_turn_still_wins(store):
+    from app import background
+
+    sid = chat.session_id("alice")
+    turn = _turn_session()
+    snapshot = turn.model_copy(deep=True)
+    newer = turn.model_copy(deep=True)
+    newer.revision = 4
+    await store.save_session(sid, newer)
+    assert not await background._apply_extracted_state(snapshot, "tender", "alice")
+    assert (await store.get_session(sid)).mood == "composed"

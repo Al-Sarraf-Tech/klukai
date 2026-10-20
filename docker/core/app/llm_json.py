@@ -19,7 +19,7 @@ from pydantic import JsonValue
 
 import httpx
 
-from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers
+from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers, lm_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,7 @@ async def call_llm(  # pragma: no cover - integration (LM Studio HTTP)
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    http = client or httpx.AsyncClient(timeout=120.0)
+    http = client or httpx.AsyncClient(timeout=lm_timeout(120.0))
     close_after = client is None
 
     try:
@@ -226,7 +226,7 @@ async def call_llm_text(  # pragma: no cover - integration (LM Studio HTTP)
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    http = client or httpx.AsyncClient(timeout=120.0)
+    http = client or httpx.AsyncClient(timeout=lm_timeout(120.0))
     close_after = client is None
 
     try:

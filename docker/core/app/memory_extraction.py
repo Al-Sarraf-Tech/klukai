@@ -56,6 +56,12 @@ class ExtractionRuntime:
 
         Delayed 3s so LLM calls don't compete with the main response stream.
         All calls are serialized (not parallel) to avoid queuing in LM Studio.
+
+        Her mood, heart rate and affection land first, straight from the
+        extraction result; the slower bookkeeping (curation, facts, promise
+        and event detection with the Operation Brief, exchange storage and
+        episode entries) follows, so a slow or unreachable model in that tail
+        can never hold back what he sees of her this turn.
         """
         session = session.model_copy(deep=True)
         await asyncio.sleep(3)  # Let main response finish streaming first
@@ -69,6 +75,33 @@ class ExtractionRuntime:
                 affection_level=aff_state_bg.level,
                 report=report,
             )
+
+            # Update mood in session + persist to PostgreSQL
+            mood = result.get("mood", "composed")
+
+            # Mood contagion: nudge Klukai's mood toward user's sentiment.
+            # Small effect — the LLM-detected mood is the primary signal; contagion
+            # is a one-step bounded adjustment that never jumps more than one register.
+            try:
+                from .character_behaviors import nudge_mood, interaction_to_sentiment
+
+                sentiment = interaction_to_sentiment(result.get("interaction"))
+                if sentiment:
+                    mood = nudge_mood(mood, sentiment)
+            except Exception as e:
+                logger.debug("Mood contagion skipped: %s", e)
+
+            try:
+                # Keeps the stale-revision guard: False when a newer turn exists.
+                applied = await self.apply_state(session, mood, user_id)
+            except Exception as e:
+                # Session storage trouble must not cost the turn its facts,
+                # promises or exchange record further down.
+                logger.warning("Mood state not applied (%s)", type(e).__name__)
+                applied = False
+            await self.send_heartbeat(result, mood, user_id, applied, report)
+
+            await self.adjust_affection(result, mood, user_id)
 
             # Apply curation if image was generated and curation data came back
             # Resolve memory_id: prefer explicit arg, fall back to module-level last_memory_id
@@ -88,26 +121,6 @@ class ExtractionRuntime:
 
             await self.store_facts(result, user_id)
 
-            await self.store_commitments(user_msg, aff_state_bg.level, user_id)
-
-            # Update mood in session + persist to PostgreSQL
-            mood = result.get("mood", "composed")
-
-            # Mood contagion: nudge Klukai's mood toward user's sentiment.
-            # Small effect — the LLM-detected mood is the primary signal; contagion
-            # is a one-step bounded adjustment that never jumps more than one register.
-            try:
-                from .character_behaviors import nudge_mood, interaction_to_sentiment
-
-                sentiment = interaction_to_sentiment(result.get("interaction"))
-                if sentiment:
-                    mood = nudge_mood(mood, sentiment)
-            except Exception as e:
-                logger.debug("Mood contagion skipped: %s", e)
-
-            applied = await self.apply_state(session, mood, user_id)
-            await self.send_heartbeat(result, mood, user_id, applied, report)
-
             # Record "firsts" for anniversary tracking (scoped to user)
             if session.turn_count == 1:
                 await self.proactive.record_first(user_id, "first_message")
@@ -120,7 +133,7 @@ class ExtractionRuntime:
 
                 await physical.on_long_conversation(user_id)
 
-            await self.adjust_affection(result, mood, user_id)
+            await self.store_commitments(user_msg, aff_state_bg.level, user_id)
 
             await self.store_exchange(
                 result, mood, user_msg, assistant_msg, session, user_id

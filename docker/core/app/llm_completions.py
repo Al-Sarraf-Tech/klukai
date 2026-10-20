@@ -10,7 +10,7 @@ import logging
 import time
 import httpx
 from .models import LLMConfig
-from .lm_gateway import LM_TTL_SECONDS
+from .lm_gateway import LM_CONNECT_TIMEOUT_SECONDS, LM_TTL_SECONDS, lm_timeout
 from .dependencies import http_request, http_stream, json_object
 from .anthropic_messages import (
     completion_message,
@@ -294,7 +294,7 @@ class LLMCompletionsMixin(ABC):
                 "post",
                 f"{config.base_url}/v1/chat/completions",
                 json=body,
-                timeout=120.0,
+                timeout=lm_timeout(120.0),
             )
             r.raise_for_status()
             data = json_object(r.json())
@@ -356,7 +356,10 @@ class LLMCompletionsMixin(ABC):
                     "ttl": LM_TTL_SECONDS,
                 },
                 timeout=httpx.Timeout(
-                    connect=10.0, read=config.read_timeout, write=10.0, pool=10.0
+                    connect=LM_CONNECT_TIMEOUT_SECONDS,
+                    read=config.read_timeout,
+                    write=10.0,
+                    pool=10.0,
                 ),
             ) as response:
                 response.raise_for_status()
