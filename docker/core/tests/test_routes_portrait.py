@@ -359,6 +359,33 @@ class TestAvatarModel:
         assert r.headers["cache-control"] == "private, no-cache"
         assert r.headers["vary"] == "Accept-Encoding, Authorization"
 
+    def test_a_model_rewritten_while_hashed_is_hashed_again(self, client, tmp_path):
+        """If the file changes during hashing, that hash is not kept for the
+        new version: the next request hashes the new bytes."""
+        from app import routes_portrait
+
+        model = tmp_path / "klukai.glb"
+        model.write_bytes(b"glTF-old")
+        real = routes_portrait._digest_file
+        calls: list[Path] = []
+
+        def racing(path):
+            digest = real(path)
+            if not calls:
+                path.write_bytes(b"glTF-new, longer")  # a deploy lands mid-hash
+            calls.append(path)
+            return digest
+
+        plain = {**AUTH, "Accept-Encoding": "identity"}
+        with patch.object(routes_portrait, "_digest_file", racing):
+            client.get("/api/avatar/model", headers=plain)
+            assert routes_portrait._MODEL_DIGEST == {}
+            r = client.get("/api/avatar/model", headers=plain)
+        assert len(calls) == 2
+        assert r.content == b"glTF-new, longer"
+        import hashlib
+        assert r.headers["etag"] == f'"default-{hashlib.sha256(b"glTF-new, longer").hexdigest()[:32]}"'
+
     @pytest.mark.parametrize("auth", [{}, {"Authorization": "Bearer bad"}, {"Authorization": "good"}])
     def test_auth_comes_before_any_304(self, client, tmp_path, auth):
         """Without a valid bearer: 401, never a 304 (which would confirm his
