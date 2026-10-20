@@ -7,21 +7,22 @@ import { moodToExpression, sceneFor, reduceFrame, abandonTurn, avatarCue } from 
 import { createPortrait } from "./portrait.js";
 import { createAmbience, ambienceKind } from "./ambience.js";
 import { createMusic } from "./music.js";
-import { createVoice } from "./voice.js?v=12e6e4bd";
-import { createStageAppearance } from "./stage_appearance.js?v=08da9810";
+import { createVoice } from "./voice.js?v=20ea8f11";
+import { createStageAppearance } from "./stage_appearance.js?v=ca580007";
 import {
   applySubtitle, completedAnnouncement, clearDecorativeMotion, motionPreference,
   beginWake, portraitStatusNotice,
 } from "./stage_life.js";
+import { createHud, hudView, nextVoicePhase } from "./hud.js?v=1ca756c7";
 import {
-  embedConfig, speakRequest, visibilityRequest, stageActivity, createSpeakGate, resumeWithin, postToParent,
-} from "./embed.js?v=25e5a0b8";
+  embedConfig, speakRequest, visibilityRequest, hudUpdate, HERDAY, stageActivity, createSpeakGate, resumeWithin, postToParent,
+} from "./embed.js?v=8b18934d";
 
 const $ = (id) => document.getElementById(id);
 const PREFS_KEY = "klukai_companion_prefs";
 const DAY_REFRESH_MS = 5 * 60 * 1000;
 const AUDIO_RESUME_MS = 3000; // resume() can wait forever without a gesture
-// Inside the PWA's 3D view (companion.html?embed=1): the PWA draws the HUD.
+// Inside the PWA's 3D view (companion.html?embed=1): framed waist-up, own camera prefs.
 const EMBED = embedConfig(globalThis.location?.search || "");
 if (EMBED.embed) document.documentElement.dataset.embed = "1";
 const PORTRAIT_POLL_MS = 15000;
@@ -89,6 +90,16 @@ function boot() {
   // Embedded: the PWA parks this page behind its CHAT face instead of
   // unloading it, so 3D is instant when he flips back (klukai:visibility).
   let embedHidden = EMBED.hidden;
+  // Embedded: the 3D view's HUD (status chips, her latest line, ▶ VOICE),
+  // drawn here from the PWA's klukai:hud snapshots (hud.js). Its VOICE is a
+  // tap in this document, the gesture iOS needs to unlock audio here.
+  let hudState = null;      // the latest snapshot (null until the PWA sends one)
+  let voicePhase = "idle";  // idle | loading | playing (the HUD's VOICE button)
+  let voiceTicket = 0;      // a newer tap (or a stop) supersedes a pending one
+  const hud = EMBED.embed
+    ? createHud(document, { onVoice: onHudVoice, onHerDay: () => postToParent(window, { type: HERDAY }) })
+    : null;
+  if (hud) hud.hold(embedHidden);
 
   const notice = (text, ms = 4000) => {
     // Embedded, the notice element is hidden: the PWA's readout shows it.
@@ -289,10 +300,11 @@ function boot() {
   });
 
   // ── Wake: the one user gesture iOS needs before any audio can play ──────
-  async function startAudio() {
-    if (voice && music) return resumeWithin(audioCtx, AUDIO_RESUME_MS);
+  // The audio context, her voice and the score, created on first use.
+  function audioContextNow() {
+    if (audioCtx) return audioCtx;
     const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return false;
+    if (!AC) return null;
     const ctx = new AC();
     audioCtx = ctx;
     music = createMusic({ context: ctx });
@@ -306,20 +318,45 @@ function boot() {
       },
       onSpeaking: (on) => {
         music?.duck(on);
+        if (on) setVoicePhase("speaking");
         if (EMBED.embed) postToParent(window, { type: "klukai:speaking", on });
       },
+      onBusy: (busy) => setVoicePhase(busy ? "busy" : "done"),
       onError: () => {
         if (EMBED.embed) postToParent(window, { type: "klukai:voice-error" });
         notice("Her voice didn't come through.", 3000);
       },
     });
     voice.setEnabled(true);  // speaks only from the voice button (tap-to-play)
-    try {
-      if (prefs.music && !EMBED.embed) await music.start(); // the PWA has its own ambience
-    } catch {
-      return false;
+    return ctx;
+  }
+
+  async function startAudio() {
+    const fresh = !audioCtx;
+    const ctx = audioContextNow();
+    if (!ctx) return false;
+    if (fresh) {
+      try {
+        if (prefs.music && !EMBED.embed) await music.start(); // the PWA has its own ambience
+      } catch {
+        return false;
+      }
     }
     return resumeWithin(ctx, AUDIO_RESUME_MS);
+  }
+
+  // Inside his tap, before any await: create/resume the context and start a
+  // silent sample, so WebKit (iOS) unlocks audio for this document.
+  function unlockAudio() {
+    const ctx = audioContextNow();
+    if (!ctx) return;
+    try { Promise.resolve(ctx.resume?.()).catch(() => {}); } catch { /* resumeWithin reports it */ }
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = ctx.createBuffer(1, 1, 22050);
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch { /* not fatal: resumeWithin reports the state */ }
   }
 
   function showAudioStatus(text) {
@@ -399,6 +436,58 @@ function boot() {
     });
   }
 
+  // ── Embedded HUD ─────────────────────────────────────────────────────────
+  function renderHud() {
+    if (!hud || !hudState) return;
+    hud.update(hudView(hudState, voicePhase), { lineId: hudState.lineId, streaming: hudState.streaming });
+  }
+
+  function setVoicePhase(event) {
+    const next = nextVoicePhase(voicePhase, event);
+    if (next === voicePhase) return;
+    voicePhase = next;
+    renderHud();
+  }
+
+  // The PWA's snapshot of what the HUD shows (same strict origin + source
+  // check as a speak request). A snapshot never makes a sound.
+  function listenForHud() {
+    window.addEventListener("message", (event) => {
+      const next = hudUpdate(event, { origin: location.origin, parent: window.parent }, hudState || undefined);
+      if (!next) return;
+      hudState = next;
+      renderHud();
+    });
+  }
+
+  // ▶ VOICE on the stage's HUD: his tap, in this document. Speaks her line
+  // once, lip-synced; a tap while she is preparing or speaking stops her.
+  async function onHudVoice() {
+    if (voicePhase !== "idle") {
+      voiceTicket++;
+      voice?.stop();
+      setVoicePhase("tap");
+      return;
+    }
+    const line = hudState && !hudState.streaming ? hudState.line.trim() : "";
+    if (!line || embedHidden) return;
+    const ticket = ++voiceTicket;
+    unlockAudio();
+    setVoicePhase("tap");
+    let ready = false;
+    try { ready = await startAudio(); } catch { ready = false; }
+    if (ticket !== voiceTicket || embedHidden) return; // stopped, or he flipped back to CHAT
+    if (!ready || !voice) {
+      setVoicePhase("failed");
+      postToParent(window, { type: "klukai:voice-error" });
+      notice("Her voice didn't come through.", 3000);
+      return;
+    }
+    lastLine = line;
+    voice.stop();
+    if (!voice.speak(line)) setVoicePhase("failed");
+  }
+
   // What runs follows one rule (embed.js stageActivity): on screen means the
   // page is visible and, embedded, the PWA shows its 3D face. Off screen the
   // render loop, ambience and portrait stop and the audio context suspends.
@@ -418,7 +507,12 @@ function boot() {
       const request = visibilityRequest(event, { origin: location.origin, parent: window.parent });
       if (!request || request.visible === !embedHidden) return;
       embedHidden = !request.visible;
-      if (embedHidden) voice?.stop();
+      if (embedHidden) {
+        voice?.stop();
+        voiceTicket++;
+        setVoicePhase("done");
+      }
+      hud?.hold(embedHidden);
       applyActivity();
       if (!embedHidden) socket.resume();
     });
@@ -426,6 +520,9 @@ function boot() {
 
   const { refreshAppearances, setMode } = createStageAppearance({
     $, api, prefs, savePrefs: persistPrefs, notice, portrait, stage, syncButtons, syncInsets,
+    framing: EMBED.embed ? "waist" : "full",
+    viewKey: EMBED.embed ? "embedView" : "view",
+    doubleTapReset: EMBED.embed,
     runtime: {
       get avatar() { return avatar; },
       set avatar(value) { avatar = value; },
@@ -553,8 +650,14 @@ function boot() {
     awake = true;
     $("wake").hidden = true;
     coverForWake(false);
+    // iOS Safari pinch-zooms the page on a two-finger gesture (it ignores
+    // user-scalable): here the pinch belongs to her camera.
+    for (const type of ["gesturestart", "gesturechange"]) {
+      document.addEventListener(type, (event) => event.preventDefault(), { passive: false });
+    }
     listenForVisibility();
     listenForSpeech();
+    listenForHud();
     setMode("model");
   } else coverForWake(true);
   portrait.setFrames({});
@@ -563,7 +666,7 @@ function boot() {
   // parallel with the socket and the tap-to-begin, so it's ready on wake.
   if (prefs.mode === "model") {
     const modelKey = prefs.appearance || "default";
-    import("./avatar3d.js?v=fcbb2d7504d9").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
+    import("./avatar3d.js?v=297fb50b742a").then((m) => m.warmAvatar3D?.({ modelKey, loadModel: () => api.model(modelKey) })).catch(() => {});
   }
   socket.start();
   refreshAppearances();

@@ -1,4 +1,4 @@
-import { DEG, clamp, wrapPi } from './common.js';
+import { DEG, clamp, smoothstep, wrapPi } from './common.js';
 
 /**
  * Pure: device-dependent renderer settings.
@@ -32,6 +32,15 @@ export function iosMajorVersion(ua = globalThis.navigator?.userAgent || '') {
 export const BASE_FOV = 26;
 export const UPPER_PORTRAIT_FOV = 22; // telephoto close-up on phones: flatter, rounder anime face
 
+/** Framings: 'full' (whole body), 'upper' (head to hips) and 'waist' — the
+ *  PWA's embedded 3D view (Ani-style): the upper crop with the camera level
+ *  with her chest, so she fills a phone frame and is seen from slightly below
+ *  (her eyes stay clear of the cap's brim; see EYE_GUARD). */
+export function normalizeFraming(framing) {
+  return framing === 'full' || framing === 'waist' ? framing : 'upper';
+}
+const WAIST_EYE_DROP = 0.04; // m below the target at the design distance: a touch of upward view
+
 // Framing as it was designed when the canvas was exactly the visible band
 // between the topbar and the dock (at BASE_FOV).
 export function bandFraming({ framing, state, aspect, headY }) {
@@ -50,7 +59,7 @@ export function bandFraming({ framing, state, aspect, headY }) {
   const dist = portrait ? 1.9 : 1.35;
   const top = headY + 0.22; // cap crown + margin
   const targetY = top - dist * half;
-  return { targetY, camY: targetY + 0.06, dist };
+  return { targetY, camY: framing === 'waist' ? targetY - WAIST_EYE_DROP : targetY + 0.06, dist };
 }
 
 /**
@@ -92,6 +101,60 @@ export function cameraFraming({ framing = 'upper', state = 'idle', aspect = 1, h
 }
 
 export const CAMERA_ZOOM_RANGE = Object.freeze({ min: 0.2, max: 3 });
+const STANDARD_LIMITS = Object.freeze({
+  zoom: CAMERA_ZOOM_RANGE,
+  pitch: Object.freeze({ min: -0.22, max: 0.12 }),
+  panY: Object.freeze({ min: -1.2, max: 1.2 }),
+});
+/** The embedded view's freer camera: pinch from a face close-up (0.36) to her
+ *  whole body and beyond (3), drag ↕ far enough to centre her shoes or the
+ *  space above her cap even when pinched in. */
+export const WAIST_LIMITS = Object.freeze({
+  zoom: Object.freeze({ min: 0.36, max: 3 }),
+  pitch: STANDARD_LIMITS.pitch,
+  panY: Object.freeze({ min: -1.7, max: 1.7 }),
+});
+/** User-view limits for a framing; 'full'/'upper' keep the stage's originals. */
+export function cameraLimits(framing) {
+  return framing === 'waist' ? WAIST_LIMITS : STANDARD_LIMITS;
+}
+
+/** Where the waist framing aims as he pinches: up to her face (eyes, just
+ *  under the brim, ~3 cm above the head bone) at the closest zoom, down to her
+ *  middle once her whole body shows. */
+export const WAIST_AIM = Object.freeze({ faceAbove: 0.03, bodyY: 0.8, fullZoom: 2.1 });
+
+/**
+ * Pure: vertical aim offset (m) added to the framing target for a user zoom.
+ * Only the waist framing aims (not asleep: then she is framed from the side).
+ * Smoothstep both ways, so the default view (zoom 1) is flat and continuous.
+ */
+export function zoomAim({ framing, state = 'idle', zoom = 1, targetY = 0, headY = 1.36 } = {}) {
+  if (framing !== 'waist' || state === 'sleep') return 0;
+  const z = Number(zoom), y = Number(targetY), head = Number(headY);
+  if (![z, y, head].every(Number.isFinite)) return 0;
+  if (z < 1) return (head + WAIST_AIM.faceAbove - y) * smoothstep(1, WAIST_LIMITS.zoom.min, z);
+  return (WAIST_AIM.bodyY - y) * smoothstep(1, WAIST_AIM.fullZoom, z);
+}
+
+/**
+ * Pure: where the camera's slow horizontal follow heads, and how fast (1/s).
+ * By default it trails her hips (the idle clip drifts ~10 cm sideways; she
+ * stays centred on a narrow phone without chasing every sway). Pinched in on
+ * the waist framing it follows her head, and quicker, so a face close-up
+ * keeps her face in frame while she sways.
+ */
+export function followGoal({ framing, state = 'idle', zoom = 1, hipsX = 0, headX = Number.NaN } = {}) {
+  const hips = Number.isFinite(hipsX) ? hipsX * 0.85 : 0;
+  if (framing !== 'waist' || state === 'sleep' || !Number.isFinite(headX)) return { x: hips, rate: 0.8 };
+  const w = smoothstep(1, WAIST_LIMITS.zoom.min, Number.isFinite(zoom) ? zoom : 1);
+  return { x: hips + (headX - hips) * w, rate: 0.8 + 2.7 * w };
+}
+
+/** Pure: the contact shadow is drawn whenever her feet can be on screen. */
+export function contactShadowWanted({ framing, state = 'idle', zoom = 1 } = {}) {
+  return framing === 'full' || state === 'sleep' || (framing === 'waist' && zoom >= 1.5);
+}
 
 /** Keep the model inside the far plane even when a small visible band requires
  *  a distant camera. The 3 m margin covers her body and animated accessories;
@@ -104,9 +167,10 @@ export function cameraFarPlane(distanceFromOrigin = 0) {
  *  Absorb only changes since the last camera placement: speech push-in and
  *  resize/state framing must never feed back into the user's zoom or orbit.
  *  Yaw wraps after each turn; horizontal orbit has no stops. */
-export function createCameraView(initial = null) {
-  const { min: minZoom, max: maxZoom } = CAMERA_ZOOM_RANGE;
-  const minPitch = -0.22, maxPitch = 0.12;
+export function createCameraView(initial = null, limits = STANDARD_LIMITS) {
+  const { min: minZoom, max: maxZoom } = limits.zoom;
+  const { min: minPitch, max: maxPitch } = limits.pitch;
+  const { min: minPan, max: maxPan } = limits.panY;
   let dTheta = 0, dPhi = 0, zoom = 1, panY = 0;
   let applied = null;
   const set = (value) => {
@@ -114,7 +178,7 @@ export function createCameraView(initial = null) {
     dTheta = wrapPi(finite(value?.dTheta, 0));
     dPhi = clamp(finite(value?.dPhi, 0), minPitch, maxPitch);
     zoom = clamp(finite(value?.zoom, 1), minZoom, maxZoom);
-    panY = clamp(finite(value?.panY, 0), -1.2, 1.2);
+    panY = clamp(finite(value?.panY, 0), minPan, maxPan);
     applied = null;
   };
   set(initial);
@@ -141,8 +205,57 @@ export function createCameraView(initial = null) {
     },
     zoomBy(factor) { if (Number.isFinite(factor) && factor > 0) zoom = clamp(zoom * factor, minZoom, maxZoom); },
     rotateBy(radians) { if (Number.isFinite(radians)) dTheta = wrapPi(dTheta + radians); },
-    moveBy(metres) { if (Number.isFinite(metres)) panY = clamp(panY - metres, -1.2, 1.2); },
+    moveBy(metres) { if (Number.isFinite(metres)) panY = clamp(panY - metres, minPan, maxPan); },
     reset() { set(null); },
+    get limits() { return limits; },
+  };
+}
+
+const VIEW_ZERO = Object.freeze({ dTheta: 0, dPhi: 0, zoom: 1, panY: 0 });
+
+/** Pure: a view `k` (0..1) of the way from `from` to `to`. Yaw takes the short
+ *  way round the seam; zoom eases geometrically (even speed in and out). */
+export function blendView(from, to, k) {
+  const t = clamp(Number(k) || 0, 0, 1);
+  const read = (view, key) => (Number.isFinite(view?.[key]) ? view[key] : VIEW_ZERO[key]);
+  const zoomOf = (view) => { const z = read(view, 'zoom'); return z > 0 ? z : 1; };
+  const a = { dTheta: read(from, 'dTheta'), dPhi: read(from, 'dPhi'), zoom: zoomOf(from), panY: read(from, 'panY') };
+  const b = { dTheta: read(to, 'dTheta'), dPhi: read(to, 'dPhi'), zoom: zoomOf(to), panY: read(to, 'panY') };
+  if (t === 0) return a;
+  if (t === 1) return b;
+  return {
+    dTheta: wrapPi(a.dTheta + wrapPi(b.dTheta - a.dTheta) * t),
+    dPhi: a.dPhi + (b.dPhi - a.dPhi) * t,
+    zoom: a.zoom * Math.pow(b.zoom / a.zoom, t),
+    panY: a.panY + (b.panY - a.panY) * t,
+  };
+}
+
+/** Pure: a short ease-out (cubic) from one view to another, sampled by time. */
+export function createViewTween({ from, to = VIEW_ZERO, at = 0, ms = 380 } = {}) {
+  const span = Math.max(1, Number(ms) || 0);
+  return {
+    value(now) {
+      const p = clamp((Number(now) - at) / span, 0, 1);
+      return { view: blendView(from, to, 1 - (1 - p) ** 3), done: p >= 1 };
+    },
+  };
+}
+
+/** Taps → double taps: the second press within `ms` of the first release
+ *  (like iOS/Android) and within `slop` px. The tap after a double tap starts
+ *  a new pair. `downAt`/`upAt` are the tap's press and release times. */
+export function createDoubleTap({ ms = 350, slop = 36 } = {}) {
+  let last = null;
+  return {
+    tap(x, y, downAt, upAt = downAt) {
+      if (![x, y, downAt, upAt].every(Number.isFinite)) { last = null; return false; }
+      const double = Boolean(last && downAt - last.upAt <= ms && downAt >= last.downAt
+        && Math.hypot(x - last.x, y - last.y) <= slop);
+      last = double ? null : { x, y, downAt, upAt };
+      return double;
+    },
+    reset() { last = null; },
   };
 }
 
@@ -171,7 +284,7 @@ export function createAvatarGesture({ threshold = 7, tapMs = 650 } = {}) {
       const p = points.get(id);
       points.delete(id);
       return p && !blocked && !p.dragged && at - p.at <= tapMs
-        && Math.hypot(x - p.startX, y - p.startY) <= threshold ? { x, y } : null;
+        && Math.hypot(x - p.startX, y - p.startY) <= threshold ? { x, y, downAt: p.at, upAt: at } : null;
     },
     cancel(id) {
       // Losing capture for one finger must not forget the other fingers: a

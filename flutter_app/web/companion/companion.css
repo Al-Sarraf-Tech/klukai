@@ -236,9 +236,11 @@ html[data-reduced-motion="reduce"] .subtitle.thinking::after {
 }
 
 /* ── Embedded in the PWA's 3D view (companion.html?embed=1) ────────────── */
-/* The PWA draws the HUD (status, her line, VOICE, composer), so the stage's
-   own chrome is hidden; the avatar fills the frame on the HUD's gunmetal,
-   darkened top and bottom where the HUD sits. Taps on her still work. */
+/* The PWA's top bar and composer sit above and below the frame (none of its
+   widgets overlap it), so the frame is all hers: the stage's own chrome is
+   hidden and it draws the 3D view's HUD itself (below). The avatar fills the
+   frame on the HUD's gunmetal, lightly darkened at the top and under the
+   subtitle card. Taps on her still work. */
 html[data-embed] .topbar,
 html[data-embed] .notice,
 html[data-embed] .dock,
@@ -252,11 +254,113 @@ html[data-embed] .stage::after {
   content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
   background:
     repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 3px),
-    linear-gradient(180deg, rgba(6, 8, 12, 0.55) 0, rgba(6, 8, 12, 0) 22%,
-      rgba(6, 8, 12, 0) 52%, rgba(6, 8, 12, 0.92) 82%);
+    linear-gradient(180deg, rgba(6, 8, 12, 0.45) 0, rgba(6, 8, 12, 0) 14%,
+      rgba(6, 8, 12, 0) 62%, rgba(6, 8, 12, 0.72) 100%);
 }
 html[data-embed] .model canvas,
 html[data-embed] .model-view canvas { -webkit-mask-image: none; mask-image: none; }
 @media (min-width: 900px) {
   html[data-embed] .portrait, html[data-embed] .model { left: 0; right: 0; width: auto; translate: none; }
+}
+
+/* ── Embedded HUD (hud.js; companion.html?embed=1) ──────────────────────── */
+/* Ani-style and minimal, in the PWA's Tactical HUD look (lib/theme/hud.dart):
+   small translucent chips at the top right, a subtitle card at the bottom.
+   Static on purpose: no animation loops and no backdrop blur over the WebGL
+   canvas (both repaint every frame and flicker on iOS); only brief state
+   changes. Pointers go through to her except on WEARING, VOICE and a line
+   long enough to scroll. Fonts are the PWA's own bundled copies (OFL). */
+@font-face { font-family: "HUD Rajdhani"; font-weight: 500; font-display: swap; src: url("../assets/assets/fonts/Rajdhani-Medium.ttf") format("truetype"); }
+@font-face { font-family: "HUD Rajdhani"; font-weight: 600; font-display: swap; src: url("../assets/assets/fonts/Rajdhani-SemiBold.ttf") format("truetype"); }
+@font-face { font-family: "HUD Rajdhani"; font-weight: 700; font-display: swap; src: url("../assets/assets/fonts/Rajdhani-Bold.ttf") format("truetype"); }
+@font-face { font-family: "HUD Mono"; font-weight: 400; font-display: swap; src: url("../assets/assets/fonts/JetBrainsMono-Regular.ttf") format("truetype"); }
+@font-face { font-family: "HUD Mono"; font-weight: 600; font-display: swap; src: url("../assets/assets/fonts/JetBrainsMono-SemiBold.ttf") format("truetype"); }
+
+html[data-embed] {
+  --hud-ground: #06080c; --hud-cyan: #4fd1ff; --hud-violet: #9b7bff;
+  --hud-text: #d8f3ff; --hud-dim: #8fb7c9; --hud-muted: #5e7f90; --hud-danger: #ff8fa3;
+  --hud-edge: rgba(79, 209, 255, 0.45);
+  --hud-display: "HUD Rajdhani", system-ui, sans-serif;
+  --hud-mono: "HUD Mono", ui-monospace, Menlo, monospace;
+}
+.hud { display: none; }
+html[data-embed][data-hud] .hud:not([hidden]) {
+  display: block; position: absolute; inset: 0; z-index: 3; pointer-events: none;
+}
+.hud [hidden] { display: none !important; }
+.hud button {
+  -webkit-appearance: none; appearance: none; border-radius: 0; cursor: pointer;
+  pointer-events: auto; touch-action: manipulation; -webkit-user-select: none; user-select: none;
+}
+.hud button:focus-visible { outline: 1px solid var(--hud-cyan); outline-offset: 2px; }
+
+/* the reticle corner at the top left */
+.hud-bracket {
+  position: absolute; top: calc(var(--safe-top) + 10px); left: calc(var(--safe-left) + 12px);
+  width: 20px; height: 20px; border-top: 2px solid var(--hud-cyan); border-left: 2px solid var(--hud-cyan);
+  opacity: 0.8;
+}
+
+/* status chips: a tight stack at the top right, clear of her face */
+.hud-tags {
+  position: absolute; top: calc(var(--safe-top) + 10px); right: calc(var(--safe-right) + 10px);
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: min(42%, 170px);
+}
+.hud-tag {
+  position: relative; display: flex; align-items: baseline; gap: 6px; max-width: 100%; min-height: 22px;
+  padding: 3px 8px; background: rgba(6, 8, 12, 0.55); border: 1px solid rgba(79, 209, 255, 0.3);
+  color: var(--hud-text); font: 600 12.5px/1.2 var(--hud-display); letter-spacing: 0.02em; white-space: nowrap;
+}
+.hud-k { flex: none; font: 400 9px/1 var(--hud-mono); letter-spacing: 0.14em; color: var(--hud-dim); }
+.hud-v { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hud-tag.hot .hud-v { color: var(--hud-danger); }
+.hud-wearing { margin: 0; border-color: rgba(155, 123, 255, 0.6); }
+.hud-wearing::after { content: "›"; flex: none; color: var(--hud-violet); }
+.hud-wearing::before { content: ""; position: absolute; inset: -9px -8px; } /* a thumb-sized target */
+
+/* the subtitle card: her latest line and ▶ VOICE; corners cut like the
+   PWA's dialogue panel (top right, bottom left), edges drawn on the cut */
+.hud-card {
+  position: absolute; left: calc(var(--safe-left) + 10px); right: calc(var(--safe-right) + 10px);
+  bottom: calc(var(--safe-bottom) + 10px); max-width: 620px; margin: 0 auto; padding: 0 6px 10px 14px;
+  border: 1px solid var(--hud-edge);
+  background:
+    linear-gradient(to bottom left, transparent 50%, var(--hud-edge) 50%, var(--hud-edge) calc(50% + 1.2px), transparent 0)
+      right top / 14px 14px no-repeat border-box,
+    linear-gradient(to top right, transparent 50%, var(--hud-edge) 50%, var(--hud-edge) calc(50% + 1.2px), transparent 0)
+      left bottom / 14px 14px no-repeat border-box,
+    rgba(6, 8, 12, 0.74);
+  -webkit-clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+          clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+}
+.hud-card-head { display: flex; align-items: center; min-height: 38px; }
+.hud-name { font: 400 10px/1 var(--hud-mono); letter-spacing: 0.14em; color: var(--hud-cyan); }
+.hud-voice {
+  position: relative; margin: 0 0 0 auto; display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px;
+  min-width: 72px; min-height: 38px; padding: 0 10px; border: 0; background: none;
+  color: var(--hud-cyan); font: 600 10px/1 var(--hud-mono); letter-spacing: 0.14em;
+  transition: color 0.15s ease;
+}
+.hud-voice::before { content: ""; position: absolute; inset: -4px -6px -6px -12px; }
+.hud-voice[data-state="loading"] { color: var(--hud-dim); }
+.hud-voice[data-state="playing"] { color: var(--hud-text); }
+.hud-voice-icon { font-size: 10px; }
+.hud-status {
+  margin: 0 8px 4px 0; color: rgba(79, 209, 255, 0.85);
+  font: 400 10.5px/1.5 var(--hud-mono); letter-spacing: 0.1em; text-transform: uppercase;
+}
+.hud-line {
+  margin: 0 8px 0 0; max-height: calc(1.3em * 4); overflow-y: auto; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch; white-space: pre-line; overflow-wrap: anywhere;
+  color: var(--hud-text); font: 500 17px/1.3 var(--hud-display); text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  scrollbar-width: thin; scrollbar-color: rgba(79, 209, 255, 0.35) transparent;
+}
+.hud-line.scrolls { pointer-events: auto; touch-action: pan-y; }
+.hud-line.placeholder { color: var(--hud-muted); font-size: 16px; }
+
+/* short frames (landscape, keyboard up): her line gets two lines, the chips go */
+@media (max-height: 440px) {
+  html[data-embed] .hud-tags, html[data-embed] .hud-bracket { display: none; }
+  html[data-embed] .hud-line { max-height: calc(1.3em * 2); }
+  html[data-embed] .hud-card-head { min-height: 32px; }
 }

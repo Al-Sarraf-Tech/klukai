@@ -1,4 +1,7 @@
-import { BASE_FOV, cameraFarPlane, cameraFraming, createAvatarGesture, createCameraView } from './camera.js';
+import {
+  BASE_FOV, cameraFarPlane, cameraFraming, cameraLimits, createAvatarGesture, createCameraView, createDoubleTap,
+  createViewTween, zoomAim,
+} from './camera.js';
 import { wrapPi } from './common.js';
 
 // Camera operations on the single avatar runtime owner.
@@ -44,7 +47,11 @@ export function installCamera(ctx) {
     ctx.camSnap = false;
     // 3. Compose the persistent view with the automatic 3% speech push-in.
     const view = ctx.orbit.place(ctx.camCur.sph, ctx.pushIn);
-    ctx.viewTarget.copy(ctx.camCur.target); ctx.viewTarget.y += ctx.orbit.state.panY;
+    const { panY, zoom } = ctx.orbit.state;
+    // The embedded (waist) framing aims up at her face as he pinches in and
+    // down to her middle as he pinches out; the other framings never aim.
+    const aim = zoomAim({ framing: ctx.framing, state: ctx.stateName, zoom, targetY: ctx.camCur.target.y, headY: ctx.headRestY });
+    ctx.viewTarget.copy(ctx.camCur.target); ctx.viewTarget.y += panY + aim;
     ctx.camera.position.setFromSpherical(ctx._sph.set(view.radius, view.phi, view.theta)).add(ctx.viewTarget);
     if (ctx.controls) {
       ctx.controls.target.copy(ctx.viewTarget);
@@ -61,6 +68,7 @@ export function installCamera(ctx) {
 
   ctx.changeView = function changeView(change) {
     if (ctx.disposed || !ctx.root) return;
+    ctx.viewTween = null; // a direct change replaces any easing in progress
     ctx.absorbCameraInput();
     // Drain the controls' residual rotation through their public API, then
     // replace that camera position. Otherwise a Reset during damping drifts.
@@ -74,6 +82,25 @@ export function installCamera(ctx) {
     ctx.placeCamera(0, false);
     ctx.notifyView();
     if (ctx.paused) ctx.renderer.render(ctx.scene, ctx.camera);
+  };
+
+  /** Ease the user view to `to` (null = the automatic view) in the render
+   *  loop. False when it can't animate (parked, reduced motion, not loaded):
+   *  the caller then changes the view at once. */
+  ctx.animateView = function animateView(to, ms = 380) {
+    if (ctx.disposed || !ctx.root || ctx.paused || ctx.reducedMotion) return false;
+    ctx.absorbCameraInput();
+    const goal = createCameraView(to, ctx.orbit.limits).state;
+    ctx.viewTween = createViewTween({ from: ctx.orbit.state, to: goal, at: performance.now(), ms });
+    return true;
+  };
+
+  /** One frame of an animated view change (called before placeCamera). */
+  ctx.stepViewTween = function stepViewTween(now) {
+    if (!ctx.viewTween) return;
+    const { view, done } = ctx.viewTween.value(now);
+    ctx.orbit.set(view);
+    if (done) { ctx.viewTween = null; ctx.notifyView(); }
   };
 
   ctx.notifyView = function notifyView() {
@@ -98,7 +125,9 @@ export function initializeCamera(ctx) {
   // ── camera framing (eased) + persistent user zoom/orbit ──────────────────
   ctx.camGoal = { target: new ctx.THREE.Vector3(), sph: new ctx.THREE.Spherical(2, Math.PI / 2, 0), fov: BASE_FOV };
   ctx.camCur = { target: new ctx.THREE.Vector3(), sph: new ctx.THREE.Spherical(2, Math.PI / 2, 0), fov: BASE_FOV };
-  ctx.orbit = createCameraView(ctx.opts.view);
+  ctx.orbit = createCameraView(ctx.opts.view, cameraLimits(ctx.framing));
+  ctx.viewTween = null;    // animated reset (double tap in the embedded view)
+  ctx.doubleTap = createDoubleTap();
   ctx.viewTarget = new ctx.THREE.Vector3();
   ctx.gesture = createAvatarGesture();
   ctx.raycaster = new ctx.THREE.Raycaster();
@@ -121,7 +150,7 @@ export function initializeCamera(ctx) {
     ctx.controls.enableDamping = false; // exact release position, with no hidden residual input
     ctx.controls.dampingFactor = 0.08;
     ctx.controls.rotateSpeed = ctx.isIOS || globalThis.matchMedia?.('(pointer: coarse)').matches ? 0.7 : 0.5;
-    ctx.onControlStart = () => { ctx.orbitDragging = true; ctx.passives?.cancel(); };
+    ctx.onControlStart = () => { ctx.orbitDragging = true; ctx.viewTween = null; ctx.passives?.cancel(); };
     ctx.onControlEnd = () => { ctx.orbitDragging = ctx.gesture.active; ctx.settleView(); };
     ctx.controls.addEventListener('start', ctx.onControlStart);
     ctx.controls.addEventListener('end', ctx.onControlEnd);
