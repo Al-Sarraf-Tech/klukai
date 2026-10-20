@@ -11,6 +11,9 @@ import '../theme/hud.dart';
 import '../widgets/hud_parts.dart';
 import 'hud_album_links.dart';
 
+/// The album's side gutter.
+const _kGutter = EdgeInsets.symmetric(horizontal: 16);
+
 /// The album's filter chips over the archive's real categories.
 enum AlbumFilter { all, herPov, withYou, moments }
 
@@ -463,8 +466,10 @@ class _HudAlbumScreenState extends State<HudAlbumScreen> {
           controller: _scroll,
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
+            // No side padding: _header() keeps the gutter itself so the
+            // chip row can scroll edge to edge.
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              padding: const EdgeInsets.only(top: 16),
               sliver: SliverToBoxAdapter(child: _header()),
             ),
             if (_loading)
@@ -527,34 +532,37 @@ class _HudAlbumScreenState extends State<HudAlbumScreen> {
   Widget _header() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      HudScreenHeader(
-        kicker: 'Archive // Memory album',
-        trailing: '$_entryCount ${_entryCount == 1 ? 'entry' : 'entries'}',
-        trailingKey: const Key('album-count'),
-        title: 'Album',
-        subtitle: 'Her collection',
-        actions: [
-          HudIconAction(
-            key: const Key('album-her-pov'),
-            icon: Icons.brush_outlined,
-            label: 'Her POV',
-            color: HudColors.violet,
-            onPressed: _openHerPov,
-          ),
-          HudIconAction(
-            key: const Key('album-thread'),
-            icon: Icons.forum_outlined,
-            label: 'The Thread',
-            onPressed: _openThread,
-          ),
-          if (_timeline.isNotEmpty)
+      Padding(
+        padding: _kGutter,
+        child: HudScreenHeader(
+          kicker: 'Archive // Memory album',
+          trailing: '$_entryCount ${_entryCount == 1 ? 'entry' : 'entries'}',
+          trailingKey: const Key('album-count'),
+          title: 'Album',
+          subtitle: 'Her collection',
+          actions: [
             HudIconAction(
-              key: const Key('album-months'),
-              icon: Icons.calendar_month_outlined,
-              label: 'Timeline by month',
-              onPressed: _pickMonth,
+              key: const Key('album-her-pov'),
+              icon: Icons.brush_outlined,
+              label: 'Her POV',
+              color: HudColors.violet,
+              onPressed: _openHerPov,
             ),
-        ],
+            HudIconAction(
+              key: const Key('album-thread'),
+              icon: Icons.forum_outlined,
+              label: 'The Thread',
+              onPressed: _openThread,
+            ),
+            if (_timeline.isNotEmpty)
+              HudIconAction(
+                key: const Key('album-months'),
+                icon: Icons.calendar_month_outlined,
+                label: 'Timeline by month',
+                onPressed: _pickMonth,
+              ),
+          ],
+        ),
       ),
       const SizedBox(height: 8),
       HudChipRow<AlbumFilter>(
@@ -562,14 +570,18 @@ class _HudAlbumScreenState extends State<HudAlbumScreen> {
         options: {for (final f in AlbumFilter.values) f: f.label},
         value: _filter,
         onChanged: _selectFilter,
+        padding: _kGutter,
       ),
       if (_month != null) ...[
         const SizedBox(height: 2),
-        HudTapChip(
-          key: const Key('album-month-clear'),
-          label: '${_monthLabel(_month!)}  ×',
-          selected: true,
-          onTap: () => _selectMonth(null),
+        Padding(
+          padding: _kGutter,
+          child: HudTapChip(
+            key: const Key('album-month-clear'),
+            label: '${_monthLabel(_month!)}  ×',
+            selected: true,
+            onTap: () => _selectMonth(null),
+          ),
         ),
       ],
     ],

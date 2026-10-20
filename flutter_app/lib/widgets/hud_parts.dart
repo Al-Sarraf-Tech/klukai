@@ -4,7 +4,10 @@
 /// loading / error / empty states.
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 
 import '../theme/hud.dart';
 
@@ -156,7 +159,13 @@ class HudTapChip extends StatelessWidget {
   );
 }
 
-/// A wrapping row of filter chips, one selected.
+/// One row of filter chips, one selected. It never wraps: chips that do not
+/// fit scroll sideways (`<keyPrefix>-row`), and a tapped chip scrolls fully
+/// into view.
+///
+/// [padding] is the screen's side gutter, kept inside the scroll view: lay
+/// the row out edge to edge and the first chip still lines up with the
+/// content, while scrolled chips run on to the screen edge.
 class HudChipRow<T> extends StatelessWidget {
   const HudChipRow({
     super.key,
@@ -164,26 +173,76 @@ class HudChipRow<T> extends StatelessWidget {
     required this.value,
     required this.onChanged,
     this.keyPrefix = 'chip',
+    this.padding = EdgeInsets.zero,
   });
 
   final Map<T, String> options;
   final T value;
   final ValueChanged<T> onChanged;
   final String keyPrefix;
+  final EdgeInsets padding;
 
   @override
-  Widget build(BuildContext context) => Wrap(
-    spacing: 6,
-    children: [
-      for (final entry in options.entries)
-        HudTapChip(
-          key: ValueKey('$keyPrefix-${entry.key}'),
-          label: entry.value,
-          selected: entry.key == value,
-          onTap: () => onChanged(entry.key),
-        ),
-    ],
+  Widget build(BuildContext context) => SingleChildScrollView(
+    key: ValueKey('$keyPrefix-row'),
+    scrollDirection: Axis.horizontal,
+    padding: padding,
+    child: Row(
+      children: [
+        for (final (i, entry) in options.entries.indexed) ...[
+          if (i > 0) const SizedBox(width: 6),
+          Builder(
+            builder: (chip) => HudTapChip(
+              key: ValueKey('$keyPrefix-${entry.key}'),
+              label: entry.value,
+              selected: entry.key == value,
+              onTap: () {
+                onChanged(entry.key);
+                _reveal(chip);
+              },
+            ),
+          ),
+        ],
+      ],
+    ),
   );
+
+  /// Once the tap has rebuilt the row, scrolls it just enough to show all of
+  /// [chip] clear of the gutter; a chip already in view stays put.
+  void _reveal(BuildContext chip) {
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (!chip.mounted) return;
+        final box = chip.findRenderObject();
+        final position = Scrollable.maybeOf(chip)?.position;
+        if (box is! RenderBox || !box.hasSize || position == null) return;
+        final viewport = RenderAbstractViewport.maybeOf(box);
+        if (viewport == null) return;
+        final area = Rect.fromLTRB(
+          -padding.left,
+          0,
+          box.size.width + padding.right,
+          box.size.height,
+        );
+        final atStart = viewport.getOffsetToReveal(box, 0, rect: area).offset;
+        final atEnd = viewport.getOffsetToReveal(box, 1, rect: area).offset;
+        final target = position.pixels
+            .clamp(math.min(atStart, atEnd), math.max(atStart, atEnd))
+            .clamp(position.minScrollExtent, position.maxScrollExtent)
+            .toDouble();
+        if ((target - position.pixels).abs() < 0.5) return;
+        if (MediaQuery.maybeDisableAnimationsOf(chip) ?? false) {
+          position.jumpTo(target);
+        } else {
+          position.animateTo(
+            target,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+          );
+        }
+      })
+      ..ensureVisualUpdate();
+  }
 }
 
 /// Section title above a group of rows (VOICE, STAGE…).

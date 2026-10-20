@@ -10,6 +10,7 @@ import 'package:companion_app/models/memory.dart';
 import 'package:companion_app/screens/hud_album_links.dart';
 import 'package:companion_app/screens/hud_album_screen.dart';
 import 'package:companion_app/services/memory_service.dart';
+import 'package:companion_app/widgets/hud_parts.dart';
 
 class _FakeMemoryService extends MemoryService {
   _FakeMemoryService({
@@ -177,8 +178,13 @@ Future<(_FakeMemoryService, _Links)> _pump(
   return (fake, links);
 }
 
+/// Taps a chip the way he would: scrolled into view first, since the row
+/// scrolls sideways once the chips outgrow the screen.
 Future<void> _chip(WidgetTester tester, AlbumFilter f) async {
-  await tester.tap(find.byKey(ValueKey('album-filter-$f')));
+  final chip = find.byKey(ValueKey('album-filter-$f'));
+  await tester.ensureVisible(chip);
+  await tester.pumpAndSettle();
+  await tester.tap(chip);
   await tester.pumpAndSettle();
 }
 
@@ -433,12 +439,59 @@ void main() {
     expect(find.text('NO MEMORIES ARCHIVED YET.'), findsOneWidget);
   });
 
-  for (final width in [360.0, 430.0]) {
-    testWidgets('no overflow at $width px', (tester) async {
+  for (final width in [360.0, 390.0, 430.0]) {
+    testWidgets('no overflow at $width px; the chips stay on one row', (
+      tester,
+    ) async {
       await _pump(tester, width: width);
       expect(tester.takeException(), isNull);
+      final chips = [
+        for (final f in AlbumFilter.values)
+          tester.getRect(find.byKey(ValueKey('album-filter-$f'))),
+      ];
+      for (final c in chips) {
+        expect(c.center.dy, moreOrLessEquals(chips.first.center.dy));
+      }
+      // Edge to edge, but the first chip starts on the 16 px gutter, like
+      // the header and the cards.
+      final row = tester.getRect(
+        find.byKey(const ValueKey('album-filter-row')),
+      );
+      expect(row.left, 0);
+      expect(row.right, lessThanOrEqualTo(width));
+      expect(chips.first.left, 16);
+      final header = tester.getRect(find.byType(HudScreenHeader));
+      expect(header.left, 16);
+      expect(header.right, width - 16);
+      expect(
+        tester.getRect(find.byKey(const Key('album-featured-stars'))).left,
+        16,
+      );
+
       await _chip(tester, AlbumFilter.herPov);
       expect(tester.takeException(), isNull);
+      expect(find.byKey(const Key('album-featured-pov')), findsOneWidget);
+      await _chip(tester, AlbumFilter.moments);
+      expect(find.byKey(const Key('album-featured-range')), findsOneWidget);
+      expect(find.byKey(const Key('album-card-cat')), findsNothing);
     });
   }
+
+  testWidgets('the month chip keeps the gutter', (tester) async {
+    await _pump(
+      tester,
+      width: 360,
+      service: _FakeMemoryService(
+        pages: [_sample],
+        categories: _cats(),
+        timeline: [MonthGroup(month: '2026-09', count: 7)],
+      ),
+    );
+    await tester.tap(find.byKey(const Key('album-months')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('album-month-2026-09')));
+    await tester.pumpAndSettle();
+    expect(tester.getRect(find.byKey(const Key('album-month-clear'))).left, 16);
+    expect(tester.takeException(), isNull);
+  });
 }

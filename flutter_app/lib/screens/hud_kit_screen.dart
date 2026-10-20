@@ -5,6 +5,9 @@ import '../services/wardrobe_service.dart';
 import '../theme/hud.dart';
 import '../widgets/hud_parts.dart';
 
+/// The Kit tab's side gutter.
+const _kGutter = EdgeInsets.symmetric(horizontal: 16);
+
 /// The Kit tab's category chips.
 enum KitFilter { all, duty, offDuty, formal, seasonal }
 
@@ -301,14 +304,18 @@ class _HudKitScreenState extends State<HudKitScreen> {
         child: ListView(
           key: const Key('kit-scroll'),
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          // The side gutter is per child: the chip row scrolls edge to edge.
+          padding: const EdgeInsets.only(top: 16, bottom: 24),
           children: [
-            HudScreenHeader(
-              kicker: 'Kit // Wardrobe',
-              trailing: w == null ? null : '$unlocked / $total unlocked',
-              trailingKey: const Key('kit-count'),
-              title: 'Kit',
-              subtitle: 'What she wears',
+            Padding(
+              padding: _kGutter,
+              child: HudScreenHeader(
+                kicker: 'Kit // Wardrobe',
+                trailing: w == null ? null : '$unlocked / $total unlocked',
+                trailingKey: const Key('kit-count'),
+                title: 'Kit',
+                subtitle: 'What she wears',
+              ),
             ),
             const SizedBox(height: 8),
             HudChipRow<KitFilter>(
@@ -316,9 +323,10 @@ class _HudKitScreenState extends State<HudKitScreen> {
               options: {for (final f in KitFilter.values) f: f.label},
               value: _filter,
               onChanged: (f) => setState(() => _filter = f),
+              padding: _kGutter,
             ),
             const SizedBox(height: 10),
-            ...switch (_phase) {
+            for (final child in switch (_phase) {
               _Phase.loading => [const HudLoading('Opening her wardrobe...')],
               _Phase.error => [
                 HudErrorState(
@@ -329,7 +337,8 @@ class _HudKitScreenState extends State<HudKitScreen> {
                 ),
               ],
               _Phase.ready => _body(w!),
-            },
+            })
+              Padding(padding: _kGutter, child: child),
           ],
         ),
       ),

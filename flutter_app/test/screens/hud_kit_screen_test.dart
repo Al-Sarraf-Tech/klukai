@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:companion_app/models/her_day.dart';
 import 'package:companion_app/screens/hud_kit_screen.dart';
 import 'package:companion_app/services/wardrobe_service.dart';
+import 'package:companion_app/widgets/hud_parts.dart';
 
 import '../support/her_day_fixtures.dart';
 
@@ -43,8 +44,13 @@ Future<FakeWardrobeService> _pump(
 
 Finder _card(String id) => find.byKey(ValueKey('kit-card-$id'));
 
+/// Taps a chip the way he would: scrolled into view first, since the row
+/// scrolls sideways once the chips outgrow the screen.
 Future<void> _chip(WidgetTester tester, KitFilter f) async {
-  await tester.tap(find.byKey(ValueKey('kit-filter-$f')));
+  final chip = find.byKey(ValueKey('kit-filter-$f'));
+  await tester.ensureVisible(chip);
+  await tester.pumpAndSettle();
+  await tester.tap(chip);
   await tester.pumpAndSettle();
 }
 
@@ -275,10 +281,73 @@ void main() {
     expect(bounced, 1);
   });
 
-  for (final width in [360.0, 430.0]) {
-    testWidgets('no overflow at $width px', (tester) async {
+  for (final width in [360.0, 390.0, 430.0]) {
+    testWidgets('no overflow at $width px; the chips stay on one row', (
+      tester,
+    ) async {
       await _pump(tester, FakeWardrobeService(), width: width);
       expect(tester.takeException(), isNull);
+      final chips = [
+        for (final f in KitFilter.values)
+          tester.getRect(find.byKey(ValueKey('kit-filter-$f'))),
+      ];
+      // One row, never a second line.
+      for (final c in chips) {
+        expect(c.center.dy, moreOrLessEquals(chips.first.center.dy));
+      }
+      // The row may run to the screen edges, but starts on the content's
+      // 16 px gutter, like the header and the cards.
+      final row = tester.getRect(find.byKey(const ValueKey('kit-filter-row')));
+      expect(row.left, 0);
+      expect(row.right, width);
+      expect(chips.first.left, 16);
+      final header = tester.getRect(find.byType(HudScreenHeader));
+      expect(header.left, 16);
+      expect(header.right, width - 16);
+      final card = tester.getRect(_card('blazing_star'));
+      expect(card.left, 16);
+      expect(
+        tester.getRect(find.byKey(const Key('kit-request'))).right,
+        width - 16,
+      );
     });
   }
+
+  testWidgets('at 360 px the chip row scrolls and still filters', (
+    tester,
+  ) async {
+    await _pump(tester, FakeWardrobeService(), width: 360);
+    final seasonal = find.byKey(ValueKey('kit-filter-${KitFilter.seasonal}'));
+    expect(tester.getRect(seasonal).right, greaterThan(360));
+    await tester.drag(
+      find.byKey(const ValueKey('kit-filter-row')),
+      const Offset(-400, 0),
+    );
+    await tester.pumpAndSettle();
+    // Scrolled to its end: the last chip sits on the right gutter.
+    expect(tester.getRect(seasonal).right, moreOrLessEquals(360 - 16));
+    await tester.tap(seasonal);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('kit-empty')), findsOneWidget);
+    expect(_card('speed_star'), findsNothing);
+  });
+
+  testWidgets('a chip tapped half off the edge scrolls fully into view', (
+    tester,
+  ) async {
+    await _pump(tester, FakeWardrobeService(), width: 360);
+    // The first chip the edge cuts that he can still tap.
+    final cut = KitFilter.values
+        .map((f) => find.byKey(ValueKey('kit-filter-$f')))
+        .firstWhere((c) {
+          final r = tester.getRect(c);
+          return r.right > 360 && r.center.dx < 360;
+        });
+    await tester.tap(cut);
+    await tester.pumpAndSettle();
+    final r = tester.getRect(cut);
+    expect(r.left, greaterThanOrEqualTo(16));
+    expect(r.right, lessThanOrEqualTo(360 - 16 + 0.01));
+    expect(tester.takeException(), isNull);
+  });
 }
