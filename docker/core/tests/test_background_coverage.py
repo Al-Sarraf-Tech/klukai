@@ -748,6 +748,7 @@ class TestImageGen:
             ("app.account_images.update_request", AsyncMock()),
             ("app.her_day.render_costume", AsyncMock(return_value="blazing_star")),
             ("app.her_day.render_place", place),
+            ("app.account_images.repeat_window", lambda: 7),
             (
                 "app.image_gen.check_comfyui_ready",
                 AsyncMock(side_effect=AssertionError("GPU readiness")),
@@ -797,7 +798,7 @@ class TestImageGen:
         assert "Avoid these visual elements: outdoor scenery; open sky." in prompt
         assert generate.await_args.kwargs["include_commander"] is True
         assert generate.await_args.kwargs["request_id"] == explicit_request_id(
-            "u1", "take a picture of us", 832, 1216, True, "his_bedroom"
+            "u1", "take a picture of us", 832, 1216, True, "his_bedroom", window=7
         )
         assert (
             "Image scene: place=his_bedroom (his bedroom) source=his-history setting=indoor "
@@ -819,7 +820,7 @@ class TestImageGen:
         assert "the vehicle hangar inside a colossal armored land vehicle" in prompt
         assert "naval vessel" in prompt  # the avoid list, never the scene
         assert generate.await_args.kwargs["request_id"] == explicit_request_id(
-            "u1", "draw yourself", 832, 1216, False, "hangar"
+            "u1", "draw yourself", 832, 1216, False, "hangar", window=7
         )
 
     async def test_agy_without_her_day_falls_back_to_a_neutral_setting(
@@ -834,7 +835,7 @@ class TestImageGen:
             await bg.background_image_gen("draw yourself", user_id="u1")
         assert "Setting: " in generate.await_args.args[0]
         assert generate.await_args.kwargs["request_id"] == explicit_request_id(
-            "u1", "draw yourself", 832, 1216, False
+            "u1", "draw yourself", 832, 1216, False, window=7
         )
 
     async def test_local_renderer_follows_his_request_and_avoids_ships(self, bg_mocks):

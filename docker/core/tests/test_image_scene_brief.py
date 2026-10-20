@@ -862,6 +862,31 @@ class TestBriefOutputs:
         )
         assert len({old, room, beach}) == 3
 
+    def test_same_words_later_draw_a_new_picture(self):
+        from app.account_images import (
+            REPEAT_WINDOW_SECONDS,
+            explicit_request_id,
+            repeat_window,
+        )
+
+        def rid(window):
+            return explicit_request_id(
+                "u1", "Take a picture for me", 832, 1216, False, window=window
+            )
+
+        start = 1_792_000_000.0 - (1_792_000_000.0 % REPEAT_WINDOW_SECONDS)
+        # Asking again a few minutes later finds the same picture...
+        assert repeat_window(start + 5) == repeat_window(start + 300)
+        assert rid(repeat_window(start + 5)) == rid(repeat_window(start + 300))
+        # ...but once the window has passed, the same words make a new one.
+        later = repeat_window(start + REPEAT_WINDOW_SECONDS + 1)
+        assert later == repeat_window(start) + 1
+        assert rid(later) != rid(repeat_window(start))
+        assert rid(None) == explicit_request_id(
+            "u1", "Take a picture for me", 832, 1216, False
+        )
+        assert isinstance(repeat_window(), int)
+
 
 # ── Her Day lookup ──────────────────────────────────────────────────────────
 

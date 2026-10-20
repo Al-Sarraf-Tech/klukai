@@ -362,7 +362,11 @@ async def background_image_gen(
         avoid = brief.avoid() or None
         outcome = None
         if use_agy:
-            from .account_images import explicit_request_id, fulfill_account_image
+            from .account_images import (
+                explicit_request_id,
+                fulfill_account_image,
+                repeat_window,
+            )
             from .image_provider import cloud_prompt, nudity_allowed
 
             described = cloud_prompt(
@@ -372,7 +376,8 @@ async def background_image_gen(
             )
             full_prompt = f"{user_request}\n\n{brief.sentence()}\n\n{described}"
             # The id is the explicit sentence (and the place it is set in when
-            # that came from outside it), so a repeat finds this journal row.
+            # that came from outside it), so a repeat within the repeat window
+            # finds this journal row; later, the same words draw a new picture.
             request_id = explicit_request_id(
                 user_id,
                 user_request,
@@ -380,6 +385,7 @@ async def background_image_gen(
                 height,
                 couple,
                 scene=brief.request_scope(),
+                window=repeat_window(),
             )
             accepted_session = await memory.get_session(session_id(user_id))
             archive_context = {

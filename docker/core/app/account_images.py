@@ -12,6 +12,7 @@ from typing import Any
 
 import hashlib
 import json
+import time
 import uuid
 from pathlib import Path
 
@@ -43,6 +44,16 @@ def payload_digest(payload: dict[str, Any]) -> str:
 
 _EXPLICIT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "klukai:explicit-account-image:v1")
 
+# Asking again with the same words within this window finds the picture already
+# made (he closed the tab, or didn't see it arrive); after it, the same words
+# make a new picture instead of returning the first one forever.
+REPEAT_WINDOW_SECONDS = 600
+
+
+def repeat_window(now: float | None = None) -> int:
+    """The repeat window ``now`` (default: the current time) falls in."""
+    return int((time.time() if now is None else now) // REPEAT_WINDOW_SECONDS)
+
 
 def explicit_request_id(
     user_id: str,
@@ -51,12 +62,15 @@ def explicit_request_id(
     height: int,
     include_commander: bool,
     scene: str | None = None,
+    window: int | None = None,
 ) -> str:
     """One id for one explicit picture, stable across a closed tab or a new process.
 
     ``scene`` is the place the picture is set in when it came from outside
     the sentence (his earlier words, where she is): "take a picture of us" in
-    his room and at the beach are two pictures. None keeps the original id.
+    his room and at the beach are two pictures. ``window`` is the
+    :func:`repeat_window` it was asked in, so the same words later make a new
+    picture. None for either keeps the original id.
     """
     identity: dict[str, Any] = {
         "height": height,
@@ -67,6 +81,8 @@ def explicit_request_id(
     }
     if scene is not None:
         identity["scene"] = scene
+    if window is not None:
+        identity["window"] = window
     raw = json.dumps(
         identity,
         sort_keys=True,

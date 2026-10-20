@@ -419,8 +419,10 @@ async def test_chat_picture_survives_disconnect_and_repeats_without_another_rend
     monkeypatch.setattr(memory, "get_session", AsyncMock(return_value=None))
     monkeypatch.setattr(memory, "record_milestone", AsyncMock())
     width, height = (1216, 832) if is_landscape(prompt) else (832, 1216)
+    # Both sends fall in one repeat window (pinned so a window edge can't split them).
+    monkeypatch.setattr("app.account_images.repeat_window", lambda: 7)
     expected = explicit_request_id(
-        user_id, prompt, width, height, is_couple_scene(prompt)
+        user_id, prompt, width, height, is_couple_scene(prompt), window=7
     )
     levels = [2, 8]
     costumes = ["range_kit", "night_ride"]
