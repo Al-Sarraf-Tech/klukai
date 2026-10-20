@@ -46,10 +46,13 @@ class MemorySeedScheduleTests(unittest.TestCase):
         # The hard kill is SIGALRM inside the seeder: the distroless core image
         # has no coreutils `timeout` to wrap it with.
         self.assertIn(
-            "ExecStart=/usr/bin/docker compose exec -T -e SEED_DEADLINE_SECONDS=6000 "
+            "ExecStart=/usr/bin/docker exec -e SEED_DEADLINE_SECONDS=6000 "
             "-e SEED_HARD_KILL_SECONDS=6600 companion-core python3 /app/seed_memories.py",
             service,
         )
+        # Plain `docker compose` has no secrets on this host (encrypted store),
+        # so the unit must never call it.
+        self.assertNotIn("docker compose", service)
         self.assertNotIn(" timeout ", service.split("ExecStart=", 1)[1].splitlines()[0])
         soft = int(re.search(r"SEED_DEADLINE_SECONDS=(\d+)", service).group(1))
         hard = int(re.search(r"SEED_HARD_KILL_SECONDS=(\d+)", service).group(1))

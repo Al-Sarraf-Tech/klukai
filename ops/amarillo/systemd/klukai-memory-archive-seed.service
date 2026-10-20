@@ -11,8 +11,10 @@ WorkingDirectory=/home/jalsarraf/git/klukai
 Environment=TZ=America/Chicago
 UMask=0077
 ExecCondition=/home/jalsarraf/.local/bin/klukai-memory-seed-day-condition
-ExecStartPre=/usr/bin/test -r /home/jalsarraf/git/klukai/docker-compose.yml
-ExecStartPre=/usr/bin/docker compose config --quiet
+# Compose run by hand cannot interpolate this stack (its secrets are only in the
+# encrypted store, so interpolation fails); exec straight into the running
+# core container, which already has its whole environment.
+ExecStartPre=/usr/bin/docker inspect -f '{{.State.Running}}' companion-core
 # Dominus-free (owner order 2026-10-19): with KLUKAI_IMAGE_PROVIDER=agy the
 # seeder selects/annotates through the background text helper and renders
 # through the account worker. It does nothing unless core's environment sets
@@ -28,7 +30,7 @@ ExecStartPre=/usr/bin/docker compose config --quiet
 #                               TimeoutStartSec alone only kills the compose
 #                               client; the seeder kept running.
 #   TimeoutStartSec=6900        outer bound on the unit itself (05:55)
-ExecStart=/usr/bin/docker compose exec -T -e SEED_DEADLINE_SECONDS=6000 -e SEED_HARD_KILL_SECONDS=6600 companion-core python3 /app/seed_memories.py
+ExecStart=/usr/bin/docker exec -e SEED_DEADLINE_SECONDS=6000 -e SEED_HARD_KILL_SECONDS=6600 companion-core python3 /app/seed_memories.py
 TimeoutStartSec=6900
 Nice=10
 IOSchedulingClass=idle
