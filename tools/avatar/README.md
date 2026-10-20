@@ -345,9 +345,13 @@ On the server side (outside this tool):
 - **Compression:** the GLB gzips to about 0.95 MB, but `/api/avatar/model`
   sends it uncompressed. gzip or brotli on that route and on `/app/companion/`
   JS would save another ~30%.
-- **Cache:** done. `/api/avatar/model` sends `Cache-Control: private, no-cache`
-  plus an ETag, and `net.js` fetches with `no-store`, so a rebuilt GLB reaches
-  devices on their next open.
+- **Cache:** done. `/api/avatar/model` sends `Cache-Control: private, no-cache`,
+  `Vary: Accept-Encoding, Authorization` and a strong ETag (a sha256 of the
+  bytes, computed once per file size/mtime; `-gz` on the gzip body). `net.js`
+  fetches the model with `cache: "default"` (still with the bearer), so the
+  browser keeps a private copy and each load revalidates it: an unchanged
+  model is a 304 without a body, a rebuilt one arrives on the next open, and
+  the auth check runs first on every request (no token: 401, never a 304).
 
 ## Personal appearances
 
