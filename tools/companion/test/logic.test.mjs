@@ -68,6 +68,13 @@ test("brightness follows the mood's warmth", () => {
   assert.equal(moodBrightness("wistful"), 0);
 });
 
+test("a heartbeat frame changes nothing on the stage (the PWA shows it)", () => {
+  const before = { line: "Report.", mood: "serene", thinking: false, streaming: false };
+  const { state, effects } = reduceFrame(before, { type: "heartbeat", bpm: 96, mood: "giddy", intensity: 7 });
+  assert.deepEqual(state, before);
+  assert.deepEqual(effects, []);
+});
+
 test("every scene's chords resolve and stay in a sane register", () => {
   for (const [name, sc] of Object.entries(SCENES)) {
     assert.ok(sc.bpm >= 50 && sc.bpm <= 120, name);
