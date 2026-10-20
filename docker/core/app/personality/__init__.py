@@ -8,7 +8,7 @@ A-tier <500 LOC threshold). It is split for S+ uplift Phase 2 with the same publ
 Internal layout:
 - :mod:`.loader`         — YAML loading + mtime-based cache invalidation
 - :mod:`.speech`         — character preamble + speech/japanese/expressive/affection blocks
-- :mod:`.moods`          — 48 moods, 6 categories, per-mood coloring, context block
+- :mod:`.moods`          — 65 moods, 6 categories, per-mood coloring, context block
 - :mod:`.memory_blocks`  — memory / relationship / recall blocks
 - :mod:`.squad`          — supporting-cast voice profiles + squad interaction hints
 - :mod:`.state_blocks`   — physical / jealousy / anniversary / comfort / mission blocks

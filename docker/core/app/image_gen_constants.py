@@ -411,6 +411,21 @@ MOOD_EXPRESSION_TAGS = {
     "melancholic": "melancholic distant look",
     "haunted": "haunted shadowed eyes, somber",
     "guilty": "guilty downcast eyes",
+    "serene": "serene peaceful expression, soft smile",
+    "cozy": "cozy relaxed smile, content",
+    "wistful": "wistful faraway gaze",
+    "lonely": "lonely downcast gaze",
+    "stern": "stern expression, firm gaze",
+    "smug": "smug smile, half-closed eyes",
+    "hopeful": "hopeful expression, gentle smile",
+    "sulking": "pout, looking away",
+    "admiring": "admiring gaze, soft smile",
+    "teasing": "teasing smirk, raised eyebrow",
+    "restless": "restless expression, fidgeting",
+    "heartbroken": "heartbroken, teary eyes, sad",
+    "giddy": "giddy bright smile, light blush",
+    "overwhelmed": "overwhelmed expression, flushed",
+    "breathless": "breathless, parted lips, flushed",
 }
 
 # Lighting / time-of-day cues. One of morning/afternoon/evening/night (or

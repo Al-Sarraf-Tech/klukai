@@ -213,6 +213,9 @@ class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
             "devoted",
             "vulnerable",
             "drowsy",
+            "cozy",
+            "wistful",
+            "lonely",
         )
 
         # Guard: check mute
@@ -305,6 +308,8 @@ class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
             "melancholic",
             "haunted",
             "guilty",
+            "heartbroken",
+            "overwhelmed",
         }
         is_stressed = self._last_mood in NEGATIVE_MOODS
 

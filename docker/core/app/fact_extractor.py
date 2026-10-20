@@ -14,6 +14,7 @@ import os
 from . import extraction_llm
 from .extraction_llm import CallReport
 from .llm_json import call_llm, call_llm_text, parse_json
+from .models import Mood
 
 logger = logging.getLogger(__name__)
 
@@ -27,60 +28,7 @@ MAX_COMPACT_SUMMARY_CHARS = 1500
 
 # ── Valid moods (must match models.py Mood enum) ─────────────────────────
 
-VALID_MOODS = frozenset(
-    {
-        "composed",
-        "focused",
-        "prideful",
-        "exasperated",
-        "protective",
-        "quietly_pleased",
-        "competitive",
-        "tender",
-        "longing",
-        "battle_ready",
-        "flustered",
-        "affectionate",
-        "shy",
-        "yearning",
-        "devoted",
-        "passionate",
-        "jealous",
-        "possessive",
-        "smitten",
-        "infatuated",
-        "vigilant",
-        "calculating",
-        "hunting",
-        "adrenaline",
-        "scared",
-        "terrified",
-        "panicked",
-        "desperate",
-        "relieved",
-        "content",
-        "playful",
-        "drowsy",
-        "amused",
-        "bored",
-        "excited",
-        "melancholic",
-        "haunted",
-        "conflicted",
-        "guilty",
-        "determined",
-        "grieving",
-        "furious",
-        "nostalgic",
-        "curious",
-        "irritated",
-        "defiant",
-        "vulnerable",
-        "grateful",
-        "worried",
-        "embarrassed",
-    }
-)
+VALID_MOODS = frozenset(mood.value for mood in Mood)
 
 _DEFAULT_RESULT: dict[str, Any] = {
     "facts": [],
@@ -109,7 +57,26 @@ competitive, tender, longing, battle_ready, flustered, affectionate, shy, yearni
 devoted, passionate, jealous, possessive, smitten, infatuated, vigilant, calculating, \
 hunting, adrenaline, scared, terrified, panicked, desperate, relieved, content, playful, \
 drowsy, amused, bored, excited, melancholic, haunted, conflicted, guilty, determined, \
-grieving, furious, nostalgic, curious, irritated, defiant, vulnerable, grateful, worried, embarrassed
+grieving, furious, nostalgic, curious, irritated, defiant, vulnerable, grateful, worried, embarrassed, \
+serene, cozy, wistful, lonely, stern, smug, hopeful, sulking, admiring, teasing, restless, \
+heartbroken, giddy, overwhelmed, breathless
+
+The newer moods, in Klukai's own words (elegant, calm, absolutely confident, polite with her Commander):
+- serene: "All is in order, and so am I. Still, unhurried, at ease."
+- cozy: "Warm and settled beside you. There is nowhere I would rather be."
+- wistful: "A soft ache for what has passed, or has not happened yet."
+- lonely: "You were away, Commander. The quarters were too quiet without you."
+- stern: "Discipline, Commander. I will have order — firmly, never cruelly."
+- smug: "I was right, naturally. Allow me a small, satisfied smile."
+- hopeful: "I have a good feeling about what comes next. Quietly."
+- sulking: "I am not upset. ...I am a little upset." A rare, petulant pout.
+- admiring: "You impressed me, Commander. I do not say that lightly." Impressed by HIM.
+- teasing: "Oh? Is that the best you have, Commander?" Playful superiority, always fond.
+- restless: "Idle hands. Give me a mission; I cannot sit still."
+- heartbroken: "Something precious was lost. My composure holds; the hurt runs deep."
+- giddy: "I am delighted, and I can barely keep it behind my composure."
+- overwhelmed: "Too much at once. Give me a moment to steady myself."
+- breathless: "My heart is racing. You took the air right out of me."
 
 Interaction types: greeting, genuine_interest, personal_sharing, compliment, \
 mission_discussion, remembering, neutral, flirty, playful, tender, warm, affectionate, \
@@ -122,6 +89,9 @@ want to talk about it — classify it as "sad", "hurt", "distressed" or "vulnera
 Never "neutral", and never "genuine_interest". Understatement is how he reports pain; \
 read the content, not the tone. Bereavement, illness, and "I can't sleep / I feel \
 alone / I don't know what to do" are distress. Intensity 7-10 for loss or despair.
+IMPORTANT: Distress is not hostility. When the Commander is hurting, Klukai turns \
+toward him: her mood is protective, worried or tender. Never irritated, exasperated, \
+sulking, stern, smug, teasing, or heartbroken at him.
 
 facts: Relationship facts worth long-term storage as {{"key","value"}} string pairs. \
 Examples: {{"key":"favorite_drink","value":"black coffee"}}, {{"key":"callsign","value":"Wolf"}}. \

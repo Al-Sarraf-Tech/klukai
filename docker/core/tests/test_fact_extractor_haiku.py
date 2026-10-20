@@ -176,6 +176,27 @@ async def test_report_is_optional(haiku):
     assert out["mood"] == "amused"
 
 
+async def test_prompt_lists_every_mood_and_keeps_the_distress_rule():
+    from app.models import Mood
+
+    for mood in Mood:
+        assert mood.value in fe.EXTRACTION_PROMPT, mood.value
+    assert "Distress is not hostility" in fe.EXTRACTION_PROMPT
+    for forbidden in ("sulking", "stern", "heartbroken", "irritated"):
+        assert forbidden in fe.EXTRACTION_PROMPT.split("Distress is not hostility")[1]
+    # Still a valid format template.
+    fe.EXTRACTION_PROMPT.format(
+        user_message="u", assistant_message="a", affection_level=1
+    )
+
+
+def test_valid_moods_are_exactly_the_enum():
+    from app.models import Mood
+
+    assert fe.VALID_MOODS == {m.value for m in Mood}
+    assert len(fe.VALID_MOODS) == 65
+
+
 # ── compaction ────────────────────────────────────────────────────────────
 
 TURNS = [

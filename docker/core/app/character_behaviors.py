@@ -299,20 +299,30 @@ _MOOD_NUDGES: dict[str, dict[str, str]] = {
         "affectionate": "composed",
         "defiant": "composed",
         "content": "composed",
+        "teasing": "composed",
+        "giddy": "composed",
+        "cozy": "composed",
+        "hopeful": "composed",
+        "admiring": "composed",
     },
     "negative_light": {
         "composed": "composed",
         "playful": "composed",
         "content": "composed",
+        "teasing": "composed",
+        "giddy": "composed",
     },
     # The Commander is hurting. She drops whatever register she was in and
     # turns toward him — protective when she was neutral, softer when she
     # was light, worried instead of annoyed if she was already prickly.
+    # Nothing here may land on a mood turned against him (sulking, stern,
+    # smug, teasing, heartbroken, irritated...): distress is not hostility.
     "distress": {
         "composed": "protective",
         "focused": "protective",
         "defiant": "protective",
         "battle_ready": "protective",
+        "furious": "protective",
         "playful": "tender",
         "amused": "tender",
         "flustered": "tender",
@@ -322,6 +332,21 @@ _MOOD_NUDGES: dict[str, dict[str, str]] = {
         "irritated": "worried",
         "exasperated": "worried",
         "bored": "worried",
+        "serene": "protective",
+        "stern": "protective",
+        "admiring": "protective",
+        "lonely": "protective",
+        "heartbroken": "protective",
+        "overwhelmed": "protective",
+        "breathless": "protective",
+        "cozy": "tender",
+        "wistful": "tender",
+        "smug": "tender",
+        "hopeful": "tender",
+        "teasing": "tender",
+        "giddy": "tender",
+        "sulking": "worried",
+        "restless": "worried",
     },
     "positive": {
         "cold": "composed",  # legacy / invalid cold label warms toward composed
@@ -329,11 +354,18 @@ _MOOD_NUDGES: dict[str, dict[str, str]] = {
         "irritated": "composed",
         "tender": "affectionate",
         "focused": "composed",
+        "sulking": "quietly_pleased",  # coaxed out of the pout
+        "lonely": "content",
+        "stern": "composed",
     },
     "flirty": {
         "composed": "flustered",
         "playful": "affectionate",
         "quietly_pleased": "flustered",
+        "cozy": "affectionate",
+        "teasing": "flustered",
+        "smug": "flustered",
+        "admiring": "flustered",
     },
 }
 

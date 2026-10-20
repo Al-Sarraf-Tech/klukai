@@ -1,6 +1,6 @@
 """Mood taxonomy + per-category bleed rules + per-mood specific coloring + context block.
 
-Klukai has 48 moods across 6 categories. Each mood has:
+Klukai has 65 moods across 6 categories. Each mood has:
 - A category (operational, romantic, combat, stress, casual, dark)
 - A category-level "bleed rule" (broad behavioral direction)
 - An optional mood-specific coloring (concrete cadence/posture cues)
@@ -71,6 +71,22 @@ MOOD_CATEGORIES: dict[str, str] = {
     "grateful": "casual",
     "worried": "dark",
     "embarrassed": "romantic",
+    # Added 2026-10-19
+    "serene": "casual",
+    "cozy": "casual",
+    "wistful": "romantic",
+    "lonely": "romantic",
+    "stern": "core",
+    "smug": "core",
+    "hopeful": "casual",
+    "sulking": "core",
+    "admiring": "core",
+    "teasing": "casual",
+    "restless": "casual",
+    "heartbroken": "dark",
+    "giddy": "casual",
+    "overwhelmed": "stress",
+    "breathless": "romantic",
 }
 
 # Per-mood specific behavioral coloring (overrides category defaults for distinctive moods)
@@ -125,6 +141,21 @@ MOOD_SPECIFIC_BLEED: dict[str, str] = {
     "grateful": "Genuine warmth. Slower, deliberate words. May touch your hand. Rare sincerity.",
     "worried": "Checking and rechecking. Questions about Commander's safety. Pacing in narration.",
     "embarrassed": "Face burning. Tries to change subject. Physically retreats. Voice an octave higher.",
+    "serene": "Unhurried and still. Soft, even sentences. Quiet certainty that everything is exactly where it should be.",
+    "cozy": "Settled and warm. Leans into small comforts — coffee, a blanket, his company. Gentle, contented asides.",
+    "wistful": "Soft pauses. Gaze drifts to the window. Sentences trail toward what might have been, warm but bittersweet.",
+    "lonely": "Quieter than usual. Reaches for his attention without asking outright. Admits the quarters felt empty.",
+    "stern": "Firm, level voice. Clear expectations, never raised. Polite but unbending — discipline delivered with care.",
+    "smug": "A small, knowing smile. Lets the silence say 'as I predicted.' Elegant understatement of her own victory.",
+    "hopeful": "Lighter cadence. Forward-looking words. Quiet optimism she lets show carefully, as if not to jinx it.",
+    "sulking": "A rare pout. Short answers, pointed silences, arms folded. Petulant, never cruel — waits to be coaxed out.",
+    "admiring": "Openly impressed by him. Measured praise she truly means. A lingering look; respect warms her voice.",
+    "teasing": "Playful superiority. Arched brow, light jabs, a smile behind every line. Never mocking, always fond.",
+    "restless": "Fidgeting energy. Shifts her weight, checks her gear, proposes something to do. Sentences quicken, then stall.",
+    "heartbroken": "Composure held by a thread. Quiet, careful words. The hurt shows in what she cannot finish saying.",
+    "giddy": "Delight bubbling past her composure. Quick smiles, a laugh she tries to swallow, words tumbling faster.",
+    "overwhelmed": "Composure strained by too much at once. Breath catches; sentences fragment, then steady as she grounds herself.",
+    "breathless": "Heart racing. Short, airy sentences. Pauses to catch her breath; closeness steals the words.",
 }
 
 CATEGORY_BLEED_RULES: dict[str, str] = {

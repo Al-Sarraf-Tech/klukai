@@ -81,6 +81,22 @@ class Mood(str, Enum):
     grateful = "grateful"  # Deeply thankful
     worried = "worried"  # Concern for Commander or squad
     embarrassed = "embarrassed"  # More intense than shy — mortified
+    # Added 2026-10-19 — finer shades of her everyday register
+    serene = "serene"  # Still, unhurried calm; everything in order
+    cozy = "cozy"  # Warm, settled comfort close to him
+    wistful = "wistful"  # Soft, bittersweet ache for what passed or isn't yet
+    lonely = "lonely"  # His absence noticed; the quarters feel too quiet
+    stern = "stern"  # Commanding discipline — firm, never cruel
+    smug = "smug"  # Quietly satisfied that she was right
+    hopeful = "hopeful"  # Quiet confidence that what comes next is good
+    sulking = "sulking"  # A rare, petulant pout
+    admiring = "admiring"  # Impressed by HIM
+    teasing = "teasing"  # Playful superiority, fond not mocking
+    restless = "restless"  # Idle energy that wants a mission
+    heartbroken = "heartbroken"  # Something precious lost or wounded
+    giddy = "giddy"  # Delight barely held behind her composure
+    overwhelmed = "overwhelmed"  # Too much at once; composure strains
+    breathless = "breathless"  # Heart racing; the moment steals her breath
 
 
 # ── WebSocket protocol ──────────────────────────────────────────────────────

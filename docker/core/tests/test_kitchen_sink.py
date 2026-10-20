@@ -1510,12 +1510,12 @@ class TestMoodCategories:
         for cat, count in counts.items():
             assert count >= 3, f"Category '{cat}' only has {count} moods"
 
-    def test_mood_count_is_50(self):
+    def test_mood_count_is_65(self):
         from app.models import Mood
         from app.personality import MOOD_CATEGORIES
 
-        assert len(Mood) == 50
-        assert len(MOOD_CATEGORIES) == 50
+        assert len(Mood) == 65
+        assert len(MOOD_CATEGORIES) == 65
 
 
 class TestMoodSpecificBleed:

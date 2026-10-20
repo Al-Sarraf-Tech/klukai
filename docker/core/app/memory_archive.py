@@ -61,6 +61,13 @@ MOOD_CATEGORY_WEIGHTS = {
     "battle_ready": {"Tactical Operations": 5, "Mission Records": 3},
     "protective": {"Squad Moments": 4, "The Commander": 3},
     "playful": {"Quiet Hours": 4, "The Commander": 3, "Squad Moments": 2},
+    "wistful": {"Precious Memories": 4, "Quiet Hours": 3, "The Commander": 2},
+    "lonely": {"The Commander": 5, "Precious Memories": 3, "Quiet Hours": 2},
+    "cozy": {"Quiet Hours": 5, "The Commander": 3},
+    "serene": {"Quiet Hours": 4, "Precious Memories": 2},
+    "admiring": {"The Commander": 5, "Mission Records": 2},
+    "teasing": {"Quiet Hours": 3, "The Commander": 3, "Squad Moments": 3},
+    "heartbroken": {"Precious Memories": 4, "Quiet Hours": 3},
 }
 
 

@@ -20,9 +20,9 @@ _CONDITION_MOOD: dict[str, str] = {
     "clear": "playful",  # sunshine — light, teasing (warmed further by affection)
     "cloudy": "composed",  # grey/overcast — measured, professional
     "fog": "composed",  # low visibility — steady, watchful composure
-    "drizzle": "tender",  # soft rain — guard lowers a little
+    "drizzle": "wistful",  # soft rain — a quiet, bittersweet window-gazing mood
     "rain": "tender",  # steady rain — quiet, close, tender
-    "snow": "content",  # snow — cozy, settled
+    "snow": "cozy",  # snow — warm inside, settled
     "storm": "protective",  # thunderstorm — wants him safe indoors
 }
 
