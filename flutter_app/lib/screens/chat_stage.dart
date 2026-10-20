@@ -70,26 +70,29 @@ extension _ChatStage on _ChatScreenState {
               ),
             ),
           ),
+          // Only real controls are shielded: everywhere else a drag or pinch
+          // reaches her. Decorative parts ignore pointers; of the status
+          // tags only WEARING (her day) is a control, shielded on its box.
           if (showTags) ...[
             const Positioned(
               top: 58,
               left: 16,
-              child: IgnorePointer(child: _Bracket()),
+              child: IgnorePointer(
+                key: Key('stage-bracket'),
+                child: _Bracket(),
+              ),
             ),
             Positioned(
               top: 56,
               right: 16,
-              child: HudPointerShield(
-                child: GestureDetector(
-                  onTap: _openHerDaySheet,
-                  child: StageStatusTags(
-                    level: _state.affectionLevel.clamp(0, kMaxAffinityLevel),
-                    mood: moodLabel(_state.mood),
-                    bpm: _moodBPM,
-                    spiking: _heartbeatSpikeOverride != null,
-                    wearing: _herDay?.outfit?.name ?? '',
-                  ),
-                ),
+              child: StageStatusTags(
+                level: _state.affectionLevel.clamp(0, kMaxAffinityLevel),
+                mood: moodLabel(_state.mood),
+                bpm: _moodBPM,
+                spiking: _heartbeatSpikeOverride != null,
+                wearing: _herDay?.outfit?.name ?? '',
+                onTap: _openHerDaySheet,
+                shield: (tag) => HudPointerShield(child: tag),
               ),
             ),
             if (showReadout)

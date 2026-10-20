@@ -19,6 +19,26 @@ Future<void> _pump(WidgetTester tester, Widget child, {double width = 390}) {
   );
 }
 
+/// Stands in for HudPointerShield (browser-only): sized by its child the
+/// same way, so its rect is what the real shield would cover.
+class _Shield extends StatelessWidget {
+  const _Shield({required this.child});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => child;
+}
+
+/// True when an enabled IgnorePointer sits above [finder].
+bool _ignoresPointers(WidgetTester tester, Finder finder) => tester
+    .widgetList<IgnorePointer>(
+      find.ancestor(
+        of: finder,
+        matching: find.byType(IgnorePointer),
+        matchRoot: true,
+      ),
+    )
+    .any((w) => w.ignoring);
+
 void main() {
   testWidgets('status tags: affinity, mood, heart, wearing', (tester) async {
     await _pump(
@@ -74,6 +94,90 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  group('status tags over the stage', () {
+    const readOnly = [
+      Key('stage-tag-affinity'),
+      Key('stage-tag-mood'),
+      Key('stage-tag-heart'),
+    ];
+    const wearingKey = Key('stage-tag-wearing');
+
+    Future<void> pumpTags(
+      WidgetTester tester, {
+      VoidCallback? onTap,
+      String wearing = 'Stargazing Night',
+    }) => _pump(
+      tester,
+      Align(
+        alignment: Alignment.topRight,
+        child: StageStatusTags(
+          level: 9,
+          mood: 'PLEASED',
+          bpm: 74,
+          wearing: wearing,
+          onTap: onTap,
+          shield: (tag) => _Shield(child: tag),
+        ),
+      ),
+    );
+
+    List<Rect> shieldRects(WidgetTester tester) => [
+      for (final e in find.byType(_Shield).evaluate())
+        tester.getRect(find.byWidget(e.widget)),
+    ];
+
+    testWidgets('only WEARING is a control, shielded on its own box', (
+      tester,
+    ) async {
+      var taps = 0;
+      await pumpTags(tester, onTap: () => taps++);
+      final shields = shieldRects(tester);
+      expect(shields, [tester.getRect(find.byKey(wearingKey))]);
+      // The rest of the column stays with the stage: the other tags, the
+      // gaps and the space beside a shorter tag.
+      final column = tester.getRect(find.byKey(const Key('stage-tags')));
+      final affinity = tester.getRect(find.byKey(readOnly[0]));
+      final mood = tester.getRect(find.byKey(readOnly[1]));
+      expect(column.width, greaterThan(affinity.width));
+      final open = [
+        for (final key in readOnly) tester.getCenter(find.byKey(key)),
+        Offset(mood.center.dx, (affinity.bottom + mood.top) / 2),
+        Offset(column.left + 2, affinity.center.dy),
+      ];
+      for (final point in open) {
+        expect(column.contains(point), isTrue, reason: '$point');
+        expect(shields.where((r) => r.contains(point)), isEmpty);
+      }
+      for (final key in readOnly) {
+        expect(_ignoresPointers(tester, find.byKey(key)), isTrue);
+        await tester.tap(find.byKey(key), warnIfMissed: false);
+      }
+      expect(taps, 0);
+      // WEARING opens her day.
+      expect(_ignoresPointers(tester, find.byKey(wearingKey)), isFalse);
+      await tester.tap(find.byKey(wearingKey));
+      expect(taps, 1);
+    });
+
+    testWidgets('no outfit, or nothing to open: no shield at all', (
+      tester,
+    ) async {
+      await pumpTags(tester, onTap: () {}, wearing: '');
+      expect(find.byKey(wearingKey), findsNothing);
+      expect(find.byType(_Shield), findsNothing);
+
+      await pumpTags(tester);
+      expect(find.byType(_Shield), findsNothing);
+      for (final key in [...readOnly, wearingKey]) {
+        expect(
+          _ignoresPointers(tester, find.byKey(key)),
+          isTrue,
+          reason: '$key',
+        );
+      }
+    });
+  });
+
   testWidgets('tracking readout lines', (tester) async {
     await _pump(
       tester,
@@ -83,6 +187,11 @@ void main() {
     );
     expect(find.text('◢ TRACKING'), findsOneWidget);
     expect(find.text('◢ GAZE: COMMANDER'), findsOneWidget);
+    // Decorative to pointers: drags there turn her.
+    expect(
+      _ignoresPointers(tester, find.byKey(const Key('stage-tracking'))),
+      isTrue,
+    );
   });
 
   testWidgets('dialogue: her line and VOICE; tapping calls through', (

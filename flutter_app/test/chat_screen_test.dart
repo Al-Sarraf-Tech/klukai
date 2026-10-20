@@ -1642,6 +1642,149 @@ void main() {
       fake.dispose();
     });
   });
+
+  // Anything shielded (HudPointerShield) keeps drags and pinches from her
+  // stage, so only the real controls may be.
+  group('ChatScreen — 3D: she takes drags around the HUD', () {
+    const readOnlyTags = [
+      Key('stage-tag-affinity'),
+      Key('stage-tag-mood'),
+      Key('stage-tag-heart'),
+    ];
+    const wearingTag = Key('stage-tag-wearing');
+
+    Future<FakeWebSocketService> pumpStage(
+      WidgetTester tester,
+      FakeWardrobeService wardrobe,
+    ) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      web.window.localStorage.setItem('klukai_token', 'test-token');
+      final fake = FakeWebSocketService();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            serverUrl: 'http://localhost:0',
+            webSocketService: fake,
+            wardrobeService: wardrobe,
+            voiceSettings: _VoiceSettingsBackend().service(),
+            stageBuilder: _FakeStage().build,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('view-flip-3d')));
+      await tester.pump();
+      return fake;
+    }
+
+    List<Rect> shields(WidgetTester tester) => [
+      for (var i = 0; i < find.byType(HudPointerShield).evaluate().length; i++)
+        tester.getRect(find.byType(HudPointerShield).at(i)),
+    ];
+
+    bool ignored(WidgetTester tester, Finder finder) => tester
+        .widgetList<IgnorePointer>(
+          find.ancestor(
+            of: finder,
+            matching: find.byType(IgnorePointer),
+            matchRoot: true,
+          ),
+        )
+        .any((w) => w.ignoring);
+
+    testWidgets('only the controls are shielded; WEARING on its own box', (
+      tester,
+    ) async {
+      final fake = await pumpStage(tester, FakeWardrobeService());
+      fake.emit({'type': 'token', 'text': 'Sit.'});
+      fake.emit({'type': 'done', 'text': 'Sit.'});
+      await tester.pump();
+
+      final rects = shields(tester);
+      // The top bar, the dialogue + composer, and the WEARING tag.
+      expect(rects, hasLength(3));
+      expect(rects, contains(tester.getRect(find.byKey(wearingTag))));
+      bool shielded(Offset p) => rects.any((r) => r.contains(p));
+      for (final control in [
+        find.byKey(const Key('view-flip-chat')),
+        find.byKey(const Key('voice-play')),
+        find.byKey(const Key('chat-composer')),
+      ]) {
+        expect(shielded(tester.getCenter(control)), isTrue, reason: '$control');
+      }
+
+      final stage = tester.getRect(find.byKey(const Key('chat-stage')));
+      final column = tester.getRect(find.byKey(const Key('stage-tags')));
+      final affinity = tester.getRect(find.byKey(readOnlyTags[0]));
+      final wearing = tester.getRect(find.byKey(wearingTag));
+      final open = {
+        'right edge, mid-height': Offset(stage.right - 40, stage.center.dy),
+        'right edge, under the tags': Offset(
+          stage.right - 24,
+          wearing.bottom + 16,
+        ),
+        for (final key in readOnlyTags)
+          'the $key tag': tester.getCenter(find.byKey(key)),
+        'beside a short tag': Offset(column.left + 2, affinity.center.dy),
+        'the bracket': tester.getCenter(find.byKey(const Key('stage-bracket'))),
+        'the readout': tester.getCenter(
+          find.byKey(const Key('stage-tracking')),
+        ),
+      };
+      open.forEach((where, point) {
+        expect(stage.contains(point), isTrue, reason: where);
+        expect(shielded(point), isFalse, reason: where);
+      });
+      // Decorative and read-only parts let every pointer through.
+      for (final key in const [
+        Key('stage-bracket'),
+        Key('stage-tracking'),
+        ...readOnlyTags,
+      ]) {
+        expect(ignored(tester, find.byKey(key)), isTrue, reason: '$key');
+        expect(
+          find.ancestor(
+            of: find.byKey(key),
+            matching: find.byType(HudPointerShield),
+          ),
+          findsNothing,
+        );
+      }
+      expect(tester.takeException(), isNull);
+      fake.dispose();
+    });
+
+    testWidgets('WEARING opens her day; before it loads, nothing is shielded', (
+      tester,
+    ) async {
+      final wardrobe = _LateDayWardrobe();
+      final fake = await pumpStage(tester, wardrobe);
+      expect(find.byKey(const Key('stage-tags')), findsOneWidget);
+      expect(find.byKey(wearingTag), findsNothing);
+      // Just the top bar and the dialogue + composer.
+      expect(shields(tester), hasLength(2));
+
+      wardrobe.release();
+      await tester.pump();
+      await tester.pump();
+      expect(shields(tester), hasLength(3));
+      // A read-only tag opens nothing.
+      await tester.tap(find.byKey(readOnlyTags[1]), warnIfMissed: false);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(BottomSheet), findsNothing);
+
+      await tester.tap(find.byKey(wearingTag));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(BottomSheet), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      fake.dispose();
+    });
+  });
 }
 
 /// Her day only arrives when the test says so, after the transcript has

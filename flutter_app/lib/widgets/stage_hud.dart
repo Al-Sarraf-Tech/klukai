@@ -8,7 +8,17 @@ import 'package:flutter/material.dart';
 import '../theme/hud.dart';
 import 'message_footer.dart';
 
+/// Wraps the one tappable tag so it can catch its tap over the 3D stage
+/// (the chat screen passes HudPointerShield, which only builds in a browser).
+typedef StageTagShield = Widget Function(Widget tag);
+
 /// AFFINITY / MOOD / HEART / WEARING, stacked on the right edge.
+///
+/// Over the stage only WEARING is a control (with [onTap], it opens her
+/// day); it alone is shielded, on its own box. The other tags are read-only
+/// and every pointer on them goes through to her, so she can be dragged and
+/// pinched there. (The browser snaps a touch to a shield a few pixels away,
+/// so separately shielded tags would still wall off the whole column.)
 class StageStatusTags extends StatelessWidget {
   const StageStatusTags({
     super.key,
@@ -17,6 +27,8 @@ class StageStatusTags extends StatelessWidget {
     required this.bpm,
     this.wearing = '',
     this.spiking = false,
+    this.onTap,
+    this.shield,
   });
 
   final int level;
@@ -24,6 +36,12 @@ class StageStatusTags extends StatelessWidget {
   final int bpm;
   final String wearing;
   final bool spiking;
+
+  /// A tap on the WEARING tag (the chat screen opens her day).
+  final VoidCallback? onTap;
+
+  /// Wraps the WEARING tag's box when [onTap] is set.
+  final StageTagShield? shield;
 
   @override
   Widget build(BuildContext context) => ConstrainedBox(
@@ -40,7 +58,8 @@ class StageStatusTags extends StatelessWidget {
           value: '$bpm bpm',
           valueColor: spiking ? HudColors.danger : HudColors.text,
         ),
-        if (wearing.isNotEmpty) _Tag(label: 'WEARING', value: wearing),
+        if (wearing.isNotEmpty)
+          _Tag(label: 'WEARING', value: wearing, onTap: onTap, shield: shield),
       ],
     ),
   );
@@ -51,18 +70,23 @@ class _Tag extends StatelessWidget {
     required this.label,
     required this.value,
     this.valueColor = HudColors.text,
+    this.onTap,
+    this.shield,
   });
   final String label;
   final String value;
   final Color valueColor;
+  final VoidCallback? onTap;
+  final StageTagShield? shield;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 6),
-    child: Semantics(
+  Widget build(BuildContext context) {
+    Widget box = Semantics(
       label: '$label $value',
+      button: onTap != null,
       excludeSemantics: true,
       child: Container(
+        key: Key('stage-tag-${label.toLowerCase()}'),
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
         decoration: BoxDecoration(
           color: HudColors.ground.withValues(alpha: 0.6),
@@ -89,8 +113,18 @@ class _Tag extends StatelessWidget {
           ],
         ),
       ),
-    ),
-  );
+    );
+    final tap = onTap;
+    box = tap == null
+        ? IgnorePointer(child: box)
+        : GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: tap,
+            child: shield?.call(box) ?? box,
+          );
+    // The gap under the box stays unshielded.
+    return Padding(padding: const EdgeInsets.only(bottom: 6), child: box);
+  }
 }
 
 /// `◢ TRACKING` lines: what the stage is actually doing. Decorative to
