@@ -33,16 +33,27 @@ before repair or startup work.
 ## Memory archive seeding
 
 Amarillo owns the memory-seeding schedule because `companion-core`, its
-database, and the seed script live there. The job still reaches LLM and ComfyUI
-through Klukai's authenticated Tailscale clients and the bounded Dominus GPU
-lease; the user unit never connects to a LAN or raw ComfyUI port.
+database, and the seed script live there.
 
-Historical seeding is deliberately local-only. If either
-`KLUKAI_IMAGE_PROVIDER` or `KLUKAI_CREATIVE_TEXT_PROVIDER` selects a cloud
-provider, the seed script exits before reading history, acquiring a GPU lease,
-or dispatching an API call. Existing local watermarks cannot safely deduplicate
-paid partial batches; durable source-aware backfill is deferred. Do not work
-around this refusal by increasing attempt limits or deleting the ledger.
+Since 2026-10-19 seeding does not need Dominus. With
+`KLUKAI_IMAGE_PROVIDER=agy` (production) the seeder selects and annotates
+through the background text helper (Claude Haiku, `app/extraction_llm.py`)
+and draws each kept memory through the account worker
+(`klukai-agy-images.service`), the same journalled path as chat pictures. It
+draws nothing unless core's environment sets `KLUKAI_ALBUM_SEED_RENDERS` to
+`1` or `2`: that many renders per run and per America/Chicago day, never more
+than two. To turn album seeding on, set `KLUKAI_ALBUM_SEED_RENDERS=2` in the
+encrypted runtime env, recreate `companion-core`, then enable the timer
+below. See ADR-0012 for the recovery and refusal rules.
+
+The legacy pipeline (Dominus LLM + ComfyUI through Klukai's authenticated
+Tailscale clients and the bounded GPU lease) runs only with the explicit
+`KLUKAI_IMAGE_PROVIDER=comfyui`; the user unit never connects to a LAN or raw
+ComfyUI port. In that mode seeding stays local-only: if
+`KLUKAI_CREATIVE_TEXT_PROVIDER` or the image provider selects a paid cloud
+API, the seed script exits before reading history, acquiring a GPU lease, or
+dispatching an API call. Do not work around this refusal by increasing
+attempt limits or deleting the ledger.
 
 The timer checks every day at 04:00 America/Chicago. Its `ExecCondition` runs
 only on even Unix-epoch calendar days, producing the required deterministic
@@ -87,7 +98,8 @@ systemctl --user list-timers klukai-memory-archive-seed.timer
 ```
 
 Do not manually start the service as a test: on an eligible date that would run
-the real archive pipeline and acquire GPU leases. Static verification is:
+the real archive pipeline and spend account renders (or, in the legacy
+`comfyui` mode, acquire GPU leases). Static verification is:
 
 ```bash
 python3 -m unittest -v ops/amarillo/tests/test_memory_seed_schedule.py

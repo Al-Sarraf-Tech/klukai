@@ -4,17 +4,42 @@ The journal row is written before the worker is contacted. A later call for
 the same request reads that row and, when needed, the worker's read-only
 recovery. Only an explicit worker busy rejection (no claim was accepted)
 may be submitted later, using the originally journaled payload.
+
+Background pictures (a missing Live Portrait, the album seeder) use the same
+journal, tagged ``archive_context["kind"]``, and render inside
+:func:`background_render`. The worker has one slot: while a background job
+holds it, an explicit picture that is answered "busy" waits for that job and
+is then submitted once with its journalled payload, so a background render
+never makes his own picture fail.
 """
 
 from __future__ import annotations
 from typing import Any
 
 
+import asyncio
+import contextvars
 import hashlib
 import json
+import logging
+import os
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
+
+# Background allowances (portraits per day) turn over at his local midnight.
+LOCAL_TZ = ZoneInfo("America/Chicago")
+BACKGROUND_WAIT_POLL_S = 5.0
+_MARKER_NAME = "background-render.json"
+_in_background: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "klukai_background_render", default=False
+)
 
 
 def canonical_payload(
@@ -357,6 +382,127 @@ async def _recover_saved(row: dict[str, Any]) -> dict[str, Any]:
     return _result(request_id, phase=status)
 
 
+# ── Background renders yield to his own pictures ─────────────────────────────
+
+
+def _marker_path() -> Path:
+    return Path(os.environ.get("IMAGES_DIR", "/images")) / ".creative" / _MARKER_NAME
+
+
+def background_wait_limit() -> float:
+    """How long an explicit picture waits for one background render: one full
+    worker request plus slack, after which it is submitted (or stays busy)."""
+    from .agy_image_provider import REQUEST_DEADLINE_SECONDS
+
+    return float(REQUEST_DEADLINE_SECONDS + 30)
+
+
+def in_background_render() -> bool:
+    """True inside :func:`background_render` (this task is the background job)."""
+    return _in_background.get()
+
+
+def _read_marker() -> dict[str, Any] | None:
+    try:
+        data = json.loads(_marker_path().read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def background_render_active(now: float | None = None) -> bool:
+    """A background job (any process in this container) holds the worker."""
+    data = _read_marker()
+    until = data.get("until") if data else None
+    if isinstance(until, bool) or not isinstance(until, (int, float)):
+        return False
+    return float(until) > (time.time() if now is None else now)
+
+
+def _write_marker(marker_id: str, kind: str) -> None:
+    path = _marker_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp = path.with_name(f"{path.name}.{marker_id}.tmp")
+        fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump(
+                {
+                    "id": marker_id,
+                    "kind": kind,
+                    "until": time.time() + background_wait_limit(),
+                },
+                handle,
+            )
+        os.replace(tmp, path)
+    except OSError as error:
+        # The job still runs; his picture just cannot see it and may get "busy".
+        logger.warning(
+            "Background render marker unavailable (%s)", type(error).__name__
+        )
+
+
+def _clear_marker(marker_id: str) -> None:
+    data = _read_marker()
+    if data is None or data.get("id") != marker_id:
+        return  # another job took the slot over; its marker stays
+    try:
+        _marker_path().unlink()
+    except OSError:
+        pass
+
+
+@asynccontextmanager
+async def background_render(kind: str) -> AsyncIterator[None]:
+    """Hold the account worker for one background picture (``kind``: portrait,
+    album_seed). The marker is a file on the images volume with an expiry, so
+    the album seeder (its own process in the same container) is seen too."""
+    marker_id = uuid.uuid4().hex
+    token = _in_background.set(True)
+    _write_marker(marker_id, kind)
+    try:
+        yield
+    finally:
+        _in_background.reset(token)
+        _clear_marker(marker_id)
+
+
+async def wait_for_background_render() -> bool:
+    """Wait (bounded) while a background render holds the worker. False when
+    none did, so a plain "busy" is answered exactly as before."""
+    if not background_render_active():
+        return False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + background_wait_limit()
+    while background_render_active() and loop.time() < deadline:
+        await asyncio.sleep(BACKGROUND_WAIT_POLL_S)
+    return True
+
+
+def local_day_start(now: datetime | None = None) -> datetime:
+    """Midnight of his local day (America/Chicago) containing ``now``."""
+    moment = (now or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    return moment.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+async def count_requests_since(kind: str, since: datetime) -> int:
+    """Journalled background requests of ``kind`` (all users) since ``since``.
+
+    Busy rejections and recoveries reuse their row, so this counts pictures
+    started, not attempts."""
+    from .db import get_conn_autocommit
+
+    async with get_conn_autocommit() as conn:
+        row = await (
+            await conn.execute(
+                "SELECT count(*) FROM companion_account_image_requests "
+                "WHERE archive_context->>'kind' = %s AND created_at >= %s",
+                (kind, since),
+            )
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
 async def fulfill_account_image(
     user_id: str,
     prompt: str,
@@ -372,7 +518,40 @@ async def fulfill_account_image(
 
     ``nudity`` (granted by the caller through image_provider.nudity_allowed) is
     journalled in ``archive_context`` with the request, never re-derived later.
+    A "busy" answer caused by a background render is waited out once (see the
+    module docstring); a background caller never waits.
     """
+    outcome = await _fulfill(
+        user_id,
+        prompt,
+        width=width,
+        height=height,
+        include_commander=include_commander,
+        request_id=request_id,
+        archive_context=archive_context,
+        nudity=nudity,
+    )
+    if outcome["phase"] != "busy" or in_background_render():
+        return outcome
+    if not await wait_for_background_render():
+        return outcome
+    row = await fetch_request(outcome["request_id"])
+    if row is None or row["user_id"] != user_id:
+        return outcome
+    return await _recover_saved(row)
+
+
+async def _fulfill(
+    user_id: str,
+    prompt: str,
+    *,
+    width: int,
+    height: int,
+    include_commander: bool,
+    request_id: str | None,
+    archive_context: dict[str, Any] | None,
+    nudity: bool,
+) -> dict[str, Any]:
     archive_context = dict(archive_context or {})
     if nudity and not include_commander:
         archive_context["nudity"] = True

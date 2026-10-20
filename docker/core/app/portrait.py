@@ -18,6 +18,13 @@ the normal ``image_gen`` lease path. The chain waits for a quiet gap in the
 chat (it never competes with a reply for the GPU), stands down while a game
 owns the GPU, and backs off after a failure. Frame URLs are short-lived HMAC
 signatures (``app/signed_urls.py``), so they work as a plain ``<img src>``.
+
+That inpainted set needs ComfyUI on Dominus, so it is drawn only with
+``KLUKAI_IMAGE_PROVIDER=comfyui`` (:func:`uses_gpu`). Otherwise Dominus is
+never asked (no game probe, no lease): an outfit without a base gets one base
+frame from the account worker (``app/portrait_account.py``), a base alone is
+"ready" and the missing frames fall back to it, and a cached set is never
+thrown away or redrawn.
 """
 
 from __future__ import annotations
@@ -109,6 +116,25 @@ _failed_at: dict[str, float] = {}
 
 def _key(user_id: str, outfit_id: str) -> str:
     return f"{user_id}/{outfit_id}"
+
+
+def uses_gpu() -> bool:
+    """The inpainted ComfyUI set (Dominus) only on the explicit legacy option."""
+    from .image_provider import selected_provider
+
+    return selected_provider() == "comfyui"
+
+
+def can_redraw() -> bool:
+    """Refresh throws a set away to draw it again: only where a full set can be
+    drawn again. Off the GPU a cached set is kept as drawn."""
+    return uses_gpu()
+
+
+def _complete(user_id: str, outfit_id: str) -> bool:
+    """Nothing more will be drawn: every frame (GPU), or the base (account)."""
+    have = existing_frames(user_id, outfit_id)
+    return have == set(FRAME_NAMES) if uses_gpu() else "base" in have
 
 
 def portrait_seed(user_id: str, outfit_id: str) -> int:
@@ -287,10 +313,35 @@ class _SetPlan:
         return crop_pngs[best] if ratio <= BLINK_FALLBACK_RATIO else None
 
 
+async def _account_chain(
+    user_id: str, outfit_id: str, level: int, delay_s: float = 0
+) -> bool:
+    """Off the GPU: draw the missing base through the account worker, after a
+    quiet gap in the chat. True once a base is on disk."""
+    key = _key(user_id, outfit_id)
+    try:
+        await asyncio.sleep(delay_s)
+        if "base" in existing_frames(user_id, outfit_id):
+            return True
+        if not await _wait_for_quiet():
+            return False
+        from . import portrait_account
+
+        if await portrait_account.draw_base(user_id, outfit_id, level):
+            return True
+        return _fail(key)
+    except Exception as e:
+        logger.warning("Portrait base %s failed (%s)", key, type(e).__name__)
+        return _fail(key)
+
+
 async def _chain(user_id: str, outfit_id: str, level: int, delay_s: float = 0) -> bool:
     """Render whatever is missing as ONE leased set: the base (unless it is
     already on disk), then every missing expression in a single graph. Each
-    image is written the moment it lands. True when the set is complete."""
+    image is written the moment it lands. True when the set is complete.
+    Off the GPU only the base is drawn (:func:`_account_chain`)."""
+    if not uses_gpu():
+        return await _account_chain(user_id, outfit_id, level, delay_s)
     key = _key(user_id, outfit_id)
     try:
         await asyncio.sleep(delay_s)
@@ -368,6 +419,11 @@ def ensure_generation(
     key = _key(user_id, outfit_id)
     if key in _inflight or _backing_off(key):
         return False
+    if not uses_gpu():
+        from . import portrait_account
+
+        if not portrait_account.enabled_for(user_id):
+            return False
     try:
         task = spawn(_chain(user_id, outfit_id, level, delay_s))
     except ApplicationClosing:
@@ -389,7 +445,7 @@ _background: set[asyncio.Task[Any]] = set()
 async def prewarm(user_id: str, level: int) -> bool:
     """Draw the set for what she is wearing now, in the background. True if enqueued."""
     outfit = await current_outfit(user_id, level)
-    if existing_frames(user_id, outfit) == set(FRAME_NAMES):
+    if _complete(user_id, outfit):
         return False
     return ensure_generation(user_id, outfit, level, delay_s=START_DELAY_S)
 
@@ -424,7 +480,7 @@ async def backfill_tick(user_id: str) -> str | None:
     gap = seconds_since_user_message()
     if gap is not None and gap < BACKFILL_SILENCE_S:
         return None
-    if await context.router.is_game_active():
+    if uses_gpu() and await context.router.is_game_active():
         return None
     from . import wardrobe
 
@@ -435,7 +491,7 @@ async def backfill_tick(user_id: str) -> str | None:
             and wardrobe.is_visible(outfit, level)
         ):
             continue
-        if existing_frames(user_id, outfit.id) == set(FRAME_NAMES):
+        if _complete(user_id, outfit.id):
             continue
         if ensure_generation(user_id, outfit.id, level):
             return outfit.id
@@ -448,7 +504,11 @@ async def backfill_tick(user_id: str) -> str | None:
 async def portrait_state(
     user_id: str, outfit_id: str, level: int, *, game_active: bool
 ) -> dict[str, Any]:
-    """The GET /api/portrait payload; enqueues generation when frames are missing."""
+    """The GET /api/portrait payload; enqueues generation when frames are missing.
+
+    Off the GPU ``game_active`` does not apply: a base is "ready" (the missing
+    frames fall back to it), no base is "pending" while one can be drawn
+    today, else "unavailable" (her official portrait)."""
     key = _key(user_id, outfit_id)
     have = existing_frames(user_id, outfit_id)
     frames: dict[str, str | None] = {
@@ -462,7 +522,9 @@ async def portrait_state(
         else None
         for f in FRAME_NAMES
     }
-    if len(have) == len(FRAME_NAMES):
+    if not uses_gpu():
+        status = await _account_status(user_id, outfit_id, level, have)
+    elif len(have) == len(FRAME_NAMES):
         status = "ready"
     elif game_active or _backing_off(key):
         # Nothing more is coming right now; whatever exists is what she has.
@@ -473,10 +535,30 @@ async def portrait_state(
     return {"outfit": outfit_id, "status": status, "frames": frames}
 
 
+async def _account_status(
+    user_id: str, outfit_id: str, level: int, have: set[str]
+) -> str:
+    from . import portrait_account
+
+    if "base" in have:
+        return "ready"
+    if _key(user_id, outfit_id) in _inflight:
+        return "pending"  # already queued or drawing: no allowance lookup per poll
+    if (
+        _backing_off(_key(user_id, outfit_id))
+        or not portrait_account.enabled_for(user_id)
+        or not await portrait_account.allowance_left(user_id, outfit_id)
+    ):
+        return "unavailable"
+    ensure_generation(user_id, outfit_id, level)
+    return "pending"
+
+
 def refresh(user_id: str, outfit_id: str, level: int) -> bool:
-    """Throw the set away and render it again. Refuses while a chain runs."""
+    """Throw the set away and render it again. Refuses while a chain runs,
+    and always off the GPU (a cached set is never thrown away there)."""
     key = _key(user_id, outfit_id)
-    if key in _inflight:
+    if key in _inflight or not can_redraw():
         return False
     folder = frame_dir(user_id, outfit_id)
     if folder.is_dir():

@@ -1,5 +1,5 @@
 [Unit]
-Description=Klukai memory archive seed pass (bounded local window)
+Description=Klukai memory archive seed pass (bounded local window, no Dominus)
 Documentation=file:///home/jalsarraf/git/klukai/ops/amarillo/README.md
 After=docker.service network-online.target
 Wants=network-online.target
@@ -13,6 +13,13 @@ UMask=0077
 ExecCondition=/home/jalsarraf/.local/bin/klukai-memory-seed-day-condition
 ExecStartPre=/usr/bin/test -r /home/jalsarraf/git/klukai/docker-compose.yml
 ExecStartPre=/usr/bin/docker compose config --quiet
+# Dominus-free (owner order 2026-10-19): with KLUKAI_IMAGE_PROVIDER=agy the
+# seeder selects/annotates through the background text helper and renders
+# through the account worker. It does nothing unless core's environment sets
+# KLUKAI_ALBUM_SEED_RENDERS to 1 or 2 (renders per run and per local day; the
+# seeder never draws more than 2). This unit deliberately does not override
+# that switch. The legacy Dominus LLM + ComfyUI path runs only with the
+# explicit KLUKAI_IMAGE_PROVIDER=comfyui.
 # Three nested bounds, all inside the 03:00-06:00 window of a 04:00 start:
 #   SEED_DEADLINE_SECONDS=6000  the seeder stops itself before its next unit of
 #                               work (05:40) and leaves last_seeded_at untouched

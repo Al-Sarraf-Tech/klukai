@@ -77,8 +77,21 @@ async def test_cloud_dispatch_never_enters_local_lease_when_key_missing(monkeypa
     assert await image_gen.generate_image("portrait") is None
 
 
-async def test_default_still_uses_local_renderer(monkeypatch):
+async def test_unset_provider_is_the_account_worker_never_dominus(monkeypatch):
+    """Owner order 2026-10-19: no Dominus image work. ComfyUI is only the
+    explicit KLUKAI_IMAGE_PROVIDER=comfyui option, never a missing setting."""
+    from app import image_provider
+
     monkeypatch.delenv("KLUKAI_IMAGE_PROVIDER", raising=False)
+    assert image_provider.selected_provider() == "agy"
+    monkeypatch.setattr(image_gen, "_leased", AsyncMock(side_effect=AssertionError("Dominus")))
+    # No allowlisted user: refused, and nothing reached ComfyUI.
+    assert await image_gen.generate_image("portrait") is None
+    assert await image_gen.free_comfyui_vram() is True
+
+
+async def test_explicit_comfyui_still_uses_local_renderer(monkeypatch):
+    monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "comfyui")
     monkeypatch.setattr(image_gen, "_leased", AsyncMock(return_value=b"local"))
     assert await image_gen.generate_image("portrait") == b"local"
 

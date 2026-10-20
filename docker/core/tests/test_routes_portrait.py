@@ -91,6 +91,29 @@ class TestPortrait:
         client.ensure.assert_not_called()
 
 
+class TestAccountWorkerMode:
+    """Off the GPU (images on the account worker) Dominus is never asked."""
+
+    @pytest.fixture
+    def account(self, client, monkeypatch):
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
+        client.router.is_game_active = AsyncMock(side_effect=AssertionError("Dominus probed"))
+        return client
+
+    def test_get_never_probes_the_game_guard(self, account):
+        _frames(frames=("base",))
+        body = account.get("/api/portrait", headers=AUTH).json()
+        assert body["status"] == "ready"
+        assert body["frames"]["base"] and body["frames"]["blink"] is None
+
+    def test_refresh_keeps_the_cached_set(self, account):
+        _frames()
+        r = account.post("/api/portrait/refresh", headers=AUTH)
+        assert r.status_code == 409 and r.json()["code"] == "REDRAW_UNAVAILABLE"
+        assert pt.existing_frames("claude", "speed_star") == set(pt.FRAME_NAMES)
+        account.ensure.assert_not_called()
+
+
 class TestFrames:
     def test_bad_or_foreign_signature_is_forbidden(self, client):
         _frames()

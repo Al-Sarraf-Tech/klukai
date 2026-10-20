@@ -1,4 +1,9 @@
-"""Image generation via ComfyUI with NoobAI-XL (Illustrious) for anime-realistic scenes."""
+"""Image generation: prompts for every renderer, and the legacy ComfyUI path.
+
+ComfyUI with NoobAI-XL (Illustrious) on Dominus runs only when
+``KLUKAI_IMAGE_PROVIDER=comfyui`` is set explicitly; every other provider is
+dispatched before any GPU gate, lease or Dominus request.
+"""
 
 from __future__ import annotations
 
@@ -204,7 +209,8 @@ async def generate_image(
     user_id: str | None = None,
     include_commander: bool = False,
 ) -> bytes | None:
-    """Generate through the configured scene provider, defaulting to ComfyUI.
+    """Generate through the configured scene provider (default: the account
+    worker; ComfyUI on Dominus only with ``KLUKAI_IMAGE_PROVIDER=comfyui``).
 
     ``sfw=True`` (wardrobe-driven renders below the intimacy gate) adds
     SFW_NEGATIVE_TAGS to the negative prompt; ``negative_extra`` appends a
@@ -225,7 +231,8 @@ async def generate_image(
 
     provider = image_provider.selected_provider()
     if provider == "agy":
-        from .agy_image_provider import generate_agy_image, uses_agy_images
+        from . import account_images
+        from .agy_image_provider import submit_agy_image, uses_agy_images
 
         if not uses_agy_images(user_id):
             return None
@@ -235,16 +242,25 @@ async def generate_image(
             )
         except image_provider.ImageProviderError:
             return None
-        return await generate_agy_image(
-            description,
-            user_id=user_id or "",
-            width=width,
-            height=height,
-            include_commander=include_commander,
-            nudity=image_provider.nudity_allowed(
+        request: dict[str, Any] = {
+            "user_id": user_id or "",
+            "width": width,
+            "height": height,
+            "include_commander": include_commander,
+            "nudity": image_provider.nudity_allowed(
                 prompt, intimate=not sfw, include_commander=include_commander
             ),
-        )
+        }
+        result = await submit_agy_image(description, **request)
+        if (
+            result.get("status") == "busy"
+            and not account_images.in_background_render()
+            and await account_images.wait_for_background_render()
+        ):
+            # A background portrait/album render held the worker's one slot;
+            # "busy" proves this was never accepted, so it goes next, once.
+            result = await submit_agy_image(description, **request)
+        return result.get("image") if result.get("status") == "completed" else None
     if provider == "openai":
         return await image_provider.generate_cloud_image(
             prompt,
