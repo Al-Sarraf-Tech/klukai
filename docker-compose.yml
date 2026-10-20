@@ -87,9 +87,12 @@ services:
       KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT: "${KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT:-0}"
       KLUKAI_CREATIVE_LEDGER: "/images/.creative/attempts.sqlite3"
       # Owner authorized Claude Haiku (high effort) for the per-turn mood /
-      # affection / facts extraction and compaction summaries on 2026-10-19.
+      # affection / facts extraction and compaction summaries on 2026-10-19,
+      # then for every background text/JSON call (promises, episode entries,
+      # proactive lines, reflections, local-creative captions) so nothing
+      # depends on Dominus being on (docker/core/app/background_llm.py).
       # Paid calls need both provider=anthropic and a positive daily cap
-      # (UTC-day attempts shared by extraction + compaction, same ledger).
+      # (UTC-day attempts shared by all of it, same ledger).
       KLUKAI_EXTRACTION_PROVIDER: "${KLUKAI_EXTRACTION_PROVIDER:-local}"
       KLUKAI_EXTRACTION_MODEL: "${KLUKAI_EXTRACTION_MODEL:-claude-haiku-5-5}"
       KLUKAI_EXTRACTION_DAILY_LIMIT: "${KLUKAI_EXTRACTION_DAILY_LIMIT:-0}"

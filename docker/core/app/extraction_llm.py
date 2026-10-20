@@ -1,16 +1,20 @@
-"""Owner-approved Claude Haiku route for per-turn extraction and compaction.
+"""Owner-approved Claude Haiku transport for every background model call.
 
-Owner decision, 2026-10-19: the per-turn background extraction (mood,
+Owner decisions, 2026-10-19: the per-turn background extraction (mood,
 interaction and affection, intensity for her heart rate, facts) and the
 session compaction summaries may run on Claude Haiku at high effort, on the
-Anthropic key interactive chat already uses. Nothing else moves here: dreams,
-Her POV, memory-archive annotation, seeding, image prompts, episode journal
-entries and promise detection keep their own providers.
+Anthropic key interactive chat already uses; then "close any gaps from
+reliance on dominus": every other background text/JSON call (promise and
+event detection, episode journal entries, proactive lines, the weekly
+reflection, return greetings, Her POV and memory-archive captions when
+creative text is local) uses the same route through app/background_llm.py,
+which owns the Haiku -> local -> safe-default policy and its log line.
+Image prompts, rendering and seeding are not text routes and stay put.
 
 A paid request needs both explicit switches: ``KLUKAI_EXTRACTION_PROVIDER=
 anthropic`` and a positive ``KLUKAI_EXTRACTION_DAILY_LIMIT``. Each request
 first reserves one attempt in the persistent creative ledger (kind
-``extraction``: one UTC-day cap shared by extraction and compaction). A
+``extraction``: one UTC-day cap shared by every background call). A
 reserved attempt stays spent after failures and timeouts. This module raises
 only credential- and content-free errors; callers fall back to the local
 model or to safe defaults and never surface them to the chat turn.
@@ -47,15 +51,18 @@ BREAKER = "anthropic_extraction"
 # Thinking counts against max_tokens; the JSON itself is a few hundred tokens.
 EXTRACTION_MAX_TOKENS = 4096
 COMPACTION_MAX_TOKENS = 2048
+MAX_REQUEST_TOKENS = 8192
 MAX_PROMPT_CHARS = 24_000
+MAX_SYSTEM_CHARS = 8_000
 REQUEST_TIMEOUT_S = 60.0
 _MAX_RESPONSE_BYTES = 512 * 1024
 _MODEL_ID = re.compile(r"claude-haiku-[a-z0-9]+(?:-[a-z0-9]+)*")
 
 SYSTEM_PROMPT = (
-    "You are the background analyst for a character companion app. Follow the "
-    "instructions in the user message exactly and reply with only what they ask "
-    "for: no preamble, no commentary, no markdown."
+    "You do the background work for a character companion app: analysis, "
+    "summaries and short in-character lines. Follow the instructions in the "
+    "user message exactly and reply with only what they ask for: no preamble, "
+    "no commentary, no markdown."
 )
 
 _warned: set[str] = set()
@@ -67,8 +74,8 @@ _gate = asyncio.Semaphore(2)
 class CallReport:
     """Which provider and model produced a background result, and how it went.
 
-    Filled in by the caller-facing functions in app/fact_extractor.py so the
-    turn can log one line per extraction without ever logging content.
+    Filled in by app/background_llm.py, so callers (the per-turn extraction
+    line in app/memory_extraction.py) can log it without ever logging content.
     """
 
     provider: str = "local"
@@ -175,8 +182,15 @@ def _visible_text(data: object) -> tuple[str, str, dict[str, Any]]:
     return text, data["model"], usage
 
 
-async def complete(prompt: str, *, max_tokens: int, route: str) -> str:
-    """Return the visible text of one authorized, budgeted Haiku request."""
+async def complete(
+    prompt: str, *, max_tokens: int, route: str, system: str | None = None
+) -> str:
+    """Return the visible text of one authorized, budgeted Haiku request.
+
+    ``system`` replaces the default background instructions, for callers whose
+    local request already carries its own system prompt (her character
+    preamble); it is sent as given.
+    """
     if not uses_anthropic():
         raise ExtractionUnavailable("Haiku extraction is not enabled")
     key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
@@ -190,12 +204,20 @@ async def complete(prompt: str, *, max_tokens: int, route: str) -> str:
         or not prompt.strip()
         or len(prompt) > MAX_PROMPT_CHARS
         or type(max_tokens) is not int
-        or not 1 <= max_tokens <= 8192
+        or not 1 <= max_tokens <= MAX_REQUEST_TOKENS
+        or (
+            system is not None
+            and (
+                not isinstance(system, str)
+                or not system.strip()
+                or len(system) > MAX_SYSTEM_CHARS
+            )
+        )
     ):
         raise ExtractionLLMError("Invalid Haiku extraction request")
     body = {
         "model": model(),
-        "system": SYSTEM_PROMPT,
+        "system": SYSTEM_PROMPT if system is None else system,
         "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
         "max_tokens": max_tokens,
         "thinking": {"type": "adaptive"},
