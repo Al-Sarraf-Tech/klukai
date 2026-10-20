@@ -105,24 +105,73 @@ _POSED = re.compile(
 )
 
 
+# Actions that need open air (wind in her hair, a stride down the street).
+OUTDOOR_ACTIONS: frozenset[str] = frozenset(
+    {
+        "wind, floating hair",
+        "walking, mid-stride",
+        "walking side by side",
+        "walking along the shore",
+        "walking along the trail",
+        "looking up at the rain",
+        "catching snowflakes",
+        "looking up at the stars",
+        "pointing at the sky",
+        "looking up at fireworks",
+        "holding lantern, looking up",
+    }
+)
+INDOOR_SOLO_ACTIONS: tuple[str, ...] = (
+    "sitting, legs crossed",
+    "leaning against the doorframe",
+)
+INDOOR_COUPLE_ACTIONS: tuple[str, ...] = ("sitting side by side",)
+
+
+def setting_pool(
+    pool: Sequence[str], indoor: bool | None, extra: Sequence[str] = ()
+) -> tuple[str, ...]:
+    """``pool`` made to fit the setting: indoors loses the open-air actions and
+    gains ``extra``; outdoors or an unknown setting (None) keeps it exactly."""
+    if not indoor:
+        return tuple(pool)
+    return tuple(a for a in pool if a not in OUTDOOR_ACTIONS) + tuple(extra)
+
+
 def composition(
     scene: str | None,
     *,
     couple: bool = False,
     framing_text: str = "",
     seed: int | str = 0,
+    indoor: bool | None = None,
+    place_actions: Sequence[str] = (),
 ) -> str:
     """A candid camera cue and action for this render; parts the caller's own
-    tags already set (framing, a pose) are left alone."""
+    tags already set (framing, a pose) are left alone.
+
+    ``indoor`` (from the scene brief) keeps the action possible where the
+    picture happens — no wind in her hair indoors — and ``place_actions`` add
+    the place's own candid moments to the generic pool.
+    """
     lower = framing_text.lower()
     parts: list[str] = []
     if not _FRAMING.search(lower):
         parts.append(variation_rng(seed, "camera").choice(CAMERA_CUES))
     if not _POSED.search(lower):
         if couple:
-            pool: Sequence[str] = COUPLE_ACTIONS
+            pool: Sequence[str] = setting_pool(
+                COUPLE_ACTIONS, indoor, INDOOR_COUPLE_ACTIONS
+            )
+        elif scene in SCENE_ACTIONS:
+            pool = setting_pool(SCENE_ACTIONS[scene or ""], indoor)
         else:
-            pool = SCENE_ACTIONS.get(scene or "", SOLO_ACTIONS)
+            generic = setting_pool(SOLO_ACTIONS, indoor, INDOOR_SOLO_ACTIONS)
+            pool = tuple(
+                a
+                for a in place_actions
+                if not (indoor and a in OUTDOOR_ACTIONS) and a not in generic
+            ) + tuple(generic)
         if pool:
             parts.append(variation_rng(seed, "action").choice(pool))
     return ", ".join(parts)

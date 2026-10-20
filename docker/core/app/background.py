@@ -5,7 +5,7 @@ from the WebSocket message handler in chat.py.
 """
 
 from __future__ import annotations
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 
 import asyncio
@@ -25,6 +25,9 @@ from .models import SessionState
 from .proactive.mission_timer import AUTO_MISSION_MAX_MINUTES
 from .memory_extraction import ExtractionRuntime
 from .personality import load_personality
+
+if TYPE_CHECKING:
+    from .image_scene import SceneBrief
 
 logger = logging.getLogger(__name__)
 
@@ -222,13 +225,44 @@ async def background_compaction(
         logger.error("Background compaction failed: %s", e)
 
 
+async def _scene_brief(
+    user_request: str,
+    history: list[dict[str, str]],
+    user_id: str,
+    level: int,
+    couple: bool,
+) -> SceneBrief:
+    """Where and when the picture happens (app/image_scene.py). Her Day is
+    only asked when the picture is of her alone and nothing he said sets it."""
+    from .image_scene import DEFAULT, resolve_scene
+    from .proactive.state import now_local
+
+    hour = now_local().hour
+    brief = resolve_scene(user_request, history, hour=hour, couple=couple)
+    if brief.about_her and brief.source == DEFAULT:
+        from .her_day import render_place
+
+        her = await render_place(user_id, level)
+        if her is not None:
+            brief = resolve_scene(
+                user_request, history, hour=hour, couple=couple, her_place=her
+            )
+    return brief
+
+
 async def background_image_gen(
     user_request: str,
     chat_context: str = "",
     squad_members: list[str] | None = None,
     user_id: str = "jalsarraf",
+    recent_turns: list[dict[str, str]] | None = None,
 ) -> None:
-    """Generate an anime image based on the user's request and recent chat context."""
+    """Generate an anime image for his request, set where the conversation is.
+
+    ``recent_turns`` (oldest first, roles kept) only decide the setting, and
+    only the chosen place's words ever leave core; ``chat_context`` is the
+    older flattened form of the same turns.
+    """
     from .image_gen import check_comfyui_ready
     from .image_provider import cloud_images_ready, selected_provider
     from .agy_image_provider import uses_agy_images
@@ -271,24 +305,31 @@ async def background_image_gen(
                 user_id, "Compiling tactical visualization, Commander..."
             )
 
-        # Agy receives only the explicit request and local appearance tags.
-        # Squad hints supplied by chat_handlers may include old conversations.
-        full_context = (
-            user_request
-            if use_agy
-            else (f"{chat_context}\n{user_request}" if chat_context else user_request)
-        )
+        # Who is in it, the moods and the orientation come from his request
+        # alone; the recent turns only set the scene (app/image_scene.py), and
+        # Agy receives the chosen place, never the conversation. Squad hints
+        # supplied by chat_handlers may include old conversations.
         if use_agy:
             from .image_gen import detect_squad_members
 
             squad_members = detect_squad_members(user_request)
-        couple = is_couple_scene(full_context)
+        couple = is_couple_scene(user_request)
 
         # Get affection level for mood-aware prompts
         aff_state = await affection.get_state(user_id)
         aff_level = aff_state.level
 
-        scene_tags = _enhance_image_prompt(full_context, couple=couple)
+        from .image_scene import turns_from_context
+        from .wardrobe_variation import derive_seed
+
+        history = (
+            recent_turns
+            if recent_turns is not None
+            else turns_from_context(chat_context)
+        )
+        brief = await _scene_brief(user_request, history, user_id, aff_level, couple)
+        logger.info("Image scene: %s", brief.log_fields())
+        scene_tags = _enhance_image_prompt(user_request, couple=couple, setting=brief)
         # Render what she is actually wearing right now (Her Day: today's pick,
         # his granted request, or block kit) — gated at the current level.
         from .her_day import render_costume
@@ -299,29 +340,52 @@ async def background_image_gen(
             scene_tags,
             couple=couple,
             affection_level=aff_level,
-            context=full_context,
+            context=user_request,
             squad_members=squad_members,
             costume=costume,
             costume_pinned=_wardrobe.granted_request_for(user_id, costume),
             request=user_request,
+            setting=brief,
+            # A new turn is a new picture plan, not this sentence's old one.
+            variation_seed=derive_seed(
+                user_request, brief.key, *(t.get("content", "") for t in history)
+            ),
         )
         logger.info("Image composition prepared (aff=%d)", aff_level)
 
         # Determine orientation
-        if is_landscape(full_context):
+        if is_landscape(user_request):
             width, height = 1216, 832
         else:
             width, height = 832, 1216
 
+        avoid = brief.avoid() or None
         outcome = None
         if use_agy:
-            from .account_images import explicit_request_id, fulfill_account_image
+            from .account_images import (
+                explicit_request_id,
+                fulfill_account_image,
+                repeat_window,
+            )
             from .image_provider import cloud_prompt, nudity_allowed
 
-            full_prompt = f"{user_request}\n\n{cloud_prompt(full_prompt, sfw=aff_level < INTIMATE_MIN_LEVEL)}"
-            # The id is the explicit sentence, so a repeat finds this journal row.
+            described = cloud_prompt(
+                full_prompt,
+                sfw=aff_level < INTIMATE_MIN_LEVEL,
+                negative_extra=avoid,
+            )
+            full_prompt = f"{user_request}\n\n{brief.sentence()}\n\n{described}"
+            # The id is the explicit sentence (and the place it is set in when
+            # that came from outside it), so a repeat within the repeat window
+            # finds this journal row; later, the same words draw a new picture.
             request_id = explicit_request_id(
-                user_id, user_request, width, height, couple
+                user_id,
+                user_request,
+                width,
+                height,
+                couple,
+                scene=brief.request_scope(),
+                window=repeat_window(),
             )
             accepted_session = await memory.get_session(session_id(user_id))
             archive_context = {
@@ -353,6 +417,7 @@ async def background_image_gen(
                 width=width,
                 height=height,
                 sfw=aff_level < INTIMATE_MIN_LEVEL,
+                negative_extra=avoid,
             )
         if img_bytes:
             await _deliver_generated_image(

@@ -8,10 +8,15 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from .image_gen_constants import SQUAD_KEYWORDS, SITUATION_KEYWORDS
+from .image_gen_constants import (
+    IMAGE_MOOD_MAP,
+    IMAGE_SCENE_MAP,
+    SITUATION_KEYWORDS,
+    SQUAD_KEYWORDS,
+)
 
 if TYPE_CHECKING:
-    pass
+    from .image_scene import SceneBrief
 
 from .departure_detection import (
     GoodbyeKind as GoodbyeKind,
@@ -85,46 +90,29 @@ def fix_narration(text: str) -> str:
     return text
 
 
-def enhance_image_prompt(user_request: str, couple: bool = False) -> str:
-    """Fast keyword-based tag generation — no LLM call needed."""
+def enhance_image_prompt(
+    user_request: str,
+    couple: bool = False,
+    setting: SceneBrief | None = None,
+) -> str:
+    """Fast keyword-based tag generation — no LLM call needed.
+
+    With a scene brief (app/image_scene.py), only his request's moods and
+    actions are tagged here; where and when the picture happens is the
+    brief's, so no place or weather keyword can pull the scene elsewhere.
+    """
+    if setting is not None:
+        from .image_scene import request_tags
+
+        return request_tags(user_request, setting, couple=couple)
     lower = user_request.lower()
     tags = []
 
-    SCENE_MAP = {
-        "sunset": "sunset, orange sky, golden hour lighting",
-        "night": "night, moonlight, dark sky, stars",
-        "rain": "rain, wet, umbrella, overcast",
-        "snow": "snow, winter, cold breath, scarf",
-        "beach": "beach, ocean, sand, swimsuit, summer",
-        "cafe": "cafe, table, coffee cup, indoor, cozy",
-        "battle": "battlefield, smoke, debris, action pose",
-        "motorcycle": "motorcycle, riding, wind, speed lines, road",
-        "bed": "bedroom, bed, pillows, soft lighting, intimate",
-        "rooftop": "rooftop, city skyline, wind, evening",
-        "garden": "garden, flowers, natural lighting, peaceful",
-        "office": "office, desk, computer, indoor lighting",
-        "forest": "forest, trees, nature, sunlight through leaves",
-        "city": "city, urban, street, buildings, neon",
-    }
-    for keyword, scene_tags in SCENE_MAP.items():
+    for keyword, scene_tags in IMAGE_SCENE_MAP.items():
         if keyword in lower:
             tags.append(scene_tags)
 
-    MOOD_MAP = {
-        "kiss": "kiss, eyes closed, romantic",
-        "hug": "hug, embrace, close, warm",
-        "cuddle": "cuddling, lying down, comfortable, close",
-        "hold": "holding hands, close, side by side",
-        "smile": "smile, happy, cheerful",
-        "blush": "blush, embarrassed, looking away",
-        "cry": "tears, emotional, sad",
-        "fight": "fighting stance, action, dynamic pose",
-        "sleep": "sleeping, peaceful, eyes closed",
-        "eat": "eating, food, table",
-        "cook": "cooking, kitchen, apron",
-        "read": "reading, book, sitting, quiet",
-    }
-    for keyword, mood_tags in MOOD_MAP.items():
+    for keyword, mood_tags in IMAGE_MOOD_MAP.items():
         if keyword in lower:
             tags.append(mood_tags)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
 from app.image_gen_constants import (
     AFFECTION_MOOD_TAGS,
@@ -28,6 +29,9 @@ from app.image_gen_constants import (
     SQUAD_KEYWORDS,
     TIME_OF_DAY_TAGS,
 )
+
+if TYPE_CHECKING:
+    from app.image_scene import SceneBrief
 
 
 def detect_squad_members(text: str) -> list[str]:
@@ -159,6 +163,7 @@ def build_prompt(
     pose: str | None = None,
     variation_seed: int | str | None = None,
     costume_pinned: bool | None = None,
+    setting: SceneBrief | None = None,
 ) -> str:
     """Build the full positive prompt with quality tags, LoRA trigger, and character identities.
 
@@ -191,6 +196,13 @@ def build_prompt(
         costume_pinned: ``costume`` is his granted request, so it is never
             re-dressed for the scene. None asks the Her Day cache
             (wardrobe.granted_request).
+        setting: The scene brief (app/image_scene.py) — where and when the
+            picture happens. Its place, light and weather close the prompt;
+            the scene she dresses for, the candid action and his default
+            outfit must fit it; the affection tags lose their generic
+            "... setting" words; ``time_of_day`` is ignored. Without one, the
+            picture's own tags may still say indoors (her POV), and then the
+            action and the hour's light stay indoors too.
 
     Who decides what she wears, highest first: an outfit he asks for in
     ``request`` and she has on > an explicit bath/bed scene (at the intimacy
@@ -199,20 +211,42 @@ def build_prompt(
     """
     parts = [QUALITY_TAGS, KLUKAI_LORA_TRIGGER]
 
+    from . import image_scene
+
     # Add affection-aware mood tags
     mood_tags = AFFECTION_MOOD_TAGS.get(affection_level, "") if affection_tags else ""
+    if mood_tags and setting is not None:
+        # "military setting" must not move a picture out of his bedroom.
+        mood_tags = ", ".join(
+            t for t in mood_tags.split(", ") if not t.endswith(" setting")
+        )
     if mood_tags:
         parts.append(mood_tags)
+
+    # Without a brief, the picture's own words may still place it indoors.
+    inferred = (
+        image_scene.infer_place(f"{scene_tags} {request or ''}")
+        if setting is None and affection_tags
+        else None
+    )
+    indoor = (
+        setting.indoor
+        if setting is not None
+        else (inferred.indoor if inferred is not None else None)
+    )
 
     # Scene-aware descriptors — concise mood expression + time/lighting cue,
     # injected BEFORE the scene tags so they colour the moment without bloat.
     expression = MOOD_EXPRESSION_TAGS.get(mood or "")
     if expression:
         parts.append(expression)
-    if time_of_day:
-        lighting = TIME_OF_DAY_TAGS.get(time_of_day)
-        if lighting:
-            parts.append(lighting)
+    if time_of_day and setting is None:
+        if inferred is not None and inferred.indoor and time_of_day in TIME_OF_DAY_TAGS:
+            parts.append(image_scene.time_tags(inferred, time_of_day, indoor=True))
+        else:
+            lighting = TIME_OF_DAY_TAGS.get(time_of_day)
+            if lighting:
+                parts.append(lighting)
 
     # Context for outfit matching: use full context (conversation + scene tags)
     outfit_context = f"{context} {scene_tags}" if context else scene_tags
@@ -222,19 +256,22 @@ def build_prompt(
 
     # Live Portrait (affection_tags=False) keeps a fixed, neutral base.
     vary = affection_tags
+    seed_parts: list[object] = [
+        scene_tags,
+        context,
+        request,
+        costume,
+        affection_level,
+        mood,
+        time_of_day,
+        couple,
+    ]
+    if setting is not None:
+        seed_parts.append(setting.key)
     seed = (
         variation_seed
         if variation_seed is not None
-        else wardrobe_variation.derive_seed(
-            scene_tags,
-            context,
-            request,
-            costume,
-            affection_level,
-            mood,
-            time_of_day,
-            couple,
-        )
+        else wardrobe_variation.derive_seed(*seed_parts)
     )
     cat = wardrobe.catalog()
     costume_id = wardrobe.canonical_id(costume, cat) if costume else None
@@ -249,12 +286,14 @@ def build_prompt(
         and _explicit_scene(request if request is not None else outfit_context)
     )
     # Only his words (or, with none, the picture's own scene tags) set the
-    # scene — never her replies in ``context``.
-    scene = (
-        wardrobe_scene.scene_of(request if request is not None else scene_tags)
-        if vary
-        else None
-    )
+    # scene — never her replies in ``context`` — and only a scene that can
+    # happen where the brief puts the picture.
+    if not vary:
+        scene = None
+    elif setting is not None:
+        scene = setting.wardrobe_scene(request)
+    else:
+        scene = wardrobe_scene.scene_of(request if request is not None else scene_tags)
     if costume_id and costume_tags and not explicit:
         worn = costume_id
         if scene and named is None:
@@ -295,13 +334,18 @@ def build_prompt(
             couple=couple,
             framing_text=f"{scene_tags} {request or ''}",
             seed=seed,
+            indoor=indoor,
+            place_actions=setting.place.actions if setting is not None else (),
         )
     else:
         composition = ""
 
     if couple:
         commander_outfit = _select_outfit(
-            outfit_context, COMMANDER_OUTFIT_MAP, COMMANDER_DEFAULT_OUTFIT
+            outfit_context,
+            COMMANDER_OUTFIT_MAP,
+            (setting.commander if setting is not None else None)
+            or COMMANDER_DEFAULT_OUTFIT,
         )
         parts.append(COUPLE_TAGS)
         parts.append(f"{COMMANDER_IDENTITY}, {commander_outfit}")
@@ -321,7 +365,12 @@ def build_prompt(
 
     if composition:
         parts.append(composition)
-    parts.append(scene_tags)
+    if setting is None or scene_tags:
+        parts.append(scene_tags)
+    if setting is not None:
+        # Kept out of ``outfit_context``: "bedroom" or "night" in the setting
+        # must never pick an outfit for either of them.
+        parts.append(setting.tags())
     return ", ".join(parts)
 
 
