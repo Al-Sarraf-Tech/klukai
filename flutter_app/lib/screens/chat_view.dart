@@ -299,16 +299,30 @@ extension _ChatView on _ChatScreenState {
 
   /// Tracks whether he is at the newest line, and keeps it there when the
   /// transcript's end moves without him scrolling (see [_pinnedToBottom]).
+  ///
+  /// Only while no scroll is in progress: scrolling up lays out older
+  /// bubbles, which corrects the list's extent, and re-pinning then would
+  /// jump back down and cancel his drag (the "can't scroll up" bug).
   bool _onTranscriptScroll(Notification notification) {
-    if (notification is ScrollUpdateNotification ||
-        notification is ScrollEndNotification) {
-      final metrics = (notification as ScrollNotification).metrics;
+    if (notification is ScrollStartNotification) {
+      _transcriptScrolling = true;
+    } else if (notification is ScrollUpdateNotification) {
+      final metrics = notification.metrics;
       _pinnedToBottom = metrics.maxScrollExtent - metrics.pixels < 48;
-    } else if (notification is ScrollMetricsNotification && _pinnedToBottom) {
+    } else if (notification is ScrollEndNotification) {
+      _transcriptScrolling = false;
+      final metrics = notification.metrics;
+      _pinnedToBottom = metrics.maxScrollExtent - metrics.pixels < 48;
+    } else if (notification is ScrollMetricsNotification &&
+        _pinnedToBottom &&
+        !_transcriptScrolling) {
       final metrics = notification.metrics;
       if (metrics.maxScrollExtent - metrics.pixels > 1) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_pinnedToBottom && _scrollController.hasClients) {
+          if (_pinnedToBottom &&
+              !_transcriptScrolling &&
+              _scrollController.hasClients &&
+              !_scrollController.position.isScrollingNotifier.value) {
             _scrollController.jumpTo(
               _scrollController.position.maxScrollExtent,
             );

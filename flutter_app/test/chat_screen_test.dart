@@ -722,6 +722,47 @@ void main() {
       fake.dispose();
     });
 
+    testWidgets('he can drag up through the history from the newest line', (
+      tester,
+    ) async {
+      final (fake, _) = await pumpWithDay(tester, FakeWardrobeService());
+      // Uneven bubbles: laying out older ones corrects the list's extent
+      // while he drags, which is what used to yank him back down.
+      for (var i = 0; i < 40; i++) {
+        final lines = i.isEven ? 1 : 7;
+        fake.emit({
+          'type': 'token',
+          'text': List.filled(lines, 'line $i of the history').join('\n'),
+        });
+        fake.emit({'type': 'done'});
+        await tester.pump();
+      }
+      await tester.pump(const Duration(milliseconds: 600));
+      ScrollPosition position() => tester
+          .widget<ListView>(
+            find.descendant(
+              of: find.byType(Focus),
+              matching: find.byType(ListView),
+            ),
+          )
+          .controller!
+          .position;
+      final start = position().pixels;
+      expect(start, closeTo(position().maxScrollExtent, 1));
+
+      // A slow drag, frame by frame, like a finger on a phone.
+      final gesture = await tester.startGesture(const Offset(195, 600));
+      for (var i = 0; i < 30; i++) {
+        await gesture.moveBy(const Offset(0, 20));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await gesture.up();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(position().pixels, lessThan(start - 400));
+      expect(position().maxScrollExtent - position().pixels, greaterThan(400));
+      fake.dispose();
+    });
+
     testWidgets('the newest line stays in view when her day loads late', (
       tester,
     ) async {

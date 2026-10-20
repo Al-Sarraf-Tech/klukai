@@ -289,6 +289,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// the end of the transcript (the header growing once her day loads, a
   /// bubble laid out taller than its estimate) keeps the newest line in view.
   bool _pinnedToBottom = true;
+
+  /// A scroll is in progress (his drag or fling, or an animation). The
+  /// transcript is never re-pinned meanwhile: jumping would cancel his drag.
+  bool _transcriptScrolling = false;
   int? _heartbeatSpikeOverride; // Temporary BPM override from heartbeat_spike
   Timer? _spikeDecayTimer;
   Timer? _inputLockTimer; // Safety timeout to auto-unlock input
