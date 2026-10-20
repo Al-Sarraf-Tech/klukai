@@ -251,8 +251,18 @@ extension _ChatWireEvents on _ChatScreenState {
         }
         _loadHerDay();
 
+      case 'heartbeat':
+        // Her live heart rate, once per turn from the core. It shows until
+        // the next one (a surge still wins while it lasts) and eases back to
+        // her mood's resting rate after 15 quiet minutes. A beat without an
+        // integer bpm is malformed and ignored; one out of range is clamped.
+        // Her mood is the `mood` frame's to set, not this one's.
+        final liveBpm = liveBpmFrom(msg['bpm']);
+        if (liveBpm != null) _setLiveHeartbeat(liveBpm);
+
       case 'heartbeat_spike':
-        final spikeBpm = msg['bpm'] as int? ?? 160;
+        final rawSpike = msg['bpm'];
+        final spikeBpm = rawSpike is int ? rawSpike : 160;
         _lockInput('HEARTBEAT SURGE', timeout: const Duration(seconds: 5));
         _update(() {
           _heartbeatSpikeOverride = spikeBpm;
@@ -291,6 +301,25 @@ extension _ChatWireEvents on _ChatScreenState {
         _unlockInput();
         _scrollToBottom();
     }
+  }
+
+  /// A `heartbeat` frame's reading becomes her live rate for the next
+  /// [kLiveHeartbeatTtl], then her mood's resting rate returns. The timer
+  /// redraws it on time; [shownHeartRate] also checks the wall clock, in
+  /// case a backgrounded tab ran the timer late.
+  void _setLiveHeartbeat(int bpm) {
+    _liveBpmExpiry?.cancel();
+    _update(() {
+      _liveBpm = bpm;
+      _liveBpmAt = DateTime.now();
+    });
+    _liveBpmExpiry = Timer(kLiveHeartbeatTtl, () {
+      if (!mounted) return;
+      _update(() {
+        _liveBpm = null;
+        _liveBpmAt = null;
+      });
+    });
   }
 
   /// Ends the in-progress reply where it stands: the streaming bubble (if any)

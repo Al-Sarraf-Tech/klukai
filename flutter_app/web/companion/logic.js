@@ -1,7 +1,8 @@
 // Pure logic for the companion stage — no DOM, no audio, no network, so it
 // runs under `node --test` (tools/companion/test) and in the browser alike.
 
-/** Her moods — kept identical to docker/core/app/fact_extractor.py VALID_MOODS (a test diffs them). */
+/** Her moods — kept identical to docker/core/app/fact_extractor.py VALID_MOODS (a test diffs them;
+ *  the last fifteen came with her live heart rate, 2026-10-19). */
 export const MOODS = Object.freeze([
   "composed", "focused", "prideful", "exasperated", "protective",
   "quietly_pleased", "competitive", "tender", "longing", "battle_ready",
@@ -14,18 +15,22 @@ export const MOODS = Object.freeze([
   "grieving", "furious",
   "nostalgic", "curious", "irritated", "defiant", "vulnerable",
   "grateful", "worried", "embarrassed",
+  "serene", "cozy", "wistful", "lonely", "stern", "smug", "hopeful", "sulking",
+  "admiring", "teasing", "restless", "heartbroken", "giddy", "overwhelmed", "breathless",
 ]);
 
 const SMILE = new Set([
   "quietly_pleased", "content", "playful", "amused", "affectionate", "devoted",
   "smitten", "infatuated", "excited", "relieved", "grateful", "prideful",
+  "serene", "cozy", "smug", "hopeful", "admiring", "teasing", "giddy",
 ]);
 const BLUSH = new Set([
   "flustered", "shy", "embarrassed", "tender", "yearning", "passionate", "vulnerable",
+  "breathless", "overwhelmed",
 ]);
 const ANNOYED = new Set([
   "exasperated", "irritated", "furious", "jealous", "possessive", "defiant",
-  "bored", "competitive",
+  "bored", "competitive", "stern", "sulking",
 ]);
 
 /** Which portrait expression frame a mood shows: base | smile | blush | annoyed. */
@@ -40,7 +45,8 @@ export function moodToExpression(mood) {
 export function moodBrightness(mood) {
   if (SMILE.has(mood) || BLUSH.has(mood)) return 0.6;
   if (ANNOYED.has(mood)) return -0.4;
-  if (["scared", "terrified", "panicked", "desperate", "haunted", "grieving", "melancholic", "worried"].includes(mood)) {
+  if (["scared", "terrified", "panicked", "desperate", "haunted", "grieving", "melancholic", "worried",
+    "heartbroken", "lonely"].includes(mood)) {
     return -0.7;
   }
   return 0;

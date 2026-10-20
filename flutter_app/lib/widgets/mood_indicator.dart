@@ -11,18 +11,21 @@ class MoodIndicator extends StatelessWidget {
   /// to grey). Unknown moods get [kDefaultMoodVisual]'s glow.
   Color get moodColor => moodVisualFor(mood).glow;
 
+  /// Her mood as words: every mood its own label (two moods sharing one would
+  /// read as her mood not changing), and an unknown key reads as words too
+  /// (`half_asleep` → `HALF ASLEEP`).
   String get statusText {
     return switch (mood) {
       // Core
       'composed' => 'COMPOSED',
       'focused' => 'FOCUSED',
       'prideful' => 'PRIDEFUL',
-      'exasperated' => 'IRRITATED',
+      'exasperated' => 'EXASPERATED',
       'protective' => 'ON GUARD',
       'quietly_pleased' => 'PLEASED',
       'competitive' => 'COMPETITIVE',
       'tender' => 'TENDER',
-      'longing' => 'WISTFUL',
+      'longing' => 'LONGING',
       'battle_ready' => 'BATTLE READY',
       // Romantic
       'flustered' => 'FLUSTERED',
@@ -53,7 +56,23 @@ class MoodIndicator extends StatelessWidget {
       'irritated' => 'IRRITATED',
       'defiant' => 'DEFIANT',
       'vulnerable' => 'VULNERABLE',
-      _ => mood.toUpperCase(),
+      // Live heart rate (2026-10-19)
+      'serene' => 'SERENE',
+      'cozy' => 'COZY',
+      'wistful' => 'WISTFUL',
+      'lonely' => 'LONELY',
+      'stern' => 'STERN',
+      'smug' => 'SMUG',
+      'hopeful' => 'HOPEFUL',
+      'sulking' => 'SULKING',
+      'admiring' => 'ADMIRING',
+      'teasing' => 'TEASING',
+      'restless' => 'RESTLESS',
+      'heartbroken' => 'HEARTBROKEN',
+      'giddy' => 'GIDDY',
+      'overwhelmed' => 'OVERWHELMED',
+      'breathless' => 'BREATHLESS',
+      _ => mood.replaceAll('_', ' ').toUpperCase(),
     };
   }
 

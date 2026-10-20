@@ -648,6 +648,160 @@ void main() {
       expect(find.text('115 BPM'), findsOneWidget);
       fake.dispose();
     });
+
+    testWidgets('each new mood shows its own label and resting BPM', (
+      tester,
+    ) async {
+      const resting = <String, int>{
+        'serene': 60,
+        'cozy': 62,
+        'wistful': 66,
+        'lonely': 70,
+        'stern': 70,
+        'smug': 74,
+        'hopeful': 76,
+        'sulking': 78,
+        'admiring': 80,
+        'teasing': 82,
+        'restless': 88,
+        'heartbroken': 92,
+        'giddy': 104,
+        'overwhelmed': 118,
+        'breathless': 140,
+      };
+      final fake = await _pumpChat(tester, wardrobe: FakeWardrobeService());
+      for (final MapEntry(key: mood, value: bpm) in resting.entries) {
+        fake.emit({'type': 'mood', 'mood': mood});
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 900));
+        expect(
+          tester.widget<Text>(find.byKey(const Key('chat-header-mood'))).data,
+          mood.toUpperCase(),
+        );
+        expect(tester.widget<HudEcg>(find.byType(HudEcg)).bpm, bpm);
+        expect(find.text('$bpm BPM'), findsOneWidget, reason: mood);
+      }
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — her live heart rate (heartbeat frames)', () {
+    int shownBpm(WidgetTester tester) =>
+        tester.widget<HudEcg>(find.byType(HudEcg)).bpm;
+
+    Future<void> beat(
+      FakeWebSocketService fake,
+      WidgetTester tester,
+      Object? bpm, {
+      String mood = 'composed',
+    }) async {
+      fake.emit({
+        'type': 'heartbeat',
+        'bpm': bpm,
+        'mood': mood,
+        'intensity': 6,
+      });
+      await tester.pump();
+      await tester.pump();
+    }
+
+    testWidgets('a heartbeat shows her live rate until the next one', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester, wardrobe: FakeWardrobeService());
+      expect(shownBpm(tester), 65); // composed, resting
+
+      await beat(fake, tester, 97);
+      expect(shownBpm(tester), 97);
+      expect(find.text('97 BPM'), findsOneWidget);
+
+      // A mood change alone keeps the live reading; the label follows.
+      fake.emit({'type': 'mood', 'mood': 'serene'});
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 900));
+      expect(find.text('SERENE'), findsWidgets);
+      expect(shownBpm(tester), 97);
+
+      await beat(fake, tester, 72, mood: 'serene');
+      expect(shownBpm(tester), 72);
+      expect(find.text('72 BPM'), findsOneWidget);
+      fake.dispose();
+    });
+
+    testWidgets('a surge still wins, then hands back to the live rate', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester, wardrobe: FakeWardrobeService());
+      await beat(fake, tester, 97);
+
+      fake.emit({'type': 'heartbeat_spike', 'bpm': 170, 'mood': 'flustered'});
+      await tester.pump();
+      expect(shownBpm(tester), 170);
+
+      // A heartbeat during the surge does not cut it short...
+      await beat(fake, tester, 101);
+      expect(shownBpm(tester), 170);
+
+      // ...and when it decays the newest live reading shows, not the mood's.
+      await tester.pump(const Duration(seconds: 6));
+      expect(shownBpm(tester), 101);
+      fake.dispose();
+    });
+
+    testWidgets('after 15 quiet minutes her mood\'s resting rate returns', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester, wardrobe: FakeWardrobeService());
+      fake.emit({'type': 'mood', 'mood': 'cozy'});
+      await tester.pump();
+      await beat(fake, tester, 120, mood: 'cozy');
+      expect(shownBpm(tester), 120);
+
+      await tester.pump(const Duration(minutes: 14));
+      expect(shownBpm(tester), 120);
+      await tester.pump(const Duration(minutes: 1, seconds: 1));
+      expect(shownBpm(tester), 62); // cozy, resting
+
+      // A newer reading restarts the 15 minutes.
+      await beat(fake, tester, 110, mood: 'cozy');
+      await tester.pump(const Duration(minutes: 10));
+      await beat(fake, tester, 99, mood: 'cozy');
+      await tester.pump(const Duration(minutes: 10));
+      expect(shownBpm(tester), 99);
+      await tester.pump(const Duration(minutes: 5, seconds: 1));
+      expect(shownBpm(tester), 62);
+      fake.dispose();
+    });
+
+    testWidgets('malformed beats are ignored; out-of-range ones clamped', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester, wardrobe: FakeWardrobeService());
+      for (final bad in <Object?>[
+        '90',
+        90.5,
+        null,
+        true,
+        <int>[90],
+      ]) {
+        await beat(fake, tester, bad);
+        expect(shownBpm(tester), 65, reason: '$bad');
+      }
+      fake.emit({'type': 'heartbeat', 'mood': 'composed'}); // no bpm at all
+      await tester.pump();
+      expect(shownBpm(tester), 65);
+      expect(tester.takeException(), isNull);
+
+      await beat(fake, tester, 250);
+      expect(shownBpm(tester), 190);
+      await beat(fake, tester, 20);
+      expect(shownBpm(tester), 48);
+
+      // A malformed beat leaves the last good reading standing.
+      await beat(fake, tester, 'fast');
+      expect(shownBpm(tester), 48);
+      fake.dispose();
+    });
   });
 
   group('ChatScreen — keyboard scroll-nav wiring', () {
@@ -1700,6 +1854,36 @@ void main() {
       for (var i = 0; i < 4; i++) {
         await tester.pump(const Duration(milliseconds: 200)); // scroll retries
       }
+      fake.dispose();
+    });
+
+    testWidgets('its HUD carries her live heart rate, a surge over it', (
+      tester,
+    ) async {
+      final (fake, stage, _) = await pump3d(tester);
+      stage.onEvent!('klukai:stage-ready', {'ready': true});
+      await tester.pump();
+      expect(stage.link.huds.last['bpm'], moodVisualFor('composed').bpm);
+
+      fake.emit({
+        'type': 'heartbeat',
+        'bpm': 88,
+        'mood': 'composed',
+        'intensity': 4,
+      });
+      await settle(tester);
+      expect(stage.link.huds.last['bpm'], 88);
+      expect(stage.link.huds.last['spiking'], false);
+
+      fake.emit({'type': 'heartbeat_spike', 'bpm': 160, 'mood': 'flustered'});
+      await settle(tester);
+      expect(stage.link.huds.last['bpm'], 160);
+      expect(stage.link.huds.last['spiking'], true);
+
+      await tester.pump(const Duration(seconds: 6));
+      await settle(tester);
+      expect(stage.link.huds.last['bpm'], 88);
+      expect(stage.link.huds.last['spiking'], false);
       fake.dispose();
     });
 

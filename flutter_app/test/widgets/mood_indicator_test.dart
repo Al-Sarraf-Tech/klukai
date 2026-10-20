@@ -4,6 +4,7 @@
 // under chrome:  flutter test --platform chrome test/widgets/mood_indicator_test.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:companion_app/theme/mood_visuals.dart';
 import 'package:companion_app/widgets/mood_indicator.dart';
 
 Widget _wrap(Widget child) => MaterialApp(
@@ -22,11 +23,11 @@ void main() {
       'composed': 'COMPOSED',
       'focused': 'FOCUSED',
       'prideful': 'PRIDEFUL',
-      'exasperated': 'IRRITATED', // exasperated renders as IRRITATED
+      'exasperated': 'EXASPERATED', // no longer shares IRRITATED
       'protective': 'ON GUARD',
       'quietly_pleased': 'PLEASED',
       'tender': 'TENDER',
-      'longing': 'WISTFUL', // longing renders as WISTFUL
+      'longing': 'LONGING', // WISTFUL is its own mood now
       'battle_ready': 'BATTLE READY',
       'flustered': 'FLUSTERED',
       'affectionate': 'AFFECTIONATE',
@@ -36,6 +37,22 @@ void main() {
       'melancholic': 'MELANCHOLIC',
       'devoted': 'DEVOTED',
       'vulnerable': 'VULNERABLE',
+      // The fifteen live-heart-rate moods (2026-10-19)
+      'serene': 'SERENE',
+      'cozy': 'COZY',
+      'wistful': 'WISTFUL',
+      'lonely': 'LONELY',
+      'stern': 'STERN',
+      'smug': 'SMUG',
+      'hopeful': 'HOPEFUL',
+      'sulking': 'SULKING',
+      'admiring': 'ADMIRING',
+      'teasing': 'TEASING',
+      'restless': 'RESTLESS',
+      'heartbroken': 'HEARTBROKEN',
+      'giddy': 'GIDDY',
+      'overwhelmed': 'OVERWHELMED',
+      'breathless': 'BREATHLESS',
     };
 
     cases.forEach((mood, label) {
@@ -50,6 +67,28 @@ void main() {
     ) async {
       await tester.pumpWidget(_wrap(const MoodIndicator(mood: 'sleepy')));
       expect(find.text('SLEEPY'), findsOneWidget);
+    });
+
+    testWidgets('an unknown mood reads as words, not a snake_case key', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_wrap(const MoodIndicator(mood: 'half_asleep')));
+      expect(find.text('HALF ASLEEP'), findsOneWidget);
+    });
+
+    test('every mood in the table reads differently', () {
+      final byLabel = <String, List<String>>{};
+      for (final mood in kMoodVisuals.keys) {
+        final label = MoodIndicator(mood: mood).statusText;
+        expect(label, isNot(contains('_')), reason: mood);
+        byLabel.putIfAbsent(label, () => []).add(mood);
+      }
+      final shared = byLabel.entries.where((e) => e.value.length > 1);
+      expect(
+        shared.map((e) => '${e.key}: ${e.value}').toList(),
+        isEmpty,
+        reason: 'two moods must never show the same label',
+      );
     });
 
     testWidgets('empty mood renders an empty (uppercased) status', (

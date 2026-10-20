@@ -11,6 +11,7 @@ import '../theme/mood_visuals.dart';
 import '../models/message.dart';
 import '../models/companion_state.dart';
 import '../models/her_day.dart';
+import '../models/heart_rate.dart';
 import '../platform/browser.dart';
 import '../services/resume_policy.dart';
 import '../services/session_auth.dart';
@@ -301,6 +302,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _transcriptScrolling = false;
   int? _heartbeatSpikeOverride; // Temporary BPM override from heartbeat_spike
   Timer? _spikeDecayTimer;
+
+  /// Her live heart rate from the last `heartbeat` frame and when it came;
+  /// [_liveBpmExpiry] drops it after [kLiveHeartbeatTtl] (see _ChatWireEvents).
+  int? _liveBpm;
+  DateTime? _liveBpmAt;
+  Timer? _liveBpmExpiry;
   Timer? _inputLockTimer; // Safety timeout to auto-unlock input
   Timer?
   _warmupTimer; // Phased "waking up" status while a cold model loads + warms
@@ -308,13 +315,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// Glow color for the current mood (shared source of truth: [kMoodVisuals]).
   Color get _moodGlowColor => moodVisualFor(_state.mood).glow;
 
-  /// Heartbeat BPM mapped to mood — reflects Klukai's emotional/physical state
-  /// (shared source of truth: [kMoodVisuals]). A heartbeat_spike event
-  /// temporarily overrides this with a higher BPM.
-  int get _moodBPM {
-    if (_heartbeatSpikeOverride != null) return _heartbeatSpikeOverride!;
-    return moodVisualFor(_state.mood).bpm;
-  }
+  /// Her shown heart rate (CHAT header ECG/BPM, the stage HUD's `bpm`): a
+  /// surge, else a fresh live reading, else her mood's resting rate.
+  int get _moodBPM => shownHeartRate(
+    mood: _state.mood,
+    spike: _heartbeatSpikeOverride,
+    live: _liveBpm,
+    liveAt: _liveBpmAt,
+    now: DateTime.now(),
+  );
 
   /// Lock input with a reason string and auto-unlock safety timeout.
   void _lockInput(
@@ -510,6 +519,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _spikeDecayTimer?.cancel();
+    _liveBpmExpiry?.cancel();
     _inputLockTimer?.cancel();
     _warmupTimer?.cancel();
     _herDayTimer?.cancel();

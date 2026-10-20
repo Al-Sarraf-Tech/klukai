@@ -26,22 +26,46 @@ function backendMoods() {
   return [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
 }
 
+/** The fifteen moods that came with her live heart rate (2026-10-19). The core
+ *  adds them to VALID_MOODS in a parallel change; listed here so the stage
+ *  covers them either way (the union is the same set before and after). */
+const NEW_MOODS = Object.freeze([
+  'serene', 'cozy', 'wistful', 'lonely', 'stern', 'smug', 'hopeful', 'sulking',
+  'admiring', 'teasing', 'restless', 'heartbroken', 'giddy', 'overwhelmed', 'breathless',
+]);
+
+/** Every mood the stage must know: the backend's plus the new fifteen. */
+function allMoods() {
+  return [...new Set([...backendMoods(), ...NEW_MOODS])];
+}
+
 // ── moods → states ─────────────────────────────────────────────────────────
 
-test('every backend mood (all 50) maps to a valid viewer state', () => {
-  const moods = backendMoods();
-  assert.equal(moods.length, 50);
+test('every mood (all 65) maps to a valid viewer state', () => {
+  const moods = allMoods();
+  assert.equal(moods.length, 65);
   for (const mood of moods) {
     const s = moodToState(mood);
     assert.ok(STATES.includes(s), `${mood} → ${s} is not a state`);
   }
 });
 
-test('the mapping is explicit for exactly the backend + logic.js mood lists', () => {
-  const backend = new Set(backendMoods());
-  assert.deepEqual(new Set(mappedMoods()), backend);
-  assert.deepEqual(new Set(MOODS), backend, 'logic.js MOODS drifted from VALID_MOODS');
+test('the mapping is explicit for exactly the backend + new + logic.js mood lists', () => {
+  const all = new Set(allMoods());
+  for (const m of backendMoods()) assert.ok(mappedMoods().includes(m), `backend mood ${m} is not mapped`);
+  assert.deepEqual(new Set(mappedMoods()), all);
+  assert.deepEqual(new Set(MOODS), all, 'logic.js MOODS drifted from VALID_MOODS');
   assert.deepEqual(moodCoverage(), { missing: [], extra: [] });
+});
+
+test('the new moods map to the pose that fits them', () => {
+  const cases = {
+    serene: 'idle', cozy: 'happy', wistful: 'sad', lonely: 'sad', stern: 'idle', smug: 'idle',
+    hopeful: 'happy', sulking: 'sad', admiring: 'bashful', teasing: 'happy', restless: 'flustered',
+    heartbroken: 'sad', giddy: 'excited', overwhelmed: 'flustered', breathless: 'flustered',
+  };
+  assert.deepEqual(Object.keys(cases).sort(), [...NEW_MOODS].sort());
+  for (const [mood, state] of Object.entries(cases)) assert.equal(moodToState(mood), state, mood);
 });
 
 test('mood mapping semantics', () => {
@@ -54,7 +78,8 @@ test('mood mapping semantics', () => {
 });
 
 test('moodToState is total and pure', () => {
-  for (const bad of [undefined, null, '', 'nope', 42, {}, 'SMUG']) assert.equal(moodToState(bad), 'idle');
+  for (const bad of [undefined, null, '', 'nope', 42, {}, 'SMUGGLED']) assert.equal(moodToState(bad), 'idle');
+  assert.equal(moodToState(' GIDDY '), 'excited');
   assert.equal(moodToState('  Content '), 'happy');
   assert.equal(moodToState('content'), moodToState('content'));
 });
@@ -257,7 +282,7 @@ test('parseTint accepts numbers, hex, rgb()/rgba() and expression names; rejects
 
 test('RIM_TINTS covers every portrait expression', async () => {
   const { moodToExpression } = await import('../../../flutter_app/web/companion/logic.js');
-  for (const m of backendMoods()) assert.ok(RIM_TINTS[moodToExpression(m)] !== undefined, m);
+  for (const m of allMoods()) assert.ok(RIM_TINTS[moodToExpression(m)] !== undefined, m);
 });
 
 test('mood hysteresis: mood-to-mood changes hold 4 s unless strong', () => {
@@ -267,6 +292,9 @@ test('mood hysteresis: mood-to-mood changes hold 4 s unless strong', () => {
   assert.equal(moodGate({ now: 1000, lastAt: 0, current: 'idle', next: 'flustered', strong: true }), 'apply');
   assert.equal(moodGate({ now: 1000, lastAt: 0, fromMood: false, current: 'thinking', next: 'happy' }), 'apply');
   for (const m of STRONG_MOODS) assert.ok(MOODS.includes(m), m);
+  // A sudden hurt or rush shows at once, like grief and panic do.
+  for (const m of ['heartbroken', 'overwhelmed', 'breathless']) assert.ok(STRONG_MOODS.includes(m), m);
+  for (const m of ['serene', 'cozy', 'wistful', 'smug', 'teasing']) assert.ok(!STRONG_MOODS.includes(m), m);
   assert.equal(MOOD_HOLD_MS, 4000);
 });
 

@@ -200,7 +200,7 @@ export function initializePresence(ctx) {
 
   // Blinks: random gaps (logic.js nextBlink) + on gaze shifts and phrase ends;
   // slow in tender moods, a little lid droop when she's sad.
-  ctx.SLOW_BLINK_MOODS = new Set(['tender', 'affectionate', 'drowsy']);
+  ctx.SLOW_BLINK_MOODS = new Set(['tender', 'affectionate', 'drowsy', 'serene', 'cozy']);
   ctx.lid = 0;
 
 }
