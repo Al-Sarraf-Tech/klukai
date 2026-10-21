@@ -63,12 +63,12 @@ class ChatFollowups:
         # Background tasks — the LLM answered (an llm_failed turn returned above).
         # Recall detection takes priority over new image generation.
         if self.wants_recall(content):
-            logger.info("Memory recall triggered for: %s", content[:80])
+            logger.info("Memory recall triggered (%d chars)", len(content))
             self.ws.track_task(
                 user_id, asyncio.create_task(self.recall(content, session, user_id))
             )
         elif self.needs_image(content):
-            logger.info("Image generation triggered for: %s", content[:80])
+            logger.info("Image generation triggered (%d chars)", len(content))
             # Build chat context from last few turns for scene-aware prompting
             recent_turns = session.turns[-6:]  # Last 3 exchanges
             chat_ctx = "\n".join(
@@ -133,7 +133,7 @@ class ChatFollowups:
 
             self.ws.track_task(user_id, asyncio.create_task(_safe_extraction()))
         else:
-            logger.info("Trivial message, skipping extraction: %s", content[:40])
+            logger.info("Trivial message, skipping extraction")
 
         # Background: compact session if turns exceed threshold
         if len(session.turns) >= self.compact_threshold:
