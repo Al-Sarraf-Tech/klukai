@@ -57,6 +57,7 @@ class HudKitScreen extends StatefulWidget {
     this.wardrobeService,
     this.onAuthExpired,
     this.onOutfitChanged,
+    this.refresh,
   });
 
   final String serverUrl;
@@ -69,6 +70,10 @@ class HudKitScreen extends StatefulWidget {
 
   /// She agreed to a request: today's outfit changed (refresh Day / Chat).
   final VoidCallback? onOutfitChanged;
+
+  /// Fires when the wardrobe should be read again (he came back to the tab:
+  /// it stays mounted, and chat or a level up may have changed it).
+  final Listenable? refresh;
 
   @override
   State<HudKitScreen> createState() => _HudKitScreenState();
@@ -91,7 +96,23 @@ class _HudKitScreenState extends State<HudKitScreen> {
   @override
   void initState() {
     super.initState();
+    widget.refresh?.addListener(_load);
     _load();
+  }
+
+  @override
+  void didUpdateWidget(HudKitScreen old) {
+    super.didUpdateWidget(old);
+    if (old.refresh != widget.refresh) {
+      old.refresh?.removeListener(_load);
+      widget.refresh?.addListener(_load);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.refresh?.removeListener(_load);
+    super.dispose();
   }
 
   void _authExpired() {

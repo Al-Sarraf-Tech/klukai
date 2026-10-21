@@ -2091,6 +2091,23 @@ void main() {
       fake.dispose();
     });
 
+    testWidgets('coming back to Kit re-reads her wardrobe', (tester) async {
+      // Kit stays mounted too: an outfit she changed in chat (or one a level
+      // up unlocked) kept the old EQUIPPED / locked cards until a pull.
+      final wardrobe = FakeWardrobeService();
+      final fake = await _pumpChat(tester, wardrobe: wardrobe);
+      await tester.tap(find.byKey(const Key('hud-tab-kit')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('hud-tab-chat')));
+      await settle(tester);
+
+      final before = wardrobe.outfitCalls;
+      await tester.tap(find.byKey(const Key('hud-tab-kit')));
+      await settle(tester);
+      expect(wardrobe.outfitCalls, before + 1);
+      fake.dispose();
+    });
+
     testWidgets('…also when it was parked under CHAT', (tester) async {
       final (fake, stage, _) = await pump3d(tester);
       await tester.tap(find.byKey(const Key('view-flip-chat')));
