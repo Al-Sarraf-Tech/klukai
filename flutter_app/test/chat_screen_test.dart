@@ -1622,6 +1622,18 @@ void main() {
       }
       fake.dispose();
     });
+
+    testWidgets('no ambient-audio entry: the page has no ambient player', (
+      tester,
+    ) async {
+      // web/index.html loads no `ambientAudio` (ambient_audio.js was removed
+      // long ago): the entry only flipped its own label, nothing ever played.
+      final fake = await _pumpChat(tester);
+      await _openMenu(tester);
+      expect(find.byKey(const Key('chat-menu-ambient')), findsNothing);
+      expect(find.textContaining('AMBIENT AUDIO'), findsNothing);
+      fake.dispose();
+    });
   });
 
   group('ChatScreen — her voice only on a tap', () {

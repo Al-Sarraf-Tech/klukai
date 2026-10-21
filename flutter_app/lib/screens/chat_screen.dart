@@ -65,12 +65,6 @@ external JSPromise<JSBoolean> _jsStartRecording();
 @JS('audioRecorder.stop')
 external JSPromise<JSString?> _jsStopRecording();
 
-@JS('ambientAudio.setMood')
-external void _jsSetAmbientMood(String mood);
-
-@JS('ambientAudio.toggleMute')
-external JSBoolean _jsToggleAmbientMute();
-
 /// Unregister all service workers so login.html loads from server, not cache.
 /// Awaitable so logout can finish the unregistration BEFORE navigating away
 /// (navigating first let the old SW survive and serve a cached login page).
@@ -288,7 +282,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   String? _thinkingText;
   final List<Map<String, String>> _activeTools = [];
   final bool _soundMuted = false;
-  bool _ambientMuted = true;
 
   bool _showScrollFAB = false;
 

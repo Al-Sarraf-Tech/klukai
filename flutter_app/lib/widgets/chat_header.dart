@@ -11,14 +11,7 @@ enum ChatViewMode { chat, threeD }
 
 /// What the chat menu holds: the entry points that lost their header buttons
 /// when the tab bar took over Album, Day and Me.
-enum ChatMenuAction {
-  companion,
-  threads,
-  herPov,
-  subscription,
-  ambient,
-  logout,
-}
+enum ChatMenuAction { companion, threads, herPov, subscription, logout }
 
 /// Highest affinity level; the pips count up to it.
 const int kMaxAffinityLevel = 9;
@@ -48,7 +41,6 @@ class ChatHeader extends StatelessWidget {
     this.affectionScore = 0,
     this.lastAffectionDelta,
     this.herDay,
-    this.ambientMuted = true,
     this.onMenu,
     this.onOpenProfile,
     this.onHerDayTap,
@@ -71,7 +63,6 @@ class ChatHeader extends StatelessWidget {
   final int affectionScore;
   final int? lastAffectionDelta;
   final HerDay? herDay;
-  final bool ambientMuted;
   final ValueChanged<ChatMenuAction>? onMenu;
   final VoidCallback? onOpenProfile;
   final VoidCallback? onHerDayTap;
@@ -91,7 +82,6 @@ class ChatHeader extends StatelessWidget {
             view: view,
             onViewChanged: onViewChanged,
             onMenu: onMenu,
-            ambientMuted: ambientMuted,
           ),
           if (compact) _compactLine() else _identity(),
           if (!compact && herDay != null) ...[
@@ -495,14 +485,12 @@ class HudTopBar extends StatelessWidget {
     required this.view,
     required this.onViewChanged,
     this.onMenu,
-    this.ambientMuted = true,
   });
 
   final String title;
   final ChatViewMode view;
   final ValueChanged<ChatViewMode> onViewChanged;
   final ValueChanged<ChatMenuAction>? onMenu;
-  final bool ambientMuted;
 
   @override
   Widget build(BuildContext context) => Row(
@@ -523,8 +511,7 @@ class HudTopBar extends StatelessWidget {
       ),
       const SizedBox(width: 8),
       ViewFlip(view: view, onChanged: onViewChanged),
-      if (onMenu != null)
-        ChatMenuButton(onSelected: onMenu!, ambientMuted: ambientMuted),
+      if (onMenu != null) ChatMenuButton(onSelected: onMenu!),
     ],
   );
 }
@@ -595,13 +582,8 @@ class ViewFlip extends StatelessWidget {
 
 /// The small menu for what has no tab of its own.
 class ChatMenuButton extends StatelessWidget {
-  const ChatMenuButton({
-    super.key,
-    required this.onSelected,
-    this.ambientMuted = true,
-  });
+  const ChatMenuButton({super.key, required this.onSelected});
   final ValueChanged<ChatMenuAction> onSelected;
-  final bool ambientMuted;
 
   @override
   Widget build(BuildContext context) => PopupMenuButton<ChatMenuAction>(
@@ -627,11 +609,6 @@ class ChatMenuButton extends StatelessWidget {
         ChatMenuAction.subscription,
         Icons.workspace_premium_outlined,
         'Subscription',
-      ),
-      _item(
-        ChatMenuAction.ambient,
-        ambientMuted ? Icons.music_note : Icons.music_off,
-        ambientMuted ? 'Ambient audio on' : 'Ambient audio off',
       ),
       _item(
         ChatMenuAction.logout,
