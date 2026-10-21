@@ -252,6 +252,42 @@ class TestSubsystemHealth:
             assert result["subsystems"]["lm_studio"] == {"status": "down"}
             assert result["status"] == "degraded"
 
+    async def _health_with(self, monkeypatch, get):
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("LM_STUDIO_URL", "http://lm.test:1234")
+        monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "true")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        handler = _find_route(_app_with_routes(), "/api/health/subsystems", "GET")
+        redis_mock = MagicMock(ping=AsyncMock(), aclose=AsyncMock())
+        client = _fake_async_client()
+        client._client.get = AsyncMock(side_effect=get)
+        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+             patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
+             patch("redis.asyncio.from_url", return_value=redis_mock), \
+             patch("httpx.AsyncClient", return_value=client), \
+             patch("app.agy_image_provider.agy_images_ready", new=AsyncMock(return_value=True)):
+            return await handler(_mk_request())
+
+    async def test_a_degraded_subsystem_degrades_the_overall_status(self, monkeypatch):
+        async def get(url, **kwargs):
+            if "/healthz" in url:
+                return _Resp(503, {})  # Qdrant answering, but not healthy
+            return _Resp(200, {"data": [{"id": "m"}]})
+
+        result = await self._health_with(monkeypatch, get)
+        assert result["subsystems"]["qdrant"]["status"] == "degraded"
+        assert result["status"] == "degraded"
+
+    async def test_a_rejected_lm_token_is_not_a_healthy_model(self, monkeypatch):
+        """A 401 from the gateway has no model list; every local call would fail."""
+        async def get(url, **kwargs):
+            if url.startswith("http://lm.test:1234"):
+                return _Resp(401, {"error": {"message": "bad bearer"}})
+            return _Resp(200, {})
+
+        result = await self._health_with(monkeypatch, get)
+        assert result["subsystems"]["lm_studio"]["status"] != "ok"
+
     @pytest.mark.asyncio
     async def test_requires_auth(self):
         app = _app_with_routes()

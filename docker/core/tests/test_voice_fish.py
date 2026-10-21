@@ -916,3 +916,31 @@ async def test_health_reports_fish_without_calling_it(fish):
         result = await handler(_request())
     assert result["subsystems"]["voice"] == {"status": "ok", "backend": "fish"}
     assert not [url for url in probed if "fish.audio" in url or ":8301" in url]
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("FISH_API_KEY", ""), ("KLUKAI_FISH_MODEL", "s2.1-pro"), ("KLUKAI_FISH_VOICE_ID", " ")],
+)
+async def test_health_reports_unconfigured_fish_as_down(fish, monkeypatch, name, value):
+    """Every tap would be refused (no key, a paid model, no voice): not "ok"."""
+    monkeypatch.setenv(name, value)
+    handler, _ = _route("/api/health/subsystems", "GET")
+    redis = MagicMock()
+    redis.ping = AsyncMock()
+    redis.aclose = AsyncMock()
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    client.get = AsyncMock(
+        return_value=httpx.Response(200, json={"data": []}, request=httpx.Request("GET", "http://x"))
+    )
+    with patch("app.routes._get_user_id", new=AsyncMock(return_value="claude")), patch(
+        "app.db.check_health", new=AsyncMock(return_value={"status": "ok"})
+    ), patch("redis.asyncio.from_url", return_value=redis), patch(
+        "app.routes_health._image_subsystems",
+        new=AsyncMock(return_value={"images": {"status": "ok"}}),
+    ), patch("httpx.AsyncClient", return_value=client):
+        result = await handler(_request())
+    assert result["subsystems"]["voice"] == {"status": "down", "backend": "fish"}
+    assert result["status"] == "degraded"

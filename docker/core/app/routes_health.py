@@ -127,6 +127,8 @@ def register_health_routes(
                     f"{lm_url}/v1/models",
                     headers=lm_studio_auth_headers(),
                 )
+                # A rejected token answers with an error and no model list.
+                resp.raise_for_status()
                 models = [m["id"] for m in resp.json().get("data", [])]
                 results["lm_studio"] = {
                     "status": "ok",
@@ -160,13 +162,17 @@ def register_health_routes(
             results["embeddings"] = {"status": "down"}
 
         # Voice service. Switched off, it is not probed and not counted.
-        from .voice_client import fish_voice_enabled, voice_enabled
+        from .voice_client import fish_configured, fish_voice_enabled, voice_enabled
 
         if not voice_enabled():
             results["voice"] = {"status": "disabled"}
         elif fish_voice_enabled():
-            # A cloud API: probing it would spend a request on every check.
-            results["voice"] = {"status": "ok", "backend": "fish"}
+            # A cloud API: probing it would spend a request on every check, so
+            # only its configuration is checked (every tap is refused without).
+            results["voice"] = {
+                "status": "ok" if fish_configured() else "down",
+                "backend": "fish",
+            }
         else:
             try:
                 async with _hx.AsyncClient(timeout=5.0) as c:
@@ -187,10 +193,9 @@ def register_health_routes(
             overall = "ok"
         elif results["database"]["status"] == "down":
             overall = "critical"
-        elif any(s == "down" for s in statuses):
-            overall = "degraded"
         else:
-            overall = "ok"
+            # Anything not ok ("down", or "degraded" answers) degrades it.
+            overall = "degraded"
 
         return {"status": overall, "subsystems": results}
 

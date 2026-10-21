@@ -124,6 +124,19 @@ FISH_OFF_MESSAGE = "Voice is not configured"
 _FISH_FAILED_MESSAGE = "Voice service unavailable"
 
 
+def fish_configured() -> bool:
+    """A key, a free model and a voice are set, so a tap can reach Fish.
+
+    Checks configuration only; nothing is sent (health must not spend).
+    """
+    model = os.environ.get("KLUKAI_FISH_MODEL", DEFAULT_FISH_MODEL).strip()
+    return bool(
+        os.environ.get("FISH_API_KEY", "").strip()
+        and model.endswith("-free")
+        and os.environ.get("KLUKAI_FISH_VOICE_ID", DEFAULT_FISH_VOICE_ID).strip()
+    )
+
+
 def _fish_response(status: int, message: str) -> httpx.Response:
     # Never echo Fish's body: errors can quote the account or the request.
     return httpx.Response(
