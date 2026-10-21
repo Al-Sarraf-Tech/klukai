@@ -88,10 +88,13 @@ async def generate_daily_recap(
                     "WHERE user_id = %s "
                     "AND (created_at AT TIME ZONE %s)::date = %s::date "
                     "AND COALESCE(model, '') <> 'proactive' "
-                    "ORDER BY created_at ASC LIMIT 40",
+                    # Newest first so a busy day keeps its evening; the rows are
+                    # put back in order below.
+                    "ORDER BY created_at DESC LIMIT 40",
                     (user_id, str(LOCAL_TZ), today),
                 )
             ).fetchall()
+        rows = rows[::-1]
 
         if len(rows) < 4:
             return None  # Not enough conversation to recap

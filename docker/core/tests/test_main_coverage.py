@@ -794,3 +794,44 @@ async def test_lifespan_owns_handoff_before_closing_dependencies(lifespan_mocks,
         await serve()
     assert order == ['start', 'stop', 'events_closed']
     lifespan_mocks.close_pool.assert_awaited_once()
+
+
+def _ordered_pool(rows):
+    """A pool that honours the query's ORDER BY created_at ASC|DESC LIMIT n
+    over ``rows`` (oldest first), like Postgres would."""
+    import re as _re
+
+    async def execute(sql, params=None):
+        found = _re.search(r"ORDER BY created_at (ASC|DESC) LIMIT (\d+)", sql)
+        ordered = list(rows)
+        if found and found.group(1) == "DESC":
+            ordered.reverse()
+        if found:
+            ordered = ordered[: int(found.group(2))]
+        cursor = MagicMock()
+        cursor.fetchall = AsyncMock(return_value=ordered)
+        return cursor
+
+    conn = MagicMock()
+    conn.execute = execute
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.connection = MagicMock(return_value=cm)
+    return pool
+
+
+class TestDailyRecapWindow:
+    async def test_a_busy_day_recaps_its_latest_messages_in_order(self):
+        """With more than 40 messages the evening log must cover the end of
+        the day, not messages 21-40 of the morning."""
+        rows = [("user", f"msg {i:02d}") for i in range(60)]
+        text = AsyncMock(return_value="Today.")
+        with patch.object(main, "get_pool", return_value=_ordered_pool(rows)), \
+             patch("app.background_llm.text", new=text):
+            assert await main.generate_daily_recap(affection_level=5) == "Today."
+        prompt = text.await_args.args[1]
+        assert "msg 59" in prompt and "msg 40" in prompt
+        assert "msg 39" not in prompt
+        assert prompt.index("msg 40") < prompt.index("msg 59")

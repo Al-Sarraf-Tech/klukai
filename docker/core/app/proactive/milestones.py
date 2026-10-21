@@ -377,10 +377,13 @@ class MilestonesMixin(_EngineBase):
                         await conn.execute(
                             "SELECT role, content FROM companion_messages "
                             "WHERE user_id = %s AND created_at > NOW() - INTERVAL '7 days' "
-                            "ORDER BY created_at ASC LIMIT 200",
+                            # Newest first so a busy week keeps its last days;
+                            # back in order below.
+                            "ORDER BY created_at DESC LIMIT 200",
                             (user_id,),
                         )
                     ).fetchall()
+                rows = rows[::-1]
 
                 if len(rows) < 10:
                     logger.info(
