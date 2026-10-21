@@ -15,6 +15,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 import 'package:companion_app/models/memory.dart';
 import 'package:companion_app/screens/memory_archive_screen.dart';
@@ -135,6 +137,94 @@ void main() {
     // The dialog's full-image fetch carries a 20s timeout; let it lapse so
     // no fake-clock timer outlives the test.
     await tester.pump(const Duration(seconds: 21));
+  });
+
+  testWidgets('a discard that lands after he closed the detail still drops '
+      'the memory', (tester) async {
+    // The server hides it either way; the album must not keep showing it
+    // until a refresh just because the dialog was already gone.
+    final discard = Completer<http.Response>();
+    final client = MockClient((req) {
+      if (req.method == 'POST') return discard.future;
+      return Future.value(http.Response('', 404)); // the full image
+    });
+    await http.runWithClient(() async {
+      final fake = await _pumpArchive(tester);
+      fake.memoryCalls.single.complete([
+        _memory('m1', 'the quiet ride home'),
+        _memory('m2', 'rain on the hangar roof'),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.textContaining('the quiet ride home'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byTooltip('Discard (hide from album)'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.text('DISCARD'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // He closes the detail while the request is still out.
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byTooltip('Close'), findsNothing);
+
+      discard.complete(http.Response('{}', 200));
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining('the quiet ride home'), findsNothing);
+      expect(find.textContaining('rain on the hangar roof'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    }, () => client);
+  });
+
+  group('MemoryArchiveScreen — the server\'s own All row', () {
+    // /api/memories/categories ends with {"name": "All", "count": total}
+    // (memory_archive_query.get_categories). Summed in with the real
+    // categories it doubled every total, and it drew a second ALL.
+    List<MemoryCategory> serverCategories() => [
+      MemoryCategory(name: 'Mission Records', count: 2),
+      MemoryCategory(name: 'Squad Moments', count: 1),
+      MemoryCategory(name: 'Dreams', count: 27),
+      MemoryCategory(name: 'All', count: 30),
+    ];
+
+    Future<void> pumpAt(WidgetTester tester, Size size) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final fake = _FakeMemoryService()..categories = serverCategories();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MemoryArchiveScreen(
+            serverUrl: 'http://127.0.0.1:1',
+            memoryService: fake,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      fake.memoryCalls.single.complete(_page(0, 3));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    testWidgets('phone: one ALL chip', (tester) async {
+      // The widest phone layout, so the chip row builds every chip.
+      await pumpAt(tester, const Size(600, 900));
+      expect(find.text('DREAMS'), findsOneWidget);
+      expect(find.text('ALL'), findsOneWidget);
+    });
+
+    testWidgets('desktop: one All row and the real kept count', (tester) async {
+      await pumpAt(tester, const Size(1200, 900));
+      expect(find.text('30 KEPT'), findsOneWidget);
+      expect(find.text('// 30 ENTRIES'), findsOneWidget);
+    });
   });
 
   group('MemoryArchiveScreen — a dead token is not a down channel', () {

@@ -72,9 +72,6 @@ extension _ChatWireEvents on _ChatScreenState {
         _update(() {
           _state = _state.copyWith(mood: msg['mood'] as String? ?? 'composed');
         });
-        try {
-          _jsSetAmbientMood(msg['mood'] as String? ?? 'composed');
-        } catch (_) {}
 
       case 'thinking':
         _clearWarmupHint(); // a real status arrived; don't overwrite it later

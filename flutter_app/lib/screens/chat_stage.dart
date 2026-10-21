@@ -172,7 +172,6 @@ extension _ChatStage on _ChatScreenState {
         view: _view,
         onViewChanged: _setView,
         onMenu: _onMenu,
-        ambientMuted: _ambientMuted,
       ),
     ),
   );

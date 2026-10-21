@@ -65,12 +65,6 @@ external JSPromise<JSBoolean> _jsStartRecording();
 @JS('audioRecorder.stop')
 external JSPromise<JSString?> _jsStopRecording();
 
-@JS('ambientAudio.setMood')
-external void _jsSetAmbientMood(String mood);
-
-@JS('ambientAudio.toggleMute')
-external JSBoolean _jsToggleAmbientMute();
-
 /// Unregister all service workers so login.html loads from server, not cache.
 /// Awaitable so logout can finish the unregistration BEFORE navigating away
 /// (navigating first let the old SW survive and serve a cached login page).
@@ -157,11 +151,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   // socket and state survive tab switches, the others build on first visit.
   HudTab _tab = HudTab.chat;
   final Set<HudTab> _visited = {HudTab.chat};
-  // Bumped when Kit changes her outfit, so Her Day re-reads it.
+  // Bumped when Kit changes her outfit, so Her Day re-reads it; also when
+  // he comes back to Day (tab or page), since its NOW moves with the clock.
   final ValueNotifier<int> _outfitChanged = ValueNotifier<int>(0);
+  // Bumped when he comes back to Kit, so it re-reads her wardrobe.
+  final ValueNotifier<int> _kitShown = ValueNotifier<int>(0);
 
   void _selectTab(HudTab tab) {
     if (tab == _tab) return;
+    // Day stays mounted: a revisit re-reads it (the first visit loads it).
+    if (tab == HudTab.day && _visited.contains(tab)) _outfitChanged.value++;
+    if (tab == HudTab.kit && _visited.contains(tab)) _kitShown.value++;
     setState(() {
       if (_tab == HudTab.chat) _dropStage();
       _tab = tab;
@@ -202,6 +202,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             _loadHerDay();
           },
           onAuthExpired: _handleAuthExpired,
+          refresh: _kitShown,
         );
       case HudTab.me:
         return HudMeScreen(
@@ -211,6 +212,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           affectionLevelName: _state.affectionLevelName,
           onLogout: _logout,
           onAuthExpired: _handleAuthExpired,
+          voiceLanguage: _voiceLanguage,
         );
     }
   }
@@ -288,7 +290,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   String? _thinkingText;
   final List<Map<String, String>> _activeTools = [];
   final bool _soundMuted = false;
-  bool _ambientMuted = true;
 
   bool _showScrollFAB = false;
 
@@ -400,6 +401,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _ws.reconnectNow(); // the connection listener reloads history on success
     }
     _loadHerDay();
+    if (_tab == HudTab.day) _outfitChanged.value++;
   }
 
   /// The web engine reports `hidden` when the tab or app leaves the screen
@@ -527,6 +529,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _resumeSub?.cancel();
     _speech.dispose();
     _outfitChanged.dispose();
+    _kitShown.dispose();
     _ws.dispose();
     _textController.dispose();
     _scrollController.dispose();

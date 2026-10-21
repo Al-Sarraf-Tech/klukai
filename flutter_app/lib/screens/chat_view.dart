@@ -126,19 +126,8 @@ extension _ChatView on _ChatScreenState {
         _openHerPov();
       case ChatMenuAction.subscription:
         _openSubscription();
-      case ChatMenuAction.ambient:
-        _toggleAmbient();
       case ChatMenuAction.logout:
         _logout();
-    }
-  }
-
-  void _toggleAmbient() {
-    try {
-      final isOn = _jsToggleAmbientMute().toDart;
-      _update(() => _ambientMuted = !isOn);
-    } catch (_) {
-      _update(() => _ambientMuted = !_ambientMuted);
     }
   }
 
@@ -157,7 +146,6 @@ extension _ChatView on _ChatScreenState {
       view: _view,
       onViewChanged: _setView,
       onMenu: _onMenu,
-      ambientMuted: _ambientMuted,
       onOpenProfile: _openProfile,
       onHerDayTap: _openHerDaySheet,
       compact: compact,

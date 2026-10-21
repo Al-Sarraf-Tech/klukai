@@ -1622,6 +1622,18 @@ void main() {
       }
       fake.dispose();
     });
+
+    testWidgets('no ambient-audio entry: the page has no ambient player', (
+      tester,
+    ) async {
+      // web/index.html loads no `ambientAudio` (ambient_audio.js was removed
+      // long ago): the entry only flipped its own label, nothing ever played.
+      final fake = await _pumpChat(tester);
+      await _openMenu(tester);
+      expect(find.byKey(const Key('chat-menu-ambient')), findsNothing);
+      expect(find.textContaining('AMBIENT AUDIO'), findsNothing);
+      fake.dispose();
+    });
   });
 
   group('ChatScreen — her voice only on a tap', () {
@@ -2046,6 +2058,53 @@ void main() {
       await tester.pump();
       expect(find.byKey(const Key('fake-stage')), findsOneWidget);
       expect(stage.created, 2);
+      fake.dispose();
+    });
+
+    testWidgets('coming back to Day re-reads her day: its NOW moves on', (
+      tester,
+    ) async {
+      // The Day tab stays mounted; it fetched once, on the first visit, so
+      // hours later it still marked the old block ACTIVE — NOW.
+      final wardrobe = FakeWardrobeService();
+      final browser = FakeBrowserPlatform();
+      final fake = await _pumpChat(
+        tester,
+        wardrobe: wardrobe,
+        browser: browser,
+      );
+      await tester.tap(find.byKey(const Key('hud-tab-day')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('hud-tab-chat')));
+      await settle(tester);
+
+      var before = wardrobe.herDayCalls;
+      await tester.tap(find.byKey(const Key('hud-tab-day')));
+      await settle(tester);
+      expect(wardrobe.herDayCalls, before + 1);
+
+      // Back from the background with Day on screen: the same.
+      before = wardrobe.herDayCalls;
+      browser.resume.add(null);
+      await settle(tester);
+      expect(wardrobe.herDayCalls, before + 2); // the chat header's and Day's
+      fake.dispose();
+    });
+
+    testWidgets('coming back to Kit re-reads her wardrobe', (tester) async {
+      // Kit stays mounted too: an outfit she changed in chat (or one a level
+      // up unlocked) kept the old EQUIPPED / locked cards until a pull.
+      final wardrobe = FakeWardrobeService();
+      final fake = await _pumpChat(tester, wardrobe: wardrobe);
+      await tester.tap(find.byKey(const Key('hud-tab-kit')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('hud-tab-chat')));
+      await settle(tester);
+
+      final before = wardrobe.outfitCalls;
+      await tester.tap(find.byKey(const Key('hud-tab-kit')));
+      await settle(tester);
+      expect(wardrobe.outfitCalls, before + 1);
       fake.dispose();
     });
 

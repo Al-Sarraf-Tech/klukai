@@ -14,12 +14,19 @@ class WebSocketService {
       Duration(seconds: 6),
       Duration(seconds: 10),
     ],
-  }) : _connector = connector ?? WebSocketChannel.connect;
+    Duration freshDialGrace = const Duration(seconds: 4),
+  }) : _freshDialGrace = freshDialGrace,
+       _connector = connector ?? WebSocketChannel.connect;
 
   final WebSocketConnector _connector;
 
   /// Backoff between automatic reconnect attempts; the last value repeats.
   final List<Duration> reconnectDelays;
+
+  /// How long [reconnectNow] leaves a dial that has not spoken yet to finish.
+  /// The signals of one resume (pageshow, visibilitychange, online) arrive
+  /// together; a dial older than this is taken for dead (iOS froze it).
+  final Duration _freshDialGrace;
 
   WebSocketChannel? _channel;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
@@ -31,6 +38,7 @@ class WebSocketService {
   bool _confirmed = false;
   int _attempt = 0;
   bool _disposed = false;
+  DateTime? _dialedAt;
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<bool> get connectionState => _connectionController.stream;
@@ -65,8 +73,18 @@ class WebSocketService {
   /// new one hasn't spoken yet, so `isConnected` is false and listeners must
   /// see the same (the chat screen refetches history on the false→true edge,
   /// and must not offer the composer on a socket that isn't open).
+  ///
+  /// A dial still opening that began under `freshDialGrace` ago is left to
+  /// finish: replacing it would open one more socket for the same resume.
   void reconnectNow() {
     if (_intentionalClose || _disposed || _url.isEmpty) return;
+    final dialedAt = _dialedAt;
+    if (_channel != null &&
+        !_confirmed &&
+        dialedAt != null &&
+        DateTime.now().difference(dialedAt) < _freshDialGrace) {
+      return;
+    }
     _reconnectTimer?.cancel();
     _attempt = 0;
     final old = _channel;
@@ -91,6 +109,7 @@ class WebSocketService {
     }
     _channel = channel;
     _confirmed = false;
+    _dialedAt = DateTime.now();
 
     // Every callback checks it still belongs to the CURRENT channel. Without
     // this, a replaced channel closing late nulls out (and re-dials over) the

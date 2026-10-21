@@ -193,9 +193,11 @@ class _MemoryDetailDialogState extends State<_MemoryDetailDialog> {
             headers: {'Authorization': 'Bearer ${widget.authToken}'},
           )
           .timeout(const Duration(seconds: 15));
-      if (r.statusCode == 200 && mounted) {
+      if (r.statusCode == 200) {
+        // The server has hidden it: the album drops it even if he already
+        // closed this dialog (the callback checks its own screen).
         widget.onDiscarded?.call(widget.memory.id);
-        Navigator.of(context).pop();
+        if (mounted) Navigator.of(context).pop();
       } else if (mounted) {
         _showSnack('DISCARD FAILED');
       }
