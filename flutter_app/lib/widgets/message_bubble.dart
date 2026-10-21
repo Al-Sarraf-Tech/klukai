@@ -37,9 +37,24 @@ class MessageBubble extends StatefulWidget {
   State<MessageBubble> createState() => _MessageBubbleState();
 }
 
-class _MessageBubbleState extends State<MessageBubble> {
+class _MessageBubbleState extends State<MessageBubble>
+    with AutomaticKeepAliveClientMixin {
   bool _isPlaying = false;
   bool _isLoading = false;
+
+  /// From his tap on `▶ VOICE` until her line has ended. Meanwhile the
+  /// bubble keeps its place in the lazy transcript: scrolled out of view and
+  /// disposed, it cancelled the clip made ahead and cut her off mid-reply.
+  bool _speaking = false;
+
+  @override
+  bool get wantKeepAlive => _speaking;
+
+  void _setSpeaking(bool on) {
+    if (_speaking == on || !mounted) return;
+    _speaking = on;
+    updateKeepAlive();
+  }
 
   /// Synthesis in flight: the clip about to play and the one made ahead of
   /// it. Leaving the screen cancels them, and their jobs on the server.
@@ -70,7 +85,15 @@ class _MessageBubbleState extends State<MessageBubble> {
   Future<void> _playVoice() async {
     if (_isLoading || _isPlaying) return;
     if (widget.message.content.isEmpty) return;
+    _setSpeaking(true);
+    try {
+      await _speak();
+    } finally {
+      _setSpeaking(false);
+    }
+  }
 
+  Future<void> _speak() async {
     setState(() => _isLoading = true);
 
     final override = widget.voiceOverride;
@@ -325,6 +348,7 @@ class _MessageBubbleState extends State<MessageBubble> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final isUser = widget.message.role == 'user';
     final width = MediaQuery.sizeOf(context).width;
     final maxWidth = width * (width < 600 ? .86 : .7);

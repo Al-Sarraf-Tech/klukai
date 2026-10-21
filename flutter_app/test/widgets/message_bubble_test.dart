@@ -461,6 +461,68 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('scrolling her line out of view does not cut her off', (
+      tester,
+    ) async {
+      // The transcript is a lazy ListView: a bubble scrolled far enough
+      // away is disposed, and that cancelled the clip made ahead, so a long
+      // reply stopped after its first clip while he read older lines.
+      tall(tester);
+      final browser = _GatedBrowser();
+      final posted = <String>[];
+      final client = MockClient((req) async {
+        final text = jsonDecode(req.body)['text'] as String;
+        posted.add(text);
+        final audio = base64Encode(utf8.encode(text.substring(0, 1)));
+        return http.Response(jsonEncode({'audio': audio}), 200);
+      });
+      final controller = ScrollController();
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        _wrap(
+          ListView.builder(
+            controller: controller,
+            itemCount: 40,
+            itemBuilder: (_, i) => i == 0
+                ? MessageBubble(
+                    message: _msg(content: '$clipA $clipB'),
+                    client: client,
+                    browser: browser,
+                  )
+                : SizedBox(height: 400, child: Text('older line $i')),
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(_voice));
+      await tester.pump();
+      await tester.pump();
+      expect(posted, [clipA, clipB]);
+      // A few seconds into clip A (the tap's ink, which holds the bubble
+      // too, has faded), he scrolls up to read.
+      await tester.pump(const Duration(seconds: 2));
+
+      controller.jumpTo(controller.position.maxScrollExtent);
+      await tester.pump();
+      browser.plays[0].complete(true);
+      await tester.pump();
+      await tester.pump();
+      expect(browser.voices.last, 'data:audio/wav;base64,Qg=='); // B plays
+      browser.plays[1].complete(true);
+      await tester.pump();
+      await tester.pump();
+
+      // Done speaking, it no longer holds its place: scrolled away, it goes
+      // (once the button's ink, which keeps it too, has faded).
+      await tester.pump(const Duration(seconds: 2));
+      controller.jumpTo(0);
+      await tester.pump();
+      controller.jumpTo(controller.position.maxScrollExtent);
+      await tester.pump();
+      await tester.pump();
+      expect(find.byType(MessageBubble, skipOffstage: false), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('a clip that fails stops the reply and says so', (
       tester,
     ) async {
