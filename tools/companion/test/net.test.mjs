@@ -214,6 +214,40 @@ test("socket parses frames, reconnects with backoff, resumes, and stops on auth"
   assert.ok(states.includes("auth") && states.includes("down") && states.includes("open"));
 });
 
+test("a replaced socket's late events cannot orphan or duplicate the live one", () => {
+  // iOS: back from the background the old socket already reads CLOSED, but
+  // its close event is dispatched after the visibilitychange that resumed us.
+  const { WS, sockets } = fakeWs();
+  const frames = []; const states = []; const timers = [];
+  const sock = createSocket({
+    url: "u", WebSocketImpl: WS, onFrame: (f) => frames.push(f), onState: (s) => states.push(s),
+    setTimer: (fn) => { timers.push(fn); return timers.length; }, clearTimer() {},
+  });
+  sock.start();
+  const old = sockets[0];
+  old.readyState = 1; old.onopen();
+  old.readyState = 3;          // died while suspended, close event still queued
+  sock.resume();               // page visible again: dial now
+  assert.equal(sockets.length, 2);
+  const live = sockets[1];
+  live.readyState = 1; live.onopen();
+  states.length = 0;
+
+  old.onclose({ code: 1006 }); // the stale close finally arrives
+  assert.equal(timers.length, 0, "no reconnect scheduled over a healthy socket");
+  assert.equal(sockets.length, 2);
+  assert.deepEqual(states, [], "the live link is not reported down");
+  assert.equal(sock.send({ type: "message", content: "hi" }), true, "the live socket is still the one we send on");
+  assert.equal(live.sent.length, 1);
+
+  old.onmessage?.({ data: '{"type":"token","text":"x"}' });
+  live.onmessage({ data: '{"type":"mood","mood":"tender"}' });
+  assert.deepEqual(frames, [{ type: "mood", mood: "tender" }], "frames come from the live socket only");
+
+  sock.close();
+  assert.equal(live.readyState, 3);
+});
+
 test("close stops reconnects", () => {
   const { WS, sockets } = fakeWs();
   const timers = [];

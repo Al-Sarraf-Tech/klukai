@@ -144,21 +144,28 @@ export function createSocket({
     clearTimer(timer);
     timer = null;
     onState("connecting");
-    ws = new WebSocketImpl(url);
-    ws.onopen = () => { attempt = 0; onState("open"); };
-    ws.onmessage = (ev) => {
+    // Every handler checks it still belongs to the current socket: a replaced
+    // one (resume() dials while iOS has yet to deliver the old close event)
+    // must not null out the new socket and dial a third over it, leaving the
+    // second open, unreferenced and delivering every frame twice.
+    const sock = new WebSocketImpl(url);
+    ws = sock;
+    sock.onopen = () => { if (ws !== sock) return; attempt = 0; onState("open"); };
+    sock.onmessage = (ev) => {
+      if (ws !== sock) return;
       let frame;
       try { frame = JSON.parse(ev.data); } catch { return; }
       onFrame(frame);
     };
-    ws.onclose = (ev) => {
+    sock.onclose = (ev) => {
+      if (ws !== sock) return;
       ws = null;
       if (closed) return;
       if (ev && ev.code === 4001) { closed = true; onState("auth"); onAuthFailed(); return; }
       onState("down");
       timer = setTimer(open, backoffMs(attempt++));
     };
-    ws.onerror = () => { /* onclose follows */ };
+    sock.onerror = () => { /* onclose follows */ };
   }
 
   return {
