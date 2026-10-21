@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime
+from uuid import UUID
 
 
 import logging
@@ -233,27 +235,50 @@ def register_extras(app: FastAPI) -> None:
 
     @app.get("/api/messages")
     async def get_messages(
-        request: Request, limit: int = 50, before: str | None = None
+        request: Request,
+        limit: int = 50,
+        before: str | None = None,
+        before_id: str | None = None,
     ) -> Any:
         """Fetch recent messages from PostgreSQL, scoped to authenticated user."""
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
+        limit = max(1, min(limit, 200))
+        # Cursor values come from the oldest displayed row. The UUID breaks
+        # timestamp ties so a page boundary cannot hide messages permanently.
+        try:
+            if before is not None:
+                datetime.fromisoformat(before)
+            if before_id is not None:
+                UUID(before_id)
+                if not before:
+                    raise ValueError("before_id requires before")
+        except ValueError:
+            return JSONResponse({"error": "Invalid message cursor"}, status_code=400)
         try:
             pool = get_pool()
             async with pool.connection() as conn:
-                if before:
+                if before and before_id:
+                    rows = await conn.execute(
+                        "SELECT id, role, content, content_type, mood, model, created_at "
+                        "FROM companion_messages WHERE user_id = %s "
+                        "AND (created_at, id) < (%s::timestamptz, %s::uuid) "
+                        "ORDER BY created_at DESC, id DESC LIMIT %s",
+                        (user_id, before, before_id, limit),
+                    )
+                elif before:
                     rows = await conn.execute(
                         "SELECT id, role, content, content_type, mood, model, created_at "
                         "FROM companion_messages WHERE user_id = %s AND created_at < %s "
-                        "ORDER BY created_at DESC LIMIT %s",
+                        "ORDER BY created_at DESC, id DESC LIMIT %s",
                         (user_id, before, limit),
                     )
                 else:
                     rows = await conn.execute(
                         "SELECT id, role, content, content_type, mood, model, created_at "
                         "FROM companion_messages WHERE user_id = %s "
-                        "ORDER BY created_at DESC LIMIT %s",
+                        "ORDER BY created_at DESC, id DESC LIMIT %s",
                         (user_id, limit),
                     )
                 messages = [

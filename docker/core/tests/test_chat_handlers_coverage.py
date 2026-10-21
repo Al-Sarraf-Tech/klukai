@@ -965,6 +965,27 @@ class TestNoAnswerTurns:
         ns.background_extraction.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("empty", ["", " \n\t"])
+    @pytest.mark.parametrize("agent", [False, True])
+    async def test_empty_reply_is_not_recorded_or_mined(self, empty, agent):
+        from app.chat_handlers import _handle_message
+
+        session = _fresh_session(turns=_prior_exchange(), turn_count=2)
+        with _patched_pipeline(
+            stream_tokens=[empty], needs_agent=agent, agent_response=empty
+        ) as ns:
+            result = await _handle_message("Tell me about our last mission", session)
+            await _drain_tasks()
+
+        assert result is None
+        assert [c.args[1] for c in ns.store_message.call_args_list] == ["user"]
+        assert session.turns == _prior_exchange()
+        assert session.turn_count == 2
+        ns.background_extraction.assert_not_called()
+        assert any(c.args[1].strip() for c in ns.ws.send_token.call_args_list)
+        ns.ws.send_done.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_sentinel_reply_is_not_recorded_or_mined(self):
         """The pre-token failure sentinel used to be add_turn'd, stored,
         read-receipted and fed to extraction (mood reset to composed, streak

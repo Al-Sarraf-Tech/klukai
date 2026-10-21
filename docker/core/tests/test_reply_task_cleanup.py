@@ -50,7 +50,7 @@ async def test_reply_settles_its_warmup_notifier_on_every_exit(monkeypatch, exit
         None,
         lambda value: value,
         lambda value, _size: [value],
-        "failure",
+        "Communications disrupted",
     )
     reply = create_task(
         runtime.direct(
@@ -77,7 +77,7 @@ async def test_reply_settles_its_warmup_notifier_on_every_exit(monkeypatch, exit
                     await reply
             else:
                 result = await reply
-                assert result.failed is (exit_path == "stream_error")
+                assert result.failed is (exit_path in {"stream_error", "empty"})
         assert all(task.done() for task in notifications), (
             "A retired reply must not send a delayed status to a later connection"
         )

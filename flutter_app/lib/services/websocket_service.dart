@@ -52,6 +52,17 @@ class WebSocketService {
   bool get isConnected => _channel != null && _confirmed;
 
   void connect(String url, {String? token}) {
+    if (_disposed) return;
+    _reconnectTimer?.cancel();
+    final previous = _channel;
+    _channel = null;
+    _confirmed = false;
+    if (previous != null) {
+      _emitConnection(false);
+      try {
+        previous.sink.close();
+      } catch (_) {}
+    }
     // Append token as query param for WebSocket auth
     if (token != null && token.isNotEmpty) {
       final uri = Uri.parse(url);
@@ -139,6 +150,8 @@ class WebSocketService {
         _confirmed = false;
         _emitConnection(false);
         if (closeCode == 4001 || closeCode == 4003) {
+          _intentionalClose = true;
+          _reconnectTimer?.cancel();
           _authFailureController.add(null);
           return;
         }

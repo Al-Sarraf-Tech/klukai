@@ -68,6 +68,8 @@ class ChatReplyRuntime:
         )
 
         response_text = self.fix_narration(agent_result.response)
+        if not response_text.strip():
+            response_text = FAILURE_SENTINEL
         model_name = agent_result.model
 
         # Stream the final response token by token for the UI
@@ -181,6 +183,11 @@ class ChatReplyRuntime:
         # Apply narration fix only to the complete text (avoids split-pattern bugs)
         raw_text = "".join(full_response)
         response_text = self.fix_narration(raw_text)
+        if not stream_failed and not response_text.strip():
+            # A clean EOF with no answer is still a failed turn. Give the
+            # client a visible retry cue and keep it out of durable memory.
+            response_text = FAILURE_SENTINEL
+            await self.ws.send_token(user_id, response_text)
         model_name = config.model
         latency_ms = int((time.monotonic() - start) * 1000)
 

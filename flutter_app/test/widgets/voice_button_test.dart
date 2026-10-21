@@ -51,6 +51,33 @@ void main() {
       expect(ups, 1);
     });
 
+    testWidgets('pointer cancellation discards capture instead of sending', (
+      tester,
+    ) async {
+      var started = 0;
+      var cancelled = 0;
+      var submitted = 0;
+      await tester.pumpWidget(
+        _wrap(
+          VoiceButton(
+            onTapDown: () => started++,
+            onTapUp: () => submitted++,
+            onCancel: () => cancelled++,
+          ),
+        ),
+      );
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(VoiceButton)),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(started, 1);
+      await gesture.cancel();
+      await tester.pump();
+      expect(cancelled, 1);
+      expect(submitted, 0);
+    });
+
     testWidgets('does not fire callbacks when disabled', (tester) async {
       var downs = 0;
       var ups = 0;

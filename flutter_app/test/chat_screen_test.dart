@@ -382,6 +382,179 @@ void main() {
     } catch (_) {}
   });
 
+  group('ChatScreen — history reconciliation', () {
+    for (final currentPersisted in [true, false]) {
+      testWidgets(
+        'repeated text keeps historical rows and merges once (persisted: $currentPersisted)',
+        (tester) async {
+          var restored = false;
+          final now = DateTime.now().toUtc();
+          final old = {
+            'id': '00000000-0000-0000-0000-000000000001',
+            'role': 'user',
+            'content': 'Yes',
+            'created_at': now
+                .subtract(const Duration(days: 1))
+                .toIso8601String(),
+          };
+          final current = {
+            'id': '00000000-0000-0000-0000-000000000002',
+            'role': 'user',
+            'content': 'Yes',
+            'created_at': now.toIso8601String(),
+          };
+          final client = MockClient(
+            (request) async => http.Response(
+              jsonEncode(
+                request.url.path == '/api/messages'
+                    ? {
+                        'messages': restored
+                            ? [
+                                old,
+                                if (currentPersisted) current,
+                                if (currentPersisted) current,
+                              ]
+                            : [],
+                      }
+                    : {'score': 0, 'level': 0},
+              ),
+              200,
+            ),
+          );
+          final fake = await _pumpChat(tester, historyClient: client);
+          await tester.enterText(find.byType(TextField), 'Yes');
+          await tester.tap(find.byTooltip('Send'));
+          await tester.pump();
+          restored = true;
+          for (var i = 0; i < 2; i++) {
+            fake.setConnected(false);
+            await tester.pump();
+            fake.setConnected(true);
+            await tester.pump();
+            await tester.pump();
+            final rows = tester
+                .widgetList<MessageBubble>(find.byType(MessageBubble))
+                .map((bubble) => bubble.message)
+                .where((m) => m.content == 'Yes')
+                .toList();
+            expect(rows, hasLength(2));
+            expect(rows.map((m) => m.id), contains(old['id']));
+            if (currentPersisted) {
+              expect(rows.map((m) => m.id), contains(current['id']));
+              expect(rows.any((m) => m.id.startsWith('user-')), isFalse);
+            } else {
+              expect(rows.any((m) => m.id.startsWith('user-')), isTrue);
+            }
+          }
+          fake.dispose();
+        },
+      );
+    }
+
+    testWidgets(
+      'voice letter reconciliation retains its recorded-note playback',
+      (tester) async {
+        var restored = false;
+        final client = MockClient(
+          (request) async => http.Response(
+            jsonEncode(
+              request.url.path == '/api/messages'
+                  ? {
+                      'messages': restored
+                          ? [
+                              {
+                                'id': '00000000-0000-0000-0000-000000000001',
+                                'role': 'assistant',
+                                'content': 'A recorded letter',
+                                'created_at': DateTime.now()
+                                    .toUtc()
+                                    .toIso8601String(),
+                              },
+                            ]
+                          : [],
+                    }
+                  : {'score': 0, 'level': 0},
+            ),
+            200,
+          ),
+        );
+        final fake = await _pumpChat(tester, historyClient: client);
+        fake.emit({
+          'type': 'voice_letter',
+          'message': 'A recorded letter',
+          'voice_id': 'note-1',
+        });
+        await tester.pump();
+        restored = true;
+        fake.setConnected(false);
+        await tester.pump();
+        fake.setConnected(true);
+        await tester.pump();
+        await tester.pump();
+        final rows = tester
+            .widgetList<MessageBubble>(find.byType(MessageBubble))
+            .where((bubble) => bubble.message.content == 'A recorded letter')
+            .toList();
+        expect(rows, hasLength(1));
+        expect(rows.single.message.id, '00000000-0000-0000-0000-000000000001');
+        expect(rows.single.voiceOverride, isNotNull);
+        fake.dispose();
+      },
+    );
+
+    testWidgets('history merge preserves an in-flight streaming bubble', (
+      tester,
+    ) async {
+      final history = Completer<http.Response>();
+      final client = MockClient(
+        (request) async => request.url.path == '/api/messages'
+            ? history.future
+            : http.Response('{"score":0,"level":0}', 200),
+      );
+      final fake = await _pumpChat(tester, historyClient: client);
+      fake.emit({'type': 'token', 'text': 'Holding position'});
+      await tester.pump();
+      history.complete(
+        http.Response(
+          jsonEncode({
+            'messages': [
+              {
+                'id': '00000000-0000-0000-0000-000000000001',
+                'role': 'assistant',
+                'content': 'Holding position',
+                'created_at': DateTime.now().toUtc().toIso8601String(),
+              },
+            ],
+          }),
+          200,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(
+        tester
+            .widgetList<MessageBubble>(find.byType(MessageBubble))
+            .where((bubble) => bubble.message.content == 'Holding position'),
+        hasLength(2),
+      );
+      fake.emit({'type': 'token', 'text': ', Commander.'});
+      await tester.pump();
+      final rows = tester
+          .widgetList<MessageBubble>(find.byType(MessageBubble))
+          .map((bubble) => bubble.message)
+          .toList();
+      expect(
+        rows.singleWhere((m) => m.isStreaming).content,
+        'Holding position, Commander.',
+      );
+      expect(
+        rows.singleWhere((m) => !m.isStreaming).content,
+        'Holding position',
+      );
+      fake.dispose();
+    });
+  });
+
   group('ChatScreen — older history pages', () {
     Future<void> scrollToTop(WidgetTester tester) async {
       for (var i = 0; i < 40; i++) {
@@ -410,6 +583,128 @@ void main() {
       expect(find.text('line o0'), findsOneWidget);
       // A page of 10 (< 50) was the start: no further requests.
       expect(older.length, 1);
+      fake.dispose();
+    });
+
+    for (final exactTie in [true, false]) {
+      testWidgets(
+        'older history retains timestamp precision and the row id (exact tie: $exactTie)',
+        (tester) async {
+          final seen = <Uri>[];
+          const stamp = '2026-10-20T08:00:00.123456+00:00';
+          final cursorId = exactTie
+              ? '00000000-0000-0000-0000-000000000001'
+              : '00000000-0000-0000-0000-000000000099';
+          final client = MockClient((request) async {
+            if (request.url.path != '/api/messages') {
+              return http.Response('{"score":0,"level":0}', 200);
+            }
+            seen.add(request.url);
+            final older = request.url.queryParameters.containsKey('before');
+            final page = older
+                ? (request.url.queryParameters['before_id'] == cursorId &&
+                          request.url.queryParameters['before'] ==
+                              '2026-10-20T08:00:00.123456Z'
+                      ? [
+                          {
+                            'id': '00000000-0000-0000-0000-000000000000',
+                            'role': 'assistant',
+                            'content': 'Same instant, older row',
+                            'created_at': stamp,
+                          },
+                        ]
+                      : [])
+                : [
+                    for (var i = 0; i < 50; i++)
+                      {
+                        'id': !exactTie && i == 0
+                            ? cursorId
+                            : '00000000-0000-0000-0000-${(i + 1).toString().padLeft(12, '0')}',
+                        'role': 'assistant',
+                        'content': 'new page line $i',
+                        'created_at': exactTie || i == 0
+                            ? stamp
+                            : '2026-10-20T08:00:00.123999+00:00',
+                      },
+                  ];
+            return http.Response(jsonEncode({'messages': page}), 200);
+          });
+          final fake = await _pumpChat(tester, historyClient: client);
+          await tester.pump(const Duration(milliseconds: 300));
+          await scrollToTop(tester);
+          await tester.pump(const Duration(milliseconds: 300));
+          await scrollToTop(tester);
+          expect(find.text('Same instant, older row'), findsOneWidget);
+          final cursor = seen.firstWhere(
+            (uri) => uri.queryParameters.containsKey('before'),
+          );
+          expect(cursor.queryParameters['before_id'], cursorId);
+          expect(
+            cursor.queryParameters['before'],
+            '2026-10-20T08:00:00.123456Z',
+          );
+          fake.dispose();
+        },
+      );
+    }
+
+    testWidgets('pagination uses the oldest canonical row after echo promotion', (
+      tester,
+    ) async {
+      var restored = false;
+      final stamp = DateTime.now().toUtc().toIso8601String();
+      const firstId = '00000000-0000-0000-0000-000000000001';
+      final client = MockClient((request) async {
+        if (request.url.path != '/api/messages') {
+          return http.Response('{"score":0,"level":0}', 200);
+        }
+        final before = request.url.queryParameters['before_id'];
+        final page = before != null
+            ? (before == firstId
+                  ? [
+                      {
+                        'id': '00000000-0000-0000-0000-000000000000',
+                        'role': 'user',
+                        'content': 'Before both echoes',
+                        'created_at': stamp,
+                      },
+                    ]
+                  : [])
+            : (restored
+                  ? [
+                      for (var i = 1; i <= 50; i++)
+                        {
+                          'id':
+                              '00000000-0000-0000-0000-${i.toString().padLeft(12, '0')}',
+                          'role': 'user',
+                          'content': i == 1
+                              ? 'Second echo'
+                              : i == 2
+                              ? 'First echo'
+                              : 'History line $i',
+                          'created_at': stamp,
+                        },
+                    ]
+                  : []);
+        return http.Response(jsonEncode({'messages': page}), 200);
+      });
+      final fake = await _pumpChat(tester, historyClient: client);
+      for (final line in ['First echo', 'Second echo']) {
+        await tester.enterText(find.byType(TextField), line);
+        await tester.tap(find.byTooltip('Send'));
+        await tester.pump();
+      }
+      restored = true;
+      fake.setConnected(false);
+      await tester.pump();
+      fake.setConnected(true);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await scrollToTop(tester);
+      await tester.pump(const Duration(milliseconds: 300));
+      await scrollToTop(tester);
+      expect(find.text('Before both echoes'), findsOneWidget);
       fake.dispose();
     });
 

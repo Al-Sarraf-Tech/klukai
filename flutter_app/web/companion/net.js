@@ -4,16 +4,20 @@
 
 const TOKEN_KEY = "klukai_token"; // set by web-build/login.html, shared with the PWA
 
-export function readToken(storage = globalThis.localStorage) {
+export function readToken(storage) {
   try {
+    if (storage === undefined) storage = globalThis.localStorage;
     return storage ? storage.getItem(TOKEN_KEY) : null;
   } catch {
     return null; // Safari private mode / blocked storage
   }
 }
 
-export function clearToken(storage = globalThis.localStorage) {
-  try { storage && storage.removeItem(TOKEN_KEY); } catch { /* ignore */ }
+export function clearToken(storage) {
+  try {
+    if (storage === undefined) storage = globalThis.localStorage;
+    storage && storage.removeItem(TOKEN_KEY);
+  } catch { /* ignore */ }
 }
 
 export class AuthExpired extends Error {}
@@ -141,6 +145,7 @@ export function createSocket({
 
   function open() {
     if (closed) return;
+    if (ws && ws.readyState < 2) return;
     clearTimer(timer);
     timer = null;
     onState("connecting");
@@ -161,7 +166,7 @@ export function createSocket({
       if (ws !== sock) return;
       ws = null;
       if (closed) return;
-      if (ev && ev.code === 4001) { closed = true; onState("auth"); onAuthFailed(); return; }
+      if (ev && [4001, 4003].includes(ev.code)) { closed = true; onState("auth"); onAuthFailed(); return; }
       onState("down");
       timer = setTimer(open, backoffMs(attempt++));
     };

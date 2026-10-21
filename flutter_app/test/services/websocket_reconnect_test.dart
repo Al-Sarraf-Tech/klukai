@@ -222,4 +222,46 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 60));
     expect(calls, after); // dispose stops the loop
   });
+
+  test(
+    'connect closes a previously active socket before replacing it',
+    () async {
+      svc.connect(server.url);
+      await _until(() => svc.isConnected);
+      final previous = server.sockets.single;
+
+      svc.connect(server.url);
+      await _until(() => server.sockets.length == 2 && svc.isConnected);
+      await _until(() => previous.closeCode != null);
+      expect(server.sockets.last.closeCode, isNull);
+    },
+  );
+
+  test('explicit connect cancels the old connection retry', () async {
+    final slowRetry = WebSocketService(
+      reconnectDelays: const [Duration(milliseconds: 200)],
+    );
+    addTearDown(slowRetry.dispose);
+    slowRetry.connect(server.url);
+    await _until(() => slowRetry.isConnected);
+    await server.sockets.single.close();
+    await _until(() => !slowRetry.isConnected);
+
+    slowRetry.connect(server.url);
+    await _until(() => server.sockets.length == 2 && slowRetry.isConnected);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(server.sockets, hasLength(2));
+  });
+
+  for (final code in [4001, 4003]) {
+    test('resume cannot redial after auth close $code', () async {
+      server.closeImmediatelyWith = code;
+      final failure = svc.authFailure.first;
+      svc.connect(server.url);
+      await failure.timeout(const Duration(seconds: 3));
+      svc.reconnectNow();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(server.sockets, hasLength(1));
+    });
+  }
 }

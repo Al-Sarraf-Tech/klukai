@@ -304,6 +304,107 @@ void main() {
       await tester.pump(const Duration(seconds: 5));
     });
 
+    testWidgets(
+      'reusing a bubble cancels stale synthesis without resetting new playback',
+      (tester) async {
+        final oldAudio = Completer<http.Response>();
+        final newAudio = Completer<http.Response>();
+        final browser = FakeBrowserPlatform();
+        final client = MockClient(
+          (request) => jsonDecode(request.body)['text'] == 'Old reply'
+              ? oldAudio.future
+              : newAudio.future,
+        );
+        await tester.pumpWidget(
+          _wrap(
+            MessageBubble(
+              message: ChatMessage(
+                id: 'old',
+                role: 'assistant',
+                content: 'Old reply',
+              ),
+              client: client,
+              browser: browser,
+            ),
+          ),
+        );
+        await tester.tap(find.byKey(_voice));
+        await tester.pump();
+        expect(find.text('SYNTH'), findsOneWidget);
+        await tester.pumpWidget(
+          _wrap(
+            MessageBubble(
+              message: ChatMessage(
+                id: 'new',
+                role: 'assistant',
+                content: 'New reply',
+              ),
+              client: client,
+              browser: browser,
+            ),
+          ),
+        );
+        expect(find.text('VOICE'), findsOneWidget);
+        await tester.tap(find.byKey(_voice));
+        await tester.pump();
+        oldAudio.complete(http.Response('{"audio":"b2xk"}', 200));
+        await tester.pump();
+        await tester.pump();
+        expect(browser.voices, isEmpty);
+        expect(find.text('SYNTH'), findsOneWidget);
+        newAudio.complete(http.Response('{"audio":"bmV3"}', 200));
+        await tester.pump();
+        await tester.pump();
+        expect(browser.voices, ['data:audio/wav;base64,bmV3']);
+        expect(find.text(offline), findsNothing);
+      },
+    );
+
+    testWidgets('reusing a bubble keeps its previous injected client open', (
+      tester,
+    ) async {
+      final audio = Completer<http.Response>();
+      final client = _ClosingClient((_) => audio.future);
+      final browser = FakeBrowserPlatform();
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: ChatMessage(
+              id: 'old',
+              role: 'assistant',
+              content: 'Old reply',
+            ),
+            client: client,
+            browser: browser,
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(_voice));
+      await tester.pump();
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: ChatMessage(
+              id: 'new',
+              role: 'assistant',
+              content: 'New reply',
+            ),
+            browser: browser,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(
+        client.closed,
+        isFalse,
+        reason: 'the injector retains client ownership',
+      );
+      audio.complete(http.Response('{"audio":"b2xk"}', 200));
+      await tester.pump();
+      expect(browser.voices, isEmpty);
+    });
+
     testWidgets('a good TTS reply plays through the unlocked voice channel', (
       tester,
     ) async {
@@ -413,6 +514,78 @@ void main() {
       await tester.pump();
       expect(find.text('▶'), findsOneWidget);
       expect(find.text(offline), findsNothing);
+    });
+
+    testWidgets('reusing a playing bubble cancels its queued next clip', (
+      tester,
+    ) async {
+      tall(tester);
+      final browser = _GatedBrowser();
+      final calls = <String>[];
+      final client = MockClient((request) async {
+        calls.add('${request.method} ${request.url.path}');
+        if (request.method == 'DELETE') return http.Response('{}', 200);
+        if (request.method == 'GET') {
+          return http.Response('{"status":"running"}', 200);
+        }
+        final text = jsonDecode(request.body)['text'] as String;
+        return text.startsWith('B')
+            ? http.Response('{"job_id":"old-next","status":"queued"}', 202)
+            : http.Response(
+                jsonEncode({'audio': text.startsWith('A') ? 'QQ==' : 'Qw=='}),
+                200,
+              );
+      });
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: ChatMessage(
+              id: 'old',
+              role: 'assistant',
+              content: '$clipA $clipB',
+            ),
+            client: client,
+            browser: browser,
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(_voice));
+      await tester.pump();
+      await tester.pump();
+      expect(browser.voices, ['data:audio/wav;base64,QQ==']);
+      await tester.pumpWidget(
+        _wrap(
+          MessageBubble(
+            message: ChatMessage(
+              id: 'new',
+              role: 'assistant',
+              content: 'Current reply',
+            ),
+            client: client,
+            browser: browser,
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('VOICE'), findsOneWidget);
+      expect(calls, contains('DELETE /api/tts/jobs/old-next'));
+      await tester.tap(find.byKey(_voice));
+      await tester.pump();
+      await tester.pump();
+      expect(browser.voices, [
+        'data:audio/wav;base64,QQ==',
+        'data:audio/wav;base64,Qw==',
+      ]);
+      browser.plays[0].complete(true);
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('▮▮'), findsOneWidget);
+      expect(browser.voices, hasLength(2));
+      browser.plays[1].complete(true);
+      await tester.pump();
+      await tester.pump();
+      expect(find.text(offline), findsNothing);
+      await tester.pump(const Duration(seconds: 2));
     });
 
     testWidgets('leaving the screen cancels the clip being made ahead', (
@@ -706,5 +879,16 @@ class _GatedBrowser extends FakeBrowserPlatform {
     final ended = Completer<bool>();
     plays.add(ended);
     return ended.future;
+  }
+}
+
+class _ClosingClient extends MockClient {
+  _ClosingClient(super.fn);
+  bool closed = false;
+
+  @override
+  void close() {
+    closed = true;
+    super.close();
   }
 }

@@ -32,10 +32,11 @@ build-backend:
 # Fails when Flutter is missing so `make build` can't silently ship a stale
 # web bundle. Opt out explicitly with SKIP_PWA=1 on backend-only hosts.
 build-pwa:
-	@if [ "$(SKIP_PWA)" = "1" ]; then \
+	@set -e; if [ "$(SKIP_PWA)" = "1" ]; then \
 		echo "SKIP_PWA=1 — skipping PWA build (web-build/ may be stale)"; \
 	elif command -v flutter >/dev/null 2>&1 && [ -d flutter_app ]; then \
-		cd flutter_app && flutter build web --release --base-href=/app/; \
+		cd flutter_app; \
+		flutter build web --release --base-href=/app/; \
 		rm -rf ../web-build/*; \
 		cp -r build/web/* ../web-build/; \
 		echo "PWA built and copied to web-build/"; \

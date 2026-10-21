@@ -355,6 +355,13 @@ async def _receive_device_frame(
         await asyncio.gather(receiving, retired, return_exceptions=True)
 
 
+async def _reject_device_frame(websocket: WebSocket, user_id: str, message: str) -> None:
+    # This frame never became a turn. Broadcasting an error would finalize
+    # another device's in-flight reply, so address only the submitting device.
+    if not await ws._send_one(websocket, {"type": "error", "message": message}):
+        await ws.disconnect(user_id, websocket, close=True)
+
+
 async def _dispatch_device_frame(
     data: dict[str, Any], user_id: str, websocket: WebSocket
 ) -> None:
@@ -363,13 +370,24 @@ async def _dispatch_device_frame(
     try:
         if msg_type == "message":
             content = data.get("content", "")
-            if isinstance(content, str):
-                content = content[:4000]  # Input length limit
+            if not isinstance(content, str) or not content[:4000].strip():
+                await _reject_device_frame(
+                    websocket, user_id, "Message must contain text."
+                )
+                return
+            content = content[:4000]  # Input length limit
             await _admit_turn("message", content, user_id, websocket)
         elif msg_type == "typing":
             pass
         elif msg_type == "voice_end":
             audio = data.get("audio")
+            if audio is not None and (
+                not isinstance(audio, str) or len(audio) > 8_000_000
+            ):
+                await _reject_device_frame(
+                    websocket, user_id, "Invalid voice recording."
+                )
+                return
             if audio:
                 await _admit_turn("voice_end", audio, user_id, websocket)
         elif msg_type == "tap_interact":

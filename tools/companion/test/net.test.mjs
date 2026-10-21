@@ -281,3 +281,50 @@ test("TTS forwards cancellation without changing authentication or language", as
   assert.equal(f.calls[0].init.headers.Authorization, "Bearer test");
   assert.deepEqual(JSON.parse(f.calls[0].init.body), { text: "Hello.", language: "en" });
 });
+
+
+test("blocked default localStorage access stays safe", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    get() { throw new DOMException("Storage access blocked", "SecurityError"); },
+  });
+  try {
+    assert.equal(readToken(), null);
+    assert.doesNotThrow(() => clearToken());
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "localStorage", descriptor);
+    else delete globalThis.localStorage;
+  }
+});
+
+test("forbidden socket closes expire authentication without reconnecting", () => {
+  const { WS, sockets } = fakeWs();
+  const timers = [], states = [];
+  let expired = 0;
+  const sock = createSocket({
+    url: "u", WebSocketImpl: WS, onFrame() {},
+    onState: (state) => states.push(state), onAuthFailed: () => expired++,
+    setTimer: (fn) => { timers.push(fn); return timers.length; }, clearTimer() {},
+  });
+  sock.start();
+  sockets[0].onclose({ code: 4003 });
+  assert.equal(expired, 1);
+  sock.resume();
+  assert.equal(sockets.length, 1);
+  assert.equal(timers.length, 0);
+  assert.equal(states.at(-1), "auth");
+});
+
+test("starting an already started socket keeps its current connection", () => {
+  const { WS, sockets } = fakeWs();
+  const sock = createSocket({ url: "u", WebSocketImpl: WS, onFrame() {} });
+  sock.start();
+  sock.start();
+  assert.equal(sockets.length, 1);
+  sockets[0].readyState = 1;
+  sockets[0].onopen();
+  sock.start();
+  assert.equal(sockets.length, 1);
+  sock.close();
+});

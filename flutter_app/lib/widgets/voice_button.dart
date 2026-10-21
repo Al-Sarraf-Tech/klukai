@@ -97,7 +97,7 @@ class _VoiceButtonState extends State<VoiceButton>
                 }
               : null,
           onTapUp: widget.enabled ? (_) => widget.onTapUp?.call() : null,
-          onTapCancel: widget.enabled ? () => widget.onTapUp?.call() : null,
+          onTapCancel: widget.enabled ? () => widget.onCancel?.call() : null,
           child: AnimatedBuilder(
             animation: _pulseController,
             builder: (context, child) {

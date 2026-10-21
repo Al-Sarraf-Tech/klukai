@@ -41,6 +41,9 @@ class _MessageBubbleState extends State<MessageBubble>
     with AutomaticKeepAliveClientMixin {
   bool _isPlaying = false;
   bool _isLoading = false;
+  int _voiceEpoch = 0;
+
+  bool _ownsVoice(int epoch) => mounted && epoch == _voiceEpoch;
 
   /// From his tap on `▶ VOICE` until her line has ended. Meanwhile the
   /// bubble keeps its place in the lazy transcript: scrolled out of view and
@@ -61,11 +64,27 @@ class _MessageBubbleState extends State<MessageBubble>
   final Set<TtsAudioRequest> _activeTts = {};
 
   @override
-  void dispose() {
+  void didUpdateWidget(MessageBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.message.id == widget.message.id) return;
+    _voiceEpoch++;
+    _cancelTts();
+    _isLoading = false;
+    _isPlaying = false;
+    _setSpeaking(false);
+  }
+
+  void _cancelTts() {
     for (final request in _activeTts) {
       unawaited(request.cancel());
     }
     _activeTts.clear();
+  }
+
+  @override
+  void dispose() {
+    _voiceEpoch++;
+    _cancelTts();
     super.dispose();
   }
 
@@ -85,15 +104,16 @@ class _MessageBubbleState extends State<MessageBubble>
   Future<void> _playVoice() async {
     if (_isLoading || _isPlaying) return;
     if (widget.message.content.isEmpty) return;
+    final epoch = ++_voiceEpoch;
     _setSpeaking(true);
     try {
-      await _speak();
+      await _speak(epoch);
     } finally {
-      _setSpeaking(false);
+      if (_ownsVoice(epoch)) _setSpeaking(false);
     }
   }
 
-  Future<void> _speak() async {
+  Future<void> _speak(int epoch) async {
     setState(() => _isLoading = true);
 
     final override = widget.voiceOverride;
@@ -104,13 +124,16 @@ class _MessageBubbleState extends State<MessageBubble>
       } catch (e) {
         debugPrint('Voice playback failed: $e');
       }
-      if (mounted) setState(() => _isLoading = false);
-      if (!heard) _showVoiceUnavailable();
+      if (_ownsVoice(epoch)) {
+        setState(() => _isLoading = false);
+        if (!heard) _showVoiceUnavailable();
+      }
       return;
     }
 
     var spoke = false;
     // An injected client is the caller's to close; one we open here is ours.
+    final ownsClient = widget.client == null;
     final client = widget.client ?? http.Client();
     final clips = <_Clip>[];
     try {
@@ -123,6 +146,7 @@ class _MessageBubbleState extends State<MessageBubble>
       // it plays, so a long reply runs on without a pause between clips.
       final chunks = chunkForTts(widget.message.content);
       for (var i = 0; i < chunks.length; i++) {
+        if (!_ownsVoice(epoch)) break;
         if (i == 0) clips.add(_synthesize(client, serverUrl, chunks[0]));
         final clip = clips[i];
         if (!clip.done) {
@@ -132,7 +156,7 @@ class _MessageBubbleState extends State<MessageBubble>
           });
         }
         final audioB64 = await clip.audio;
-        if (!mounted) break;
+        if (!_ownsVoice(epoch)) break;
         if (i + 1 < chunks.length) {
           clips.add(_synthesize(client, serverUrl, chunks[i + 1]));
         }
@@ -149,7 +173,7 @@ class _MessageBubbleState extends State<MessageBubble>
       }
     } catch (e) {
       spoke = false;
-      debugPrint('Voice playback failed: $e');
+      if (_ownsVoice(epoch)) debugPrint('Voice playback failed: $e');
     } finally {
       // A clip made ahead that will not play now: cancel it (and its job),
       // and let every request settle before its client closes.
@@ -157,18 +181,18 @@ class _MessageBubbleState extends State<MessageBubble>
         if (!clip.done) unawaited(clip.request.cancel());
       }
       await Future.wait(clips.map((clip) => clip.settled));
-      if (widget.client == null) client.close();
+      if (ownsClient) client.close();
     }
 
     // Any failure (502 from a powered-off GPU host, timeout, transport error)
     // must drop the spinner and say so — the text still stands on its own.
-    if (mounted) {
+    if (_ownsVoice(epoch)) {
       setState(() {
         _isLoading = false;
         _isPlaying = false;
       });
     }
-    if (!spoke) _showVoiceUnavailable();
+    if (!spoke && _ownsVoice(epoch)) _showVoiceUnavailable();
   }
 
   void _showVoiceUnavailable() {
