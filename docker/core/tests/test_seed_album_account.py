@@ -150,6 +150,14 @@ class TestSwitch:
         await seed_memories.main()
         assert run.fulfill.await_count == 1
 
+    async def test_a_cap_of_one_is_one_render_a_day(self, run, monkeypatch):
+        """KLUKAI_ALBUM_SEED_RENDERS=1 is one render a local day: a second run
+        the same day draws nothing."""
+        monkeypatch.setenv("KLUKAI_ALBUM_SEED_RENDERS", "1")
+        run.renders_today.return_value = 1
+        assert await seed_memories.main() == 0
+        run.fulfill.assert_not_awaited()
+
     async def test_renders_today_counts_album_journal_rows_since_his_midnight(self):
         cursor = MagicMock()
         cursor.fetchone = AsyncMock(return_value=(1,))
