@@ -138,6 +138,48 @@ void main() {
     },
   );
 
+  test(
+    'resume signals that arrive together redial once, not once each',
+    () async {
+      // A bfcache restore fires pageshow and visibilitychange back to back;
+      // an iOS resume often brings `online` with it. Each reaches the chat
+      // screen as a resume, and the second used to tear down the dial the
+      // first had just opened (still silent, so "not connected") for a third
+      // socket: one more device on the server, one more connect greeting.
+      svc.connect(server.url);
+      await _until(() => svc.isConnected);
+      server.greet = false; // the new dial stays silent for a moment
+
+      svc.reconnectNow();
+      await _until(() => server.sockets.length == 2);
+      svc.reconnectNow(); // the second signal of the same resume
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(server.sockets, hasLength(2));
+      expect(server.sockets[1].closeCode, isNull); // the fresh dial was kept
+
+      server.sockets[1].add('{"type":"hello"}');
+      await _until(() => svc.isConnected);
+      expect(svc.send({'type': 'typing'}), isTrue);
+    },
+  );
+
+  test('a dial that has hung past the grace period is replaced', () async {
+    final quick = WebSocketService(
+      reconnectDelays: const [Duration(milliseconds: 20)],
+      freshDialGrace: const Duration(milliseconds: 50),
+    );
+    addTearDown(quick.dispose);
+    quick.connect(server.url);
+    await _until(() => quick.isConnected);
+    server.greet = false;
+
+    quick.reconnectNow();
+    await _until(() => server.sockets.length == 2);
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    quick.reconnectNow(); // that dial never spoke: iOS froze it, say
+    await _until(() => server.sockets.length == 3);
+  });
+
   test('reconnectNow is a no-op after an intentional disconnect', () async {
     svc.connect(server.url);
     await _until(() => svc.isConnected);
