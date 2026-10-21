@@ -138,7 +138,8 @@ def provider_error(message: str):
             or 'run out of credits' in text or 'rate limit' in text
             or 'not available on free or x basic' in text
             or ('supergrok feature' in text and 'not available' in text)
-            or 'authentication required' in text or 'failed to refresh' in text):
+            or 'authentication required' in text or 'failed to refresh' in text
+            or 'not signed in' in text):
         raise agy.ProviderUnavailable('Grok account or image service is temporarily unavailable')
     raise agy.RuntimeError('Grok did not complete the image request')
 

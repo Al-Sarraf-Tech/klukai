@@ -119,7 +119,13 @@ def test_string_error_message_preserves_service_classification_and_refusal_prece
 
 @pytest.mark.parametrize('message', ['HTTP 500 Internal Server Error', 'HTTP 429 Too Many Requests',
                                    'HTTP 401 Unauthorized', 'HTTP 402 Payment Required',
-                                   'Image generation is a SuperGrok feature and is not available on Free or X Basic'])
+                                   'Image generation is a SuperGrok feature and is not available on Free or X Basic',
+                                   # The CLI's own words when its account is signed out (2026-10-21).
+                                   'Error: Not signed in. To authenticate without a browser, run:\n'
+                                   '  grok login --device-code\nAlternatively, set the XAI_API_KEY '
+                                   'environment variable or run `grok login` on a machine with a browser.\n'
+                                   '{"type":"result","subtype":"error_during_execution","is_error":true,'
+                                   '"num_turns":0,"stop_reason":null}'])
 def test_service_errors_are_failover_eligible(message):
     m = module()
     with pytest.raises(m.agy.ProviderUnavailable): m.provider_error(message)

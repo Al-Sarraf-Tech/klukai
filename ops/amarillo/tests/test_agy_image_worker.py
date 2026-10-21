@@ -832,3 +832,16 @@ def test_only_a_literal_grant_without_the_commander_is_accepted(worker, setup_fi
     with running(worker, setup_files, render) as path:
         assert request(path, payload(**change))[0] == 400
     assert calls == []
+
+
+def test_a_failed_attempt_says_why_in_the_journal(worker, setup_files, capsys):
+    """A signed-out Grok was invisible: the journal now names the provider,
+    category and the renderer's own (fixed) message."""
+    from agy_art_runtime import ProviderUnavailable
+
+    def render(data, references):
+        raise ProviderUnavailable("Grok account or image service is temporarily unavailable")
+    with running(worker, setup_files, render) as path:
+        assert request(path, payload())[0] in (502, 504)
+    err = capsys.readouterr().err
+    assert "unavailable: ProviderUnavailable: Grok account or image service" in err

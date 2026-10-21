@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 
-from agy_art_runtime import ProviderUnavailable
+from agy_art_runtime import ProviderUnavailable, RuntimeError as RendererError
 
 
 MAX_BODY = 80 * 1024
@@ -273,6 +273,11 @@ class Worker:
                         timeout = "timeout" in str(error).lower() or "timed out" in str(error).lower()
                         category = "timeout" if timeout else ("unavailable" if eligible else "generation_failed")
                         terminal = not eligible or position + 1 == len(ordered)
+                        # Why, in the journal. Only the renderers' own errors carry their
+                        # (fixed) message; anything else could quote the brief.
+                        detail = str(error)[:160] if isinstance(error, RendererError) else "withheld"
+                        print(f"{provider} attempt {index} {category}: {type(error).__name__}: {detail}",
+                              file=sys.stderr, flush=True)
                         self.fail_attempt(value["request_id"], index, category, terminal)
                         if terminal:
                             return (504 if timeout else 502), None
