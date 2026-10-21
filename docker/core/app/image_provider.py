@@ -202,9 +202,39 @@ def _plain_description(text: str) -> str:
 # meteor shower or a bathing suit.
 _NUDITY_CUE = re.compile(
     r"\b(nude|nudity|naked|undress(?:ed|ing)?|topless|skinny[- ]dip(?:ping)?|"
-    r"bath|bathing(?! suits?\b)|bathtub|onsen|hot springs?|(?<!meteor )shower(?:ing)?)\b",
+    r"bath|bathing(?! suits?\b)|bathtub|onsen|hot springs?|"
+    r"(?<!meteor )(?<!rain )(?<!baby )(?<!bridal )shower(?:ing)?)\b",
     re.IGNORECASE,
 )
+
+
+# "Not naked", "no nudity", "without undressing": a refusal, never a request.
+_NUDITY_REFUSED = re.compile(
+    r"\b(?:not|no|never|without|don'?t)\s+(?:\w+\s+){0,2}$", re.IGNORECASE
+)
+
+
+def _not_alone(text: str) -> bool:
+    """Another girl is named or tagged ("Groza", "2girls", "multiple girls")."""
+    from .image_gen_constants import SQUAD_KEYWORDS
+
+    names = "|".join(re.escape(name) for name in SQUAD_KEYWORDS)
+    return bool(
+        re.search(
+            rf"\b(?:{names})\b|\b(?:[2-9]|\d\d+)\s*girls\b|\bmultiple girls\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _asks_for_nudity(text: str) -> bool:
+    asked = False
+    for match in _NUDITY_CUE.finditer(text):
+        if _NUDITY_REFUSED.search(text[max(0, match.start() - 60) : match.start()]):
+            return False
+        asked = True
+    return asked
 
 
 def nudity_allowed(
@@ -215,7 +245,8 @@ def nudity_allowed(
         intimate
         and not include_commander
         and isinstance(text, str)
-        and _NUDITY_CUE.search(text)
+        and not _not_alone(text)
+        and _asks_for_nudity(text)
     )
 
 
