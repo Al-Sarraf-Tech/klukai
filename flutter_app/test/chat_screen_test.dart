@@ -307,6 +307,33 @@ http.Client _historyBackend() => MockClient((request) async {
   return http.Response(jsonEncode({'score': 10, 'level': 1}), 200);
 });
 
+/// /api/messages with a long history: the newest page of 50 first, then
+/// 10 older lines for `before=`; every history URL is recorded.
+http.Client _pagedHistory(List<Uri> seen) {
+  Map<String, Object> line(String id, int minute) => {
+    'id': id,
+    'role': minute.isEven ? 'assistant' : 'user',
+    'content': 'line $id',
+    'created_at': DateTime.utc(
+      2026,
+      10,
+      20,
+      8,
+    ).add(Duration(minutes: minute)).toIso8601String(),
+  };
+  return MockClient((request) async {
+    if (request.url.path == '/api/messages') {
+      seen.add(request.url);
+      final older = request.url.queryParameters.containsKey('before');
+      final page = older
+          ? [for (var i = 0; i < 10; i++) line('o$i', i)]
+          : [for (var i = 0; i < 50; i++) line('n$i', 100 + i)];
+      return http.Response(jsonEncode({'messages': page}), 200);
+    }
+    return http.Response(jsonEncode({'score': 10, 'level': 1}), 200);
+  });
+}
+
 Future<FakeWebSocketService> _pumpChat(
   WidgetTester tester, {
   SpeechBridge? speechBridge,
@@ -353,6 +380,60 @@ void main() {
       web.window.localStorage.removeItem('flutter.$kOpenIn3dPrefKey');
       web.window.localStorage.removeItem(kStageUsedKey);
     } catch (_) {}
+  });
+
+  group('ChatScreen — older history pages', () {
+    Future<void> scrollToTop(WidgetTester tester) async {
+      for (var i = 0; i < 40; i++) {
+        await tester.drag(find.byType(CustomScrollView), const Offset(0, 600));
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
+    testWidgets('scrolling to the top loads the page before the oldest line', (
+      tester,
+    ) async {
+      final seen = <Uri>[];
+      final fake = await _pumpChat(tester, historyClient: _pagedHistory(seen));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('line o0'), findsNothing);
+
+      await scrollToTop(tester);
+      await tester.pump(const Duration(milliseconds: 300));
+      final older = seen.where((u) => u.queryParameters.containsKey('before'));
+      expect(older, isNotEmpty);
+      expect(
+        DateTime.parse(older.first.queryParameters['before']!),
+        DateTime.utc(2026, 10, 20, 8).add(const Duration(minutes: 100)),
+      );
+      await scrollToTop(tester);
+      expect(find.text('line o0'), findsOneWidget);
+      // A page of 10 (< 50) was the start: no further requests.
+      expect(older.length, 1);
+      fake.dispose();
+    });
+
+    testWidgets('a page arriving never moves the line he is reading', (
+      tester,
+    ) async {
+      final seen = <Uri>[];
+      final fake = await _pumpChat(tester, historyClient: _pagedHistory(seen));
+      await tester.pump(const Duration(milliseconds: 300));
+      // Up to the oldest line of the first page, then hold still.
+      for (var i = 0; i < 40 && find.text('line n0').evaluate().isEmpty; i++) {
+        await tester.drag(find.byType(CustomScrollView), const Offset(0, 300));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(find.text('line n0'), findsOneWidget);
+      final before = tester.getTopLeft(find.text('line n0')).dy;
+      await tester.pump(const Duration(milliseconds: 300)); // the page lands
+      expect(seen.any((u) => u.queryParameters.containsKey('before')), isTrue);
+      // The older page is in the list, just above him...
+      expect(find.text('line o9', skipOffstage: false), findsOneWidget);
+      // ...and the line he was reading has not moved.
+      expect(tester.getTopLeft(find.text('line n0')).dy, closeTo(before, 1));
+      fake.dispose();
+    });
   });
 
   group('ChatScreen — injectable transport', () {
@@ -820,7 +901,7 @@ void main() {
       // The message list is wrapped by a Focus with our key handler bound —
       // proves _handleKeyScroll is actually wired (not dead code).
       final listFocus = find.ancestor(
-        of: find.byType(ListView),
+        of: find.byType(CustomScrollView),
         matching: find.byType(Focus),
       );
       expect(listFocus, findsWidgets);
@@ -908,10 +989,10 @@ void main() {
       }
       await tester.pump(const Duration(milliseconds: 600));
       ScrollPosition position() => tester
-          .widget<ListView>(
+          .widget<CustomScrollView>(
             find.descendant(
               of: find.byType(Focus),
-              matching: find.byType(ListView),
+              matching: find.byType(CustomScrollView),
             ),
           )
           .controller!
@@ -947,10 +1028,10 @@ void main() {
       await tester.pump(const Duration(milliseconds: 600));
       // The transcript is the list the keyboard scroll-nav Focus wraps.
       ScrollPosition position() => tester
-          .widget<ListView>(
+          .widget<CustomScrollView>(
             find.descendant(
               of: find.byType(Focus),
-              matching: find.byType(ListView),
+              matching: find.byType(CustomScrollView),
             ),
           )
           .controller!

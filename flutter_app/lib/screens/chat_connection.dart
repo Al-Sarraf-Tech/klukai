@@ -61,7 +61,7 @@ extension _ChatConnection on _ChatScreenState {
               x.id.startsWith('proactive-') ||
               x.id.startsWith('image-')),
     );
-    final known = _messages.map((m) => m.id).toSet();
+    final known = {..._messages.map((m) => m.id), ..._older.map((m) => m.id)};
     final additions =
         fetched
             .where((m) => !known.contains(m.id) && !isLocalEchoOf(m))
@@ -78,6 +78,62 @@ extension _ChatConnection on _ChatScreenState {
       }
     });
   }
+
+  /// Lines of one history page; a shorter page means the start was reached.
+  static const int _historyPage = 50;
+
+  /// The page of history before the oldest line on screen, fetched when he
+  /// scrolls near the top. Pages grow upward above the transcript's anchor,
+  /// so what he is reading stays where it is.
+  Future<void> _loadOlder() async {
+    if (_loadingOlder || _olderExhausted || _authExpired) return;
+    final oldest = _older.isNotEmpty
+        ? _older.first
+        : _messages.where((m) => !_isLocalId(m.id)).firstOrNull;
+    if (oldest == null) return;
+    _update(() => _loadingOlder = true);
+    try {
+      final before = Uri.encodeQueryComponent(
+        oldest.createdAt.toUtc().toIso8601String(),
+      );
+      final response = await _getChat(
+        Uri.parse(
+          '${widget.serverUrl}/api/messages?limit=$_historyPage&before=$before',
+        ),
+      );
+      if (!mounted || _authExpired) return;
+      if (response.statusCode == 200) {
+        final page = (jsonDecode(response.body)['messages'] as List)
+            .map((m) => ChatMessage.fromJson(m))
+            .toList();
+        final known = {
+          ..._messages.map((m) => m.id),
+          ..._older.map((m) => m.id),
+        };
+        final fresh = page.where((m) => !known.contains(m.id)).toList()
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        _update(() {
+          _older.insertAll(0, fresh);
+          if (page.length < _historyPage || fresh.isEmpty) {
+            _olderExhausted = true;
+          }
+        });
+      } else if (response.statusCode == 401) {
+        _handleAuthExpired();
+      }
+    } catch (e) {
+      debugPrint('Failed to load older history: $e');
+    } finally {
+      if (mounted) _update(() => _loadingOlder = false);
+    }
+  }
+
+  /// Ids the client made up for a line before the server's copy arrived.
+  static bool _isLocalId(String id) =>
+      id.startsWith('user-') ||
+      id.startsWith('streaming-') ||
+      id.startsWith('proactive-') ||
+      id.startsWith('image-');
 
   void _showHistoryError() {
     if (!mounted || _authExpired) return;

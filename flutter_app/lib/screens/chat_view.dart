@@ -241,51 +241,86 @@ extension _ChatView on _ChatScreenState {
       onKeyEvent: _handleKeyScroll,
       child: NotificationListener<Notification>(
         onNotification: _onTranscriptScroll,
-        child: ListView.builder(
+        child: CustomScrollView(
           controller: _scrollController,
           physics: const ClampingScrollPhysics(
             parent: AlwaysScrollableScrollPhysics(),
           ),
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          itemCount: _messages.length,
-          itemBuilder: (context, index) {
-            final msg = _messages[index];
-            final msgDate = DateTime(
-              msg.createdAt.year,
-              msg.createdAt.month,
-              msg.createdAt.day,
-            );
-            bool showDivider = false;
-            if (index == 0) {
-              showDivider = true;
-            } else {
-              final prev = _messages[index - 1];
-              final prevDate = DateTime(
-                prev.createdAt.year,
-                prev.createdAt.month,
-                prev.createdAt.day,
-              );
-              if (msgDate != prevDate) showDivider = true;
-            }
-            final voiceId = _voiceNotes[msg.id];
-            final bubble = MessageBubble(
-              message: msg,
-              browser: widget.browser,
-              voiceOverride: voiceId == null
-                  ? null
-                  : () => _fetchAndPlayVoiceNote(voiceId),
-            );
-            if (showDivider) {
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  DateDivider(date: msg.createdAt),
-                  bubble,
-                ],
-              );
-            }
-            return bubble;
-          },
+          // Older pages sit above the anchor and grow upward, so one arriving
+          // never moves the line he is reading.
+          center: _transcriptAnchor,
+          slivers: [
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                // Built from the anchor upward: 0 is the newest older line.
+                (context, i) {
+                  if (i == _older.length) return _historyTop();
+                  final at = _older.length - 1 - i;
+                  return _transcriptLine(
+                    _older[at],
+                    at > 0 ? _older[at - 1] : null,
+                  );
+                },
+                childCount: _older.length + 1,
+              ),
+            ),
+            SliverPadding(
+              key: _transcriptAnchor,
+              padding: const EdgeInsets.only(bottom: 8),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _transcriptLine(
+                    _messages[index],
+                    index > 0
+                        ? _messages[index - 1]
+                        : (_older.isNotEmpty ? _older.last : null),
+                  ),
+                  childCount: _messages.length,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// One line of the transcript, with a date divider when its day differs
+  /// from the line before it (or it is the first line loaded).
+  Widget _transcriptLine(ChatMessage msg, ChatMessage? prev) {
+    final voiceId = _voiceNotes[msg.id];
+    final bubble = MessageBubble(
+      message: msg,
+      browser: widget.browser,
+      voiceOverride: voiceId == null
+          ? null
+          : () => _fetchAndPlayVoiceNote(voiceId),
+    );
+    final showDivider =
+        prev == null ||
+        DateUtils.dateOnly(prev.createdAt) != DateUtils.dateOnly(msg.createdAt);
+    if (!showDivider) return bubble;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        DateDivider(date: msg.createdAt),
+        bubble,
+      ],
+    );
+  }
+
+  /// The top of what is loaded: a spinner while an older page comes in,
+  /// otherwise the list's top margin.
+  Widget _historyTop() {
+    if (!_loadingOlder) return const SizedBox(height: 8);
+    return const Padding(
+      key: Key('chat-history-loading'),
+      padding: EdgeInsets.symmetric(vertical: 12),
+      child: Center(
+        child: SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
         ),
       ),
     );
@@ -303,6 +338,12 @@ extension _ChatView on _ChatScreenState {
     } else if (notification is ScrollUpdateNotification) {
       final metrics = notification.metrics;
       _pinnedToBottom = metrics.maxScrollExtent - metrics.pixels < 48;
+      // Near the top of what is loaded: fetch the page before it.
+      if (metrics.axis == Axis.vertical &&
+          metrics.pixels - metrics.minScrollExtent < 600 &&
+          (notification.scrollDelta ?? 0) < 0) {
+        _loadOlder();
+      }
     } else if (notification is ScrollEndNotification) {
       _transcriptScrolling = false;
       final metrics = notification.metrics;

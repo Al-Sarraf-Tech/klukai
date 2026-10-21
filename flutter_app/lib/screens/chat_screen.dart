@@ -15,6 +15,7 @@ import '../models/heart_rate.dart';
 import '../platform/browser.dart';
 import '../services/resume_policy.dart';
 import '../services/session_auth.dart';
+import '../services/session_logout.dart';
 import '../services/speech_capture.dart';
 import '../services/tts_request.dart';
 import '../services/voice_settings_service.dart';
@@ -280,6 +281,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _focusNode = FocusNode();
 
   final List<ChatMessage> _messages = [];
+
+  /// Older history pages, oldest first, fetched as he scrolls up. They live
+  /// in the sliver above the transcript's anchor ([_transcriptAnchor]), so a
+  /// page arriving never moves the line he is reading.
+  final List<ChatMessage> _older = [];
+  bool _loadingOlder = false;
+  bool _olderExhausted = false;
+  final _transcriptAnchor = const ValueKey('chat-transcript-anchor');
   CompanionState _state = const CompanionState();
   String? _authToken;
   bool _authExpired = false;
