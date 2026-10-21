@@ -165,10 +165,10 @@ async def _handle_message(
     from .llm_router import mark_user_active
 
     mark_user_active()
-    proactive.mark_user_messaged_today()
+    proactive.mark_user_messaged_today(user_id=user_id)
 
     start = time.monotonic()
-    proactive.mark_responded()
+    proactive.mark_responded(user_id=user_id)
 
     # ── Mission timer detection ───────────────────────────────────────────
     if _wants_mission_cancel(content):

@@ -165,7 +165,8 @@ class ProactiveEngine(
     def mark_user_messaged_today(self, user_id: str = "jalsarraf") -> None:
         """Record that the user sent at least one message today."""
         self._user_messaged[user_id] = True
-        self._user_messaged_today = True  # Legacy compat
+        if user_id == "jalsarraf":
+            self._user_messaged_today = True  # Primary-owner scheduled jobs
 
     def start(self) -> None:
         # Morning briefing at 0800
@@ -253,20 +254,27 @@ class ProactiveEngine(
     def unmute(self) -> None:
         self._muted_until = None
 
-    def mark_responded(self) -> None:
+    def mark_responded(self, user_id: str = "jalsarraf") -> None:
         """Mark that the Commander responded to the last proactive message.
 
-        Any message from him also lifts a goodbye hold: he is back.
+        Any message from him also lifts a goodbye hold: he is back. Scheduled
+        pings go to the primary owner, so only his message answers them or
+        lifts their hold; anyone's message still counts as recent activity.
         """
-        self._last_proactive_answered = True
         self._last_message_time = now_local()
+        if user_id != "jalsarraf":
+            return
+        self._last_proactive_answered = True
         self._goodbye_hold_until = None
 
-    def mark_goodnight(self) -> None:
+    def mark_goodnight(self, user_id: str = "jalsarraf") -> None:
         """He said goodnight: no pings until 0800 local (QUIET_HOUR_END).
 
-        The next 0800, or this morning's if he says it after midnight.
+        The next 0800, or this morning's if he says it after midnight. Only
+        the primary owner's goodnight holds his scheduled pings.
         """
+        if user_id != "jalsarraf":
+            return
         now = now_local()
         until = now.replace(hour=QUIET_HOUR_END, minute=0, second=0, microsecond=0)
         if now >= until:
@@ -274,8 +282,10 @@ class ProactiveEngine(
         self._goodbye_hold_until = until
         logger.info("Goodnight: proactive pings held until %s", until)
 
-    def mark_leaving(self) -> None:
-        """He signed off ("gotta go"): no pings for LEAVE_HOLD."""
+    def mark_leaving(self, user_id: str = "jalsarraf") -> None:
+        """He signed off ("gotta go"): no pings for LEAVE_HOLD (owner only)."""
+        if user_id != "jalsarraf":
+            return
         self._goodbye_hold_until = now_local() + LEAVE_HOLD
         logger.info("Goodbye: proactive pings held until %s", self._goodbye_hold_until)
 
