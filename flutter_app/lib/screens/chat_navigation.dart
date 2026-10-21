@@ -21,6 +21,8 @@ extension _ChatNavigation on _ChatScreenState {
 
   Future<void> _logout() async {
     _ws.dispose();
+    // End the session on the server too; bounded, so it never holds up logout.
+    await endServerSession(widget.serverUrl, readAuthToken());
     try {
       web.window.localStorage.removeItem('klukai_token');
     } catch (_) {}
