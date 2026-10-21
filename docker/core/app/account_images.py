@@ -304,6 +304,14 @@ async def _submit_saved(row: dict[str, Any]) -> dict[str, Any]:
     if status not in {"refused", "failed", "pending", "unknown", "unavailable", "busy"}:
         status = "failed"
     await update_request(request_id, phase=status, failure=status)
+    if status not in {"pending", "busy"}:  # busy: yielded, and retried or logged
+        # He is told the visualization failed; say why here (never the prompt).
+        logger.warning(
+            "Account picture %s for %s not drawn: %s",
+            request_id[:8],
+            row["user_id"],
+            status,
+        )
     return _result(request_id, phase=status)
 
 
