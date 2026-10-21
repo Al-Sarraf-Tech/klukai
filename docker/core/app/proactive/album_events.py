@@ -151,7 +151,7 @@ class AlbumEventsMixin(_EngineBase):
                 return
 
             # Persist as a kept Precious Memory so the gift lasts in the album.
-            await memory_archive.save_image(
+            saved = await memory_archive.save_image(
                 image_bytes=img,
                 prompt=prompt,
                 conversation_id="proactive_art",
@@ -165,6 +165,11 @@ class AlbumEventsMixin(_EngineBase):
                 },
                 user_id="jalsarraf",
             )
+            if not saved:
+                # The album did not keep it (a duplicate of a recent caption):
+                # there is no gift to announce, and the cooldown stays free.
+                logger.info("Spontaneous art not kept; not announced")
+                return
             self._last_spontaneous_art = now
 
             # If he's here, tell him + show it live (caption first, then image).
