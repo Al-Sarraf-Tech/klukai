@@ -1027,8 +1027,9 @@ class TestHeartbeatSpikeAlerts:
         from app import memory_extraction
 
         src = inspect.getsource(memory_extraction)
-        # The real gate combines the mood-map membership with the >= 7 floor.
-        assert "if mood in HIGH_INTENSITY_MOODS and intensity >= 7:" in src
+        # The real gate combines the mood-map membership with the >= 7 floor
+        # (and only for a turn whose mood landed).
+        assert "if current and mood in HIGH_INTENSITY_MOODS and intensity >= 7:" in src
 
     def test_spike_map_matches_source(self):
         """This test's BPM map must mirror the one memory_extraction.py uses.
