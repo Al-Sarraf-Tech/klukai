@@ -243,7 +243,7 @@ async def test_failed_save_is_not_archived_and_retry_reuses_the_cached_picture(
 
 
 async def test_unknown_pending_and_refusal_never_render(
-    account_db, account_worker, api
+    account_db, account_worker, api, monkeypatch
 ):
     handler, users = api
     unknown_prompt = "Draw Klukai beside a radio"
@@ -281,8 +281,11 @@ async def test_unknown_pending_and_refusal_never_render(
     assert pending.status_code == 409
     assert json.loads(pending.body)["phase"] == "pending"
 
-    users["id"] = "alice"
-    refused_prompt = "Draw us together in a quiet room"
+    # An account off the allow-list is refused and never rendered (production
+    # selects the account worker for every account).
+    monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
+    users["id"] = "mallory"
+    refused_prompt = "Draw Klukai in a quiet room"
     refused_id = str(uuid.uuid4())
     refused = await _post(handler, refused_prompt, refused_id)
     assert refused.status_code == 409
@@ -291,6 +294,28 @@ async def test_unknown_pending_and_refusal_never_render(
     assert repeated.status_code == 409
     assert json.loads(repeated.body)["phase"] == "refused"
     assert account_worker["calls"] == []
+
+
+async def test_a_friends_picture_of_us_is_drawn_without_the_commander(
+    account_db, account_worker, api
+):
+    """Only the owner's account may carry the Commander (his real face): a
+    friend's "picture of us" is drawn with her alone instead of refused."""
+    handler, users = api
+    users["id"] = "alice"
+    request_id = str(uuid.uuid4())
+    drawn = await _post(handler, "Draw us together in a quiet room", request_id)
+    assert drawn["generated"] is True
+    assert account_worker["calls"] == [request_id]
+    async with account_db.connection() as conn:
+        row = await (
+            await conn.execute(
+                "SELECT include_commander FROM companion_account_image_requests "
+                "WHERE id = %s",
+                (request_id,),
+            )
+        ).fetchone()
+    assert row[0] is False
 
 
 class _Socket:
