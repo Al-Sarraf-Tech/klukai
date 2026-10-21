@@ -47,6 +47,7 @@ from .helpers import (
     store_message as _store_message,
 )
 from .image_gen import needs_image
+from .memory_archive import update_curation
 from .llm_router import FAILURE_SENTINEL
 from .models import SessionState, new_id
 from .chat_prompt import ChatPromptBuilder
@@ -330,6 +331,7 @@ async def _handle_message(
         DISCARD_KEYWORDS,
         TRIVIAL_PATTERNS,
         COMPACT_THRESHOLD,
+        curate=update_curation,
     )
     await followups.admit(content, response_text, session, user_id)
 

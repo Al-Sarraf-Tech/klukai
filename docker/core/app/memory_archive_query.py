@@ -237,13 +237,15 @@ async def update_curation(
         async with get_conn_autocommit() as conn:
             if user_id:
                 await conn.execute(
-                    "UPDATE companion_memories SET kept = %s, annotation = %s, "
+                    "UPDATE companion_memories SET kept = %s, "
+                    "annotation = COALESCE(NULLIF(%s, ''), annotation), "
                     "category = %s, scene_tags = %s WHERE id = %s AND user_id = %s",
                     (kept, annotation, category, scene_tags, memory_id, user_id),
                 )
             else:
                 await conn.execute(
-                    "UPDATE companion_memories SET kept = %s, annotation = %s, "
+                    "UPDATE companion_memories SET kept = %s, "
+                    "annotation = COALESCE(NULLIF(%s, ''), annotation), "
                     "category = %s, scene_tags = %s WHERE id = %s",
                     (kept, annotation, category, scene_tags, memory_id),
                 )

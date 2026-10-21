@@ -23,6 +23,7 @@ from .heartbeat import (
 )
 from .memory import MemoryManager
 from .models import SessionState
+from .picture_curation import PictureCuration
 from .proactive import ProactiveEngine
 from .ws_manager import WSManager
 
@@ -35,7 +36,6 @@ class ExtractionRuntime:
     affection: AffectionManager
     proactive: ProactiveEngine
     ws: WSManager
-    last_memory_id: Callable[[str], str | None]
     update_curation: Callable[..., Awaitable[bool]]
     extract_facts: Callable[..., Awaitable[dict[str, Any]]]
     create_summary: Callable[..., Awaitable[str | None]]
@@ -51,6 +51,7 @@ class ExtractionRuntime:
         user_id: str = "default",
         image_generated: bool = False,
         memory_id: str | None = None,
+        picture: PictureCuration | None = None,
     ) -> None:
         """Background task: extract facts, adjust affection, and maybe create an episode.
 
@@ -103,21 +104,22 @@ class ExtractionRuntime:
 
             await self.adjust_affection(result, mood, user_id)
 
-            # Apply curation if image was generated and curation data came back
-            # Resolve memory_id: prefer explicit arg, fall back to module-level last_memory_id
-            # (image gen runs concurrently and sets it ~1-30s before extraction completes)
-            curation_target = (
-                memory_id or (image_generated and self.last_memory_id(user_id)) or None
-            )
-            if image_generated and curation_target and "memory_curation" in result:
-                try:
-                    await self.update_curation(
-                        curation_target, result["memory_curation"], aff_state_bg.level
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Memory curation update failed for %s: %s", curation_target, e
-                    )
+            # Her journal entry goes to THIS turn's picture: the explicit memory
+            # id, or the turn's PictureCuration, which holds it until the
+            # picture is saved (it is usually still rendering at this point).
+            curation = result.get("memory_curation") if image_generated else None
+            if isinstance(curation, dict):
+                if memory_id:
+                    try:
+                        await self.update_curation(
+                            memory_id, curation, aff_state_bg.level, user_id=user_id
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Memory curation update failed for %s: %s", memory_id, e
+                        )
+                elif picture is not None:
+                    await picture.curation_ready(curation, aff_state_bg.level)
 
             await self.store_facts(result, user_id)
 

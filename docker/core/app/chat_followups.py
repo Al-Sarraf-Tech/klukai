@@ -9,6 +9,7 @@ from typing import Any
 import logging
 
 from .models import SessionState
+from .picture_curation import PictureCuration
 from .ws_manager import WSManager
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,8 @@ class ChatFollowups:
     discard_keywords: Collection[str]
     trivial_patterns: Collection[str]
     compact_threshold: int
+    # Writes her keep/caption/category onto a saved picture (update_curation).
+    curate: Callable[..., Coroutine[Any, Any, bool]] | None = None
 
     async def admit(
         self, content: str, response_text: str, session: SessionState, user_id: str
@@ -55,6 +58,7 @@ class ChatFollowups:
 
         # Track whether image gen was triggered (for extraction curation pass)
         image_triggered = False
+        picture: PictureCuration | None = None
 
         # Background tasks — the LLM answered (an llm_failed turn returned above).
         # Recall detection takes priority over new image generation.
@@ -71,6 +75,9 @@ class ChatFollowups:
                 f"{t['role']}: {t['content'][:200]}" for t in recent_turns
             )
             image_triggered = True
+            # Joins this picture to this turn's curation, whichever lands last.
+            if self.curate is not None:
+                picture = PictureCuration(self.curate, user_id)
             # Detect squad members mentioned for multi-character scenes
             from .image_gen import detect_squad_members
 
@@ -93,6 +100,7 @@ class ChatFollowups:
                         squad_members=mentioned_squad,
                         user_id=user_id,
                         recent_turns=scene_turns,
+                        picture=picture,
                     )
                 ),
                 survive_disconnect=True,
@@ -116,6 +124,7 @@ class ChatFollowups:
                         extraction_snapshot,
                         user_id,
                         image_generated=image_triggered,
+                        picture=picture,
                     )
                 except Exception as e:
                     import traceback

@@ -24,6 +24,7 @@ from .character_scenes import commit_oath_scene, oath_lines
 from .models import SessionState
 from .proactive.mission_timer import AUTO_MISSION_MAX_MINUTES
 from .memory_extraction import ExtractionRuntime
+from .picture_curation import PictureCuration
 from .personality import load_personality
 
 if TYPE_CHECKING:
@@ -144,13 +145,13 @@ async def background_extraction(
     user_id: str = "default",
     image_generated: bool = False,
     memory_id: str | None = None,
+    picture: PictureCuration | None = None,
 ) -> None:
     runtime = ExtractionRuntime(
         memory,
         affection,
         proactive,
         ws,
-        context.get_last_memory_id,
         memory_archive.update_curation,
         extract_facts,
         create_episode_summary,
@@ -159,7 +160,7 @@ async def background_extraction(
         load_personality,
     )
     await runtime.process(
-        user_msg, assistant_msg, session, user_id, image_generated, memory_id
+        user_msg, assistant_msg, session, user_id, image_generated, memory_id, picture
     )
 
 
@@ -258,6 +259,7 @@ async def background_image_gen(
     squad_members: list[str] | None = None,
     user_id: str = "jalsarraf",
     recent_turns: list[dict[str, str]] | None = None,
+    picture: PictureCuration | None = None,
 ) -> None:
     """Generate an anime image for his request, set where the conversation is.
 
@@ -423,7 +425,7 @@ async def background_image_gen(
             )
         if img_bytes:
             await _deliver_generated_image(
-                user_id, img_bytes, full_prompt, aff_level, outcome
+                user_id, img_bytes, full_prompt, aff_level, outcome, picture
             )
         else:
             await ws.send_proactive(
@@ -528,6 +530,7 @@ async def _deliver_generated_image(
     full_prompt: str,
     aff_level: int,
     outcome: dict[str, Any] | None,
+    picture: PictureCuration | None = None,
 ) -> None:
     from .account_images import complete_archive
     import base64 as b64
@@ -566,6 +569,8 @@ async def _deliver_generated_image(
     if memory_id is not None:
         context.set_last_memory_id(user_id, memory_id)
         logger.info("Image archived as memory %s", memory_id)
+        if picture is not None:
+            await picture.picture_saved(memory_id)
 
     img_b64 = b64.b64encode(img_bytes).decode()
     frame = {"type": "image", "data": img_b64, "archived": archived}

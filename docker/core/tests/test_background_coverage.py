@@ -532,23 +532,51 @@ class TestExtractionCurationAndResilience:
             memory_id="mem-xyz",
         )
         bg_mocks.memory_archive.update_curation.assert_awaited_once_with(
-            "mem-xyz", {"category": "battle", "annotation": "A fierce moment."}, 5
+            "mem-xyz",
+            {"category": "battle", "annotation": "A fierce moment."},
+            5,
+            user_id="u1",
         )
 
-    async def test_curation_resolves_memory_id_from_context_fallback(self, bg_mocks):
+    async def test_curation_waits_for_this_turns_picture(self, bg_mocks):
+        """Regression: the picture renders for 20-60 s and the extraction is
+        done in about 8, so "the latest picture" was the previous one, which
+        took this turn's caption and keep/discard (prod 2026-10-20)."""
+        from app.picture_curation import PictureCuration
+
         bg_mocks.extract_facts.return_value = _base_extract_result(
-            memory_curation={"category": "candid"}
+            memory_curation={"category": "candid", "annotation": "Us, at last."}
         )
-        bg_mocks.context.get_last_memory_id.return_value = "ctx-mem"
+        bg_mocks.context.get_last_memory_id.return_value = "previous-picture"
+        picture = PictureCuration(bg_mocks.memory_archive.update_curation, "u1")
         await bg.background_extraction(
             "m",
             "r",
             _session(1),
             user_id="u1",
             image_generated=True,
+            picture=picture,
         )
-        bg_mocks.context.get_last_memory_id.assert_called_once_with("u1")
-        assert bg_mocks.memory_archive.update_curation.await_args.args[0] == "ctx-mem"
+        bg_mocks.context.get_last_memory_id.assert_not_called()
+        bg_mocks.memory_archive.update_curation.assert_not_awaited()
+
+        await picture.picture_saved("this-picture")
+        bg_mocks.memory_archive.update_curation.assert_awaited_once_with(
+            "this-picture",
+            {"category": "candid", "annotation": "Us, at last."},
+            5,
+            user_id="u1",
+        )
+
+    async def test_no_curation_without_a_picture_for_this_turn(self, bg_mocks):
+        bg_mocks.extract_facts.return_value = _base_extract_result(
+            memory_curation={"category": "candid"}
+        )
+        bg_mocks.context.get_last_memory_id.return_value = "previous-picture"
+        await bg.background_extraction(
+            "m", "r", _session(1), user_id="u1", image_generated=True
+        )
+        bg_mocks.memory_archive.update_curation.assert_not_awaited()
 
     async def test_top_level_exception_swallowed(self, bg_mocks):
         """A failure in extract_facts must NOT propagate (fire-and-forget task)."""
@@ -1068,6 +1096,22 @@ class TestImageGen:
         frames = [c.args[1] for c in bg_mocks.ws.send.await_args_list]
         image_at = next(i for i, f in enumerate(frames) if f.get("type") == "image")
         assert {"type": "thinking", "content": ""} in frames[image_at + 1 :]
+
+    async def test_saved_picture_reports_its_memory_id_to_the_turn(self, bg_mocks):
+        picture = MagicMock()
+        picture.picture_saved = AsyncMock()
+        with (
+            patch(
+                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
+            ),
+            patch.object(bg, "is_couple_scene", return_value=False),
+            patch.object(bg, "is_landscape", return_value=False),
+            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
+            patch.object(bg, "build_prompt", return_value="full prompt"),
+            patch.object(bg, "generate_image", new=AsyncMock(return_value=b"PNGDATA")),
+        ):
+            await bg.background_image_gen("draw klukai", user_id="u1", picture=picture)
+        picture.picture_saved.assert_awaited_once_with("mem-123")
 
     async def test_failed_generation_sends_graceful_message(self, bg_mocks):
         with (

@@ -104,7 +104,6 @@ def rt(monkeypatch):
         affection,
         proactive,
         ws,
-        lambda _uid: None,
         AsyncMock(),
         AsyncMock(side_effect=extract),
         AsyncMock(return_value=None),
