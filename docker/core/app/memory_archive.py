@@ -41,6 +41,8 @@ async def close() -> None:
 
 
 IMAGES_DIR = Path(os.environ.get("IMAGES_DIR", "/images"))
+# Stored when no caption was written; the backfill replaces it later.
+UNCAPTIONED = "Uncaptioned moment."
 
 # Affection-gated categories
 CATEGORIES_BY_LEVEL = {
@@ -152,7 +154,7 @@ async def _is_duplicate_annotation(
     Uses simple word overlap ratio — fast, no LLM or embedding needed.
     Returns True if a recent memory has >threshold word overlap.
     """
-    if not annotation or annotation == "Uncaptioned moment.":
+    if not annotation or annotation == UNCAPTIONED:
         return False
     try:
         async with get_conn() as conn:
@@ -280,7 +282,7 @@ async def save_image(
                 memory_id,
                 prompt[:80],
             )
-            annotation = "Uncaptioned moment."
+            annotation = UNCAPTIONED
 
         # Account pictures dedupe on the request id. Annotation overlap must
         # not drop a distinct requested picture or report it as saved.
@@ -374,7 +376,8 @@ Write ONLY the caption. Nothing else.
 
 
 async def backfill_annotations(user_id: str = "jalsarraf") -> dict[str, Any]:
-    """Find memory archive entries with NULL/empty annotation and generate one.
+    """Find memory archive entries without a caption (NULL, empty or the
+    "Uncaptioned moment." placeholder) and write one.
 
     Scoped to a specific user. Caption text comes from the shared background
     route (app/background_llm.py): Haiku when enabled, else dolphin through the
@@ -392,9 +395,9 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict[str, Any]:
                 await conn.execute(
                     "SELECT id, prompt, category, scene_tags "
                     "FROM companion_memories "
-                    "WHERE (annotation IS NULL OR annotation = '') AND user_id = %s "
-                    "ORDER BY created_at ASC",
-                    (user_id,),
+                    "WHERE (annotation IS NULL OR annotation IN ('', %s)) "
+                    "AND user_id = %s ORDER BY created_at ASC",
+                    (UNCAPTIONED, user_id),
                 )
             ).fetchall()
     except Exception as e:
@@ -473,7 +476,7 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict[str, Any]:
             # Clean up quotes / markdown prefixes
             annotation = content.strip('"').strip("'").strip("`")
             if not annotation:
-                annotation = "Uncaptioned moment."
+                annotation = UNCAPTIONED
 
             async with get_conn_autocommit() as conn:
                 await conn.execute(
