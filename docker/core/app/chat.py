@@ -355,7 +355,9 @@ async def _receive_device_frame(
         await asyncio.gather(receiving, retired, return_exceptions=True)
 
 
-async def _reject_device_frame(websocket: WebSocket, user_id: str, message: str) -> None:
+async def _reject_device_frame(
+    websocket: WebSocket, user_id: str, message: str
+) -> None:
     # This frame never became a turn. Broadcasting an error would finalize
     # another device's in-flight reply, so address only the submitting device.
     if not await ws._send_one(websocket, {"type": "error", "message": message}):
