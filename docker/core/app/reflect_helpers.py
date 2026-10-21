@@ -19,6 +19,13 @@ logger = logging.getLogger(__name__)
 REFLECTION_MIN_HOURS_AWAY = 8
 REFLECTION_MAX_HOURS_AWAY = 72
 
+# One return greeting per absence. The absence is named by his last message's
+# time, which her greeting does not move (her proactive lines are excluded),
+# so without this every reconnect before he writes again greeted him again:
+# six "Morning, Commander" dreams in seven minutes, each one a creative-text
+# request against the daily allowance (prod 2026-10-21).
+_greeted_absence: dict[str, object] = {}
+
 
 async def _maybe_oath_on_connect(user_id: str) -> None:
     """On connect, if the Commander is already at the level-9 "Oath Fulfilled"
@@ -113,6 +120,11 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
             return
         if not recent_excerpts:
             return
+        # Claimed before the first await below, so concurrent connects of the
+        # same absence greet once.
+        if _greeted_absence.get(user_id) == last_at:
+            return
+        _greeted_absence[user_id] = last_at
 
         # Small delay so the UI settles before the greeting arrives
         import asyncio

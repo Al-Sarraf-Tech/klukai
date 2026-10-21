@@ -8,6 +8,7 @@ a budget that leaves room for adaptive thinking.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -456,3 +457,44 @@ async def test_legacy_classifier_failures_are_neutral(haiku_only, reply):
         None, "hm", url="u", model="m", prompt_template=CLASSIFICATION_PROMPT
     )
     assert out == ("neutral", 5)
+
+
+async def test_return_greeting_once_per_absence_across_reconnects(haiku_only):
+    """Regression: her greeting does not move his last-message time, so each
+    reconnect before he wrote again greeted him again (six in seven minutes,
+    2026-10-21), each a request against the creative allowance."""
+    from app import reflect_helpers
+    from app.reflect_helpers import _maybe_reflect_on_return
+
+    reflect_helpers._greeted_absence.clear()
+    haiku_only.return_value = "Welcome back, Commander. You were telling me about rain."
+    last = datetime.now(timezone.utc) - timedelta(hours=12)
+    ws = MagicMock()
+    ws.is_connected.return_value = True
+    ws.send_proactive = AsyncMock()
+    aff = MagicMock()
+    aff.get_state = AsyncMock(return_value=_mk_affection())
+
+    async def connect(last_at):
+        pool = _FakePool([(last_at,), [("user", "We talked about rain.")], ("tender",)])
+        with (
+            patch("app.db.get_pool", return_value=pool),
+            patch("app.reflect_helpers.router", _dead_router()),
+            patch("app.reflect_helpers.ws", ws),
+            patch("app.reflect_helpers.affection", aff),
+            patch("app.reflect_helpers.now_local", return_value=datetime(2026, 10, 14, 15)),
+            patch("app.personality.load_personality", return_value={}),
+            patch("app.personality.build_character_preamble", return_value="P"),
+            patch("app.voice_archive.save_voice_note", AsyncMock(return_value=None)),
+            patch("asyncio.sleep", AsyncMock()),
+        ):
+            await _maybe_reflect_on_return("alice")
+
+    await asyncio.gather(connect(last), connect(last))
+    await connect(last)
+    assert ws.send_proactive.await_count == 1
+    assert haiku_only.await_count == 1
+
+    # He wrote again and left again: that is a new absence.
+    await connect(last + timedelta(minutes=5))
+    assert ws.send_proactive.await_count == 2

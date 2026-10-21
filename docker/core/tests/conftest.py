@@ -300,6 +300,16 @@ def _reset_wardrobe_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_return_greetings():
+    """One return greeting per absence is remembered in-process — per test."""
+    from app import reflect_helpers
+
+    reflect_helpers._greeted_absence.clear()
+    yield
+    reflect_helpers._greeted_absence.clear()
+
+
+@pytest.fixture(autouse=True)
 def isolate_dependency_breakers():
     """Unit tests inject independent outages; production keeps one registry.
 
