@@ -208,6 +208,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           affectionLevelName: _state.affectionLevelName,
           onLogout: _logout,
           onAuthExpired: _handleAuthExpired,
+          voiceLanguage: _voiceLanguage,
         );
     }
   }

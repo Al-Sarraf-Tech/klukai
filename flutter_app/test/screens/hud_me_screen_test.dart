@@ -140,6 +140,49 @@ void main() {
     expect(_selected(tester, 'JP'), isTrue);
   });
 
+  testWidgets('a language change in the chat composer shows here too', (
+    tester,
+  ) async {
+    // The Me tab stays mounted in the tab stack and read the language once;
+    // switched to EN in the composer, it still showed JP.
+    tester.view.physicalSize = const Size(390, 2600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final s = _Server();
+    var language = VoiceLanguage.ja;
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return HudMeScreen(
+                serverUrl: 'http://127.0.0.1:1',
+                affectionScore: 1000,
+                affectionLevel: 9,
+                affectionLevelName: 'Devoted',
+                onLogout: () {},
+                client: s.client,
+                prefs: MemoryLocalPrefs(),
+                voiceLanguage: language,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(_selected(tester, 'JP'), isTrue);
+
+    s.language = 'en'; // the composer saved it
+    rebuild(() => language = VoiceLanguage.en);
+    await tester.pumpAndSettle();
+    expect(_selected(tester, 'EN'), isTrue);
+    expect(_selected(tester, 'JP'), isFalse);
+    expect(s.puts, isEmpty); // shown, not saved again
+  });
+
   testWidgets('no voice endpoint: English', (tester) async {
     await _pump(tester, server: _Server(voiceStatus: 404));
     expect(_selected(tester, 'EN'), isTrue);

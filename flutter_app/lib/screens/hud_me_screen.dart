@@ -60,6 +60,7 @@ class HudMeScreen extends StatefulWidget {
     this.voiceSettings,
     this.prefs,
     this.onAuthExpired,
+    this.voiceLanguage,
   });
 
   final String serverUrl;
@@ -84,6 +85,11 @@ class HudMeScreen extends StatefulWidget {
 
   /// 401: the token is dead; the shell's logout/reauth path.
   final VoidCallback? onAuthExpired;
+
+  /// Her voice language as the chat composer has it. This tab stays mounted
+  /// and reads the server once: a change made in the composer shows here
+  /// when this value changes. Null: only the server's answer counts.
+  final VoiceLanguage? voiceLanguage;
 
   @override
   State<HudMeScreen> createState() => _HudMeScreenState();
@@ -115,6 +121,15 @@ class _HudMeScreenState extends State<HudMeScreen> {
     _loadStats();
     _loadMilestones();
     _loadVoice();
+  }
+
+  @override
+  void didUpdateWidget(HudMeScreen old) {
+    super.didUpdateWidget(old);
+    final language = widget.voiceLanguage;
+    if (language != null && language != old.voiceLanguage && !_savingLanguage) {
+      _language = language;
+    }
   }
 
   void _authExpired() {
