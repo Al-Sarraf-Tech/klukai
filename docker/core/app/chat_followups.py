@@ -43,9 +43,10 @@ class ChatFollowups:
         # Commander save/discard overrides — operate on the most recent memory
         content_lower = content.lower()
         user_last_mem = self.last_memory_id(user_id)
-        # Track all post-response background tasks so a full user disconnect cancels
-        # them — otherwise a stale task (extraction/compaction) can wake after the
-        # user reconnects and clobber the fresh session's write.
+        # Track post-response background tasks so a full user disconnect cancels
+        # them — otherwise a stale task can wake after the user reconnects and
+        # clobber the fresh session's write. The turn's extraction is the
+        # exception (below): its session write is revision-guarded.
         if any(kw in content_lower for kw in self.save_keywords) and user_last_mem:
             self.ws.track_task(
                 user_id, asyncio.create_task(self.keep_memory(user_last_mem, kept=True))
@@ -131,7 +132,15 @@ class ChatFollowups:
 
                     logger.error("EXTRACTION CRASH: %s\n%s", e, traceback.format_exc())
 
-            self.ws.track_task(user_id, asyncio.create_task(_safe_extraction()))
+            # Survives his disconnect: closing the app right after her reply
+            # cancelled it, and the turn lost its mood, heart rate, affection,
+            # facts and recall memory. Its mood write checks the session
+            # revision, so a newer turn always wins.
+            self.ws.track_task(
+                user_id,
+                asyncio.create_task(_safe_extraction()),
+                survive_disconnect=True,
+            )
         else:
             logger.info("Trivial message, skipping extraction")
 

@@ -83,3 +83,33 @@ async def test_picture_turn_hands_one_join_to_the_picture_and_the_extraction():
     assert isinstance(picture, PictureCuration)
     assert extract.await_args.kwargs["picture"] is picture
     assert extract.await_args.kwargs["image_generated"] is True
+
+
+async def test_the_turns_extraction_survives_his_disconnect():
+    """Closing the app right after her reply must not cancel the turn's
+    extraction (mood, heart rate, affection, facts, recall memory)."""
+    tracked: list[tuple[asyncio.Task[None], dict]] = []
+    ws = AsyncMock()
+    ws.track_task = lambda _uid, task, **kw: tracked.append((task, kw))
+    extract = AsyncMock()
+    followups = ChatFollowups(
+        ws,
+        lambda _uid: None,
+        lambda _text: False,
+        lambda _text: False,
+        AsyncMock(),
+        AsyncMock(),
+        AsyncMock(),
+        extract,
+        AsyncMock(),
+        (),
+        (),
+        (),
+        10_000,
+    )
+    await followups.admit(
+        "tell me about the convoy", "It moved at dawn.", SessionState(conversation_id="c"), "u1"
+    )
+    await asyncio.gather(*(task for task, _ in tracked))
+    extract.assert_awaited_once()
+    assert [kw for _, kw in tracked] == [{"survive_disconnect": True}]
