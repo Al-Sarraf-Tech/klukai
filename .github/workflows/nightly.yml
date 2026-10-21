@@ -13,15 +13,17 @@ name: Klukai Nightly
 #                      failure); evidence retained on the heavy guest
 #
 # Every job's window guard refuses to start unless it can finish before the
-# 23:30 America/Chicago hard stop (Dominus is off by 23:45).
+# 23:30 America/Chicago hard stop (owner directive 2026-10-15).
 
 on:
   schedule:
-    # 00:37 UTC = 19:37 CDT / 18:37 CST. The whole chain (perf ~20 min, trivy
-    # ~5 min, mutation up to 150 min) then ends near 22:30 CDT, before the 23:30
-    # hard stop. If Dominus is off, the jobs wait in the queue and each window
-    # guard refuses to start one that could not finish in time.
-    - cron: '37 0 * * *'
+    # 11:23 UTC = 06:23 CDT / 05:23 CST. GitHub has been starting this
+    # schedule about 4.5 hours late (00:37 UTC fired near 05:12 UTC, 00:12 CDT,
+    # so every guard refused and the night went red). A morning slot stays
+    # inside the 05:00-21:00 start window even with that delay, and the chain
+    # (perf ~20 min, trivy ~5 min, mutation up to 150 min) runs on amarillo's
+    # one-VM-per-job runner, which is always on.
+    - cron: '23 11 * * *'
   workflow_dispatch:
     inputs:
       only:
