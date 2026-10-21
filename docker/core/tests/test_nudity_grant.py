@@ -176,3 +176,21 @@ def test_a_journalled_grant_never_applies_with_the_commander():
         )
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_her_own_pictures_are_never_granted(monkeypatch):
+    """Her POV, album and mission renders come through generate_image with a
+    prompt she composed: "onsen" there is not his words asking, so the worker
+    is never told nudity is allowed, even past the intimacy gate."""
+    from app import image_gen
+
+    monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
+    monkeypatch.setattr(agy, "uses_agy_images", lambda user_id: True)
+    submit = AsyncMock(return_value={"status": "completed", "image": None})
+    monkeypatch.setattr(agy, "submit_agy_image", submit)
+    await image_gen.generate_image(
+        "Klukai alone, naked, relaxing at the onsen", sfw=False, user_id="jalsarraf"
+    )
+    submit.assert_awaited_once()
+    assert submit.await_args.kwargs["nudity"] is False

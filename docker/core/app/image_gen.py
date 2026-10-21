@@ -247,9 +247,11 @@ async def generate_image(
             "width": width,
             "height": height,
             "include_commander": include_commander,
-            "nudity": image_provider.nudity_allowed(
-                prompt, intimate=not sfw, include_commander=include_commander
-            ),
+            # Her own pictures (Her POV, album, mission aftermath) come here, and
+            # nudity is only ever granted when his own words ask for it, which
+            # the chat and API paths decide (image_provider.nudity_allowed). A
+            # "bath" or "onsen" in a prompt she composed is not him asking.
+            "nudity": False,
         }
         result = await submit_agy_image(description, **request)
         if (
