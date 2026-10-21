@@ -92,7 +92,10 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
       final cats = await _service.fetchCategories();
       if (mounted) {
         setState(() {
-          _categories = cats;
+          // The server ends the list with its own {"name": "All"} total. The
+          // screen draws its own All and sums the real categories: kept in,
+          // that row showed twice and doubled every total.
+          _categories = cats.where((c) => c.name != 'All').toList();
           _loadingCategories = false;
         });
       }

@@ -137,6 +137,51 @@ void main() {
     await tester.pump(const Duration(seconds: 21));
   });
 
+  group('MemoryArchiveScreen — the server\'s own All row', () {
+    // /api/memories/categories ends with {"name": "All", "count": total}
+    // (memory_archive_query.get_categories). Summed in with the real
+    // categories it doubled every total, and it drew a second ALL.
+    List<MemoryCategory> serverCategories() => [
+      MemoryCategory(name: 'Mission Records', count: 2),
+      MemoryCategory(name: 'Squad Moments', count: 1),
+      MemoryCategory(name: 'Dreams', count: 27),
+      MemoryCategory(name: 'All', count: 30),
+    ];
+
+    Future<void> pumpAt(WidgetTester tester, Size size) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final fake = _FakeMemoryService()..categories = serverCategories();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MemoryArchiveScreen(
+            serverUrl: 'http://127.0.0.1:1',
+            memoryService: fake,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      fake.memoryCalls.single.complete(_page(0, 3));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    testWidgets('phone: one ALL chip', (tester) async {
+      // The widest phone layout, so the chip row builds every chip.
+      await pumpAt(tester, const Size(600, 900));
+      expect(find.text('DREAMS'), findsOneWidget);
+      expect(find.text('ALL'), findsOneWidget);
+    });
+
+    testWidgets('desktop: one All row and the real kept count', (tester) async {
+      await pumpAt(tester, const Size(1200, 900));
+      expect(find.text('30 KEPT'), findsOneWidget);
+      expect(find.text('// 30 ENTRIES'), findsOneWidget);
+    });
+  });
+
   group('MemoryArchiveScreen — a dead token is not a down channel', () {
     testWidgets('401 on the list bounces to login, never SIGNAL LOST', (
       tester,
