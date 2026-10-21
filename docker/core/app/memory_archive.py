@@ -274,11 +274,10 @@ async def save_image(
 
         # Ensure annotation is never NULL — every image must have text
         if not annotation:
+            # Never the prompt: a chat picture's prompt opens with his words.
             logger.warning(
-                "Memory %s saved without annotation (prompt=%s). "
-                "Using default placeholder.",
+                "Memory %s saved without annotation. Using default placeholder.",
                 memory_id,
-                prompt[:80],
             )
             annotation = "Uncaptioned moment."
 
