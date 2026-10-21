@@ -1135,7 +1135,7 @@ class TestImageGen:
             await bg.background_image_gen("draw klukai", user_id="u1", picture=picture)
         picture.picture_saved.assert_awaited_once_with("mem-123")
 
-    async def test_failed_generation_sends_graceful_message(self, bg_mocks):
+    async def test_failed_generation_sends_graceful_message(self, bg_mocks, caplog):
         with (
             patch(
                 "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
@@ -1149,6 +1149,8 @@ class TestImageGen:
             await bg.background_image_gen("draw", user_id="u1")
         # User is never ghosted: a proactive failure message + a thinking-clear.
         bg_mocks.ws.send_proactive.assert_awaited()
+        # ...and the operator sees why, without his words.
+        assert "Image gen: no picture for u1 (local)" in caplog.text
         clear_frames = [
             c
             for c in bg_mocks.ws.send.await_args_list

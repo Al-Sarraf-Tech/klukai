@@ -428,6 +428,11 @@ async def background_image_gen(
                 user_id, img_bytes, full_prompt, aff_level, outcome, picture
             )
         else:
+            logger.warning(
+                "Image gen: no picture for %s (%s)",
+                user_id,
+                (outcome or {}).get("phase") or ("account" if use_agy else "local"),
+            )
             await ws.send_proactive(
                 user_id,
                 "...Visualization failed. Interference in the rendering pipeline. I'll try again later.",
