@@ -35,11 +35,12 @@ if TYPE_CHECKING:
 
 
 def detect_squad_members(text: str) -> list[str]:
-    """Detect which squad members are mentioned in the text."""
+    """Detect which squad members are mentioned in the text, by whole name
+    ("elevator" or "relevant" must not put Leva in his picture)."""
     lower = text.lower()
     found = []
     for name in SQUAD_KEYWORDS:
-        if name in lower:
+        if re.search(r"\b" + re.escape(name) + r"\b", lower):
             found.append(name)
     return found
 
@@ -95,10 +96,18 @@ def build_mission_prompt(
     return ", ".join(parts)
 
 
+# Whole words, with the plain verb endings ("drawing", "rendered"), so a
+# keyword inside another word ("drawer", "surrender", "withdraw") is no request.
+_IMAGE_REQUEST = re.compile(
+    r"\b(?:"
+    + "|".join(re.escape(kw) for kw in IMAGE_KEYWORDS)
+    + r")(?:s|es|d|ed|ing)?\b"
+)
+
+
 def needs_image(message: str) -> bool:
     """Check if the message is requesting image generation."""
-    lower = message.lower()
-    return any(kw in lower for kw in IMAGE_KEYWORDS)
+    return _IMAGE_REQUEST.search(message.lower()) is not None
 
 
 def is_couple_scene(text: str) -> bool:

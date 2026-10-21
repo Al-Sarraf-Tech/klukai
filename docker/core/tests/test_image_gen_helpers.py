@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.image_gen import (
     build_mission_prompt,
     build_prompt,
@@ -29,6 +31,21 @@ class TestDetectSquadMembers:
     def test_no_matches_empty(self):
         assert detect_squad_members("a generic sentence with no names") == []
 
+    @pytest.mark.parametrize("text", [
+        "draw Klukai in the elevator",
+        "that's relevant to the mission",
+        "the vectors on the map",
+        "Klukai on the elevated catwalk",
+    ])
+    def test_a_name_inside_another_word_adds_nobody(self, text):
+        """An extra girl in his picture because "elevator" contains "leva"."""
+        assert detect_squad_members(text) == []
+
+    def test_whole_names_still_match(self):
+        assert detect_squad_members("Klukai with Leva's squad and Vector") == [
+            "leva", "vector",
+        ]
+
 
 class TestNeedsImage:
     def test_image_request_keyword(self):
@@ -40,6 +57,26 @@ class TestNeedsImage:
 
     def test_case_insensitive(self):
         assert needs_image("SHOW ME") is True or needs_image("show me") is True
+
+    @pytest.mark.parametrize("text", [
+        "check the drawer for my keys",
+        "I surrender, you win",
+        "withdraw the troops",
+        "I'm drawn to you",
+    ])
+    def test_a_keyword_inside_another_word_is_not_a_request(self, text):
+        assert needs_image(text) is False
+
+    @pytest.mark.parametrize("text", [
+        "draw us on the beach",
+        "a drawing of you",
+        "paint me something",
+        "render that again",
+        "send me a selfie",
+        "SHOW ME",
+    ])
+    def test_real_requests_still_match(self, text):
+        assert needs_image(text) is True
 
 
 class TestIsCoupleScene:
