@@ -2061,6 +2061,36 @@ void main() {
       fake.dispose();
     });
 
+    testWidgets('coming back to Day re-reads her day: its NOW moves on', (
+      tester,
+    ) async {
+      // The Day tab stays mounted; it fetched once, on the first visit, so
+      // hours later it still marked the old block ACTIVE — NOW.
+      final wardrobe = FakeWardrobeService();
+      final browser = FakeBrowserPlatform();
+      final fake = await _pumpChat(
+        tester,
+        wardrobe: wardrobe,
+        browser: browser,
+      );
+      await tester.tap(find.byKey(const Key('hud-tab-day')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('hud-tab-chat')));
+      await settle(tester);
+
+      var before = wardrobe.herDayCalls;
+      await tester.tap(find.byKey(const Key('hud-tab-day')));
+      await settle(tester);
+      expect(wardrobe.herDayCalls, before + 1);
+
+      // Back from the background with Day on screen: the same.
+      before = wardrobe.herDayCalls;
+      browser.resume.add(null);
+      await settle(tester);
+      expect(wardrobe.herDayCalls, before + 2); // the chat header's and Day's
+      fake.dispose();
+    });
+
     testWidgets('…also when it was parked under CHAT', (tester) async {
       final (fake, stage, _) = await pump3d(tester);
       await tester.tap(find.byKey(const Key('view-flip-chat')));

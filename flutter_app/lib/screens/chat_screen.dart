@@ -151,11 +151,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   // socket and state survive tab switches, the others build on first visit.
   HudTab _tab = HudTab.chat;
   final Set<HudTab> _visited = {HudTab.chat};
-  // Bumped when Kit changes her outfit, so Her Day re-reads it.
+  // Bumped when Kit changes her outfit, so Her Day re-reads it; also when
+  // he comes back to Day (tab or page), since its NOW moves with the clock.
   final ValueNotifier<int> _outfitChanged = ValueNotifier<int>(0);
 
   void _selectTab(HudTab tab) {
     if (tab == _tab) return;
+    // Day stays mounted: a revisit re-reads it (the first visit loads it).
+    if (tab == HudTab.day && _visited.contains(tab)) _outfitChanged.value++;
     setState(() {
       if (_tab == HudTab.chat) _dropStage();
       _tab = tab;
@@ -393,6 +396,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _ws.reconnectNow(); // the connection listener reloads history on success
     }
     _loadHerDay();
+    if (_tab == HudTab.day) _outfitChanged.value++;
   }
 
   /// The web engine reports `hidden` when the tab or app leaves the screen
