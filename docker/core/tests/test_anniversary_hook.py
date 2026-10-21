@@ -112,6 +112,30 @@ class TestAnniversaryCheck:
         assert engine._last_proactive_answered is True
 
     @pytest.mark.asyncio
+    async def test_anniversary_reaches_him_when_offline(self):
+        """A once-a-year line must not vanish because no socket was open at
+        0800: it is kept in his history and pushed to his device."""
+        from app.proactive import ProactiveEngine
+        engine = ProactiveEngine()
+
+        pool = _FakePool(
+            [[("alice",)]],
+            [[("first_message", _one_year_ago_today(), None)]],
+        )
+        fake_ws = MagicMock()
+        fake_ws.is_connected = MagicMock(return_value=False)
+        fake_ws.send_proactive = AsyncMock()
+        push = AsyncMock(return_value=1)
+        with _at(_FIRE_TIME), patch("app.db.get_pool", return_value=pool), \
+             patch("app.context.ws", fake_ws), patch("app.push.send_push", push):
+            await engine._anniversary_check()
+
+        fake_ws.send_proactive.assert_awaited_once()
+        assert fake_ws.send_proactive.await_args.args[0] == "alice"
+        push.assert_awaited_once()
+        assert push.await_args.kwargs["user_id"] == "alice"
+
+    @pytest.mark.asyncio
     async def test_owners_anniversary_counts_toward_his_cap(self):
         from app.proactive import ProactiveEngine
         engine = ProactiveEngine()
