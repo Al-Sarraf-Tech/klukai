@@ -57,10 +57,11 @@ If the `klukai-obs` network is ever recreated with a different subnet, update th
 ## Nightly performance history
 
 `.github/workflows/nightly.yml` runs the paired disposable harness on `main`
-against its previous commit at 19:37 CDT (18:37 CST), first in a chain of perf,
-trivy and mutation on the single heavy runner. If Dominus is off, the job
-waits in the queue and its window guard refuses to start unless it can finish
-before the 23:30 hard stop; a refused or failed night is an explicit failure,
+against its previous commit at 06:23 CDT (05:23 CST), first in a chain of perf,
+trivy, onboarding and mutation on amarillo's one-VM-per-job heavy runner.
+GitHub often starts the schedule hours late; each job's window guard refuses
+to start unless it can finish before the 23:30 hard stop, and the morning slot
+keeps a late start inside that window. A refused or failed night is an explicit failure,
 and a harness failure still writes a `passed: false` summary. Summaries are kept
 on the heavy guest under `/opt/klukai-ci/artifacts/nightly/<UTC stamp>-<sha7>/`.
 
