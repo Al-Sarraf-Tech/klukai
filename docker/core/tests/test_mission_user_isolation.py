@@ -214,6 +214,24 @@ async def test_decompression_uses_owners_affection_and_delivery():
     ):
         await engine._decompression_message("alice", False, 1)
     assert deliveries == [("alice", "normal")]
+    # Her line to another Commander is not one of the owner's scheduled
+    # pings: it must not use up his daily cap or wait for his answer.
+    assert engine._proactive_count_today == 0
+    assert engine._last_proactive_answered is True
+
+
+@pytest.mark.asyncio
+async def test_owners_decompression_counts_as_his_proactive_line():
+    engine = ProactiveEngine()
+    engine.set_callback(AsyncMock())
+    with (
+        patch.object(engine, "_can_send", return_value=True),
+        patch("app.proactive.mission.asyncio.sleep", AsyncMock()),
+        patch("app.proactive.mission._decompression_normal", return_value=["normal"]),
+    ):
+        await engine._decompression_message(PRIMARY, False, 1)
+    assert engine._proactive_count_today == 1
+    assert engine._last_proactive_answered is False
 
 
 @pytest.mark.asyncio

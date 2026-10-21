@@ -414,6 +414,7 @@ async def deliver(user_id: str, action: dict[str, Any]) -> None:
         return  # cancelled, already finished, or gone
 
     from .context import affection, proactive, router, ws
+    from .decisions import PRIMARY_USER
 
     cfg = load_config()
     level = (await affection.get_state(user_id)).level
@@ -426,7 +427,7 @@ async def deliver(user_id: str, action: dict[str, Any]) -> None:
     held = None
     if await _game_active(router):
         held = "game"
-    elif proactive._goodbye_hold_active():
+    elif proactive.goodbye_hold_active_for(user_id):
         held = "goodbye hold"
     if held:
         if now_local() < hold_deadline(action, commitment):
@@ -452,9 +453,11 @@ async def deliver(user_id: str, action: dict[str, Any]) -> None:
 
             await send_push(title="Klukai", body=text, user_id=user_id)
         # Count it like any proactive line so the daily cap and the
-        # don't-pile-up gate see it.
-        proactive._proactive_count_today += 1
-        proactive._last_proactive_answered = False
+        # don't-pile-up gate see it. Both belong to the primary owner's
+        # scheduled pings, so only his own brief counts there.
+        if user_id == PRIMARY_USER:
+            proactive._proactive_count_today += 1
+            proactive._last_proactive_answered = False
     except Exception as e:
         logger.warning("Operation brief post-send bookkeeping failed: %s", e)
     await _close(slot, event_id, user_id)

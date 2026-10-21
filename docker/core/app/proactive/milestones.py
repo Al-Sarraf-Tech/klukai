@@ -327,8 +327,10 @@ class MilestonesMixin(_EngineBase):
                     if ws.is_connected(user_id):
                         # Counts toward the daily cap like any proactive line,
                         # but does not flip _last_proactive_answered: it is the
-                        # opener to the morning greeting, not a question.
-                        self._proactive_count_today += 1
+                        # opener to the morning greeting, not a question. The
+                        # cap is the primary owner's scheduled-ping state.
+                        if user_id == "jalsarraf":
+                            self._proactive_count_today += 1
                         await ws.send_proactive(user_id, msg)
                     logger.info(
                         "Anniversary surfaced: user=%s years=%s type=%s",

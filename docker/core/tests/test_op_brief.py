@@ -670,7 +670,7 @@ def ctx():
     affection.get_state = AsyncMock(return_value=SimpleNamespace(level=5))
     proactive = MagicMock()
     proactive._can_send = MagicMock(return_value=True)
-    proactive._goodbye_hold_active = MagicMock(return_value=False)
+    proactive.goodbye_hold_active_for = MagicMock(return_value=False)
     proactive._proactive_count_today = 0
     proactive._last_proactive_answered = True
     router = MagicMock()
@@ -699,15 +699,25 @@ def ctx():
 
 class TestDeliver:
     async def test_sends_brief_and_counts_it(self, ctx):
-        await op_brief.deliver("claude", _action())
-        ctx.load.assert_awaited_once_with(EVENT_ID, "claude")
+        await op_brief.deliver("jalsarraf", _action())
+        ctx.load.assert_awaited_once_with(EVENT_ID, "jalsarraf")
         ctx.proactive._can_send.assert_called_once_with(ignore_unanswered=True)
         user, text = ctx.ws.send_proactive.await_args.args
-        assert user == "claude" and "SITUATION" in text
+        assert user == "jalsarraf" and "SITUATION" in text
         assert ctx.proactive._proactive_count_today == 1
         assert ctx.proactive._last_proactive_answered is False
         ctx.push.assert_not_awaited()
         ctx.complete.assert_not_awaited()  # only the debrief closes the chain
+
+    async def test_another_commanders_brief_leaves_the_owners_counters(self, ctx):
+        """The daily cap and the unanswered gate are the owner's scheduled
+        state: a brief to anyone else must not stop the owner's pings."""
+        await op_brief.deliver("claude", _action())
+        user, text = ctx.ws.send_proactive.await_args.args
+        assert user == "claude" and "SITUATION" in text
+        ctx.proactive.goodbye_hold_active_for.assert_called_once_with("claude")
+        assert ctx.proactive._proactive_count_today == 0
+        assert ctx.proactive._last_proactive_answered is True
 
     async def test_debrief_closes_the_chain(self, ctx):
         await op_brief.deliver("claude", _action(slot="debrief", due="2026-10-08T19:00:00"))
@@ -770,7 +780,7 @@ class TestDeliver:
     async def test_goodbye_hold_is_held_and_retried_not_dropped(self, ctx):
         """He said "gotta go" at 20:00: the 20:30 OPORD waits like a mid-game
         slot instead of being refused by the guard and closed as delivered."""
-        ctx.proactive._goodbye_hold_active.return_value = True
+        ctx.proactive.goodbye_hold_active_for.return_value = True
         await op_brief.deliver("claude", _action())
         ctx.ws.send_proactive.assert_not_awaited()
         ctx.proactive._can_send.assert_not_called()
@@ -781,7 +791,7 @@ class TestDeliver:
     async def test_goodbye_hold_past_window_drops_and_closes_debrief(self, ctx):
         """A goodnight hold that outlasts the deadline drops the slot; the
         debrief still closes the chain so it can never fire the next day."""
-        ctx.proactive._goodbye_hold_active.return_value = True
+        ctx.proactive.goodbye_hold_active_for.return_value = True
         with patch.object(op_brief, "now_local", return_value=datetime(2026, 10, 8, 22, 46)):
             await op_brief.deliver("claude", _action(slot="debrief", due="2026-10-08T19:00:00"))
         ctx.schedule.assert_not_awaited()
