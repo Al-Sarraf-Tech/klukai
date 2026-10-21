@@ -77,6 +77,50 @@ class TestRecallFact:
         assert result == "ok"
 
     @pytest.mark.asyncio
+    async def test_returns_value_from_the_data_services_entries(self):
+        """The live data service answers a key lookup with its matching row in
+        ``entries`` and no top-level ``value``; that row is the fact."""
+        m = MemoryManager()
+        m._http = AsyncMock()
+        m._http.get = AsyncMock(return_value=_mk_http_resp({
+            "key": "companion:alice:late_nights",
+            "found": True,
+            "entries": [{
+                "key": "companion:alice:late_nights",
+                "value": '["2026-10-19"]',
+                "ts": "2026-10-20T07:10:00+00:00",
+            }],
+        }))
+        assert await m.recall_fact("late_nights", "alice") == '["2026-10-19"]'
+
+    @pytest.mark.asyncio
+    async def test_ignores_entries_for_another_key(self):
+        m = MemoryManager()
+        m._http = AsyncMock()
+        m._http.get = AsyncMock(return_value=_mk_http_resp({
+            "key": "companion:alice:milestone:first_image",
+            "found": True,
+            "entries": [{"key": "companion:bob:milestone:first_image", "value": "x"}],
+        }))
+        assert await m.recall_fact("milestone:first_image", "alice") is None
+
+    @pytest.mark.asyncio
+    async def test_a_recorded_milestone_is_not_recorded_again(self):
+        m = MemoryManager()
+        m._http = AsyncMock()
+        m._http.get = AsyncMock(return_value=_mk_http_resp({
+            "key": "companion:alice:milestone:first_image",
+            "found": True,
+            "entries": [{
+                "key": "companion:alice:milestone:first_image",
+                "value": "2026-10-20T05:51:38+00:00",
+            }],
+        }))
+        m._http.post = AsyncMock(return_value=_mk_http_resp())
+        assert await m.record_milestone("first_image", user_id="alice") is False
+        m._http.post.assert_not_called()  # the first date is never overwritten
+
+    @pytest.mark.asyncio
     async def test_returns_none_when_not_found(self):
         m = MemoryManager()
         m._http = AsyncMock()
