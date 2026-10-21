@@ -505,11 +505,11 @@ class TestGenerateImage:
         from app.routes import ImageGenRequest
 
         monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
-        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "alice")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "jalsarraf")
         handler = _find_route(_app_with_routes(), "/api/generate-image", "POST")
         generate = AsyncMock(return_value={"status": "completed", "image": b"AGYPNG"})
         save = AsyncMock(return_value="agy-memory")
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
+        with patch("app.routes._get_user_id", new=AsyncMock(return_value="jalsarraf")), \
              patch.object(agy_image_provider, "submit_agy_image", new=generate), \
              patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)), \
              patch("app.account_images.insert_request", new=AsyncMock()), \
@@ -520,9 +520,9 @@ class TestGenerateImage:
             result = await handler(ImageGenRequest(prompt="Draw us together at a cafe"), _mk_request())
         assert result["memory_id"] == "agy-memory" and result["image"] == "QUdZUE5H"
         assert generate.await_args.args == ("Draw us together at a cafe",)
-        assert generate.await_args.kwargs["user_id"] == "alice"
+        assert generate.await_args.kwargs["user_id"] == "jalsarraf"
         assert generate.await_args.kwargs["include_commander"] is True
-        assert save.await_args.kwargs["user_id"] == "alice"
+        assert save.await_args.kwargs["user_id"] == "jalsarraf"
 
     async def test_agy_api_failure_does_not_use_local_fallback(self, monkeypatch):
         from app import agy_image_provider

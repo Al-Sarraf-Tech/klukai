@@ -252,7 +252,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        from .agy_image_provider import uses_agy_images
+        from .agy_image_provider import commander_reference_allowed, uses_agy_images
         from .image_provider import selected_provider
 
         if selected_provider() == "agy" or uses_agy_images(user_id):
@@ -262,6 +262,9 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             from .image_provider import nudity_allowed
 
             width, height = (1216, 832) if is_landscape(req.prompt) else (832, 1216)
+            couple = is_couple_scene(req.prompt) and commander_reference_allowed(
+                user_id
+            )
             aff_state = await affection.get_state(user_id)
             try:
                 outcome = await fulfill_account_image(
@@ -269,12 +272,12 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                     req.prompt,
                     width=width,
                     height=height,
-                    include_commander=is_couple_scene(req.prompt),
+                    include_commander=couple,
                     request_id=req.request_id,
                     nudity=nudity_allowed(
                         req.prompt,
                         intimate=aff_state.level >= INTIMATE_MIN_LEVEL,
-                        include_commander=is_couple_scene(req.prompt),
+                        include_commander=couple,
                     ),
                     archive_context={
                         "conversation_id": "api",

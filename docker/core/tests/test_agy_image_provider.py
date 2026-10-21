@@ -317,3 +317,23 @@ async def test_real_unix_socket_transport_ignores_proxy_environment(agy_config, 
     assert len(requests) == 1
     assert requests[0][1]["user_id"] == "test-user"
     assert b"Authorization: Bearer test-private-agy-token" in requests[0][0]
+
+
+def test_only_the_owner_may_carry_the_commander_reference():
+    from app import agy_image_provider as agy
+
+    assert agy.commander_reference_allowed("jalsarraf") is True
+    for user in ("tj", "claude", "", None, "jalsarraf-extra"):
+        assert agy.commander_reference_allowed(user) is False
+
+
+async def test_refusal_for_a_user_off_the_list_is_logged(monkeypatch, caplog):
+    from app import agy_image_provider as agy
+
+    monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
+    monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "jalsarraf")
+    payload = await agy._validated_payload(
+        "draw her", user_id="tj", width=832, height=1216, include_commander=False, request_id=None,
+    )
+    assert payload is None
+    assert "Picture refused: tj is not on KLUKAI_AGY_ALLOWED_USERS" in caplog.text

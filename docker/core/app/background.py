@@ -269,7 +269,7 @@ async def background_image_gen(
     """
     from .image_gen import check_comfyui_ready
     from .image_provider import cloud_images_ready, selected_provider
-    from .agy_image_provider import uses_agy_images
+    from .agy_image_provider import commander_reference_allowed, uses_agy_images
 
     try:
         provider = selected_provider()
@@ -317,7 +317,7 @@ async def background_image_gen(
             from .image_gen import detect_squad_members
 
             squad_members = detect_squad_members(user_request)
-        couple = is_couple_scene(user_request)
+        couple = is_couple_scene(user_request) and commander_reference_allowed(user_id)
 
         # Get affection level for mood-aware prompts
         aff_state = await affection.get_state(user_id)

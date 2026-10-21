@@ -797,7 +797,7 @@ class TestImageGen:
 
         caplog.set_level(logging.INFO, logger="app.background")
         monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
-        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "jalsarraf")
         generate = AsyncMock(return_value={"status": "completed", "image": b"PNG"})
         place = AsyncMock(side_effect=AssertionError("Her Day for a couple picture"))
         turns = [
@@ -814,7 +814,7 @@ class TestImageGen:
             ),
         ):
             await bg.background_image_gen(
-                "take a picture of us", user_id="u1", recent_turns=turns
+                "take a picture of us", user_id="jalsarraf", recent_turns=turns
             )
         prompt = generate.await_args.args[0]
         assert prompt.startswith(
@@ -826,13 +826,35 @@ class TestImageGen:
         assert "Avoid these visual elements: outdoor scenery; open sky." in prompt
         assert generate.await_args.kwargs["include_commander"] is True
         assert generate.await_args.kwargs["request_id"] == explicit_request_id(
-            "u1", "take a picture of us", 832, 1216, True, "his_bedroom", window=7
+            "jalsarraf",
+            "take a picture of us",
+            832,
+            1216,
+            True,
+            "his_bedroom",
+            window=7,
         )
         assert (
             "Image scene: place=his_bedroom (his bedroom) source=his-history setting=indoor "
             "time=night(clock) weather=clear"
         ) in caplog.text
         assert "secret plans" not in caplog.text
+
+    async def test_a_friends_picture_of_us_draws_her_alone(self, bg_mocks, monkeypatch):
+        """Only the owner's account may carry the Commander (his real face): a
+        friend's "picture of us" draws her alone instead of a refusal."""
+        monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "jalsarraf,tj")
+        generate = AsyncMock(return_value={"status": "completed", "image": b"PNG"})
+        place = AsyncMock(return_value=("Hangar", "tuning the bike"))
+        with self._agy_patches(generate, place):
+            await bg.background_image_gen("take a picture of us", user_id="tj")
+        assert generate.await_args.kwargs["user_id"] == "tj"
+        assert generate.await_args.kwargs["include_commander"] is False
+        assert any(
+            call.args[1].get("type") == "image"
+            for call in bg_mocks.ws.send.await_args_list
+        )
 
     async def test_agy_picture_of_her_alone_asks_her_day(self, bg_mocks, monkeypatch):
         from app.account_images import explicit_request_id
@@ -891,7 +913,7 @@ class TestImageGen:
         from app import agy_image_provider
 
         monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
-        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "jalsarraf")
         generate = AsyncMock(return_value={"status": "completed", "image": b"PNG"})
         with (
             patch.object(agy_image_provider, "submit_agy_image", new=generate),
@@ -905,9 +927,9 @@ class TestImageGen:
             ),
         ):
             await bg.background_image_gen(
-                "Draw us together in a landscape", user_id="u1"
+                "Draw us together in a landscape", user_id="jalsarraf"
             )
-        assert generate.await_args.kwargs["user_id"] == "u1"
+        assert generate.await_args.kwargs["user_id"] == "jalsarraf"
         assert generate.await_args.kwargs["width"] == 1216
         assert generate.await_args.kwargs["height"] == 832
         assert generate.await_args.kwargs["include_commander"] is True
@@ -1188,7 +1210,7 @@ class TestImageGen:
             patch.object(bg, "build_prompt", new=build),
             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)),
         ):
-            await bg.background_image_gen("us together", user_id="u1")
+            await bg.background_image_gen("us together", user_id="jalsarraf")
         assert build.call_args.kwargs["affection_level"] == 8
         assert build.call_args.kwargs["couple"] is True
 

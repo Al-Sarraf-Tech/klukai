@@ -30,6 +30,12 @@ MAX_IMAGE_PIXELS = 12_000_000
 REQUEST_DEADLINE_SECONDS = 380  # Two bounded 170s providers plus transport/setup.
 
 
+def commander_reference_allowed(user_id: str | None) -> bool:
+    """Only the owner's own account may put the Commander, his real face, in a
+    picture (the worker enforces the same rule); anyone else gets her alone."""
+    return user_id == "jalsarraf"
+
+
 def uses_agy_images(user_id: str | None) -> bool:
     """Only authenticated allowlisted identities may use the selected worker."""
     allowed = {
@@ -220,6 +226,9 @@ async def _validated_payload(
     nudity: bool = False,
 ) -> dict[str, Any] | None:
     if not uses_agy_images(user_id):
+        logger.warning(
+            "Picture refused: %s is not on KLUKAI_AGY_ALLOWED_USERS", user_id
+        )
         return None
     if (
         not isinstance(prompt, str)
