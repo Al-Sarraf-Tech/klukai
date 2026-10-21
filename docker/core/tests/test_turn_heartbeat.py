@@ -93,7 +93,7 @@ def rt(monkeypatch):
             report.provider, report.model, report.outcome = (
                 "anthropic",
                 "claude-haiku-5-5",
-                "ok",
+                state.get("outcome", "ok"),
             )
             reports["last"] = report
         return state["result"]
@@ -162,6 +162,28 @@ async def test_stale_turn_sends_no_heartbeat(rt):
     rt.applied["value"] = False
     await rt.runtime.process("u", "a", _session(), user_id="u1")
     rt.ws.send_heartbeat.assert_not_awaited()
+    rt.memory.store_exchange.assert_awaited_once()
+
+
+async def test_stale_turn_sends_no_spike(rt):
+    rt.applied["value"] = False
+    rt.state["result"] = _result(
+        mood="breathless", interaction={"type": "flirty", "intensity": 9}
+    )
+    await rt.runtime.process("u", "a", _session(), user_id="u1")
+    rt.ws.send_heartbeat_spike.assert_not_awaited()
+
+
+async def test_placeholder_result_leaves_her_state_alone(rt):
+    """No model answered: the extractor's "composed"/neutral placeholder is not
+    a reading of the turn, so mood, heart rate and affection stay put."""
+    rt.state["outcome"] = "capped->defaults"
+    session = _session()
+    session.mood = "smitten"
+    await rt.runtime.process("u", "a", session, user_id="u1")
+    rt.ws.send_mood.assert_not_awaited()
+    rt.ws.send_heartbeat.assert_not_awaited()
+    rt.affection.apply_classification.assert_not_awaited()
     rt.memory.store_exchange.assert_awaited_once()
 
 

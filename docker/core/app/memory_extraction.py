@@ -77,8 +77,14 @@ class ExtractionRuntime:
                 report=report,
             )
 
+            # No model answered (Haiku capped or failing, Dominus off): the
+            # result is the extractor's placeholder, not a reading of this
+            # turn, so her mood, heart rate and affection stay where they are
+            # instead of snapping back to "composed" and a neutral turn.
+            read = not report.outcome.endswith("defaults")
+
             # Update mood in session + persist to PostgreSQL
-            mood = result.get("mood", "composed")
+            mood = result.get("mood", "composed") if read else session.mood
 
             # Mood contagion: nudge Klukai's mood toward user's sentiment.
             # Small effect — the LLM-detected mood is the primary signal; contagion
@@ -87,22 +93,24 @@ class ExtractionRuntime:
                 from .character_behaviors import nudge_mood, interaction_to_sentiment
 
                 sentiment = interaction_to_sentiment(result.get("interaction"))
-                if sentiment:
+                if sentiment and read:
                     mood = nudge_mood(mood, sentiment)
             except Exception as e:
                 logger.debug("Mood contagion skipped: %s", e)
 
-            try:
-                # Keeps the stale-revision guard: False when a newer turn exists.
-                applied = await self.apply_state(session, mood, user_id)
-            except Exception as e:
-                # Session storage trouble must not cost the turn its facts,
-                # promises or exchange record further down.
-                logger.warning("Mood state not applied (%s)", type(e).__name__)
-                applied = False
+            applied = False
+            if read:
+                try:
+                    # Keeps the stale-revision guard: False when a newer turn exists.
+                    applied = await self.apply_state(session, mood, user_id)
+                except Exception as e:
+                    # Session storage trouble must not cost the turn its facts,
+                    # promises or exchange record further down.
+                    logger.warning("Mood state not applied (%s)", type(e).__name__)
             await self.send_heartbeat(result, mood, user_id, applied, report)
 
-            await self.adjust_affection(result, mood, user_id)
+            if read:
+                await self.adjust_affection(result, mood, user_id, applied)
 
             # Her journal entry goes to THIS turn's picture: the explicit memory
             # id, or the turn's PictureCuration, which holds it until the
@@ -263,7 +271,7 @@ class ExtractionRuntime:
         )
 
     async def adjust_affection(
-        self, result: dict[str, Any], mood: str, user_id: str
+        self, result: dict[str, Any], mood: str, user_id: str, current: bool = True
     ) -> None:
         # Adjust affection using the merged interaction classification (no separate LLM call)
         try:
@@ -278,8 +286,9 @@ class ExtractionRuntime:
                 interaction_type, intensity, user_id
             )
 
-            # Heartbeat spike alert (app/heartbeat.py holds the BPM map).
-            if mood in HIGH_INTENSITY_MOODS and intensity >= 7:
+            # Heartbeat spike alert (app/heartbeat.py holds the BPM map), only
+            # for a turn whose mood landed; a newer turn has its own.
+            if current and mood in HIGH_INTENSITY_MOODS and intensity >= 7:
                 bpm = HIGH_INTENSITY_MOODS[mood]
                 await self.ws.send_heartbeat_spike(user_id, bpm, mood)
                 logger.info(
@@ -419,6 +428,6 @@ class ExtractionRuntime:
                         conversation_id=session.conversation_id,
                         user_id=user_id,
                     )
-                    logger.info("Episode stored: %s", summary[:80])
+                    logger.info("Episode stored (%d chars)", len(summary))
             except Exception as e:
                 logger.warning("Episode creation failed: %s", e)
