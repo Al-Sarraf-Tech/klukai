@@ -111,7 +111,9 @@ class TestDecompressionMessage:
         with _freeze(_AFTERNOON), \
              patch("app.proactive.mission.asyncio.sleep", new=AsyncMock()), \
              patch("app.proactive.mission.random.uniform", return_value=0):
-            await e._decompression_message("alice", had_injury=False, update_count=2)
+            # The daily count is the owner's scheduled state (see
+            # test_mission_user_isolation for another Commander's mission).
+            await e._decompression_message("jalsarraf", had_injury=False, update_count=2)
         assert e._proactive_count_today == before_count + 1
 
 

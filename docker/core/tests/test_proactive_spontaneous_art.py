@@ -118,6 +118,20 @@ class TestSpontaneousArt:
         assert e._last_spontaneous_art is None
 
     @pytest.mark.asyncio
+    async def test_a_piece_the_album_did_not_keep_is_not_announced(self):
+        """save_image returns None when the album drops it (a duplicate of a
+        recent annotation): no gift to announce, and the cooldown stays free."""
+        e = _engine()
+        ws = _ws(connected=True)
+        gen, bp, save, slp = _gen_patches(save=AsyncMock(return_value=None))
+        with gen, bp, save as s, slp, patch("app.context.ws", ws):
+            await e._spontaneous_art_event()
+        s.assert_awaited_once()
+        e._on_message_callback.assert_not_awaited()
+        ws.send.assert_not_awaited()
+        assert e._last_spontaneous_art is None
+
+    @pytest.mark.asyncio
     async def test_save_failure_is_swallowed(self):
         e = _engine()
         boom = AsyncMock(side_effect=RuntimeError("db down"))

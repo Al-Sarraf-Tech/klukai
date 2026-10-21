@@ -340,7 +340,10 @@ class TestMarkUserMessagedToday:
         assert e._user_messaged.get("alice") is True
         assert "bob" not in e._user_messaged
 
-    def test_legacy_compat_flag(self):
+    def test_legacy_flag_is_the_primary_owners(self):
+        """The scalar gates the owner's evening line: only his message sets it."""
         e = ProactiveEngine()
         e.mark_user_messaged_today("alice")
+        assert e._user_messaged_today is False
+        e.mark_user_messaged_today("jalsarraf")
         assert e._user_messaged_today is True

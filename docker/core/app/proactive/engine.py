@@ -128,6 +128,9 @@ class ProactiveEngine(
         # Cleared by his next message (mark_responded); deliberately NOT by the
         # midnight reset, so a 2200 goodnight still holds until 0800.
         self._goodbye_hold_until: datetime | None = None
+        # Other Commanders' own goodbye holds, for lines sent to them alone
+        # (operation briefs); the primary owner's is the scalar above.
+        self._goodbye_holds: dict[str, datetime] = {}
 
     @property
     def _task_logger(self) -> logging.Logger:
@@ -165,7 +168,8 @@ class ProactiveEngine(
     def mark_user_messaged_today(self, user_id: str = "jalsarraf") -> None:
         """Record that the user sent at least one message today."""
         self._user_messaged[user_id] = True
-        self._user_messaged_today = True  # Legacy compat
+        if user_id == "jalsarraf":
+            self._user_messaged_today = True  # Primary-owner scheduled jobs
 
     def start(self) -> None:
         # Morning briefing at 0800
@@ -253,31 +257,58 @@ class ProactiveEngine(
     def unmute(self) -> None:
         self._muted_until = None
 
-    def mark_responded(self) -> None:
+    def mark_responded(self, user_id: str = "jalsarraf") -> None:
         """Mark that the Commander responded to the last proactive message.
 
-        Any message from him also lifts a goodbye hold: he is back.
+        Any message from him also lifts a goodbye hold: he is back. Scheduled
+        pings go to the primary owner, so only his message answers them or
+        lifts their hold; anyone's message still counts as recent activity.
         """
-        self._last_proactive_answered = True
         self._last_message_time = now_local()
+        if user_id != "jalsarraf":
+            self._goodbye_holds.pop(user_id, None)
+            return
+        self._last_proactive_answered = True
         self._goodbye_hold_until = None
 
-    def mark_goodnight(self) -> None:
+    def mark_goodnight(self, user_id: str = "jalsarraf") -> None:
         """He said goodnight: no pings until 0800 local (QUIET_HOUR_END).
 
-        The next 0800, or this morning's if he says it after midnight.
+        The next 0800, or this morning's if he says it after midnight. Only
+        the primary owner's goodnight holds his scheduled pings.
         """
         now = now_local()
         until = now.replace(hour=QUIET_HOUR_END, minute=0, second=0, microsecond=0)
         if now >= until:
             until += timedelta(days=1)
-        self._goodbye_hold_until = until
+        self._hold_for(user_id, until)
         logger.info("Goodnight: proactive pings held until %s", until)
 
-    def mark_leaving(self) -> None:
+    def mark_leaving(self, user_id: str = "jalsarraf") -> None:
         """He signed off ("gotta go"): no pings for LEAVE_HOLD."""
-        self._goodbye_hold_until = now_local() + LEAVE_HOLD
-        logger.info("Goodbye: proactive pings held until %s", self._goodbye_hold_until)
+        until = now_local() + LEAVE_HOLD
+        self._hold_for(user_id, until)
+        logger.info("Goodbye: proactive pings held until %s", until)
+
+    def _hold_for(self, user_id: str, until: datetime) -> None:
+        if user_id == "jalsarraf":
+            self._goodbye_hold_until = until
+        else:
+            self._goodbye_holds[user_id] = until
+
+    def goodbye_hold_active_for(
+        self, user_id: str, now: datetime | None = None
+    ) -> bool:
+        """True while this Commander's own goodbye hold is running."""
+        if user_id == "jalsarraf":
+            return self._goodbye_hold_active(now)
+        until = self._goodbye_holds.get(user_id)
+        if until is None:
+            return False
+        if (now or now_local()) >= until:
+            self._goodbye_holds.pop(user_id, None)
+            return False
+        return True
 
     def _goodbye_hold_active(self, now: datetime | None = None) -> bool:
         """True while a goodbye hold is running; clears it once it lapses."""

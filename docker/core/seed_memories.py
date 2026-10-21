@@ -663,10 +663,9 @@ async def main() -> int:
     conn = await psycopg.AsyncConnection.connect(DATABASE_URL)
 
     if render_cap is not None:
-        # Every run today shares the cap: a second run never draws more.
-        render_cap = min(
-            render_cap, MAX_RENDERS_PER_RUN - await _album_renders_today(conn)
-        )
+        # Every run today shares the cap: a second run never draws more. The
+        # cap is already clamped to MAX_RENDERS_PER_RUN.
+        render_cap -= await _album_renders_today(conn)
         if render_cap <= 0:
             logger.info("Today's album renders are spent; nothing to do")
             await conn.close()

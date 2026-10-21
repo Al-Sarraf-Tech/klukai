@@ -266,9 +266,9 @@ class MilestonesMixin(_EngineBase):
         For every user with activity in the past 30 days, load their
         companion_firsts rows and check if today matches any anniversary
         (via character_behaviors.select_anniversary_from_firsts). If so,
-        deliver a warm remark via ws.send_proactive (when connected) or
-        stash the anniversary as a flag for the morning briefing. Every
-        remark passes the engine's _can_send() gate first.
+        deliver a warm remark via ws.send_proactive, which keeps it in his
+        history, and push it when he is offline. Every remark passes the
+        engine's _can_send() gate first.
         """
         try:
             from ..db import get_pool
@@ -324,12 +324,19 @@ class MilestonesMixin(_EngineBase):
                 try:
                     from ..context import ws
 
-                    if ws.is_connected(user_id):
-                        # Counts toward the daily cap like any proactive line,
-                        # but does not flip _last_proactive_answered: it is the
-                        # opener to the morning greeting, not a question.
+                    # Counts toward the daily cap like any proactive line,
+                    # but does not flip _last_proactive_answered: it is the
+                    # opener to the morning greeting, not a question. The
+                    # cap is the primary owner's scheduled-ping state.
+                    if user_id == "jalsarraf":
                         self._proactive_count_today += 1
-                        await ws.send_proactive(user_id, msg)
+                    # Kept in his history even with no socket open; offline,
+                    # it goes to his device too, so the year's line is not lost.
+                    await ws.send_proactive(user_id, msg)
+                    if not ws.is_connected(user_id):
+                        from ..push import send_push
+
+                        await send_push(title="Klukai", body=msg, user_id=user_id)
                     logger.info(
                         "Anniversary surfaced: user=%s years=%s type=%s",
                         user_id,
@@ -375,10 +382,13 @@ class MilestonesMixin(_EngineBase):
                         await conn.execute(
                             "SELECT role, content FROM companion_messages "
                             "WHERE user_id = %s AND created_at > NOW() - INTERVAL '7 days' "
-                            "ORDER BY created_at ASC LIMIT 200",
+                            # Newest first so a busy week keeps its last days;
+                            # back in order below.
+                            "ORDER BY created_at DESC LIMIT 200",
                             (user_id,),
                         )
                     ).fetchall()
+                rows = rows[::-1]
 
                 if len(rows) < 10:
                     logger.info(
@@ -456,7 +466,10 @@ class MilestonesMixin(_EngineBase):
                         keywords=["weekly_reflection", "journal"],
                         emotion_tags=["reflective"],
                         importance=8,
-                        conversation_id="weekly-reflection",
+                        # No conversation: the Postgres column is a UUID
+                        # foreign key, so a label here lost every Postgres
+                        # copy. The keyword marks it as a reflection.
+                        conversation_id=None,
                         user_id=user_id,
                     )
                     logger.info(

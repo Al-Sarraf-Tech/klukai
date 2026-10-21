@@ -233,3 +233,18 @@ async def test_actual_busy_worker_can_retry_without_duplicate_render(journal_row
         assert worker.db.execute("SELECT value FROM worker_state WHERE key = 'rotation_next'").fetchone() == (1,)
     finally:
         worker.close()
+
+
+@pytest.mark.parametrize("status", ["refused", "failed", "unknown", "unavailable"])
+async def test_a_picture_that_was_not_drawn_is_logged(journal_rows, monkeypatch, caplog, status):
+    """A refusal (the allow-list, the worker's 403) or a failure used to leave
+    no log line at all while he was told the visualization failed."""
+    monkeypatch.setattr(
+        provider, "submit_agy_image", AsyncMock(return_value={"status": status, "image": None})
+    )
+    with caplog.at_level("WARNING", logger="app.account_images"):
+        outcome = await fulfill("show me where you are")
+    assert outcome["phase"] == status
+    lines = [r.getMessage() for r in caplog.records if r.name == "app.account_images"]
+    assert any("alice" in line and status in line for line in lines)
+    assert not any("show me where you are" in line for line in lines)  # never his words

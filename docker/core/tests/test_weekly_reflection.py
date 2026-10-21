@@ -123,7 +123,9 @@ class TestWeeklyReflection:
 
         assert fake_memory.store_episode.called
         kwargs = fake_memory.store_episode.call_args.kwargs
-        assert kwargs["conversation_id"] == "weekly-reflection"
+        # companion_episodes.conversation_id is a UUID foreign key: a label
+        # there fails the Postgres copy of every reflection.
+        assert kwargs["conversation_id"] is None
         assert kwargs["importance"] == 8
         assert kwargs["user_id"] == "alice"
 
@@ -209,3 +211,47 @@ class TestSchedulerRegistration:
             assert "daily_reset" in job_ids  # sanity: other existing jobs still registered
         finally:
             engine.stop()
+
+
+class TestWeeklyReflectionWindow:
+    @pytest.mark.asyncio
+    async def test_a_busy_week_reflects_on_its_latest_messages(self):
+        """Past 200 messages in the week the excerpt must be the newest 80,
+        oldest first, not rows 121-200 from the start of the week."""
+        import re as _re
+
+        import app.context as context_mod
+        from app.proactive import ProactiveEngine
+
+        week = [("user", f"msg {i:03d}") for i in range(300)]
+
+        class _Conn(_FakeConn):
+            async def execute(self, sql, params=None):
+                if "DISTINCT user_id" in sql:
+                    return _FakeRows([("alice",)])
+                found = _re.search(r"ORDER BY created_at (ASC|DESC) LIMIT (\d+)", sql)
+                ordered = list(reversed(week)) if found.group(1) == "DESC" else list(week)
+                return _FakeRows(ordered[: int(found.group(2))])
+
+        class _Pool:
+            def connection(self):
+                return _Conn()
+
+        engine = ProactiveEngine()
+        text = AsyncMock(return_value="x" * 80)
+        fake_memory = MagicMock()
+        fake_memory.store_episode = AsyncMock()
+        orig_memory = context_mod.memory
+        context_mod.memory = fake_memory
+        try:
+            with patch("app.db.get_pool", return_value=_Pool()), \
+                 patch("app.background_llm.text", new=text), \
+                 patch("app.personality.load_personality", return_value={}), \
+                 patch("app.personality.build_character_preamble", return_value="You are Klukai."):
+                await engine._weekly_reflection()
+        finally:
+            context_mod.memory = orig_memory
+        prompt = text.await_args.args[1]
+        assert "msg 299" in prompt and "msg 220" in prompt
+        assert "msg 219" not in prompt
+        assert prompt.index("msg 220") < prompt.index("msg 299")

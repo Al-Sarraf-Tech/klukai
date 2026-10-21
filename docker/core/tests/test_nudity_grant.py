@@ -44,6 +44,36 @@ def test_ordinary_scenes_are_never_granted(text):
     assert nudity_allowed(text, intimate=True, include_commander=False) is False
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Klukai and Groza bathing at the onsen",
+        "Leva and Klukai naked in the hot spring",
+        "1girl, klukai, 2girls, multiple girls, onsen, bathing",
+    ],
+)
+def test_never_granted_when_she_is_not_alone(text):
+    """Klukai alone: another girl in the picture is never part of a grant."""
+    assert nudity_allowed(text, intimate=True, include_commander=False) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Klukai caught in a rain shower on patrol",
+        "Klukai at a baby shower",
+        "planning a bridal shower",
+        "Klukai at the onsen, not naked",
+        "a bath scene but no nudity please",
+        "Klukai by the hot spring without undressing",
+    ],
+)
+def test_his_words_must_actually_ask(text):
+    """Only his words asking for it grant it: weather, parties and a refusal
+    are not requests."""
+    assert nudity_allowed(text, intimate=True, include_commander=False) is False
+
+
 @pytest.fixture
 def agy_on(monkeypatch):
     monkeypatch.setattr(agy, "uses_agy_images", lambda user_id: True)

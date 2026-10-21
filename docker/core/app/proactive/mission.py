@@ -311,8 +311,9 @@ class MissionMixin(_EngineBase):
         else:
             message = random.choice(messages)
 
-        self._proactive_count_today += 1
-        self._last_proactive_answered = False
+        if user_id == "jalsarraf":  # the owner's scheduled-ping counters
+            self._proactive_count_today += 1
+            self._last_proactive_answered = False
         await self._on_message_callback(message, user_id=user_id)
         logger.info(
             "Decompression message delivered (injury=%s, updates=%d)",

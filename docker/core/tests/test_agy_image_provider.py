@@ -70,6 +70,20 @@ def test_selection_requires_explicit_provider_and_exact_user(monkeypatch, provid
     assert agy.uses_agy_images(user_id) is expected
 
 
+def test_an_unset_image_provider_is_the_account_worker(monkeypatch):
+    """selected_provider() reads an unset KLUKAI_IMAGE_PROVIDER as "agy"; the
+    worker gate must agree, or every picture is refused while routed to it."""
+    from app import agy_image_provider as agy
+    from app.image_provider import selected_provider
+
+    monkeypatch.delenv("KLUKAI_IMAGE_PROVIDER", raising=False)
+    monkeypatch.delenv("KLUKAI_CHAT_IMAGE_PROVIDER", raising=False)
+    monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "jalsarraf")
+    assert selected_provider() == "agy"
+    assert agy.uses_agy_images("jalsarraf") is True
+    assert agy.uses_agy_images("tj") is False
+
+
 async def test_posts_authenticated_identity_once_and_strips_output_metadata(agy_config, monkeypatch):
     from app import agy_image_provider as agy
 

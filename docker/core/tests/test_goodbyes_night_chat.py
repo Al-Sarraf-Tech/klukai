@@ -18,7 +18,10 @@ _DAY = datetime(2026, 10, 4, 14, 0)
 _NIGHT = datetime(2026, 10, 5, 2, 10)
 
 
-async def _run(content: str, *, at: datetime = _DAY, late_nights=None, **pipeline_kw):
+async def _run(
+    content: str, *, at: datetime = _DAY, late_nights=None, user_id: str = "default",
+    **pipeline_kw,
+):
     from app.chat_handlers import _handle_message
 
     captured: dict = {}
@@ -35,7 +38,7 @@ async def _run(content: str, *, at: datetime = _DAY, late_nights=None, **pipelin
         ns.memory.store_fact = AsyncMock()
         with patch("app.chat_handlers.router", ns.router), \
              patch("app.night_watch.now_local", return_value=at):
-            await _handle_message(content, _fresh_session())
+            await _handle_message(content, _fresh_session(), user_id)
             await _drain_tasks()
     return captured["sys"], ns
 
@@ -46,7 +49,7 @@ class TestGoodbyeWiring:
         prompt, ns = await _run("goodnight, Klukai", aff_level=7)
         assert "DEPARTURE" in prompt
         assert "I'll be here." in prompt
-        ns.proactive.mark_goodnight.assert_called_once_with()
+        ns.proactive.mark_goodnight.assert_called_once_with(user_id="default")
         ns.proactive.mark_leaving.assert_not_called()
         # Activity tracking still ran first (it clears any earlier hold).
         ns.proactive.mark_responded.assert_called_once()
@@ -56,7 +59,7 @@ class TestGoodbyeWiring:
         prompt, ns = await _run("gotta go, sorry!", aff_level=1)
         assert "DEPARTURE" in prompt
         assert "Dismissed." in prompt
-        ns.proactive.mark_leaving.assert_called_once_with()
+        ns.proactive.mark_leaving.assert_called_once_with(user_id="default")
         ns.proactive.mark_goodnight.assert_not_called()
 
     @pytest.mark.asyncio
@@ -65,6 +68,14 @@ class TestGoodbyeWiring:
         assert "DEPARTURE" not in prompt
         ns.proactive.mark_goodnight.assert_not_called()
         ns.proactive.mark_leaving.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_activity_and_goodbye_carry_the_commander(self):
+        """The proactive hold is the owner's: every mark names who spoke."""
+        _, ns = await _run("goodnight, Klukai", aff_level=7, user_id="tj")
+        ns.proactive.mark_user_messaged_today.assert_called_once_with(user_id="tj")
+        ns.proactive.mark_responded.assert_called_once_with(user_id="tj")
+        ns.proactive.mark_goodnight.assert_called_once_with(user_id="tj")
 
     @pytest.mark.asyncio
     async def test_birthday_block_still_lands_last(self):
@@ -100,4 +111,4 @@ class TestNightWatchWiring:
         assert "DEPARTURE" in prompt and "NIGHT WATCH" in prompt
         assert prompt.index("DEPARTURE") < prompt.index("NIGHT WATCH")
         assert prompt.endswith("COMMANDER'S BIRTHDAY: today")
-        ns.proactive.mark_goodnight.assert_called_once_with()
+        ns.proactive.mark_goodnight.assert_called_once_with(user_id="default")

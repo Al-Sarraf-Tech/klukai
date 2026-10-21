@@ -110,6 +110,17 @@ async def test_haiku_invalid_mood_still_defaults_to_composed(haiku):
     assert out["mood"] == "composed"
 
 
+@pytest.mark.parametrize("mood", [["tender", "protective"], {"primary": "tender"}])
+async def test_haiku_mood_that_is_not_a_string_defaults_to_composed(haiku, mood):
+    """An unhashable mood used to raise out of extract_facts, losing the whole
+    turn: mood, heart rate, affection, facts and the exchange record."""
+    complete, _, _, _ = haiku
+    complete.return_value = json.dumps({**GOOD, "mood": mood})
+    out = await fe.extract_facts("hi", "hello")
+    assert out["mood"] == "composed"
+    assert out["facts"] == GOOD["facts"]
+
+
 @pytest.mark.parametrize(
     ("effect", "reason"),
     [

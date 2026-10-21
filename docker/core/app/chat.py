@@ -66,8 +66,14 @@ def _mission_is_stale(started_at: str | None) -> bool:
 
 
 async def _handle_tap_interact(user_id: str) -> None:
-    """Handle tap interaction — deliver a short proactive comment."""
-    if proactive and proactive._can_send():
+    """Handle tap interaction — deliver a short proactive comment.
+
+    The proactive line goes to the primary owner, so anyone else's tap gets
+    the plain acknowledgment on their own socket instead.
+    """
+    from .decisions import PRIMARY_USER
+
+    if user_id == PRIMARY_USER and proactive and proactive._can_send():
         await proactive.trigger_tap()
     else:
         # Fallback: send a simple acknowledgment if proactive can't send

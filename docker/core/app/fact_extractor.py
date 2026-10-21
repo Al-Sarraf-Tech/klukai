@@ -250,7 +250,7 @@ async def extract_facts(
 
     # Validate mood
     mood = result.get("mood", "composed")
-    if mood not in VALID_MOODS:
+    if not isinstance(mood, str) or mood not in VALID_MOODS:
         logger.warning("Invalid mood '%s', defaulting to composed", mood)
         mood = "composed"
 

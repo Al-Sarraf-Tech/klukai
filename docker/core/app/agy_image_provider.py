@@ -38,6 +38,8 @@ def commander_reference_allowed(user_id: str | None) -> bool:
 
 def uses_agy_images(user_id: str | None) -> bool:
     """Only authenticated allowlisted identities may use the selected worker."""
+    from .image_provider import selected_provider
+
     allowed = {
         user.strip()
         for user in os.environ.get("KLUKAI_AGY_ALLOWED_USERS", "").split(",")
@@ -46,7 +48,8 @@ def uses_agy_images(user_id: str | None) -> bool:
     return (
         (
             os.environ.get("KLUKAI_CHAT_IMAGE_PROVIDER", "").strip().lower() == "agy"
-            or os.environ.get("KLUKAI_IMAGE_PROVIDER", "").strip().lower() == "agy"
+            # Unset means the account worker, exactly as selected_provider() reads it.
+            or selected_provider() == "agy"
         )
         and bool(user_id)
         and user_id in allowed

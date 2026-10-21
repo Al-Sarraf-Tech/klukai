@@ -128,10 +128,30 @@ class TestTapInteract:
         ws.send_proactive = AsyncMock()
 
         with patch("app.chat.proactive", proactive), patch("app.chat.ws", ws):
-            await _handle_tap_interact("u1")
+            await _handle_tap_interact("jalsarraf")
 
         proactive.trigger_tap.assert_awaited_once()
         ws.send_proactive.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_another_commanders_tap_is_answered_to_him(self):
+        """The proactive tap line is delivered to the primary owner, so a tap
+        from anyone else must never land in the owner's history."""
+        from app.chat import _handle_tap_interact
+
+        proactive = MagicMock()
+        proactive._can_send = MagicMock(return_value=True)
+        proactive.trigger_tap = AsyncMock()
+        ws = MagicMock()
+        ws.send_proactive = AsyncMock()
+
+        with patch("app.chat.proactive", proactive), patch("app.chat.ws", ws):
+            await _handle_tap_interact("tj")
+
+        proactive.trigger_tap.assert_not_called()
+        ws.send_proactive.assert_awaited_once()
+        assert ws.send_proactive.await_args.args[0] == "tj"
+        assert ws.send_proactive.await_args.kwargs == {"persist": False}
 
     @pytest.mark.asyncio
     async def test_tap_falls_back_to_ack_when_blocked(self):

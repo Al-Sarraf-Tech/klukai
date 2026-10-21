@@ -314,6 +314,24 @@ class TestSaveImage:
         assert params[10] == "Mission Records"  # default category
 
     @pytest.mark.asyncio
+    async def test_missing_annotation_log_never_quotes_his_words(self, caplog):
+        """A chat picture's prompt opens with his own request: chat text is
+        never written to the log."""
+        from app.memory_archive import save_image
+
+        conn = _RecordingConn()
+        with caplog.at_level("WARNING", logger="app.memory_archive"):
+            async with _save_image_env(conn):
+                mem_id = await save_image(
+                    image_bytes=b"x",
+                    prompt="his private request about tonight",
+                    conversation_id="c",
+                )
+        assert mem_id is not None
+        assert "saved without annotation" in caplog.text
+        assert "private request" not in caplog.text
+
+    @pytest.mark.asyncio
     async def test_duplicate_skips_insert_and_cleans_files(self):
         """A duplicate annotation -> no DB row + both written files unlinked,
         and None returned to the caller."""

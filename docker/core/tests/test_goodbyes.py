@@ -416,6 +416,61 @@ class TestGoodbyeHold:
         e._on_message_callback.assert_not_awaited()
 
 
+
+class TestGoodbyeHoldBelongsToTheOwner:
+    """Scheduled pings go to the primary owner only, so only his own goodbye or
+    return may change their hold; another Commander's chat must not."""
+
+    def test_another_commanders_goodnight_does_not_hold_the_owner(self):
+        e = _clear_engine()
+        with _at(datetime(2026, 10, 4, 21, 30)):
+            e.mark_goodnight(user_id="tj")
+            e.mark_leaving(user_id="tj")
+            assert e._goodbye_hold_until is None
+            assert e._can_send() is True
+
+    def test_another_commanders_message_keeps_the_owners_hold(self):
+        e = _clear_engine()
+        e._last_proactive_answered = False
+        with _at(datetime(2026, 10, 4, 21, 30)):
+            e.mark_goodnight(user_id="jalsarraf")
+            e.mark_responded(user_id="tj")
+        assert e._goodbye_hold_until == datetime(2026, 10, 5, 8, 0)
+        assert e._last_proactive_answered is False
+
+    def test_another_commanders_goodbye_holds_his_own_lines(self):
+        """His own per-user lines (an operation brief) still wait after his
+        goodbye, and his next message lifts that hold."""
+        e = _clear_engine()
+        with _at(datetime(2026, 10, 4, 14, 0)):
+            e.mark_leaving(user_id="tj")
+            assert e.goodbye_hold_active_for("tj") is True
+            assert e.goodbye_hold_active_for("jalsarraf") is False
+            e.mark_responded(user_id="tj")
+            assert e.goodbye_hold_active_for("tj") is False
+            e.mark_goodnight(user_id="tj")
+        with _at(datetime(2026, 10, 5, 7, 59)):
+            assert e.goodbye_hold_active_for("tj") is True
+        with _at(datetime(2026, 10, 5, 8, 0)):
+            assert e.goodbye_hold_active_for("tj") is False
+
+    def test_the_owners_hold_is_his_scheduled_hold(self):
+        e = _clear_engine()
+        with _at(datetime(2026, 10, 4, 21, 30)):
+            e.mark_goodnight(user_id="jalsarraf")
+            assert e.goodbye_hold_active_for("jalsarraf") is True
+            assert e.goodbye_hold_active_for("tj") is False
+
+    def test_the_owners_own_goodbye_and_return_still_work(self):
+        e = _clear_engine()
+        e._last_proactive_answered = False
+        with _at(datetime(2026, 10, 4, 21, 30)):
+            e.mark_goodnight(user_id="jalsarraf")
+            assert e._goodbye_hold_until == datetime(2026, 10, 5, 8, 0)
+            e.mark_responded(user_id="jalsarraf")
+        assert e._goodbye_hold_until is None
+        assert e._last_proactive_answered is True
+
 _HELD = datetime(2026, 10, 4, 14, 0)
 
 

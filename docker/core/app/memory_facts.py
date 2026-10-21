@@ -28,17 +28,29 @@ class MemoryFactsMixin:
             logger.warning("store_fact failed for %s: %s", key, e)
 
     async def recall_fact(self, key: str, user_id: str = "jalsarraf") -> str | None:
+        full_key = f"companion:{user_id}:{key}"
         try:
             r = await http_request(
                 "data",
                 self._http,
                 "get",
                 f"{DATA_URL}/memory/recall",
-                params={"key": f"companion:{user_id}:{key}"},
+                params={"key": full_key},
             )
             data = json_object(r.json())
             if data.get("found"):
                 value = data.get("value")
+                if value is None:
+                    # The data service answers a key lookup with its row in
+                    # ``entries`` ({key, value, ts}), not a top-level value.
+                    value = next(
+                        (
+                            entry.get("value")
+                            for entry in json_objects(data.get("entries", []))
+                            if entry.get("key") == full_key
+                        ),
+                        None,
+                    )
                 return value if isinstance(value, str) else None
         except Exception as e:
             logger.warning("recall_fact failed for %s: %s", key, e)

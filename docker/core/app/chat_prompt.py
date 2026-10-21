@@ -384,9 +384,9 @@ class ChatPromptBuilder:
         goodbye = detect_goodbye(content)
         if goodbye:
             if goodbye == "night":
-                self.proactive.mark_goodnight()
+                self.proactive.mark_goodnight(user_id=user_id)
             else:
-                self.proactive.mark_leaving()
+                self.proactive.mark_leaving(user_id=user_id)
             system_prompt += (
                 f"\n\n{build_departure_block(_p, goodbye, aff_state.level)}"
             )
