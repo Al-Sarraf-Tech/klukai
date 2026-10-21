@@ -123,7 +123,9 @@ class TestWeeklyReflection:
 
         assert fake_memory.store_episode.called
         kwargs = fake_memory.store_episode.call_args.kwargs
-        assert kwargs["conversation_id"] == "weekly-reflection"
+        # companion_episodes.conversation_id is a UUID foreign key: a label
+        # there fails the Postgres copy of every reflection.
+        assert kwargs["conversation_id"] is None
         assert kwargs["importance"] == 8
         assert kwargs["user_id"] == "alice"
 

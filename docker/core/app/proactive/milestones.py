@@ -458,7 +458,10 @@ class MilestonesMixin(_EngineBase):
                         keywords=["weekly_reflection", "journal"],
                         emotion_tags=["reflective"],
                         importance=8,
-                        conversation_id="weekly-reflection",
+                        # No conversation: the Postgres column is a UUID
+                        # foreign key, so a label here lost every Postgres
+                        # copy. The keyword marks it as a reflection.
+                        conversation_id=None,
                         user_id=user_id,
                     )
                     logger.info(

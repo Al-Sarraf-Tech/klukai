@@ -255,7 +255,8 @@ async def test_weekly_reflection_on_haiku_with_her_preamble(haiku_only):
         context_mod.memory, context_mod.router = orig
     kwargs = memory.store_episode.await_args.kwargs
     assert kwargs["summary"] == reflection
-    assert kwargs["conversation_id"] == "weekly-reflection"
+    # companion_episodes.conversation_id is a UUID foreign key.
+    assert kwargs["conversation_id"] is None
     prompt, sent = _sent(haiku_only)
     assert prompt.startswith("Write a private weekly reflection journal entry")
     assert sent == {
