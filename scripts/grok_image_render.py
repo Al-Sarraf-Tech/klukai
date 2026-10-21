@@ -1,8 +1,12 @@
 """One native Grok reference edit, under the owner's confirmed $0 extra-usage cap.
 
-The official client reads its auth file through a read-only bind mount. Refresh
-that requires rewriting that file fails closed; refresh via the owner's normal
-login outside this worker. No credential bytes enter Python or a repository.
+The official client runs directly, without a sandbox (owner directive
+2026-10-21), in its own clean Grok home (no owner MCP servers, hooks or skills),
+and reads and renews the account's real login through GROK_AUTH_PATH. The old
+read-only bind mount made every token renewal fail and signed the account out.
+Its tools stay limited to one image_edit of the approved references, because
+the brief can carry another account's typed words. No credential bytes enter
+Python or a repository.
 """
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -75,31 +80,45 @@ for _vendor in ('claude', 'cursor', 'codex'):
         CONFIG += 'agents=false\nmcps=false\nrules=false\n'
 
 
-def environment(source=None):
+def environment(source=None, *, home=None, auth=None):
+    """The CLI's environment: no inherited secrets or provider overrides.
+
+    ``home`` is the render's own clean Grok home (no owner MCP servers, hooks or
+    skills); ``auth`` is the account's real login file, read and renewed in
+    place, so a token Grok renews mid-render is kept (owner directive
+    2026-10-21: no sandbox; the read-only copy inside one lost every renewal
+    and signed the account out).
+    """
     source = os.environ if source is None else source
     env = {k: source[k] for k in ('HOME', 'USER', 'LOGNAME', 'LANG') if k in source}
+    if home is not None:
+        env['HOME'] = str(home)
     env.update(PATH='/usr/bin:/bin', NO_COLOR='1', GROK_DISABLE_AUTOUPDATER='1',
                GROK_DISABLE_API_KEY_AUTH='1', GROK_CAMPAIGNS='0',
                GROK_HOME=str(Path(env.get('HOME', str(Path.home()))) / '.grok'))
+    if auth is not None:
+        env['GROK_AUTH_PATH'] = str(auth)
     return env
 
 
 def prepare(root: Path, images: set[str]):
     profile, work = root/'profile', root/'work'
     profile.mkdir(mode=0o700); work.mkdir(mode=0o700)
+    gate = root/'gate'; gate.mkdir(mode=0o700)
+    shutil.copyfile(Path(__file__).with_name('grok_image_gate.py'), gate/'gate.py')
+    (gate/'policy.json').write_text(json.dumps({'images': sorted(images)}))
     config = profile/'.grok'; config.mkdir()
     (config/'config.toml').write_text(CONFIG)
     hooks = config/'hooks'; hooks.mkdir()
     (hooks/'image-gate.json').write_text(json.dumps({'hooks': {'PreToolUse': [{
         'matcher': '*', 'hooks': [{'type': 'command',
-          'command': '/usr/bin/python3 /gate/gate.py', 'timeout': 5}]}]}}))
-    gate = root/'gate'; gate.mkdir(mode=0o700)
-    shutil.copyfile(Path(__file__).with_name('grok_image_gate.py'), gate/'gate.py')
-    (gate/'policy.json').write_text(json.dumps({'images': sorted(images)}))
+          'command': '/usr/bin/python3 ' + shlex.quote(str(gate/'gate.py')), 'timeout': 5}]}]}}))
     return profile, work
 
 
 def command(profile: Path, work: Path, args: list[str], *, auth=None, binary=None):
+    """The pinned CLI itself, run directly (no sandbox, owner directive
+    2026-10-21); execute() gives it the render's home and the real login."""
     home = Path.home()
     if binary is None:
         name = f'grok-{VERSION}-linux-x86_64'
@@ -108,24 +127,7 @@ def command(profile: Path, work: Path, args: list[str], *, auth=None, binary=Non
     auth = auth or home/'.grok/auth.json'
     if not binary.is_file() or not auth.is_file() or auth.is_symlink():
         raise agy.ProviderUnavailable('Native Grok account credentials or pinned executable unavailable')
-    cmd = ['/usr/bin/bwrap', '--die-with-parent', '--new-session', '--unshare-pid', '--unshare-ipc',
-           '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin',
-           '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
-           '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--dir', '/etc']
-    # Only public runtime configuration, never host /etc/grok or service secrets.
-    for name in ('resolv.conf', 'hosts', 'nsswitch.conf', 'passwd', 'group', 'ssl'):
-        path = Path('/etc')/name
-        if path.exists(): cmd += ['--ro-bind', str(path.resolve()), str(path)]
-    cmd += ['--bind', str(profile), str(home),
-            '--ro-bind', str(auth), str(home/'.grok/auth.json'),
-            '--ro-bind', str(profile/'.grok/config.toml'), str(home/'.grok/config.toml'),
-            '--ro-bind', str(profile/'.grok/hooks'), str(home/'.grok/hooks'),
-            '--ro-bind', str(binary), '/opt/grok',
-            '--ro-bind', str(profile.parent/'gate'), '/gate',
-            '--bind', str(work), '/work']
-    for path in sorted(work.glob('*.png')):
-        cmd += ['--ro-bind', str(path), '/work/'+path.name]
-    return cmd + ['--chdir', '/work', '/opt/grok'] + args
+    return [str(binary)] + args
 
 
 def provider_error(message: str):
@@ -211,11 +213,16 @@ def parse_stream(raw: str, session: str, images: set[str]):
 def artifact(profile: Path, session: str, references: list[bytes]) -> bytes:
     try:
         if str(uuid.UUID(session)) != session: raise ValueError('session')
-        relative = Path('.grok/sessions/%2Fwork')/session/'images'
-        current = profile
-        for part in relative.parts:
-            current /= part
+        # Grok files a session under its encoded working directory.
+        sessions = profile/'.grok'/'sessions'
+        if sessions.is_symlink() or not sessions.is_dir(): raise ValueError('directory')
+        found = [d for d in sessions.iterdir() if (d/session).exists()]
+        if len(found) != 1: raise ValueError('session')
+        current = found[0]
+        for part in (session, 'images'):
             if current.is_symlink() or not current.is_dir(): raise ValueError('directory')
+            current /= part
+        if current.is_symlink() or not current.is_dir(): raise ValueError('directory')
         files = list(current.iterdir())
         if len(files) != 1 or files[0].is_symlink() or not files[0].is_file():
             raise ValueError('image count')
@@ -229,7 +236,9 @@ def artifact(profile: Path, session: str, references: list[bytes]) -> bytes:
 
 def execute(profile: Path, work: Path, args: list[str], timeout=170) -> str:
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        process = subprocess.Popen(command(profile, work, args), env=environment(),
+        auth = Path.home()/'.grok/auth.json'
+        process = subprocess.Popen(command(profile, work, args, auth=auth), cwd=work,
+            env=environment(home=profile, auth=auth),
             stdin=subprocess.DEVNULL, stdout=out, stderr=err, start_new_session=True)
         try:
             process.wait(timeout=timeout)
@@ -255,8 +264,8 @@ def render(request: dict, references: dict) -> bytes:
     try: inputs = {name: read_image(references[name]) for name in selected}
     except (ValueError, KeyError, TypeError) as exc:
         raise agy.RuntimeError('Approved image references are unavailable') from exc
-    paths = {'/work/'+name+'.png' for name in inputs}
     with tempfile.TemporaryDirectory(prefix='klukai-grok-render-') as temp:
+        paths = {str(Path(temp)/'work'/(name+'.png')) for name in inputs}
         profile, work = prepare(Path(temp), paths)
         for name, data in inputs.items(): (work/(name+'.png')).write_bytes(data)
         session = str(uuid.uuid4())

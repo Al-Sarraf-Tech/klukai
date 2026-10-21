@@ -3,8 +3,13 @@ import json
 from pathlib import Path
 import sys
 
+# The renderer lays out <root>/gate (this file, policy.json) beside <root>/work.
+GATE = Path(__file__).resolve().parent
+WORK = GATE.parent / 'work'
 
-def decide(call, policy, claim=Path('/work/generation-started')):
+
+def decide(call, policy, claim=None):
+    claim = WORK / 'generation-started' if claim is None else claim
     if not isinstance(call, dict) or call.get('toolInputTruncated'):
         return 'deny'
     args = call.get('toolInput')
@@ -28,11 +33,11 @@ def main():
     decision = 'deny'
     try:
         call = json.loads(sys.stdin.read(65537))
-        policy = json.loads(Path('/gate/policy.json').read_text())
+        policy = json.loads((GATE / 'policy.json').read_text())
         decision = decide(call, policy)
         record = {'tool': call.get('toolName'), 'decision': decision,
                   'session': call.get('sessionId'), 'id': call.get('toolUseId')}
-        with Path('/work/gate-audit.ndjson').open('a') as handle:
+        with (WORK / 'gate-audit.ndjson').open('a') as handle:
             handle.write(json.dumps(record) + '\n')
     except Exception:
         decision = 'deny'

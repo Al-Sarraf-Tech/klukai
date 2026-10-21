@@ -165,29 +165,40 @@ def test_environment_drops_secrets_and_provider_overrides():
     assert not any(k in env for k in ['XAI_API_KEY','GROK_CONFIG','GROK_AUTH_PROVIDER_COMMAND','DBUS_SESSION_BUS_ADDRESS'])
 
 
-def test_sparse_sandbox_cannot_read_owner_config_or_modify_auth(tmp_path):
-    m=module(); profile,work=m.prepare(tmp_path, {'/work/klukai.png'})
-    auth=tmp_path/'auth'; auth.write_text('test credential fixture')
+def test_runs_unsandboxed_in_its_own_home_with_the_real_login(tmp_path):
+    """Owner directive 2026-10-21: no sandbox. The CLI runs directly with a
+    clean home of its own and the account's real login, which it can renew."""
+    m=module(); profile,work=m.prepare(tmp_path, {str(tmp_path/'work'/'klukai.png')})
+    auth=tmp_path/'auth.json'; auth.write_text('test credential fixture')
     binary=Path('/usr/bin/true')
-    code='''import os,pathlib
-h=pathlib.Path.home()
-assert (h/'.grok/auth.json').read_text()=='test credential fixture'
-assert not (h/'.ssh').exists()
-assert not pathlib.Path('/run/user').exists()
-assert not pathlib.Path('/etc/grok').exists()
-try: (h/'.grok/auth.json').write_text('corrupt')
-except OSError: pass
-else: raise AssertionError('auth writable')
-try: (h/'.grok/config.toml').write_text('corrupt')
-except OSError: pass
-else: raise AssertionError('config writable')
-print('isolated')'''
-    cmd=m.command(profile,work,[],auth=auth,binary=binary)
-    cmd=cmd[:-1]+['/usr/bin/python3','-c',code]
-    run=subprocess.run(cmd,env=m.environment(),capture_output=True,text=True,timeout=10)
+    assert m.command(profile,work,['--single','x'],auth=auth,binary=binary) == ['/usr/bin/true','--single','x']
+    env=m.environment({'HOME': '/home/owner', 'XAI_API_KEY': 'secret'}, home=profile, auth=auth)
+    assert env['HOME']==str(profile) and env['GROK_HOME']==str(profile/'.grok')
+    assert env['GROK_AUTH_PATH']==str(auth) and 'XAI_API_KEY' not in env
+    code="""import os,pathlib
+a=pathlib.Path(os.environ['GROK_AUTH_PATH'])
+assert a.read_text()=='test credential fixture'
+a.write_text('renewed login')
+assert pathlib.Path.home()==pathlib.Path(os.environ['HOME'])
+print('direct')"""
+    run=subprocess.run(['/usr/bin/python3','-c',code],env=env,cwd=work,capture_output=True,text=True,timeout=10)
     assert run.returncode == 0,run.stderr
-    assert run.stdout.strip()=='isolated'
-    assert auth.read_text()=='test credential fixture'
+    assert run.stdout.strip()=='direct'
+    assert auth.read_text()=='renewed login'  # a renewal is kept
+
+
+def test_the_gate_hook_finds_its_policy_and_work_beside_itself(tmp_path):
+    m=module(); image=str(tmp_path/'work'/'klukai.png')
+    profile,work=m.prepare(tmp_path, {image})
+    hook=json.loads((profile/'.grok/hooks/image-gate.json').read_text())
+    command=hook['hooks']['PreToolUse'][0]['hooks'][0]['command']
+    assert command == '/usr/bin/python3 ' + str(tmp_path/'gate'/'gate.py')
+    call={'toolName':'image_edit','toolInput':{'image':[image],'prompt':'Draw'},'sessionId':'s','toolUseId':'t'}
+    run=subprocess.run(['/usr/bin/python3',str(tmp_path/'gate'/'gate.py')],input=json.dumps(call),
+                       capture_output=True,text=True,timeout=10)
+    assert run.returncode == 0 and json.loads(run.stdout)['decision']=='allow'
+    assert (work/'generation-started').exists()
+    assert json.loads((work/'gate-audit.ndjson').read_text())['decision']=='allow'
 
 
 def test_pinned_copy_is_preferred_and_downloads_are_the_fallback(tmp_path, monkeypatch):
