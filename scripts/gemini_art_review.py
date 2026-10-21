@@ -143,9 +143,10 @@ def review_one(entry: dict, refs: list, *, model: str, timeout: int) -> dict:
         for index, ref in enumerate(refs):
             name = f"reference-{index}.png"
             (work / name).write_bytes(read_image(ref))
-            references.append("/work/" + name)
+            references.append(str(work / name))
         (work / "candidate.png").write_bytes(read_image(entry))
-        required = set(references + ["/work/candidate.png"])
+        candidate = str(work / "candidate.png")
+        required = set(references + [candidate])
         agy.configure_gate(work, required)
         prompt = (
             "Use view_file to inspect EVERY listed image before reviewing this fictional adult anime character. "
@@ -156,7 +157,7 @@ def review_one(entry: dict, refs: list, *, model: str, timeout: int) -> dict:
             "Give advisory evidence, no overall pass/fail, no automatic fixes. Use finish to return the schema fields directly. "
             "Return JSON id, summary, checks (criterion, status, evidence).\n"
             + json.dumps({"id": entry["id"], "expected_outfit": entry["expected"],
-                          "references": references, "candidate": "/work/candidate.png"})
+                          "references": references, "candidate": candidate})
         )
         args = ["--agent", agy.AGENT, "--model", model, "--disable-slash-commands",
                 "--print-timeout", f"{timeout - 5}s", "--output-format", "stream-json",

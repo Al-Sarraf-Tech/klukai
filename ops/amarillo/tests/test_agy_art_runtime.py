@@ -49,14 +49,14 @@ def test_watchdog_kills_hung_process_and_does_not_retry(tmp_path, monkeypatch):
     script.write_text('from pathlib import Path\nimport time\np=Path('+repr(str(marker))+')\np.write_text(p.read_text()+"x" if p.exists() else "x")\ntime.sleep(60)\n')
     monkeypatch.setattr(m,'command',lambda *a:[sys.executable,str(script)])
     with pytest.raises(m.RuntimeError,match='timed out'):
-        m._execute(tmp_path,tmp_path,[],0.2,tmp_path/'socket')
+        m.execute(tmp_path,tmp_path,[],0.2)
     assert marker.read_text()=='x'
 
 def test_nonzero_cli_cannot_leak_raw_error_into_report(tmp_path, monkeypatch):
     import sys
     m=runtime()
     monkeypatch.setattr(m,'command',lambda *a:[sys.executable,'-c','import sys;print("private data",file=sys.stderr);sys.exit(9)'])
-    with pytest.raises(m.RuntimeError) as e: m._execute(tmp_path,tmp_path,[],5,tmp_path/'socket')
+    with pytest.raises(m.RuntimeError) as e: m.execute(tmp_path,tmp_path,[],5)
     assert 'private data' not in str(e.value)
     assert '9' in str(e.value)
 
@@ -68,6 +68,8 @@ def test_profile_disables_credit_fallback_and_global_tools(tmp_path):
     assert 'command(*)' in settings['permissions']['deny']
     assert 'mcp(*)' in settings['permissions']['deny']
     assert not (profile/'.gemini/GEMINI.md').exists()
+    assert settings['permissions']['allow']==[f'read_file({work})']
+    assert settings['trustedWorkspaces']==[str(work)]
 
 def test_gate_blocks_generation_commands_and_unselected_files():
     spec=importlib.util.spec_from_file_location('agy_art_gate', SCRIPT.with_name('agy_art_gate.py'))
@@ -162,18 +164,57 @@ def test_policy_and_unclassified_tool_errors_do_not_permit_failover(message):
 def test_plain_numbers_or_refusals_are_not_service_statuses(message):
     assert not runtime().service_unavailable({'message':message})
 
+def installed(tmp_path, monkeypatch):
+    m=runtime();monkeypatch.setattr(m.Path,'home',lambda:tmp_path)
+    binary=tmp_path/'.local/opt/antigravity-cli'/m.VERSION/'agy'
+    binary.parent.mkdir(parents=True);binary.write_text('')
+    bus=tmp_path/'bus';bus.write_text('')
+    return m,binary,'unix:path='+str(bus)
+
 def test_missing_native_account_runtime_is_failover_eligible(tmp_path, monkeypatch):
     m=runtime();monkeypatch.setattr(m.Path,'home',lambda:tmp_path)
-    with pytest.raises(m.ProviderUnavailable):m.command(tmp_path,tmp_path,[],tmp_path/'missing')
+    with pytest.raises(m.ProviderUnavailable):m.command(tmp_path,tmp_path,[],'unix:path='+str(tmp_path/'bus'))
 
-def test_failed_keyring_proxy_is_failover_eligible(tmp_path, monkeypatch):
-    m=runtime()
-    class FailedProxy:
-        def poll(self):return 1
-        def terminate(self):pass
-        def wait(self,**kw):return 1
-    monkeypatch.setattr(m.subprocess,'Popen',lambda *a,**kw:FailedProxy())
-    with pytest.raises(m.ProviderUnavailable):m.execute(tmp_path,tmp_path,[],10)
+def test_missing_keyring_session_is_failover_eligible(tmp_path, monkeypatch):
+    m,_,_=installed(tmp_path, monkeypatch)
+    with pytest.raises(m.ProviderUnavailable):m.command(tmp_path,tmp_path,[],'unix:path='+str(tmp_path/'gone'))
+
+def test_runs_unsandboxed_in_its_own_home(tmp_path, monkeypatch):
+    """Owner directive 2026-10-21: no sandbox. The CLI runs directly, with the
+    run's own profile as HOME and the session bus for its keyring login."""
+    m,binary,bus=installed(tmp_path, monkeypatch)
+    (tmp_path/'run').mkdir();profile,work=m.prepare(tmp_path/'run')
+    assert m.command(profile,work,['--print','x'],bus)==[str(binary),'--print','x']
+    env=m.environment({'HOME':'/home/owner','DBUS_SESSION_BUS_ADDRESS':bus,'GEMINI_API_KEY':'secret'},home=profile)
+    assert env['HOME']==str(profile) and env['DBUS_SESSION_BUS_ADDRESS']==bus
+    assert 'GEMINI_API_KEY' not in env
+    seen={}
+    class Done:
+        pid=0;returncode=0
+        def wait(self,timeout=None):return 0
+    def popen(cmd,**kw):
+        seen.update(kw,cmd=cmd);kw['stdout'].write(b'ok');return Done()
+    monkeypatch.setattr(m.subprocess,'Popen',popen)
+    monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS',bus)
+    assert m.execute(profile,work,['--print','x'],5)=='ok'
+    assert seen['cmd'][0]==str(binary) and 'bwrap' not in ' '.join(seen['cmd'])
+    assert seen['cwd']==work and seen['env']['HOME']==str(profile)
+
+def test_the_gate_hook_finds_its_policy_and_work_beside_itself(tmp_path):
+    import subprocess
+    m=runtime();profile,work=m.prepare(tmp_path,generation=True)
+    image=str(work/'klukai.png')
+    m.configure_gate(work,{image},generation=True)
+    hooks=json.loads((work/'.agents/hooks.json').read_text())
+    command=hooks['klukai-art-gate']['PreToolUse'][0]['hooks'][0]['command']
+    assert command=='/usr/bin/python3 '+str(work/'.agents/gate.py')
+    for call in ({'name':'view_file','args':{'AbsolutePath':image}},
+                 {'name':'generate_image','args':{'ImagePaths':[image]}}):
+        run=subprocess.run(['/usr/bin/python3',str(work/'.agents/gate.py')],
+                           input=json.dumps({'toolCall':call,'stepIdx':1}),capture_output=True,text=True,timeout=10)
+        assert run.returncode==0 and json.loads(run.stdout)['decision']=='allow'
+    assert (work/'generation-started').exists()
+    m.verify_gate(work,{image},generation=True)
 
 def test_later_refusal_prevents_failover_from_earlier_server_error():
     m=runtime();rows=[json.loads(x) for x in generation_stream().splitlines()]

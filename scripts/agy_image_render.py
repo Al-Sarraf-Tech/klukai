@@ -78,7 +78,7 @@ def render(request: dict, references: dict) -> bytes:
     with tempfile.TemporaryDirectory(prefix='klukai-agy-render-') as temp:
         profile,work=agy.prepare(Path(temp),generation=True)
         for name,data in inputs.items():(work/(name+'.png')).write_bytes(data)
-        paths={'/work/'+name+'.png' for name in inputs}
+        paths={str(work/(name+'.png')) for name in inputs}
         agy.configure_gate(work,paths,generation=True)
         orientation='landscape' if request['width']>request['height'] else 'portrait'
         prompt=(

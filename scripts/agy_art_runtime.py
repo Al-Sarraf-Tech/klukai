@@ -1,8 +1,11 @@
-"""Pinned Agy account runtime with isolated files and verified read-only tools.
+"""Pinned Agy account runtime with its own clean home and verified read-only tools.
 
-Linux desktop session required. No credentials are copied: the official client
-uses the existing D-Bus keyring. HOME retains its original value inside a fresh
-filesystem view. The owner account's global customizations are not mounted.
+The official client runs directly, without a sandbox (owner directive
+2026-10-21), with HOME set to the run's own profile, so the owner account's
+global customizations (MCP servers, hooks, skills) never load. No credentials
+are copied: the client signs in through the session D-Bus keyring. Its tools
+stay limited to reading the selected images (and one generation), because a
+brief can carry another account's typed words.
 """
 from __future__ import annotations
 
@@ -11,10 +14,10 @@ import os
 from pathlib import Path
 import re
 import signal
+import shlex
 import shutil
 import subprocess
 import tempfile
-import time
 
 VERSION = '1.3.5'
 MODEL = 'gemini-3.8-flash-medium'
@@ -41,11 +44,24 @@ def service_unavailable(error) -> bool:
                           r'(?:401|402|408|429|500|502|503|504)\b', message))
 
 
-def environment(source=None):
+def bus_address(source=None) -> str:
+    source = os.environ if source is None else source
+    return source.get('DBUS_SESSION_BUS_ADDRESS') or f'unix:path=/run/user/{os.getuid()}/bus'
+
+
+def environment(source=None, *, home=None):
+    """The CLI's environment: no inherited secrets or paid-auth overrides.
+
+    ``home`` is the run's own profile; the keyring login is reached through
+    the session bus, which needs no files from the owner's home.
+    """
     source = os.environ if source is None else source
     env = {k: source[k] for k in ('HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL',
-           'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR') if k in source}
-    env.update(PATH='/usr/bin:/bin', AGY_CLI_DISABLE_AUTO_UPDATE='true', NO_COLOR='1')
+           'XDG_RUNTIME_DIR') if k in source}
+    if home is not None:
+        env['HOME'] = str(home)
+    env.update(PATH='/usr/bin:/bin', AGY_CLI_DISABLE_AUTO_UPDATE='true', NO_COLOR='1',
+               DBUS_SESSION_BUS_ADDRESS=bus_address(source))
     return env
 
 
@@ -59,8 +75,8 @@ def prepare(root: Path, *, generation=False):
         denies.append('write_file(*)')
     (config / 'settings.json').write_text(json.dumps({
         'useG1Credits': False,
-        'permissions': {'deny': denies, 'allow': ['read_file(/work)'], 'ask': []},
-        'trustedWorkspaces': ['/work'],
+        'permissions': {'deny': denies, 'allow': [f'read_file({work})'], 'ask': []},
+        'trustedWorkspaces': [str(work)],
     }))
     agents = work / '.agents/agents'
     agents.mkdir(parents=True)
@@ -77,23 +93,15 @@ def prepare(root: Path, *, generation=False):
     return profile, work
 
 
-def command(profile: Path, work: Path, args: list[str], socket: Path):
-    home = Path.home()
-    binary = home / '.local/opt/antigravity-cli' / VERSION / 'agy'
-    if not binary.is_file() or not socket.exists():
+def command(profile: Path, work: Path, args: list[str], address=None):
+    """The pinned CLI itself, run directly (no sandbox, owner directive
+    2026-10-21); execute() gives it the run's own home and working folder."""
+    binary = Path.home() / '.local/opt/antigravity-cli' / VERSION / 'agy'
+    address = bus_address() if address is None else address
+    socket = Path(address[len('unix:path='):].split(',', 1)[0]) if address.startswith('unix:path=') else None
+    if not binary.is_file() or (socket is not None and not socket.exists()):
         raise ProviderUnavailable('Pinned Agy or desktop keyring session is unavailable')
-    # Preserve user authentication through the official keyring, without exposing
-    # their home, project, hooks, MCP configuration, or API credential files.
-    cmd = ['/usr/bin/bwrap', '--die-with-parent', '--new-session', '--unshare-pid',
-           '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin',
-           '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
-           '--ro-bind', '/etc', '/etc', '--proc', '/proc', '--dev', '/dev',
-           '--tmpfs', '/tmp', '--bind', str(profile), str(home),
-           '--ro-bind', str(binary), str(binary),
-           '--ro-bind', str(socket), '/run/klukai-keyring-bus',
-           '--ro-bind', str(Path('/etc/resolv.conf').resolve()), str(Path('/etc/resolv.conf').resolve()),
-           '--bind', str(work), '/work', '--ro-bind', str(work / '.agents'), '/work/.agents', '--chdir', '/work', str(binary)]
-    return cmd + args
+    return [str(binary)] + args
 
 
 def parse_stream(raw: str, required: set[str], *, generation=False) -> dict:
@@ -173,11 +181,11 @@ def parse_stream(raw: str, required: set[str], *, generation=False) -> dict:
         raise RuntimeError('Invalid Agy stream') from exc
 
 
-def _execute(profile: Path, work: Path, args: list[str], timeout: int, socket: Path) -> str:
+def execute(profile: Path, work: Path, args: list[str], timeout: int) -> str:
     """One bounded process; no retry. Raw output remains in private temporary files."""
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-        process = subprocess.Popen(command(profile, work, args, socket),
-                                   env={**environment(), 'DBUS_SESSION_BUS_ADDRESS':'unix:path=/run/klukai-keyring-bus'},
+        process = subprocess.Popen(command(profile, work, args), cwd=work,
+                                   env=environment(home=profile),
                                    stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
                                    start_new_session=True)
         try:
@@ -200,36 +208,12 @@ def _execute(profile: Path, work: Path, args: list[str], timeout: int, socket: P
             raise RuntimeError('Agy output was not UTF-8') from exc
 
 
-def execute(profile: Path, work: Path, args: list[str], timeout: int) -> str:
-    """Expose only Secret Service, not arbitrary host-session D-Bus services."""
-    with tempfile.TemporaryDirectory(prefix='klukai-keyring-') as d:
-        socket = Path(d) / 'bus'
-        address = os.environ.get('DBUS_SESSION_BUS_ADDRESS', f'unix:path=/run/user/{os.getuid()}/bus')
-        proxy = subprocess.Popen(['/usr/bin/xdg-dbus-proxy', address, str(socket),
-                                  '--filter', '--talk=org.freedesktop.secrets'],
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, env=environment())
-        try:
-            deadline = time.monotonic() + 5
-            while not socket.exists():
-                if proxy.poll() is not None or time.monotonic() > deadline:
-                    raise ProviderUnavailable('Filtered keyring proxy failed to start')
-                time.sleep(0.02)
-            return _execute(profile, work, args, timeout, socket)
-        finally:
-            proxy.terminate()
-            try:
-                proxy.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proxy.kill(); proxy.wait()
-
-
 def configure_gate(work: Path, images: set[str], *, generation=False):
     shutil.copyfile(Path(__file__).with_name('agy_art_gate.py'), work / '.agents/gate.py')
     (work / '.agents/review-policy.json').write_text(json.dumps({'images': sorted(images), 'generation':generation}))
     (work / '.agents/hooks.json').write_text(json.dumps({'klukai-art-gate': {
         'PreToolUse': [{'matcher': '*', 'hooks': [{'type':'command',
-            'command':'/usr/bin/python3 /work/.agents/gate.py', 'timeout':5}]}]}}))
+            'command':'/usr/bin/python3 ' + shlex.quote(str(work / '.agents/gate.py')), 'timeout':5}]}]}}))
 
 
 def verify_gate(work: Path, images: set[str], *, generation=False):

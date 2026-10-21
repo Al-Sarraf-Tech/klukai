@@ -1,10 +1,14 @@
-"""PreToolUse gate; copied into the isolated worker's read-only configuration."""
+"""PreToolUse gate; copied into each run's .agents folder beside its policy."""
 import json
 from pathlib import Path
 import sys
 
+GATE = Path(__file__).resolve().parent
+WORK = GATE.parent
 
-def decide(call, policy, claim=Path('/work/generation-started')):
+
+def decide(call, policy, claim=None):
+    claim = WORK / 'generation-started' if claim is None else claim
     name = call.get('name')
     if name == 'generate_image' and policy.get('generation') is True:
         refs = call.get('args', {}).get('ImagePaths')
@@ -26,12 +30,12 @@ def decide(call, policy, claim=Path('/work/generation-started')):
 def main():
     try:
         payload = json.load(sys.stdin)
-        policy = json.loads(Path('/work/.agents/review-policy.json').read_text())
+        policy = json.loads((GATE / 'review-policy.json').read_text())
         call = payload['toolCall']
         decision = decide(call, policy)
         record = {'tool':call.get('name'), 'path':call.get('args',{}).get('AbsolutePath'),
                   'decision':decision, 'step':payload.get('stepIdx')}
-        with Path('/work/gate-audit.ndjson').open('a') as handle:
+        with (WORK / 'gate-audit.ndjson').open('a') as handle:
             handle.write(json.dumps(record)+'\n')
         print(json.dumps({'decision':decision, 'reason':'Klukai permits only the selected artwork operation.'}))
     except Exception:

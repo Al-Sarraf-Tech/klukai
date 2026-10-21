@@ -63,6 +63,11 @@ def test_returns_the_session_image_and_removes_the_copy(harness):
     args = calls['args']
     assert args[:3] == ['/usr/bin/codex', 'exec', '--skip-git-repo-check']
     assert 'model_reasoning_effort="low"' in args
+    # Owner directive 2026-10-21: no sandbox, but no owner config and no shell either.
+    assert args[args.index('-s') + 1] == 'danger-full-access' and 'workspace-write' not in args
+    assert '--ignore-user-config' in args
+    disabled = {args[i + 1] for i, a in enumerate(args) if a == '--disable'}
+    assert {'shell_tool', 'unified_exec', 'browser_use', 'computer_use', 'apps'} <= disabled
     assert args[-1] == '-'
     assert any(a.startswith('--image=') and a.endswith('reference-klukai.png') for a in args)
     assert 'BEGIN BRIEF\na rooftop at night\nEND BRIEF' in calls['kwargs']['input']

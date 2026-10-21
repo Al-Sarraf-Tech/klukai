@@ -4,7 +4,11 @@
 Runs the owner's signed-in Codex CLI non-interactively in a private temporary
 directory with the approved references attached, asks its built-in image
 generation tool for exactly one image, and returns the normalised PNG. No
-credentials pass through here: Codex uses its own subscription login. Service
+credentials pass through here: Codex uses its own subscription login.
+It runs without a sandbox or approvals (owner directive 2026-10-21), but
+without the owner's config (no MCP servers, plugins or hooks) and with its
+shell tools off, so the image tool is all it has: the brief can carry another
+account's typed words. Service
 failures (login, usage limits, timeouts) raise ProviderUnavailable so the
 worker can fail over to the next provider; anything else is a generation
 failure.
@@ -35,6 +39,9 @@ UNAVAILABLE_PHRASES = (
     "service unavailable", "connection", "stream disconnected", "internal server error",
 )
 UNAVAILABLE_CODES = re.compile(r"\b(?:401|402|408|429|500|502|503|504)\b")
+# The image tool is all a render gets: no shell, no browser, no computer use.
+DISABLED_TOOLS = tuple(arg for feature in ("shell_tool", "unified_exec", "browser_use", "computer_use", "apps")
+                       for arg in ("--disable", feature))
 # Variables Codex needs to find its own login and run; nothing else crosses.
 ENV_KEYS = ("HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "PATH", "XDG_RUNTIME_DIR",
             "DBUS_SESSION_BUS_ADDRESS")
@@ -101,8 +108,9 @@ def render(request: dict, references: dict) -> bytes:
             path = work / f"reference-{name}.png"
             path.write_bytes(data)
             ref_files.append(path)
-        args = [binary, "exec", "--skip-git-repo-check", "--ephemeral", "--color", "never",
-                "-c", 'model_reasoning_effort="low"', "-s", "workspace-write", "-C", str(work)]
+        args = [binary, "exec", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config",
+                "--color", "never", "-c", 'model_reasoning_effort="low"',
+                "-s", "danger-full-access", *DISABLED_TOOLS, "-C", str(work)]
         for path in ref_files:
             args += [f"--image={path}"]
         # The prompt goes on stdin: --image takes several values and would
