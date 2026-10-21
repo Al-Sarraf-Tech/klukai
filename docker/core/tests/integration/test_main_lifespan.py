@@ -138,6 +138,27 @@ class TestAuthRoutes:
         )
         assert r.status_code == 401
 
+    def test_logout_ends_only_that_session(
+        self, client, test_user_id, test_password, _create_test_user
+    ):
+        tokens = [
+            client.post(
+                "/api/auth/login",
+                json={"username": test_user_id, "password": test_password},
+            ).json()["token"]
+            for _ in range(2)
+        ]
+        r = client.post(
+            "/api/auth/logout", headers={"Authorization": f"Bearer {tokens[0]}"}
+        )
+        assert r.status_code == 200
+        gone, kept = (
+            client.get("/api/auth/verify", headers={"Authorization": f"Bearer {t}"})
+            for t in tokens
+        )
+        assert gone.status_code == 401
+        assert kept.status_code == 200
+
 
 class TestExceptionHandler:
     def test_404_returns_json(self, client):

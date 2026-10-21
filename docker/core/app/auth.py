@@ -226,6 +226,23 @@ async def check_ip_banned(ip: str) -> bool:
     return False
 
 
+async def logout(token: str) -> str | None:
+    """End this one session (sign out this device) and return its user.
+
+    Only the row for this token goes; his other devices stay signed in.
+    """
+    if not token:
+        return None
+    async with get_conn_autocommit() as conn:
+        row = await (
+            await conn.execute(
+                "DELETE FROM companion_auth_sessions WHERE token = %s RETURNING user_id",
+                (_hash_token(token),),
+            )
+        ).fetchone()
+    return row[0] if row else None
+
+
 async def get_user_from_token(token: str) -> str | None:
     """Look up user_id from a session token. Returns None if expired/invalid.
 

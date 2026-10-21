@@ -105,6 +105,22 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             return {"token": token, "user_id": req.username}
         return JSONResponse({"error": "Invalid credentials"}, status_code=401)
 
+    @app.post("/api/auth/logout")
+    async def logout(request: Request) -> Any:
+        """Sign this device out: its session token stops working at once."""
+        from . import audit
+        from .auth import logout as end_session
+
+        header = request.headers.get("Authorization", "")
+        token = header[7:] if header.startswith("Bearer ") else ""
+        user_id = await end_session(token)
+        if user_id:
+            try:
+                await audit.log(audit.EVENT_LOGOUT, user_id=user_id)
+            except Exception:
+                pass
+        return {"ok": True}
+
     @app.get("/api/auth/verify")
     async def verify_token(request: Request) -> Any:
         user_id = await _get_user_id(request)

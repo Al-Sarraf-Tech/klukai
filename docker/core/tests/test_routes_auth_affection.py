@@ -234,3 +234,57 @@ class TestPushSubscribeRoute:
         # Subscription should be persisted under the authenticated user
         called_user = add_mock.call_args.args[0]
         assert called_user == "alice"
+
+
+class TestLogoutRoute:
+    @pytest.mark.asyncio
+    async def test_ends_only_this_session_and_audits(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/auth/logout", "POST")
+        end = AsyncMock(return_value="u1")
+        audit_log = AsyncMock()
+        with patch("app.auth.logout", end), patch("app.audit.log", audit_log):
+            result = await handler(_mk_request("tok-1"))
+        assert result == {"ok": True}
+        end.assert_awaited_once_with("tok-1")
+        audit_log.assert_awaited_once_with("session.logout", user_id="u1")
+
+    @pytest.mark.asyncio
+    async def test_unknown_or_missing_token_is_still_ok(self):
+        app = _app_with_routes()
+        handler = _find_route(app, "/api/auth/logout", "POST")
+        audit_log = AsyncMock()
+        with patch("app.auth.logout", AsyncMock(return_value=None)), patch(
+            "app.audit.log", audit_log
+        ):
+            assert await handler(_mk_request(None)) == {"ok": True}
+        audit_log.assert_not_awaited()
+
+
+class TestLogoutSession:
+    @pytest.mark.asyncio
+    async def test_deletes_the_hashed_token_row(self):
+        from contextlib import asynccontextmanager
+
+        from app import auth
+
+        calls = []
+
+        class _Conn:
+            async def execute(self, query, params=None):
+                calls.append((query, params))
+                cursor = MagicMock()
+                cursor.fetchone = AsyncMock(return_value=("u1",))
+                return cursor
+
+        @asynccontextmanager
+        async def _ctx():
+            yield _Conn()
+
+        with patch("app.auth.get_conn_autocommit", _ctx):
+            assert await auth.logout("tok-1") == "u1"
+            assert await auth.logout("") is None
+        assert len(calls) == 1
+        query, params = calls[0]
+        assert query.startswith("DELETE FROM companion_auth_sessions WHERE token = %s")
+        assert params == (auth._hash_token("tok-1"),)
