@@ -69,6 +69,19 @@ def request(path, data=None, *, method="POST", target="/generate", token=TOKEN):
         connection.close()
 
 
+def one_write_status(path, data, *, token):
+    """Status for a POST sent in one write.
+
+    The worker refuses before reading the body (by design). http.client sends
+    the body in a second write, which can race that close and fail with a
+    broken pipe; one write over a unix socket cannot.
+    """
+    body = json.dumps(data).encode()
+    head = (f"POST /generate HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n"
+            f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n").encode()
+    return int(raw_request(path, head + body).split(b" ", 2)[1])
+
+
 def raw_request(path, raw):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(3)
@@ -122,7 +135,7 @@ def running(worker, setup_files, render=None, **kwargs):
 def test_health_and_generation_require_token_before_reading_body(worker, setup_files):
     with running(worker, setup_files) as path:
         assert request(path, method="GET", target="/health", token=None)[0] == 401
-        assert request(path, payload(), token="wrong")[0] == 401
+        assert one_write_status(path, payload(), token="wrong") == 401
         raw = raw_request(path, b"POST /generate HTTP/1.1\r\nHost: localhost\r\nContent-Length: 80000\r\n\r\n")
         assert b" 401 " in raw
         assert b"Connection: close" in raw
@@ -400,7 +413,7 @@ def test_rotation_survives_restart_and_replay_or_invalid_requests_do_not_advance
         assert request(path, dict(first, prompt="changed"))[0] == 409
         assert request(path, payload(width=False))[0] == 400
         assert request(path, payload(user_id="unauthorized"))[0] == 403
-        assert request(path, payload(), token="wrong")[0] == 401
+        assert one_write_status(path, payload(), token="wrong") == 401
     with running(worker, setup_files, providers=providers) as path:
         assert request(path, first)[2] == PNG
         assert request(path, second)[0] == 200
