@@ -48,3 +48,11 @@ docs/adr/**                             @jalsarraf0
 docs/runbooks/**                        @jalsarraf0
 docs/slos.md                            @jalsarraf0
 docs/perf-baseline.md                   @jalsarraf0
+
+# ── Deployment — production rights; changes take effect only after review ─
+docker-compose.yml                      @jalsarraf0
+ops/amarillo/                           @jalsarraf0
+tools/ci/                               @jalsarraf0
+scripts/ci/                             @jalsarraf0
+scripts/deploy-web.sh                   @jalsarraf0
+docs/releases/recovery/                 @jalsarraf0

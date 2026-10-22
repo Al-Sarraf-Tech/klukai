@@ -3,6 +3,11 @@
 The core image that runs in production is the exact image CI built and scanned.
 Nothing is rebuilt on amarillo. Every step refuses rather than guessing.
 
+Once activated, [deploy-on-merge](deploy-on-merge.md) runs these same steps by
+itself for every certified merge to `main`, and adds the atomic web release.
+The manual commands below stay valid. They share its deployment lock, so a
+manual and an automatic deploy can never interleave.
+
 ## 1. CI builds, scans and retains the artifact
 
 The `image-scan` job (`.github/workflows/ci.yml`) on the heavy runner:
@@ -30,7 +35,9 @@ GH_TOKEN=... python3 ops/amarillo/scripts/klukai-fetch-ci-artifacts.py image <fu
 The relay requires a successful CI run whose `Required CI gates` job passed for
 that exact commit. The manifest must name that run, and its SHA-256 must equal
 the `KLUKAI_RELEASE_MANIFEST_SHA256=` line the run's own image-scan job printed
-to its GitHub log; bytes another job writes on the shared heavy guest are refused. It reads the files through the Dominus guest agent in 2 MiB
+to its GitHub log; bytes another job writes on the shared heavy guest are refused. Since 2026-10-19 Klukai CI runs on amarillo's own VMs and the relay
+reads `/docker/klukai/ci-artifacts` directly (`--source amarillo`, what
+deploy-on-merge always uses). The legacy Dominus path reads the files through the guest agent in 2 MiB
 chunks. libvirt caps an agent reply at 10 MiB and virsh's RPC string at 4 MiB,
 and exceeding the first disables the agent channel. It then verifies the manifest,
 every material digest, the licence verdict, the tar hash, and the loaded image's
@@ -112,8 +119,22 @@ python3 ops/amarillo/scripts/klukai-release.py drill --image klukai-core:ci-<sha
 It deploys a good build of a tiny service, then a deliberately broken build,
 and passes only if the broken release is rolled back automatically.
 
-After core, deploy the PWA with `./scripts/deploy-web.sh` and run
-`scripts/e2e_live.py` as the `claude` test user.
+After core, deploy the PWA and run `scripts/e2e_live.py` as the `claude` test
+user. Before the atomic web root is activated, deploy the PWA with
+`./scripts/deploy-web.sh`. After activation, relay the CI-built PWA and switch
+it atomically:
+
+```sh
+GH_TOKEN=... python3 ops/amarillo/scripts/klukai-fetch-ci-artifacts.py --source amarillo web <full sha>
+python3 ops/amarillo/scripts/klukai_web_release.py deploy <full sha>
+```
+
+The second command checks every entry file through core and switches back
+automatically on failure.
+
+A release that changes `docker/core/migrations/` or `docker-compose.yml` needs a
+reviewed recovery plan in `docs/releases/recovery/` (see its README) before
+deploy-on-merge will ship it.
 
 ## Licence policy
 

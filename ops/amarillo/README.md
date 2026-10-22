@@ -30,6 +30,18 @@ does not authorize starting a GPU service. Read the
 [Dominus boot/publish handoff](../../docs/handoff/2026-09-25-dominus-tailscale-publish.md)
 before repair or startup work.
 
+## Releases and deploy-on-merge
+
+Core releases are CI-built, relayed, signed and deployed with automatic
+rollback ([release runbook](../../docs/runbooks/release.md)). Once the owner
+activates it, [deploy-on-merge](../../docs/runbooks/deploy-on-merge.md) does
+this on its own for each certified merge to `main`: a two-minute user timer
+(`klukai-deploy-on-merge.timer`) runs the owner-pinned controller, which
+deploys core and the PWA, including the atomic web root at
+`~/.local/share/klukai/web`, then verifies and restores on failure.
+`klukai-deploy-staging.py` replays every failure mode against disposable
+targets.
+
 ## Memory archive seeding
 
 Amarillo owns the memory-seeding schedule because `companion-core`, its
