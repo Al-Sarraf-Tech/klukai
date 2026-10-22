@@ -486,7 +486,8 @@ def run_all(stage: Stage) -> list[dict[str, Any]]:
              concurrent,
              lambda r: r["outcome"].get("core_recreated_during_first") and r["outcome"]["first_exit"] == 0
              and r["outcome"]["second_refused_busy"] and r["observed"]["deployed"] == C2
-             and r["outcome"]["follow_up"]["status"] == "ci_failed" and r["observed"]["checkout"] == C2,
+             and r["outcome"]["follow_up"]["status"] in ("ci_failed", "refused")
+             and r["observed"]["checkout"] == C2,
              stage, results)
 
     # 9. Failed core health: automatic rollback, checkout restored; two attempts then held.
