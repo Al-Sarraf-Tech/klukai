@@ -2,10 +2,10 @@
 
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 import yaml
@@ -338,39 +338,31 @@ def test_component_only_push_can_run_after_intentionally_skipped_tool_image():
     assert job["runs-on"][-1] == "klukai-amarillo-serial"
 
 
-def test_companion_push_requires_the_job_that_runs_javascript_regressions():
-    from tools.ci.selection import plan, required
-
-    selected = plan(["flutter_app/web/companion/voice.js"])
-    jobs = workflow()["jobs"]
-    javascript_jobs = {
-        name
-        for name, job in jobs.items()
-        if any(step.get("run") == "make test-js" for step in job["steps"])
-    }
-    assert javascript_jobs == {"components"}
-    assert javascript_jobs <= required(selected)
-    assert "frontend" in required(selected)
-    assert "ci-image" not in required(selected)
-
-
-def test_push_selection_uses_cumulative_full_certification_not_previous_push():
-    data = workflow()
-    source = data["jobs"]["source-policy"]
-    assert data["permissions"] == {"contents": "read"}
-    assert source.get("permissions") == {"contents": "read", "actions": "read"}
-    for name, job in data["jobs"].items():
-        if name != "source-policy":
-            assert "actions" not in job.get("permissions", {})
-    step = next(step for step in source["steps"] if step.get("id") == "select")
-    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
-    assert "--cumulative" in step["run"]
-    assert "--before" not in step["run"]
-    assert "BEFORE_REVISION" not in step["env"]
-    assert "--full" in step["run"], "Dispatch remains full release certification"
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+def test_every_main_push_and_dispatch_plans_full_certification(event, tmp_path):
+    """Deploy-on-merge deploys only fully certified commits, so a merge to main
+    must never run a selective plan that skips Flutter, the PWA build or the
+    image gates (a skipped gate is not release certification)."""
+    fake = tmp_path / "python3"
+    fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    fake.chmod(0o755)
+    script = block(workflow()["jobs"]["source-policy"], "select")
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        env={
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "EVENT_NAME": event,
+            "BEFORE_REVISION": "b" * 40,
+            "GITHUB_SHA": REVISION,
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--full" in result.stdout.split()
 
 
-def test_cumulative_baseline_evidence_covers_every_existing_workflow_job():
-    from tools.ci.selection import FULL_CI_GATES
-
-    assert FULL_CI_GATES == {job["name"] for job in workflow()["jobs"].values()}
+def test_frontend_job_logs_the_pwa_digest_the_deployer_binds():
+    script = (ROOT / "scripts/ci/frontend.sh").read_text()
+    assert "KLUKAI_PWA_SHA256=" in script

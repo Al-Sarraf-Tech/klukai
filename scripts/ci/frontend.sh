@@ -123,4 +123,8 @@ export FONT_CACHE="${FONT_CACHE:-${KLUKAI_CI_ARTIFACT_ROOT:-$(dirname "$OUTPUT")
 run build "$REPO_ROOT/scripts/deploy-web.sh" --build-only
 python3 "$EVIDENCE" create --root "$REPO_ROOT" --output "$OUTPUT" --revision "$REVISION" \
   --flutter "$FLUTTER" --dart "$DART" --chrome "$CHROME"
-python3 "$EVIDENCE" verify --output "$OUTPUT" --revision "$REVISION"
+verified="$(python3 "$EVIDENCE" verify --output "$OUTPUT" --revision "$REVISION")"
+printf '%s\n' "$verified"
+# The deployer reads this line from the run's own job log and refuses a PWA
+# tree on the shared artifact disk whose digest differs.
+python3 -c 'import json, sys; print("KLUKAI_PWA_SHA256=" + json.loads(sys.argv[1])["pwa_sha256"])' "$verified"

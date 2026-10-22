@@ -1,0 +1,15 @@
+[Unit]
+Description=Klukai PR reviewer: Claude Opus 5.5 (xhigh) reviews and, within fixed rules, approves
+After=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+Environment=HOME=%h
+Environment=KLUKAI_PRODUCTION_CHECKOUT=%h/git/klukai
+WorkingDirectory=%h
+# Runs from the same owner-pinned copy as the deployer (install --revision).
+ExecStart=/usr/bin/python3 %h/.local/share/klukai/deployer/current/ops/amarillo/scripts/klukai-pr-reviewer.py run-once
+# An xhigh review of a large diff can take several minutes; a killed review
+# posts nothing and is retried next cycle.
+TimeoutStartSec=45min

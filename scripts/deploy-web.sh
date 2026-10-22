@@ -85,37 +85,28 @@ cmp -s "$FLUTTER_APP/web/login.html" "$OUT/login.html"
 if [[ $BUILD_ONLY -eq 1 ]]; then
   echo ""; echo "=== Build only: $OUT (web-build/ untouched) ==="; exit 0
 fi
+# Once the atomic web root is active, core no longer serves web-build/: live
+# releases go through the CI-verified pipeline (docs/runbooks/deploy-on-merge.md).
+if [[ -f "${KLUKAI_WEB_ROOT_OVERRIDE:-$HOME/.local/state/klukai/release/web-root.json}" ]]; then
+  echo "  ERROR: core serves the atomic web root now; an rsync into web-build/ would not be live."
+  echo "  Deploy through: ops/amarillo/scripts/klukai_web_release.py (see docs/runbooks/deploy-on-merge.md)."
+  exit 2
+fi
 
 # web-build/ is bind-mounted and served live, so every rewrite happens in the
 # staging dir $OUT first; the only mutation of web-build/ is one rsync at the end.
 echo ""
 echo "=== Step 4: Content-hash JS files (in $OUT) ==="
-cd "$OUT"
-
-# Remove any previously hashed files
-rm -f main.dart.*.js flutter_bootstrap.*.js
-
-# Hash main.dart.js
-MAIN_HASH=$(md5sum main.dart.js | cut -c1-8)
-MAIN_HASHED="main.dart.${MAIN_HASH}.js"
-mv main.dart.js "$MAIN_HASHED"
+# Same transform the deploy-on-merge pipeline applies to the CI-built bundle
+# (tools/ci/web_release.py), so both paths produce identical release trees.
+# A previous local build may have left hashed entry files behind.
+rm -f "$OUT"/main.dart.*.js "$OUT"/flutter_bootstrap.*.js
+hashed=$(cd "$REPO_ROOT" && python3 -m tools.ci.web_release hash "$OUT")
+MAIN_HASHED=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["main"])' "$hashed")
+BOOT_HASHED=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["bootstrap"])' "$hashed")
 echo "  main.dart.js → $MAIN_HASHED"
-
-# Update reference in flutter_bootstrap.js (build config references main.dart.js)
-sed -i "s|\"mainJsPath\":\"main.dart.js\"|\"mainJsPath\":\"$MAIN_HASHED\"|g" flutter_bootstrap.js
-# Also update the fallback entrypoint URL
-sed -i "s|c(\"main.dart.js\")|c(\"$MAIN_HASHED\")|g" flutter_bootstrap.js
-grep -q "$MAIN_HASHED" flutter_bootstrap.js || { echo "  ERROR: bootstrap no longer references $MAIN_HASHED"; exit 1; }
-
-# Hash flutter_bootstrap.js (after updating its content)
-BOOT_HASH=$(md5sum flutter_bootstrap.js | cut -c1-8)
-BOOT_HASHED="flutter_bootstrap.${BOOT_HASH}.js"
-mv flutter_bootstrap.js "$BOOT_HASHED"
 echo "  flutter_bootstrap.js → $BOOT_HASHED"
-
-# Update reference in index.html
-sed -i "s|flutter_bootstrap.js|$BOOT_HASHED|g" index.html
-grep -q "$BOOT_HASHED" index.html || { echo "  ERROR: index.html does not reference $BOOT_HASHED"; exit 1; }
+cd "$OUT"
 
 echo ""
 echo "=== Step 5: Rsync staged build to web-build (the only live change) ==="

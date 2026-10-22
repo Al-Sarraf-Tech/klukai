@@ -13,6 +13,13 @@ software:
   tools.ci.release_artifact (material digests, tar hash, layer diff IDs,
   revision label), then sign `provenance.json` with the amarillo release key
   (ssh-keygen, namespace klukai-release) for the release deployer.
+* `web <revision>`: the same green run's frontend job retained the CI-built PWA
+  (`frontend/pwa`, every file digested in its manifest). Its tree digest must
+  equal the `KLUKAI_PWA_SHA256=` line that job printed to its own GitHub log;
+  each file is copied and checked, the deterministic content-hash transform
+  (tools/ci/web_release.py) turns it into the release tree, and
+  `web-provenance.json` (the CI run, the CI tree digest and every release file
+  digest) is signed with the same release key for the web deployer.
 * `nightly`: copy new nightly performance summaries into a JSON-lines file the
   observability stack ingests; optionally warn the owner when none is recent.
 * `archive`: move finished CI records off the guest's small disk into
@@ -38,6 +45,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -46,10 +54,14 @@ from typing import Any, Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from tools.ci import release_artifact  # noqa: E402
+from tools.ci import web_release  # noqa: E402
+from tools.ci.frontend_evidence import inventory, tree_digest  # noqa: E402
 
 ARTIFACTS = "/opt/klukai-ci/artifacts"
 SIGNING_NAMESPACE = "klukai-release"
 SCAN_JOB = "Image Scan (trivy)"
+FRONTEND_JOB = "Frontend validation and immutable PWA evidence"
+WEB_KIND = "klukai-web"
 SIGNING_KEY = Path.home() / ".config/klukai/release-signing/release_ed25519"
 # Two libvirt limits bound each guest-file-read. virtqemud rejects any agent
 # reply over 10 MiB and then disables the agent channel until the stale reply is
@@ -409,6 +421,106 @@ def fetch_image(
     return result
 
 
+def ci_pwa_digest(
+    repo: str, run: str, token: str, api: Any = github, log: Any = job_log
+) -> str:
+    """The PWA tree digest the run's own frontend job printed. Runs from before
+    the explicit KLUKAI_PWA_SHA256= line carry it only in the evidence tool's
+    JSON summary; either way exactly one digest must appear."""
+    run_id, attempt = run.split("-")
+    jobs = api(
+        f"/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=50",
+        token,
+    )["jobs"]
+    frontend = [
+        j for j in jobs if j["name"] == FRONTEND_JOB and j["conclusion"] == "success"
+    ]
+    if len(frontend) != 1:
+        raise ValueError("The run has no successful frontend job")
+    text = log(repo, frontend[0]["id"], token)
+    found = set(re.findall(r"KLUKAI_PWA_SHA256=([0-9a-f]{64})", text))
+    found |= set(re.findall(r'"pwa_sha256": "([0-9a-f]{64})"', text))
+    if len(found) != 1:
+        raise ValueError("The frontend job log does not record one PWA digest")
+    return found.pop()
+
+
+def fetch_web(
+    guest: Guest,
+    run: str,
+    revision: str,
+    dest: Path,
+    *,
+    pwa_sha256: str,
+    key: Path | None = None,
+) -> dict[str, Any]:
+    """Copy and verify the run's CI-built PWA, then build and sign the release tree."""
+    release_artifact._revision(revision)
+    if not re.fullmatch(r"\d+-\d+", run):
+        raise ValueError("Invalid CI run identity")
+    if not re.fullmatch(r"[0-9a-f]{64}", pwa_sha256):
+        raise ValueError("Invalid PWA digest")
+    remote = f"{ARTIFACTS}/{revision}/{run}/frontend"
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(mode=0o700, parents=True)
+    guest.read(f"{remote}/manifest.json", dest / "frontend-manifest.json")
+    manifest = json.loads((dest / "frontend-manifest.json").read_text())
+    if manifest.get("schema_version") != 1:
+        raise ValueError("Unknown frontend manifest schema")
+    if manifest.get("source", {}).get("revision") != revision:
+        raise ValueError("Frontend manifest is for a different revision")
+    files = manifest.get("pwa", {}).get("files")
+    if not isinstance(files, dict) or not files:
+        raise ValueError("Frontend manifest lists no PWA files")
+    if tree_digest(files) != manifest["pwa"].get("sha256") or manifest["pwa"][
+        "sha256"
+    ] != pwa_sha256:
+        raise ValueError("PWA differs from the digest the CI job logged")
+    ci_tree = dest / "ci-pwa"
+    ci_tree.mkdir(mode=0o700)
+    for name, digest in sorted(files.items()):
+        target = ci_tree / name
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        guest.read(f"{remote}/pwa/{name}", target)
+        if release_artifact.sha256(target) != digest:
+            raise ValueError(f"PWA file differs from its manifest digest: {name}")
+    if inventory(ci_tree) != manifest["pwa"]:
+        raise ValueError("Copied PWA differs from its manifest")
+    release = dest / "release"
+    shutil.copytree(ci_tree, release)
+    shutil.rmtree(ci_tree)
+    entry = web_release.content_hash(release)
+    built = inventory(release)
+    result: dict[str, Any] = {
+        "revision": revision,
+        "ci_run": run,
+        "ci_pwa_sha256": pwa_sha256,
+        "release_sha256": built["sha256"],
+        "files": len(built["files"]),
+        "entry": entry,
+    }
+    if key is not None:
+        # Signed only after every CI file matched the logged digest and the
+        # release tree was rebuilt from exactly those bytes.
+        provenance = {
+            "schema": 1,
+            "kind": WEB_KIND,
+            "revision": revision,
+            "ci_run": run,
+            "ci_pwa_sha256": pwa_sha256,
+            "entry": entry,
+            "release": built,
+            "verified_by": "amarillo klukai-fetch-ci-artifacts",
+            "verified_at": datetime.now(UTC).isoformat(),
+        }
+        (dest / "web-provenance.json").write_text(
+            json.dumps(provenance, indent=2, sort_keys=True) + "\n"
+        )
+        result["signature"] = str(sign(dest / "web-provenance.json", key))
+    return result
+
+
 def _finished(doc: dict[str, Any]) -> datetime | None:
     try:
         when = datetime.fromisoformat(str(doc.get("finished_at")))
@@ -671,6 +783,13 @@ def main() -> int:
     i.add_argument(
         "--dest", type=Path, default=Path.home() / ".local/state/klukai/ci-releases"
     )
+    w = sub.add_parser("web")
+    w.add_argument("revision")
+    w.add_argument("--repo", default="Al-Sarraf-Tech/klukai")
+    w.add_argument("--signing-key", type=Path, default=SIGNING_KEY)
+    w.add_argument(
+        "--dest", type=Path, default=Path.home() / ".local/state/klukai/ci-releases"
+    )
     n = sub.add_parser("nightly")
     n.add_argument(
         "--state", type=Path, default=Path.home() / ".local/state/klukai/perf-nightly"
@@ -692,7 +811,7 @@ def main() -> int:
     guest: Any = Guest(VirshAgent(args.host, args.domain))
     if args.source == "amarillo" or (
         args.source == "auto"
-        and args.command == "image"
+        and args.command in ("image", "web")
         and (LOCAL_ROOTS[ARTIFACTS] / args.revision).is_dir()
     ):
         guest = LocalGuest()
@@ -705,7 +824,7 @@ def main() -> int:
 
 
 def _run(args: argparse.Namespace, guest: Guest) -> int:
-    if args.command == "image":
+    if args.command in ("image", "web"):
         token = os.environ.get("GH_TOKEN") or os.environ.get(
             "GITHUB_PERSONAL_ACCESS_TOKEN"
         )
@@ -714,14 +833,24 @@ def _run(args: argparse.Namespace, guest: Guest) -> int:
         if not args.signing_key.is_file():
             raise ValueError(f"Release signing key missing: {args.signing_key}")
         run = green_run(args.repo, args.revision, token)
-        result = fetch_image(
-            guest,
-            run,
-            args.revision,
-            args.dest / args.revision,
-            manifest_sha256=ci_manifest_digest(args.repo, run, token),
-            key=args.signing_key,
-        )
+        if args.command == "image":
+            result = fetch_image(
+                guest,
+                run,
+                args.revision,
+                args.dest / args.revision,
+                manifest_sha256=ci_manifest_digest(args.repo, run, token),
+                key=args.signing_key,
+            )
+        else:
+            result = fetch_web(
+                guest,
+                run,
+                args.revision,
+                args.dest / args.revision / "web",
+                pwa_sha256=ci_pwa_digest(args.repo, run, token),
+                key=args.signing_key,
+            )
     elif args.command == "archive":
         try:
             seen = args.state / "seen.txt"
