@@ -188,7 +188,9 @@ companion-core once.
    administrators are included.
 
 4. **CyberWolf identity.** Its PRs are now authored as `jalsarraf0`, and GitHub
-   does not let you approve your own PR. Choose one:
+   does not let you approve your own PR. The [PR reviewer](pr-reviewer.md)
+   (Claude Opus 5.5, xhigh) approves them from its own identity, within fixed
+   rules that keep protected paths for you. Otherwise choose one:
    - give CyberWolf its own machine account or GitHub App with write access to
      branches and PRs and no admin; or
    - keep it under your account and set `require_approved_pr` to false. Branch

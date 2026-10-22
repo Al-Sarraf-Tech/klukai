@@ -40,7 +40,9 @@ this on its own for each certified merge to `main`: a two-minute user timer
 deploys core and the PWA, including the atomic web root at
 `~/.local/share/klukai/web`, then verifies and restores on failure.
 `klukai-deploy-staging.py` replays every failure mode against disposable
-targets.
+targets. The [PR reviewer](../../docs/runbooks/pr-reviewer.md) (Claude Opus
+5.5, xhigh) reviews ready PRs and approves within fixed rules, keeping
+protected paths for the owner.
 
 ## Memory archive seeding
 

@@ -46,7 +46,9 @@ TOKEN_NAMES = ("metrics-token", "alert-bridge-token")
 # Read in memory by the deploy-on-merge controller: a fine-grained GitHub token
 # limited to read-only access to the public Klukai repository. Optional until
 # the owner activates deploy-on-merge.
-OPTIONAL_NAMES = ("deployer-github-token",)
+# The PR reviewer's own GitHub identity (approves within fixed rules); optional
+# until the owner creates it, and the reviewer posts nothing without it.
+OPTIONAL_NAMES = ("deployer-github-token", "reviewer-github-token")
 NAMES = COMPOSE_NAMES + TOKEN_NAMES + OPTIONAL_NAMES
 SYSTEMD_CREDS = "systemd-creds"
 
