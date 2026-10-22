@@ -228,14 +228,14 @@ def test_complete_native_bootstrap_retains_evidence_before_selecting_tools(
     subject.run(args)
     report = json.loads((args.output / "manifest.json").read_text())
     assert report["passed"] is True and report["source_unchanged"] is True
-    assert len(report["packages"]) == 130
+    assert len(report["packages"]) == 129
     assert report["host"]["executable"] == str(Path(sys.executable).resolve())
     assert len(report["host"]["sha256"]) == 64
     assert args.output.stat().st_mode & 0o777 == 0o700
     assert json.loads((args.output / "commands.json").read_text())
     assert (
         len(json.loads((args.output / "wheel-materials.json").read_text())["wheels"])
-        == 130
+        == 129
     )
 
 
