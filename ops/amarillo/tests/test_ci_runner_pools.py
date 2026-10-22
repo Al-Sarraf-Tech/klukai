@@ -14,6 +14,9 @@ SCRIPT = REPO / "ops/amarillo/ci-runner/klukai_ci_runner.py"
 sys.path.insert(0, str(Path(__file__).parent))
 from test_ci_runner import FakeGitHub, FakeHost, job  # noqa: E402
 
+# 10:00 host-local, outside Dominus's quiet hours in any time zone (CI guests run in UTC).
+DAYTIME = datetime(2026, 10, 22, 10, 0).timestamp()
+
 DOMINUS = {"pool": "dominus", "steal_from": None, "max_vcpus": 20, "max_memory_mib": 32768,
            "slots": 8, "subnet": "10.232.0", "artifacts": "/srv/klukai-ci/artifacts",
            "temp_sensor": "k10temp", "token_source": "gh-cli",
@@ -42,7 +45,7 @@ class Beats(FakeGitHub):
 
 @pytest.fixture
 def build(tmp_path, monkeypatch):
-    def make(runner, jobs=(), *, now=1000.0, mem=60000, temp=45.0):
+    def make(runner, jobs=(), *, now=DAYTIME, mem=60000, temp=45.0):
         root = tmp_path / "klukai-ci"
         (root / "base").mkdir(parents=True, exist_ok=True)
         (root / "base" / "base.qcow2").write_bytes(b"base")
@@ -166,7 +169,7 @@ def test_a_restarted_amarillo_controller_still_knows_a_taken_over_guest(build, t
 def test_the_heartbeat_tells_the_router_when_dominus_can_take_runs(build):
     runner = fresh()
     runner.configure(DOMINUS)
-    hour10 = datetime(2026, 10, 22, 10, 0).timestamp()
+    hour10 = DAYTIME
     controller, github, host, state = build(runner, now=hour10)
     controller.tick()
     assert github.variables == [("KLUKAI_CI_DOMINUS_HEARTBEAT", str(int(hour10)))]
