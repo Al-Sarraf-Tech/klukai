@@ -66,7 +66,9 @@ class _MessageBubbleState extends State<MessageBubble>
   @override
   void didUpdateWidget(MessageBubble oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.message.id == widget.message.id) return;
+    if (oldWidget.message.presentationId == widget.message.presentationId) {
+      return;
+    }
     _voiceEpoch++;
     _cancelTts();
     _isLoading = false;

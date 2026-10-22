@@ -1,5 +1,9 @@
 class ChatMessage {
   final String id;
+
+  /// Stable identity for this displayed reply, even when a local echo adopts
+  /// its persisted row id. Repeated text on another reply has its own identity.
+  final String presentationId;
   final String role; // 'user' or 'assistant'
   final String content;
   final String mood;
@@ -13,6 +17,7 @@ class ChatMessage {
 
   ChatMessage({
     required this.id,
+    String? presentationId,
     required this.role,
     required this.content,
     this.mood = 'neutral',
@@ -23,9 +28,11 @@ class ChatMessage {
     this.tightBubbleWidth,
     this.imageData,
     this.status = 'read',
-  }) : createdAt = createdAt ?? DateTime.now();
+  }) : presentationId = presentationId ?? id,
+       createdAt = createdAt ?? DateTime.now();
 
   ChatMessage copyWith({
+    String? presentationId,
     String? content,
     String? mood,
     String? model,
@@ -37,6 +44,7 @@ class ChatMessage {
   }) {
     return ChatMessage(
       id: id,
+      presentationId: presentationId ?? this.presentationId,
       role: role,
       content: content ?? this.content,
       mood: mood ?? this.mood,

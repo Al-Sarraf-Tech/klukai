@@ -32,6 +32,9 @@ jobs:
     name: Authorized exact source
     runs-on: [self-hosted, Linux, X64, klukai-amarillo-small]
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       full: ${{ steps.select.outputs.full }}
       core: ${{ steps.select.outputs.core }}
@@ -63,16 +66,17 @@ jobs:
           persist-credentials: false
       - name: Fail fast on formatting before allocating build VMs
         run: python3 -m tools.ci.quick_lint --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/preflight-ruff"
-      - name: Conservative complete push diff; dispatch always certifies full source
+      - name: Cumulative diff from full certification; dispatch certifies full source
         id: select
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BEFORE_REVISION: ${{ github.event.before }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          extra=()
+          # Superseded pushes may never finish. Preserve all affected paths
+          # since a successful full ancestor, not merely the previous push.
+          extra=(--cumulative)
           if [[ "$EVENT_NAME" != push ]]; then extra=(--full); fi
-          python3 -m tools.ci.selection plan --before "$BEFORE_REVISION" \
-            --after "$GITHUB_SHA" "${extra[@]}"
+          python3 -m tools.ci.selection plan --after "$GITHUB_SHA" "${extra[@]}"
 
 
   ci-image:

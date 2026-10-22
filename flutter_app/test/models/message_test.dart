@@ -111,6 +111,22 @@ void main() {
       expect(m.imageData, isNull);
     });
 
+    test('presentation identity defaults to the original row id', () {
+      final m = ChatMessage(id: 'streaming-1', role: 'assistant', content: 'Hi');
+      expect(m.presentationId, 'streaming-1');
+      expect(m.copyWith(isStreaming: false).presentationId, 'streaming-1');
+    });
+
+    test('promoted presentation identity survives later content updates', () {
+      final canonical = ChatMessage.fromJson({
+        'id': '00000000-0000-0000-0000-000000000001',
+        'role': 'assistant',
+        'content': 'Hi',
+      }).copyWith(presentationId: 'streaming-1');
+      expect(canonical.id, '00000000-0000-0000-0000-000000000001');
+      expect(canonical.copyWith(content: 'Hello').presentationId, 'streaming-1');
+    });
+
     test('createdAt defaults to now when not provided', () {
       final before = DateTime.now();
       final m = ChatMessage(id: '1', role: 'user', content: 'hi');

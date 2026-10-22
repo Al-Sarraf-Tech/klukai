@@ -282,6 +282,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   final List<ChatMessage> _messages = [];
 
+  // Several frames may arrive in one millisecond. Local rows need distinct
+  // identities for reconciliation and keyed playback, not wall-clock ids.
+  int _localMessageSequence = 0;
+  String _newLocalMessageId(String kind) => '$kind-${_localMessageSequence++}';
+
   /// Older history pages, oldest first, fetched as he scrolls up. They live
   /// in the sliver above the transcript's anchor ([_transcriptAnchor]), so a
   /// page arriving never moves the line he is reading.

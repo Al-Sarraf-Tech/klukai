@@ -261,6 +261,12 @@ extension _ChatView on _ChatScreenState {
                     at > 0 ? _older[at - 1] : null,
                   );
                 },
+                findChildIndexCallback: (key) {
+                  final at = _older.indexWhere(
+                    (message) => ValueKey(message.presentationId) == key,
+                  );
+                  return at < 0 ? null : _older.length - 1 - at;
+                },
                 childCount: _older.length + 1,
               ),
             ),
@@ -275,6 +281,12 @@ extension _ChatView on _ChatScreenState {
                         ? _messages[index - 1]
                         : (_older.isNotEmpty ? _older.last : null),
                   ),
+                  findChildIndexCallback: (key) {
+                    final at = _messages.indexWhere(
+                      (message) => ValueKey(message.presentationId) == key,
+                    );
+                    return at < 0 ? null : at;
+                  },
                   childCount: _messages.length,
                 ),
               ),
@@ -290,6 +302,7 @@ extension _ChatView on _ChatScreenState {
   Widget _transcriptLine(ChatMessage msg, ChatMessage? prev) {
     final voiceId = _voiceNotes[msg.id];
     final bubble = MessageBubble(
+      key: ValueKey(msg.presentationId),
       message: msg,
       browser: widget.browser,
       voiceOverride: voiceId == null
@@ -299,11 +312,13 @@ extension _ChatView on _ChatScreenState {
     final showDivider =
         prev == null ||
         DateUtils.dateOnly(prev.createdAt) != DateUtils.dateOnly(msg.createdAt);
-    if (!showDivider) return bubble;
+    // Both the sliver row and its bubble retain identity when reconnect adds
+    // earlier rows or the canonical timestamp changes this date boundary.
     return Column(
+      key: ValueKey(msg.presentationId),
       mainAxisSize: MainAxisSize.min,
       children: [
-        DateDivider(date: msg.createdAt),
+        if (showDivider) DateDivider(date: msg.createdAt),
         bubble,
       ],
     );

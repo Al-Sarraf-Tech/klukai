@@ -360,6 +360,39 @@ void main() {
       },
     );
 
+    testWidgets('same text on a different reply still cancels pending synthesis', (
+      tester,
+    ) async {
+      final calls = <String>[];
+      final browser = FakeBrowserPlatform();
+      final client = MockClient((request) async {
+        calls.add('${request.method} ${request.url.path}');
+        if (request.method == 'POST') {
+          return http.Response('{"job_id":"old","status":"queued"}', 202);
+        }
+        if (request.method == 'DELETE') return http.Response('{}', 200);
+        return http.Response('{"audio":"b2xk"}', 200);
+      });
+      Widget bubble(String id) => _wrap(MessageBubble(
+        message: ChatMessage(id: id, role: 'assistant', content: 'Same words.'),
+        client: client,
+        browser: browser,
+      ));
+      await tester.pumpWidget(bubble('streaming-old'));
+      await tester.tap(find.byKey(_voice));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('SYNTH'), findsOneWidget);
+      // Identical words and a canonical-looking ID do not prove promotion.
+      await tester.pumpWidget(bubble('00000000-0000-0000-0000-000000000001'));
+      await tester.pump();
+      expect(calls, contains('DELETE /api/tts/jobs/old'));
+      expect(find.text('VOICE'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 2));
+      expect(browser.voices, isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('reusing a bubble keeps its previous injected client open', (
       tester,
     ) async {

@@ -31,7 +31,7 @@ extension _ChatComposer on _ChatScreenState {
     _update(() {
       _messages.add(
         ChatMessage(
-          id: 'user-${DateTime.now().millisecondsSinceEpoch}',
+          id: _newLocalMessageId('user'),
           role: 'user',
           content: text,
         ),

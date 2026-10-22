@@ -32,6 +32,7 @@ import 'package:http/testing.dart';
 import 'package:web/web.dart' as web;
 
 import 'package:companion_app/models/her_day.dart';
+import 'package:companion_app/models/message.dart';
 import 'package:companion_app/screens/chat_screen.dart';
 import 'package:companion_app/services/resume_policy.dart';
 import 'package:companion_app/services/speech_capture.dart';
@@ -46,6 +47,7 @@ import 'package:companion_app/theme/mood_visuals.dart';
 import 'package:companion_app/widgets/voice_button.dart';
 import 'package:companion_app/widgets/canvas_message_bubble.dart';
 import 'package:companion_app/widgets/message_bubble.dart';
+import 'package:companion_app/widgets/date_divider.dart';
 import 'package:companion_app/widgets/tool_status_indicator.dart';
 
 import 'support/fake_browser.dart';
@@ -502,6 +504,305 @@ void main() {
       },
     );
 
+    testWidgets('same-time local reply bursts keep distinct identities after rebuild', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 1800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final history = MockClient((request) async => http.Response(
+        request.url.path == '/api/messages'
+            ? '{"messages":[]}'
+            : '{"score":0,"level":0}',
+        200,
+      ));
+      final fake = await _pumpChat(tester, historyClient: history);
+      for (var i = 0; i < 6; i++) {
+        fake.emit({'type': 'proactive', 'message': 'Burst reply $i'});
+      }
+      // All six frames land before another frame or clock advancement.
+      await tester.pump();
+      List<ChatMessage> replies() => tester
+          .widgetList<MessageBubble>(find.byType(MessageBubble))
+          .map((bubble) => bubble.message)
+          .where((message) => message.content.startsWith('Burst reply '))
+          .toList();
+      final before = replies();
+      expect(before, hasLength(6));
+      expect(before.map((message) => message.id).toSet(), hasLength(6));
+      expect(before.map((message) => message.presentationId).toSet(), hasLength(6));
+
+      fake.emit({'type': 'mood', 'mood': 'focused'});
+      await tester.pump();
+      final after = replies();
+      expect(after.map((message) => message.content),
+          [for (var i = 0; i < 6; i++) 'Burst reply $i']);
+      expect(after.map((message) => message.presentationId),
+          before.map((message) => message.presentationId));
+      expect(tester.takeException(), isNull);
+      await tester.pump(const Duration(seconds: 2));
+      fake.dispose();
+    });
+
+    for (final sameDay in [false, true]) {
+      testWidgets(
+        'reconnect preserves the mounted reply state when earlier history arrives (same day: $sameDay)',
+        (tester) async {
+          tester.view.physicalSize = const Size(800, 1200);
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.reset);
+          ChatMessage? echo;
+          final client = MockClient((request) async {
+            final local = echo?.createdAt;
+            final day = local == null
+                ? null
+                : DateTime(local.year, local.month, local.day);
+            return http.Response(jsonEncode(
+              request.url.path == '/api/messages'
+                  ? {
+                      'messages': echo == null ? [] : [
+                        {
+                          'id': '00000000-0000-0000-0000-000000000001',
+                          'role': 'assistant',
+                          'content': 'Earlier history',
+                          'created_at': (sameDay ? day! : day!.subtract(const Duration(days: 1)))
+                              .toUtc().toIso8601String(),
+                        },
+                        {
+                          'id': '00000000-0000-0000-0000-000000000002',
+                          'role': 'assistant',
+                          'content': 'Keep this reply mounted.',
+                          'created_at': local!.toUtc().toIso8601String(),
+                        },
+                      ],
+                    }
+                  : {'score': 0, 'level': 0},
+            ), 200);
+          });
+          final fake = await _pumpChat(tester, historyClient: client);
+          fake.emit({'type': 'token', 'text': 'Keep this reply mounted.'});
+          await tester.pump();
+          fake.emit({'type': 'done'});
+          await tester.pump();
+          final target = find.byWidgetPredicate((widget) =>
+              widget is MessageBubble &&
+              widget.message.content == 'Keep this reply mounted.');
+          final state = tester.state(target);
+          echo = tester.widget<MessageBubble>(target).message;
+          expect(find.byType(DateDivider), findsOneWidget);
+
+          fake.setConnected(false);
+          await tester.pump();
+          fake.setConnected(true);
+          await tester.pump();
+          await tester.pump();
+          expect(find.text('Earlier history'), findsOneWidget);
+          expect(tester.widget<MessageBubble>(target).message.id,
+              '00000000-0000-0000-0000-000000000002');
+          expect(state.mounted, isTrue);
+          expect(tester.state(target), same(state));
+          // Same-day insertion removes this row's divider; a prior-day row
+          // leaves it in place. Neither may replace the bubble's State.
+          expect(find.byType(DateDivider), findsNWidgets(sameDay ? 1 : 2));
+          expect(tester.takeException(), isNull);
+          fake.dispose();
+        },
+      );
+    }
+
+    /// Capture both versions through the real reconnect merge, then use the
+    /// bubble's existing HTTP seam to exercise playback during that update.
+    Future<(ChatMessage, ChatMessage)> reconciledReply(
+      WidgetTester tester,
+      String content,
+    ) async {
+      var restored = false;
+      final client = MockClient((request) async {
+        final page = restored
+            ? [
+                {
+                  'id': '00000000-0000-0000-0000-000000000001',
+                  'role': 'assistant',
+                  'content': content,
+                  'created_at': DateTime.now().toUtc().toIso8601String(),
+                },
+              ]
+            : [];
+        return http.Response(
+          jsonEncode(request.url.path == '/api/messages'
+              ? {'messages': page}
+              : {'score': 0, 'level': 0}),
+          200,
+        );
+      });
+      final fake = await _pumpChat(tester, historyClient: client);
+      fake.emit({'type': 'token', 'text': content});
+      await tester.pump();
+      fake.emit({'type': 'done'});
+      await tester.pump();
+      ChatMessage reply() => tester
+          .widgetList<MessageBubble>(find.byType(MessageBubble))
+          .singleWhere((bubble) => bubble.message.content == content)
+          .message;
+      final echo = reply();
+      expect(echo.id, startsWith('streaming-'));
+      expect(echo.isStreaming, isFalse);
+      restored = true;
+      fake.setConnected(false);
+      await tester.pump();
+      fake.setConnected(true);
+      await tester.pump();
+      await tester.pump();
+      final canonical = reply();
+      expect(canonical.id, '00000000-0000-0000-0000-000000000001');
+      await tester.pumpWidget(const SizedBox());
+      fake.dispose();
+      return (echo, canonical);
+    }
+
+    Widget voiceBubble(
+      ChatMessage message,
+      http.Client client,
+      FakeBrowserPlatform browser,
+    ) => MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 400,
+          child: MessageBubble(
+            message: message,
+            client: client,
+            browser: browser,
+          ),
+        ),
+      ),
+    );
+
+    testWidgets('canonical promotion preserves pending voice synthesis', (
+      tester,
+    ) async {
+      final (echo, canonical) = await reconciledReply(tester, 'Holding position.');
+      final calls = <String>[];
+      final browser = _GatedVoiceBrowser();
+      final client = MockClient((request) async {
+        calls.add('${request.method} ${request.url.path}');
+        if (request.method == 'POST') {
+          return http.Response('{"job_id":"pending","status":"queued"}', 202);
+        }
+        if (request.method == 'DELETE') return http.Response('{}', 200);
+        return http.Response('{"audio":"QQ=="}', 200);
+      });
+      await tester.pumpWidget(voiceBubble(echo, client, browser));
+      await tester.tap(find.byKey(const Key('voice-play')));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('SYNTH'), findsOneWidget);
+
+      await tester.pumpWidget(voiceBubble(canonical, client, browser));
+      await tester.pump();
+      expect(calls, ['POST /api/tts']);
+      expect(find.text('SYNTH'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('voice-play')));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      await tester.pump();
+      expect(browser.voices, ['data:audio/wav;base64,QQ==']);
+      expect(calls.where((call) => call == 'POST /api/tts'), hasLength(1));
+      browser.plays.single.complete(true);
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('VOICE'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('canonical promotion preserves playback and its queued next clip', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final clipA = 'A${'a' * 298}.';
+      final clipB = 'B${'b' * 298}.';
+      final (echo, canonical) = await reconciledReply(tester, '$clipA $clipB');
+      final calls = <String>[];
+      final posted = <String>[];
+      final browser = _GatedVoiceBrowser();
+      final client = MockClient((request) async {
+        calls.add('${request.method} ${request.url.path}');
+        if (request.method == 'DELETE') return http.Response('{}', 200);
+        if (request.method == 'GET') return http.Response('{"audio":"Qg=="}', 200);
+        final text = jsonDecode(request.body)['text'] as String;
+        posted.add(text);
+        return text == clipA
+            ? http.Response('{"audio":"QQ=="}', 200)
+            : http.Response('{"job_id":"next","status":"queued"}', 202);
+      });
+      await tester.pumpWidget(voiceBubble(echo, client, browser));
+      await tester.tap(find.byKey(const Key('voice-play')));
+      await tester.pump();
+      await tester.pump();
+      expect(browser.voices, ['data:audio/wav;base64,QQ==']);
+      expect(posted, [clipA, clipB]);
+
+      await tester.pumpWidget(voiceBubble(canonical, client, browser));
+      await tester.pump();
+      expect(calls.where((call) => call.startsWith('DELETE')), isEmpty);
+      expect(find.text('▮▮'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('voice-play')));
+      browser.plays.first.complete(true);
+      await tester.pump();
+      expect(find.text('SYNTH'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      await tester.pump();
+      expect(browser.voices, [
+        'data:audio/wav;base64,QQ==',
+        'data:audio/wav;base64,Qg==',
+      ]);
+      expect(posted, [clipA, clipB]);
+      browser.plays.last.complete(true);
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('VOICE'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('error lines never reconcile with identical assistant history', (
+      tester,
+    ) async {
+      var restored = false;
+      final client = MockClient((request) async => http.Response(
+        jsonEncode(request.url.path == '/api/messages'
+            ? {
+                'messages': restored
+                    ? [
+                        {
+                          'id': '00000000-0000-0000-0000-000000000001',
+                          'role': 'assistant',
+                          'content': 'Please try again.',
+                          'created_at': DateTime.now().toUtc().toIso8601String(),
+                        },
+                      ]
+                    : [],
+              }
+            : {'score': 0, 'level': 0}),
+        200,
+      ));
+      final fake = await _pumpChat(tester, historyClient: client);
+      fake.emit({'type': 'error', 'message': 'Please try again.'});
+      await tester.pump();
+      restored = true;
+      fake.setConnected(false);
+      await tester.pump();
+      fake.setConnected(true);
+      await tester.pump();
+      await tester.pump();
+      final rows = tester.widgetList<MessageBubble>(find.byType(MessageBubble))
+          .where((bubble) => bubble.message.content == 'Please try again.');
+      expect(rows, hasLength(2));
+      expect(rows.any((bubble) => bubble.message.id.startsWith('error-')), isTrue);
+      fake.dispose();
+    });
+
     testWidgets('history merge preserves an in-flight streaming bubble', (
       tester,
     ) async {
@@ -705,6 +1006,81 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await scrollToTop(tester);
       expect(find.text('Before both echoes'), findsOneWidget);
+      fake.dispose();
+    });
+
+    testWidgets('pagination skips an earlier error and uses the canonical minimum', (
+      tester,
+    ) async {
+      final seen = <Uri>[];
+      DateTime? stamp;
+      const firstId = '00000000-0000-0000-0000-000000000001';
+      final client = MockClient((request) async {
+        if (request.url.path != '/api/messages') {
+          return http.Response('{"score":0,"level":0}', 200);
+        }
+        seen.add(request.url);
+        if (request.url.queryParameters.containsKey('before')) {
+          return request.url.queryParameters['before_id'] == firstId
+              ? http.Response('{"messages":[]}', 200)
+              : http.Response('invalid UUID cursor', 400);
+        }
+        return http.Response(jsonEncode({
+          'messages': stamp == null ? [] : [
+            for (var i = 50; i >= 1; i--)
+              {
+                'id': '00000000-0000-0000-0000-${i.toString().padLeft(12, '0')}',
+                'role': 'assistant',
+                'content': 'Persisted reply $i',
+                'created_at': stamp!.toIso8601String(),
+              },
+          ],
+        }), 200);
+      });
+      final fake = await _pumpChat(tester, historyClient: client);
+      fake.emit({'type': 'error', 'message': 'A transient failure'});
+      await tester.pump();
+      final error = tester.widgetList<MessageBubble>(find.byType(MessageBubble))
+          .singleWhere((bubble) => bubble.message.id.startsWith('error-')).message;
+      stamp = error.createdAt.toUtc().add(const Duration(seconds: 1));
+      fake.setConnected(false);
+      await tester.pump();
+      fake.setConnected(true);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await scrollToTop(tester);
+      final older = seen.where((uri) => uri.queryParameters.containsKey('before'));
+      expect(older, isNotEmpty);
+      expect(older.first.queryParameters['before_id'], firstId);
+      expect(older.first.queryParameters['before'], stamp!.toIso8601String());
+      expect(older, hasLength(1));
+      fake.dispose();
+    });
+
+    testWidgets('synthetic-only history never sends a pagination cursor', (
+      tester,
+    ) async {
+      final seen = <Uri>[];
+      final client = MockClient((request) async {
+        if (request.url.path != '/api/messages') {
+          return http.Response('{"score":0,"level":0}', 200);
+        }
+        seen.add(request.url);
+        return http.Response('{"messages":[]}', 200);
+      });
+      final fake = await _pumpChat(tester, historyClient: client);
+      fake.emit({'type': 'error', 'message': 'A transient failure'});
+      await tester.pump();
+      for (var i = 0; i < 50; i++) {
+        fake.emit({'type': 'token', 'text': 'Unpersisted reply $i'});
+        await tester.pump();
+        fake.emit({'type': 'done'});
+        await tester.pump(const Duration(milliseconds: 1));
+      }
+      await tester.pump(const Duration(milliseconds: 300));
+      await scrollToTop(tester);
+      expect(seen.where((uri) => uri.queryParameters.containsKey('before')), isEmpty);
       fake.dispose();
     });
 
@@ -2812,5 +3188,18 @@ class _LateDayWardrobe extends FakeWardrobeService {
   Future<HerDay> fetchHerDay() async {
     await _gate.future;
     return super.fetchHerDay();
+  }
+}
+
+/// Keeps each clip playing until the test finishes it.
+class _GatedVoiceBrowser extends FakeBrowserPlatform {
+  final plays = <Completer<bool>>[];
+
+  @override
+  Future<bool> playVoice(String url) {
+    voices.add(url);
+    final ended = Completer<bool>();
+    plays.add(ended);
+    return ended.future;
   }
 }
