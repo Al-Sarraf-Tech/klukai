@@ -79,7 +79,7 @@ jobs:
     name: Pinned Python CI executor
     needs: source-policy
     if: needs.source-policy.outputs.core == 'true'
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-build]
     timeout-minutes: 30
     outputs:
       image_id: ${{ steps.build.outputs.image_id }}
@@ -140,9 +140,9 @@ jobs:
 
   components:
     name: Isolated component suites
-    needs: source-policy
-    if: needs.source-policy.outputs.components == 'true'
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
+    needs: [source-policy, ci-image]
+    if: always() && needs.source-policy.result == 'success' && needs.source-policy.outputs.components == 'true' && contains(fromJSON('["success","skipped"]'), needs.ci-image.result)
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-serial]
     timeout-minutes: 20
     env:
       # Light containers drop all capabilities and the Ubuntu heavy guest restricts
@@ -204,7 +204,7 @@ jobs:
   test:
     name: Test Suite
     needs: ci-image
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-serial]
     timeout-minutes: 25
     env:
       KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/core
@@ -232,7 +232,7 @@ jobs:
   real-backends:
     name: Real PostgreSQL, Valkey and Qdrant recovery
     needs: ci-image
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-serial]
     timeout-minutes: 20
     env:
       KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/backends

@@ -96,6 +96,8 @@ def test_existing_required_names_are_preserved_and_every_job_is_aggregated():
             ["self-hosted", "Linux", "X64", "klukai-amarillo-heavy"],
             ["self-hosted", "Linux", "X64", "klukai-amarillo-small"],
             ["self-hosted", "Linux", "X64", "klukai-amarillo-medium"],
+            ["self-hosted", "Linux", "X64", "klukai-amarillo-build"],
+            ["self-hosted", "Linux", "X64", "klukai-amarillo-serial"],
             ["self-hosted", "Linux", "X64", "klukai-amarillo-frontend"],
         )
         if key not in {"source-policy", "all-required", "affected-required"}:
@@ -315,3 +317,19 @@ def test_release_build_requires_full_ci_for_its_exact_revision_before_building()
     assert steps[gate]["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert "green_run" in steps[gate]["run"]
     assert "os.environ['GITHUB_SHA']" in steps[gate]["run"]
+
+
+def test_component_only_push_can_run_after_intentionally_skipped_tool_image():
+    from tools.ci.selection import plan, required
+
+    selected = plan(["ops/amarillo/tests/test_ci_runner.py"])
+    expected = required(selected)
+    assert "components" in expected and "ci-image" not in expected
+    job = workflow()["jobs"]["components"]
+    assert job["needs"] == ["source-policy", "ci-image"]
+    assert "always() && needs.source-policy.result == 'success'" in job["if"]
+    assert (
+        'contains(fromJSON(\'["success","skipped"]\'), needs.ci-image.result)'
+        in job["if"]
+    )
+    assert job["runs-on"][-1] == "klukai-amarillo-serial"

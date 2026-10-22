@@ -513,3 +513,26 @@ def test_idle_cache_pruning_keeps_recent_and_published_exports(tmp_path):
     )
     assert runner.prune_build_caches(root, now=10000) == 2
     assert [path.exists() for path in caches] == [True, False, False, True, True]
+
+
+def test_serial_suites_fit_two_alongside_frontend_and_keep_build_priority(env):
+    make, state, _ = env
+    state["mem"] = 40000
+    controller, github, host = make(
+        [
+            job("klukai-amarillo-frontend"),
+            job("klukai-amarillo-serial"),
+            job("klukai-amarillo-serial"),
+        ]
+    )
+    controller.tick()
+    assert sorted(g.profile.vcpus for g in controller.guests.values()) == [2, 2, 4]
+    serial = runner.profile_for(job("klukai-amarillo-serial"))
+    assert serial.memory_mib == 4096
+    controller, github, host = make(
+        [
+            job("klukai-amarillo-serial"),
+            job("klukai-amarillo-build"),
+        ]
+    )
+    assert controller.demand()[0].label == "klukai-amarillo-build"

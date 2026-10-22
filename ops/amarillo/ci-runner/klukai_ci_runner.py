@@ -57,6 +57,8 @@ PROFILES = {
         Profile("klukai-amarillo-heavy", 8, 8192),
         Profile("klukai-amarillo-small", 2, 3072),
         Profile("klukai-amarillo-medium", 4, 4096),
+        Profile("klukai-amarillo-build", 4, 4096),
+        Profile("klukai-amarillo-serial", 2, 4096),
         Profile("klukai-amarillo-frontend", 4, 8192),
     )
 }
@@ -569,7 +571,15 @@ class Controller:
             idle = now - guest.started < WARMUP_SECONDS or busy is not True
             if idle and wanted.get(guest.profile.label):
                 wanted[guest.profile.label] -= 1
-        order = sorted(PROFILES.values(), key=lambda p: (p.vcpus, -p.memory_mib))
+        priority = {
+            "klukai-amarillo-small": 0,
+            "klukai-amarillo-frontend": 1,
+            "klukai-amarillo-build": 2,
+            "klukai-amarillo-serial": 3,
+            "klukai-amarillo-medium": 4,
+            "klukai-amarillo-heavy": 5,
+        }
+        order = sorted(PROFILES.values(), key=lambda p: priority[p.label])
         return [p for p in order for _ in range(wanted.get(p.label, 0))]
 
     def tick(self) -> None:

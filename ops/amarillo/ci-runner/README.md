@@ -7,7 +7,9 @@ the job. Other repositories keep the Dominus fleet runners.
 | Label set (`runs-on`) | VM | Jobs |
 |---|---|---|
 | `[self-hosted, Linux, X64, klukai-amarillo-heavy]` | 8 vCPU, 8 GiB (+ zram swap) | perf-gate (exclusive), existing nightly jobs |
-| `[self-hosted, Linux, X64, klukai-amarillo-medium]` | 4 vCPU, 4 GiB | ci-image, components, test, real-backends, image-scan |
+| `[self-hosted, Linux, X64, klukai-amarillo-build]` | 4 vCPU, 4 GiB | ci-image (before serial suites) |
+| `[self-hosted, Linux, X64, klukai-amarillo-serial]` | 2 vCPU, 4 GiB | components, test, real-backends |
+| `[self-hosted, Linux, X64, klukai-amarillo-medium]` | 4 vCPU, 4 GiB | image-scan |
 | `[self-hosted, Linux, X64, klukai-amarillo-frontend]` | 4 vCPU, 8 GiB (+ zram swap) | frontend |
 | `[self-hosted, Linux, X64, klukai-amarillo-small]` | 2 vCPU, 3 GiB | source-policy/preflight/selection, lint, typecheck, security, final gates |
 
