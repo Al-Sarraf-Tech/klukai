@@ -13,7 +13,8 @@ amarillo, as before. Other repositories keep the Dominus fleet runners.
     - 20 threads and 32 GiB;
     - `klukai-dominus-*` labels;
     - subnet `10.232.0.0/24` with the same fail-closed guard;
-    - AMD `k10temp` sensor;
+    - AMD `k10temp` sensor, starting guests below 80 C and pausing them at 90 C
+      (a 7950X runs up to 95 C by design; amarillo keeps 62/68 C);
     - the owner's GitHub CLI login, read in memory.
 - **Heartbeat.** While Dominus is healthy, not gaming (no new guests while
   `/run/user/1000/dominus-gpu/game-active` exists) and outside 23:00-08:00,
