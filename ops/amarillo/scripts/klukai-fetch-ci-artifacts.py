@@ -239,6 +239,22 @@ def github(path: str, token: str) -> Any:
         return json.load(response)
 
 
+FULL_CI_GATES = {
+    "Authorized exact source",
+    "Pinned Python CI executor",
+    "Isolated component suites",
+    "Test Suite",
+    "Real PostgreSQL, Valkey and Qdrant recovery",
+    "Lint",
+    "Type Check (mypy)",
+    "Security Scan (bandit + safety)",
+    "Image Scan (trivy)",
+    "Perf Gate (p99 regression check)",
+    "Frontend validation and immutable PWA evidence",
+    "Required CI gates",
+}
+
+
 def green_run(repo: str, revision: str, token: str, api: Any = github) -> str:
     """Return '<run_id>-<attempt>' of the newest fully green CI run for the commit."""
     runs = api(
@@ -250,10 +266,8 @@ def green_run(repo: str, revision: str, token: str, api: Any = github) -> str:
         if run["head_sha"] != revision or run["conclusion"] != "success":
             continue
         jobs = api(f"/repos/{repo}/actions/runs/{run['id']}/jobs?per_page=50", token)
-        if any(
-            j["name"] == "Required CI gates" and j["conclusion"] == "success"
-            for j in jobs["jobs"]
-        ):
+        certified = {j["name"] for j in jobs["jobs"] if j["conclusion"] == "success"}
+        if FULL_CI_GATES <= certified:
             return f"{run['id']}-{run['run_attempt']}"
     raise ValueError("No successful CI run with Required CI gates for this revision")
 

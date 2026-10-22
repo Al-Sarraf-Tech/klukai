@@ -47,7 +47,7 @@ def validate(
         lock = root / "docker/core/requirements-ci.txt"
         require(report["lock_sha256"] == sha256(lock), "Lock identity differs")
         packages = lock_versions(lock.read_text())
-        require(len(packages) == 131, "Expected complete exact131 lock")
+        require(len(packages) == 130, "Expected complete exact130 lock")
         require(
             importlib.metadata.version("coverage") == packages["coverage"],
             "Consumer coverage library differs from pinned lock",

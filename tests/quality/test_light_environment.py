@@ -228,14 +228,14 @@ def test_complete_native_bootstrap_retains_evidence_before_selecting_tools(
     subject.run(args)
     report = json.loads((args.output / "manifest.json").read_text())
     assert report["passed"] is True and report["source_unchanged"] is True
-    assert len(report["packages"]) == 131
+    assert len(report["packages"]) == 130
     assert report["host"]["executable"] == str(Path(sys.executable).resolve())
     assert len(report["host"]["sha256"]) == 64
     assert args.output.stat().st_mode & 0o777 == 0o700
     assert json.loads((args.output / "commands.json").read_text())
     assert (
         len(json.loads((args.output / "wheel-materials.json").read_text())["wheels"])
-        == 131
+        == 130
     )
 
 
@@ -542,3 +542,24 @@ def test_selected_complete_lock_set_is_dynamic(subject, repository, tmp_path, bo
     assert subject.selection(repository, args.output, args.revision) == str(
         args.output / "environment"
     )
+
+
+def test_download_cache_is_opt_in_and_requires_safe_absolute_directory(
+    tmp_path, monkeypatch, subject
+):
+    light = subject
+    monkeypatch.delenv("KLUKAI_CI_DOWNLOAD_CACHE", raising=False)
+    assert "--no-cache-dir" in light.public_downloads()
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("KLUKAI_CI_DOWNLOAD_CACHE", str(cache))
+    arguments = light.public_downloads()
+    assert arguments[-2:] == ["--cache-dir", str(cache)]
+    assert cache.is_dir()
+    monkeypatch.setenv("KLUKAI_CI_DOWNLOAD_CACHE", "relative")
+    with pytest.raises(ValueError, match="cache"):
+        light.public_downloads()
+    link = tmp_path / "linked"
+    link.symlink_to(cache, target_is_directory=True)
+    monkeypatch.setenv("KLUKAI_CI_DOWNLOAD_CACHE", str(link))
+    with pytest.raises(ValueError, match="cache"):
+        light.public_downloads()

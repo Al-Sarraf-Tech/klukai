@@ -236,6 +236,8 @@ def source_snapshot(root, revision):
         "scripts/ci/frontend.sh",
         "scripts/deploy-web.sh",
         "tools/ci/frontend_evidence.py",
+        "tools/ci/font_cache.py",
+        "tools/ci/fallback-fonts.lock.json",
     ).splitlines()
     files = {name: digest(root / name) for name in names}
     require(

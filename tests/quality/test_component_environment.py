@@ -338,7 +338,7 @@ def test_component_workflow_pytest_starts_with_strict_warnings_and_explicit_loop
     job = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())["jobs"][
         "components"
     ]
-    step = next(row for row in job["steps"] if "make test-tgbot" in row.get("run", ""))
+    step = next(row for row in job["steps"] if "make test-ops" in row.get("run", ""))
     config = tmp_path / "pytest.ini"
     config.write_text("[pytest]\n")
     sample = tmp_path / "test_async_fixture.py"

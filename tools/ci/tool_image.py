@@ -170,6 +170,25 @@ def build_image(
         "--build-arg=SOURCE_DATE_EPOCH=" + str(materials["source_date_epoch"]),
         str(output / "context"),
     ]
+    command.insert(1, "--build-arg=BUILDKIT_INLINE_CACHE=1")
+    cache_directory = os.environ.get("KLUKAI_CI_BUILDKIT_CACHE_FROM", "")
+    if cache_directory:
+        require(Path(cache_directory).is_absolute(), "BuildKit cache must be absolute")
+        command.insert(1, "--cache-from=type=local,src=" + cache_directory)
+    if os.environ.get("KLUKAI_CI_BUILDKIT_CACHE_EXPORT") == "1":
+        command.insert(
+            1,
+            "--cache-to=type=local,dest="
+            + str(output / "buildkit-cache")
+            + ",mode=max",
+        )
+    cached = os.environ.get("KLUKAI_CI_BUILD_CACHE_IMAGE", "")
+    if cached:
+        require(
+            re.fullmatch(r"sha256:[0-9a-f]{64}", cached),
+            "Invalid immutable build cache",
+        )
+        command.insert(1, "--cache-from=" + cached)
     report["build"] = {
         "argv": ["docker", *command],
         "completion_known": False,

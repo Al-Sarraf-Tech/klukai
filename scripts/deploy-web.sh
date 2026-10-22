@@ -36,33 +36,17 @@ cd "$FLUTTER_APP"
 echo ""
 echo "=== Step 2: Mirror fallback fonts (no requests to fonts.gstatic.com) ==="
 MAIN_JS="$OUT/main.dart.js"
-mapfile -t FONT_PATHS < <(grep -oE '"[a-z0-9]+/v[0-9]+/[A-Za-z0-9_-]+(\.[0-9]+)?\.(woff2|ttf|otf)"' "$MAIN_JS" | tr -d '"' | sort -u)
-echo "  engine fallback font files: ${#FONT_PATHS[@]}"
-mkdir -p "$FONT_CACHE"
-missing=0
-for rel in "${FONT_PATHS[@]}"; do
-  if [[ ! -s "$FONT_CACHE/$rel" ]]; then
-    mkdir -p "$FONT_CACHE/$(dirname "$rel")"
-    if ! curl -fsS --retry 2 --max-time 60 -o "$FONT_CACHE/$rel.part" "$FONT_CDN$rel"; then
-      rm -f "$FONT_CACHE/$rel.part"; missing=$((missing + 1)); continue
-    fi
-    mv "$FONT_CACHE/$rel.part" "$FONT_CACHE/$rel"
-  fi
-done
-if [[ ${#FONT_PATHS[@]} -gt 0 && $missing -eq 0 ]]; then
-  mkdir -p "$OUT/fonts/fallback"
-  for rel in "${FONT_PATHS[@]}"; do
-    mkdir -p "$OUT/fonts/fallback/$(dirname "$rel")"
-    cp "$FONT_CACHE/$rel" "$OUT/fonts/fallback/$rel"
-  done
+if python3 "$REPO_ROOT/tools/ci/font_cache.py" \
+    --source "$MAIN_JS" --cache "$FONT_CACHE" --output "$OUT/fonts/fallback" \
+    --manifest "$REPO_ROOT/tools/ci/fallback-fonts.lock.json"; then
   sed -i 's|const klukaiFontFallbackBase = null;|const klukaiFontFallbackBase = "fonts/fallback/";|' "$OUT/flutter_bootstrap.js"
   grep -q 'klukaiFontFallbackBase = "fonts/fallback/"' "$OUT/flutter_bootstrap.js" \
     || { echo "  ERROR: bootstrap template not found (web/flutter_bootstrap.js)"; exit 1; }
-  echo "  mirrored ${#FONT_PATHS[@]} files ($(du -sh "$OUT/fonts/fallback" | cut -f1)); bootstrap points at fonts/fallback/"
+  echo "  bootstrap points at verified fonts/fallback/"
 elif [[ "${KLUKAI_ALLOW_FONT_CDN:-0}" == "1" ]]; then
-  echo "  WARNING: $missing font file(s) unavailable; clients will use $FONT_CDN"
+  echo "  WARNING: verified font mirror unavailable; clients will use $FONT_CDN"
 else
-  echo "  ERROR: $missing font file(s) could not be mirrored (or none found)."
+  echo "  ERROR: complete verified fallback fonts could not be mirrored."
   echo "  Re-run when online, or set KLUKAI_ALLOW_FONT_CDN=1 to accept Google-hosted fonts."
   exit 1
 fi

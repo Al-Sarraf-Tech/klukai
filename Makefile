@@ -175,7 +175,7 @@ test-shell:
 		| xargs -r awk 'FNR==1 && /^#!.*sh/ {print FILENAME}' \
 		| xargs -r shellcheck -S warning
 
-test-all: test-local test-tgbot test-ops test-voice test-bridge test-js test-shell
+test-all: test-local test-ops test-voice test-bridge test-js test-shell
 
 lint-local:
 	cd docker/core && ruff check app/ --config ruff.toml

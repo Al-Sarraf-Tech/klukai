@@ -10,12 +10,20 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: klukai-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 env:
   KLUKAI_CI_ARTIFACT_ROOT: /opt/klukai-ci/artifacts
   KLUKAI_CI_REVISION: ${{ github.sha }}
+  KLUKAI_CI_DOWNLOAD_CACHE: /opt/klukai-ci/artifacts/cache/pip
+  KLUKAI_CI_BUILDKIT_CACHE_EXPORT: "1"
+  NPM_CONFIG_CACHE: /opt/klukai-ci/artifacts/cache/npm
+  TRIVY_CACHE_DIR: /opt/klukai-ci/artifacts/cache/trivy
 
 jobs:
   # Dispatch uses GitHub's repository write ACL and binds the reviewed branch
@@ -23,7 +31,13 @@ jobs:
   source-policy:
     name: Authorized exact source
     runs-on: [self-hosted, Linux, X64, klukai-amarillo-small]
-    timeout-minutes: 2
+    timeout-minutes: 5
+    outputs:
+      full: ${{ steps.select.outputs.full }}
+      core: ${{ steps.select.outputs.core }}
+      frontend: ${{ steps.select.outputs.frontend }}
+      components: ${{ steps.select.outputs.components }}
+      selected: ${{ steps.select.outputs.selected }}
     steps:
       - name: Require reviewed exact source before checkout
         id: admit
@@ -42,11 +56,30 @@ jobs:
             workflow_dispatch) [[ "$EXPECTED_REVISION" == "$SOURCE_REVISION" ]] ;;
             *) echo 'Unauthorized CI event' >&2; exit 1 ;;
           esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fail fast on formatting before allocating build VMs
+        run: python3 -m tools.ci.quick_lint --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/preflight-ruff"
+      - name: Conservative complete push diff; dispatch always certifies full source
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_REVISION: ${{ github.event.before }}
+        run: |
+          extra=()
+          if [[ "$EVENT_NAME" != push ]]; then extra=(--full); fi
+          python3 -m tools.ci.selection plan --before "$BEFORE_REVISION" \
+            --after "$GITHUB_SHA" "${extra[@]}"
+
 
   ci-image:
     name: Pinned Python CI executor
-    needs: source-policy
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
+    needs: [source-policy, lint]
+    if: needs.source-policy.outputs.core == 'true'
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
     timeout-minutes: 30
     outputs:
       image_id: ${{ steps.build.outputs.image_id }}
@@ -58,6 +91,13 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Restore optional verified Docker build materials
+        shell: bash
+        run: |
+          cached=$(python3 -m tools.ci.docker_cache restore --record "$KLUKAI_CI_ARTIFACT_ROOT/cache/ci-tool.json")
+          echo "KLUKAI_CI_BUILD_CACHE_IMAGE=$cached" >> "$GITHUB_ENV"
+          directory=$(python3 -m tools.ci.docker_cache restore-buildkit --record "$KLUKAI_CI_ARTIFACT_ROOT/cache/ci-buildkit.json")
+          echo "KLUKAI_CI_BUILDKIT_CACHE_FROM=$directory" >> "$GITHUB_ENV"
       - name: Build once and prove the complete pinned Python environment
         id: build
         shell: bash
@@ -93,11 +133,16 @@ jobs:
           mkdir -p "$HANDOFF"
           docker save "$IMAGE_ID" -o "$HANDOFF/image.tar"
           sha256sum "$HANDOFF/image.tar" | cut -d' ' -f1 > "$HANDOFF/image.tar.sha256"
+          python3 -m tools.ci.docker_cache publish --record "$KLUKAI_CI_ARTIFACT_ROOT/cache/ci-tool.json" \
+            --archive "$HANDOFF/image.tar" --image "$IMAGE_ID"
+          python3 -m tools.ci.docker_cache publish-buildkit --record "$KLUKAI_CI_ARTIFACT_ROOT/cache/ci-buildkit.json" \
+            --directory "$KLUKAI_CI_OUTPUT/buildkit-cache"
 
   components:
     name: Isolated component suites
-    needs: source-policy
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
+    needs: [source-policy, lint]
+    if: needs.source-policy.outputs.components == 'true'
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
     timeout-minutes: 20
     env:
       # Light containers drop all capabilities and the Ubuntu heavy guest restricts
@@ -141,13 +186,13 @@ jobs:
             --output "${RUNNER_TEMP}/klukai-component-native" --revision "$GITHUB_SHA" \
             --tools "${RUNNER_TEMP}/klukai-component-python" \
             --bridge "${RUNNER_TEMP}/klukai-bridge-python" --github-env "$GITHUB_ENV"
-      - name: Run bot, operations, voice and bridge in separate pytest processes
+      - name: Run operations, voice and bridge in separate pytest processes
         env:
           PYTHONWARNINGS: error
           PYTEST_ADDOPTS: "-o asyncio_default_fixture_loop_scope=function -o asyncio_default_test_loop_scope=function"
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
-          make test-tgbot test-ops test-voice TEST_PYTHON="$KLUKAI_COMPONENT_PYTHON"
+          make test-ops test-voice TEST_PYTHON="$KLUKAI_COMPONENT_PYTHON"
           make test-bridge TEST_PYTHON="$KLUKAI_BRIDGE_PYTHON"
       - name: Install locked avatar test dependencies
         run: npm ci --prefix tools/avatar --ignore-scripts
@@ -159,7 +204,7 @@ jobs:
   test:
     name: Test Suite
     needs: ci-image
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
     timeout-minutes: 25
     env:
       KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/core
@@ -187,7 +232,7 @@ jobs:
   real-backends:
     name: Real PostgreSQL, Valkey and Qdrant recovery
     needs: ci-image
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
     timeout-minutes: 20
     env:
       KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/backends
@@ -307,8 +352,9 @@ jobs:
 
   image-scan:
     name: Image Scan (trivy)
-    needs: source-policy
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
+    needs: [source-policy, lint]
+    if: needs.source-policy.outputs.core == 'true'
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
     timeout-minutes: 60
 
     steps:
@@ -317,10 +363,18 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
+      - name: Restore optional verified release build materials
+        shell: bash
+        run: |
+          cached=$(python3 -m tools.ci.docker_cache restore --record "$KLUKAI_CI_ARTIFACT_ROOT/cache/release.json")
+          echo "KLUKAI_RELEASE_BUILD_CACHE_IMAGE=$cached" >> "$GITHUB_ENV"
+          directory=$(python3 -m tools.ci.docker_cache restore-buildkit --record "$KLUKAI_CI_ARTIFACT_ROOT/cache/release-buildkit.json")
+          echo "KLUKAI_RELEASE_BUILDKIT_CACHE_FROM=$directory" >> "$GITHUB_ENV"
       - name: Build twice, scan, and record provenance materials
         # This job requires heavy Docker-capable capacity. Missing capability
         # is a failed gate and must never certify an unscanned release.
         env:
+          CI_FULL: ${{ needs.source-policy.outputs.full }}
           TRIVY_VERSION: "0.71.0"
           # sha256 of trivy_0.71.0_Linux-64bit.tar.gz, matching upstream's
           # trivy_0.71.0_checksums.txt (checked 2026-10-17).
@@ -344,17 +398,31 @@ jobs:
               --label org.opencontainers.image.revision="$GITHUB_SHA" \
               -f docker/core/Dockerfile docker/core/
           }
-          build -t "$image"
-          # PROC-2: a second controlled build from the same checkout and pinned
-          # inputs, without cache. Layers may differ (timestamps); any content
-          # difference fails the job. The result is retained either way.
-          build --no-cache -t "${image}-rebuild"
-          repro=0
-          python3 -m tools.ci.release_artifact compare-builds --first "$image" \
-            --second "${image}-rebuild" --output "$M/reproducibility.json" || repro=$?
-          docker image rm "${image}-rebuild" >/dev/null
-          cat "$M/reproducibility.json"
-          [ "$repro" -eq 0 ] || { echo "::error::the second build differs in content"; exit "$repro"; }
+          cache_args=()
+          if [[ -n "${KLUKAI_RELEASE_BUILD_CACHE_IMAGE:-}" ]]; then
+            cache_args=(--cache-from "$KLUKAI_RELEASE_BUILD_CACHE_IMAGE")
+          fi
+          if [[ -n "${KLUKAI_RELEASE_BUILDKIT_CACHE_FROM:-}" ]]; then
+            cache_args+=(--cache-from "type=local,src=$KLUKAI_RELEASE_BUILDKIT_CACHE_FROM")
+          fi
+          export_cache="$KLUKAI_CI_ARTIFACT_ROOT/$GITHUB_SHA/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/release-buildkit"
+          mkdir -p "$(dirname "$export_cache")"
+          build "${cache_args[@]}" --cache-to "type=local,dest=$export_cache,mode=max" \
+            --build-arg BUILDKIT_INLINE_CACHE=1 -t "$image"
+          python3 -m tools.ci.docker_cache publish-buildkit --record "$KLUKAI_CI_ARTIFACT_ROOT/cache/release-buildkit.json" \
+            --directory "$export_cache"
+          if [[ "$CI_FULL" == true ]]; then
+            # PROC-2: a second controlled build from the same checkout and pinned
+            # inputs, without cache. Layers may differ (timestamps); any content
+            # difference fails the job. The result is retained either way.
+            build --no-cache -t "${image}-rebuild"
+            repro=0
+            python3 -m tools.ci.release_artifact compare-builds --first "$image" \
+              --second "${image}-rebuild" --output "$M/reproducibility.json" || repro=$?
+            docker image rm "${image}-rebuild" >/dev/null
+            cat "$M/reproducibility.json"
+            [ "$repro" -eq 0 ] || { echo "::error::the second build differs in content"; exit "$repro"; }
+          fi
           trivy image --severity HIGH,CRITICAL --exit-code 1 --no-progress "$image"
           trivy image --scanners secret --exit-code 1 --no-progress "$image"
           trivy image --scanners license --format json --no-progress \
@@ -369,6 +437,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Retain the scanned image for digest-verified deployment
+        if: needs.source-policy.outputs.full == 'true'
         # Amarillo pulls this exact tar through the Dominus guest agent after the
         # whole run is green (ops/amarillo/scripts/klukai-fetch-ci-artifacts.py),
         # verifies hash, layers, revision and provenance materials, then signs
@@ -391,6 +460,8 @@ jobs:
             --material "reproducibility.json=$M/reproducibility.json" \
             --tool "trivy=$KLUKAI_TOOL_TRIVY" --tool "docker=$KLUKAI_TOOL_DOCKER" \
             --tool "buildx=$KLUKAI_TOOL_BUILDX" --tool "python=$(python3 --version)"
+          python3 -m tools.ci.docker_cache publish --record "$KLUKAI_CI_ARTIFACT_ROOT/cache/release.json" \
+            --archive "$RELEASE_DIR/core-image.tar" --image "$(docker image inspect --format '{{.Id}}' "$image")"
           docker image rm "$image" >/dev/null
           # The relay compares the guest's manifest with this line in the run's
           # own job log, so bytes another job writes on the shared guest cannot
@@ -405,7 +476,8 @@ jobs:
 
   perf-gate:
     name: Perf Gate (p99 regression check)
-    needs: source-policy
+    needs: [source-policy, lint, image-scan]
+    if: needs.source-policy.outputs.full == 'true'
     runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 60
     env:
@@ -437,14 +509,27 @@ jobs:
           if [ "$base" = "$GITHUB_SHA" ]; then base=$(git rev-parse "$GITHUB_SHA^1"); fi
           for image in "$KLUKAI_PERF_POSTGRES_IMAGE" "$KLUKAI_PERF_REDIS_IMAGE" \
                        "$KLUKAI_PERF_QDRANT_IMAGE" "$KLUKAI_PERF_FIXTURE_IMAGE"; do
-            docker pull --quiet "$image" >/dev/null
+            docker image inspect "$image" >/dev/null 2>&1 || docker pull --quiet "$image" >/dev/null
           done
-          docker build --quiet --build-arg VCS_REF="$GITHUB_SHA" \
-            --label org.opencontainers.image.revision="$GITHUB_SHA" \
-            -t "klukai-core:perf-candidate-$GITHUB_RUN_ID" docker/core >/dev/null
-          git archive --format=tar "$base:docker/core" | docker build --quiet \
-            --build-arg VCS_REF="$base" --label org.opencontainers.image.revision="$base" \
-            -t "klukai-core:perf-baseline-$GITHUB_RUN_ID" - >/dev/null
+          release="$KLUKAI_CI_ARTIFACT_ROOT/$GITHUB_SHA/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/release"
+          python3 -m tools.ci.release_artifact verify --tar "$release/core-image.tar" \
+            --manifest "$release/manifest.json" --revision "$GITHUB_SHA" \
+            --tag "klukai-core:perf-candidate-$GITHUB_RUN_ID"
+          restored=0
+          for manifest in "$KLUKAI_CI_ARTIFACT_ROOT/$base"/*/release/manifest.json; do
+            [[ -f "$manifest" ]] || continue
+            if python3 -m tools.ci.release_artifact verify --tar "$(dirname "$manifest")/core-image.tar" \
+                --manifest "$manifest" --revision "$base" --tag "klukai-core:perf-baseline-$GITHUB_RUN_ID"; then
+              restored=1; break
+            fi
+          done
+          if [[ "$restored" == 0 ]]; then
+            cache="$KLUKAI_CI_ARTIFACT_ROOT/$GITHUB_SHA/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/release-buildkit"
+            git archive --format=tar "$base:docker/core" | docker build --quiet \
+              --cache-from "type=local,src=$cache" \
+              --build-arg VCS_REF="$base" --label org.opencontainers.image.revision="$base" \
+              -t "klukai-core:perf-baseline-$GITHUB_RUN_ID" - >/dev/null
+          fi
           {
             echo "baseline_revision=$base"
             echo "baseline_image=$(docker image inspect --format '{{.Id}}' "klukai-core:perf-baseline-$GITHUB_RUN_ID")"
@@ -473,8 +558,9 @@ jobs:
 
   frontend:
     name: Frontend validation and immutable PWA evidence
-    needs: source-policy
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
+    needs: [source-policy, lint]
+    if: needs.source-policy.outputs.frontend == 'true'
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-frontend]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -502,7 +588,7 @@ jobs:
 
   all-required:
     name: Required CI gates
-    if: always()
+    if: always() && needs.source-policy.outputs.full == 'true'
     needs: [source-policy, ci-image, components, test, real-backends, lint, typecheck, security, image-scan, perf-gate, frontend]
     runs-on: [self-hosted, Linux, X64, klukai-amarillo-small]
     timeout-minutes: 2
@@ -523,3 +609,20 @@ jobs:
           if any(row.get('result') != 'success' for row in actual.values()):
               raise SystemExit('Required CI jobs did not all succeed')
           PY
+
+  affected-required:
+    name: Affected CI gates
+    if: always() && needs.source-policy.result == 'success'
+    needs: [source-policy, ci-image, components, test, real-backends, lint, typecheck, security, image-scan, perf-gate, frontend]
+    runs-on: [self-hosted, Linux, X64, klukai-amarillo-small]
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require the exact selected gates; skipped gates cannot certify a release
+        env:
+          CI_PLAN: ${{ needs.source-policy.outputs.selected }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 -m tools.ci.selection check

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import pytest
 from unittest import mock
 
 
@@ -200,7 +201,9 @@ class GreenRunTests(unittest.TestCase):
             },
         ]
         jobs = {
-            "1": [{"name": "Required CI gates", "conclusion": "success"}],
+            "1": [
+                {"name": name, "conclusion": "success"} for name in relay.FULL_CI_GATES
+            ],
             "2": [{"name": "Required CI gates", "conclusion": "skipped"}],
         }
         self.assertEqual(
@@ -529,3 +532,23 @@ class ReleaseManifestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_routine_or_incomplete_success_never_certifies_a_release():
+    run = {
+        "id": 1,
+        "run_attempt": 1,
+        "head_sha": REV,
+        "conclusion": "success",
+        "run_started_at": "2026-10-17T01:00:00Z",
+    }
+    jobs = [
+        {"name": "Affected CI gates", "conclusion": "success"},
+        {"name": "Required CI gates", "conclusion": "success"},
+    ]
+
+    def api(path, token):
+        return {"jobs": jobs} if "/jobs" in path else {"workflow_runs": [run]}
+
+    with pytest.raises(ValueError, match="successful CI run"):
+        relay.green_run("o/r", REV, "tok", api)

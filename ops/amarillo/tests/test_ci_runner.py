@@ -180,7 +180,7 @@ def test_cpu_budget_never_exceeds_eight_threads(env):
     ]
     controller, github, host = make(jobs)
     controller.tick()
-    assert [g.profile for g in controller.guests.values()] == [HEAVY]
+    assert [g.profile for g in controller.guests.values()] == [SMALL]
     assert sum(g.profile.vcpus for g in controller.guests.values()) <= runner.MAX_VCPUS
 
 
@@ -431,3 +431,85 @@ def test_one_unreadable_run_does_not_hide_the_others():
     github.call = fake_call
     jobs = github.queued_jobs()
     assert len(jobs) == 1 and runner.profile_for(jobs[0]) is SMALL
+
+
+def test_quick_checks_are_admitted_before_exclusive_work(env):
+    make, state, _ = env
+    controller, github, host = make(
+        [job("klukai-amarillo-heavy"), job("klukai-amarillo-small")]
+    )
+    assert controller.demand()[0] is SMALL
+    controller.tick()
+    assert [g.profile for g in controller.guests.values()] == [SMALL]
+
+
+def test_medium_jobs_pack_with_quick_checks_without_changing_host_limits(env):
+    make, state, _ = env
+    state["mem"] = 40000
+    controller, github, host = make(
+        [
+            job("klukai-amarillo-medium"),
+            job("klukai-amarillo-small"),
+            job("klukai-amarillo-small"),
+            job("klukai-amarillo-heavy"),
+        ]
+    )
+    controller.tick()
+    assert sorted(g.profile.vcpus for g in controller.guests.values()) == [2, 2, 4]
+    assert runner.MAX_VCPUS == 8
+    assert runner.MEMORY_HEADROOM_MIB == 4096
+    assert (runner.START_BELOW_C, runner.PAUSE_AT_C, runner.RESUME_BELOW_C) == (
+        62,
+        68,
+        60,
+    )
+
+
+def test_blocked_profile_does_not_hide_admissible_work(env, monkeypatch):
+    make, state, _ = env
+    controller, github, host = make()
+    monkeypatch.setattr(controller, "demand", lambda: [HEAVY, SMALL])
+    original = controller.admit
+    monkeypatch.setattr(
+        controller, "admit", lambda p: "blocked heavy" if p is HEAVY else original(p)
+    )
+    controller.tick()
+    assert [g.profile for g in controller.guests.values()] == [SMALL]
+
+
+def test_frontend_keeps_eight_gib_but_uses_only_four_threads(env):
+    profile = runner.profile_for(job("klukai-amarillo-frontend"))
+    assert profile is not None
+    assert (profile.vcpus, profile.memory_mib) == (4, 8192)
+
+
+def test_long_frontend_overlaps_medium_jobs_instead_of_waiting_at_tail(env):
+    make, state, _ = env
+    controller, github, host = make(
+        [
+            job("klukai-amarillo-medium"),
+            job("klukai-amarillo-frontend"),
+        ]
+    )
+    assert controller.demand()[0].label == "klukai-amarillo-frontend"
+    controller.tick()
+    assert sum(g.profile.vcpus for g in controller.guests.values()) == 8
+
+
+def test_idle_cache_pruning_keeps_recent_and_published_exports(tmp_path):
+    import os
+
+    root = tmp_path / "artifacts"
+    caches = []
+    for number in range(5):
+        path = root / ("a" * 40) / f"{number}-1" / "release-buildkit"
+        path.mkdir(parents=True)
+        (path / "index.json").write_text("{}")
+        os.utime(path, (number, number))
+        caches.append(path)
+    (root / "cache").mkdir()
+    (root / "cache" / "release-buildkit.json").write_text(
+        json.dumps({"directory": str(caches[0])})
+    )
+    assert runner.prune_build_caches(root, now=10000) == 2
+    assert [path.exists() for path in caches] == [True, False, False, True, True]

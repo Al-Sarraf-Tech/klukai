@@ -395,11 +395,12 @@ def test_required_frontend_job_has_no_optional_or_billable_escape():
     import yaml
 
     root = Path(__file__).resolve().parents[2]
-    job = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())["jobs"][
-        "frontend"
-    ]
-    assert job["runs-on"] == ["self-hosted", "Linux", "X64", "klukai-amarillo-heavy"]
-    assert "if" not in job
+    jobs = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())["jobs"]
+    job = jobs["frontend"]
+    assert job["runs-on"] == ["self-hosted", "Linux", "X64", "klukai-amarillo-frontend"]
+    selector = "plan" if "plan" in jobs else "source-policy"
+    assert job["if"] == f"needs.{selector}.outputs.frontend == 'true'"
+    assert selector in job["needs"]
     assert job.get("continue-on-error") is not True
     # The existing heavy guest's runner-owned, private capacity was verified
     # before selecting this path; no optional repository variable is needed.
@@ -410,3 +411,37 @@ def test_required_frontend_job_has_no_optional_or_billable_escape():
     )
     assert all("upload-artifact" not in step.get("uses", "") for step in job["steps"])
     assert job["steps"][-1]["run"].strip().endswith("scripts/ci/frontend.sh")
+
+
+def test_frontend_source_identity_includes_font_verifier_and_lock(tmp_path):
+    import subprocess
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", str(tmp_path), *args], text=True
+        ).strip()
+
+    git("init", "-q")
+    files = {
+        "flutter_app/pubspec.lock": "packages: {}",
+        "tools/ci/font_cache.py": "# verifier",
+        "tools/ci/fallback-fonts.lock.json": '{"schema":1,"files":{}}',
+    }
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    git("add", ".")
+    git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "commit",
+        "-qm",
+        "fixture",
+    )
+    snapshot = frontend.source_snapshot(tmp_path, git("rev-parse", "HEAD"))
+    assert set(snapshot["inputs"]["files"]) == set(files)

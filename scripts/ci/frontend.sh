@@ -119,7 +119,7 @@ done
 # cache-busting rewrites and endpoint requests. Font/CDN exceptions are disabled.
 rm -rf -- "$REPO_ROOT/flutter_app/build/web"
 export KLUKAI_ALLOW_FONT_CDN=0
-export FONT_CACHE="${FONT_CACHE:-$OUTPUT/font-cache}"
+export FONT_CACHE="${FONT_CACHE:-${KLUKAI_CI_ARTIFACT_ROOT:-$(dirname "$OUTPUT")}/cache/fonts}"
 run build "$REPO_ROOT/scripts/deploy-web.sh" --build-only
 python3 "$EVIDENCE" create --root "$REPO_ROOT" --output "$OUTPUT" --revision "$REVISION" \
   --flutter "$FLUTTER" --dart "$DART" --chrome "$CHROME"

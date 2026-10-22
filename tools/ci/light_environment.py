@@ -133,6 +133,28 @@ def wheel_materials(output: Path, expected: dict[str, str]) -> dict[str, Any]:
     return manifest
 
 
+def public_downloads() -> list[str]:
+    """Cache transport bytes only; pip still verifies every committed lock hash.
+
+    Installed environments and terminal evidence are always fresh. A cached
+    response or wheel cannot bypass --require-hashes or wheel-material checks.
+    pip manages concurrent cache writes atomically across the one-job guests.
+    """
+    arguments = ["--index-url=https://pypi.org/simple", "--no-input"]
+    selected = os.environ.get("KLUKAI_CI_DOWNLOAD_CACHE")
+    if not selected:
+        return [*arguments, "--no-cache-dir"]
+    cache = Path(selected)
+    require(
+        cache.is_absolute()
+        and not any(p.is_symlink() for p in (cache, *cache.parents)),
+        "Invalid download cache path",
+    )
+    cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+    require(cache.is_dir(), "Invalid download cache directory")
+    return [*arguments, "--cache-dir", str(cache)]
+
+
 def bootstrap(args: argparse.Namespace, report: dict[str, Any]) -> None:
     root, output = args.root, args.output
     captured = core_source.snapshot(root, output, args.revision, development=False)
@@ -180,7 +202,7 @@ def bootstrap(args: argparse.Namespace, report: dict[str, Any]) -> None:
     pip = [python, "-I", "-m", "pip", "--isolated"]
     report["bootstrap_pip"] = commands.run([*pip, "--version"]).strip()
     pinned = ["--no-deps", "--require-hashes", "--no-build-isolation"]
-    public = ["--index-url=https://pypi.org/simple", "--no-input", "--no-cache-dir"]
+    public = public_downloads()
     commands.run([*pip, "install", *public, *pinned, "-r", str(build_lock)])
     report["build_tools"] = commands.run([python, "-I", "-c", PACKAGE_PROBE])
     commands.run(

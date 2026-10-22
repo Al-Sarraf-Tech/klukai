@@ -69,7 +69,8 @@ def test_only_exact_dispatched_heads_and_main_pushes_start_self_hosted_ci():
 )
 def test_source_admission_executes_fail_closed(event, ref, actual, expected, allowed):
     job = workflow()["jobs"]["source-policy"]
-    assert not any("uses" in step for step in job["steps"])
+    assert job["steps"][0]["id"] == "admit"
+    assert all("uses" not in step for step in job["steps"][:1])
     script = block(job, "admit")
     assert "${{" not in script, "Source metadata must enter through quoted environment"
     result = run_block(
@@ -86,16 +87,18 @@ def test_existing_required_names_are_preserved_and_every_job_is_aggregated():
     jobs = workflow()["jobs"]
     assert all(jobs[key]["name"] == value for key, value in LEGACY_NAMES.items())
     required = jobs["all-required"]
-    assert required["if"] == "always()"
-    assert set(required["needs"]) == set(jobs) - {"all-required"}
+    assert required["if"] == "always() && needs.source-policy.outputs.full == 'true'"
+    assert set(required["needs"]) == set(jobs) - {"all-required", "affected-required"}
     for key, job in jobs.items():
         labels = job["runs-on"]
         # Owner decision 2026-10-19: Klukai CI runs only on amarillo's one-job VMs.
         assert labels in (
             ["self-hosted", "Linux", "X64", "klukai-amarillo-heavy"],
             ["self-hosted", "Linux", "X64", "klukai-amarillo-small"],
+            ["self-hosted", "Linux", "X64", "klukai-amarillo-medium"],
+            ["self-hosted", "Linux", "X64", "klukai-amarillo-frontend"],
         )
-        if key not in {"source-policy", "all-required"}:
+        if key not in {"source-policy", "all-required", "affected-required"}:
             dependencies = job["needs"]
             if isinstance(dependencies, str):
                 dependencies = [dependencies]
@@ -237,7 +240,7 @@ def test_core_and_real_backends_use_one_source_bound_tool_image():
     build = jobs["ci-image"]
     script = "\n".join(step.get("run", "") for step in build["steps"])
     assert "python3 -m tools.ci.tool_image" in script
-    assert build["needs"] == "source-policy"
+    assert build["needs"] == ["source-policy", "lint"]
     assert (
         next(step for step in build["steps"] if "uses" in step)["with"]["fetch-depth"]
         == 0
@@ -292,3 +295,11 @@ def test_node_archive_checksum_failure_stops_before_unpack_or_path_selection(tmp
     assert "FAILED" in result.stdout + result.stderr
     assert not sentinel.exists(), "A corrupt archive must never reach tar"
     assert not selected_path.exists(), "An unverified toolchain must never enter PATH"
+
+
+def test_only_admitted_source_can_execute_affected_gate_checker():
+    job = workflow()["jobs"]["affected-required"]
+    assert job["if"] == "always() && needs.source-policy.result == 'success'"
+    source = workflow()["jobs"]["source-policy"]
+    assert source["steps"][0]["id"] == "admit"
+    assert "uses" not in source["steps"][0]

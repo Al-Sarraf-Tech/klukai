@@ -6,13 +6,16 @@ the job. Other repositories keep the Dominus fleet runners.
 
 | Label set (`runs-on`) | VM | Jobs |
 |---|---|---|
-| `[self-hosted, Linux, X64, klukai-amarillo-heavy]` | 8 vCPU, 8 GiB (+ zram swap) | ci-image, components, test, real-backends, image-scan, perf-gate, frontend, all nightly jobs |
-| `[self-hosted, Linux, X64, klukai-amarillo-small]` | 2 vCPU, 3 GiB | source-policy, lint, typecheck, security, all-required |
+| `[self-hosted, Linux, X64, klukai-amarillo-heavy]` | 8 vCPU, 8 GiB (+ zram swap) | perf-gate (exclusive), existing nightly jobs |
+| `[self-hosted, Linux, X64, klukai-amarillo-medium]` | 4 vCPU, 4 GiB | ci-image, components, test, real-backends, image-scan |
+| `[self-hosted, Linux, X64, klukai-amarillo-frontend]` | 4 vCPU, 8 GiB (+ zram swap) | frontend |
+| `[self-hosted, Linux, X64, klukai-amarillo-small]` | 2 vCPU, 3 GiB | source-policy/preflight/selection, lint, typecheck, security, final gates |
 
 ## How it works
 
 - `klukai_ci_runner.py` (root, `klukai-ci-runner.service`) polls Klukai's
-  queued jobs every 20 s. For each job whose labels match a row above exactly,
+  queued jobs every 5 s. Small jobs get priority and admissible jobs backfill
+  free capacity; a waiting large job does not hide smaller work. For each job whose labels match a row above exactly,
   it creates a copy-on-write disk over the base image and a seed with a
   single-use JIT runner registration (GitHub API, repository-scoped). It then
   boots the VM. The guest runs one job (`klukai-ci-job.service`) and powers off.
@@ -77,3 +80,34 @@ auto-updates.
 - Roll back to Dominus: revert the `runs-on` labels in `ci.yml`/`nightly.yml`
   (and the two contract tests) to `[self-hosted, Linux, X64, ci-heavy]` /
   `[fleet-ci-v1, ci-small]`, then stop `klukai-ci-runner`.
+
+## Push acceleration and release certification
+
+Source admission still runs before checkout. The same first VM checks Ruff
+formatting using only its existing hash-locked dependency, then selects the
+complete push diff. Known component edits run affected suites; shared, unknown,
+workflow and dependency edits run everything. An unavailable/empty diff fails
+open to more tests. Retired Telegram files have no active test closure.
+
+`Affected CI gates` validates the exact selected results, including expected
+skips. `Required CI gates` certifies only full runs; routine pushes show this
+job skipped in GitHub (GitHub may render a skipped check as successful). The
+release relay independently requires every full named job to succeed. A full
+`workflow_dispatch` with the exact `expected_revision` is required to certify
+a routine-only commit for release. Dispatch always runs all gates, including
+the independent no-cache image rebuild and unchanged paired performance test.
+Superseded CI runs on the same ref are cancelled; deployment workflows retain
+their existing concurrency policy.
+
+Only reusable data survives job VMs: pip hash-verified downloads, npm integrity
+cache, Trivy data, SHA256-pinned fonts and Docker/BuildKit transport materials.
+Current source evidence and environments are rebuilt and revalidated per run.
+BuildKit exports use unique run directories and atomic shared pointers; all
+cached blobs are checked before import. Corrupt/missing caches become cold
+builds. The performance job verifies and loads the current scanned candidate,
+then uses a verified exact-revision baseline artifact or builds it using only
+reusable dependency layers. Performance still gets all eight threads alone.
+
+Caches under the shared artifact tree contain no accounts or credentials.
+They can be removed while CI is idle to force cold setup; do not prune active
+run directories. Existing archival policy bounds the retained revision trees.

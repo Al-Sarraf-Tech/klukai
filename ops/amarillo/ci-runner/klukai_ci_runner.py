@@ -56,6 +56,8 @@ PROFILES = {
     for p in (
         Profile("klukai-amarillo-heavy", 8, 8192),
         Profile("klukai-amarillo-small", 2, 3072),
+        Profile("klukai-amarillo-medium", 4, 4096),
+        Profile("klukai-amarillo-frontend", 4, 8192),
     )
 }
 MAX_VCPUS = 8
@@ -549,7 +551,7 @@ class Controller:
         self._save()
 
     def demand(self) -> list[Profile]:
-        """Queued jobs not yet covered by a warming guest, heavy first."""
+        """Queued jobs not yet covered by a warming guest, quick checks first."""
         wanted: dict[str, int] = {}
         for job in self.github.queued_jobs():
             profile = profile_for(job)
@@ -567,12 +569,13 @@ class Controller:
             idle = now - guest.started < WARMUP_SECONDS or busy is not True
             if idle and wanted.get(guest.profile.label):
                 wanted[guest.profile.label] -= 1
-        order = sorted(PROFILES.values(), key=lambda p: -p.vcpus)
+        order = sorted(PROFILES.values(), key=lambda p: (p.vcpus, -p.memory_mib))
         return [p for p in order for _ in range(wanted.get(p.label, 0))]
 
     def tick(self) -> None:
         self.reap()
         if not self.guests:  # never re-own files a running guest is writing
+            prune_build_caches(ARTIFACTS, now=self.clock())
             normalize_ownership(ARTIFACTS)
         self.thermal()
         reason = self.ready()
@@ -583,8 +586,46 @@ class Controller:
             why = self.admit(profile)
             if why:
                 log.info("queued %s job waits: %s", profile.label, why)
-                break  # keep queue order: a waiting heavy job is not overtaken
+                continue  # backfill free capacity; an 8-thread perf VM stays exclusive
             self.launch(profile)
+
+
+def prune_build_caches(root: Path, *, now: float, keep: int = 2) -> int:
+    """Prune disposable exports only while no guest can be importing them.
+
+    Preserve current pointers, two newest exports per role and a one-hour grace
+    period. Source, terminal manifests, scanned image tars and fonts stay intact.
+    """
+    pinned = set()
+    for record in (root / "cache").glob("*buildkit.json"):
+        try:
+            if record.is_symlink():
+                continue
+            path = Path(json.loads(record.read_text())["directory"])
+            guest_root = Path("/opt/klukai-ci/artifacts")
+            if path.is_relative_to(guest_root):
+                path = root / path.relative_to(guest_root)
+            pinned.add(path)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    removed = 0
+    for suffix in ("release-buildkit", "ci-image/buildkit-cache"):
+        candidates = []
+        for path in root.glob("*/*/" + suffix):
+            parts = path.relative_to(root).parts
+            if (
+                re.fullmatch(r"[a-f0-9]{40}", parts[0])
+                and re.fullmatch(r"[0-9]+-[0-9]+", parts[1])
+                and path.is_dir()
+                and not any(p.is_symlink() for p in (path, *path.parents))
+            ):
+                candidates.append(path)
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for path in candidates[keep:]:
+            if path not in pinned and now - path.stat().st_mtime > 3600:
+                shutil.rmtree(path)
+                removed += 1
+    return removed
 
 
 def normalize_ownership(root: Path) -> int:
@@ -633,7 +674,7 @@ def read_token() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--interval", type=float, default=20.0)
+    parser.add_argument("--interval", type=float, default=5.0)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
