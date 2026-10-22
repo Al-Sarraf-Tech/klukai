@@ -58,6 +58,7 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- Companion background animation follows live reduced-motion changes without restarting while hidden.
 - Standby-branch audit fixes, ported onto main from `claude/klukai-standby-rqu97r`:
   self-started missions stand down after 180 minutes and stale missions are not
   restored on reconnect; voice letters are `Cache-Control: private`; the
