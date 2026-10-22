@@ -43,7 +43,11 @@ COMPOSE_NAMES = ("compose-env", "core-override")
 # klukai-runtime-secrets.service (klukai_runtime_secrets.py), before Docker
 # restarts the containers that read them.
 TOKEN_NAMES = ("metrics-token", "alert-bridge-token")
-NAMES = COMPOSE_NAMES + TOKEN_NAMES
+# Read in memory by the deploy-on-merge controller: a fine-grained GitHub token
+# limited to read-only access to the public Klukai repository. Optional until
+# the owner activates deploy-on-merge.
+OPTIONAL_NAMES = ("deployer-github-token",)
+NAMES = COMPOSE_NAMES + TOKEN_NAMES + OPTIONAL_NAMES
 SYSTEMD_CREDS = "systemd-creds"
 
 
@@ -217,8 +221,13 @@ def materialized(
 
 def check(store: Path = STORE, plaintext: tuple[Path, ...] = ()) -> dict[str, object]:
     _store(store)
-    sizes = {name: len(decrypt(name, store)) for name in NAMES}
-    for name in NAMES:
+    present = [
+        name
+        for name in NAMES
+        if name not in OPTIONAL_NAMES or cred_path(name, store).exists()
+    ]
+    sizes = {name: len(decrypt(name, store)) for name in present}
+    for name in present:
         rescue = store / "recovery" / f"{name}.cred"
         _check_private(rescue, 0o600)
         if _creds("decrypt", f"--name=klukai-{name}", str(rescue), "-") != decrypt(

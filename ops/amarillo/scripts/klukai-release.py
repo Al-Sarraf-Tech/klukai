@@ -48,9 +48,17 @@ import urllib.request
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
+# The checkout production runs from. The deploy-on-merge controller runs this
+# code (and its signer list) from a pinned, owner-installed copy and passes the
+# production checkout here; a manual run uses its own checkout as before.
+PRODUCTION = Path(os.environ.get("KLUKAI_PRODUCTION_CHECKOUT") or REPO)
+RECOVERY_PLANS = "docs/releases/recovery"
+# Every reviewed recovery plan states how data survives and how to get back.
+RECOVERY_SECTIONS = ("## Data preserved", "## Rollback", "## Verification")
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(HERE))
 from tools.ci import release_artifact  # noqa: E402
+import klukai_deploy_lock  # noqa: E402
 
 STATE = Path.home() / ".local/state/klukai/release"
 RELEASES = Path.home() / ".local/state/klukai/ci-releases"
@@ -162,7 +170,7 @@ def verify_artifact(
 # ── 2. source ────────────────────────────────────────────────────────────────
 
 
-def verify_source(revision: str, repo: Path = REPO) -> None:
+def verify_source(revision: str, repo: Path = PRODUCTION) -> None:
     head = run(["git", "-C", str(repo), "rev-parse", "HEAD"]).strip()
     if head != revision:
         raise ReleaseError(f"main checkout is at {head[:12]}, not {revision[:12]}")
@@ -544,9 +552,15 @@ def production_target() -> Target:
     import klukai_compose
     import klukai_secrets
 
+    if not (PRODUCTION / "docker-compose.yml").is_file():
+        raise ReleaseError(
+            f"no docker-compose.yml in {PRODUCTION}; set KLUKAI_PRODUCTION_CHECKOUT "
+            "to the production checkout"
+        )
+
     def compose(args: list[str]) -> None:
         with klukai_secrets.materialized(klukai_secrets.COMPOSE_NAMES) as paths:
-            run(klukai_compose.argv(paths, args), cwd=REPO, timeout=900)
+            run(klukai_compose.argv(paths, args), cwd=PRODUCTION, timeout=900)
 
     return Target(
         compose=compose,
@@ -571,7 +585,9 @@ def receipt(doc: dict[str, Any]) -> Path:
 IRREVERSIBLE_PATHS = ("docker/core/migrations", "docker-compose.yml")
 
 
-def rollback_safety(target_revision: str, repo: Path = REPO) -> dict[str, Any]:
+def rollback_safety(
+    target_revision: str, repo: Path = PRODUCTION, container: str = SERVICE
+) -> dict[str, Any]:
     """Rolling back restores only the image. Core applies migrations at startup
     and refuses to start when an applied migration file is missing, and a
     rollback recreates with the new revision's compose file, so a change to
@@ -582,7 +598,7 @@ def rollback_safety(target_revision: str, repo: Path = REPO) -> dict[str, Any]:
             "inspect",
             "-f",
             '{{index .Config.Labels "org.opencontainers.image.revision"}}',
-            SERVICE,
+            container,
         ],
         capture_output=True,
         text=True,
@@ -618,6 +634,57 @@ def rollback_safety(target_revision: str, repo: Path = REPO) -> dict[str, Any]:
         "changed": changed,
         "reason": "migrations or compose changed" if changed else "",
     }
+
+
+def recovery_plans(
+    changed: list[str], revision: str, repo: Path = PRODUCTION
+) -> dict[str, Any]:
+    """Reviewed recovery plans for changes automatic rollback cannot undo.
+
+    A changed migration `docker/core/migrations/<name>.sql` needs
+    `docs/releases/recovery/<name>.md`; a changed docker-compose.yml needs
+    `docs/releases/recovery/compose-<blob12>.md`, named after the first 12 hex
+    of the new file's git blob ID (`git hash-object docker-compose.yml`). Each
+    plan must be in the release commit (so it was reviewed with the change)
+    and carry the sections in RECOVERY_SECTIONS."""
+    plans: dict[str, str] = {}
+    missing: list[str] = []
+    for path in changed:
+        if path == "docker-compose.yml":
+            blob = run(
+                ["git", "-C", str(repo), "rev-parse", f"{revision}:docker-compose.yml"]
+            ).strip()
+            plan = f"{RECOVERY_PLANS}/compose-{blob[:12]}.md"
+        else:
+            plan = f"{RECOVERY_PLANS}/{Path(path).stem}.md"
+        shown = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{revision}:{plan}"],
+            capture_output=True,
+            text=True,
+        )
+        if shown.returncode or not all(s in shown.stdout for s in RECOVERY_SECTIONS):
+            missing.append(path)
+        else:
+            plans[path] = plan
+    return {"plans": plans, "missing": missing}
+
+
+def restore(
+    target: Target,
+    rollback_tag: str,
+    previous_id: str,
+    *,
+    ready_timeout: float = 180,
+    hold: float = 30,
+) -> dict[str, Any]:
+    """Put a previous image back after a deployed release failed a later check."""
+    try:
+        target.write_pin(rollback_tag)
+        target.recreate()
+        ok, detail = watch(target, previous_id, ready_timeout=ready_timeout, hold=hold)
+    except BaseException as error:  # noqa: BLE001 - report, never hide
+        ok, detail = False, f"restore raised {type(error).__name__}: {error}"[:300]
+    return {"status": "restored" if ok else "restore_failed", "detail": detail}
 
 
 def re_full_sha(value: str) -> bool:
@@ -659,16 +726,28 @@ def deploy(
     hold: float,
     ready_timeout: float,
     accept_manual_rollback: bool = False,
+    plans: dict[str, str] | None = None,
+    *,
+    releases: Path = RELEASES,
+    signers: Path = SIGNERS,
+    repo: Path | None = None,
+    target: Target | None = None,
+    backup: Callable[[], dict[str, Any]] | None = None,
+    container: str = SERVICE,
 ) -> dict[str, Any]:
+    """Production by default; the disposable staging run passes its own target,
+    backup source, checkout and signer list through the very same steps."""
     release_artifact._revision(revision)
+    production = target is None
+    repo = PRODUCTION if repo is None else repo
     doc: dict[str, Any] = {
         "command": "deploy",
         "revision": revision,
         "started_at": datetime.now(UTC).isoformat(),
     }
-    doc["artifact"] = verify_artifact(revision)
-    verify_source(revision)
-    doc["rollback_safety"] = rollback_safety(revision)
+    doc["artifact"] = verify_artifact(revision, releases, signers)
+    verify_source(revision, repo)
+    doc["rollback_safety"] = rollback_safety(revision, repo, container)
     if not doc["rollback_safety"]["safe"]:
         if not accept_manual_rollback:
             raise ReleaseError(
@@ -677,13 +756,15 @@ def deploy(
                 + "); review it and rerun with --accept-manual-rollback"
             )
         doc["rollback_safety"]["accepted_by_operator"] = True
-    doc["backup"] = backup_and_verify()
-    target = production_target()
+        if plans:
+            doc["rollback_safety"]["recovery_plans"] = plans
+    doc["backup"] = (backup or backup_and_verify)()
+    target = production_target() if target is None else target
     if not target.pin.exists():
         # First managed release: pin what is running now so a rollback has a target.
         current = target.inspect("{{.Config.Image}}")
         if not current:
-            raise ReleaseError("companion-core is not running")
+            raise ReleaseError(f"{target.container} is not running")
         target.write_pin(current)
     doc["rollout"] = rollout(
         target,
@@ -692,7 +773,7 @@ def deploy(
         ready_timeout=ready_timeout,
         hold=hold,
     )
-    if doc["rollout"]["status"] == "deployed":
+    if doc["rollout"]["status"] == "deployed" and production:
         try:
             doc["pruned"] = prune()
         except (ReleaseError, OSError) as error:  # housekeeping never masks a deploy
@@ -846,17 +927,24 @@ def main() -> int:
     # and plaintext secrets in tmpfs are still removed.
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(143))
     try:
-        doc = (
-            deploy(
-                args.revision,
-                args.hold,
-                args.ready_timeout,
-                accept_manual_rollback=args.accept_manual_rollback,
-            )
-            if args.command == "deploy"
-            else drill(args.image)
-        )
-    except (ReleaseError, ValueError, OSError, subprocess.SubprocessError) as error:
+        if args.command == "deploy":
+            # One production deployment at a time, manual or automatic.
+            with klukai_deploy_lock.held(f"klukai-release deploy {args.revision[:12]}"):
+                doc = deploy(
+                    args.revision,
+                    args.hold,
+                    args.ready_timeout,
+                    accept_manual_rollback=args.accept_manual_rollback,
+                )
+        else:
+            doc = drill(args.image)
+    except (
+        ReleaseError,
+        klukai_deploy_lock.Busy,
+        ValueError,
+        OSError,
+        subprocess.SubprocessError,
+    ) as error:
         # Raised only before production changes: rollout() handles its own.
         doc = {"command": args.command, "status": "refused", "error": str(error)}
         print(json.dumps(doc, indent=2), file=sys.stderr)
