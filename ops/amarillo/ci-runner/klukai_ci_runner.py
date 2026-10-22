@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import logging
 import os
@@ -50,18 +51,46 @@ class Profile:
     vcpus: int
     memory_mib: int
 
+    @property
+    def kind(self) -> str:
+        return self.label.rsplit("-", 1)[1]
 
-PROFILES = {
-    p.label: p
-    for p in (
-        Profile("klukai-amarillo-heavy", 8, 8192),
-        Profile("klukai-amarillo-small", 2, 3072),
-        Profile("klukai-amarillo-medium", 4, 4096),
-        Profile("klukai-amarillo-build", 4, 4096),
-        Profile("klukai-amarillo-serial", 2, 4096),
-        Profile("klukai-amarillo-frontend", 4, 8192),
-    )
+
+# Every pool offers the same job shapes under its own labels (klukai-<pool>-<kind>).
+KINDS = {
+    "heavy": (8, 8192),
+    "small": (2, 3072),
+    "medium": (4, 4096),
+    "build": (4, 4096),
+    "serial": (2, 4096),
+    "frontend": (4, 8192),
 }
+
+
+def make_profiles(pool: str) -> dict[str, Profile]:
+    return {
+        f"klukai-{pool}-{kind}": Profile(f"klukai-{pool}-{kind}", vcpus, memory)
+        for kind, (vcpus, memory) in KINDS.items()
+    }
+
+
+# Owner, 2026-10-22: Klukai CI runs on Dominus when it is online, else amarillo.
+# amarillo is the default pool and also serves a Dominus job that has waited
+# STEAL_AFTER_SECONDS (Dominus went off, is gaming, or is full). A host config
+# (/etc/klukai-ci/host.json, see configure()) turns this module into Dominus's pool.
+POOL = "amarillo"
+STEAL_FROM: str | None = "dominus"
+STEAL_AFTER_SECONDS = 180
+PROFILES = make_profiles(POOL)
+STEAL_PROFILES = make_profiles(STEAL_FROM) if STEAL_FROM else {}
+MAX_MEMORY_MIB: int | None = None  # a pool-wide guest memory budget (Dominus)
+SUBNET = "10.231.0"
+TEMP_SENSOR = "coretemp"  # k10temp on AMD hosts
+TOKEN_SOURCE = "credential"  # or "gh-cli": the owner's GitHub CLI login, read at start
+HEARTBEAT_VARIABLE: str | None = None  # repo variable the CI router reads
+GAMING_MARKER: Path | None = None  # no new guests while it exists
+QUIET_HOURS: tuple[int, int] | None = None  # local [start, end) hours: no new guests
+HOST_CONFIG = Path("/etc/klukai-ci/host.json")
 # Owner, 2026-10-22: 12 of amarillo's 20 threads (no thermal events at 8 in three
 # days; MEMORY_HEADROOM_MIB still protects production's memory).
 MAX_VCPUS = 12
@@ -75,7 +104,7 @@ IDLE_SECONDS = 900  # an idle runner this old never got a job: free its capacity
 # nothing of its kind queued, it is surplus: it yields its CPUs to a waiting job
 # of another kind instead of holding them until IDLE_SECONDS.
 SURPLUS_GRACE_SECONDS = 120
-SLOTS = 4  # static guest addresses 10.231.0.10-13
+SLOTS = 4  # static guest addresses <SUBNET>.10-13
 
 ROOT = Path("/var/lib/libvirt/images/klukai-ci")
 BASE = ROOT / "base" / "base.qcow2"
@@ -102,10 +131,10 @@ class RunnerError(RuntimeError):
 
 
 def cpu_temp_c(hwmon: Path = Path("/sys/class/hwmon")) -> float:
-    """CPU package temperature from coretemp; unknown reads as too hot."""
+    """CPU package temperature (coretemp, or k10temp's Tctl); unknown reads as too hot."""
     for node in sorted(hwmon.glob("hwmon*")):
         try:
-            if (node / "name").read_text().strip() != "coretemp":
+            if (node / "name").read_text().strip() != TEMP_SENSOR:
                 continue
             return int((node / "temp1_input").read_text()) / 1000.0
         except (OSError, ValueError):
@@ -210,6 +239,15 @@ class GitHub:
             raise RunnerError("GitHub returned no JIT configuration")
         return runner["id"], config
 
+    def set_variable(self, name: str, value: str) -> None:
+        """Create or update a repository Actions variable (the pool heartbeat)."""
+        try:
+            self.call("PATCH", f"/repos/{REPO}/actions/variables/{name}", {"name": name, "value": value})
+        except RunnerError as error:
+            if "HTTP 404" not in str(error):
+                raise
+            self.call("POST", f"/repos/{REPO}/actions/variables", {"name": name, "value": value})
+
     def delete_runner(self, runner_id: int) -> None:
         try:
             self.call("DELETE", f"/repos/{REPO}/actions/runners/{int(runner_id)}")
@@ -226,10 +264,48 @@ class GitHub:
         return bool(runner.get("busy"))
 
 
-def profile_for(job: dict[str, Any]) -> Profile | None:
-    """Only exact label sets are served: never a Dominus or light-pool job."""
+def configure(doc: dict[str, Any]) -> None:
+    """Turn this module into one host's pool from its host config."""
+    global POOL, STEAL_FROM, PROFILES, STEAL_PROFILES, MAX_VCPUS, MAX_MEMORY_MIB, SLOTS
+    global SUBNET, ARTIFACTS, TEMP_SENSOR, TOKEN_SOURCE, HEARTBEAT_VARIABLE
+    global GAMING_MARKER, QUIET_HOURS
+    known = {"pool", "steal_from", "max_vcpus", "max_memory_mib", "slots", "subnet",
+             "artifacts", "temp_sensor", "token_source", "heartbeat_variable",
+             "gaming_marker", "quiet_hours"}
+    if set(doc) - known:
+        raise RunnerError(f"unknown host settings: {sorted(set(doc) - known)}")
+    pool = doc.get("pool", POOL)
+    steal = doc.get("steal_from", STEAL_FROM)
+    if not re.fullmatch(r"[a-z]+", pool) or (steal is not None and not re.fullmatch(r"[a-z]+", steal)):
+        raise RunnerError("pool names are lowercase letters")
+    slots = int(doc.get("slots", SLOTS))
+    if not 1 <= slots <= 16:
+        raise RunnerError("slots must be 1-16")
+    subnet = doc.get("subnet", SUBNET)
+    if not re.fullmatch(r"10\.\d{1,3}\.\d{1,3}", subnet):
+        raise RunnerError("subnet must be a private 10.x.y /24 prefix")
+    if doc.get("token_source", TOKEN_SOURCE) not in ("credential", "gh-cli"):
+        raise RunnerError("token_source must be credential or gh-cli")
+    POOL, STEAL_FROM, SLOTS, SUBNET = pool, steal, slots, subnet
+    PROFILES = make_profiles(POOL)
+    STEAL_PROFILES = make_profiles(STEAL_FROM) if STEAL_FROM and STEAL_FROM != POOL else {}
+    MAX_VCPUS = int(doc.get("max_vcpus", MAX_VCPUS))
+    memory = doc.get("max_memory_mib", MAX_MEMORY_MIB)
+    MAX_MEMORY_MIB = int(memory) if memory is not None else None
+    ARTIFACTS = Path(doc.get("artifacts", str(ARTIFACTS)))
+    TEMP_SENSOR = doc.get("temp_sensor", TEMP_SENSOR)
+    TOKEN_SOURCE = doc.get("token_source", TOKEN_SOURCE)
+    HEARTBEAT_VARIABLE = doc.get("heartbeat_variable", HEARTBEAT_VARIABLE)
+    marker = doc.get("gaming_marker")
+    GAMING_MARKER = Path(marker) if marker else GAMING_MARKER
+    hours = doc.get("quiet_hours")
+    QUIET_HOURS = (int(hours[0]), int(hours[1])) if hours else QUIET_HOURS
+
+
+def profile_for(job: dict[str, Any], profiles: dict[str, Profile] | None = None) -> Profile | None:
+    """Only exact label sets are served: never another pool's or a light-pool job."""
     labels = job.get("labels") or []
-    for profile in PROFILES.values():
+    for profile in (PROFILES if profiles is None else profiles).values():
         if sorted(labels) == sorted([*BASE_LABELS, profile.label]):
             return profile
     return None
@@ -243,7 +319,7 @@ def mac_for(slot: int) -> str:
 
 
 def address_for(slot: int) -> str:
-    return f"10.231.0.{10 + slot}"
+    return f"{SUBNET}.{10 + slot}"
 
 
 def domain_xml(name: str, profile: Profile, slot: int, job_dir: Path) -> str:
@@ -315,7 +391,7 @@ def network_config(slot: int) -> str:
                     "dhcp6": False,
                     "accept-ra": False,
                     "addresses": [f"{address_for(slot)}/24"],
-                    "routes": [{"to": "0.0.0.0/0", "via": "10.231.0.1"}],
+                    "routes": [{"to": "0.0.0.0/0", "via": f"{SUBNET}.1"}],
                     "nameservers": {"addresses": ["1.1.1.1", "9.9.9.9"]},
                 }
             },
@@ -371,6 +447,8 @@ class Controller:
             clock,
         )
         self.state_file = state_file
+        self.first_seen: dict[int, float] = {}  # other-pool jobs we might take over
+        self._beat: tuple[str, float] = ("", 0.0)
         self.guests: dict[str, Guest] = self._load()
 
     # state survives a controller restart so leftovers are always reaped
@@ -381,13 +459,14 @@ class Controller:
             return {}
         guests = {}
         for item in raw:
+            known = {**STEAL_PROFILES, **PROFILES}
             if (
                 NAME_RE.fullmatch(item.get("name", ""))
-                and item.get("profile") in PROFILES
+                and item.get("profile") in known
             ):
                 guests[item["name"]] = Guest(
                     item["name"],
-                    PROFILES[item["profile"]],
+                    known[item["profile"]],
                     int(item["slot"]),
                     int(item["runner_id"]),
                     float(item["started"]),
@@ -445,16 +524,44 @@ class Controller:
             return "artifact tree missing"
         return None
 
+    def blocked(self) -> str | None:
+        """Owner guards on a shared desktop: gaming and the overnight window."""
+        if GAMING_MARKER is not None and GAMING_MARKER.exists():
+            return "a game is running"
+        if QUIET_HOURS is not None:
+            hour = datetime.fromtimestamp(self.clock()).hour
+            start, end = QUIET_HOURS
+            if (start <= hour < end) if start < end else (hour >= start or hour < end):
+                return "quiet hours"
+        return None
+
+    def heartbeat(self, healthy: bool) -> None:
+        """Tell the CI router this pool can take new runs (epoch) or not ("0")."""
+        if not HEARTBEAT_VARIABLE:
+            return
+        now = self.clock()
+        value = str(int(now)) if healthy else "0"
+        last, at = self._beat
+        if (value == "0" and last == "0") or (healthy and last not in ("", "0") and now - at < 60):
+            return
+        try:
+            self.github.set_variable(HEARTBEAT_VARIABLE, value)
+            self._beat = (value, now)
+        except RunnerError as error:
+            log.warning("heartbeat not written: %s", error)
+
     def admit(self, profile: Profile) -> str | None:
         # The perf VM measures p99 latency: it never shares the host with CI.
-        heavy = "klukai-amarillo-heavy"
-        if profile.label == heavy and self.guests:
+        if profile.kind == "heavy" and self.guests:
             return "perf runs alone"
-        if any(g.profile.label == heavy for g in self.guests.values()):
+        if any(g.profile.kind == "heavy" for g in self.guests.values()):
             return "perf is measuring"
         used = sum(g.profile.vcpus for g in self.guests.values())
         if used + profile.vcpus > MAX_VCPUS:
             return "CPU budget in use"
+        if MAX_MEMORY_MIB is not None and \
+                sum(g.profile.memory_mib for g in self.guests.values()) + profile.memory_mib > MAX_MEMORY_MIB:
+            return "memory budget in use"
         if self.memory() - profile.memory_mib < MEMORY_HEADROOM_MIB:
             return "not enough free memory"
         if self.temp() >= START_BELOW_C:
@@ -581,11 +688,20 @@ class Controller:
     def demand(self) -> list[Profile]:
         """Queued jobs not yet covered by a warming guest, quick checks first."""
         wanted: dict[str, int] = {}
+        now = self.clock()
+        seen: set[int] = set()
         for job in self.github.queued_jobs():
             profile = profile_for(job)
+            if profile is None and STEAL_PROFILES:
+                stolen = profile_for(job, STEAL_PROFILES)
+                if stolen is not None:
+                    job_id = int(job.get("id") or 0)
+                    seen.add(job_id)
+                    if now - self.first_seen.setdefault(job_id, now) >= STEAL_AFTER_SECONDS:
+                        profile = stolen  # its own pool has not taken it: run it here
             if profile is not None:
                 wanted[profile.label] = wanted.get(profile.label, 0) + 1
-        now = self.clock()
+        self.first_seen = {k: v for k, v in self.first_seen.items() if k in seen}
         self.surplus: list[str] = []
         for guest in list(self.guests.values()):
             busy = self.github.runner_busy(guest.runner_id)
@@ -612,15 +728,8 @@ class Controller:
                 wanted[guest.profile.label] -= 1
             elif idle and busy is False and now - guest.started > SURPLUS_GRACE_SECONDS:
                 self.surplus.append(guest.name)
-        priority = {
-            "klukai-amarillo-small": 0,
-            "klukai-amarillo-frontend": 1,
-            "klukai-amarillo-build": 2,
-            "klukai-amarillo-serial": 3,
-            "klukai-amarillo-medium": 4,
-            "klukai-amarillo-heavy": 5,
-        }
-        order = sorted(PROFILES.values(), key=lambda p: priority[p.label])
+        priority = {"small": 0, "frontend": 1, "build": 2, "serial": 3, "medium": 4, "heavy": 5}
+        order = sorted({**STEAL_PROFILES, **PROFILES}.values(), key=lambda p: (priority[p.kind], p.label))
         return [p for p in order for _ in range(wanted.get(p.label, 0))]
 
     def tick(self) -> None:
@@ -629,7 +738,8 @@ class Controller:
             prune_build_caches(ARTIFACTS, now=self.clock())
             normalize_ownership(ARTIFACTS)
         self.thermal()
-        reason = self.ready()
+        reason = self.ready() or self.blocked()
+        self.heartbeat(reason is None and self.temp() < START_BELOW_C)
         if reason:
             log.debug("not starting guests: %s", reason)
             return
@@ -725,6 +835,13 @@ class _quiet:
 
 
 def read_token() -> str:
+    if TOKEN_SOURCE == "gh-cli":
+        # The owner's existing GitHub CLI login, read at start and kept in memory only.
+        found = subprocess.run(["runuser", "-u", "jalsarraf", "--", "gh", "auth", "token"],
+                               capture_output=True, text=True, timeout=30)
+        if found.returncode or not found.stdout.strip():
+            raise RunnerError("GitHub CLI login unavailable")
+        return found.stdout.strip()
     directory = os.environ.get("CREDENTIALS_DIRECTORY")
     if not directory:
         raise RunnerError(
@@ -742,6 +859,8 @@ def main() -> int:
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    if HOST_CONFIG.is_file():
+        configure(json.loads(HOST_CONFIG.read_text()))
     controller = Controller(GitHub(read_token()))
     while True:
         try:
