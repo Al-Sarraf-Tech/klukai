@@ -31,7 +31,7 @@ previous release and checks that too. Each run writes a receipt.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 import hashlib
 import importlib.util
@@ -188,7 +188,17 @@ def entry_files(release: Path) -> dict[str, str]:
         main = re.search(r"main\.dart\.[0-9a-f]{8}\.js", (release / boot.group()).read_text())
         if main and (release / main.group()).is_file():
             found[main.group()] = digest(release / main.group())
+    _check_cache_names(release, found)
     return found
+
+
+def _check_cache_names(release: Path, names: Iterable[str]) -> None:
+    """Check the existing cache identifiers, not cryptographic provenance."""
+    for name in names:
+        if HASHED.fullmatch(name):
+            actual = hashlib.md5((release / name).read_bytes(), usedforsecurity=False).hexdigest()[:8]
+            if actual != name.rsplit(".", 2)[1]:
+                raise WebError(f"entry bytes do not match their cache filename: {name}")
 
 
 def is_release(found: dict[str, Any], expected: dict[str, Any]) -> bool:
@@ -306,6 +316,7 @@ def smoke(
     """Fetch the entry files through core and compare them with the release."""
     release = tree(root, rid)
     files = inventory(release)["files"]
+    _check_cache_names(release, files)
     checks: list[tuple[str, str]] = [("/app/", "index.html")]
     if "login.html" in files:
         checks.append(("/", "login.html"))
@@ -388,17 +399,22 @@ def deploy(
     rid = release_id(revision, provenance["release"]["sha256"])
     doc.update(release=rid, previous=previous, ci_run=provenance["ci_run"])
     live_meta = _load(state)["releases"].get(previous, {})
+    live_tree = tree(root, previous)
     if live_meta.get("tree_sha256") == provenance["release"]["sha256"]:
-        # Another commit with the very same PWA: nothing to switch.
+        # Metadata records a prior deployment, not the current bytes or
+        # serving configuration. A core-only release can change either.
+        if not is_release(inventory(live_tree), provenance["release"]):
+            raise WebError("live release does not match the verified provenance")
+        doc["checks"] = smoke(base, root, previous, fetch=fetch)
         doc.update(status="unchanged", release=previous, finished_at=datetime.now(UTC).isoformat())
         return doc
-    live_tree = tree(root, previous)
     carried = {} if rid == previous else {
         k: v for k, v in entry_files(live_tree).items() if k not in provenance["release"]["files"]}
     staged = stage(root, directory / "release", rid, provenance["release"],
                    carry_from=live_tree, carried=carried)
     doc["carried"] = sorted(carried)
     if rid == previous:
+        doc["checks"] = smoke(base, root, previous, fetch=fetch)
         doc.update(status="unchanged", finished_at=datetime.now(UTC).isoformat())
         return doc
     doc["links_created"] = ensure_links(root, _names(staged))
@@ -489,6 +505,7 @@ def adopt(source: Path, *, root: Path = ROOT, state: Path = STATE) -> dict[str, 
     if current(root) is not None:
         raise WebError(f"{root} already has a live release")
     found = inventory(source)  # refuses symlinks and empty trees
+    _check_cache_names(source, found["files"])
     rid = f"adopted-{datetime.now(UTC).strftime('%Y%m%dt%H%M%S')}-{found['sha256'][:12]}"
     root.mkdir(mode=0o755, parents=True, exist_ok=True)
     staged = stage(root, source, rid, found)

@@ -11,6 +11,8 @@ import sys
 
 import pytest
 
+OLD_IMAGE = "sha256:" + "a" * 64
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import klukai_deploy_lock  # noqa: E402
@@ -62,7 +64,12 @@ class Target:
         self.world = world
 
     def inspect(self, template: str) -> str:
-        return self.world.image if template == "{{.Image}}" else ""
+        return {"{{.Image}}": self.world.image, "{{.Id}}": self.world.container_id,
+                "{{.Id}} {{.Image}} {{.State.Running}}":
+                f"{self.world.container_id} {self.world.image} {str(self.world.running).lower()}"}.get(template, "")
+
+    def ready(self) -> bool:
+        return self.world.ready
 
     def read_pin(self) -> str:
         return self.world.pin
@@ -72,7 +79,9 @@ class World:
     """Production stand-ins and a record of everything the deployer did."""
 
     def __init__(self) -> None:
-        self.image, self.pin, self.web = "sha256:old", "klukai-core:old", "aaaaaaaaaaaa-000000000000"
+        self.image, self.pin, self.web = OLD_IMAGE, "klukai-core:old", "aaaaaaaaaaaa-000000000000"
+        self.container_id = "a" * 64
+        self.running = self.ready = True
         self.cert: dict[str, dict] = {}
         self.calls: list[tuple] = []
         self.notes: list[str] = []
@@ -114,9 +123,9 @@ class Fake(dom.Deployer):
     def deploy_core(self, revision, accept, plans):
         self.w.calls.append(("core", revision, accept, plans))
         if self.w.core_result == "deployed":
-            self.w.image = f"sha256:{revision[:8]}"
+            self.w.image = "sha256:" + revision + "0" * 24
         return {"rollout": {"status": self.w.core_result, "rollback_tag": "klukai-core:rollback-x",
-                            "previous_image_id": "sha256:old"}}
+                            "previous_image_id": OLD_IMAGE}}
 
     def deploy_web(self, revision):
         self.w.calls.append(("web", revision))
@@ -163,8 +172,13 @@ def env(tmp_path, monkeypatch):
     def restore(target, tag, previous_id, **kw):
         world.calls.append(("core-restore", tag, previous_id))
         world.image = previous_id
+        world.running = world.ready = True
         return {"status": "restored"}
 
+    def unexpected_run(*args, **kwargs):
+        raise AssertionError("unmocked release command in offline fixture")
+
+    monkeypatch.setattr(dom.release, "run", unexpected_run)
     monkeypatch.setattr(dom.release, "restore", restore)
     cfg = dom.Config(remote_url=str(remote.bare), checkout=checkout, state=tmp_path / "state",
                      releases=tmp_path / "releases", notify=True)
@@ -273,8 +287,8 @@ def test_a_failed_web_release_restores_core_and_checkout(env):
     certify(env, sha)
     env["world"].web_result = "rolled_back"
     assert env["deployer"].run_once()["status"] == "web_rolled_back"
-    assert ("core-restore", "klukai-core:rollback-x", "sha256:old") in env["world"].calls
-    assert env["world"].image == "sha256:old"
+    assert ("core-restore", "klukai-core:rollback-x", OLD_IMAGE) in env["world"].calls
+    assert env["world"].image == OLD_IMAGE
     assert head_of(env["checkout"]) == env["base"]
 
 
@@ -284,7 +298,7 @@ def test_failed_post_deploy_checks_restore_web_core_and_checkout(env):
     env["world"].verify_ok = False
     before_web = env["world"].web
     assert env["deployer"].run_once()["status"] == "verify_failed"
-    assert env["world"].web == before_web and env["world"].image == "sha256:old"
+    assert env["world"].web == before_web and env["world"].image == OLD_IMAGE
     assert head_of(env["checkout"]) == env["base"]
     assert "production is back on" in env["world"].notes[-1]
 
@@ -295,7 +309,7 @@ def test_an_interrupt_mid_release_restores_before_exiting(env):
     env["world"].raise_in_web = KeyboardInterrupt()
     with pytest.raises(KeyboardInterrupt):
         env["deployer"].run_once()
-    assert env["world"].image == "sha256:old"
+    assert env["world"].image == OLD_IMAGE
     assert head_of(env["checkout"]) == env["base"]
     assert state(env)["inflight"] is None
     assert state(env)["candidates"][sha]["outcome"] == "interrupted"
@@ -307,13 +321,14 @@ def test_a_killed_run_is_restored_at_the_start_of_the_next_cycle(env):
     st = state(env)
     # What a SIGKILL right after the core switch leaves behind.
     st["inflight"] = {"revision": sha, "started_at": "x", "previous": {
-        "checkout": env["base"], "core_image_id": "sha256:old", "core_pin": "klukai-core:old",
+        "checkout": env["base"], "core_image_id": OLD_IMAGE, "core_pin": "klukai-core:old",
+        "core_container_id": env["world"].container_id,
         "web_release": env["world"].web}}
     st["candidates"][sha] = {"attempts": 1, "allowed": 2, "outcome": "deploying"}
     env["deployer"].save(st)
     git(env["checkout"], "fetch", "-q", str(env["remote"].bare), "main")
     git(env["checkout"], "checkout", "-q", "--detach", sha)
-    env["world"].image = "sha256:new"
+    env["world"].image = "sha256:" + "b" * 64
     tagged = []
     original = dom.release.run
     dom.release.run = lambda argv, **kw: tagged.append(argv) or ""
@@ -321,7 +336,7 @@ def test_a_killed_run_is_restored_at_the_start_of_the_next_cycle(env):
         assert env["deployer"].run_once()["status"] == "interrupted"
     finally:
         dom.release.run = original
-    assert env["world"].image == "sha256:old" and head_of(env["checkout"]) == env["base"]
+    assert env["world"].image == OLD_IMAGE and head_of(env["checkout"]) == env["base"]
     assert tagged and tagged[0][:2] == ["docker", "tag"]
     assert tagged[0][3].startswith("klukai-core:rollback-recover-")
     assert env["deployer"].run_once()["status"] == "deployed"  # attempt 2 of 2
@@ -506,7 +521,7 @@ def test_a_recorded_deployment_is_never_rolled_back_by_a_late_interrupt(env):
     with pytest.raises(KeyboardInterrupt):
         env["deployer"].run_once()
     assert state(env)["deployed"]["revision"] == sha and state(env)["inflight"] is None
-    assert head_of(env["checkout"]) == sha and env["world"].image == f"sha256:{sha[:8]}"
+    assert head_of(env["checkout"]) == sha and env["world"].image == "sha256:" + sha + "0" * 24
     assert not any(c[0] == "core-restore" for c in env["world"].calls)
 
 
@@ -514,7 +529,8 @@ def test_an_incomplete_recovery_stays_paused_and_keeps_its_record(env):
     sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
     st = state(env)
     st["inflight"] = {"revision": sha, "started_at": "x", "previous": {
-        "checkout": env["base"], "core_image_id": "sha256:old", "core_pin": "klukai-core:old",
+        "checkout": env["base"], "core_image_id": OLD_IMAGE, "core_pin": "klukai-core:old",
+        "core_container_id": env["world"].container_id,
         "web_release": env["world"].web}}
     env["deployer"].save(st)
     git(env["checkout"], "fetch", "-q", str(env["remote"].bare), "main")
@@ -534,7 +550,8 @@ def test_recovery_puts_back_a_pin_switched_just_before_the_kill(env, monkeypatch
     st = state(env)
     sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
     st["inflight"] = {"revision": sha, "started_at": "x", "previous": {
-        "checkout": env["base"], "core_image_id": "sha256:old", "core_pin": "klukai-core:old",
+        "checkout": env["base"], "core_image_id": OLD_IMAGE, "core_pin": "klukai-core:old",
+        "core_container_id": env["world"].container_id,
         "web_release": env["world"].web}}
     env["deployer"].save(st)
     env["world"].pin = "klukai-core:verified-new"  # pin switched, core not yet recreated
@@ -612,3 +629,651 @@ def test_the_token_prefers_the_dedicated_credential_then_the_gh_login(monkeypatc
     monkeypatch.setattr(dom.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", "no"))
     with pytest.raises(dom.Refused, match="no deployer GitHub token"):
         dom.github_token()
+
+
+def test_a_core_exception_after_switching_still_restores_the_snapshot(env, monkeypatch):
+    """Core pruning can time out after rollout succeeded but before it returns."""
+    sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
+    certify(env, sha)
+    deployer, world = env["deployer"], env["world"]
+    original = deployer.deploy_core
+
+    def switched_then_failed(*args):
+        original(*args)
+        raise subprocess.TimeoutExpired(["docker", "image", "ls"], 600)
+
+    monkeypatch.setattr(deployer, "deploy_core", switched_then_failed)
+    monkeypatch.setattr(dom.release, "run", lambda *a, **kw: "")
+    result = deployer.run_once()
+    assert result["status"] != "deployed"
+    assert world.image == OLD_IMAGE
+    assert head_of(env["checkout"]) == env["base"]
+    assert state(env)["inflight"] is None
+
+
+def test_an_interrupt_after_the_web_switch_restores_the_snapshot(env, monkeypatch):
+    """An interrupt while pruning happens after the new PWA became live."""
+    sha = env["remote"].commit({"flutter_app/main.dart": "v2\n"})
+    certify(env, sha)
+    deployer, world = env["deployer"], env["world"]
+    previous = world.web
+    original = deployer.deploy_web
+
+    def switched_then_interrupted(*args):
+        original(*args)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(deployer, "deploy_web", switched_then_interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        deployer.run_once()
+    assert world.web == previous
+    assert head_of(env["checkout"]) == env["base"]
+    assert state(env)["inflight"] is None
+
+
+def test_a_failed_normal_restore_keeps_the_snapshot_for_recovery(env, monkeypatch):
+    sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
+    certify(env, sha)
+    env["world"].verify_ok = False
+    restore = dom.release.restore
+    monkeypatch.setattr(dom.release, "restore", lambda *a, **kw: {"status": "restore_failed"})
+    assert env["deployer"].run_once()["status"] == "restore_failed"
+    assert env["deployer"].paused()
+    assert state(env)["inflight"] is not None
+    assert state(env)["inflight"]["previous"]["checkout"] == env["base"]
+    monkeypatch.setattr(dom.release, "restore", restore)
+    monkeypatch.setattr(dom.release, "run", lambda *a, **kw: "")
+    env["deployer"].pause_marker.unlink()
+    env["world"].calls.clear()
+    assert env["deployer"].run_once()["status"] == "interrupted"
+    assert env["world"].image == OLD_IMAGE
+    assert not any(call[0] == "relay" for call in env["world"].calls)
+    assert state(env)["inflight"] is None
+
+
+@pytest.mark.parametrize("step", ["core", "web"])
+def test_a_step_refused_before_mutation_leaves_untouched_targets_alone(env, monkeypatch, step):
+    name = "docker/core/app.py" if step == "core" else "flutter_app/main.dart"
+    sha = env["remote"].commit({name: "v2\n"})
+    certify(env, sha)
+    world = env["world"]
+    previous = world.web
+
+    def refused(*args):
+        raise OSError("preflight disk read failed")
+
+    monkeypatch.setattr(env["deployer"], f"deploy_{step}", refused)
+    result = env["deployer"].run_once()
+    assert result["status"] == f"{step}_refused"
+    assert world.image == OLD_IMAGE and world.web == previous
+    assert not any(call[0] == "core-restore" for call in world.calls)
+    # Equal-pointer web rollback is a read-only serving check, not a switch.
+    assert (("web-back", previous) in world.calls) == (step == "web")
+    assert head_of(env["checkout"]) == env["base"]
+    assert state(env)["inflight"] is None
+
+
+def test_a_core_rollback_recreates_using_the_previous_checkout(env, monkeypatch):
+    """The nested rollback ran old image under the candidate compose/config."""
+    sha = env["remote"].commit({"docker-compose.yml": "services: {core: {environment: {NEW: yes}}}\n"})
+    certify(env, sha)
+    deployer, world = env["deployer"], env["world"]
+    world.core_result = "rolled_back"
+    runtime_checkout = [env["base"]]
+    original_deploy, original_restore = deployer.deploy_core, dom.release.restore
+
+    def nested_rollback(*args):
+        runtime_checkout[0] = head_of(env["checkout"])
+        return original_deploy(*args)
+
+    def restore_with_checkout(*args, **kwargs):
+        runtime_checkout[0] = head_of(env["checkout"])
+        return original_restore(*args, **kwargs)
+
+    monkeypatch.setattr(deployer, "deploy_core", nested_rollback)
+    monkeypatch.setattr(dom.release, "restore", restore_with_checkout)
+    assert deployer.run_once()["status"] == "rolled_back"
+    assert head_of(env["checkout"]) == env["base"]
+    assert runtime_checkout[0] == env["base"]
+
+
+def test_snapshot_recovery_removes_a_pin_that_did_not_exist_before(env, monkeypatch):
+    sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
+    certify(env, sha)
+    world = env["world"]
+    world.pin = None
+
+    def switch_pin_then_failed(*args):
+        world.pin = "klukai-core:verified-new"
+        raise OSError("stopped before recreate")
+
+    monkeypatch.setattr(env["deployer"], "deploy_core", switch_pin_then_failed)
+    monkeypatch.setattr(Target, "write_pin", lambda self, image: setattr(world, "pin", image), raising=False)
+    result = env["deployer"].run_once()
+    assert result["status"] == "core_refused"
+    assert world.image == OLD_IMAGE
+    assert world.pin is None
+
+
+@pytest.mark.parametrize("restore_blocked", [False, True])
+def test_an_interrupt_after_checkout_restores_or_retains_recovery(env, monkeypatch, restore_blocked):
+    sha = env["remote"].commit({"flutter_app/main.dart": "v2\n"})
+    certify(env, sha)
+    checkout = dom.checkout_detached
+    local_note = env["checkout"] / "operator-note.txt"
+    local_note.write_text("keep this local note\n")
+
+    def switch_then_interrupt(repo, revision):
+        checkout(repo, revision)
+        if revision == sha:
+            if restore_blocked:
+                (repo / ".git" / "index.lock").write_text("")
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(dom, "checkout_detached", switch_then_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        env["deployer"].run_once()
+    assert local_note.read_text() == "keep this local note\n"
+    assert not any(c[0] in {"core", "web"} for c in env["world"].calls)
+    if restore_blocked:
+        assert head_of(env["checkout"]) == sha
+        assert state(env)["inflight"]["previous"]["checkout"] == env["base"]
+        assert state(env)["candidates"][sha]["outcome"] == "restore_failed"
+        assert env["deployer"].paused()
+    else:
+        assert head_of(env["checkout"]) == env["base"]
+        assert state(env)["inflight"] is None
+
+
+def test_a_checkout_refusal_before_mutation_preserves_user_files(env, monkeypatch):
+    sha = env["remote"].commit({"flutter_app/main.dart": "v2\n"})
+    certify(env, sha)
+    checkout = dom.checkout_detached
+    local_note = env["checkout"] / "operator-note.txt"
+    local_note.write_text("keep this local note\n")
+
+    def refuse_candidate(repo, revision):
+        if revision == sha:
+            raise OSError("checkout not started")
+        checkout(repo, revision)
+
+    monkeypatch.setattr(dom, "checkout_detached", refuse_candidate)
+    assert env["deployer"].run_once()["status"] == "interrupted"
+    assert head_of(env["checkout"]) == env["base"]
+    assert local_note.read_text() == "keep this local note\n"
+    assert not any(c[0] in {"core", "web"} for c in env["world"].calls)
+    assert state(env)["inflight"] is None
+
+
+@pytest.mark.parametrize("escape", ["exception", "kill", "legacy_kill", "restore_failure"])
+def test_an_old_image_recreated_under_candidate_compose_is_restored(env, monkeypatch, escape):
+    sha = env["remote"].commit({"docker-compose.yml": "services: {core: {environment: {NEW: yes}}}\n"})
+    certify(env, sha)
+    deployer, world = env["deployer"], env["world"]
+    runtime_checkout = [env["base"]]
+    original_restore = dom.release.restore
+
+    def nested_rollback_then_failure(*args):
+        runtime_checkout[0] = head_of(env["checkout"])
+        world.container_id = "b" * 64
+        world.image = OLD_IMAGE
+        raise subprocess.TimeoutExpired(["fake-inner-rollback-receipt"], 600)
+
+    def restore_under_checkout(*args, **kwargs):
+        if escape == "restore_failure":
+            return {"status": "restore_failed"}
+        runtime_checkout[0] = head_of(env["checkout"])
+        return original_restore(*args, **kwargs)
+
+    monkeypatch.setattr(deployer, "deploy_core", nested_rollback_then_failure)
+    monkeypatch.setattr(dom.release, "restore", restore_under_checkout)
+    monkeypatch.setattr(dom.release, "run", lambda *a, **kw: "")
+    if escape in {"kill", "legacy_kill"}:
+        st = state(env)
+        previous = {"checkout": env["base"], "core_image_id": OLD_IMAGE,
+                    "core_pin": world.pin, "web_release": world.web}
+        if escape == "kill":
+            previous["core_container_id"] = world.container_id
+        st["inflight"] = {"revision": sha, "started_at": "x", "previous": previous}
+        st["candidates"][sha] = {"attempts": 1, "allowed": 2, "outcome": "deploying"}
+        deployer.save(st)
+        deployer.fetch_commit(sha)
+        git(env["checkout"], "checkout", "-q", "--detach", sha)
+        runtime_checkout[0] = sha
+        world.container_id = "b" * 64
+    result = deployer.run_once()
+    assert head_of(env["checkout"]) == env["base"]
+    if escape == "restore_failure":
+        assert result["status"] == "restore_failed"
+        assert state(env)["inflight"] is not None and deployer.paused()
+    else:
+        assert result["status"] == ("interrupted" if "kill" in escape else "core_refused")
+        assert runtime_checkout[0] == env["base"]
+        assert state(env)["inflight"] is None
+
+
+@pytest.mark.parametrize("observation", ["", "bad-container " + OLD_IMAGE + " true",
+                                         "a" * 64 + " bad-image true",
+                                         "a" * 64 + " " + OLD_IMAGE + " extra",
+                                         "a" * 64 + " " + OLD_IMAGE + " false"])
+def test_invalid_core_identity_refuses_before_mutation(env, monkeypatch, observation):
+    sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
+    certify(env, sha)
+    inspect = Target.inspect
+    monkeypatch.setattr(Target, "inspect", lambda self, template:
+                        observation if template == "{{.Id}} {{.Image}} {{.State.Running}}" else inspect(self, template))
+    assert env["deployer"].run_once()["status"] == "refused"
+    assert head_of(env["checkout"]) == env["base"]
+    assert not any(c[0] in {"core", "web"} for c in env["world"].calls)
+    assert state(env).get("inflight") is None
+
+
+@pytest.mark.parametrize("fault", ["stopped", "unready"])
+def test_the_same_old_container_is_not_restored_until_running_and_ready(env, monkeypatch, fault):
+    sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
+    certify(env, sha)
+    world = env["world"]
+
+    def disturbed_then_failed(*args):
+        if fault == "stopped":
+            world.running = False
+        else:
+            world.ready = False
+        raise OSError("compose interrupted before replacing the old container")
+
+    monkeypatch.setattr(env["deployer"], "deploy_core", disturbed_then_failed)
+    monkeypatch.setattr(dom.release, "run", lambda *a, **kw: "")
+    assert env["deployer"].run_once()["status"] == "core_refused"
+    assert any(c[0] == "core-restore" for c in world.calls)
+    assert world.running and world.ready
+    assert state(env)["inflight"] is None
+
+
+def test_resume_rechecks_a_failed_web_restore_already_pointing_at_previous(env, monkeypatch):
+    deployer, world = env["deployer"], env["world"]
+    sha = env["remote"].commit({"flutter_app/main.dart": "v2\n"})
+    st = state(env)
+    previous = {"checkout": env["base"], "core_image_id": OLD_IMAGE,
+                "core_container_id": world.container_id, "core_pin": world.pin,
+                "web_release": world.web}
+    st["inflight"] = {"revision": sha, "started_at": "x", "previous": previous}
+    st["candidates"][sha] = {"attempts": 1, "allowed": 1, "outcome": "restore_failed"}
+    deployer.save(st)
+    switch_back = deployer.web_switch_back
+
+    def still_broken(rid):
+        world.calls.append(("web-back", rid))
+        return {"status": "rollback_failed", "detail": "old pointer but broken static serving"}
+
+    monkeypatch.setattr(deployer, "web_switch_back", still_broken)
+    for _ in range(2):
+        assert deployer.run_once()["status"] == "restore_failed"
+        assert state(env)["inflight"]["previous"] == previous
+        assert deployer.paused()
+        deployer.pause_marker.unlink()
+    monkeypatch.setattr(deployer, "web_switch_back", switch_back)
+    assert deployer.run_once()["status"] == "interrupted"
+    assert state(env)["inflight"] is None
+    assert not any(c[0] in {"relay", "core", "web"} for c in world.calls)
+    assert sum(c[0] == "web-back" for c in world.calls) == 3
+
+
+def test_recovery_recreates_a_confirmed_absent_container_from_the_saved_image(env, monkeypatch):
+    deployer, world = env["deployer"], env["world"]
+    sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
+    st = state(env)
+    previous = {"checkout": env["base"], "core_image_id": OLD_IMAGE,
+                "core_container_id": world.container_id, "core_pin": world.pin,
+                "web_release": world.web}
+    st["inflight"] = {"revision": sha, "started_at": "x", "previous": previous}
+    st["candidates"][sha] = {"attempts": 1, "allowed": 2, "outcome": "deploying"}
+    deployer.save(st)
+    # Compose removed the old container and the process died before replacement.
+    monkeypatch.setattr(Target, "inspect", lambda self, template: "")
+    monkeypatch.setattr(Target, "container_absent", lambda self: True, raising=False)
+    monkeypatch.setattr(dom.release, "run", lambda *args, **kwargs: "")
+    assert deployer.run_once()["status"] == "interrupted"
+    assert any(call[0] == "core-restore" for call in world.calls)
+    assert state(env)["inflight"] is None
+
+
+def test_a_lost_failed_web_rollback_receipt_keeps_recovery_intent(env, monkeypatch):
+    deployer, world = env["deployer"], env["world"]
+    sha = env["remote"].commit({"flutter_app/main.dart": "v2\n"})
+    certify(env, sha)
+    previous_web = world.web
+    healthy_switch_back = deployer.web_switch_back
+
+    def nested_rollback_loses_receipt(revision):
+        world.web = f"{revision[:12]}-111111111111"
+        # Nested rollback restores the pointer but fails its serving check;
+        # Ctrl-C escapes before its rollback_failed receipt reaches the caller.
+        world.web = previous_web
+        raise KeyboardInterrupt("after failed web rollback, before receipt")
+
+    def still_broken(rid):
+        world.calls.append(("web-back", rid))
+        return {"status": "rollback_failed", "detail": "pointer restored, serving still broken"}
+
+    monkeypatch.setattr(deployer, "deploy_web", nested_rollback_loses_receipt)
+    monkeypatch.setattr(deployer, "web_switch_back", still_broken)
+    with pytest.raises(KeyboardInterrupt):
+        deployer.run_once()
+    assert state(env)["inflight"] is not None
+    assert deployer.paused()
+    assert any(call[0] == "web-back" for call in world.calls)
+    assert state(env)["candidates"][sha]["outcome"] == "restore_failed"
+
+    previous = state(env)["inflight"]["previous"]
+    deployer.pause_marker.unlink()
+    assert deployer.run_once()["status"] == "restore_failed"
+    assert state(env)["inflight"]["previous"] == previous and deployer.paused()
+    monkeypatch.setattr(deployer, "web_switch_back", healthy_switch_back)
+    deployer.pause_marker.unlink()
+    assert deployer.run_once()["status"] == "interrupted"
+    assert state(env)["inflight"] is None
+
+
+@pytest.mark.parametrize("observation, absence", [
+    ("", False), ("", None), ("", {}), ("", {"absent": True}), ("", "true"),
+    ("", OSError("fake daemon/access failure")), ("", TimeoutError("fake listing timeout")),
+    ("malformed", True), ("a" * 64 + " bad-image true", True),
+    ("a" * 64 + " " + OLD_IMAGE + " unknown", True), (None, True),
+])
+def test_uncertain_container_observation_keeps_the_recovery_journal(env, monkeypatch, observation, absence):
+    deployer, world = env["deployer"], env["world"]
+    sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
+    st = state(env)
+    previous = {"checkout": env["base"], "core_image_id": OLD_IMAGE,
+                "core_container_id": world.container_id, "core_pin": world.pin,
+                "web_release": world.web}
+    st["inflight"] = {"revision": sha, "started_at": "x", "previous": previous}
+    st["candidates"][sha] = {"attempts": 1, "allowed": 2, "outcome": "deploying"}
+    deployer.save(st)
+    calls = []
+
+    def confirm_absence(self):
+        calls.append("absence")
+        if isinstance(absence, Exception):
+            raise absence
+        return absence
+
+    monkeypatch.setattr(Target, "inspect", lambda self, template: observation)
+    monkeypatch.setattr(Target, "container_absent", confirm_absence, raising=False)
+    assert deployer.run_once()["status"] == "restore_failed"
+    if observation != "":
+        assert calls == []  # malformed identity is not evidence of absence
+    assert state(env)["inflight"]["previous"] == previous and deployer.paused()
+    assert not any(call[0] == "core-restore" for call in world.calls)
+
+
+def test_a_failed_absent_container_restore_keeps_recovery_until_a_verified_retry(env, monkeypatch):
+    deployer, world = env["deployer"], env["world"]
+    sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
+    st = state(env)
+    previous = {"checkout": env["base"], "core_image_id": OLD_IMAGE,
+                "core_container_id": world.container_id, "core_pin": world.pin,
+                "web_release": world.web}
+    st["inflight"] = {"revision": sha, "started_at": "x", "previous": previous}
+    st["candidates"][sha] = {"attempts": 1, "allowed": 2, "outcome": "deploying"}
+    deployer.save(st)
+    monkeypatch.setattr(Target, "inspect", lambda self, template: "")
+    monkeypatch.setattr(Target, "container_absent", lambda self: True, raising=False)
+    monkeypatch.setattr(dom.release, "run", lambda *args, **kwargs: "")
+    original_restore = dom.release.restore
+    monkeypatch.setattr(dom.release, "restore", lambda *args, **kwargs: {"status": "restore_failed"})
+    for _ in range(2):
+        assert deployer.run_once()["status"] == "restore_failed"
+        assert state(env)["inflight"]["previous"] == previous and deployer.paused()
+        deployer.pause_marker.unlink()
+    monkeypatch.setattr(dom.release, "restore", original_restore)
+    assert deployer.run_once()["status"] == "interrupted"
+    assert state(env)["inflight"] is None
+
+
+def test_an_equal_web_pointer_is_revalidated_after_an_interrupted_noop(env, monkeypatch):
+    deployer, world = env["deployer"], env["world"]
+    sha = env["remote"].commit({"flutter_app/main.dart": "v2\n"})
+    certify(env, sha)
+    previous_web = world.web
+
+    def interrupted_noop(revision):
+        raise KeyboardInterrupt("no pointer change, but caller needs serving evidence")
+
+    monkeypatch.setattr(deployer, "deploy_web", interrupted_noop)
+    with pytest.raises(KeyboardInterrupt):
+        deployer.run_once()
+    assert ("web-back", previous_web) in world.calls
+    assert state(env)["inflight"] is None
+    assert not deployer.paused()
+
+
+def test_absence_confirmation_is_not_used_to_invent_an_initial_baseline(env, monkeypatch):
+    sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
+    certify(env, sha)
+    calls = []
+    monkeypatch.setattr(Target, "inspect", lambda self, template: "")
+    monkeypatch.setattr(Target, "container_absent", lambda self: calls.append("absence") or True, raising=False)
+    assert env["deployer"].run_once()["status"] == "refused"
+    assert calls == [] and state(env).get("inflight") is None
+
+
+def test_a_missing_web_snapshot_cannot_select_the_rollback_default(env, monkeypatch):
+    """Exercise actual rollback's ``to or saved.previous`` semantics, all I/O fake."""
+    deployer, world = env["deployer"], env["world"]
+    sha = env["remote"].commit({"flutter_app/main.dart": "v2\n"})
+    certify(env, sha)
+    world.web = None
+    stale = "dddddddddddd-999999999999"
+    rollback_calls = []
+    monkeypatch.setattr(dom.web, "_load", lambda state: {"previous": stale})
+    monkeypatch.setattr(dom.web, "current", lambda root: world.web)
+    monkeypatch.setattr(dom.web, "tree", lambda root, rid: env["tmp"])
+    monkeypatch.setattr(dom.web, "smoke", lambda *args, **kwargs: ["fake serving passed"])
+    monkeypatch.setattr(dom.web, "_record", lambda *args, **kwargs: None)
+
+    def switch(root, rid):
+        world.calls.append(("pointer-switch", rid))
+        world.web = rid
+
+    def rollback(rid):
+        rollback_calls.append(rid)
+        return dom.web.rollback(rid, root=env["tmp"] / "web", state=env["tmp"] / "web-state",
+                                base="https://unused.invalid", allow_live=True)
+
+    def refused(revision):
+        raise dom.web.WebError("no live release; run adopt first")
+
+    monkeypatch.setattr(dom.web, "switch", switch)
+    monkeypatch.setattr(deployer, "web_switch_back", rollback)
+    monkeypatch.setattr(deployer, "deploy_web", refused)
+    result = deployer.run_once()
+    assert world.web is None and not rollback_calls
+    assert result["status"] == "restore_failed"
+    previous = state(env)["inflight"]["previous"]
+    assert previous["web_release"] is None and deployer.paused()
+    for _ in range(2):
+        deployer.pause_marker.unlink()
+        assert deployer.run_once()["status"] == "restore_failed"
+        assert state(env)["inflight"]["previous"] == previous and deployer.paused()
+        assert world.web is None and not rollback_calls
+    assert not any(call[0] == "pointer-switch" for call in world.calls)
+
+
+@pytest.mark.parametrize("rid", [None, "", False, 0, {}, [], "not-a-release", "../outside",
+                                 "g" * 12 + "-" + "0" * 12, "missing-key"])
+def test_recovery_refuses_missing_or_invalid_explicit_web_identity(env, monkeypatch, rid):
+    deployer, world = env["deployer"], env["world"]
+    sha = env["remote"].commit({"flutter_app/main.dart": "v2\n"})
+    st = state(env)
+    previous = {"checkout": env["base"], "core_image_id": OLD_IMAGE,
+                "core_container_id": world.container_id, "core_pin": world.pin,
+                "web_release": rid}
+    if rid == "missing-key":
+        del previous["web_release"]
+    st["inflight"] = {"revision": sha, "started_at": "x", "previous": previous}
+    st["candidates"][sha] = {"attempts": 1, "allowed": 1, "outcome": "restore_failed"}
+    deployer.save(st)
+    calls = []
+    monkeypatch.setattr(deployer, "web_switch_back", lambda target: calls.append(target) or {"status": "rolled_back"})
+    for _ in range(2):
+        assert deployer.run_once()["status"] == "restore_failed"
+        assert state(env)["inflight"]["previous"] == previous and deployer.paused()
+        assert calls == []
+        deployer.pause_marker.unlink()
+
+
+@pytest.mark.parametrize("rid", ["aaaaaaaaaaaa-000000000000", "adopted-20261022t075000-000000000000"])
+def test_recovery_accepts_explicit_normal_and_adopted_web_identities(env, rid):
+    deployer, world = env["deployer"], env["world"]
+    sha = env["remote"].commit({"flutter_app/main.dart": "v2\n"})
+    world.web = rid
+    st = state(env)
+    previous = {"checkout": env["base"], "core_image_id": OLD_IMAGE,
+                "core_container_id": world.container_id, "core_pin": world.pin,
+                "web_release": rid}
+    st["inflight"] = {"revision": sha, "started_at": "x", "previous": previous}
+    st["candidates"][sha] = {"attempts": 1, "allowed": 1, "outcome": "deploying"}
+    deployer.save(st)
+    assert deployer.run_once()["status"] == "interrupted"
+    assert ("web-back", rid) in world.calls
+    assert state(env)["inflight"] is None and not deployer.paused()
+
+
+def core_dependent_web(env, monkeypatch, *, fault=None):
+    """Use real deploy/rollback/smoke; only external effects are inert fakes."""
+    import hashlib
+
+    deployer, world = env["deployer"], env["world"]
+    previous_web = world.web
+    root = env["tmp"] / "web-root"
+    directory = root / ".releases" / previous_web
+    directory.mkdir(parents=True)
+    main = b"same signed PWA across this core-only deployment"
+    name = "main.dart." + hashlib.md5(main, usedforsecurity=False).hexdigest()[:8] + ".js"
+    payloads = {"index.html": b"<html>unchanged signed PWA</html>", name: main}
+    for filename, body in payloads.items():
+        (directory / filename).write_bytes(body)
+    inventory = dom.web.inventory(directory)
+    events = []
+    monkeypatch.setattr(dom.web, "verify_provenance", lambda *args: {"release": inventory, "ci_run": "42-1"})
+    monkeypatch.setattr(dom.web, "_load", lambda path: {
+        "releases": {previous_web: {"tree_sha256": inventory["sha256"]}},
+        "previous": "dddddddddddd-999999999999"})
+    monkeypatch.setattr(dom.web, "current", lambda path: world.web)
+    monkeypatch.setattr(dom.web, "_record", lambda *args: events.append(("record",)))
+    monkeypatch.setattr(dom.web.time, "sleep", lambda delay: None)
+
+    def fetch(url):
+        events.append(("fetch", world.image, head_of(env["checkout"]), world.web, url))
+        if (world.image != OLD_IMAGE and fault != "healthy-candidate") or fault == "persistent-web":
+            return 404, b"core ready but its static mount is broken", {}
+        filename = "index.html" if url.endswith("/app/") else url.rsplit("/", 1)[1]
+        return 200, payloads[filename], {"Cache-Control": dom.web.IMMUTABLE}
+
+    def switch(path, rid):
+        events.append(("switch", rid))
+        world.web = rid
+
+    def rollback(rid):
+        events.append(("rollback", rid))
+        result = dom.web.rollback(rid, root=root, state=env["tmp"] / "web-state",
+                                  base="https://unused.invalid", fetch=fetch, allow_live=True)
+        if fault == "lost-receipt":
+            raise OSError("web rollback receipt lost after failed serving check")
+        if fault == "wrong-receipt":
+            result["to"] = "ffffffffffff-999999999999"
+        elif fault == "unknown-receipt":
+            result.pop("to", None)
+        return result
+
+    def checkout_back(sha):
+        events.append(("checkout", sha))
+        if fault == "checkout":
+            raise OSError("previous checkout could not be restored")
+        dom.checkout_detached(env["checkout"], sha)
+        return {"status": "restored"}
+
+    def restore_core(target, tag, image, **kwargs):
+        events.append(("core", image))
+        if fault == "core":
+            return {"status": "restore_failed"}
+        world.image, world.running, world.ready = image, True, True
+        if fault == "wrong-target":
+            world.web = "ffffffffffff-999999999999"
+        elif fault == "unknown-target":
+            world.web = None
+        return {"status": "unknown" if fault == "unknown-core-status" else "restored"}
+
+    monkeypatch.setattr(dom.web, "switch", switch)
+    monkeypatch.setattr(deployer, "deploy_web", lambda revision: dom.web.deploy(
+        revision, root=root, state=env["tmp"] / "web-state", releases=env["cfg"].releases,
+        base="https://unused.invalid", fetch=fetch))
+    monkeypatch.setattr(deployer, "web_switch_back", rollback)
+    monkeypatch.setattr(deployer, "_checkout_back", checkout_back)
+    monkeypatch.setattr(dom.release, "restore", restore_core)
+    monkeypatch.setattr(deployer, "image_id", lambda tag: OLD_IMAGE)
+    return events, previous_web
+
+
+def run_core_dependent_restore(env, *, recovering):
+    deployer, world = env["deployer"], env["world"]
+    sha = env["remote"].commit({"docker/core/app.py": "core with broken static mount\n"})
+    certify(env, sha)
+    if recovering:
+        st = state(env)
+        previous = {"checkout": env["base"], "core_image_id": OLD_IMAGE,
+                    "core_container_id": world.container_id, "core_pin": world.pin,
+                    "web_release": world.web}
+        st["inflight"] = {"revision": sha, "previous": previous}
+        st["candidates"][sha] = {"attempts": 1, "allowed": 2, "outcome": "deploying"}
+        deployer.save(st)
+        deployer.fetch_commit(sha)
+        dom.checkout_detached(env["checkout"], sha)
+        world.image, world.container_id = "sha256:" + "b" * 64, "b" * 64
+    return deployer.run_once()
+
+
+@pytest.mark.parametrize("recovering", [False, True])
+def test_web_failure_before_core_restore_is_rechecked_after_core_is_restored(env, monkeypatch, recovering):
+    # Without the final same-target check, a healthy restored service pauses
+    # forever on web smoke evidence gathered under the candidate core.
+    events, previous_web = core_dependent_web(env, monkeypatch)
+    result = run_core_dependent_restore(env, recovering=recovering)
+    assert result["status"] == ("interrupted" if recovering else "web_refused"), result
+    assert state(env)["inflight"] is None and not env["deployer"].paused()
+    assert env["world"].web == previous_web and env["world"].image == OLD_IMAGE
+    assert head_of(env["checkout"]) == env["base"]
+    mutations = [event[0] for event in events if event[0] in {"switch", "record", "checkout", "core"}]
+    assert mutations == ["checkout", "core"]
+    assert [event for event in events if event[0] == "rollback"] == [("rollback", previous_web)] * 2
+    restored = next(i for i, event in enumerate(events) if event[0] == "core")
+    assert any(event[0] == "fetch" and event[1] == OLD_IMAGE and event[2] == env["base"]
+               for event in events[restored + 1:])
+
+
+@pytest.mark.parametrize("recovering", [False, True])
+@pytest.mark.parametrize("fault", ["persistent-web", "core", "checkout", "wrong-target", "unknown-target",
+                                  "lost-receipt", "wrong-receipt", "unknown-receipt", "unknown-core-status"])
+def test_post_core_web_recheck_never_hides_incomplete_restoration(env, monkeypatch, recovering, fault):
+    events, previous_web = core_dependent_web(env, monkeypatch, fault=fault)
+    result = run_core_dependent_restore(env, recovering=recovering)
+    assert result["status"] == "restore_failed"
+    previous = state(env)["inflight"]["previous"]
+    assert previous["web_release"] == previous_web and env["deployer"].paused()
+    assert env["deployer"].run_once()["status"] == "paused"
+    assert not any(event[0] in {"switch", "record"} for event in events)
+    assert sum(event[0] == "core" for event in events) == 1
+    assert sum(event[0] == "checkout" for event in events) == 1
+    assert sum(event[0] == "rollback" for event in events) == (2 if fault == "persistent-web" else 1)
+
+
+@pytest.mark.parametrize("recovering", [False, True])
+def test_a_successful_web_check_does_not_repeat_after_restoring_core(env, monkeypatch, recovering):
+    events, previous_web = core_dependent_web(env, monkeypatch, fault="healthy-candidate")
+    env["world"].verify_ok = False
+    result = run_core_dependent_restore(env, recovering=recovering)
+    assert result["status"] == ("interrupted" if recovering else "verify_failed")
+    assert state(env)["inflight"] is None and not env["deployer"].paused()
+    assert [event for event in events if event[0] == "rollback"] == [("rollback", previous_web)]
+    assert not any(event[0] in {"switch", "record"} for event in events)

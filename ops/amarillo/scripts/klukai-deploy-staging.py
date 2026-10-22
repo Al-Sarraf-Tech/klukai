@@ -301,7 +301,8 @@ class StagingDeployer(dom.Deployer):
         return web.current(self.stage.webroot)
 
     def web_switch_back(self, rid: str) -> dict[str, Any]:
-        return web.rollback(rid, root=self.stage.webroot, state=self.stage.webstate, base=WEB_URL)
+        return web.rollback(rid, root=self.stage.webroot, state=self.stage.webstate, base=WEB_URL,
+                            allow_live=True)
 
     def verify(self) -> dict[str, Any]:
         ready = release.http_ready(f"{CORE_URL}/ready")

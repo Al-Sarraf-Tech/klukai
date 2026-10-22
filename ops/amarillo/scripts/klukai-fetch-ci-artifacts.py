@@ -267,19 +267,73 @@ FULL_CI_GATES = {
 }
 
 
+def _attempt_jobs(repo: str, run: dict[str, Any], token: str, api: Any) -> list[dict[str, Any]]:
+    """Read one complete, attempt-pinned jobs snapshot, never a partial page."""
+    jobs: list[dict[str, Any]] = []
+    ids: set[int] = set()
+    total: int | None = None
+    page = 1
+    while True:
+        response = api(
+            f"/repos/{repo}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs"
+            f"?per_page=100&page={page}",
+            token,
+        )
+        if not isinstance(response, dict):
+            raise ValueError("Invalid jobs response")  # noqa: TRY004 - remote evidence validation
+        count, batch = response.get("total_count"), response.get("jobs")
+        if type(count) is not int or count < 0 or not isinstance(batch, list):
+            raise ValueError("Incomplete jobs response")
+        if total is not None and count != total:
+            raise ValueError("Jobs changed while paging")
+        total = count
+        for job in batch:
+            if not isinstance(job, dict) or type(job.get("id")) is not int \
+                    or job["id"] <= 0 or job["id"] in ids:
+                raise ValueError("Missing or duplicate job identity")
+            # run_attempt is optional in GitHub's job schema. The pinned
+            # endpoint binds an absent field; a supplied value must match.
+            if type(job.get("run_id")) is not int or job["run_id"] != run["id"] \
+                    or job.get("head_sha") != run["head_sha"] \
+                    or type(job.get("run_attempt", run["run_attempt"])) is not int \
+                    or job.get("run_attempt", run["run_attempt"]) != run["run_attempt"] \
+                    or job.get("status") != "completed" or not isinstance(job.get("name"), str):
+                raise ValueError("Job evidence does not match the complete exact run attempt")
+            ids.add(job["id"])
+        jobs.extend(batch)
+        if len(batch) > 100 or len(jobs) > total:
+            raise ValueError("Jobs exceed the reported total")
+        if len(jobs) == total:
+            return jobs
+        if len(batch) < 100:
+            raise ValueError("Incomplete jobs page")
+        page += 1
+
+
 def green_run(repo: str, revision: str, token: str, api: Any = github) -> str:
     """Return '<run_id>-<attempt>' of the newest fully green CI run for the commit."""
     runs = api(
         f"/repos/{repo}/actions/workflows/ci.yml/runs?head_sha={revision}"
         "&status=success&per_page=20",
         token,
-    )["workflow_runs"]
-    for run in sorted(runs, key=lambda r: r["run_started_at"], reverse=True):
-        if run["head_sha"] != revision or run["conclusion"] != "success":
+    )
+    if not isinstance(runs, dict) or not isinstance(runs.get("workflow_runs"), list):
+        raise ValueError("Incomplete workflow runs response")  # noqa: TRY004 - remote evidence validation
+    candidates = [r for r in runs["workflow_runs"] if isinstance(r, dict)]
+    for run in sorted(candidates, key=lambda r: str(r.get("run_started_at", "")), reverse=True):
+        if run.get("head_sha") != revision or run.get("conclusion") != "success" \
+                or run.get("status") != "completed" or type(run.get("id")) is not int \
+                or run["id"] <= 0 or type(run.get("run_attempt")) is not int or run["run_attempt"] <= 0:
             continue
-        jobs = api(f"/repos/{repo}/actions/runs/{run['id']}/jobs?per_page=50", token)
-        certified = {j["name"] for j in jobs["jobs"] if j["conclusion"] == "success"}
-        if FULL_CI_GATES <= certified:
+        # A rerun can start after the runs response. Bind every gate to the
+        # same attempt whose artifacts and job logs will be relayed below.
+        try:
+            jobs = _attempt_jobs(repo, run, token, api)
+        except ValueError:
+            continue
+        gates = [j for j in jobs if j["name"] in FULL_CI_GATES]
+        certified = {j["name"] for j in gates if j.get("conclusion") == "success"}
+        if len(gates) == len(FULL_CI_GATES) and FULL_CI_GATES == certified:
             return f"{run['id']}-{run['run_attempt']}"
     raise ValueError("No successful CI run with Required CI gates for this revision")
 
@@ -313,24 +367,34 @@ def job_log(repo: str, job_id: int, token: str) -> str:
         return response.read().decode(errors="replace")
 
 
+def _successful_attempt_job(
+    repo: str, run: str, revision: str, token: str, name: str, api: Any
+) -> dict[str, Any]:
+    """Resolve one named job only after validating the complete pinned attempt."""
+    release_artifact._revision(revision)
+    if not re.fullmatch(r"[1-9][0-9]*-[1-9][0-9]*", run):
+        raise ValueError("Invalid CI run identity")
+    run_id, attempt = map(int, run.split("-"))
+    jobs = _attempt_jobs(
+        repo, {"id": run_id, "run_attempt": attempt, "head_sha": revision}, token, api
+    )
+    named = [job for job in jobs if job["name"] == name]
+    if len(named) != 1 or named[0].get("conclusion") != "success":
+        raise ValueError(f"The run has no unique successful {name} job")
+    return named[0]
+
+
 def ci_manifest_digest(
-    repo: str, run: str, token: str, api: Any = github, log: Any = job_log
+    repo: str, run: str, token: str, api: Any = github, log: Any = job_log, *, revision: str
 ) -> str:
     """The manifest SHA-256 that the run's own image-scan job printed. GitHub's
     job log is written by the run, so this binds the guest's bytes to it: a
     file written to the shared heavy guest by any other job will not match."""
-    run_id, attempt = run.split("-")
-    jobs = api(
-        f"/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=50",
-        token,
-    )["jobs"]
-    scan = [j for j in jobs if j["name"] == SCAN_JOB and j["conclusion"] == "success"]
-    if len(scan) != 1:
-        raise ValueError("The run has no successful image-scan job")
+    scan = _successful_attempt_job(repo, run, revision, token, SCAN_JOB, api)
     found = set(
         re.findall(
             r"KLUKAI_RELEASE_MANIFEST_SHA256=([0-9a-f]{64})",
-            log(repo, scan[0]["id"], token),
+            log(repo, scan["id"], token),
         )
     )
     if len(found) != 1:
@@ -422,22 +486,13 @@ def fetch_image(
 
 
 def ci_pwa_digest(
-    repo: str, run: str, token: str, api: Any = github, log: Any = job_log
+    repo: str, run: str, token: str, api: Any = github, log: Any = job_log, *, revision: str
 ) -> str:
     """The PWA tree digest the run's own frontend job printed. Runs from before
     the explicit KLUKAI_PWA_SHA256= line carry it only in the evidence tool's
     JSON summary; either way exactly one digest must appear."""
-    run_id, attempt = run.split("-")
-    jobs = api(
-        f"/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=50",
-        token,
-    )["jobs"]
-    frontend = [
-        j for j in jobs if j["name"] == FRONTEND_JOB and j["conclusion"] == "success"
-    ]
-    if len(frontend) != 1:
-        raise ValueError("The run has no successful frontend job")
-    text = log(repo, frontend[0]["id"], token)
+    frontend = _successful_attempt_job(repo, run, revision, token, FRONTEND_JOB, api)
+    text = log(repo, frontend["id"], token)
     found = set(re.findall(r"KLUKAI_PWA_SHA256=([0-9a-f]{64})", text))
     found |= set(re.findall(r'"pwa_sha256": "([0-9a-f]{64})"', text))
     if len(found) != 1:
@@ -839,7 +894,7 @@ def _run(args: argparse.Namespace, guest: Guest) -> int:
                 run,
                 args.revision,
                 args.dest / args.revision,
-                manifest_sha256=ci_manifest_digest(args.repo, run, token),
+                manifest_sha256=ci_manifest_digest(args.repo, run, token, revision=args.revision),
                 key=args.signing_key,
             )
         else:
@@ -848,7 +903,7 @@ def _run(args: argparse.Namespace, guest: Guest) -> int:
                 run,
                 args.revision,
                 args.dest / args.revision / "web",
-                pwa_sha256=ci_pwa_digest(args.repo, run, token),
+                pwa_sha256=ci_pwa_digest(args.repo, run, token, revision=args.revision),
                 key=args.signing_key,
             )
     elif args.command == "archive":

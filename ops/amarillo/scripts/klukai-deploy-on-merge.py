@@ -406,14 +406,15 @@ class Deployer:
         if core:
             out["core"] = relay.fetch_image(
                 guest, run, head, self.cfg.releases / head,
-                manifest_sha256=relay.ci_manifest_digest(self.cfg.repo, run, self.token,
-                                                         self.api_for_relay, self.job_log),
+                manifest_sha256=relay.ci_manifest_digest(
+                    self.cfg.repo, run, self.token, self.api_for_relay, self.job_log, revision=head),
                 key=self.cfg.signing_key)
         if core_only:
             return {**out, **core_only}
         out["web"] = relay.fetch_web(
             guest, run, head, self.cfg.releases / head / "web",
-            pwa_sha256=relay.ci_pwa_digest(self.cfg.repo, run, self.token, self.api_for_relay, self.job_log),
+            pwa_sha256=relay.ci_pwa_digest(
+                self.cfg.repo, run, self.token, self.api_for_relay, self.job_log, revision=head),
             key=self.cfg.signing_key)
         return out
 
@@ -549,10 +550,12 @@ class Deployer:
         target = self.core_target()
         previous = {
             "checkout": git(self.cfg.checkout, "rev-parse", "HEAD"),
-            "core_image_id": target.inspect("{{.Image}}"),
+            **self._core_observation(target),
             "core_pin": target.read_pin(),
             "web_release": self.web_current(),
         }
+        if not previous["core_running"]:
+            raise Refused("current core is not running; cannot establish a recovery baseline")
         st["inflight"] = {"revision": head, "previous": previous, "started_at": now()}
         st["candidates"][head] = {**record, "attempts": attempts, "outcome": "deploying", "at": now(),
                                   "allowed": max(record.get("allowed", 0), self.cfg.max_attempts)}
@@ -575,23 +578,32 @@ class Deployer:
     def steps(self, head: str, doc: dict[str, Any], core: bool, accept: bool,
               plans: dict[str, str] | None, changed: dict[str, Any]) -> str:
         """The production changes, in order; returns the outcome."""
-        checkout_detached(self.cfg.checkout, head)
+        # The subprocess may finish changing HEAD before an interrupt reaches
+        # its caller. Record intent first so every escape restores the snapshot.
         changed["checkout"] = True
+        checkout_detached(self.cfg.checkout, head)
         if core:
+            # A nested deploy can change production and then escape before
+            # returning its receipt (for example, while pruning). Restore
+            # from the durable snapshot even when no result reached us.
+            changed["core_pending"] = True
             try:
                 doc["core"] = self.deploy_core(head, accept, plans)
             except (release.ReleaseError, ValueError, OSError, subprocess.SubprocessError) as error:
-                # klukai-release refuses only before its pin switch.
                 doc["core"] = {"status": "refused", "error": str(error)[:300]}
                 return "core_refused"
-            status = doc["core"].get("rollout", {}).get("status")
+            rollout = doc["core"].get("rollout", {})
+            status = rollout.get("status")
+            if rollout:
+                # Even its successful rollback used the candidate compose
+                # file. Recreate again only after restoring the checkout.
+                changed["core"] = rollout
             if status != "deployed":
                 return status or "core_refused"
-            changed["core"] = doc["core"]["rollout"]
+        changed["web_pending"] = True
         try:
             doc["web"] = self.deploy_web(head)
         except (web.WebError, ValueError, OSError) as error:
-            # The web release refuses only before its switch.
             doc["web"] = {"status": "refused", "error": str(error)[:300]}
             return "web_refused"
         if doc["web"]["status"] == "rolled_back":
@@ -618,7 +630,11 @@ class Deployer:
                 outcome = "restore_failed"
         doc.update(outcome=outcome, finished_at=now())
         st = self.load()
-        st["inflight"] = None
+        # As in recover(), keep the snapshot until restoration is confirmed.
+        # Resuming after an incomplete restore must retry that recovery, not
+        # start a new candidate from partially changed production.
+        if outcome != "restore_failed":
+            st["inflight"] = None
         record = st["candidates"].get(head, {})
         st["candidates"][head] = {**record, "outcome": outcome, "at": now()}
         if outcome == "deployed":
@@ -648,7 +664,11 @@ class Deployer:
         restarts with the previous compose file and config), then core."""
         out: dict[str, Any] = {}
         if changed.get("web"):
-            out["web"] = self._guard("web", lambda: self.web_switch_back(changed["web"]))
+            out["web"] = self._guard("web", lambda: self._web_back(changed["web"]))
+        elif changed.get("web_pending"):
+            # A nested rollback may restore the pointer but fail serving,
+            # then escape before returning its receipt. Equality is not health.
+            out["web"] = self._guard("web", lambda: self._web_back(previous.get("web_release")))
         if changed.get("checkout") and previous.get("checkout"):
             out["checkout"] = self._guard("checkout", lambda: self._checkout_back(previous["checkout"]))
         if "core" in changed:
@@ -656,6 +676,9 @@ class Deployer:
             out["core"] = self._guard("core", lambda: release.restore(
                 self.core_target(), rollout["rollback_tag"], rollout["previous_image_id"],
                 ready_timeout=self.cfg.ready_timeout))
+        elif changed.get("core_pending"):
+            out["core"] = self._guard("core", lambda: self._core_back(previous))
+        self._recheck_web_after_core(previous, out)
         return out
 
     def _checkout_back(self, sha: str) -> dict[str, str]:
@@ -678,13 +701,15 @@ class Deployer:
         doc: dict[str, Any] = {"revision": head, "recovered_at": now(), "previous": previous,
                                "started_at": inflight.get("started_at")}
         out: dict[str, Any] = {}
-        if previous.get("web_release") and self.web_current() != previous["web_release"]:
-            out["web"] = self._guard("web", lambda: self.web_switch_back(previous["web_release"]))
+        # A failed rollback can leave the right pointer but fail its serving
+        # checks. allow_live=True re-verifies it before clearing recovery intent.
+        out["web"] = self._guard("web", lambda: self._web_back(previous.get("web_release")))
         out["checkout"] = self._guard("checkout", lambda: (
             self._checkout_back(previous["checkout"])
             if git(self.cfg.checkout, "rev-parse", "HEAD") != previous["checkout"]
             else {"status": "unchanged"}))
         out["core"] = self._guard("core", lambda: self._core_back(previous))
+        self._recheck_web_after_core(previous, out)
         doc["restore"] = out
         failed = any(v.get("status", "").endswith("failed") for v in out.values())
         outcome = "restore_failed" if failed else "interrupted"
@@ -707,19 +732,68 @@ class Deployer:
             self.notify(f"{head[:12]} was interrupted mid-deployment; previous production restored")
         return {"status": outcome, "revision": head, "receipt": doc["receipt"]}
 
+    def _recheck_web_after_core(self, previous: dict[str, Any], out: dict[str, Any]) -> None:
+        # Web smoke runs through core. A same-pointer check made before the
+        # old core is restored may fail only because the candidate mount is
+        # broken. Re-check after a successful restore, without another switch.
+        rid, evidence = previous.get("web_release"), out.get("web", {})
+        if evidence.get("status") != "rollback_failed" \
+                or out.get("checkout", {}).get("status") not in {"restored", "unchanged"} \
+                or out.get("core", {}).get("status") != "restored" \
+                or not isinstance(rid, str) or not web.RELEASE_ID.fullmatch(rid) \
+                or evidence.get("from") != rid or evidence.get("to") != rid:
+            return
+
+        def recheck() -> dict[str, Any]:
+            if self.web_current() != rid:
+                return evidence  # a wrong/unknown pointer is not safe to re-check
+            return self._web_back(rid)
+
+        out["web"] = self._guard("web", recheck)
+
+    def _web_back(self, rid: Any) -> dict[str, Any]:
+        # rollback(None/empty) means saved.previous, not the captured baseline.
+        # Use the web API's own identity grammar, including adopted releases.
+        if not isinstance(rid, str) or not web.RELEASE_ID.fullmatch(rid):
+            raise Refused("recovery snapshot has no valid explicit web release identity")
+        return self.web_switch_back(rid)
+
+    @staticmethod
+    def _core_observation(target: Any, *, allow_absent: bool = False) -> dict[str, Any] | None:
+        # One inspect avoids pairing an image with another container's ID.
+        raw = target.inspect("{{.Id}} {{.Image}} {{.State.Running}}")
+        # Empty inspect also covers daemon/access errors. Only recovery may
+        # establish absence via a separate successful, validated full listing.
+        # Nonempty malformed identity data must never take this fallback.
+        if raw == "" and allow_absent and target.container_absent() is True:
+            return None
+        observed = raw.split() if isinstance(raw, str) else []
+        if len(observed) != 3 or not re.fullmatch(r"[0-9a-f]{64}", observed[0]) \
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", observed[1]) \
+                or observed[2] not in {"true", "false"}:
+            raise Refused("cannot establish current core container/image identity")
+        return {"core_container_id": observed[0], "core_image_id": observed[1],
+                "core_running": observed[2] == "true"}
+
     def _core_back(self, previous: dict[str, Any]) -> dict[str, Any]:
         """The previous image running under the previous pin."""
         target = self.core_target()
         image, pin = previous.get("core_image_id"), previous.get("core_pin")
-        if not image:
-            return {"status": "unchanged"}
-        if target.inspect("{{.Image}}") != image:
+        if not isinstance(image, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+            raise Refused("recovery snapshot has no valid core image identity")
+        live = self._core_observation(target, allow_absent=True)
+        # Same image is not same configuration: a nested rollback may have
+        # recreated it using candidate compose, or stopped it before escaping.
+        # Legacy snapshots without a container ID cannot prove it untouched.
+        if live is None or live["core_image_id"] != image \
+                or live["core_container_id"] != previous.get("core_container_id") \
+                or not live["core_running"] or not target.ready():
             tag = pin if pin and self.image_id(pin) == image \
                 else f"{target.rollback_repo}:rollback-recover-{image[7:19]}"
             if tag != pin:
                 release.run(["docker", "tag", image, tag])
             return release.restore(target, tag, image, ready_timeout=self.cfg.ready_timeout)
-        if pin and target.read_pin() != pin:
+        if target.read_pin() != pin:
             target.write_pin(pin)  # killed between the pin switch and the recreate
             return {"status": "pin_restored"}
         return {"status": "unchanged"}

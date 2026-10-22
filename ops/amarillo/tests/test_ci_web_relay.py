@@ -126,8 +126,10 @@ def test_web_provenance_is_signed_and_verifies(tmp_path):
 def jobs_api(conclusion: str = "success"):
     def api(path: str, token: str) -> dict:
         assert "/runs/9/attempts/1/jobs" in path
-        return {"jobs": [{"id": 4, "name": "Lint", "conclusion": "success"},
-                         {"id": 8, "name": relay.FRONTEND_JOB, "conclusion": conclusion}]}
+        common = {"run_id": 9, "head_sha": REV, "status": "completed"}
+        return {"total_count": 2,
+                "jobs": [{**common, "id": 4, "name": "Lint", "conclusion": "success"},
+                         {**common, "id": 8, "name": relay.FRONTEND_JOB, "conclusion": conclusion}]}
     return api
 
 
@@ -139,16 +141,17 @@ def test_the_pwa_digest_comes_from_the_runs_own_frontend_job():
         seen["job"] = job_id
         return f'python3 -c ... "$verified"\n{{"pwa_sha256": "{digest}", "revision": "{REV}"}}\nKLUKAI_PWA_SHA256={digest}\n'
 
-    assert relay.ci_pwa_digest("o/r", RUN, "tok", jobs_api(), log) == digest
+    assert relay.ci_pwa_digest("o/r", RUN, "tok", jobs_api(), log, revision=REV) == digest
     assert seen["job"] == 8
 
 
 @pytest.mark.parametrize("text", ["nothing here", f"KLUKAI_PWA_SHA256={'a' * 64}\nKLUKAI_PWA_SHA256={'b' * 64}\n"])
 def test_a_missing_or_ambiguous_pwa_digest_is_refused(text):
     with pytest.raises(ValueError):
-        relay.ci_pwa_digest("o/r", RUN, "tok", jobs_api(), lambda *a: text)
+        relay.ci_pwa_digest("o/r", RUN, "tok", jobs_api(), lambda *a: text, revision=REV)
 
 
 def test_a_failed_frontend_job_cannot_supply_a_digest():
     with pytest.raises(ValueError):
-        relay.ci_pwa_digest("o/r", RUN, "tok", jobs_api("failure"), lambda *a: f"KLUKAI_PWA_SHA256={'a' * 64}")
+        relay.ci_pwa_digest("o/r", RUN, "tok", jobs_api("failure"),
+                            lambda *a: f"KLUKAI_PWA_SHA256={'a' * 64}", revision=REV)

@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import signal
 import subprocess
@@ -345,6 +346,33 @@ class Target:
             text=True,
         )
         return result.stdout.strip() if result.returncode == 0 else ""
+
+    def container_absent(self) -> bool:
+        """Confirm absence from a successful full listing, not a failed inspect."""
+        result = subprocess.run(
+            ["docker", "container", "ls", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}}"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if result.returncode != 0 or not isinstance(result.stdout, str):
+            raise ReleaseError("cannot establish container absence")
+        ids: set[str] = set()
+        names: set[str] = set()
+        for row in result.stdout.splitlines():
+            fields = row.split()
+            if len(fields) != 2 or not re.fullmatch(r"[0-9a-f]{64}", fields[0]) or fields[0] in ids:
+                raise ReleaseError("malformed container listing cannot establish absence")
+            # --no-trunc includes comma-separated legacy parent/link aliases
+            # alongside the one primary name. Only exact names match the target.
+            listed = fields[1].split(",")
+            component = r"[a-zA-Z0-9][a-zA-Z0-9_.-]*"
+            if sum("/" not in name for name in listed) != 1 \
+                    or len(set(listed)) != len(listed) \
+                    or any(not re.fullmatch(rf"{component}(?:/{component})?", name)
+                           or name in names for name in listed):
+                raise ReleaseError("malformed container names cannot establish absence")
+            ids.add(fields[0])
+            names.update(listed)
+        return self.container not in names
 
     def write_pin(self, image: str | None) -> None:
         if image is None:

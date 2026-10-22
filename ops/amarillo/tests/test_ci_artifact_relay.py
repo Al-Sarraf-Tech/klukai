@@ -178,7 +178,10 @@ class GreenRunTests(unittest.TestCase):
         def call(path: str, token: str) -> dict:
             self.assertEqual(token, "tok")
             if "/jobs" in path:
-                return {"jobs": jobs[path.split("/runs/")[1].split("/")[0]]}
+                run_id = int(path.split("/runs/")[1].split("/")[0])
+                rows = [{"id": index, "run_id": run_id, "head_sha": REV, "status": "completed", **job}
+                        for index, job in enumerate(jobs[str(run_id)], 1)]
+                return {"jobs": rows, "total_count": len(rows)}
             return {"workflow_runs": runs}
 
         return call
@@ -190,6 +193,7 @@ class GreenRunTests(unittest.TestCase):
                 "run_attempt": 1,
                 "head_sha": REV,
                 "conclusion": "success",
+                "status": "completed",
                 "run_started_at": "2026-10-17T01:00:00Z",
             },
             {
@@ -197,6 +201,7 @@ class GreenRunTests(unittest.TestCase):
                 "run_attempt": 2,
                 "head_sha": REV,
                 "conclusion": "success",
+                "status": "completed",
                 "run_started_at": "2026-10-17T02:00:00Z",
             },
         ]
@@ -217,6 +222,7 @@ class GreenRunTests(unittest.TestCase):
                 "run_attempt": 1,
                 "head_sha": REV,
                 "conclusion": "success",
+                "status": "completed",
                 "run_started_at": "2026-10-17T01:00:00Z",
             }
         ]
@@ -258,10 +264,12 @@ class FetchImageTests(unittest.TestCase):
 
     def test_the_ci_logged_digest_is_read_from_the_runs_own_scan_job(self) -> None:
         digest = "a" * 64
+        common = {"run_id": 9, "head_sha": REV, "status": "completed"}
         jobs = {
+            "total_count": 2,
             "jobs": [
-                {"id": 5, "name": "Lint", "conclusion": "success"},
-                {"id": 7, "name": "Image Scan (trivy)", "conclusion": "success"},
+                {**common, "id": 5, "name": "Lint", "conclusion": "success"},
+                {**common, "id": 7, "name": "Image Scan (trivy)", "conclusion": "success"},
             ]
         }
         seen = {}
@@ -278,12 +286,12 @@ class FetchImageTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            relay.ci_manifest_digest("o/r", "9-2", "tok", api, log), digest
+            relay.ci_manifest_digest("o/r", "9-2", "tok", api, log, revision=REV), digest
         )
         self.assertIn("/runs/9/attempts/2/jobs", seen["path"])
         self.assertEqual(seen["job"], 7)
         with self.assertRaises(ValueError):
-            relay.ci_manifest_digest("o/r", "9-2", "tok", api, lambda *a: "nothing")
+            relay.ci_manifest_digest("o/r", "9-2", "tok", api, lambda *a: "nothing", revision=REV)
 
     def test_tampered_material_stops_before_the_image_transfer(self) -> None:
         base = f"/opt/klukai-ci/artifacts/{REV}/9-1/release"
@@ -540,15 +548,17 @@ def test_routine_or_incomplete_success_never_certifies_a_release():
         "run_attempt": 1,
         "head_sha": REV,
         "conclusion": "success",
+        "status": "completed",
         "run_started_at": "2026-10-17T01:00:00Z",
     }
     jobs = [
-        {"name": "Affected CI gates", "conclusion": "success"},
-        {"name": "Required CI gates", "conclusion": "success"},
+        {"id": index, "run_id": 1, "head_sha": REV, "status": "completed",
+         "name": name, "conclusion": "success"}
+        for index, name in enumerate(["Affected CI gates", "Required CI gates"], 1)
     ]
 
     def api(path, token):
-        return {"jobs": jobs} if "/jobs" in path else {"workflow_runs": [run]}
+        return {"jobs": jobs, "total_count": len(jobs)} if "/jobs" in path else {"workflow_runs": [run]}
 
     with pytest.raises(ValueError, match="successful CI run"):
         relay.green_run("o/r", REV, "tok", api)
@@ -560,18 +570,177 @@ def test_even_fully_green_ci_for_another_revision_is_rejected():
         "run_attempt": 1,
         "head_sha": "b" * 40,
         "conclusion": "success",
+        "status": "completed",
         "run_started_at": "2026-10-17T01:00:00Z",
     }
 
     def api(path, token):
         if "/jobs" in path:
-            return {
-                "jobs": [
-                    {"name": name, "conclusion": "success"}
-                    for name in relay.FULL_CI_GATES
-                ]
-            }
+            raise AssertionError("a different revision must be refused before reading its jobs")
         return {"workflow_runs": [run]}
 
     with pytest.raises(ValueError):
         relay.green_run("o/r", REV, "tok", api)
+
+
+def test_certification_does_not_mix_a_run_snapshot_with_a_later_attempt():
+    """A rerun starting between API calls cannot certify the earlier artifacts."""
+    run = {"id": 1, "run_attempt": 1, "head_sha": REV, "conclusion": "success",
+           "status": "completed", "run_started_at": "2026-10-17T01:00:00Z"}
+    full = [{"id": index, "run_id": 1, "head_sha": REV, "status": "completed",
+             "name": name, "conclusion": "success"}
+            for index, name in enumerate(sorted(relay.FULL_CI_GATES), 1)]
+    earlier = [{**job, "conclusion": "skipped"} if job["name"] == "Required CI gates" else job
+               for job in full]
+
+    def api(path, token):
+        if "/jobs" not in path:
+            return {"workflow_runs": [run]}
+        if "/attempts/1/jobs" in path:
+            return {"jobs": earlier, "total_count": len(earlier)}
+        return {"jobs": full, "total_count": len(full)}  # unpinned endpoint now returns attempt 2
+
+    with pytest.raises(ValueError, match="successful CI run"):
+        relay.green_run("o/r", REV, "tok", api)
+
+
+def test_certification_reads_the_pinned_attempt_even_when_the_latest_is_pending():
+    run = {"id": 1, "run_attempt": 1, "head_sha": REV, "conclusion": "success",
+           "status": "completed", "run_started_at": "2026-10-17T01:00:00Z"}
+
+    def api(path, token):
+        if "/jobs" not in path:
+            return {"workflow_runs": [run]}
+        if "/attempts/1/jobs" in path:
+            return {"jobs": [{"id": index, "run_id": 1, "head_sha": REV, "status": "completed",
+                              "name": name, "conclusion": "success"}
+                             for index, name in enumerate(sorted(relay.FULL_CI_GATES), 1)],
+                    "total_count": len(relay.FULL_CI_GATES)}
+        return {"jobs": [], "total_count": 0}  # attempt 2 has just started
+
+    assert relay.green_run("o/r", REV, "tok", api) == "1-1"
+
+
+def certifying_run():
+    return {"id": 9, "run_attempt": 2, "head_sha": REV, "conclusion": "success",
+            "status": "completed", "run_started_at": "2026-10-17T01:00:00Z"}
+
+
+def certifying_jobs():
+    return [{"id": index, "run_id": 9, "run_attempt": 2, "head_sha": REV,
+             "name": name, "status": "completed", "conclusion": "success"}
+            for index, name in enumerate(sorted(relay.FULL_CI_GATES), 1)]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("run_id", 10), ("run_attempt", 1), ("head_sha", "b" * 40),
+    ("run_id", None), ("run_attempt", None), ("head_sha", None),
+    ("status", "in_progress"), ("conclusion", "skipped"),
+])
+def test_gate_evidence_must_match_the_complete_exact_run_attempt(field, value):
+    jobs = certifying_jobs()
+    jobs[0][field] = value
+
+    def api(path, token):
+        return {"jobs": jobs, "total_count": len(jobs)} if "/jobs" in path else {
+            "workflow_runs": [certifying_run()]}
+
+    with pytest.raises(ValueError, match="successful CI run"):
+        relay.green_run("o/r", REV, "tok", api)
+
+
+@pytest.mark.parametrize("total", [None, 0, len(relay.FULL_CI_GATES) + 1])
+def test_an_incomplete_gate_response_cannot_certify_a_run(total):
+    jobs = certifying_jobs()
+
+    def api(path, token):
+        return {"jobs": jobs, "total_count": total} if "/jobs" in path else {
+            "workflow_runs": [certifying_run()]}
+
+    with pytest.raises(ValueError, match="successful CI run"):
+        relay.green_run("o/r", REV, "tok", api)
+
+
+def test_matching_complete_evidence_certifies_the_exact_attempt():
+    jobs = certifying_jobs()
+
+    def api(path, token):
+        return {"jobs": jobs, "total_count": len(jobs)} if "/jobs" in path else {
+            "workflow_runs": [certifying_run()]}
+
+    assert relay.green_run("o/r", REV, "tok", api) == "9-2"
+
+
+def test_the_pinned_endpoint_does_not_require_the_optional_job_attempt_field():
+    jobs = certifying_jobs()
+    for job in jobs:
+        del job["run_attempt"]
+
+    def api(path, token):
+        return {"jobs": jobs, "total_count": len(jobs)} if "/jobs" in path else {
+            "workflow_runs": [certifying_run()]}
+
+    assert relay.green_run("o/r", REV, "tok", api) == "9-2"
+
+
+def paginated_jobs_api(jobs, *, second_page=None, second_total=None):
+    def api(path, token):
+        if "/jobs" not in path:
+            return {"workflow_runs": [certifying_run()]}
+        from urllib.parse import parse_qs, urlsplit
+        query = parse_qs(urlsplit(path).query)
+        page, size = int(query.get("page", ["1"])[0]), int(query["per_page"][0])
+        if page == 2 and second_page is not None:
+            return {"jobs": second_page, "total_count": len(jobs) if second_total is None else second_total}
+        return {"jobs": jobs[(page - 1) * size:page * size], "total_count": len(jobs)}
+    return api
+
+
+def many_certifying_jobs():
+    jobs = certifying_jobs()
+    return [{**jobs[0], "id": 1000 + index, "name": f"extra-{index}"} for index in range(100)] + jobs
+
+
+def test_all_pages_of_the_exact_attempt_are_checked_before_certifying():
+    assert relay.green_run("o/r", REV, "tok", paginated_jobs_api(many_certifying_jobs())) == "9-2"
+
+
+@pytest.mark.parametrize("fault", ["empty", "duplicate", "changed-total"])
+def test_torn_or_repeated_job_pages_cannot_certify(fault):
+    jobs = many_certifying_jobs()
+    if fault == "empty":
+        api = paginated_jobs_api(jobs, second_page=[])
+    elif fault == "duplicate":
+        api = paginated_jobs_api(jobs, second_page=jobs[:len(relay.FULL_CI_GATES)])
+    else:
+        api = paginated_jobs_api(jobs, second_page=jobs[100:], second_total=len(jobs) + 1)
+    with pytest.raises(ValueError):
+        relay.green_run("o/r", REV, "tok", api)
+
+
+def test_an_ambiguous_gate_name_cannot_hide_a_failed_copy():
+    jobs = certifying_jobs()
+    jobs.append({**jobs[0], "id": 100, "conclusion": "failure"})
+    with pytest.raises(ValueError):
+        relay.green_run("o/r", REV, "tok", paginated_jobs_api(jobs))
+
+
+@pytest.mark.parametrize("name", sorted(relay.FULL_CI_GATES))
+def test_every_full_ci_gate_is_required(name):
+    jobs = [job for job in certifying_jobs() if job["name"] != name]
+    with pytest.raises(ValueError):
+        relay.green_run("o/r", REV, "tok", paginated_jobs_api(jobs))
+
+
+@pytest.mark.parametrize("field", ["id", "run_id", "head_sha", "name", "status", "conclusion"])
+def test_a_required_job_field_cannot_be_missing(field):
+    jobs = certifying_jobs()
+    del jobs[0][field]
+    with pytest.raises(ValueError):
+        relay.green_run("o/r", REV, "tok", paginated_jobs_api(jobs))
+
+
+@pytest.mark.parametrize("response", [None, {}, {"workflow_runs": None}, {"workflow_runs": [None]}])
+def test_incomplete_run_responses_fail_closed(response):
+    with pytest.raises(ValueError):
+        relay.green_run("o/r", REV, "tok", lambda *args: response)

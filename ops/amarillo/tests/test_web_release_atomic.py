@@ -357,3 +357,78 @@ def test_a_failure_recording_the_switch_switches_back(site, monkeypatch):
     doc = web.deploy(REV_B, fetch=Server(site["root"]), **site["kw"])
     assert doc["status"] == "rolled_back"
     assert web.current(site["root"]) == site["adopted"]
+
+
+def test_same_pwa_metadata_does_not_hide_a_corrupt_live_tree(site):
+    relayed(site["releases"], REV_B, "new", site["key"])
+    deployed = web.deploy(REV_B, fetch=Server(site["root"]), **site["kw"])
+    live = web.tree(site["root"], deployed["release"])
+    main = next(name for name in web.entry_files(live) if name.startswith("main.dart."))
+    (live / main).write_text("corrupted after deployment\n")
+    relayed(site["releases"], "c" * 40, "new", site["key"])
+    with pytest.raises(web.WebError, match="provenance"):
+        web.deploy("c" * 40, fetch=Server(site["root"]), **site["kw"])
+    assert web.current(site["root"]) == deployed["release"]
+
+
+@pytest.mark.parametrize("has_metadata", [True, False])
+def test_an_unchanged_pwa_still_checks_the_new_cores_static_serving(site, monkeypatch, has_metadata):
+    relayed(site["releases"], REV_B, "new", site["key"])
+    deployed = web.deploy(REV_B, fetch=Server(site["root"]), **site["kw"])
+    if not has_metadata:
+        saved = web._load(site["state"])
+        saved["releases"][deployed["release"]].pop("tree_sha256")
+        web._save(site["state"], saved)
+    monkeypatch.setattr(web.time, "sleep", lambda s: None)
+    with pytest.raises(web.WebError, match="did not serve"):
+        web.deploy(REV_B, fetch=Server(site["root"], broken={"login.html"}), **site["kw"])
+    assert web.current(site["root"]) == deployed["release"]
+
+
+@pytest.mark.parametrize("prefix", ["main.dart.", "flutter_bootstrap."])
+@pytest.mark.parametrize("has_metadata", [True, False])
+def test_an_unchanged_pwa_refuses_corrupted_carried_entry_bytes(site, prefix, has_metadata):
+    old_entries = web.entry_files(web.tree(site["root"], site["adopted"]))
+    relayed(site["releases"], REV_B, "new", site["key"])
+    deployed = web.deploy(REV_B, fetch=Server(site["root"]), **site["kw"])
+    carried = next(name for name in old_entries if name.startswith(prefix))
+    (web.tree(site["root"], deployed["release"]) / carried).write_text("corrupted carried JavaScript\n")
+    revision = REV_B
+    if has_metadata:
+        revision = "c" * 40
+        relayed(site["releases"], revision, "new", site["key"])
+    else:
+        saved = web._load(site["state"])
+        saved["releases"][deployed["release"]].pop("tree_sha256")
+        web._save(site["state"], saved)
+    with pytest.raises(web.WebError, match="filename"):
+        web.deploy(revision, fetch=Server(site["root"]), **site["kw"])
+    assert web.current(site["root"]) == deployed["release"]
+
+
+@pytest.mark.parametrize("prefix", ["main.dart.", "flutter_bootstrap."])
+def test_a_corrupt_entry_is_not_carried_into_a_forward_release(site, prefix):
+    root = site["root"]
+    previous = web.current(root)
+    live = web.tree(root, previous)
+    name = next(name for name in web.entry_files(live) if name.startswith(prefix))
+    (live / name).write_text("corrupted legacy entry before deploy\n")
+    before = inventory(live)
+    relayed(site["releases"], REV_B, "new", site["key"])
+    with pytest.raises(web.WebError, match="filename"):
+        web.deploy(REV_B, fetch=Server(root), **site["kw"])
+    assert web.current(root) == previous
+    assert inventory(live) == before
+
+
+@pytest.mark.parametrize("prefix", ["main.dart.", "flutter_bootstrap."])
+def test_adoption_refuses_inconsistent_legacy_cache_names_without_rewriting(tmp_path, prefix):
+    source = bundle(tmp_path / "legacy", "legacy")
+    name = next(name for name in web.entry_files(source) if name.startswith(prefix))
+    (source / name).write_text("legacy bytes do not match their cache name\n")
+    before = inventory(source)
+    root = tmp_path / "root"
+    with pytest.raises(web.WebError, match="filename"):
+        web.adopt(source, root=root, state=tmp_path / "state")
+    assert inventory(source) == before
+    assert not root.exists()
