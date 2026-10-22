@@ -163,7 +163,11 @@ companion-core once.
    branch.
 
 2. **Create the read-only token** in GitHub settings. This is the owner's
-   action, and it is free.
+   action, and it is free. Until it exists, the deployer reads the owner's
+   existing GitHub CLI login at runtime (`gh auth token`). That is broader
+   than read-only, so `status` reports `token_source`. It is held in memory
+   only, never stored and never logged, the same as manual releases already
+   do.
    - Type: fine-grained personal access token.
    - Resource owner: `Al-Sarraf-Tech`.
    - Repository access: *Public repositories (read-only)*, or only
@@ -190,30 +194,21 @@ companion-core once.
    - keep it under your account and set `require_approved_pr` to false. Branch
      protection is then the only approval gate.
 
-5. **Move the web root and pin the deployer:**
+5. **Move the web root and pin the deployer.** Do this in this order. Until
+   `activate` succeeds, `web-build/` is what core serves, so leave it untouched.
 
    ```sh
    cd ~/git/klukai && git fetch -q origin && git checkout --detach origin/main   # deployer owns this checkout from now on
-   git restore web-build/index.html          # local copy of a no-longer-served file
    M=$(git rev-parse HEAD)
    python3 ops/amarillo/scripts/klukai-deploy-on-merge.py install --revision "$M"
    D=~/.local/share/klukai/deployer/current/ops/amarillo/scripts
-   python3 $D/klukai_web_release.py adopt --from ~/git/klukai/web-build   # nothing served changes
+   python3 $D/klukai_web_release.py adopt --from ~/git/klukai/web-build   # copies what is served; nothing changes
+   python3 $D/klukai_web_release.py activate     # one core recreate onto the identical files; rolls back on failure
+   git -C ~/git/klukai restore web-build/index.html   # only now: web-build/ is no longer served
    ```
 
-   Before `adopt`, rebuild `web-build` once from this commit, so the adopted
-   release matches what is served:
-
-   ```sh
-   ./scripts/deploy-web.sh
-   ```
-
-   Then switch the mount. This recreates core once and rolls back
-   automatically on failure:
-
-   ```sh
-   python3 $D/klukai_web_release.py activate
-   ```
+   The first automatic deploy then replaces the adopted files with the
+   CI-built PWA of main's head, atomically.
 
 6. **Baseline and settings:**
 

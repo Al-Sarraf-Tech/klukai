@@ -173,13 +173,27 @@ def git(repo: Path, *args: str, check: bool = True) -> str:
     return result.stdout.strip()
 
 
-def github_token() -> str:
+def github_token() -> tuple[str, str]:
+    """(token, source). The dedicated read-only credential when it exists.
+
+    Until the owner creates it, the owner's existing GitHub CLI login is read
+    at runtime (`gh auth token`), as manual releases already do: in memory
+    only, never stored, never logged. It is broader than read-only, so status
+    reports which source is in use."""
     import klukai_secrets
 
     try:
-        return klukai_secrets.decrypt(TOKEN_NAME).decode().strip()
-    except (klukai_secrets.SecretError, UnicodeError) as error:
-        raise Refused(f"deployer GitHub token unavailable: {error}") from error
+        return klukai_secrets.decrypt(TOKEN_NAME).decode().strip(), TOKEN_NAME
+    except (klukai_secrets.SecretError, UnicodeError):
+        pass
+    try:
+        found = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise Refused(f"no deployer GitHub token: {type(error).__name__}") from error
+    token = found.stdout.strip()
+    if found.returncode or not token:
+        raise Refused("no deployer GitHub token: create deployer-github-token (see runbook)")
+    return token, "gh auth token (interim)"
 
 
 class Deployer:
@@ -194,10 +208,12 @@ class Deployer:
 
     # ── external effects (substituted in staging and tests) ─────────────────
 
+    token_source = "injected"
+
     @property
     def token(self) -> str:
         if self._token is None:
-            self._token = github_token()
+            self._token, self.token_source = github_token()
         return self._token
 
     def api(self, path: str) -> Any:
@@ -762,7 +778,8 @@ def main() -> int:
             doc = {"paused": deployer.paused(), "deployed": st.get("deployed"),
                    "inflight": st.get("inflight"), "candidates": st["candidates"],
                    "config": {f.name: str(getattr(cfg, f.name)) for f in fields(cfg)},
-                   "code": str(CODE), "web": web.status()}
+                   "code": str(CODE), "web": web.status(),
+                   "token_source": github_token()[1]}
         elif args.command == "install":
             doc = install(args.revision, cfg)
         elif args.command == "pause":

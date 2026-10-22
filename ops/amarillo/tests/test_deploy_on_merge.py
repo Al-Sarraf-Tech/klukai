@@ -593,3 +593,22 @@ def test_a_migration_plan_counts_only_through_an_approved_pr(env, monkeypatch):
         deployer.irreversible("m" * 40)
     deployer.api = Api([pr()], [review("jalsarraf0")])
     assert deployer.irreversible("m" * 40) == (True, {"docker/core/migrations/240_x.sql": "p"})
+
+
+
+def test_the_token_prefers_the_dedicated_credential_then_the_gh_login(monkeypatch):
+    import klukai_secrets
+
+    monkeypatch.setattr(klukai_secrets, "decrypt", lambda name: b"dedicated\n")
+    assert dom.github_token() == ("dedicated", "deployer-github-token")
+
+    def missing(name):
+        raise klukai_secrets.SecretError("missing")
+
+    monkeypatch.setattr(klukai_secrets, "decrypt", missing)
+    monkeypatch.setattr(dom.subprocess, "run",
+                        lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "gho_interim\n", ""))
+    assert dom.github_token() == ("gho_interim", "gh auth token (interim)")
+    monkeypatch.setattr(dom.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", "no"))
+    with pytest.raises(dom.Refused, match="no deployer GitHub token"):
+        dom.github_token()
