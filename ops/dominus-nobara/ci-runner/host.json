@@ -10,6 +10,12 @@
   "token_source": "gh-cli",
   "heartbeat_variable": "KLUKAI_CI_DOMINUS_HEARTBEAT",
   "gaming_marker": "/run/user/1000/dominus-gpu/game-active",
-  "quiet_hours": [23, 8],
-  "record_days": 2
+  "quiet_hours": [
+    23,
+    8
+  ],
+  "record_days": 2,
+  "start_below_c": 80,
+  "pause_at_c": 90,
+  "resume_below_c": 78
 }

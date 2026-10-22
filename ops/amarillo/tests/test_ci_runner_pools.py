@@ -18,7 +18,8 @@ DOMINUS = {"pool": "dominus", "steal_from": None, "max_vcpus": 20, "max_memory_m
            "slots": 8, "subnet": "10.232.0", "artifacts": "/srv/klukai-ci/artifacts",
            "temp_sensor": "k10temp", "token_source": "gh-cli",
            "heartbeat_variable": "KLUKAI_CI_DOMINUS_HEARTBEAT",
-           "gaming_marker": "/run/user/1000/dominus-gpu/game-active", "quiet_hours": [23, 8]}
+           "gaming_marker": "/run/user/1000/dominus-gpu/game-active", "quiet_hours": [23, 8],
+           "start_below_c": 80, "pause_at_c": 90, "resume_below_c": 78}
 
 
 def fresh():
@@ -94,6 +95,28 @@ def test_an_amd_package_temperature_is_read_from_k10temp(tmp_path):
     assert runner.cpu_temp_c(tmp_path) == 50.5
 
 
+def test_amarillo_keeps_its_thermal_limits_and_dominus_has_its_own(build):
+    amarillo = fresh()
+    assert (amarillo.START_BELOW_C, amarillo.PAUSE_AT_C, amarillo.RESUME_BELOW_C) == (62.0, 68.0, 60.0)
+    runner = fresh()
+    runner.configure(DOMINUS)
+    assert (runner.START_BELOW_C, runner.PAUSE_AT_C, runner.RESUME_BELOW_C) == (80.0, 90.0, 78.0)
+    # A 7950X at 70 C is lightly loaded: Dominus still starts guests and keeps them running.
+    controller, github, host, state = build(runner, [job("klukai-dominus-serial")], temp=70.0)
+    controller.tick()
+    assert len(controller.guests) == 1
+    controller.thermal()
+    assert not any(g.paused for g in controller.guests.values())
+    state["temp"] = 90.0
+    controller.thermal()
+    assert all(g.paused for g in controller.guests.values())
+    for bad in ({"start_below_c": 91, "pause_at_c": 90}, {"resume_below_c": 95, "pause_at_c": 90},
+                {"pause_at_c": 99}):
+        other = fresh()
+        with pytest.raises(other.RunnerError):
+            other.configure(bad)
+
+
 def test_dominus_runs_twenty_threads_within_thirty_two_gib(build):
     runner = fresh()
     runner.configure(DOMINUS)
@@ -153,7 +176,7 @@ def test_the_heartbeat_tells_the_router_when_dominus_can_take_runs(build):
     state["now"] += 31
     controller.tick()
     assert github.variables[-1] == ("KLUKAI_CI_DOMINUS_HEARTBEAT", str(int(state["now"])))
-    state["temp"] = 70.0  # too warm: unhealthy, say so once
+    state["temp"] = 85.0  # too warm for Dominus: unhealthy, say so once
     controller.tick()
     controller.tick()
     assert [v for _, v in github.variables].count("0") == 1

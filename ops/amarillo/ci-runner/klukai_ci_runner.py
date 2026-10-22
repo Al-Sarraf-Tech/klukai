@@ -11,7 +11,7 @@ deletes the disk, the seed and any leftover registration.
 Limits (owner): CI uses at most 8 CPU threads in total; a VM starts only while
 amarillo keeps 4 GiB of memory free beyond it and the CPU package is below
 62 C. Running VMs are paused at 68 C (amarillo's limit is 70 C) and resumed
-below 60 C. Production runs on this host, so guests sit on the firewalled
+below 60 C (a host config sets its own CPU's limits). Production runs on this host, so guests sit on the firewalled
 ``klukai-ci`` network (internet only) and share nothing with the host except
 the CI evidence tree, mounted read-write at /opt/klukai-ci/artifacts.
 
@@ -269,10 +269,11 @@ def configure(doc: dict[str, Any]) -> None:
     """Turn this module into one host's pool from its host config."""
     global POOL, STEAL_FROM, PROFILES, STEAL_PROFILES, MAX_VCPUS, MAX_MEMORY_MIB, SLOTS
     global SUBNET, ARTIFACTS, TEMP_SENSOR, TOKEN_SOURCE, HEARTBEAT_VARIABLE
-    global GAMING_MARKER, QUIET_HOURS, RECORD_DAYS
+    global GAMING_MARKER, QUIET_HOURS, RECORD_DAYS, START_BELOW_C, PAUSE_AT_C, RESUME_BELOW_C
     known = {"pool", "steal_from", "max_vcpus", "max_memory_mib", "slots", "subnet",
              "artifacts", "temp_sensor", "token_source", "heartbeat_variable",
-             "gaming_marker", "quiet_hours", "record_days"}
+             "gaming_marker", "quiet_hours", "record_days",
+             "start_below_c", "pause_at_c", "resume_below_c"}
     if set(doc) - known:
         raise RunnerError(f"unknown host settings: {sorted(set(doc) - known)}")
     pool = doc.get("pool", POOL)
@@ -287,6 +288,13 @@ def configure(doc: dict[str, Any]) -> None:
         raise RunnerError("subnet must be a private 10.x.y /24 prefix")
     if doc.get("token_source", TOKEN_SOURCE) not in ("credential", "gh-cli"):
         raise RunnerError("token_source must be credential or gh-cli")
+    # Each CPU has its own normal range: a Ryzen 7950X runs up to 95 C by design.
+    start = float(doc.get("start_below_c", START_BELOW_C))
+    pause = float(doc.get("pause_at_c", PAUSE_AT_C))
+    resume = float(doc.get("resume_below_c", RESUME_BELOW_C))
+    if not (resume < pause and start < pause <= 95):
+        raise RunnerError("thermal limits need resume and start below pause, pause at most 95 C")
+    START_BELOW_C, PAUSE_AT_C, RESUME_BELOW_C = start, pause, resume
     POOL, STEAL_FROM, SLOTS, SUBNET = pool, steal, slots, subnet
     PROFILES = make_profiles(POOL)
     STEAL_PROFILES = make_profiles(STEAL_FROM) if STEAL_FROM and STEAL_FROM != POOL else {}
