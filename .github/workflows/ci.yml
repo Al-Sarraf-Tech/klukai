@@ -141,7 +141,7 @@ jobs:
   components:
     name: Isolated component suites
     needs: [source-policy, ci-image]
-    if: always() && needs.source-policy.result == 'success' && needs.source-policy.outputs.components == 'true' && contains(fromJSON('["success","skipped"]'), needs.ci-image.result)
+    if: always() && !cancelled() && needs.source-policy.result == 'success' && needs.source-policy.outputs.components == 'true' && contains(fromJSON('["success","skipped"]'), needs.ci-image.result)
     runs-on: [self-hosted, Linux, X64, klukai-amarillo-serial]
     timeout-minutes: 20
     env:

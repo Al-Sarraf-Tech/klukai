@@ -327,7 +327,10 @@ def test_component_only_push_can_run_after_intentionally_skipped_tool_image():
     assert "components" in expected and "ci-image" not in expected
     job = workflow()["jobs"]["components"]
     assert job["needs"] == ["source-policy", "ci-image"]
-    assert "always() && needs.source-policy.result == 'success'" in job["if"]
+    assert (
+        "always() && !cancelled() && needs.source-policy.result == 'success'"
+        in job["if"]
+    )
     assert (
         'contains(fromJSON(\'["success","skipped"]\'), needs.ci-image.result)'
         in job["if"]
