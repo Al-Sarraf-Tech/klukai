@@ -377,13 +377,16 @@ class Deployer:
 
     def certification(self, head: str) -> dict[str, Any]:
         """certified (with run), pending, or failed for exactly this commit."""
+        # One merged lookup (GitHub's commit search is flaky) feeds both the
+        # certification and the pending/failed decision. Nothing found means
+        # waiting, never failed.
+        runs = relay.runs_for(self.cfg.repo, head, self.token, self.api_for_relay, branch=self.cfg.branch)
         try:
-            return {"state": "certified", "run": relay.green_run(self.cfg.repo, head, self.token, self.api_for_relay)}
+            return {"state": "certified",
+                    "run": relay.green_run(self.cfg.repo, head, self.token, self.api_for_relay, runs=runs)}
         except ValueError:
             pass
-        runs = self.api(f"/repos/{self.cfg.repo}/actions/workflows/ci.yml/runs?head_sha={head}&per_page=20")
-        runs = [r for r in runs["workflow_runs"] if r["head_sha"] == head]
-        if any(r["status"] != "completed" for r in runs) or not runs:
+        if any(r.get("status") != "completed" for r in runs) or not runs:
             return {"state": "pending"}
         return {"state": "failed", "runs": sorted(f"{r['id']}:{r['conclusion']}" for r in runs)}
 

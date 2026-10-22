@@ -155,3 +155,37 @@ def test_a_failed_frontend_job_cannot_supply_a_digest():
     with pytest.raises(ValueError):
         relay.ci_pwa_digest("o/r", RUN, "tok", jobs_api("failure"),
                             lambda *a: f"KLUKAI_PWA_SHA256={'a' * 64}", revision=REV)
+
+
+class FlakySearch:
+    """GitHub's commit search on 2026-10-22: identical queries returned 0, 2, 0 runs."""
+
+    def __init__(self, run, answers):
+        self.run, self.answers, self.calls = run, list(answers), []
+
+    def __call__(self, path, token):
+        self.calls.append(path)
+        if "/jobs" in path:
+            return {"total_count": 0, "jobs": []}
+        found = self.answers.pop(0) if self.answers else False
+        return {"workflow_runs": [self.run] if found else []}
+
+
+def test_a_run_missing_from_one_search_is_found_by_another():
+    run = {"id": 7, "head_sha": REV, "status": "completed", "conclusion": "success", "run_attempt": 1}
+    search = FlakySearch(run, [False, True])  # filtered search empty, unfiltered has it
+    assert [r["id"] for r in relay.runs_for("o/r", REV, "tok", search)] == [7]
+
+
+def test_an_empty_search_is_retried_and_the_branch_listing_is_consulted():
+    run = {"id": 9, "head_sha": REV, "status": "completed", "conclusion": "success", "run_attempt": 1}
+    search = FlakySearch(run, [False, False, False, False, False, True])  # second pass, branch listing
+    found = relay.runs_for("o/r", REV, "tok", search, branch="main")
+    assert [r["id"] for r in found] == [9]
+    assert any("branch=main" in c for c in search.calls)
+
+
+def test_runs_of_other_commits_in_the_branch_listing_are_ignored():
+    other = {"id": 3, "head_sha": "d" * 40, "status": "completed", "conclusion": "success", "run_attempt": 1}
+    search = FlakySearch(other, [True] * 9)
+    assert relay.runs_for("o/r", REV, "tok", search, branch="main") == []

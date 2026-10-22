@@ -1308,3 +1308,30 @@ def test_a_successful_web_check_does_not_repeat_after_restoring_core(env, monkey
     assert state(env)["inflight"] is None and not env["deployer"].paused()
     assert [event for event in events if event[0] == "rollback"] == [("rollback", previous_web)]
     assert not any(event[0] in {"switch", "record"} for event in events)
+
+
+def test_a_flaky_empty_commit_search_means_waiting_not_failed(env, monkeypatch):
+    deployer = dom.Deployer(env["cfg"], token="t")
+    monkeypatch.setattr(dom.relay, "RUN_LOOKUP_PAUSE", 0)
+    deployer.api = lambda path: {"workflow_runs": []}
+    assert deployer.certification("a" * 40) == {"state": "pending"}
+
+
+def test_a_green_run_hidden_from_the_success_search_still_certifies(env, monkeypatch):
+    """The false 'CI failed' of 2026-10-22: the status=success search returned
+    nothing while the unfiltered one returned the green run."""
+    head = "a" * 40
+    run = {"id": 5, "run_attempt": 1, "head_sha": head, "status": "completed",
+           "conclusion": "success", "run_started_at": "2026-10-22T10:00:00Z"}
+    jobs = [{"id": i + 1, "run_id": 5, "run_attempt": 1, "head_sha": head, "status": "completed",
+             "conclusion": "success", "name": name} for i, name in enumerate(sorted(dom.relay.FULL_CI_GATES))]
+
+    def api(path):
+        if "/attempts/1/jobs" in path:
+            return {"total_count": len(jobs), "jobs": jobs}
+        return {"workflow_runs": [] if "status=success" in path else [run]}
+
+    deployer = dom.Deployer(env["cfg"], token="t")
+    monkeypatch.setattr(dom.relay, "RUN_LOOKUP_PAUSE", 0)
+    deployer.api = api
+    assert deployer.certification(head) == {"state": "certified", "run": "5-1"}

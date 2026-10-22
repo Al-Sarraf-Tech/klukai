@@ -310,16 +310,55 @@ def _attempt_jobs(repo: str, run: dict[str, Any], token: str, api: Any) -> list[
         page += 1
 
 
-def green_run(repo: str, revision: str, token: str, api: Any = github) -> str:
+# GitHub's head_sha filter is a search index: on 2026-10-22 identical queries
+# seconds apart returned 0, 2 and 0 runs for one commit. Every run found is
+# read again directly (attempt-pinned jobs), so merging lookups is safe.
+RUN_LOOKUPS = 3
+RUN_LOOKUP_PAUSE = 2.0
+
+
+def runs_for(
+    repo: str, revision: str, token: str, api: Any = github, *, branch: str | None = None
+) -> list[dict[str, Any]]:
+    """Every CI run GitHub reports for this commit, merged across a few lookups
+    of the filtered, unfiltered and (for main) branch listings."""
+    queries = [
+        f"/repos/{repo}/actions/workflows/ci.yml/runs?head_sha={revision}&status=success&per_page=20",
+        f"/repos/{repo}/actions/workflows/ci.yml/runs?head_sha={revision}&per_page=20",
+    ]
+    if branch:
+        queries.append(f"/repos/{repo}/actions/workflows/ci.yml/runs?branch={branch}&per_page=50")
+    found: dict[int, dict[str, Any]] = {}
+    for attempt in range(RUN_LOOKUPS):
+        for query in queries:
+            response = api(query, token)
+            if not isinstance(response, dict) or not isinstance(response.get("workflow_runs"), list):
+                raise ValueError("Incomplete workflow runs response")  # noqa: TRY004 - remote evidence validation
+            for run in response["workflow_runs"]:
+                if isinstance(run, dict) and run.get("head_sha") == revision \
+                        and type(run.get("id")) is int:
+                    found[run["id"]] = run
+        if any(r.get("status") == "completed" and r.get("conclusion") == "success"
+               for r in found.values()):
+            break
+        if attempt < RUN_LOOKUPS - 1:
+            time.sleep(RUN_LOOKUP_PAUSE)
+    return list(found.values())
+
+
+def green_run(
+    repo: str,
+    revision: str,
+    token: str,
+    api: Any = github,
+    *,
+    branch: str | None = None,
+    runs: list[dict[str, Any]] | None = None,
+) -> str:
     """Return '<run_id>-<attempt>' of the newest fully green CI run for the commit."""
-    runs = api(
-        f"/repos/{repo}/actions/workflows/ci.yml/runs?head_sha={revision}"
-        "&status=success&per_page=20",
-        token,
-    )
-    if not isinstance(runs, dict) or not isinstance(runs.get("workflow_runs"), list):
-        raise ValueError("Incomplete workflow runs response")  # noqa: TRY004 - remote evidence validation
-    candidates = [r for r in runs["workflow_runs"] if isinstance(r, dict)]
+    if runs is None:
+        runs = runs_for(repo, revision, token, api, branch=branch)
+    candidates = [r for r in runs if isinstance(r, dict)]
     for run in sorted(candidates, key=lambda r: str(r.get("run_started_at", "")), reverse=True):
         if run.get("head_sha") != revision or run.get("conclusion") != "success" \
                 or run.get("status") != "completed" or type(run.get("id")) is not int \
