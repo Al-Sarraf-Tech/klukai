@@ -124,6 +124,12 @@ is a read-only bind mount of `~/.local/share/klukai/web`:
 - **Verification.** After the switch, the entry files are fetched through core
   (`127.0.0.1:8300`) and must match the signed digests, including the
   `immutable` cache header on hashed bundles.
+- The existing `main.dart.<md5[:8]>.js` and
+  `flutter_bootstrap.<md5[:8]>.js` cache names must match their bytes,
+  including bundles carried from the previous release. This is an accidental
+  corruption check, not authenticated provenance; the current release still
+  requires signed SHA-256 evidence. Inconsistent legacy bundles are refused
+  during adoption or verification, not renamed, deleted or silently repaired.
 - **Rollback.** Any failure is the same rename back, and the previous release
   is checked as well.
 - **Why links inside the mount.** A bind mount follows the directory inode.

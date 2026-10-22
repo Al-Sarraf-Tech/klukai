@@ -185,3 +185,32 @@ def test_the_web_release_cli_defaults_to_the_production_checkout(tmp_path):
     out = subprocess.run([sys.executable, "-c", code], env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
                          capture_output=True, text=True)
     assert f"CHECKOUT={tmp_path}/git/klukai" in out.stdout, out.stdout + out.stderr
+
+
+def test_staging_web_adapter_preserves_allow_live_restore_contract(tmp_path):
+    """Extract only this adapter: never import or execute the staging harness."""
+    import ast
+    from types import SimpleNamespace
+
+    source = SCRIPTS / "klukai-deploy-staging.py"
+    parsed = ast.parse(source.read_text())
+    cls = next(node for node in parsed.body if isinstance(node, ast.ClassDef)
+               and node.name == "StagingDeployer")
+    method = next(node for node in cls.body if isinstance(node, ast.FunctionDef)
+                  and node.name == "web_switch_back")
+    seen = {}
+
+    def rollback(to, **kwargs):
+        seen.update(to=to, **kwargs)
+        return {"status": "rolled_back" if kwargs.get("allow_live") else "refused"}
+
+    namespace = {"web": SimpleNamespace(rollback=rollback), "WEB_URL": "https://example.invalid"}
+    # Execute only the repository's single adapter with a fake dependency.
+    code = compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec")
+    exec(code, namespace)  # noqa: S102 - isolated trusted method, not the staging harness
+    stage = SimpleNamespace(webroot=tmp_path / "webroot", webstate=tmp_path / "state")
+    rid = "a" * 12 + "-" + "b" * 12
+    result = namespace["web_switch_back"](SimpleNamespace(stage=stage), rid)
+    assert result["status"] == "rolled_back"
+    assert seen == {"to": rid, "root": stage.webroot, "state": stage.webstate,
+                    "base": namespace["WEB_URL"], "allow_live": True}
