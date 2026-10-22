@@ -137,9 +137,17 @@ class Stage:
     def baseline_image(self) -> str:
         return json.loads(PRODUCTION_PIN.read_text())["services"]["companion-core"]["image"]
 
+    def image_tags(self) -> dict[str, str]:
+        """Every local tag and the image ID it points at."""
+        rows = sh(["docker", "image", "ls", "--no-trunc", "--format", "{{.Repository}}:{{.Tag}} {{.ID}}"])
+        return dict(line.rsplit(" ", 1) for line in rows.splitlines() if " " in line)
+
     def setup(self) -> dict[str, Any]:
         for path in (self.releases, self.state, self.webstate, self.backups, self.keys):
             path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Cleanup removes only tags this run creates: a staging commit can be
+        # the very one production runs, and its tags must survive.
+        (self.root / "preexisting-tags.json").write_text(json.dumps(sorted(self.image_tags())))
         sh(["git", "clone", "-q", "--bare", "--shared", str(SOURCE_REPO), str(self.remote)])
         git(self.remote, "update-ref", "refs/heads/main", BASE)
         sh(["git", "clone", "-q", "--shared", str(self.remote), str(self.checkout)])
@@ -227,10 +235,17 @@ class Stage:
         if self.compose_file.exists():
             subprocess.run(["docker", "compose", "-p", PROJECT, "-f", str(self.compose_file), "down",
                             "--remove-orphans"], capture_output=True)
-        tags = sh(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"]).split()
-        staged = [t for t in tags if t.startswith(f"{PROJECT}:")
-                  or any(t.startswith(f"klukai-core:{kind}-{sha[:7]}") for sha in (C1, C2)
-                         for kind in ("ci", "verified"))]
+        tags = self.image_tags()
+        record = self.root / "preexisting-tags.json"
+        before = set(json.loads(record.read_text())) if record.is_file() else set(tags)
+        protected = {subprocess.run(["docker", "inspect", "-f", "{{.Image}}", "companion-core"],
+                                    capture_output=True, text=True).stdout.strip()}
+        if PRODUCTION_PIN.is_file():
+            pin = json.loads(PRODUCTION_PIN.read_text())["services"]["companion-core"]["image"]
+            protected.add(tags.get(pin, ""))
+        staged = [t for t, image in tags.items()
+                  if t not in before and image not in protected
+                  and (t.startswith(f"{PROJECT}:") or t.startswith(("klukai-core:ci-", "klukai-core:verified-")))]
         if staged:
             subprocess.run(["docker", "image", "rm", *staged], capture_output=True)
         for big in self.releases.glob("*/core-image.tar"):
