@@ -336,3 +336,33 @@ def test_component_only_push_can_run_after_intentionally_skipped_tool_image():
         in job["if"]
     )
     assert job["runs-on"][-1] == "klukai-amarillo-serial"
+
+
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+def test_every_main_push_and_dispatch_plans_full_certification(event, tmp_path):
+    """Deploy-on-merge deploys only fully certified commits, so a merge to main
+    must never run a selective plan that skips Flutter, the PWA build or the
+    image gates (a skipped gate is not release certification)."""
+    fake = tmp_path / "python3"
+    fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    fake.chmod(0o755)
+    script = block(workflow()["jobs"]["source-policy"], "select")
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        env={
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "EVENT_NAME": event,
+            "BEFORE_REVISION": "b" * 40,
+            "GITHUB_SHA": REVISION,
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--full" in result.stdout.split()
+
+
+def test_frontend_job_logs_the_pwa_digest_the_deployer_binds():
+    script = (ROOT / "scripts/ci/frontend.sh").read_text()
+    assert "KLUKAI_PWA_SHA256=" in script

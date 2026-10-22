@@ -63,16 +63,17 @@ jobs:
           persist-credentials: false
       - name: Fail fast on formatting before allocating build VMs
         run: python3 -m tools.ci.quick_lint --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/preflight-ruff"
-      - name: Conservative complete push diff; dispatch always certifies full source
+      - name: Every main push and dispatch certifies the full source
+        # Deploy-on-merge releases only commits whose "Required CI gates" ran
+        # every job (Flutter tests, format, analysis, PWA build, image gates);
+        # a selective plan would leave a merged commit uncertified.
         id: select
         env:
           EVENT_NAME: ${{ github.event_name }}
           BEFORE_REVISION: ${{ github.event.before }}
         run: |
-          extra=()
-          if [[ "$EVENT_NAME" != push ]]; then extra=(--full); fi
           python3 -m tools.ci.selection plan --before "$BEFORE_REVISION" \
-            --after "$GITHUB_SHA" "${extra[@]}"
+            --after "$GITHUB_SHA" --full
 
 
   ci-image:
