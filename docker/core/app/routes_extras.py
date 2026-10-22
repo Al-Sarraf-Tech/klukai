@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 
@@ -249,12 +249,20 @@ def register_extras(app: FastAPI) -> None:
         # timestamp ties so a page boundary cannot hide messages permanently.
         try:
             if before is not None:
-                datetime.fromisoformat(before)
+                if "\x00" in before:
+                    raise ValueError("NUL in message cursor")
+                stamp = datetime.fromisoformat(before)
+                # Python accepts ISO spellings and offsets that PostgreSQL's
+                # text parser does not. Bind what we validated, not the raw
+                # input, preserving microseconds and legacy naive cursors.
+                if stamp.tzinfo is not None:
+                    stamp = stamp.astimezone(timezone.utc)
+                before = stamp.isoformat()
             if before_id is not None:
-                UUID(before_id)
+                before_id = str(UUID(before_id))
                 if not before:
                     raise ValueError("before_id requires before")
-        except ValueError:
+        except (ValueError, OverflowError):
             return JSONResponse({"error": "Invalid message cursor"}, status_code=400)
         try:
             pool = get_pool()
