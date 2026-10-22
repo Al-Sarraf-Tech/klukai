@@ -62,7 +62,9 @@ PROFILES = {
         Profile("klukai-amarillo-frontend", 4, 8192),
     )
 }
-MAX_VCPUS = 8
+# Owner, 2026-10-22: 12 of amarillo's 20 threads (no thermal events at 8 in three
+# days; MEMORY_HEADROOM_MIB still protects production's memory).
+MAX_VCPUS = 12
 MEMORY_HEADROOM_MIB = 4096
 START_BELOW_C = 62.0
 PAUSE_AT_C = 68.0
@@ -444,6 +446,12 @@ class Controller:
         return None
 
     def admit(self, profile: Profile) -> str | None:
+        # The perf VM measures p99 latency: it never shares the host with CI.
+        heavy = "klukai-amarillo-heavy"
+        if profile.label == heavy and self.guests:
+            return "perf runs alone"
+        if any(g.profile.label == heavy for g in self.guests.values()):
+            return "perf is measuring"
         used = sum(g.profile.vcpus for g in self.guests.values())
         if used + profile.vcpus > MAX_VCPUS:
             return "CPU budget in use"
@@ -642,7 +650,7 @@ class Controller:
                 why = self.admit(profile)
             if why:
                 log.info("queued %s job waits: %s", profile.label, why)
-                continue  # backfill free capacity; an 8-thread perf VM stays exclusive
+                continue  # backfill free capacity; the perf VM stays exclusive
             self.launch(profile)
 
 

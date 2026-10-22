@@ -172,7 +172,7 @@ def test_finished_guest_is_torn_down_with_its_registration(env):
     assert github.deleted == [100]
 
 
-def test_cpu_budget_never_exceeds_eight_threads(env):
+def test_cpu_budget_is_never_exceeded(env):
     make, state, _ = env
     jobs = [
         job("klukai-amarillo-heavy", "2026-10-19T10:00:00Z"),
@@ -190,7 +190,7 @@ def test_small_jobs_share_the_budget(env):
     controller, github, host = make(jobs)
     state["mem"] = 40000
     controller.tick()
-    assert len(controller.guests) == 4  # 4 x 2 threads = 8
+    assert len(controller.guests) == 4  # four slots, 4 x 2 threads
     assert {g.slot for g in controller.guests.values()} == {0, 1, 2, 3}
 
 
@@ -456,7 +456,7 @@ def test_medium_jobs_pack_with_quick_checks_without_changing_host_limits(env):
     )
     controller.tick()
     assert sorted(g.profile.vcpus for g in controller.guests.values()) == [2, 2, 4]
-    assert runner.MAX_VCPUS == 8
+    assert runner.MAX_VCPUS == 12
     assert runner.MEMORY_HEADROOM_MIB == 4096
     assert (runner.START_BELOW_C, runner.PAUSE_AT_C, runner.RESUME_BELOW_C) == (
         62,
@@ -616,36 +616,40 @@ def test_a_surplus_idle_guest_frees_capacity_for_a_starving_job(env):
     make, state, _ = env
     controller, github, host = make(
         [job("klukai-amarillo-build", "2026-10-22T09:00:00Z"),
-         job("klukai-amarillo-build", "2026-10-22T09:00:01Z")])
+         job("klukai-amarillo-build", "2026-10-22T09:00:01Z"),
+         job("klukai-amarillo-build", "2026-10-22T09:00:02Z")])
+    state["mem"] = 40000
     controller.tick()
-    assert len(host.domains) == 2  # 4 + 4 threads: the budget is full
-    github.busy.add(100)  # one guest took a build job; nothing left for the other
+    assert len(host.domains) == 3  # 3 x 4 threads: the budget is full
+    github.busy.update({100, 101})  # two guests took build jobs; nothing left for the third
     github.jobs = [job("klukai-amarillo-serial", "2026-10-22T09:01:00Z")]
     state["now"] += runner.SURPLUS_GRACE_SECONDS - 1
     controller.tick()
-    assert len(host.domains) == 2  # still inside its chance to get a job
+    assert len(host.domains) == 3  # still inside its chance to get a job
     state["now"] += 2
     controller.tick()
     labels = sorted(g.profile.label for g in controller.guests.values())
-    assert labels == ["klukai-amarillo-build", "klukai-amarillo-serial"]
-    assert 101 in github.deleted and 100 not in github.deleted  # the busy guest is untouched
+    assert labels == ["klukai-amarillo-build", "klukai-amarillo-build", "klukai-amarillo-serial"]
+    assert 102 in github.deleted and not {100, 101} & set(github.deleted)  # busy guests untouched
 
 
 def test_a_surplus_guest_stays_when_nothing_waits_or_github_cannot_say(env):
     make, state, _ = env
     controller, github, host = make(
         [job("klukai-amarillo-build", "2026-10-22T09:00:00Z"),
-         job("klukai-amarillo-build", "2026-10-22T09:00:01Z")])
+         job("klukai-amarillo-build", "2026-10-22T09:00:01Z"),
+         job("klukai-amarillo-build", "2026-10-22T09:00:02Z")])
+    state["mem"] = 40000
     controller.tick()
-    github.busy.add(100)
+    github.busy.update({100, 101})
     github.jobs = []  # nothing starving: no reason to tear it down early
     state["now"] += runner.SURPLUS_GRACE_SECONDS + 5
     controller.tick()
-    assert len(host.domains) == 2
+    assert len(host.domains) == 3
     github.jobs = [job("klukai-amarillo-serial", "2026-10-22T09:05:00Z")]
-    github.unknown.add(101)  # GitHub cannot say whether it is busy: never on a guess
+    github.unknown.add(102)  # GitHub cannot say whether it is busy: never on a guess
     controller.tick()
-    assert len(host.domains) == 2 and 101 not in github.deleted
+    assert len(host.domains) == 3 and 102 not in github.deleted
 
 
 def test_an_idle_guest_still_covers_a_queued_job_of_its_kind(env):
@@ -657,3 +661,39 @@ def test_an_idle_guest_still_covers_a_queued_job_of_its_kind(env):
     state["now"] += runner.SURPLUS_GRACE_SECONDS + 5
     controller.tick()
     assert 100 not in github.deleted  # its build job is still queued for it
+
+
+def test_twelve_threads_run_four_jobs_side_by_side(env):
+    """Owner, 2026-10-22: amarillo's CI budget is 12 threads (no thermal
+    events in three days at 8; production keeps its 4 GiB memory headroom)."""
+    make, state, _ = env
+    controller, github, host = make([
+        job("klukai-amarillo-frontend", "2026-10-22T10:00:00Z"),
+        job("klukai-amarillo-build", "2026-10-22T10:00:01Z"),
+        job("klukai-amarillo-serial", "2026-10-22T10:00:02Z"),
+        job("klukai-amarillo-small", "2026-10-22T10:00:03Z"),
+    ])
+    state["mem"] = 40000
+    controller.tick()
+    assert runner.MAX_VCPUS == 12
+    assert sum(g.profile.vcpus for g in controller.guests.values()) == 12
+    assert len(controller.guests) == 4
+
+
+def test_the_perf_vm_still_runs_alone(env):
+    """The p99 gate measures timing: it never shares the host with other CI."""
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-medium", "2026-10-22T10:00:00Z")])
+    state["mem"] = 40000
+    controller.tick()
+    github.busy.add(100)
+    github.jobs = [job("klukai-amarillo-heavy", "2026-10-22T10:01:00Z")]
+    controller.tick()
+    assert [g.profile.label for g in controller.guests.values()] == ["klukai-amarillo-medium"]
+    host.domains.clear()  # the medium job finished
+    controller.tick()
+    assert [g.profile.label for g in controller.guests.values()] == ["klukai-amarillo-heavy"]
+    github.busy.add(101)
+    github.jobs = [job("klukai-amarillo-small", "2026-10-22T10:02:00Z")]
+    controller.tick()
+    assert [g.profile.label for g in controller.guests.values()] == ["klukai-amarillo-heavy"]
