@@ -6,6 +6,7 @@ These test the message processing flow end-to-end with mocked external services
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -192,14 +193,19 @@ class TestWSManagerAdvanced:
         """Multiple devices for the same user all receive messages."""
         s1, s2 = MagicMock(), MagicMock()
         s1.accept = AsyncMock()
-        s1.send_json = AsyncMock()
+        s1.send_text = AsyncMock()
         s2.accept = AsyncMock()
-        s2.send_json = AsyncMock()
+        s2.send_text = AsyncMock()
         await ws.connect(s1, "user1")
         await ws.connect(s2, "user1")
         assert ws.is_connected("user1")
-        # Both devices should exist in the connection set
         await ws.send_token("user1", "test")
+        for socket in (s1, s2):
+            frames = [json.loads(call.args[0]) for call in socket.send_text.await_args_list]
+            assert frames == [
+                {"type": "connected", "status": "ok"},
+                {"type": "token", "text": "test"},
+            ]
 
 
 # ── Session State Tests ──────────────────────────────────────────────────────

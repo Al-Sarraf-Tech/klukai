@@ -536,8 +536,9 @@ def register_websocket(app: FastAPI) -> None:
                         break
                     try:
                         data = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue  # malformed frame — skip it, keep the connection
+                    except (ValueError, RecursionError):
+                        # Malformed or decoder-limit frame: keep receiving.
+                        continue
                     if not isinstance(data, dict):
                         continue
 
