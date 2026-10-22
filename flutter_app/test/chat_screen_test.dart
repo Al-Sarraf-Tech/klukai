@@ -763,8 +763,9 @@ void main() {
         final client = MockClient((request) async {
           calls.add('${request.method} ${request.url.path}');
           if (request.method == 'DELETE') return http.Response('{}', 200);
-          if (request.method == 'GET')
+          if (request.method == 'GET') {
             return http.Response('{"audio":"Qg=="}', 200);
+          }
           final text = jsonDecode(request.body)['text'] as String;
           posted.add(text);
           return text == clipA
@@ -1083,7 +1084,7 @@ void main() {
                               '00000000-0000-0000-0000-${i.toString().padLeft(12, '0')}',
                           'role': 'assistant',
                           'content': 'Persisted reply $i',
-                          'created_at': stamp!.toIso8601String(),
+                          'created_at': stamp.toIso8601String(),
                         },
                     ],
             }),
@@ -1110,7 +1111,7 @@ void main() {
         );
         expect(older, isNotEmpty);
         expect(older.first.queryParameters['before_id'], firstId);
-        expect(older.first.queryParameters['before'], stamp!.toIso8601String());
+        expect(older.first.queryParameters['before'], stamp.toIso8601String());
         expect(older, hasLength(1));
         fake.dispose();
       },
