@@ -1016,7 +1016,7 @@ class TestMessagesHappyPath:
         # `before` set → the cursor SQL branch with the timestamp param.
         sql, params = captured[0]
         assert "created_at <" in sql
-        assert params == ("alice", "2026-04-01T00:00:00Z", 10)
+        assert params == ("alice", "2026-04-01T00:00:00+00:00", 10)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
