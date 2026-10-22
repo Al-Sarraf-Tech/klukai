@@ -68,7 +68,6 @@ START_BELOW_C = 62.0
 PAUSE_AT_C = 68.0
 RESUME_BELOW_C = 60.0
 MAX_JOB_SECONDS = 4 * 3600
-WARMUP_SECONDS = 300  # a VM this young may not have picked up its job yet
 IDLE_SECONDS = 900  # an idle runner this old never got a job: free its capacity
 SLOTS = 4  # static guest addresses 10.231.0.10-13
 
@@ -568,7 +567,10 @@ class Controller:
                 )
                 self.teardown(guest.name)
                 continue
-            idle = now - guest.started < WARMUP_SECONDS or busy is not True
+            # GitHub's queued list excludes the job already assigned to a busy
+            # runner. Counting that runner again hides a distinct waiting job
+            # for up to five minutes and leaves otherwise free CPUs idle.
+            idle = busy is not True
             if idle and wanted.get(guest.profile.label):
                 wanted[guest.profile.label] -= 1
         priority = {

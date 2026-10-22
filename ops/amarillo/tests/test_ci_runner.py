@@ -536,3 +536,16 @@ def test_serial_suites_fit_two_alongside_frontend_and_keep_build_priority(env):
         ]
     )
     assert controller.demand()[0].label == "klukai-amarillo-build"
+
+
+def test_busy_young_guest_does_not_cover_another_queued_job(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-medium")])
+    controller.tick()
+    github.busy.add(100)
+    # The first job is now assigned; queued_jobs still has one waiting job.
+    # Replacing it with another job models GitHub's authoritative queued list.
+    github.jobs = [job("klukai-amarillo-medium", "2026-10-19T10:00:01Z")]
+    controller.tick()
+    assert len(controller.guests) == 2
+    assert sum(g.profile.vcpus for g in controller.guests.values()) == 8
