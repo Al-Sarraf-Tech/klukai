@@ -20,13 +20,52 @@ def done(stdout="", rc=0):
     return lambda argv, **kw: subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr="")
 
 
-def test_only_recent_well_formed_run_records_are_listed():
-    listing = f"{SHA}/39-1\n{SHA}/40-2\ncache/pip\n../etc\n{SHA}/not-a-run\n"
-    assert pull.recent(done(listing)) == [f"{SHA}/39-1", f"{SHA}/40-2"]
+def test_records_are_listed_with_their_fingerprints():
+    listing = (f"3:120:1792700000.5 {SHA}/39-1\n7:900:1792700100.0 {SHA}/40-2\n"
+               "1:4:1792700000.0 cache/pip\n1:1:1.0 ../etc\n2:2:2.0 \n")
+    assert pull.recent(done(listing)) == {f"{SHA}/39-1": "3:120:1792700000.5",
+                                          f"{SHA}/40-2": "7:900:1792700100.0"}
 
 
 def test_an_unreachable_dominus_is_not_an_error():
     assert pull.recent(done(rc=255)) is None
+
+
+def test_only_changed_records_are_copied_oldest_first_and_never_after_archiving(tmp_path):
+    local, archive = tmp_path / "local", tmp_path / "archive"
+    (local / ("c" * 40)).mkdir(parents=True)
+    archive.mkdir()
+    (archive / f"{'b' * 40}.tar").write_text("archived")
+    (archive / f"{'c' * 40}.tar").write_text("archived, but this revision has new local runs")
+    listing = {f"{SHA}/2-1": "5:50:300.0", f"{SHA}/1-1": "5:50:100.0", f"{SHA}/3-1": "9:90:200.0",
+               f"{'b' * 40}/4-1": "1:1:50.0", f"{'c' * 40}/5-1": "1:1:60.0"}
+    synced = {f"{SHA}/3-1": "9:90:200.0", f"{SHA}/2-1": "4:40:250.0"}
+    assert pull.todo(listing, synced, local, archive) == [f"{'c' * 40}/5-1", f"{SHA}/1-1", f"{SHA}/2-1"]
+
+
+def test_a_complete_copy_is_remembered_and_a_cut_short_one_is_not(tmp_path):
+    record = f"{SHA}/39-1"
+    state = tmp_path / "state.json"
+    listings = [f"3:120:100.0 {record}\n"]
+
+    def run(argv, **kw):
+        if argv[0] == "ssh":
+            return subprocess.CompletedProcess(argv, 0, listings[0], "")
+        return subprocess.CompletedProcess(argv, outcome[0] if argv[0] == "timeout" else 0, "", "")
+
+    outcome = [124]
+    pull.main(run, local=tmp_path, archive=tmp_path / "none", state=state)
+    assert pull.load(state) == {}
+    outcome = [0]
+    pull.main(run, local=tmp_path, archive=tmp_path / "none", state=state)
+    assert pull.load(state) == {record: "3:120:100.0"}
+    calls = []
+    pull.main(lambda argv, **kw: (calls.append(argv[0]), run(argv, **kw))[1],
+              local=tmp_path, archive=tmp_path / "none", state=state)
+    assert calls == ["ssh"]  # unchanged since its complete copy: no rsync at all
+    listings[0] = ""  # Dominus pruned it: forget it
+    pull.main(run, local=tmp_path, archive=tmp_path / "none", state=state)
+    assert pull.load(state) == {}
 
 
 def test_rsync_copies_only_the_listed_records_without_deleting(tmp_path):
@@ -43,6 +82,8 @@ def test_rsync_copies_only_the_listed_records_without_deleting(tmp_path):
         assert "--files-from=-" in rsync and "--safe-links" in rsync
         assert not any(a.startswith("--delete") or a == "--remove-source-files" for a in rsync)
         assert given == f"{SHA}/39-1\n" and rsync[-1] == f"{tmp_path}/"
+        # Directories get local times, so the archiver sees a pull still in progress.
+        assert "--omit-dir-times" in rsync
 
 
 def test_the_deployer_s_frontend_evidence_goes_first_and_the_rest_is_time_boxed(tmp_path):
@@ -64,7 +105,7 @@ def test_a_time_boxed_bulk_copy_that_runs_out_of_time_is_not_an_error(tmp_path):
     def run(argv, **kw):
         return subprocess.CompletedProcess(argv, 124 if argv[0] == "timeout" else 0, "", "")
 
-    pull.pull([f"{SHA}/39-1"], run, tmp_path)
+    assert pull.pull([f"{SHA}/39-1"], run, tmp_path) is False
 
 
 def test_a_failed_copy_is_reported(tmp_path):
@@ -74,9 +115,9 @@ def test_a_failed_copy_is_reported(tmp_path):
         pull.pull([f"{SHA}/39-1"], done(rc=12), tmp_path)
 
 
-def test_nothing_recent_means_no_copy():
+def test_nothing_to_copy_means_no_rsync():
     calls = []
-    pull.pull([], lambda *a, **k: calls.append(a))
+    assert pull.pull([], lambda *a, **k: calls.append(a)) is True
     assert calls == []
 
 

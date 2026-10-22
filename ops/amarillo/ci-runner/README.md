@@ -33,17 +33,23 @@ amarillo, as before. Other repositories keep the Dominus fleet runners.
   still queued after 180 s (Dominus went off, started gaming, or is full),
   registering its runner with that job's labels.
 - **Evidence.** Dominus cannot reach amarillo, so amarillo pulls.
-  `klukai-ci-pull.timer` (user unit, every minute) copies the run records Dominus
-  changed in the last 90 minutes into `/docker/klukai/ci-artifacts`, using
-  `ops/amarillo/scripts/klukai-ci-pull.py`. Nothing is deleted or overwritten.
-  The deployer reads it all locally and still binds every byte to the run's
-  own job log. Dominus prunes its records after two days.
-  - The link is relayed, about 2 MiB/s, and a Dominus run writes about 1 GB.
-    So each pull copies the frontend job (the PWA the deployer reads, about
-    70 MB) first.
-  - The rest gets 45 s per pull; interrupted files resume on the next pull.
+  `klukai-ci-pull.timer` (user unit, every minute) runs
+  `ops/amarillo/scripts/klukai-ci-pull.py` into `/docker/klukai/ci-artifacts`.
+  Nothing is deleted or overwritten. The deployer reads it all locally and
+  still binds every byte to the run's own job log.
+  - The link is relayed, about 2 MiB/s. A Dominus run writes about 1.1 GB in
+    about 6,600 files.
+  - Dominus lists a fingerprint per record (files, bytes, newest mtime) for
+    the two days it keeps records. A record is copied again only when it
+    changed since its last complete copy; the ledger is in
+    `~/.local/state/klukai/ci-pull.json`.
+  - Each pull copies the frontend job (the PWA the deployer reads, about
+    70 MB) first. The rest gets 45 s per pull, oldest record first, and
+    interrupted files resume on the next pull.
   - A PWA still arriving makes the deployer retry with backoff, never deploy
     early: the bytes must match the job log.
+  - Directories get local times, so the archiver (two hours idle) waits for
+    a pull in progress. A revision it already packed is never pulled back.
 - **Measured basis.** Full CI took 16 min on amarillo alone. Jobs waited
   2-7 min for CPUs, while booting a VM takes a median of 19 s. The
   `image-scan` → `perf` chain, about 8 min, is the floor.
