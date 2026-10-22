@@ -34,9 +34,25 @@ and 215 Chrome tests with zero skips, took 5m02s overall and 46.869s in its buil
 phase. These are job timings, not a measured
 frontend-only pipeline duration.
 
-A subsequent documentation-only push validates the routine path; its actual run
-result is retained in the external task evidence and completion report. No
-frontend-only or backend-only end-to-end timing is claimed without a run.
+The documentation-only push [39704656604](https://github.com/Al-Sarraf-Tech/klukai/actions/runs/39704656604)
+for `717d51a8329879b5029c2c71f4e30a6d50ccc3f3` passed in **3m06s**
+(01:15:46–01:18:52 UTC). Source admission and the Ruff preflight had passed within
+39s of run creation. The only changed paths were this handoff and the acceleration
+plan. The actual source-job selector output was:
+
+```json
+{"components": false, "core": false, "frontend": false, "full": false}
+```
+
+Five jobs succeeded: source admission, lint, typecheck, security and the affected
+aggregate. Eight jobs were skipped as expected: the executor image, components,
+core suite, real backends, image scan, frontend, performance and full aggregate.
+The actual affected aggregate validated these exact results. The read-only release
+relay rejected this green routine revision because it lacks full certification,
+while accepting the exact full `eeec54e` run above. Evidence files are
+`docs-selection.json`, `docs-source-policy.log`, `docs-routine-final.json`,
+`relay-accept-full.json` and `relay-reject-routine.json` in the task directory.
+No frontend-only or backend-only end-to-end timing is claimed without a run.
 
 ## Execution and cache behavior
 

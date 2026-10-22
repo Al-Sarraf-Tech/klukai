@@ -47,7 +47,7 @@
 - [x] Dispatch exact branch revision; inspect real results/timings; correct failures and repeat as needed.
 - [x] Integrate verified changes, commit conventionally, mirror locally and push authorized origin main.
 - [x] Record baseline and accelerated full timings and remaining limitations in [the handoff](../../handoff/2026-10-21-ci-acceleration.md).
-- [ ] Complete the documentation-only push measurement and retain its exact selector/skipped-job results and release-relay rejection proof in the task evidence; record the outcome in the handoff.
+- [x] Complete the documentation-only push measurement and retain its exact selector/skipped-job results and release-relay rejection proof in the task evidence; record the outcome in the handoff.
 
 ## Verified rollout
 
@@ -57,4 +57,11 @@ Final code revision `eeec54e53cec5ff534b56befaea71ff19376644f` passed every gate
 15m39s from the first job. This is 42% less total wait than the verified successful
 30m21s baseline. The release relay independently accepted this exact full run.
 Final controller hash, tests, preserved constraints and evidence paths are in the
-handoff. Routine measurement remains the final rollout check below.
+handoff. Documentation-only routine run
+[39704656604](https://github.com/Al-Sarraf-Tech/klukai/actions/runs/39704656604)
+passed in 3m06s with five successful and eight intentionally skipped jobs. The
+actual source-job selector output and exact skip set are recorded in the handoff.
+The release relay rejected that green routine revision for release, proving that
+routine success does not satisfy full certification. This final evidence-only
+update is itself verified by a subsequent routine run without repeating edits
+merely to record that run's timing.
