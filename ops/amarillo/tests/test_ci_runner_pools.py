@@ -60,7 +60,8 @@ def build(tmp_path, monkeypatch):
         state = {"now": now, "mem": mem, "temp": temp}
         github, host = Beats(jobs), FakeHost()
         controller = runner.Controller(github, run=host, temp=lambda: state["temp"],
-                                       memory=lambda: state["mem"], clock=lambda: state["now"],
+                                       memory=lambda: state["mem"], pressure=lambda: 0.0,
+                                       clock=lambda: state["now"],
                                        state_file=tmp_path / "state.json")
         return controller, github, host, state
     return make
@@ -114,7 +115,7 @@ def test_amarillo_keeps_its_thermal_limits_and_dominus_has_its_own(build):
     controller.thermal()
     assert all(g.paused for g in controller.guests.values())
     for bad in ({"start_below_c": 91, "pause_at_c": 90}, {"resume_below_c": 95, "pause_at_c": 90},
-                {"pause_at_c": 99}):
+                {"pause_at_c": 99}, {"memory_headroom_mib": 100}, {"max_memory_pressure": 0}):
         other = fresh()
         with pytest.raises(other.RunnerError):
             other.configure(bad)
@@ -162,6 +163,7 @@ def test_a_restarted_amarillo_controller_still_knows_a_taken_over_guest(build, t
     state["now"] += runner.STEAL_AFTER_SECONDS + 1
     controller.tick()
     restarted = runner.Controller(github, run=host, temp=lambda: 45.0, memory=lambda: 60000,
+                                  pressure=lambda: 0.0,
                                   clock=lambda: state["now"], state_file=tmp_path / "state.json")
     assert [g.profile.label for g in restarted.guests.values()] == ["klukai-dominus-serial"]
 

@@ -110,9 +110,11 @@ amarillo takes over anything still queued.
   boots the VM. The guest runs one job (`klukai-ci-job.service`) and powers off.
   The controller deletes the disk, the seed and any leftover registration.
 - **Limits (owner):**
-  - at most 8 CPU threads in total across VMs;
-  - a VM starts only if amarillo keeps 4 GiB free beyond it and the CPU package
-    is below 62 C;
+  - at most 12 CPU threads in total across VMs (perf runs alone);
+  - a VM starts only if amarillo keeps 8 GiB free beyond it, nothing has
+    stalled on memory for 5% of the last 10 s (PSI), and the CPU package is
+    below 62 C. Production shares the host: with only 4 GiB kept free, a full
+    amarillo-only run pushed it into swap on 2026-10-22;
   - running VMs pause at 68 C and resume below 60 C (amarillo's limit is 70 C);
   - a job VM is destroyed after 4 hours.
 - **Isolation (production runs on this host):**

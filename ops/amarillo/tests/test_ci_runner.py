@@ -113,7 +113,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "CONSOLE_LOGS", tmp_path / "logs")
     monkeypatch.setattr(runner, "ARTIFACTS", artifacts)
     monkeypatch.setattr(runner.shutil, "chown", lambda *a, **k: None)
-    state = {"temp": 45.0, "mem": 17000, "now": 1000.0}
+    state = {"temp": 45.0, "mem": 17000, "now": 1000.0, "pressure": 0.0}
 
     def make(jobs=()):
         github, host = FakeGitHub(jobs), FakeHost()
@@ -122,6 +122,7 @@ def env(tmp_path, monkeypatch):
             run=host,
             temp=lambda: state["temp"],
             memory=lambda: state["mem"],
+            pressure=lambda: state["pressure"],
             clock=lambda: state["now"],
             state_file=tmp_path / "state.json",
         )
@@ -206,6 +207,39 @@ def test_admission_waits_for_heat_and_memory(env, temp, mem, reason):
     assert github.registered == {}
 
 
+def test_no_new_guest_while_the_host_is_short_of_memory(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-small")])
+    state["mem"] = 40000
+    state["pressure"] = 5.0  # tasks stalled on memory 5% of the last 10 s: swapping
+    controller.tick()
+    assert host.domains == {}
+    state["pressure"] = 0.5
+    controller.tick()
+    assert len(host.domains) == 1
+
+
+def test_amarillo_keeps_eight_gib_free_beyond_each_guest(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-medium")])  # 4 GiB
+    state["mem"] = 4096 + 8191
+    controller.tick()
+    assert host.domains == {}
+    state["mem"] = 4096 + 8192
+    controller.tick()
+    assert len(host.domains) == 1
+
+
+def test_memory_pressure_reads_the_kernel_and_fails_closed(tmp_path):
+    psi = tmp_path / "memory"
+    psi.write_text("some avg10=3.25 avg60=9.11 avg300=7.78 total=1\n"
+                   "full avg10=0.87 avg60=7.36 avg300=6.28 total=1\n")
+    assert runner.memory_pressure(psi) == 3.25
+    assert runner.memory_pressure(tmp_path / "missing") == float("inf")
+    psi.write_text("garbage\n")
+    assert runner.memory_pressure(psi) == float("inf")
+
+
 def test_nothing_starts_without_the_guard_network_or_base(env):
     make, state, _ = env
     for breakage in ("guard", "network", "base"):
@@ -287,6 +321,7 @@ def test_state_survives_a_controller_restart(env):
         run=host,
         temp=lambda: 45.0,
         memory=lambda: 17000,
+        pressure=lambda: 0.0,
         clock=lambda: state["now"],
         state_file=tmp / "state.json",
     )
@@ -457,7 +492,7 @@ def test_medium_jobs_pack_with_quick_checks_without_changing_host_limits(env):
     controller.tick()
     assert sorted(g.profile.vcpus for g in controller.guests.values()) == [2, 2, 4]
     assert runner.MAX_VCPUS == 12
-    assert runner.MEMORY_HEADROOM_MIB == 4096
+    assert (runner.MEMORY_HEADROOM_MIB, runner.MAX_MEMORY_PRESSURE) == (8192, 5.0)
     assert (runner.START_BELOW_C, runner.PAUSE_AT_C, runner.RESUME_BELOW_C) == (
         62,
         68,

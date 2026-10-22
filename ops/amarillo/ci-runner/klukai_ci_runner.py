@@ -8,9 +8,9 @@ throwaway copy-on-write disk and a just-in-time (single-use) runner
 registration. The guest powers off after its one job; the controller then
 deletes the disk, the seed and any leftover registration.
 
-Limits (owner): CI uses at most 8 CPU threads in total; a VM starts only while
-amarillo keeps 4 GiB of memory free beyond it and the CPU package is below
-62 C. Running VMs are paused at 68 C (amarillo's limit is 70 C) and resumed
+Limits (owner): CI uses at most 12 CPU threads in total; a VM starts only while
+amarillo keeps 8 GiB of memory free beyond it, nothing is stalling on memory
+(PSI) and the CPU package is below 62 C. Running VMs are paused at 68 C (amarillo's limit is 70 C) and resumed
 below 60 C (a host config sets its own CPU's limits). Production runs on this host, so guests sit on the firewalled
 ``klukai-ci`` network (internet only) and share nothing with the host except
 the CI evidence tree, mounted read-write at /opt/klukai-ci/artifacts.
@@ -93,9 +93,14 @@ QUIET_HOURS: tuple[int, int] | None = None  # local [start, end) hours: no new g
 RECORD_DAYS: int | None = None  # a pool whose records amarillo pulls keeps only this many days
 HOST_CONFIG = Path("/etc/klukai-ci/host.json")
 # Owner, 2026-10-22: 12 of amarillo's 20 threads (no thermal events at 8 in three
-# days; MEMORY_HEADROOM_MIB still protects production's memory).
+# days). Memory is the tighter limit: production, game servers and other work share
+# the host, and with only 4 GiB kept free a full amarillo run pushed it into swap
+# (2026-10-22: PSI 9%, backend containers missed their readiness deadline). So a
+# guest starts only with 8 GiB to spare and while nothing is stalling on memory.
 MAX_VCPUS = 12
-MEMORY_HEADROOM_MIB = 4096
+MEMORY_HEADROOM_MIB = 8192
+# Percent of the last 10 s some task stalled on memory (PSI "some avg10").
+MAX_MEMORY_PRESSURE = 5.0
 START_BELOW_C = 62.0
 PAUSE_AT_C = 68.0
 RESUME_BELOW_C = 60.0
@@ -140,6 +145,17 @@ def cpu_temp_c(hwmon: Path = Path("/sys/class/hwmon")) -> float:
             return int((node / "temp1_input").read_text()) / 1000.0
         except (OSError, ValueError):
             continue
+    return float("inf")
+
+
+def memory_pressure(psi: Path = Path("/proc/pressure/memory")) -> float:
+    """PSI "some avg10" for memory, in percent; unreadable reads as too high."""
+    try:
+        for line in psi.read_text().splitlines():
+            if line.startswith("some "):
+                return float(dict(f.split("=", 1) for f in line.split()[1:])["avg10"])
+    except (OSError, ValueError, KeyError):
+        pass
     return float("inf")
 
 
@@ -270,10 +286,12 @@ def configure(doc: dict[str, Any]) -> None:
     global POOL, STEAL_FROM, PROFILES, STEAL_PROFILES, MAX_VCPUS, MAX_MEMORY_MIB, SLOTS
     global SUBNET, ARTIFACTS, TEMP_SENSOR, TOKEN_SOURCE, HEARTBEAT_VARIABLE
     global GAMING_MARKER, QUIET_HOURS, RECORD_DAYS, START_BELOW_C, PAUSE_AT_C, RESUME_BELOW_C
+    global MEMORY_HEADROOM_MIB, MAX_MEMORY_PRESSURE
     known = {"pool", "steal_from", "max_vcpus", "max_memory_mib", "slots", "subnet",
              "artifacts", "temp_sensor", "token_source", "heartbeat_variable",
              "gaming_marker", "quiet_hours", "record_days",
-             "start_below_c", "pause_at_c", "resume_below_c"}
+             "start_below_c", "pause_at_c", "resume_below_c",
+             "memory_headroom_mib", "max_memory_pressure"}
     if set(doc) - known:
         raise RunnerError(f"unknown host settings: {sorted(set(doc) - known)}")
     pool = doc.get("pool", POOL)
@@ -295,6 +313,11 @@ def configure(doc: dict[str, Any]) -> None:
     if not (resume < pause and start < pause <= 95):
         raise RunnerError("thermal limits need resume and start below pause, pause at most 95 C")
     START_BELOW_C, PAUSE_AT_C, RESUME_BELOW_C = start, pause, resume
+    headroom = int(doc.get("memory_headroom_mib", MEMORY_HEADROOM_MIB))
+    stall = float(doc.get("max_memory_pressure", MAX_MEMORY_PRESSURE))
+    if not (1024 <= headroom <= 65536 and 0 < stall <= 100):
+        raise RunnerError("memory headroom must be 1-64 GiB and pressure 0-100 %")
+    MEMORY_HEADROOM_MIB, MAX_MEMORY_PRESSURE = headroom, stall
     POOL, STEAL_FROM, SLOTS, SUBNET = pool, steal, slots, subnet
     PROFILES = make_profiles(POOL)
     STEAL_PROFILES = make_profiles(STEAL_FROM) if STEAL_FROM and STEAL_FROM != POOL else {}
@@ -449,7 +472,9 @@ class Controller:
         memory: Callable[[], int] = mem_available_mib,
         clock: Callable[[], float] = time.time,
         state_file: Path = Path("/var/lib/klukai-ci/state.json"),
+        pressure: Callable[[], float] = memory_pressure,
     ) -> None:
+        self.pressure = pressure
         self.github, self._run, self.temp, self.memory, self.clock = (
             github,
             run,
@@ -575,6 +600,8 @@ class Controller:
             return "memory budget in use"
         if self.memory() - profile.memory_mib < MEMORY_HEADROOM_MIB:
             return "not enough free memory"
+        if self.pressure() >= MAX_MEMORY_PRESSURE:
+            return "host is stalling on memory"
         if self.temp() >= START_BELOW_C:
             return "CPU too warm"
         if len(self.guests) >= SLOTS:
