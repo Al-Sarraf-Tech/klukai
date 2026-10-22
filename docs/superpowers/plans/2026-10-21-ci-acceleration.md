@@ -27,23 +27,34 @@
 
 ### Task1: Runner scheduling and early checks
 
-- [ ] Add failing scheduling tests for quick-first order, medium packing, blocked-profile backfill, exclusive performance admission and restart compatibility.
-- [ ] Add medium/frontend profiles, prioritize quick work, reduce polling delay, and retain host guards.
-- [ ] Update workflow labels and put expensive jobs behind fast checks.
-- [ ] Verify controller and workflow tests; deploy the controller atomically with state preservation.
+- [x] Add failing scheduling tests for quick-first order, medium packing, blocked-profile backfill, exclusive performance admission and restart compatibility.
+- [x] Add medium/frontend profiles, prioritize quick work, reduce polling delay, and retain host guards.
+- [x] Update workflow labels and put expensive jobs behind fast checks.
+- [x] Verify controller and workflow tests; deploy the controller atomically with state preservation.
 
 ### Task2: Verified setup/build reuse and retired bot removal
 
-- [ ] Test cache identity/corruption handling before implementation.
-- [ ] Persist hash-verified pip downloads and BuildKit reusable materials while retaining fresh evidence per run.
-- [ ] Reuse the scanned exact candidate for performance; retain independent no-cache rebuild and revision-bound baseline.
-- [ ] Remove Telegram from active component target and CI lock without dropping shared runtime dependencies.
-- [ ] Run component/release/workflow suites and full CI.
+- [x] Test cache identity/corruption handling before implementation.
+- [x] Persist hash-verified pip downloads and BuildKit reusable materials while retaining fresh evidence per run.
+- [x] Reuse the scanned exact candidate for performance; retain independent no-cache rebuild and revision-bound baseline.
+- [x] Remove Telegram from active component target and CI lock without dropping shared runtime dependencies.
+- [x] Run component/release/workflow suites and full CI.
 
 ### Task3: Conservative routine selection and measured rollout
 
-- [ ] Add failing path-planner tests for frontend/core/components/docs/shared/unknown and multi-component changes.
-- [ ] Add explicit routine/full modes and distinguish their final status; strengthen release relay full-gate checks.
-- [ ] Dispatch exact branch revision; inspect real results/timings; correct failures and repeat as needed.
-- [ ] Integrate verified changes, commit conventionally, mirror locally and push authorized origin main.
-- [ ] Record baseline and accelerated full/routine timings and remaining limitations in handoff evidence.
+- [x] Add failing path-planner tests for frontend/core/components/docs/shared/unknown and multi-component changes.
+- [x] Add explicit routine/full modes and distinguish their final status; strengthen release relay full-gate checks.
+- [x] Dispatch exact branch revision; inspect real results/timings; correct failures and repeat as needed.
+- [x] Integrate verified changes, commit conventionally, mirror locally and push authorized origin main.
+- [x] Record baseline and accelerated full timings and remaining limitations in [the handoff](../../handoff/2026-10-21-ci-acceleration.md).
+- [ ] Complete the documentation-only push measurement and retain its exact selector/skipped-job results and release-relay rejection proof in the task evidence; record the outcome in the handoff.
+
+## Verified rollout
+
+Final code revision `eeec54e53cec5ff534b56befaea71ff19376644f` passed every gate in
+[39702742680](https://github.com/Al-Sarraf-Tech/klukai/actions/runs/39702742680):
+17m35s creation-to-completion, including 1m56s initial supersession queueing;
+15m39s from the first job. This is 42% less total wait than the verified successful
+30m21s baseline. The release relay independently accepted this exact full run.
+Final controller hash, tests, preserved constraints and evidence paths are in the
+handoff. Routine measurement remains the final rollout check below.
