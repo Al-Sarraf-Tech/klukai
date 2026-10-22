@@ -549,3 +549,60 @@ def test_busy_young_guest_does_not_cover_another_queued_job(env):
     controller.tick()
     assert len(controller.guests) == 2
     assert sum(g.profile.vcpus for g in controller.guests.values()) == 8
+
+
+def test_run_transition_between_status_queries_cannot_duplicate_queued_jobs():
+    github = runner.GitHub("token")
+
+    def api(method, path, body=None):
+        if "/jobs?" in path:
+            return {"jobs": [job("klukai-amarillo-small", id=7)]}
+        return {"workflow_runs": [{"id": 1}]}
+
+    github.call = api
+    assert [row["id"] for row in github.queued_jobs()] == [7]
+
+
+def test_new_busy_transition_is_credited_until_jobs_snapshot_contains_assignment(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-medium")])
+    controller.tick()
+    github.busy.add(100)
+    # The earlier jobs snapshot still says queued, but runner API now says busy.
+    github.assigned_runners = set()
+    controller.tick()
+    assert len(controller.guests) == 1
+    # A later coherent snapshot contains that assignment plus a DIFFERENT queue job.
+    github.assigned_runners = {100}
+    github.jobs = [job("klukai-amarillo-medium", id=8)]
+    controller.tick()
+    assert len(controller.guests) == 2
+
+
+def test_job_snapshot_records_consumed_jit_runner_ids():
+    github = runner.GitHub("token")
+    calls = []
+
+    def api(method, path, body=None):
+        calls.append(path)
+        if "/jobs?" in path:
+            return {
+                "jobs": [
+                    job("klukai-amarillo-small", id=7),
+                    job(
+                        "klukai-amarillo-small",
+                        id=8,
+                        status="in_progress",
+                        runner_id=101,
+                    ),
+                    job(
+                        "klukai-amarillo-small", id=9, status="completed", runner_id=102
+                    ),
+                ]
+            }
+        return {"workflow_runs": [{"id": 1}]}
+
+    github.call = api
+    assert [row["id"] for row in github.queued_jobs()] == [7]
+    assert github.assigned_runners == {101, 102}
+    assert sum("/jobs?" in path for path in calls) == 1

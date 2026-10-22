@@ -120,6 +120,7 @@ def mem_available_mib(meminfo: Path = Path("/proc/meminfo")) -> int:
 class GitHub:
     def __init__(self, token: str, opener: Callable[..., Any] = urllib.request.urlopen):
         self._token, self._open = token, opener
+        self.assigned_runners: set[int] = set()
 
     def call(self, method: str, path: str, body: dict | None = None) -> Any:
         request = urllib.request.Request(
@@ -149,11 +150,17 @@ class GitHub:
     def queued_jobs(self) -> list[dict[str, Any]]:
         """Queued jobs of Klukai's queued or in-progress runs, oldest first."""
         jobs = []
+        assigned: set[int] = set()
+        seen_runs: set[int] = set()
         for status in ("queued", "in_progress"):
             runs = self.call(
                 "GET", f"/repos/{REPO}/actions/runs?status={status}&per_page=30"
             )
             for run in runs.get("workflow_runs", []):
+                run_id = int(run["id"])
+                if run_id in seen_runs:
+                    continue  # a run can transition between the two API reads
+                seen_runs.add(run_id)
                 try:
                     listing = self.call(
                         "GET",
@@ -164,10 +171,18 @@ class GitHub:
                     # one) must not stop every other run's jobs from starting.
                     log.warning("skipping run %s: %s", int(run["id"]), error)
                     continue
-                jobs += [
-                    j for j in listing.get("jobs", []) if j.get("status") == "queued"
-                ]
-        return sorted(jobs, key=lambda j: (j.get("created_at") or "", j.get("id") or 0))
+                rows = listing.get("jobs", [])
+                jobs += [j for j in rows if j.get("status") == "queued"]
+                assigned.update(
+                    int(j["runner_id"])
+                    for j in rows
+                    if j.get("status") != "queued" and j.get("runner_id")
+                )
+        self.assigned_runners = assigned
+        unique = {job["id"]: job for job in jobs}
+        return sorted(
+            unique.values(), key=lambda j: (j.get("created_at") or "", j.get("id") or 0)
+        )
 
     def jit_config(self, name: str, profile: Profile) -> tuple[int, str]:
         result = self.call(
@@ -570,7 +585,16 @@ class Controller:
             # GitHub's queued list excludes the job already assigned to a busy
             # runner. Counting that runner again hides a distinct waiting job
             # for up to five minutes and leaves otherwise free CPUs idle.
-            idle = busy is not True
+            assignments = getattr(self.github, "assigned_runners", None)
+            # Job listings and runner_busy are separate, non-atomic API reads.
+            # Use assignment IDs from the same snapshot as queued demand. A
+            # newly busy runner absent there still covers its stale queued row;
+            # a listed assignment has consumed its JIT guest's only job.
+            idle = (
+                (guest.runner_id not in assignments)
+                if assignments is not None
+                else busy is not True
+            )
             if idle and wanted.get(guest.profile.label):
                 wanted[guest.profile.label] -= 1
         priority = {
