@@ -1184,12 +1184,6 @@ import-linter==2.11 \
     --hash=sha256:3dc54cae933bae3430358c30989762b721c77aa99d424f56a08265be0eeaa465 \
     --hash=sha256:5abc3394797a54f9bae315e7242dc98715ba485f840ac38c6d3192c370d0085e
     # via -r docker/core/requirements-ci.in
-importlib-metadata==8.7.1 \
-    --hash=sha256:49fef1ae6440c182052f407c8d34a68f72efc36db9ca90dc0113398f2fdde8bb \
-    --hash=sha256:5a1f80bf1daa489495071efbb095d75a634cf28a8bc299581244063b53176151
-    # via
-    #   -c docker/core/requirements.txt
-    #   opentelemetry-api
 iniconfig==2.3.1 \
     --hash=sha256:67f4b9c50da0dedf52af349e7749a80a9057a5031199791b906c3bb3ae878960 \
     --hash=sha256:9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7
@@ -1853,9 +1847,9 @@ mypy-extensions==1.1.0 \
     --hash=sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505 \
     --hash=sha256:52e68efc3284861e772bbcd66823fde5ae21fd2fdb51c62a211403730b916558
     # via mypy
-opentelemetry-api==1.41.1 \
-    --hash=sha256:0ad1814d73b875f84494387dae86ce0b12c68556331ce6ce8fe789197c949621 \
-    --hash=sha256:a22df900e75c76dc08440710e51f52f1aa6b451b429298896023e60db5b3139f
+opentelemetry-api==1.45.1 \
+    --hash=sha256:aa38ed19bcc084ba42782a73255b3582283eced7ad6dddbd6695189e69adfb75 \
+    --hash=sha256:b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb
     # via
     #   -c docker/core/requirements.txt
     #   opentelemetry-exporter-otlp-proto-grpc
@@ -1865,61 +1859,68 @@ opentelemetry-api==1.41.1 \
     #   opentelemetry-instrumentation-httpx
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
-opentelemetry-exporter-otlp-proto-common==1.41.1 \
-    --hash=sha256:0e253156ea9c36b0bd3d2440c5c9ba7dd1f3fb64ba7a08fc85fbac536b56e1fb \
-    --hash=sha256:10da74dad6a49344b9b7b21b6182e3060373a235fde1528616d5f01f92e66aa9
+opentelemetry-exporter-otlp-common==0.66b1 \
+    --hash=sha256:00ff8592c3a7cb729ff3fdc7ffa12372c243bdf2163e80c180994d0c7bd83ee9 \
+    --hash=sha256:6b1403487a2185ac1feb45fd5546fdf8630ce71c36bcefaadf51e2130e9e23f9
     # via
     #   -c docker/core/requirements.txt
     #   opentelemetry-exporter-otlp-proto-grpc
-opentelemetry-exporter-otlp-proto-grpc==1.41.1 \
-    --hash=sha256:537926dcef951136992479af1d9cd88f25e33d56c530e9f020ed57774dca2f94 \
-    --hash=sha256:b05df8fa1333dc9a3fda36b676b96b5095ab6016d3f0c3296d430d629ba1443b
+opentelemetry-exporter-otlp-proto-common==1.45.1 \
+    --hash=sha256:2e4adcc3a67bcf57804fc49514f0ef64974ca7590aa3491da389852b4a0628f6 \
+    --hash=sha256:2f446183ae7047b036226f1d846c41a834b0e8755ad13b51a51dd38952eb466c
+    # via
+    #   -c docker/core/requirements.txt
+    #   opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-exporter-otlp-proto-grpc==1.45.1 \
+    --hash=sha256:3b3dcfbfdcb4e35149fcf309972282054b45228f5c10547d0095d6578510a9a0 \
+    --hash=sha256:e42ecb789d2fc5d8145e3dadc3e2991c9f18cd166d7c7514e234702540274b76
     # via
     #   -c docker/core/requirements.txt
     #   -r docker/core/requirements.in
-opentelemetry-instrumentation==0.62b1 \
-    --hash=sha256:90e92a905ba4f84db06ac3aec96701df6c079b2d66e9379f8739f0a1bdcc7f45 \
-    --hash=sha256:976fc6e640f2006599e97429c949e622c108d0c17c2059347d1e6c93c707f257
+opentelemetry-instrumentation==0.66b1 \
+    --hash=sha256:4c4aa14dc9a24a02325a9d4c42c4d0208dbb1374c2b1b8fe6c9392d59f3e1008 \
+    --hash=sha256:e79a510f7d87c72d95e964ddb42193a0d9a75668c027d980eab032ea1322a5ce
     # via
     #   -c docker/core/requirements.txt
     #   opentelemetry-instrumentation-asgi
     #   opentelemetry-instrumentation-fastapi
     #   opentelemetry-instrumentation-httpx
-opentelemetry-instrumentation-asgi==0.62b1 \
-    --hash=sha256:7cf5f5d5c493bbb1edd2bd6d51fa879d964e94048904017258a32ffa47329310 \
-    --hash=sha256:b7f89be48528512619bd54fa2459f72afb1695ba71d7024d382ad96d467e7fa8
+opentelemetry-instrumentation-asgi==0.66b1 \
+    --hash=sha256:78b3f9bdf0fa38c65935a2ab46d59e0f9de873a51e0c95b0329f106e2ccb5274 \
+    --hash=sha256:78cdc5e45e897e16a8dac9d282e8d5bdf9af2d58e1313fa0bdd4a134c6f9dafc
     # via
     #   -c docker/core/requirements.txt
     #   opentelemetry-instrumentation-fastapi
-opentelemetry-instrumentation-fastapi==0.62b1 \
-    --hash=sha256:93fa9cc4f315819aee5f4fceb6196c1e5b0fbd789c5520c631de228bd3e5285b \
-    --hash=sha256:b377d4ba32868fb1ff0f64da3fcdd3aa154d698fc83d65f5d380ea21bf31ee19
+opentelemetry-instrumentation-fastapi==0.66b1 \
+    --hash=sha256:584cf9d2c4417ff8b2d6ff2bc606bfe13c8b3456018bf94f50f2cf658492505b \
+    --hash=sha256:97f8ac8fd7537517f9e6988bd0aca04bfa5aad564bcd46c245530739e2be72d1
     # via
     #   -c docker/core/requirements.txt
     #   -r docker/core/requirements.in
-opentelemetry-instrumentation-httpx==0.62b1 \
-    --hash=sha256:88614015df451d61bc7e73f22524e6f223611f80b6caad2f6bdcbe05fa0df653 \
-    --hash=sha256:a1fac9bcc3a6ef5996a7990563f1af0798468b2c146de535fd598369383fba7e
+opentelemetry-instrumentation-httpx==0.66b1 \
+    --hash=sha256:0342a4002c6dbc6c4bf22cc7e698f50f5c8b77f63325c6f40c94ab87e016bf4d \
+    --hash=sha256:5865a72c68098c85955a271ab8744b480a36e3ee492d35b8cadb93c7c4dbb618
     # via
     #   -c docker/core/requirements.txt
     #   -r docker/core/requirements.in
-opentelemetry-proto==1.41.1 \
-    --hash=sha256:0496713b804d127a4147e32849fbaf5683fac8ee98550e8e7679cd706c289720 \
-    --hash=sha256:4b9d2eb631237ea43b80e16c073af438554e32bc7e9e3f8ca4a9582f900020e5
+opentelemetry-proto==1.45.1 \
+    --hash=sha256:79e0fb95e4616691a469439238aa9224d75779b3e108e895d1aa125ab29ca77c \
+    --hash=sha256:f38e2a8413053c180cd3d2637fbb279673ec2f6a6e09c995aafa2f452c52b46e
     # via
     #   -c docker/core/requirements.txt
     #   opentelemetry-exporter-otlp-proto-common
     #   opentelemetry-exporter-otlp-proto-grpc
-opentelemetry-sdk==1.41.1 \
-    --hash=sha256:724b615e1215b5aeacda0abb8a6a8922c9a1853068948bd0bd225a56d0c792e6 \
-    --hash=sha256:edee379c126c1bce952b0c812b48fe8ff35b30df0eecf17e98afa4d598b7d85d
+opentelemetry-sdk==1.45.1 \
+    --hash=sha256:63d24a6ca645019a631e6a51999c73e93adcac1196ca640b8ae78a7cc4762bf3 \
+    --hash=sha256:c604c11dc429810812348989115fa44bd558772a3d7442afc43d024f2c250ca4
     # via
     #   -c docker/core/requirements.txt
     #   -r docker/core/requirements.in
+    #   opentelemetry-exporter-otlp-common
     #   opentelemetry-exporter-otlp-proto-grpc
-opentelemetry-semantic-conventions==0.62b1 \
-    --hash=sha256:c5cc6e04a7f8c7cdd30be2ed81499fa4e75bfbd52c9cb70d40af1f9cd3619802 \
-    --hash=sha256:cf506938103d331fbb78eded0d9788095f7fd59016f2bda813c3324e5a74a93c
+opentelemetry-semantic-conventions==0.66b1 \
+    --hash=sha256:497ca63bf383723411e8eaf60c8779e9877633c936bb641080adab59d0eb6ec8 \
+    --hash=sha256:d4cddeb4315490b35213f55e2bdc9ac54bb1e4d318927475bed62b35545e581b
     # via
     #   -c docker/core/requirements.txt
     #   opentelemetry-instrumentation
@@ -1927,9 +1928,9 @@ opentelemetry-semantic-conventions==0.62b1 \
     #   opentelemetry-instrumentation-fastapi
     #   opentelemetry-instrumentation-httpx
     #   opentelemetry-sdk
-opentelemetry-util-http==0.62b1 \
-    --hash=sha256:adf6facbb89aef8f8bc566e2f04624942ba08a7b678b3479a91051a8f4dc70a3 \
-    --hash=sha256:c57e8a6c19fc422c288e6074e882f506f85030b69b7376182f74f9257b9261f0
+opentelemetry-util-http==0.66b1 \
+    --hash=sha256:047dea1a628031f857a5a32261dc0e955bc162d39993ed1cffb8f2cff5ba8a62 \
+    --hash=sha256:8f443d7abcaf29c4a07b373bbd31b5b39132c0ed3c27d015a59dc0323d5b1c58
     # via
     #   -c docker/core/requirements.txt
     #   opentelemetry-instrumentation-asgi
@@ -3366,12 +3367,6 @@ yarl==1.25.1 \
     # via
     #   -c docker/core/requirements.txt
     #   aiohttp
-zipp==3.23.1 \
-    --hash=sha256:0b3596c50a5c700c9cb40ba8d86d9f2cc4807e9bedb06bcdf7fac85633e444dc \
-    --hash=sha256:32120e378d32cd9714ad503c1d024619063ec28aad2248dc6672ad13edfa5110
-    # via
-    #   -c docker/core/requirements.txt
-    #   importlib-metadata
 
 # The following packages are considered to be unsafe in a requirements file:
 pip==26.2.1 \
