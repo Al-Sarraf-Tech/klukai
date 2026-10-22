@@ -289,9 +289,10 @@ function boot() {
     onFrame,
     onAuthFailed: toLogin,
     onState: (s) => {
-      if (s === "down") {
-        notice("Link down — reconnecting…", 0);
-        // The server never replays a turn lost with the link: stop waiting on it.
+      if (s === "down" || s === "connecting") {
+        if (s === "down") notice("Link down — reconnecting…", 0);
+        // Resume may replace a dead socket before its queued close arrives.
+        // Abandon that turn when dialing too, without a false link-down notice.
         if (state.thinking || state.streaming) {
           const prev = state;
           state = abandonTurn(state);
@@ -426,10 +427,15 @@ function boot() {
       if (!gate.admit(request)) return;
       const reply = (status) => postToParent(window, { type: "klukai:speak-status", id: request.id, status });
       if (embedHidden) { reply("hidden"); return; }
+      if (document.hidden) { reply("hidden"); return; }
+      const ticket = ++voiceTicket;
       lastLine = request.text;
       syncButtons();
       let ready = false;
       try { ready = await startAudio(); } catch { ready = false; }
+      // A newer request, HUD stop, or hide wins even if the old resume later
+      // succeeds. A stale failure must not trigger the PWA's fallback either.
+      if (ticket !== voiceTicket) return;
       // He flipped back to CHAT while the audio was starting: stay quiet.
       if (embedHidden) { music?.setHidden(true); reply("hidden"); return; }
       if (!ready || !voice) { reply("unavailable"); return; }
@@ -468,7 +474,8 @@ function boot() {
     if (voicePhase !== "idle") {
       voiceTicket++;
       voice?.stop();
-      setVoicePhase("tap");
+      // stop() may already have emitted done via onBusy(false).
+      setVoicePhase("done");
       return;
     }
     const line = hudState && !hudState.streaming ? hudState.line.trim() : "";
@@ -586,9 +593,12 @@ function boot() {
     syncButtons();
   });
   $("btn-voice").addEventListener("click", async () => {
+    if (document.hidden) return;
+    const ticket = ++voiceTicket;
     if (!voice) {
       let ready = false;
       try { ready = await startAudio(); } catch { ready = false; }
+      if (ticket !== voiceTicket) return;
       if (!ready) {
         notice(beginWake().audioMissing, 4000);
         showAudioStatus(beginWake().audioMissing);
@@ -637,6 +647,11 @@ function boot() {
 
   // ── iOS / Safari lifecycle: suspend in the background, heal on return ──
   document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      voiceTicket++;
+      voice?.stop();
+      setVoicePhase("done");
+    }
     applyActivity();
     if (!document.hidden) {
       socket.resume();
