@@ -78,9 +78,10 @@ extension _ChatConnection on _ChatScreenState {
         if (match != null) {
           unmatched.remove(match);
           final echo = _messages[match];
-          // Keep local media/layout and the bubble's place while adopting
-          // the server identity. A live streaming bubble is never a candidate.
+          // Keep local media/layout, playback identity and the bubble's place
+          // while adopting the server id. Live streams are never candidates.
           _messages[match] = message.copyWith(
+            presentationId: echo.presentationId,
             imageData: echo.imageData,
             pretextHandle: echo.pretextHandle,
             tightBubbleWidth: echo.tightBubbleWidth,
@@ -121,7 +122,7 @@ extension _ChatConnection on _ChatScreenState {
     // minimum independently of display order before advancing the cursor.
     ChatMessage? oldest;
     for (final message in _older.followedBy(_messages)) {
-      if (_isLocalId(message.id)) continue;
+      if (!_isHistoryCursorId(message.id)) continue;
       if (oldest == null || _compareHistory(message, oldest) < 0) {
         oldest = message;
       }
@@ -165,6 +166,11 @@ extension _ChatConnection on _ChatScreenState {
       if (mounted) _update(() => _loadingOlder = false);
     }
   }
+
+  /// Errors are local-only, not echoes awaiting a persisted copy. Keep cursor
+  /// eligibility separate so excluding errors never makes them merge candidates.
+  static bool _isHistoryCursorId(String id) =>
+      id.isNotEmpty && !id.startsWith('error-') && !_isLocalId(id);
 
   /// Ids the client made up for a line before the server's copy arrived.
   static bool _isLocalId(String id) =>

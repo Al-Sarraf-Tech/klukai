@@ -134,7 +134,7 @@ extension _ChatVoice on _ChatScreenState {
       _speech.succeed(epoch);
       _messages.add(
         ChatMessage(
-          id: 'user-${DateTime.now().millisecondsSinceEpoch}',
+          id: _newLocalMessageId('user'),
           role: 'user',
           content: spoken,
         ),

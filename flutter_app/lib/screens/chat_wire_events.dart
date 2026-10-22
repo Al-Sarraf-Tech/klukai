@@ -25,7 +25,7 @@ extension _ChatWireEvents on _ChatScreenState {
           _streamingBuffer += text;
           if (_streamingId == null) {
             _thinkingText = null;
-            _streamingId = 'streaming-${DateTime.now().millisecondsSinceEpoch}';
+            _streamingId = _newLocalMessageId('streaming');
             _messages.add(
               ChatMessage(
                 id: _streamingId!,
@@ -164,7 +164,7 @@ extension _ChatWireEvents on _ChatScreenState {
         _update(() {
           _messages.add(
             ChatMessage(
-              id: 'proactive-${DateTime.now().millisecondsSinceEpoch}',
+              id: _newLocalMessageId('proactive'),
               role: 'assistant',
               content: message,
             ),
@@ -193,7 +193,7 @@ extension _ChatWireEvents on _ChatScreenState {
         final letter = msg['message'] as String? ?? '';
         final voiceId = msg['voice_id'] as String?;
         if (letter.isNotEmpty) {
-          final id = 'voice-letter-${DateTime.now().millisecondsSinceEpoch}';
+          final id = _newLocalMessageId('voice-letter');
           _update(() {
             if (voiceId != null && voiceId.isNotEmpty) {
               _voiceNotes[id] = voiceId;
@@ -220,7 +220,7 @@ extension _ChatWireEvents on _ChatScreenState {
             }
             _messages.add(
               ChatMessage(
-                id: 'image-${DateTime.now().millisecondsSinceEpoch}',
+                id: _newLocalMessageId('image'),
                 role: 'assistant',
                 content: '[IMAGE]',
                 imageData: imgData,
@@ -289,7 +289,7 @@ extension _ChatWireEvents on _ChatScreenState {
           _finalizeStreamingBubble();
           _messages.add(
             ChatMessage(
-              id: 'error-${DateTime.now().millisecondsSinceEpoch}',
+              id: _newLocalMessageId('error'),
               role: 'assistant',
               content: errText,
             ),
