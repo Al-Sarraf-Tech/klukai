@@ -1,0 +1,24 @@
+[Unit]
+Description=On-demand one-job VMs for Klukai's GitHub Actions jobs (Dominus pool)
+Requires=klukai-ci-network.service
+After=klukai-ci-network.service network-online.target virtqemud.socket
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/klukai-ci/klukai_ci_runner.py
+# Token: the owner's GitHub CLI login, read at start and kept in memory
+# (host.json token_source "gh-cli"); no token file is copied to this host.
+Restart=on-failure
+RestartSec=30s
+Nice=5
+ProtectHome=read-only
+StateDirectory=klukai-ci
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/libvirt/images/klukai-ci
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

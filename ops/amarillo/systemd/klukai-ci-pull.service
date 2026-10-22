@@ -1,0 +1,9 @@
+[Unit]
+Description=Pull Klukai CI evidence written by Dominus's pool into amarillo's tree
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=%h
+ExecStart=/usr/bin/python3 %h/git/klukai/ops/amarillo/scripts/klukai-ci-pull.py
+TimeoutStartSec=30min

@@ -180,3 +180,21 @@ def test_the_perf_vm_runs_alone_in_any_pool(build):
                                                      job("klukai-dominus-small", "2026-10-22T10:00:01Z")])
     controller.tick()
     assert [g.profile.kind for g in controller.guests.values()] == ["small"]
+
+
+def test_old_records_are_pruned_and_the_cache_and_fresh_runs_kept(tmp_path):
+    import os
+    runner = fresh()
+    old = tmp_path / ("a" * 40) / "1-1" / "frontend"
+    new = tmp_path / ("b" * 40) / "2-1" / "core"
+    cache = tmp_path / "cache" / "pip"
+    for path in (old, new, cache):
+        path.mkdir(parents=True)
+        (path / "file").write_text("x")
+    now = 10 * 86400.0
+    for path in [old, old / "file", old.parent, cache, cache / "file"]:
+        os.utime(path, (now - 3 * 86400, now - 3 * 86400))
+    for path in [new, new / "file", new.parent]:
+        os.utime(path, (now - 3600, now - 3600))
+    assert runner.prune_records(tmp_path, days=2, now=now) == 1
+    assert not (tmp_path / ("a" * 40)).exists() and new.exists() and cache.exists()

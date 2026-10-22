@@ -1,0 +1,10 @@
+[Unit]
+Description=Pull Dominus's Klukai CI evidence every minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=10s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

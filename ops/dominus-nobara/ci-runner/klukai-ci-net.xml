@@ -1,0 +1,15 @@
+<!-- Private NAT network for Klukai's disposable CI VMs (Dominus pool, owner decision 2026-10-22).
+     No DHCP and no DNS from the host: guests get a static address and public
+     resolvers. klukai-ci-guard.nft blocks the host, the LAN, Tailscale,
+     ZeroTier, Docker networks and IPv6; only the public internet is reachable. -->
+<network>
+  <name>klukai-ci</name>
+  <forward mode="nat">
+    <nat>
+      <port start="1024" end="65535"/>
+    </nat>
+  </forward>
+  <bridge name="kci-br0" stp="off" delay="0"/>
+  <dns enable="no"/>
+  <ip address="10.232.0.1" netmask="255.255.255.0"/>
+</network>

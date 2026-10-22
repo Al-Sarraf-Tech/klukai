@@ -1,0 +1,15 @@
+{
+  "pool": "dominus",
+  "steal_from": null,
+  "max_vcpus": 20,
+  "max_memory_mib": 32768,
+  "slots": 8,
+  "subnet": "10.232.0",
+  "artifacts": "/srv/klukai-ci/artifacts",
+  "temp_sensor": "k10temp",
+  "token_source": "gh-cli",
+  "heartbeat_variable": "KLUKAI_CI_DOMINUS_HEARTBEAT",
+  "gaming_marker": "/run/user/1000/dominus-gpu/game-active",
+  "quiet_hours": [23, 8],
+  "record_days": 2
+}

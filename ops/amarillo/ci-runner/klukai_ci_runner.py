@@ -90,6 +90,7 @@ TOKEN_SOURCE = "credential"  # or "gh-cli": the owner's GitHub CLI login, read a
 HEARTBEAT_VARIABLE: str | None = None  # repo variable the CI router reads
 GAMING_MARKER: Path | None = None  # no new guests while it exists
 QUIET_HOURS: tuple[int, int] | None = None  # local [start, end) hours: no new guests
+RECORD_DAYS: int | None = None  # a pool whose records amarillo pulls keeps only this many days
 HOST_CONFIG = Path("/etc/klukai-ci/host.json")
 # Owner, 2026-10-22: 12 of amarillo's 20 threads (no thermal events at 8 in three
 # days; MEMORY_HEADROOM_MIB still protects production's memory).
@@ -268,10 +269,10 @@ def configure(doc: dict[str, Any]) -> None:
     """Turn this module into one host's pool from its host config."""
     global POOL, STEAL_FROM, PROFILES, STEAL_PROFILES, MAX_VCPUS, MAX_MEMORY_MIB, SLOTS
     global SUBNET, ARTIFACTS, TEMP_SENSOR, TOKEN_SOURCE, HEARTBEAT_VARIABLE
-    global GAMING_MARKER, QUIET_HOURS
+    global GAMING_MARKER, QUIET_HOURS, RECORD_DAYS
     known = {"pool", "steal_from", "max_vcpus", "max_memory_mib", "slots", "subnet",
              "artifacts", "temp_sensor", "token_source", "heartbeat_variable",
-             "gaming_marker", "quiet_hours"}
+             "gaming_marker", "quiet_hours", "record_days"}
     if set(doc) - known:
         raise RunnerError(f"unknown host settings: {sorted(set(doc) - known)}")
     pool = doc.get("pool", POOL)
@@ -300,6 +301,8 @@ def configure(doc: dict[str, Any]) -> None:
     GAMING_MARKER = Path(marker) if marker else GAMING_MARKER
     hours = doc.get("quiet_hours")
     QUIET_HOURS = (int(hours[0]), int(hours[1])) if hours else QUIET_HOURS
+    days = doc.get("record_days", RECORD_DAYS)
+    RECORD_DAYS = int(days) if days is not None else None
 
 
 def profile_for(job: dict[str, Any], profiles: dict[str, Profile] | None = None) -> Profile | None:
@@ -736,6 +739,8 @@ class Controller:
         self.reap()
         if not self.guests:  # never re-own files a running guest is writing
             prune_build_caches(ARTIFACTS, now=self.clock())
+            if RECORD_DAYS is not None:
+                prune_records(ARTIFACTS, days=RECORD_DAYS, now=self.clock())
             normalize_ownership(ARTIFACTS)
         self.thermal()
         reason = self.ready() or self.blocked()
@@ -762,6 +767,22 @@ class Controller:
                 log.info("queued %s job waits: %s", profile.label, why)
                 continue  # backfill free capacity; the perf VM stays exclusive
             self.launch(profile)
+
+
+def prune_records(root: Path, *, days: int, now: float) -> int:
+    """Drop <sha>/<run> records untouched for `days` on a pool whose records are
+    pulled into amarillo's archive (the cache tree is never touched)."""
+    removed = 0
+    for record in root.glob("*/*"):
+        if record.is_symlink() or not record.is_dir() or not re.fullmatch(r"[0-9a-f]{40}", record.parent.name):
+            continue
+        newest = max((p.lstat().st_mtime for p in [record, *record.rglob("*")]), default=0.0)
+        if now - newest > days * 86400:
+            shutil.rmtree(record, ignore_errors=True)
+            removed += 1
+            with _quiet():
+                record.parent.rmdir()  # only if now empty
+    return removed
 
 
 def prune_build_caches(root: Path, *, now: float, keep: int = 2) -> int:

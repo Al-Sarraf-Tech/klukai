@@ -1,8 +1,76 @@
-# Klukai CI runner on amarillo
+# Klukai CI runners on amarillo and Dominus
 
-Owner decision 2026-10-19: Klukai's CI no longer depends on Dominus. Every
-queued Klukai job runs in its own fresh VM on amarillo, which is deleted after
-the job. Other repositories keep the Dominus fleet runners.
+Owner decision 2026-10-19: every queued Klukai job runs in its own fresh VM,
+deleted after the job. Owner decision 2026-10-22: when Dominus is online, one
+CI run is split across **both** hosts; when it is not, everything runs on
+amarillo, as before. Other repositories keep the Dominus fleet runners.
+
+## Two pools
+
+- **Pools.** The same controller runs on both hosts.
+  - amarillo needs no config: 12 threads, `klukai-amarillo-*` labels, perf alone.
+  - Dominus reads `/etc/klukai-ci/host.json` (`ops/dominus-nobara/ci-runner/`):
+    - 20 threads and 32 GiB;
+    - `klukai-dominus-*` labels;
+    - subnet `10.232.0.0/24` with the same fail-closed guard;
+    - AMD `k10temp` sensor;
+    - the owner's GitHub CLI login, read in memory.
+- **Heartbeat.** While Dominus is healthy, not gaming (no new guests while
+  `/run/user/1000/dominus-gpu/game-active` exists) and outside 23:00-08:00,
+  its controller writes the repository variable `KLUKAI_CI_DOMINUS_HEARTBEAT`
+  every minute, and `0` otherwise.
+- **Routing.** CI's first job (`tools/ci/pool.py`) reads the heartbeat:
+  - **under 150 s old:** `ci-image` → `test`/`real-backends`, the component
+    suites and Flutter go to Dominus;
+  - **always on amarillo:** quick checks and `image-scan` → `perf`. Perf
+    measures on calibrated hardware, and the release artifacts stay local to
+    the deployer;
+  - **otherwise:** all of it stays on amarillo.
+
+  Jobs that hand files to each other stay in one pool.
+- **Fallback.** amarillo's controller takes over any `klukai-dominus-*` job
+  still queued after 180 s (Dominus went off, started gaming, or is full),
+  registering its runner with that job's labels.
+- **Evidence.** Dominus cannot reach amarillo, so amarillo pulls.
+  `klukai-ci-pull.timer` (user unit, every minute) copies the run records Dominus
+  changed in the last 90 minutes into `/docker/klukai/ci-artifacts`, using
+  `ops/amarillo/scripts/klukai-ci-pull.py`. Nothing is deleted or overwritten.
+  The deployer reads it all locally and still binds every byte to the run's
+  own job log. Dominus prunes its records after two days.
+- **Measured basis.** Full CI took 16 min on amarillo alone. Jobs waited
+  2-7 min for CPUs, while booting a VM takes a median of 19 s. The
+  `image-scan` → `perf` chain, about 8 min, is the floor.
+
+### Install the Dominus pool (root on Dominus)
+
+```sh
+sudo install -d -m 0755 /opt/klukai-ci /etc/klukai-ci /var/lib/libvirt/images/klukai-ci/base
+# base.qcow2 + base.qcow2.sha256 copied from amarillo and digest-verified
+sudo install -m 0644 ops/amarillo/ci-runner/{klukai_ci_runner.py,klukai-ci-guard.nft} \
+  ops/dominus-nobara/ci-runner/klukai-ci-net.xml /opt/klukai-ci/
+sudo install -m 0755 ops/dominus-nobara/ci-runner/network-up.sh /opt/klukai-ci/
+sudo install -m 0644 ops/dominus-nobara/ci-runner/host.json /etc/klukai-ci/host.json
+sudo install -m 0644 ops/dominus-nobara/ci-runner/systemd/klukai-ci-{network,runner}.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now klukai-ci-network.service klukai-ci-runner.service
+```
+
+On amarillo, install the puller:
+
+```sh
+install -m 0644 ops/amarillo/systemd/klukai-ci-pull.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now klukai-ci-pull.timer
+```
+
+To take Dominus out of rotation, stop its controller:
+
+```sh
+sudo systemctl stop klukai-ci-runner
+```
+
+The heartbeat goes stale within 150 s, new runs stay on amarillo, and
+amarillo takes over anything still queued.
+
+## amarillo.
 
 | Label set (`runs-on`) | VM | Jobs |
 |---|---|---|
