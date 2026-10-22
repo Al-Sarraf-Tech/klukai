@@ -24,6 +24,28 @@ LEGACY_NAMES = {
 }
 
 
+ROUTED = {group: "${{ fromJSON(needs.source-policy.outputs.labels_%s) }}" % group
+          for group in ("build", "serial", "frontend")}
+MOVABLE_JOBS = {"ci-image": "build", "test": "serial", "real-backends": "serial",
+                "components": "serial", "frontend": "frontend"}
+
+
+def test_the_router_only_ever_yields_amarillo_or_dominus_one_job_vm_labels():
+    from tools.ci import pool
+
+    routed = workflow()["jobs"]["source-policy"]["outputs"]
+    for group in ("build", "serial", "frontend"):
+        assert routed[f"labels_{group}"] == "${{ steps.route.outputs.labels_%s }}" % group
+    for beat in ("0", "1800000000"):
+        plan = pool.plan(beat, 1800000010)
+        for group in ("build", "serial", "frontend"):
+            assert json.loads(plan[f"labels_{group}"]) == [
+                "self-hosted", "Linux", "X64", f"klukai-{plan['pool']}-{group}"]
+    route = next(s for s in workflow()["jobs"]["source-policy"]["steps"] if s.get("id") == "route")
+    assert route["env"]["DOMINUS_HEARTBEAT"] == "${{ vars.KLUKAI_CI_DOMINUS_HEARTBEAT }}"
+    assert "${{" not in route["run"]  # the variable enters through the environment
+
+
 def workflow():
     return yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
 
@@ -91,7 +113,12 @@ def test_existing_required_names_are_preserved_and_every_job_is_aggregated():
     assert set(required["needs"]) == set(jobs) - {"all-required", "affected-required"}
     for key, job in jobs.items():
         labels = job["runs-on"]
-        # Owner decision 2026-10-19: Klukai CI runs only on amarillo's one-job VMs.
+        if isinstance(labels, str):
+            # Owner, 2026-10-22: these groups run on Dominus when its pool is
+            # online (tools/ci/pool.py), else on amarillo; see the router test.
+            assert key in MOVABLE_JOBS and labels == ROUTED[MOVABLE_JOBS[key]], key
+            continue
+        # Owner decision 2026-10-19: everything else runs on amarillo's one-job VMs.
         assert labels in (
             ["self-hosted", "Linux", "X64", "klukai-amarillo-heavy"],
             ["self-hosted", "Linux", "X64", "klukai-amarillo-small"],
@@ -253,7 +280,9 @@ def test_core_and_real_backends_use_one_source_bound_tool_image():
     ]:
         job = jobs[name]
         assert "services" not in job
-        assert job["needs"] == "ci-image"
+        # source-policy publishes the pool; both stay with ci-image's executor image.
+        assert job["needs"] == ["source-policy", "ci-image"]
+        assert job["runs-on"] == ROUTED["serial"] and jobs["ci-image"]["runs-on"] == ROUTED["build"]
         commands = "\n".join(step.get("run", "") for step in job["steps"])
         assert command in commands and "pip install" not in commands
         assert (
@@ -335,7 +364,7 @@ def test_component_only_push_can_run_after_intentionally_skipped_tool_image():
         'contains(fromJSON(\'["success","skipped"]\'), needs.ci-image.result)'
         in job["if"]
     )
-    assert job["runs-on"][-1] == "klukai-amarillo-serial"
+    assert job["runs-on"] == ROUTED["serial"]
 
 
 @pytest.mark.parametrize("event", ["push", "workflow_dispatch"])

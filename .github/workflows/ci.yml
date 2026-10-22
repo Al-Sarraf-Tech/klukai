@@ -38,6 +38,10 @@ jobs:
       frontend: ${{ steps.select.outputs.frontend }}
       components: ${{ steps.select.outputs.components }}
       selected: ${{ steps.select.outputs.selected }}
+      pool: ${{ steps.route.outputs.pool }}
+      labels_build: ${{ steps.route.outputs.labels_build }}
+      labels_serial: ${{ steps.route.outputs.labels_serial }}
+      labels_frontend: ${{ steps.route.outputs.labels_frontend }}
     steps:
       - name: Require reviewed exact source before checkout
         id: admit
@@ -61,6 +65,14 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Choose the CI pool (Dominus when online, else amarillo)
+        # tools/ci/pool.py: a fresh Dominus heartbeat moves the build/test chain,
+        # components and Flutter there; quick checks and image-scan/perf stay on
+        # amarillo, which also takes over any Dominus job that waits too long.
+        id: route
+        env:
+          DOMINUS_HEARTBEAT: ${{ vars.KLUKAI_CI_DOMINUS_HEARTBEAT }}
+        run: python3 -m tools.ci.pool --heartbeat "${DOMINUS_HEARTBEAT:-0}" --now "$(date +%s)" >> "$GITHUB_OUTPUT"
       - name: Fail fast on formatting before allocating build VMs
         run: python3 -m tools.ci.quick_lint --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/preflight-ruff"
       - name: Every main push and dispatch certifies the full source
@@ -80,7 +92,7 @@ jobs:
     name: Pinned Python CI executor
     needs: source-policy
     if: needs.source-policy.outputs.core == 'true'
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-build]
+    runs-on: ${{ fromJSON(needs.source-policy.outputs.labels_build) }}
     timeout-minutes: 30
     outputs:
       image_id: ${{ steps.build.outputs.image_id }}
@@ -143,7 +155,7 @@ jobs:
     name: Isolated component suites
     needs: [source-policy, ci-image]
     if: always() && !cancelled() && needs.source-policy.result == 'success' && needs.source-policy.outputs.components == 'true' && contains(fromJSON('["success","skipped"]'), needs.ci-image.result)
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-serial]
+    runs-on: ${{ fromJSON(needs.source-policy.outputs.labels_serial) }}
     timeout-minutes: 20
     env:
       # Light containers drop all capabilities and the Ubuntu heavy guest restricts
@@ -204,8 +216,8 @@ jobs:
 
   test:
     name: Test Suite
-    needs: ci-image
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-serial]
+    needs: [source-policy, ci-image]
+    runs-on: ${{ fromJSON(needs.source-policy.outputs.labels_serial) }}
     timeout-minutes: 25
     env:
       KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/core
@@ -232,8 +244,8 @@ jobs:
 
   real-backends:
     name: Real PostgreSQL, Valkey and Qdrant recovery
-    needs: ci-image
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-serial]
+    needs: [source-policy, ci-image]
+    runs-on: ${{ fromJSON(needs.source-policy.outputs.labels_serial) }}
     timeout-minutes: 20
     env:
       KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/backends
@@ -546,7 +558,7 @@ jobs:
     name: Frontend validation and immutable PWA evidence
     needs: source-policy
     if: needs.source-policy.outputs.frontend == 'true'
-    runs-on: [self-hosted, Linux, X64, klukai-amarillo-frontend]
+    runs-on: ${{ fromJSON(needs.source-policy.outputs.labels_frontend) }}
     timeout-minutes: 30
     permissions:
       contents: read
