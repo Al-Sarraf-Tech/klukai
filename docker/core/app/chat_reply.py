@@ -35,6 +35,7 @@ class ChatReplyRuntime:
     fix_narration: Callable[[str], str]
     chunk_text: Callable[[str, int], list[str]]
     failure_prefix: str
+    on_completed: Callable[[ChatReply], None] | None = None
 
     async def respond(
         self,
@@ -78,7 +79,16 @@ class ChatReplyRuntime:
             await asyncio.sleep(0.02)
 
         latency_ms = int((time.monotonic() - start) * 1000)
-        await self.ws.send_done(user_id, msg_id, model_name)
+        failed = response_text.startswith(self.failure_prefix)
+        reply = ChatReply(response_text, model_name, latency_ms, failed)
+        if not failed and self.on_completed is not None:
+            self.on_completed(reply)
+        await self.ws.send_done(
+            user_id,
+            msg_id,
+            model_name,
+            final_text=response_text if not failed else None,
+        )
 
         logger.info(
             "Agent loop: %d iterations, %d tools used (%s)",
@@ -86,12 +96,7 @@ class ChatReplyRuntime:
             len(agent_result.tools_used),
             ", ".join(agent_result.tools_used) or "none",
         )
-        return ChatReply(
-            response_text,
-            model_name,
-            latency_ms,
-            response_text.startswith(self.failure_prefix),
-        )
+        return reply
 
     async def direct(
         self,
@@ -191,13 +196,13 @@ class ChatReplyRuntime:
         model_name = config.model
         latency_ms = int((time.monotonic() - start) * 1000)
 
-        # Send corrected final text if narration fix changed anything
-        final_text = response_text if response_text != raw_text else None
+        # A reconnecting/second device may have missed earlier token frames.
+        # Complete replies carry the whole canonical line, even if unchanged.
+        failed = stream_failed or response_text.startswith(self.failure_prefix)
+        final_text = response_text if not failed or response_text != raw_text else None
+        reply = ChatReply(response_text, model_name, latency_ms, failed)
+        if not failed and self.on_completed is not None:
+            self.on_completed(reply)
         await self.ws.send_done(user_id, msg_id, model_name, final_text=final_text)
 
-        return ChatReply(
-            response_text,
-            model_name,
-            latency_ms,
-            stream_failed or response_text.startswith(self.failure_prefix),
-        )
+        return reply

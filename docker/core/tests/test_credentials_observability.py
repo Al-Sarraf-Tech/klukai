@@ -123,6 +123,7 @@ def test_bearer_header_text_is_redacted_in_errors():
 def test_real_fastapi_traces_redact_credentials_even_with_header_capture(monkeypatch):
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.sampling import ALWAYS_ON
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
         InMemorySpanExporter,
@@ -130,8 +131,11 @@ def test_real_fastapi_traces_redact_credentials_even_with_header_capture(monkeyp
 
     # This test exports only to memory; enable its SDK despite the CI guard.
     monkeypatch.setenv("OTEL_SDK_DISABLED", "false")
+    # Ambient sampling must not make the credential assertions vacuous.
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER", "always_off")
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER_ARG", "0")
     exporter = InMemorySpanExporter()
-    provider = TracerProvider()
+    provider = TracerProvider(sampler=ALWAYS_ON)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     monkeypatch.setattr(trace, "_TRACER_PROVIDER", provider)
     monkeypatch.setattr(tracing, "_TRACING_INITIALIZED", True)
