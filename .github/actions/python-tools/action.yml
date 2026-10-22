@@ -1,22 +1,30 @@
 name: Complete pinned Python tools
-description: Build and validate private native tools before selecting the environment
+description: Build and validate the complete pinned role closure before selecting it
+inputs:
+  role:
+    description: Fixed committed dependency role (tools, bridge, perf)
+    default: tools
 runs:
   using: composite
   steps:
     - name: Bootstrap and select complete pinned tools
+      env:
+        KLUKAI_CI_ROLE: ${{ inputs.role }}
       shell: bash
       working-directory: ${{ github.workspace }}
       run: |
         set -euo pipefail
         umask 077
         python3 -m tools.ci.light_environment --root "$GITHUB_WORKSPACE" \
-          --output "$KLUKAI_CI_OUTPUT" --revision "$KLUKAI_CI_REVISION"
+          --output "$KLUKAI_CI_OUTPUT" --revision "$KLUKAI_CI_REVISION" \
+          --role "${KLUKAI_CI_ROLE:-tools}"
         python3 - <<'PY'
         import os, pathlib
         from tools.ci.light_environment import selection
         environment = selection(pathlib.Path(os.environ['GITHUB_WORKSPACE']),
                                 pathlib.Path(os.environ['KLUKAI_CI_OUTPUT']),
-                                os.environ['KLUKAI_CI_REVISION'])
+                                os.environ['KLUKAI_CI_REVISION'],
+                                role=os.environ.get('KLUKAI_CI_ROLE', 'tools'))
         with open(os.environ['GITHUB_PATH'], 'a') as selected:
             selected.write(environment + '/bin\n')
         with open(os.environ['GITHUB_ENV'], 'a') as selected:

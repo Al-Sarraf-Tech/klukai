@@ -108,8 +108,14 @@ BuildKit exports use unique run directories and atomic shared pointers; all
 cached blobs are checked before import. Corrupt/missing caches become cold
 builds. The performance job verifies and loads the current scanned candidate,
 then uses a verified exact-revision baseline artifact or builds it using only
-reusable dependency layers. Performance still gets all eight threads alone.
+reusable dependency layers. Performance still gets all eight threads alone. Its host harness installs the
+complete eleven-package perf closure copied from the existing CI hash lock;
+measured services still use the exact baseline and candidate images, with the
+same six paired rounds, samples and password hashing.
 
 Caches under the shared artifact tree contain no accounts or credentials.
 They can be removed while CI is idle to force cold setup; do not prune active
-run directories. Existing archival policy bounds the retained revision trees.
+run directories. While no guests run, the controller retains the two newest BuildKit exports
+per role, any currently published cache pointer, and a one-hour grace period.
+Only disposable cache payloads are pruned; terminal evidence and scanned image
+tars keep their existing archival policy.

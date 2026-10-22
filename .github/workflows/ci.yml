@@ -478,6 +478,8 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/python-tools
+        with:
+          role: perf
         env:
           KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/perf
 

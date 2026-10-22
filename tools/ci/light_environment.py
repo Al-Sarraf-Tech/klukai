@@ -427,7 +427,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--timeout", type=float, default=900)
-    parser.add_argument("--role", choices=("tools", "bridge"), default="tools")
+    parser.add_argument("--role", choices=("tools", "bridge", "perf"), default="tools")
     args = parser.parse_args()
     try:
         run(args)

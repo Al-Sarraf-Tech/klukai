@@ -1,0 +1,8 @@
+# Host-side perf harness only; measured services use the exact release images.
+# Versions and hashes in requirements-perf.txt are copied from requirements-ci.txt.
+httpx==0.28.1
+psycopg[binary]==3.3.6
+redis==7.4.0
+pip==26.2.1
+# Required by the Python 3.12 dependency closure; retained on Python 3.13+ too.
+typing-extensions==4.16.0
