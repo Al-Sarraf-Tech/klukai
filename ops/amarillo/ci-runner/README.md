@@ -37,6 +37,12 @@ amarillo, as before. Other repositories keep the Dominus fleet runners.
   `ops/amarillo/scripts/klukai-ci-pull.py`. Nothing is deleted or overwritten.
   The deployer reads it all locally and still binds every byte to the run's
   own job log. Dominus prunes its records after two days.
+  - The link is relayed, about 2 MiB/s, and a Dominus run writes about 1 GB.
+    So each pull copies the frontend job (the PWA the deployer reads, about
+    70 MB) first.
+  - The rest gets 45 s per pull; interrupted files resume on the next pull.
+  - A PWA still arriving makes the deployer retry with backoff, never deploy
+    early: the bytes must match the job log.
 - **Measured basis.** Full CI took 16 min on amarillo alone. Jobs waited
   2-7 min for CPUs, while booting a VM takes a median of 19 s. The
   `image-scan` → `perf` chain, about 8 min, is the floor.
@@ -45,7 +51,13 @@ amarillo, as before. Other repositories keep the Dominus fleet runners.
 
 ```sh
 sudo install -d -m 0755 /opt/klukai-ci /etc/klukai-ci /var/lib/libvirt/images/klukai-ci/base
-# base.qcow2 + base.qcow2.sha256 copied from amarillo and digest-verified
+# From amarillo: stream the base image (zstd more than halves 6.2 GiB over the relay),
+# then keep it only if its digest matches amarillo's base.qcow2.sha256:
+#   B=/var/lib/libvirt/images/klukai-ci/base
+#   sudo cat $B/base.qcow2 | zstd -3 -T8 -c | ssh dominus-nobara "zstd -dc | sudo tee $B/base.qcow2.partial >/dev/null"
+#   then on Dominus: sha256sum base.qcow2.partial = amarillo's digest, mv to base.qcow2 + base.qcow2.sha256,
+#   copy manifest.json and packages.tsv, and match amarillo's modes: dir root:qemu 0750,
+#   base.qcow2 qemu:qemu 0440.
 sudo install -m 0644 ops/amarillo/ci-runner/{klukai_ci_runner.py,klukai-ci-guard.nft} \
   ops/dominus-nobara/ci-runner/klukai-ci-net.xml /opt/klukai-ci/
 sudo install -m 0755 ops/dominus-nobara/ci-runner/network-up.sh /opt/klukai-ci/
@@ -147,6 +159,10 @@ auto-updates.
 - Rebuild the base image: `sudo systemctl stop klukai-ci-runner`, then wait for
   running guests to finish, then rerun `build-base.py`, then start the service.
   The manifest is in `/var/lib/libvirt/images/klukai-ci/base/manifest.json`.
+  Then give Dominus the same bytes: stop its controller, copy `base.qcow2`,
+  `base.qcow2.sha256`, `manifest.json` and `packages.tsv` as in the install steps, check the
+  digest, then start it. Until then, stop Dominus's controller so both pools
+  run on one base image.
 - Roll back to Dominus: revert the `runs-on` labels in `ci.yml`/`nightly.yml`
   (and the two contract tests) to `[self-hosted, Linux, X64, ci-heavy]` /
   `[fleet-ci-v1, ci-small]`, then stop `klukai-ci-runner`.
