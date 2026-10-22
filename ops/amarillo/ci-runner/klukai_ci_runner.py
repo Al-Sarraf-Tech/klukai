@@ -69,6 +69,10 @@ PAUSE_AT_C = 68.0
 RESUME_BELOW_C = 60.0
 MAX_JOB_SECONDS = 4 * 3600
 IDLE_SECONDS = 900  # an idle runner this old never got a job: free its capacity
+# A JIT runner gets a queued job of its label within seconds. Idle this long with
+# nothing of its kind queued, it is surplus: it yields its CPUs to a waiting job
+# of another kind instead of holding them until IDLE_SECONDS.
+SURPLUS_GRACE_SECONDS = 120
 SLOTS = 4  # static guest addresses 10.231.0.10-13
 
 ROOT = Path("/var/lib/libvirt/images/klukai-ci")
@@ -574,6 +578,7 @@ class Controller:
             if profile is not None:
                 wanted[profile.label] = wanted.get(profile.label, 0) + 1
         now = self.clock()
+        self.surplus: list[str] = []
         for guest in list(self.guests.values()):
             busy = self.github.runner_busy(guest.runner_id)
             if busy is False and now - guest.started > IDLE_SECONDS:
@@ -597,6 +602,8 @@ class Controller:
             )
             if idle and wanted.get(guest.profile.label):
                 wanted[guest.profile.label] -= 1
+            elif idle and busy is False and now - guest.started > SURPLUS_GRACE_SECONDS:
+                self.surplus.append(guest.name)
         priority = {
             "klukai-amarillo-small": 0,
             "klukai-amarillo-frontend": 1,
@@ -620,6 +627,19 @@ class Controller:
             return
         for profile in self.demand():
             why = self.admit(profile)
+            while why in ("CPU budget in use", "all slots in use") and self.surplus:
+                name = self.surplus.pop(0)
+                guest = self.guests.get(name)
+                # Re-ask GitHub right before: a job assigned since the snapshot
+                # makes it busy, and a busy (or unknown) guest is never removed.
+                if guest is None or self.github.runner_busy(guest.runner_id) is not False:
+                    continue
+                log.info(
+                    "%s is idle with no %s job queued; freeing it for a waiting %s job",
+                    name, guest.profile.label, profile.label,
+                )
+                self.teardown(name)
+                why = self.admit(profile)
             if why:
                 log.info("queued %s job waits: %s", profile.label, why)
                 continue  # backfill free capacity; an 8-thread perf VM stays exclusive

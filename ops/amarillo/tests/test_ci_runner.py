@@ -606,3 +606,54 @@ def test_job_snapshot_records_consumed_jit_runner_ids():
     assert [row["id"] for row in github.queued_jobs()] == [7]
     assert github.assigned_runners == {101, 102}
     assert sum("/jobs?" in path for path in calls) == 1
+
+
+def test_a_surplus_idle_guest_frees_capacity_for_a_starving_job(env):
+    """2026-10-22: five runs queued five build jobs; GitHub handed them out
+    faster than the queue snapshot showed, two build guests got no job and
+    held the whole CPU budget for 15 minutes while every serial and medium job
+    waited. An idle guest with nothing queued for its kind now yields."""
+    make, state, _ = env
+    controller, github, host = make(
+        [job("klukai-amarillo-build", "2026-10-22T09:00:00Z"),
+         job("klukai-amarillo-build", "2026-10-22T09:00:01Z")])
+    controller.tick()
+    assert len(host.domains) == 2  # 4 + 4 threads: the budget is full
+    github.busy.add(100)  # one guest took a build job; nothing left for the other
+    github.jobs = [job("klukai-amarillo-serial", "2026-10-22T09:01:00Z")]
+    state["now"] += runner.SURPLUS_GRACE_SECONDS - 1
+    controller.tick()
+    assert len(host.domains) == 2  # still inside its chance to get a job
+    state["now"] += 2
+    controller.tick()
+    labels = sorted(g.profile.label for g in controller.guests.values())
+    assert labels == ["klukai-amarillo-build", "klukai-amarillo-serial"]
+    assert 101 in github.deleted and 100 not in github.deleted  # the busy guest is untouched
+
+
+def test_a_surplus_guest_stays_when_nothing_waits_or_github_cannot_say(env):
+    make, state, _ = env
+    controller, github, host = make(
+        [job("klukai-amarillo-build", "2026-10-22T09:00:00Z"),
+         job("klukai-amarillo-build", "2026-10-22T09:00:01Z")])
+    controller.tick()
+    github.busy.add(100)
+    github.jobs = []  # nothing starving: no reason to tear it down early
+    state["now"] += runner.SURPLUS_GRACE_SECONDS + 5
+    controller.tick()
+    assert len(host.domains) == 2
+    github.jobs = [job("klukai-amarillo-serial", "2026-10-22T09:05:00Z")]
+    github.unknown.add(101)  # GitHub cannot say whether it is busy: never on a guess
+    controller.tick()
+    assert len(host.domains) == 2 and 101 not in github.deleted
+
+
+def test_an_idle_guest_still_covers_a_queued_job_of_its_kind(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-build", "2026-10-22T09:00:00Z")])
+    controller.tick()
+    github.jobs = [job("klukai-amarillo-build", "2026-10-22T09:00:00Z"),
+                   job("klukai-amarillo-serial", "2026-10-22T09:01:00Z")]
+    state["now"] += runner.SURPLUS_GRACE_SECONDS + 5
+    controller.tick()
+    assert 100 not in github.deleted  # its build job is still queued for it
