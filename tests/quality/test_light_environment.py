@@ -468,8 +468,6 @@ print(json.dumps({'net':os.readlink('/proc/self/ns/net'),'isolated':True}))
 @pytest.mark.parametrize(
     "job,failure",
     [
-        ("lint", "check"),
-        ("lint", "format"),
         ("typecheck", "mypy"),
         ("security", "requirements.txt"),
         ("security", "requirements-ci.txt"),

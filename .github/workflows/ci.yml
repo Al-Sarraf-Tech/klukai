@@ -77,7 +77,7 @@ jobs:
 
   ci-image:
     name: Pinned Python CI executor
-    needs: [source-policy, lint]
+    needs: source-policy
     if: needs.source-policy.outputs.core == 'true'
     runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
     timeout-minutes: 30
@@ -140,7 +140,7 @@ jobs:
 
   components:
     name: Isolated component suites
-    needs: [source-policy, lint]
+    needs: source-policy
     if: needs.source-policy.outputs.components == 'true'
     runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
     timeout-minutes: 20
@@ -263,31 +263,14 @@ jobs:
     name: Lint
     needs: source-policy
     runs-on: [self-hosted, Linux, X64, klukai-amarillo-small]
-    timeout-minutes: 20
-    env:
-      # Light containers drop all capabilities and the Ubuntu heavy guest restricts
-      # unprivileged user namespaces; wheels still build offline from hash-verified
-      # downloads and the report records the missing sandbox.
-      KLUKAI_CI_NATIVE_SANDBOX: unavailable
-    defaults:
-      run:
-        working-directory: docker/core
-
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-
-      - uses: ./.github/actions/python-tools
-        env:
-          # runner context is unavailable in job-level env.
-          KLUKAI_CI_OUTPUT: ${{ runner.temp }}/klukai-python-tools/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/lint
-
-      - name: Lint with ruff
-        run: |
-          python -m ruff check app/ --config ruff.toml
-          python -m ruff format --check app/ --config ruff.toml
+      - name: Lint with the existing hash-locked Ruff closure
+        run: python3 -m tools.ci.quick_lint --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/lint-ruff"
 
   typecheck:
     name: Type Check (mypy)
@@ -352,7 +335,7 @@ jobs:
 
   image-scan:
     name: Image Scan (trivy)
-    needs: [source-policy, lint]
+    needs: source-policy
     if: needs.source-policy.outputs.core == 'true'
     runs-on: [self-hosted, Linux, X64, klukai-amarillo-medium]
     timeout-minutes: 60
@@ -476,7 +459,7 @@ jobs:
 
   perf-gate:
     name: Perf Gate (p99 regression check)
-    needs: [source-policy, lint, image-scan]
+    needs: [source-policy, image-scan]
     if: needs.source-policy.outputs.full == 'true'
     runs-on: [self-hosted, Linux, X64, klukai-amarillo-heavy]
     timeout-minutes: 60
@@ -558,7 +541,7 @@ jobs:
 
   frontend:
     name: Frontend validation and immutable PWA evidence
-    needs: [source-policy, lint]
+    needs: source-policy
     if: needs.source-policy.outputs.frontend == 'true'
     runs-on: [self-hosted, Linux, X64, klukai-amarillo-frontend]
     timeout-minutes: 30

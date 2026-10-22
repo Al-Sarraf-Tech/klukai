@@ -240,7 +240,7 @@ def test_core_and_real_backends_use_one_source_bound_tool_image():
     build = jobs["ci-image"]
     script = "\n".join(step.get("run", "") for step in build["steps"])
     assert "python3 -m tools.ci.tool_image" in script
-    assert build["needs"] == ["source-policy", "lint"]
+    assert build["needs"] == "source-policy"
     assert (
         next(step for step in build["steps"] if "uses" in step)["with"]["fetch-depth"]
         == 0
