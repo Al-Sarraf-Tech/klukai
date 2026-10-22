@@ -112,7 +112,11 @@ void main() {
     });
 
     test('presentation identity defaults to the original row id', () {
-      final m = ChatMessage(id: 'streaming-1', role: 'assistant', content: 'Hi');
+      final m = ChatMessage(
+        id: 'streaming-1',
+        role: 'assistant',
+        content: 'Hi',
+      );
       expect(m.presentationId, 'streaming-1');
       expect(m.copyWith(isStreaming: false).presentationId, 'streaming-1');
     });
@@ -124,7 +128,10 @@ void main() {
         'content': 'Hi',
       }).copyWith(presentationId: 'streaming-1');
       expect(canonical.id, '00000000-0000-0000-0000-000000000001');
-      expect(canonical.copyWith(content: 'Hello').presentationId, 'streaming-1');
+      expect(
+        canonical.copyWith(content: 'Hello').presentationId,
+        'streaming-1',
+      );
     });
 
     test('createdAt defaults to now when not provided', () {
