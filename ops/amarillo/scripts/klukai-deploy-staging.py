@@ -60,12 +60,13 @@ PROJECT = "klukai-staging"
 APP, PG, WEBSRV = f"{PROJECT}-app", f"{PROJECT}-pg", f"{PROJECT}-web"
 CORE_PORT, WEB_PORT = 18401, 18402
 CORE_URL, WEB_URL = f"http://127.0.0.1:{CORE_PORT}", f"http://127.0.0.1:{WEB_PORT}"
-# Real commits on main and what their real CI runs say.
-BASE = "7f9bb38de6c5c1e10fd22d4e3a0b84a5bea195e2"  # full CI green (dispatch run 39695523339)
-C1 = "aaf601b850f71780089bf4e01d8eb3f3325e86d9"  # full CI green, artifacts retained
-C2 = "eeec54e53cec5ff534b56befaea71ff19376644f"  # full CI green, artifacts retained
-SELECTIVE = "8ee64f991c273516f40e1b8f60557b1bbbd66c22"  # green but selective: not certification
-CANCELLED = "70ee2c6df96d2c169fbd7583845769751265d0ea"  # its CI run was cancelled
+# Real commits and what their real CI runs say. Artifacts must still be retained
+# on amarillo (the archive keeps the newest few), so these move forward over time.
+BASE = "edb30e1e22209fa731bbf470a80ff63b466e17be"  # full CI green (run 39729400999)
+C1 = "07808296aa069f283ab034520fc57dc928c75e70"  # full CI green, artifacts retained
+C2 = "4ccc070c5c681cb9c118164f34e3ee8106ccec96"  # full CI green, artifacts retained
+SELECTIVE = "376f4cd9febe0b3a52c0c7e1565695b151471171"  # its run failed (frontend), then was cancelled
+CANCELLED = "66829d0f5925cef6a469ad9e73d81faf5fa960da"  # its CI run was cancelled
 
 STAND_IN = (
     "import http.server,os,sys\n"
@@ -175,10 +176,10 @@ class Stage:
         ok, detail = release.watch(target, baseline_id, ready_timeout=90, hold=4, interval=1)
         if not ok:
             raise RuntimeError(f"stand-in baseline did not start: {detail}")
-        # The web root, adopted from a copy of what production serves today, and
-        # served by the real core image through a read-only bind mount.
+        # The web root, adopted from a copy of the release production serves
+        # today, and served by the real core image through a read-only bind mount.
         live = self.root / "web-build-copy"
-        shutil.copytree(SOURCE_REPO / "web-build", live)
+        shutil.copytree((Path.home() / ".local/share/klukai/web/.current").resolve(), live)
         adopted = web.adopt(live, root=self.webroot, state=self.webstate)
         sh(["docker", "run", "-d", "--name", WEBSRV, "--user", "1000:1000",
             "-p", f"127.0.0.1:{WEB_PORT}:8080", "-v", f"{self.webroot}:/app/static:ro",
@@ -392,7 +393,7 @@ def run_all(stage: Stage) -> list[dict[str, Any]]:
 
     # 1-2. Failed or non-certifying CI never deploys.
     git(stage.remote, "update-ref", "refs/heads/main", SELECTIVE)
-    scenario("failed-ci: selective green run is not certification", lambda: d().run_once(),
+    scenario("failed-ci: a failed run is not certification", lambda: d().run_once(),
              lambda r: r["outcome"]["status"] == "ci_failed" and unchanged(r), stage, results)
     stage.reset()
     git(stage.remote, "update-ref", "refs/heads/main", CANCELLED)

@@ -883,10 +883,41 @@ def test_the_same_old_container_is_not_restored_until_running_and_ready(env, mon
 
     monkeypatch.setattr(env["deployer"], "deploy_core", disturbed_then_failed)
     monkeypatch.setattr(dom.release, "run", lambda *a, **kw: "")
+    monkeypatch.setattr(dom.time, "sleep", lambda s: None)  # the readiness re-checks
     assert env["deployer"].run_once()["status"] == "core_refused"
     assert any(c[0] == "core-restore" for c in world.calls)
     assert world.running and world.ready
     assert state(env)["inflight"] is None
+
+
+def test_one_missed_readiness_probe_does_not_recreate_an_untouched_core(env, monkeypatch):
+    """A pre-change core refusal re-checks the untouched old core; a single
+    readiness blip must not recreate production for nothing."""
+    sha = env["remote"].commit({"docker/core/app.py": "v2\n"})
+    certify(env, sha)
+    world = env["world"]
+    probes = iter([False, True])
+
+    def refused(*args):
+        raise OSError("backup failed before any production change")
+
+    class Blip(Target):
+        def ready(self):
+            return next(probes, True)
+
+    monkeypatch.setattr(env["deployer"], "deploy_core", refused)
+    monkeypatch.setattr(env["deployer"], "core_target", lambda: Blip(world))
+    monkeypatch.setattr(dom.time, "sleep", lambda s: None)
+    assert env["deployer"].run_once()["status"] == "core_refused"
+    assert not any(c[0] == "core-restore" for c in world.calls)
+
+
+def test_a_rollout_record_without_its_rollback_keys_falls_back_to_the_snapshot(env, monkeypatch):
+    deployer = env["deployer"]
+    calls = []
+    monkeypatch.setattr(deployer, "_core_back", lambda previous: calls.append(previous) or {"status": "unchanged"})
+    out = deployer.restore({"checkout": None, "core_image_id": OLD_IMAGE}, {"core": {"status": "rolled_back"}})
+    assert out["core"] == {"status": "unchanged"} and calls
 
 
 def test_resume_rechecks_a_failed_web_restore_already_pointing_at_previous(env, monkeypatch):

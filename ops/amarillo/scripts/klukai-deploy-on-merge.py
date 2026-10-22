@@ -62,6 +62,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 
 HERE = Path(__file__).resolve().parent
@@ -671,12 +672,13 @@ class Deployer:
             out["web"] = self._guard("web", lambda: self._web_back(previous.get("web_release")))
         if changed.get("checkout") and previous.get("checkout"):
             out["checkout"] = self._guard("checkout", lambda: self._checkout_back(previous["checkout"]))
-        if "core" in changed:
-            rollout = changed["core"]
+        rollout = changed.get("core") or {}
+        if rollout.get("rollback_tag") and rollout.get("previous_image_id"):
             out["core"] = self._guard("core", lambda: release.restore(
                 self.core_target(), rollout["rollback_tag"], rollout["previous_image_id"],
                 ready_timeout=self.cfg.ready_timeout))
-        elif changed.get("core_pending"):
+        elif "core" in changed or changed.get("core_pending"):
+            # No usable rollback record: put back the recorded snapshot instead.
             out["core"] = self._guard("core", lambda: self._core_back(previous))
         self._recheck_web_after_core(previous, out)
         return out
@@ -758,6 +760,16 @@ class Deployer:
             raise Refused("recovery snapshot has no valid explicit web release identity")
         return self.web_switch_back(rid)
 
+    def _ready_settled(self, target: Any, attempts: int = 3, pause: float = 5.0) -> bool:
+        """An untouched core that misses one readiness probe is not broken:
+        re-check a few times before recreating it."""
+        for attempt in range(attempts):
+            if target.ready():
+                return True
+            if attempt < attempts - 1:
+                time.sleep(pause)
+        return False
+
     @staticmethod
     def _core_observation(target: Any, *, allow_absent: bool = False) -> dict[str, Any] | None:
         # One inspect avoids pairing an image with another container's ID.
@@ -787,7 +799,7 @@ class Deployer:
         # Legacy snapshots without a container ID cannot prove it untouched.
         if live is None or live["core_image_id"] != image \
                 or live["core_container_id"] != previous.get("core_container_id") \
-                or not live["core_running"] or not target.ready():
+                or not live["core_running"] or not self._ready_settled(target):
             tag = pin if pin and self.image_id(pin) == image \
                 else f"{target.rollback_repo}:rollback-recover-{image[7:19]}"
             if tag != pin:
