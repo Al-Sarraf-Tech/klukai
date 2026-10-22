@@ -552,3 +552,26 @@ def test_routine_or_incomplete_success_never_certifies_a_release():
 
     with pytest.raises(ValueError, match="successful CI run"):
         relay.green_run("o/r", REV, "tok", api)
+
+
+def test_even_fully_green_ci_for_another_revision_is_rejected():
+    run = {
+        "id": 1,
+        "run_attempt": 1,
+        "head_sha": "b" * 40,
+        "conclusion": "success",
+        "run_started_at": "2026-10-17T01:00:00Z",
+    }
+
+    def api(path, token):
+        if "/jobs" in path:
+            return {
+                "jobs": [
+                    {"name": name, "conclusion": "success"}
+                    for name in relay.FULL_CI_GATES
+                ]
+            }
+        return {"workflow_runs": [run]}
+
+    with pytest.raises(ValueError):
+        relay.green_run("o/r", REV, "tok", api)

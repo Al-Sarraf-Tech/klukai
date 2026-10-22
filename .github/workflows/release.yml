@@ -24,6 +24,7 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: write
   packages: write
   id-token: write
@@ -45,6 +46,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Require full exact-source CI before any release build
+        id: full-ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import importlib.util, os, pathlib, sys
+          path = pathlib.Path('ops/amarillo/scripts/klukai-fetch-ci-artifacts.py')
+          spec = importlib.util.spec_from_file_location('klukai_release_ci', path)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          run = module.green_run(os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA'], os.environ['GH_TOKEN'])
+          print('Full exact-source CI certified by run ' + run)
+          PYTHON
 
       - name: Compute image metadata
         id: meta

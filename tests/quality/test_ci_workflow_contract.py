@@ -303,3 +303,15 @@ def test_only_admitted_source_can_execute_affected_gate_checker():
     source = workflow()["jobs"]["source-policy"]
     assert source["steps"][0]["id"] == "admit"
     assert "uses" not in source["steps"][0]
+
+
+def test_release_build_requires_full_ci_for_its_exact_revision_before_building():
+    data = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
+    assert data["permissions"]["actions"] == "read"
+    steps = data["jobs"]["build"]["steps"]
+    gate = next(i for i, row in enumerate(steps) if row.get("id") == "full-ci")
+    build = next(i for i, row in enumerate(steps) if row.get("name") == "Build image")
+    assert gate < build
+    assert steps[gate]["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "green_run" in steps[gate]["run"]
+    assert "os.environ['GITHUB_SHA']" in steps[gate]["run"]
