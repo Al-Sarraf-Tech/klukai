@@ -10,6 +10,12 @@ overwritten from amarillo's own jobs: each job directory of a run is written
 by exactly one pool. The deployer then reads everything locally and still
 binds every byte to the run's own job log. Dominus being off is normal; the
 next minute tries again.
+
+The link between the hosts is relayed (about 2 MiB/s) and a Dominus run
+writes about 1 GB, so each pull copies the frontend job first (the PWA the
+deployer reads, about 70 MB) and then gives the rest at most BULK_SECONDS.
+An interrupted file resumes from .rsync-partial on the next pull, so a big
+record never holds the deployer's PWA back for more than about a minute.
 """
 
 from __future__ import annotations
@@ -29,6 +35,11 @@ LOCAL = Path("/docker/klukai/ci-artifacts")
 WINDOW_MINUTES = 90
 RECORD = re.compile(r"[0-9a-f]{40}/[0-9]+-[0-9]+")
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
+# The job directory the deployer reads from a Dominus run.
+PRIORITY = ["--include=/*/*/frontend/***", "--exclude=/*/*/*"]
+BULK_SECONDS = 45
+# 24: a file vanished mid-copy (pruned or rewritten).
+FINE = (0, 24)
 
 
 def recent(run: Callable[..., Any] = subprocess.run) -> list[str] | None:
@@ -46,16 +57,22 @@ def recent(run: Callable[..., Any] = subprocess.run) -> list[str] | None:
 
 
 def pull(records: list[str], run: Callable[..., Any] = subprocess.run, local: Path = LOCAL) -> None:
-    """Copy those records; partial files are completed by a later pull."""
+    """Copy those records: the frontend jobs in full, then the rest for BULK_SECONDS."""
     if not records:
         return
-    result = run(
-        ["rsync", "-rlt", "--safe-links", "--rsync-path=sudo -n rsync", "--files-from=-",
-         "-e", " ".join(SSH[:-1] + ["ConnectTimeout=10"]), f"{HOST}:{REMOTE}/", f"{local}/"],
-        input="".join(r + "\n" for r in records), capture_output=True, text=True, timeout=1800,
-    )
-    if result.returncode not in (0, 24):  # 24: a file vanished mid-copy (pruned or rewritten)
-        raise RuntimeError(f"rsync failed with exit {result.returncode}")
+    listing = "".join(r + "\n" for r in records)
+    rsync = ["rsync", "-rlt", "--safe-links", "--chmod=D700,F600", "--partial-dir=.rsync-partial",
+             "--rsync-path=sudo -n rsync", "--files-from=-",
+             "-e", " ".join(SSH[:-1] + ["ConnectTimeout=10"]), f"{HOST}:{REMOTE}/", f"{local}/"]
+    first = run([rsync[0], *PRIORITY, *rsync[1:]], input=listing, capture_output=True, text=True,
+                timeout=900)
+    if first.returncode not in FINE:
+        raise RuntimeError(f"rsync failed with exit {first.returncode}")
+    # TERM, not KILL, so rsync keeps the part it copied for the next pull.
+    rest = run(["timeout", "--signal=TERM", "--kill-after=10", str(BULK_SECONDS), *rsync],
+               input=listing, capture_output=True, text=True, timeout=BULK_SECONDS + 30)
+    if rest.returncode not in (*FINE, 124):
+        raise RuntimeError(f"rsync failed with exit {rest.returncode}")
 
 
 def main() -> int:
