@@ -1,0 +1,22 @@
+[Unit]
+Description=Klukai deploy-on-merge: certified main commits to production
+After=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+Environment=HOME=%h
+Environment=KLUKAI_PRODUCTION_CHECKOUT=%h/git/klukai
+WorkingDirectory=%h
+# The owner-installed, pinned copy of the deployer (klukai-deploy-on-merge.py
+# install --revision <sha>): a merged change to the deployer itself runs only
+# after the owner installs it. Production still deploys the merged commit.
+ExecStart=/usr/bin/python3 %h/.local/share/klukai/deployer/current/ops/amarillo/scripts/klukai-deploy-on-merge.py run-once
+# A deployment is never cut short. SIGTERM reaches only the deployer, which
+# treats it as a stop request: it finishes (or restores) the deployment in
+# progress without interrupting its children (docker compose, pg_dump, git),
+# then exits. TimeoutStopSec bounds that; a run killed outright is restored at
+# the start of the next cycle.
+KillMode=mixed
+TimeoutStartSec=90min
+TimeoutStopSec=20min
