@@ -35,6 +35,13 @@ and backed up. No key value or credential file was inspected for this work.
 Each companion must use its own encrypted credential store; no new keys,
 top-ups or paid test calls are authorized by this handoff.
 
+Owner clarification (2026-10-23): Commander scenes must not use his portrait in
+image renders. The renderer uses only Klukai's approved image reference and a
+text-only description of the Commander: adult human man, short dark crew-cut
+hair, brown eyes, light-olive skin with natural warm shading, mature masculine
+facial features, and a strong build. His portrait is never opened or sent to
+the image provider.
+
 The owner subsequently authorized deployment of both apps' updates. The
 coordinating agent owns that deployment; this branch remains source preparation
 until the coordinator deploys it. No production checkout, services, credentials,

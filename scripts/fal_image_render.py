@@ -34,7 +34,7 @@ import urllib.request
 from PIL import Image
 
 import agy_art_runtime as agy
-from agy_image_render import COMMANDER_APPEARANCE, MAX_BYTES, normalize
+from agy_image_render import MAX_BYTES, normalize
 from gemini_art_review import read_image
 
 MODEL = "fal-ai/bytedance/seedream/v4.5/edit"
@@ -66,10 +66,16 @@ BACKGROUND = (
 )
 
 
-def brief(request: dict, names: list[str]) -> str:
+def brief(request: dict) -> str:
     people = (
-        "Image 2 is the adult Commander. " + COMMANDER_APPEARANCE + "Exactly two people. "
-        if "commander" in names
+        "The adult human Commander is a separate anime character: a man with short dark "
+        "crew-cut hair, brown eyes, light-olive skin with natural warm shading, mature "
+        "masculine facial features, and a strong build. Keep his anatomy human and adult, "
+        "with no Doll, android, or mechanical features. Use scene-appropriate clothing from "
+        "the written brief, or understated practical clothing if none is specified. This "
+        "description is text-only: do not imitate or reconstruct a photograph. Exactly two "
+        "people, Klukai and the Commander. "
+        if request.get("include_commander") is True
         else "Only Klukai in the image. "
     )
     return (
@@ -192,14 +198,15 @@ def render(request: dict, references: dict) -> bytes:
         raise agy.RuntimeError("Nudity rendering is unsupported; provider safety checks stay enabled")
     if request.get("include_commander") and request.get("user_id") != "jalsarraf":
         raise agy.RuntimeError("Commander reference is not authorized")
-    names = ["klukai"] + (["commander"] if request.get("include_commander") else [])
+    # Commander identity is text-only. Never open or send his private reference image.
+    names = ["klukai"]
     try:
         inputs = {name: read_image(references[name]) for name in names}
     except (ValueError, KeyError, TypeError) as exc:
         raise agy.RuntimeError("Approved image references are unavailable") from exc
     width, height = output_size(request["width"], request["height"])
     body = {
-        "prompt": brief(request, names),
+        "prompt": brief(request),
         "image_urls": [_data_uri(inputs[name]) for name in names],
         "image_size": {"width": width, "height": height},
         "num_images": 1,

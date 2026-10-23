@@ -109,12 +109,30 @@ def test_one_render_sends_locked_style_reference_and_caps(setup):
     assert attempts(tmp_path) == 1
 
 
-def test_commander_reference_only_for_the_owner(setup):
+def test_commander_is_described_in_text_without_reading_or_sending_his_image(setup, monkeypatch):
     api, _ = setup
+    read = []
+    original_read = fal.read_image
+    monkeypatch.setattr(
+        fal, "read_image", lambda entry: (read.append(entry), original_read(entry))[1]
+    )
     fal.render(dict(REQUEST, user_id="jalsarraf", include_commander=True), {"klukai": "klukai", "commander": "commander"})
     body = api.calls[0][3]
-    assert len(body["image_urls"]) == 2
-    assert "Image 2 is the adult Commander" in body["prompt"] and "Exactly two people" in body["prompt"]
+    assert len(body["image_urls"]) == 1
+    assert read == ["klukai"]
+    assert "The adult human Commander" in body["prompt"]
+    for detail in (
+        "short dark crew-cut hair",
+        "brown eyes",
+        "light-olive skin",
+        "mature masculine facial features",
+        "strong build",
+    ):
+        assert detail in body["prompt"]
+    assert "Exactly two people" in body["prompt"]
+    assert "from the photo" not in body["prompt"].lower()
+    assert "reference image of the Commander" not in body["prompt"]
+    assert "Image 2 is the adult Commander" not in body["prompt"]
     api.calls.clear()
     with pytest.raises(agy.RuntimeError):
         fal.render(dict(REQUEST, include_commander=True), {"klukai": "klukai", "commander": "commander"})
