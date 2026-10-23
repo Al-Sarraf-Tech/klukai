@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import psycopg
 import seed_memories
 from .test_reflection_on_return import _FakePool, _mk_affection
 from .test_memory_her_pov import _RailConn, _patch_rail
@@ -111,12 +112,12 @@ async def test_scheduled_remote_seed_fails_closed_before_db_or_paid_work(writer,
     monkeypatch.setenv("KLUKAI_CREATIVE_TEXT_PROVIDER", "anthropic" if text_remote else "local")
     monkeypatch.setattr(image_provider, "uses_cloud_images", lambda: image_remote)
     connect = AsyncMock(side_effect=AssertionError("archive history must not be loaded"))
-    monkeypatch.setattr(seed_memories.psycopg.AsyncConnection, "connect", connect)
+    monkeypatch.setattr(psycopg.AsyncConnection, "connect", connect)
     result = await seed_memories.main()
-    assert result == 1
+    assert result == 0
     connect.assert_not_awaited()
     writer.assert_not_awaited()
-    assert "durable source-aware jobs" in caplog.text
+    # Successful no-op: no task was started and no history was read.
 
 
 @pytest.mark.asyncio

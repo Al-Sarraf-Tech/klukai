@@ -26,8 +26,9 @@ def test_offline_loaders_reuse_the_protected_production_path() -> None:
     seed = (CORE / "seed_memories.py").read_text()
     regen = (REPO / "scripts" / "regen_images.py").read_text()
 
-    assert "from app.image_gen import" in seed
-    assert "free_comfyui_vram" in seed
+    # The retired scheduled seeder cannot load any renderer or acquire a GPU.
+    assert "from app.image_gen import" not in seed
+    assert "free_comfyui_vram" not in seed
     assert "from app.image_gen import generate_image" in regen
     for source in (seed, regen):
         for raw_endpoint in ("/prompt", "/history", "/view", "/free", "/interrupt"):

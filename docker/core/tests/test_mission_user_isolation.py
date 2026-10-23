@@ -235,7 +235,7 @@ async def test_owners_decompression_counts_as_his_proactive_line():
 
 
 @pytest.mark.asyncio
-async def test_aftermath_caption_and_image_context_belong_to_owner():
+async def test_mission_end_never_creates_an_unrequested_picture():
     engine = ProactiveEngine()
     engine._affection_level = 9
     engine._affection_levels["alice"] = 0
@@ -258,8 +258,8 @@ async def test_aftermath_caption_and_image_context_belong_to_owner():
         patch("app.proactive.mission.asyncio.create_task", side_effect=discard_task),
     ):
         await engine.trigger_mission_aftermath_image("alice", timer=_timer())
-    assert deliveries == [("alice", PRIVATE)]
-    assert build.call_args.kwargs["affection_level"] == 0
+    assert deliveries == []
+    build.assert_not_called()
 
 
 def test_her_day_context_reads_only_requested_mission(monkeypatch):

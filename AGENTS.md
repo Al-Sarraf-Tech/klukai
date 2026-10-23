@@ -66,9 +66,19 @@ Standing rules (owner, 2026-10-23):
 - Nudity need not be tasteful; explicit nudity is allowed when Klukai's own
   intimacy gate grants it. It stays adult (never childlike), Klukai alone,
   never with the Commander reference (a real person's likeness), no sex acts.
-  Only fal receives the grant flag that lifts its safety filter.
+  Character intimacy controls are unchanged. The current renderer does not
+  support the nudity grant: it refuses that flag before any private or paid
+  work and always keeps provider safety checks enabled.
 - **Pictures are made only on demand.** The fal API is paid per image: no
   automatic, proactive, dream, prewarm or seeding pictures.
+
+Final owner clarification (2026-10-23): this is a hard rule, including dreams;
+it supersedes any older nightly-picture allowance. Dreams remain text. Existing
+environment caps cannot opt automatic pictures back in. The owner reports the
+existing fal key was added to Klukai's encrypted store and backed up; that is
+owner-reported state, not permission to inspect credentials. Each companion's
+key belongs in its own encrypted store. The owner subsequently authorized
+deployment of both apps' updates; the coordinating agent owns the deployment.
 
 ## Klukai's pictures: Grok renders, Claude only checks
 

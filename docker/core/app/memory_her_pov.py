@@ -258,6 +258,7 @@ async def start_her_pov(user_id: str) -> dict[str, Any]:
         snapshot = {
             "id": job_id,
             "user_id": user_id,
+            "requested_by_user": True,
             "status": "queued",
             "phase": "queued",
             "message": "Standing by…",
@@ -333,7 +334,7 @@ async def run_job_from_queue(job_id: str) -> bool:
                 "SET status = 'searching', phase = 'searching', "
                 "    claimed_at = NOW(), attempts = attempts + 1, "
                 "    updated_at = NOW() "
-                "WHERE id = %s AND status = 'queued' "
+                "WHERE id = %s AND requested_by_user IS TRUE AND status = 'queued' "
                 "AND claimed_at IS NULL AND attempts = 0 AND finished_at IS NULL RETURNING user_id"
             )
             params: tuple[Any, ...] = (job_id,)
@@ -343,7 +344,7 @@ async def run_job_from_queue(job_id: str) -> bool:
                     "SET status = 'searching', phase = 'searching', "
                     "    claimed_at = NOW(), attempts = attempts + 1, "
                     "    updated_at = NOW() "
-                    "WHERE id = %s AND (status = 'queued' "
+                    "WHERE id = %s AND requested_by_user IS TRUE AND (status = 'queued' "
                     "OR (status IN ('searching', 'thinking', 'drawing') "
                     "AND updated_at < NOW() - %s * INTERVAL '1 minute')) "
                     "RETURNING user_id"
@@ -364,6 +365,8 @@ async def run_job_from_queue(job_id: str) -> bool:
         async with _JOBS_LOCK:
             job = _JOBS.get(job_id)
             if not job:
+                return True
+            if job.get("requested_by_user") is not True:
                 return True
             user_id = job.get("user_id")
             if job.get("status") in ("done", "failed"):

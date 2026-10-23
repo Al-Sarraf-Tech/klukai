@@ -45,9 +45,8 @@ async def test_push_subscription_delete_finishes_before_database_close(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("entrypoint", ["generation", "prewarm"])
 async def test_portrait_background_entrypoint_settles_before_clients_close(
-    application, monkeypatch, entrypoint
+    application, monkeypatch
 ):
     _, state, _ = application
     entered = asyncio.Event()
@@ -64,12 +63,8 @@ async def test_portrait_background_entrypoint_settles_before_clients_close(
     monkeypatch.setattr(portrait, "_inflight", {})
     monkeypatch.setattr(portrait, "_failed_at", {})
     monkeypatch.setattr(portrait, "_chain", work)
-    monkeypatch.setattr(portrait, "prewarm", work)
     async with main.lifespan(main.app):
-        if entrypoint == "generation":
-            assert portrait.ensure_generation("owner", "speed_star", 9)
-        else:
-            portrait.prewarm_soon("owner", 9)
+        assert portrait.ensure_generation("owner", "speed_star", 9)
         await entered.wait()
     assert finalizers == [False]
 

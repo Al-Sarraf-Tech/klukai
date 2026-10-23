@@ -92,10 +92,10 @@ async def _persist_job(job_id: str, snapshot: dict[str, Any], *, strict: bool) -
                 "INSERT INTO companion_her_pov_jobs "
                 "(id, user_id, status, phase, message, error, title, annotation, "
                 " mood, memory_id, has_image, exchange_preview, created_at, updated_at, "
-                " finished_at) "
+                " finished_at, requested_by_user) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, "
                 "        COALESCE(%s::timestamptz, NOW()), NOW(), "
-                "        CASE WHEN %s THEN NOW() ELSE NULL END) "
+                "        CASE WHEN %s THEN NOW() ELSE NULL END, %s) "
                 "ON CONFLICT (id) DO UPDATE SET "
                 " status = EXCLUDED.status, "
                 " phase = EXCLUDED.phase, "
@@ -126,6 +126,7 @@ async def _persist_job(job_id: str, snapshot: dict[str, Any], *, strict: bool) -
                     preview_json,
                     snapshot.get("created_at"),
                     terminal,
+                    snapshot.get("requested_by_user") is True,
                     terminal,
                 ),
             )

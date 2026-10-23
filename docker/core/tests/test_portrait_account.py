@@ -359,13 +359,13 @@ class TestAccountState:
         assert all(state["frames"][f] is None for f in pt.EXPRESSIONS)
         ensure.assert_not_called()
 
-    async def test_missing_base_enqueues_one_draw(self, worker):
+    async def test_missing_base_never_enqueues(self, worker):
         with patch("app.portrait.ensure_generation", return_value=True) as ensure:
             state = await pt.portrait_state(
                 "jalsarraf", "cat_cafe_date", 6, game_active=False
             )
-        assert state["status"] == "pending"
-        ensure.assert_called_once_with("jalsarraf", "cat_cafe_date", 6)
+        assert state["status"] == "unavailable"
+        ensure.assert_not_called()
 
     async def test_a_queued_draw_stays_pending_without_a_lookup(
         self, worker, monkeypatch
@@ -383,7 +383,7 @@ class TestAccountState:
             state = await pt.portrait_state(
                 "jalsarraf", "cat_cafe_date", 6, game_active=True
             )
-        assert state["status"] == "pending"
+        assert state["status"] == "unavailable"
 
     async def test_limit_reached_is_unavailable_without_enqueueing(
         self, worker, monkeypatch
@@ -427,25 +427,7 @@ class TestAccountPrewarmBackfillRefresh:
             assert await pt.prewarm("jalsarraf", 6) is False
         ensure.assert_not_called()
 
-    async def test_prewarm_enqueues_a_missing_base(self, monkeypatch):
-        monkeypatch.setattr(
-            pt, "current_outfit", AsyncMock(return_value="lantern_walk")
-        )
-        with patch("app.portrait.ensure_generation", return_value=True) as ensure:
-            assert await pt.prewarm("jalsarraf", 6) is True
-        ensure.assert_called_once_with(
-            "jalsarraf", "lantern_walk", 6, delay_s=pt.START_DELAY_S
-        )
 
-    async def test_backfill_never_probes_the_gpu(self, monkeypatch):
-        monkeypatch.setenv("PORTRAIT_BACKFILL", "1")
-        affection = MagicMock()
-        affection.get_state = AsyncMock(return_value=MagicMock(level=9))
-        monkeypatch.setattr(pt.context, "affection", affection)
-        with patch("app.portrait.ensure_generation", return_value=True) as ensure:
-            outfit = await pt.backfill_tick("jalsarraf")
-        assert outfit is not None
-        ensure.assert_called_once()
 
     async def test_backfill_skips_outfits_with_a_base(self, monkeypatch):
         from app import wardrobe

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 import random
 from typing import Any
@@ -96,102 +95,12 @@ class AlbumEventsMixin(_EngineBase):
     _event_art_pieces: Callable[[], list[dict[str, Any]]]
 
     async def _spontaneous_art_tick(self) -> None:
-        """Occasional gate for spontaneous art — ~18% roll per fire. She draws for
-        the Commander unprompted and leaves it in the album as a lasting gift."""
-        if random.random() > 0.18:
-            return
-        await self._spontaneous_art_event()
+        """Automatic pictures are disabled by owner policy."""
+        return
 
     async def _spontaneous_art_event(self) -> None:
-        """She draws something for the Commander unprompted, saves it to the album
-        (a lasting, kept gift), and — if he's connected — shows it to him live.
-
-        Rare (<= once / ~2.5 days), bonded-only (affection >= 6), and tender by
-        design (never an intimate-mood interrupt). The art is persisted regardless
-        of presence, so he discovers it in the archive even if he's away when she
-        makes it. Fully fail-open — a generation/save hiccup never raises.
-        """
-        now = self._event_now()
-        if self._last_spontaneous_art and (
-            now - self._last_spontaneous_art
-        ) < timedelta(hours=60):
-            return  # special, not routine
-        if self._affection_level < 6:
-            return  # a vulnerable gesture — only once genuinely bonded
-        if self._muted_until and now < self._muted_until:
-            return
-        if self._goodbye_hold_active(now):
-            return
-
-        piece = random.choice(self._event_art_pieces())
-        try:
-            from .. import memory_archive
-            from ..her_day import render_costume
-            from .. import wardrobe as _wardrobe
-            from ..image_gen import INTIMATE_MIN_LEVEL, build_prompt, generate_image
-
-            # She draws herself in what she has on today.
-            costume = await render_costume("jalsarraf", self._affection_level)
-            prompt = build_prompt(
-                piece["scene"],
-                couple=False,
-                affection_level=self._affection_level,
-                context=piece["scene"],
-                mood=self._last_mood,
-                time_of_day=_time_of_day(now.hour),
-                costume=costume,
-                costume_pinned=_wardrobe.granted_request_for("jalsarraf", costume),
-            )
-            img = await generate_image(
-                prompt,
-                sfw=self._affection_level < INTIMATE_MIN_LEVEL,
-                user_id="jalsarraf",
-            )
-            if not img:
-                return
-
-            # Persist as a kept Precious Memory so the gift lasts in the album.
-            saved = await memory_archive.save_image(
-                image_bytes=img,
-                prompt=prompt,
-                conversation_id="proactive_art",
-                mood=self._last_mood or "tender",
-                affection_level=self._affection_level,
-                curation={
-                    "keep": True,
-                    "annotation": piece["annotation"],
-                    "category": "Precious Memories",
-                    "image_tags": ["for_you", "spontaneous"],
-                },
-                user_id="jalsarraf",
-            )
-            if not saved:
-                # The album did not keep it (a duplicate of a recent caption):
-                # there is no gift to announce, and the cooldown stays free.
-                logger.info("Spontaneous art not kept; not announced")
-                return
-            self._last_spontaneous_art = now
-
-            # If he's here, tell him + show it live (caption first, then image).
-            from ..context import ws
-
-            if ws.is_connected("jalsarraf") and self._on_message_callback:
-                self._last_proactive_answered = False
-                await self._on_message_callback(piece["message"])
-                await asyncio.sleep(2)
-                import base64 as b64
-
-                await ws.send(
-                    "jalsarraf", {"type": "image", "data": b64.b64encode(img).decode()}
-                )
-
-            logger.info(
-                "Spontaneous art delivered (aff=%d, connected=%s)",
-                self._affection_level,
-                ws.is_connected("jalsarraf"),
-            )
-        except Exception as e:
-            logger.warning("Spontaneous art failed: %s", e)
+        """Do not render or save unrequested album gifts."""
+        return
 
     async def _memory_recall_tick(self) -> None:
         """Scheduled gate for living memory recall — ~35% roll per fire.

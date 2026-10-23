@@ -292,10 +292,10 @@ class TestDispatch:
         ws.send_proactive.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_her_pov_action_starts_a_job(self):
+    async def test_scheduled_her_pov_action_never_starts_a_job(self):
         with patch("app.memory_her_pov.start_her_pov", AsyncMock()) as start:
             await deferred.dispatch("claude", {"kind": "her_pov"})
-        start.assert_awaited_once_with("claude")
+        start.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_op_brief_action_delivers_the_slot(self):

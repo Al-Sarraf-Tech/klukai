@@ -6,7 +6,6 @@ ComfyUI is mocked throughout (the image_gen lease fixture is reused).
 
 from __future__ import annotations
 
-import asyncio
 import io
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -456,84 +455,8 @@ def _complete(user, outfit):
         (d / f"{f}.webp").write_bytes(b"x")
 
 
-class TestPrewarm:
-    @pytest.mark.asyncio
-    async def test_missing_set_is_drawn_in_the_background(self, portraits):
-        with patch("app.portrait.current_outfit", new=AsyncMock(return_value="speed_star")), \
-             patch("app.portrait.ensure_generation", return_value=True) as ensure:
-            assert await pt.prewarm("claude", 4) is True
-        ensure.assert_called_once_with("claude", "speed_star", 4, delay_s=pt.START_DELAY_S)
-
-    @pytest.mark.asyncio
-    async def test_complete_set_is_left_alone(self, portraits):
-        _complete("claude", "speed_star")
-        with patch("app.portrait.current_outfit", new=AsyncMock(return_value="speed_star")), \
-             patch("app.portrait.ensure_generation") as ensure:
-            assert await pt.prewarm("claude", 4) is False
-        ensure.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_prewarm_soon_is_fire_and_forget(self, portraits):
-        with patch("app.portrait.prewarm", new=AsyncMock(side_effect=RuntimeError("db"))) as pw:
-            pt.prewarm_soon("claude", 4)
-            await asyncio.gather(*list(pt._background))
-        pw.assert_awaited_once_with("claude", 4)
-        assert not pt._background
-
-    def test_prewarm_soon_without_a_loop_is_a_no_op(self):
-        pt.prewarm_soon("claude", 4)  # no running loop: nothing to do, no error
 
 
-class TestBackfill:
-    def _env(self, monkeypatch, *, gap=None, game=False, level=4):
-        monkeypatch.setenv("PORTRAIT_BACKFILL", "1")
-        monkeypatch.setattr(pt, "seconds_since_user_message", lambda: gap)
-        router = MagicMock()
-        router.is_game_active = AsyncMock(return_value=game)
-        aff = MagicMock()
-        aff.get_state = AsyncMock(return_value=SimpleNamespace(level=level))
-        monkeypatch.setattr(pt.context, "router", router)
-        monkeypatch.setattr(pt.context, "affection", aff)
-
-    @pytest.mark.asyncio
-    async def test_opt_in_only(self, portraits, monkeypatch):
-        monkeypatch.delenv("PORTRAIT_BACKFILL", raising=False)
-        assert pt.backfill_enabled() is False
-        assert await pt.backfill_tick("claude") is None
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("gap, game", [(60.0, False), (None, True)])
-    async def test_never_while_chatting_or_gaming(self, portraits, monkeypatch, gap, game):
-        self._env(monkeypatch, gap=gap, game=game)
-        with patch("app.portrait.ensure_generation") as ensure:
-            assert await pt.backfill_tick("claude") is None
-        ensure.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_one_set_at_a_time(self, portraits, monkeypatch):
-        self._env(monkeypatch)
-        pt._inflight["claude/x"] = MagicMock()
-        assert await pt.backfill_tick("claude") is None
-
-    @pytest.mark.asyncio
-    async def test_draws_the_next_unlocked_outfit_without_a_set(self, portraits, monkeypatch):
-        self._env(monkeypatch, gap=pt.BACKFILL_SILENCE_S + 1, level=0)
-        from app import wardrobe
-        unlocked = [o for o in wardrobe.catalog().values()
-                    if wardrobe.is_unlocked(o.id, 0) and wardrobe.is_visible(o, 0)]
-        _complete("claude", unlocked[0].id)
-        with patch("app.portrait.ensure_generation", side_effect=[False, True]) as ensure:
-            picked = await pt.backfill_tick("claude")
-        assert picked == unlocked[2].id
-        called = [c.args[1] for c in ensure.call_args_list]
-        assert called == [unlocked[1].id, unlocked[2].id]
-        assert all(wardrobe.is_unlocked(o, 0) for o in called)
-
-    @pytest.mark.asyncio
-    async def test_nothing_left_to_draw(self, portraits, monkeypatch):
-        self._env(monkeypatch)
-        with patch("app.portrait.existing_frames", return_value=set(pt.FRAME_NAMES)):
-            assert await pt.backfill_tick("claude") is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

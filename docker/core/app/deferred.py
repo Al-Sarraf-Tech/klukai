@@ -97,6 +97,8 @@ async def schedule(
     the caller genuinely has no task. A broker failure is survivable and does
     not fail the call.
     """
+    if action.get("kind") == "her_pov":
+        raise ValueError("Pictures are on demand only; Her POV cannot be scheduled")
     if due_at is None:
         if delay_seconds is None:
             raise ValueError("schedule() needs either delay_seconds or due_at")
@@ -267,9 +269,8 @@ async def dispatch(user_id: str, action: dict[str, Any]) -> None:
         await ws.send_proactive(user_id, text)
         return
     if kind == "her_pov":
-        from . import memory_her_pov
-
-        await memory_her_pov.start_her_pov(user_id)
+        # A scheduled row is not a present human tap. Keep the direct POST CTA.
+        logger.info("Scheduled Her POV skipped: pictures are on demand only")
         return
     if kind == "op_brief":
         from . import op_brief

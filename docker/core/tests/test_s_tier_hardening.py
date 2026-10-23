@@ -377,10 +377,10 @@ class TestComfyUIFacade:
         assert "http://100.107.121.5:1234/api/v1/comfy" in text
         assert "GPU_LEASE_HEADER" not in text  # use the central header helper
 
-    def test_seed_memories_reuses_protected_image_path(self):
+    def test_retired_seed_memories_cannot_load_image_provider(self):
         source = Path(__file__).resolve().parent.parent / "seed_memories.py"
         text = source.read_text()
-        assert "from app.image_gen import" in text
+        assert "from app.image_gen import" not in text
         assert '"/prompt"' not in text
         assert '"/free"' not in text
 

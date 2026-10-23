@@ -51,7 +51,3 @@ class TestSeedConfig:
     def test_image_tags_prompt_describes_scene(self, seed_module_text):
         """Image tag prompt must request scene description, not abstract concepts."""
         assert "WHERE are they" in seed_module_text or "image_tags" in seed_module_text
-
-    def test_retry_logic_present(self, seed_module_text):
-        """Seed script must retry failed batches."""
-        assert "failed_batches" in seed_module_text or "retry" in seed_module_text.lower()

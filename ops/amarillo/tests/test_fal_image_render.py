@@ -2,6 +2,7 @@
 approved references, caps reserved before every paid call, nothing leaked."""
 
 import base64
+from contextlib import closing
 import io
 import json
 from pathlib import Path
@@ -85,7 +86,7 @@ def setup(tmp_path, monkeypatch):
 
 
 def attempts(tmp_path):
-    with sqlite3.connect(tmp_path / "fal.sqlite3") as db:
+    with closing(sqlite3.connect(tmp_path / "fal.sqlite3")) as db:
         return db.execute("SELECT COUNT(*) FROM fal_attempts").fetchone()[0]
 
 
@@ -155,7 +156,7 @@ def test_provider_errors_are_classified_and_never_echo_the_key(setup, monkeypatc
     api, tmp_path = setup
     error = urllib.error.HTTPError("https://queue.fal.run", code, "x", {}, io.BytesIO(KEY.encode()))
     monkeypatch.setattr(fal, "_urlopen", FakeFal(submit_error=error))
-    with pytest.raises(kind) as raised:
+    with closing(error), pytest.raises(kind) as raised:
         fal.render(REQUEST, {"klukai": "klukai"})
     assert KEY not in str(raised.value) and str(code) in str(raised.value)
     assert attempts(tmp_path) == 1  # the paid attempt was reserved before dispatch
@@ -219,17 +220,25 @@ def test_key_comes_from_the_encrypted_store(monkeypatch):
 
 
 
-def test_granted_nudity_lifts_only_fals_safety_filter(setup, monkeypatch):
-    api, _ = setup
-    flagged = {"images": [{"url": "data:image/png;base64," + base64.b64encode(png()).decode()}],
-               "has_nsfw_concepts": [True]}
-    monkeypatch.setattr(fal, "_urlopen", api := FakeFal(result=flagged))
-    out = fal.render(dict(REQUEST, nudity=True, prompt=REQUEST["prompt"] + " Full, explicit nudity of Klukai alone is permitted."),
-                     {"klukai": "klukai"})
-    assert out.startswith(b"\x89PNG")
-    body = api.calls[0][3]
-    assert body["enable_safety_checker"] is False and len(body["image_urls"]) == 1
-    assert "Only Klukai in the image" in body["prompt"]
+@pytest.mark.parametrize("include_commander", [False, True, None])
+def test_unsupported_nudity_request_is_refused_before_any_private_or_paid_work(setup, monkeypatch, include_commander):
+    from unittest.mock import Mock
+
+    api, tmp_path = setup
+    read = Mock(side_effect=AssertionError("references must not be read"))
+    key = Mock(side_effect=AssertionError("credential must not be read"))
+    reserve = Mock(side_effect=AssertionError("attempt must not be spent"))
+    monkeypatch.setattr(fal, "read_image", read)
+    monkeypatch.setattr(fal, "fal_key", key)
+    monkeypatch.setattr(fal, "reserve_attempt", reserve)
+    request = dict(REQUEST, nudity=True, include_commander=include_commander)
+    with pytest.raises(agy.RuntimeError, match="unsupported"):
+        fal.render(request, {"klukai": "klukai", "commander": "commander"})
+    read.assert_not_called()
+    key.assert_not_called()
+    reserve.assert_not_called()
+    assert api.calls == []
+    assert not (tmp_path / "fal.sqlite3").exists()
 
 
 @pytest.mark.parametrize("nudity", [False, "yes", 1, None])

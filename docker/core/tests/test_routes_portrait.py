@@ -37,11 +37,15 @@ def client(tmp_path, monkeypatch):
     async def _user(token):
         return "claude" if token == "good" else None
 
+    def enqueue(user_id, outfit_id, level):
+        pt._inflight[pt._key(user_id, outfit_id)] = MagicMock()
+        return True
+
     app = FastAPI()
     register_portrait_routes(app)
     with patch("app.auth.get_user_from_token", side_effect=_user), \
          patch("app.portrait.current_outfit", new=AsyncMock(return_value="speed_star")), \
-         patch("app.portrait.ensure_generation", return_value=True) as ensure, \
+         patch("app.portrait.ensure_generation", side_effect=enqueue) as ensure, \
          TestClient(app) as c:
         c.router = router  # type: ignore[attr-defined]
         c.ensure = ensure  # type: ignore[attr-defined]
@@ -68,12 +72,12 @@ class TestAuth:
 
 
 class TestPortrait:
-    def test_pending_then_ready(self, client):
+    def test_cache_only_then_ready(self, client):
         r = client.get("/api/portrait", headers=AUTH)
         assert r.status_code == 200
-        assert r.json() == {"outfit": "speed_star", "status": "pending",
+        assert r.json() == {"outfit": "speed_star", "status": "unavailable",
                             "frames": dict.fromkeys(pt.FRAME_NAMES)}
-        client.ensure.assert_called_once_with("claude", "speed_star", 4)
+        client.ensure.assert_not_called()
         _frames()
         body = client.get("/api/portrait", headers=AUTH).json()
         assert body["status"] == "ready"

@@ -32,6 +32,7 @@ async def reconcile_once(
                 "WITH pending AS ("
                 " SELECT id FROM companion_her_pov_jobs"
                 " WHERE status = 'queued' AND claimed_at IS NULL AND attempts = 0"
+                " AND requested_by_user IS TRUE"
                 " AND finished_at IS NULL"
                 " AND (last_enqueued_at IS NULL OR last_enqueued_at < NOW() - %s * INTERVAL '1 second')"
                 " AND (%s::uuid IS NULL OR id = %s::uuid)"

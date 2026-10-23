@@ -7,10 +7,9 @@ realistic", painted anime background; without these Seedream drifts toward
 semi-realistic). Every paid call is first reserved in a persistent ledger
 against daily and monthly caps; a missing or invalid cap fails closed. The key
 is read from Klukai's encrypted store into memory only. Results come back
-inline (sync_mode), so fal keeps no copy in its request history. fal's safety
-filter stays on except for the worker's literal nudity grant (Klukai alone, past
-the intimacy gate, never with the Commander's reference; owner decisions
-2026-10-19 and 2026-10-23), which fal's API permits for fictional adults.
+inline (sync_mode), so fal keeps no copy in its request history. Provider
+safety checks always stay enabled. Unsupported nudity-grant requests are
+refused before reading references, accessing credentials or reserving spend.
 Outages, billing and rate limits raise ProviderUnavailable; refusals, safety
 blocks and malformed results are generation failures.
 """
@@ -189,11 +188,10 @@ def _image(result: dict, *, filtered: bool) -> bytes:
 
 
 def render(request: dict, references: dict) -> bytes:
+    if request.get("nudity") is True:
+        raise agy.RuntimeError("Nudity rendering is unsupported; provider safety checks stay enabled")
     if request.get("include_commander") and request.get("user_id") != "jalsarraf":
         raise agy.RuntimeError("Commander reference is not authorized")
-    nudity = request.get("nudity") is True
-    if nudity and request.get("include_commander") is not False:
-        raise agy.RuntimeError("Nudity is never drawn with the Commander reference")
     names = ["klukai"] + (["commander"] if request.get("include_commander") else [])
     try:
         inputs = {name: read_image(references[name]) for name in names}
@@ -206,7 +204,7 @@ def render(request: dict, references: dict) -> bytes:
         "image_size": {"width": width, "height": height},
         "num_images": 1,
         "sync_mode": True,
-        "enable_safety_checker": not nudity,
+        "enable_safety_checker": True,
     }
     key = fal_key()
     reserve_attempt()
@@ -218,7 +216,7 @@ def render(request: dict, references: dict) -> bytes:
         if time.monotonic() - started > TIMEOUT_SECONDS:
             raise agy.ProviderUnavailable("Seedream timed out")
         time.sleep(POLL_SECONDS)
-    result = normalize(_image(_call(job["response_url"], key), filtered=not nudity))
+    result = normalize(_image(_call(job["response_url"], key), filtered=True))
     digest = hashlib.sha256(result).digest()
     if any(digest == hashlib.sha256(normalize(data)).digest() for data in inputs.values()):
         raise agy.RuntimeError("Seedream returned a reference image instead of a new one")

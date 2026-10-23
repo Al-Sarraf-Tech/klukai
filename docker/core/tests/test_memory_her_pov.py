@@ -1138,7 +1138,7 @@ class TestClaimActiveFromDb:
         memory mirror must follow or the user stays locked out until restart."""
         stale_id = "33333333-3333-3333-3333-333333333333"
         hp._ACTIVE_JOB_BY_USER["claude"] = stale_id
-        hp._JOBS[stale_id] = {"id": stale_id, "user_id": "claude", "status": "queued"}
+        hp._JOBS[stale_id] = {"id": stale_id, "user_id": "claude", "status": "queued", "requested_by_user": True}
         conn = _RailConn(results=[[(stale_id,)], []])
         p = _patch_rail(conn)
         with p[0], p[1], p[2]:
@@ -1266,7 +1266,7 @@ class TestRunJobFromQueue:
 
     @pytest.mark.asyncio
     async def test_db_outage_falls_back_to_the_memory_board(self, clean_jobs):
-        hp._JOBS[self._JOB] = {"id": self._JOB, "user_id": "claude", "status": "queued"}
+        hp._JOBS[self._JOB] = {"id": self._JOB, "user_id": "claude", "status": "queued", "requested_by_user": True}
         broken = MagicMock()
         broken.execute = AsyncMock(side_effect=RuntimeError("db down"))
         run = AsyncMock()
@@ -1357,7 +1357,7 @@ class TestJobPersistence:
         assert params[0] == self._JOB and params[1] == "claude"
         assert params[2] == "done" and params[10] is True
         assert params[11] == '{"user": "u", "assistant": "a"}'
-        assert params[-2:] == (True, True)  # terminal → finished_at stamped
+        assert params[-3:] == (True, False, True)  # terminal; no origin escalation
 
     @pytest.mark.asyncio
     async def test_persist_defaults_and_non_terminal(self, clean_jobs):
@@ -1368,7 +1368,7 @@ class TestJobPersistence:
         _, params = conn.calls[0]
         assert params[1] == "" and params[2] == "queued" and params[3] == "queued"
         assert params[11] is None
-        assert params[-2:] == (False, False)
+        assert params[-3:] == (False, False, False)
 
     @pytest.mark.asyncio
     async def test_persist_never_raises(self, clean_jobs):

@@ -448,19 +448,19 @@ class TestState:
         ensure.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_pending_enqueues_the_chain(self):
+    async def test_missing_frames_never_enqueue(self):
         with patch("app.portrait.ensure_generation", return_value=True) as ensure:
             state = await pt.portrait_state("claude", "speed_star", 4, game_active=False)
-        assert state["status"] == "pending"
+        assert state["status"] == "unavailable"
         assert state["frames"] == dict.fromkeys(pt.FRAME_NAMES)
-        ensure.assert_called_once_with("claude", "speed_star", 4)
+        ensure.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_partial_while_frames_render(self):
         _write_all(frames=("base", "blink"))
         with patch("app.portrait.ensure_generation", return_value=False):
             state = await pt.portrait_state("claude", "speed_star", 4, game_active=False)
-        assert state["status"] == "partial"
+        assert state["status"] == "ready"
         assert state["frames"]["blink"] and state["frames"]["talk"] is None
 
     @pytest.mark.asyncio

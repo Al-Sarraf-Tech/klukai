@@ -1,30 +1,8 @@
-"""Live Portrait: Klukai's face, in whatever she is wearing today.
+"""Cached Live Portrait frames with explicit manual refresh.
 
-Per (user, outfit) the app keeps six frames under
-``/images/portraits/{STYLE_VERSION}/{user_id}/{outfit_id}/``:
-
-- ``base.webp``: a txt2img portrait (fixed composition: upper body, facing
-  the viewer, centred, a dark gradient backdrop with depth) with a deterministic seed per
-  (user, outfit). Its lossless source is kept as ``base.png``.
-- ``blink``, ``talk``, ``smile``, ``blush`` and ``annoyed``: masked img2img
-  (inpaint) of that base. Her eyes are located in the base (her canon green
-  irises), each frame repaints only its own feathered region (eyes, mouth,
-  cheeks, brows) and is composited back onto the base, so every other pixel
-  is identical and the frontend can crossfade between frames.
-
-Generation is lazy and idempotent. A request for missing frames enqueues one
-background chain per (user, outfit) that renders one image at a time through
-the normal ``image_gen`` lease path. The chain waits for a quiet gap in the
-chat (it never competes with a reply for the GPU), stands down while a game
-owns the GPU, and backs off after a failure. Frame URLs are short-lived HMAC
-signatures (``app/signed_urls.py``), so they work as a plain ``<img src>``.
-
-That inpainted set needs ComfyUI on Dominus, so it is drawn only with
-``KLUKAI_IMAGE_PROVIDER=comfyui`` (:func:`uses_gpu`). Otherwise Dominus is
-never asked (no game probe, no lease): an outfit without a base gets one base
-frame from the account worker (``app/portrait_account.py``), a base alone is
-"ready" and the missing frames fall back to it, and a cached set is never
-thrown away or redrawn.
+Portrait polling, wardrobe changes and idle backfill never start generation.
+Existing signed frames remain available. Only the manual refresh POST may
+start the render chain; the account-provider cache is never discarded.
 """
 
 from __future__ import annotations
@@ -35,7 +13,6 @@ import asyncio
 import hashlib
 import io
 import logging
-import os
 import time
 
 from PIL import Image
@@ -443,58 +420,22 @@ _background: set[asyncio.Task[Any]] = set()
 
 
 async def prewarm(user_id: str, level: int) -> bool:
-    """Draw the set for what she is wearing now, in the background. True if enqueued."""
-    outfit = await current_outfit(user_id, level)
-    if _complete(user_id, outfit):
-        return False
-    return ensure_generation(user_id, outfit, level, delay_s=START_DELAY_S)
+    """Outfit changes never authorize a picture."""
+    return False
 
 
 def prewarm_soon(user_id: str, level: int) -> None:
-    """Fire-and-forget prewarm (today's outfit picked or changed). Never raises."""
-
-    async def _run() -> None:
-        try:
-            await prewarm(user_id, level)
-        except Exception as e:
-            logger.debug("Portrait prewarm skipped: %s", e)
-
-    try:
-        task = spawn(_run())
-    except RuntimeError:
-        return
-    _background.add(task)
-    task.add_done_callback(_background.discard)
+    """Retained for wardrobe callers; automatic portrait generation is disabled."""
+    return
 
 
 def backfill_enabled() -> bool:
-    return os.environ.get("PORTRAIT_BACKFILL", "") == "1"
+    """Standing on-demand policy overrides legacy PORTRAIT_BACKFILL settings."""
+    return False
 
 
 async def backfill_tick(user_id: str) -> str | None:
-    """Idle backfill (opt-in): start ONE missing set for an unlocked outfit she
-    acknowledges, only while nothing else is drawing, no game owns the GPU and
-    he has been silent for BACKFILL_SILENCE_S. Returns the outfit enqueued."""
-    if not backfill_enabled() or _inflight:
-        return None
-    gap = seconds_since_user_message()
-    if gap is not None and gap < BACKFILL_SILENCE_S:
-        return None
-    if uses_gpu() and await context.router.is_game_active():
-        return None
-    from . import wardrobe
-
-    level = (await context.affection.get_state(user_id)).level
-    for outfit in wardrobe.catalog().values():
-        if not (
-            wardrobe.is_unlocked(outfit.id, level)
-            and wardrobe.is_visible(outfit, level)
-        ):
-            continue
-        if _complete(user_id, outfit.id):
-            continue
-        if ensure_generation(user_id, outfit.id, level):
-            return outfit.id
+    """Idle time never authorizes a picture."""
     return None
 
 
@@ -504,12 +445,7 @@ async def backfill_tick(user_id: str) -> str | None:
 async def portrait_state(
     user_id: str, outfit_id: str, level: int, *, game_active: bool
 ) -> dict[str, Any]:
-    """The GET /api/portrait payload; enqueues generation when frames are missing.
-
-    Off the GPU ``game_active`` does not apply: a base is "ready" (the missing
-    frames fall back to it), no base is "pending" while one can be drawn
-    today, else "unavailable" (her official portrait)."""
-    key = _key(user_id, outfit_id)
+    """Return cached signed frames without enqueuing any generation."""
     have = existing_frames(user_id, outfit_id)
     frames: dict[str, str | None] = {
         f: frame_url(
@@ -522,36 +458,11 @@ async def portrait_state(
         else None
         for f in FRAME_NAMES
     }
-    if not uses_gpu():
-        status = await _account_status(user_id, outfit_id, level, have)
-    elif len(have) == len(FRAME_NAMES):
-        status = "ready"
-    elif game_active or _backing_off(key):
-        # Nothing more is coming right now; whatever exists is what she has.
-        status = "ready" if "base" in have else "unavailable"
-    else:
-        ensure_generation(user_id, outfit_id, level)
+    if _key(user_id, outfit_id) in _inflight and len(have) < len(FRAME_NAMES):
         status = "partial" if "base" in have else "pending"
+    else:
+        status = "ready" if "base" in have else "unavailable"
     return {"outfit": outfit_id, "status": status, "frames": frames}
-
-
-async def _account_status(
-    user_id: str, outfit_id: str, level: int, have: set[str]
-) -> str:
-    from . import portrait_account
-
-    if "base" in have:
-        return "ready"
-    if _key(user_id, outfit_id) in _inflight:
-        return "pending"  # already queued or drawing: no allowance lookup per poll
-    if (
-        _backing_off(_key(user_id, outfit_id))
-        or not portrait_account.enabled_for(user_id)
-        or not await portrait_account.allowance_left(user_id, outfit_id)
-    ):
-        return "unavailable"
-    ensure_generation(user_id, outfit_id, level)
-    return "pending"
 
 
 def refresh(user_id: str, outfit_id: str, level: int) -> bool:

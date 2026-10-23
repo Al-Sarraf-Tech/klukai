@@ -48,6 +48,10 @@ class _OfflineDatabase:
         self.conn.create_function("NOW", 0, lambda: datetime.now(timezone.utc).isoformat())
         migration = Path(__file__).parents[1] / "migrations/170_her_pov_jobs.sql"
         self.conn.executescript(migration.read_text().replace("DEFAULT NOW()", "DEFAULT (NOW())"))
+        self.conn.execute(
+            "ALTER TABLE companion_her_pov_jobs "
+            "ADD COLUMN requested_by_user BOOLEAN NOT NULL DEFAULT FALSE"
+        )
         self.conn.executescript("""
             CREATE TABLE companion_messages (
                 id TEXT PRIMARY KEY, user_id TEXT, role TEXT, content TEXT,

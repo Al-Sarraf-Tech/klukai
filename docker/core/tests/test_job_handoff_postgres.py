@@ -17,6 +17,7 @@ async def board(migration_pool, monkeypatch):  # noqa: F811
     async with migration_pool.connection() as conn:
         await conn.execute((migrations / '170_her_pov_jobs.sql').read_text())
         await conn.execute((migrations / '200_her_pov_dispatch.sql').read_text())
+        await conn.execute((migrations / '250_on_demand_image_origin.sql').read_text())
 
     @asynccontextmanager
     async def connection():
@@ -29,14 +30,14 @@ async def board(migration_pool, monkeypatch):  # noqa: F811
     return migration_pool
 
 
-async def insert(pool, status='queued', attempts=0, claimed=False, finished=False):
+async def insert(pool, status='queued', attempts=0, claimed=False, finished=False, human=True):
     jid = str(uuid.uuid4())
     async with pool.connection() as conn:
         await conn.execute(
-            'INSERT INTO companion_her_pov_jobs (id,user_id,status,attempts,claimed_at,finished_at) '
-            'VALUES (%s,%s,%s,%s,%s,%s)',
+            'INSERT INTO companion_her_pov_jobs (id,user_id,status,attempts,claimed_at,finished_at,requested_by_user) '
+            'VALUES (%s,%s,%s,%s,%s,%s,%s)',
             (jid, jid, status, attempts, datetime.now(timezone.utc) if claimed else None,
-             datetime.now(timezone.utc) if finished else None),
+             datetime.now(timezone.utc) if finished else None, human),
         )
     return jid
 
@@ -224,10 +225,83 @@ async def test_dispatch_migration_preserves_existing_rows(migration_pool):  # no
     migrations = Path(__file__).parents[1] / 'migrations'
     async with migration_pool.connection() as conn:
         await conn.execute((migrations / '170_her_pov_jobs.sql').read_text())
-    await insert(migration_pool, 'drawing', attempts=1, claimed=True)
+    async with migration_pool.connection() as conn:
+        await conn.execute(
+            "INSERT INTO companion_her_pov_jobs (id,user_id,status,attempts,claimed_at) "
+            "VALUES (%s,'claude','drawing',1,NOW())", (str(uuid.uuid4()),)
+        )
     before = await snapshot(migration_pool)
     async with migration_pool.connection() as conn:
         await conn.execute((migrations / '200_her_pov_dispatch.sql').read_text())
     assert await snapshot(migration_pool) == before
     async with migration_pool.connection() as conn:
         assert await (await conn.execute('SELECT last_enqueued_at FROM companion_her_pov_jobs')).fetchall() == [(None,)]
+
+
+async def test_unconfirmed_queue_row_never_republishes_or_renders(board, monkeypatch):
+    from unittest.mock import AsyncMock
+    from app import job_handoff
+
+    jid = await insert(board, human=False)
+    publish, render = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(hp, '_enqueue_job', publish)
+    monkeypatch.setattr(hp, 'run_her_pov', render)
+    assert await job_handoff.reconcile_once() == 0
+    for cloud in (False, True):
+        monkeypatch.setattr(hp, '_cloud_generation_enabled', lambda cloud=cloud: cloud)
+        assert await hp.run_job_from_queue(jid) is True
+    publish.assert_not_awaited()
+    render.assert_not_awaited()
+
+
+async def test_origin_migration_preserves_started_jobs_and_only_parks_unstarted(migration_pool):
+    migrations = Path(__file__).parents[1] / 'migrations'
+    async with migration_pool.connection() as conn:
+        await conn.execute((migrations / '170_her_pov_jobs.sql').read_text())
+        ids = []
+        for status, attempts, claimed in (
+            ('queued', 0, False), ('queued', 1, False), ('queued', 0, True),
+            ('drawing', 1, True), ('done', 1, True), ('failed', 0, False),
+        ):
+            jid = str(uuid.uuid4())
+            ids.append(jid)
+            await conn.execute(
+                "INSERT INTO companion_her_pov_jobs "
+                "(id,user_id,status,attempts,claimed_at,annotation) VALUES (%s,%s,%s,%s,%s,%s)",
+                (jid, jid, status, attempts, datetime.now(timezone.utc) if claimed else None,
+                 'synthetic preserved annotation'),
+            )
+    before = {str(row[0]): row for row in await snapshot(migration_pool)}
+    async with migration_pool.connection() as conn:
+        await conn.execute((migrations / '250_on_demand_image_origin.sql').read_text())
+        rows = await (await conn.execute(
+            "SELECT id,status,phase,error,requested_by_user,annotation,finished_at "
+            "FROM companion_her_pov_jobs"
+        )).fetchall()
+    assert len(rows) == len(ids)
+    for row in rows:
+        assert row[4] is False
+        assert row[5] == 'synthetic preserved annotation'
+        if str(row[0]) == ids[0]:
+            assert row[1:4] == ('failed', 'confirmation_required', 'human_request_required')
+            assert row[6] is not None
+    after = {str(row[0]): row for row in await snapshot(migration_pool)}
+    assert {k: v for k, v in after.items() if k != ids[0]} == {
+        k: v for k, v in before.items() if k != ids[0]
+    }
+
+
+async def test_origin_cannot_be_escalated_or_lost_by_progress_upsert(board):
+    from app import her_pov_storage
+
+    legacy = await insert(board, human=False)
+    human = await insert(board, human=True)
+    await her_pov_storage._persist_job(
+        legacy, {'user_id': legacy, 'requested_by_user': True}, strict=True
+    )
+    await her_pov_storage._persist_job(human, {'user_id': human}, strict=True)
+    async with board.connection() as conn:
+        rows = await (await conn.execute(
+            "SELECT id,requested_by_user FROM companion_her_pov_jobs"
+        )).fetchall()
+    assert {str(row[0]): row[1] for row in rows} == {legacy: False, human: True}
