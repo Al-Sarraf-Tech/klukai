@@ -16,8 +16,8 @@ about 1 GB and its record holds about 6,600 files, so:
   the two days it keeps them. A record is copied again only when it changed
   since its last complete copy (the ledger in STATE).
 - Each pull copies the frontend job first (the PWA the deployer reads, about
-  70 MB), then gives the rest, oldest record first, at most BULK_SECONDS.
-  Interrupted files resume from .rsync-partial on the next pull.
+  70 MB), then gives the rest at most BULK_SECONDS, one record at a time and
+  oldest first. Interrupted files resume from .rsync-partial on the next pull.
 - Directories get local times, so amarillo's archiver (two hours idle) never
   packs a revision while its files are still arriving. A revision it has
   already packed and removed is never pulled back: that would overwrite its
@@ -34,6 +34,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Callable
 
 HOST = "dominus-nobara"
@@ -56,6 +57,8 @@ done
 # The job directory the deployer reads from a Dominus run.
 PRIORITY = ["--include=/*/*/frontend/***", "--exclude=/*/*/*"]
 BULK_SECONDS = 45
+# Too little time left to be worth starting another record's copy.
+MIN_SLICE_SECONDS = 5
 # 24: a file vanished mid-copy (pruned or rewritten).
 FINE = (0, 24)
 
@@ -87,27 +90,37 @@ def todo(listing: dict[str, str], synced: dict[str, str], local: Path = LOCAL,
     return sorted(wanted, key=lambda r: (float(listing[r].rsplit(":", 1)[1]), r))
 
 
-def pull(records: list[str], run: Callable[..., Any] = subprocess.run, local: Path = LOCAL) -> bool:
+def pull(records: list[str], run: Callable[..., Any] = subprocess.run, local: Path = LOCAL,
+         clock: Callable[[], float] = time.monotonic) -> list[str]:
     """Copy those records: frontend jobs in full, then the rest for BULK_SECONDS.
 
-    True when everything listed was copied, False when the time box cut it short.
+    The rest goes one record at a time, oldest first, so each record carries only
+    its own file list and counts as copied as soon as its own copy finishes.
+    Returns the records copied in full.
     """
     if not records:
-        return True
-    listing = "".join(r + "\n" for r in records)
+        return []
     rsync = ["rsync", "-rlt", "--omit-dir-times", "--safe-links", "--chmod=D700,F600",
              "--partial-dir=.rsync-partial", "--rsync-path=sudo -n rsync", "--files-from=-",
              "-e", " ".join(SSH[:-1] + ["ConnectTimeout=10"]), f"{HOST}:{REMOTE}/", f"{local}/"]
-    first = run([rsync[0], *PRIORITY, *rsync[1:]], input=listing, capture_output=True, text=True,
-                timeout=900)
+    first = run([rsync[0], *PRIORITY, *rsync[1:]], input="".join(r + "\n" for r in records),
+                capture_output=True, text=True, timeout=900)
     if first.returncode not in FINE:
         raise RuntimeError(f"rsync failed with exit {first.returncode}")
-    # TERM, not KILL, so rsync keeps the part it copied for the next pull.
-    rest = run(["timeout", "--signal=TERM", "--kill-after=10", str(BULK_SECONDS), *rsync],
-               input=listing, capture_output=True, text=True, timeout=BULK_SECONDS + 30)
-    if rest.returncode not in (*FINE, 124):
-        raise RuntimeError(f"rsync failed with exit {rest.returncode}")
-    return rest.returncode != 124
+    start, completed = clock(), []
+    for record in records:
+        left = int(BULK_SECONDS - (clock() - start))
+        if left < MIN_SLICE_SECONDS:
+            break
+        # TERM, not KILL, so rsync keeps the part it copied for the next pull.
+        rest = run(["timeout", "--signal=TERM", "--kill-after=10", str(left), *rsync],
+                   input=record + "\n", capture_output=True, text=True, timeout=left + 30)
+        if rest.returncode == 124:
+            break
+        if rest.returncode not in FINE:
+            raise RuntimeError(f"rsync failed with exit {rest.returncode}")
+        completed.append(record)
+    return completed
 
 
 def load(state: Path = STATE) -> dict[str, str]:
@@ -138,13 +151,12 @@ def main(run: Callable[..., Any] = subprocess.run, *, local: Path = LOCAL,
         # Records Dominus no longer lists were pruned there: forget them.
         synced = {r: fp for r, fp in load(state).items() if r in listing}
         wanted = todo(listing, synced, local, archive)
-        complete = pull(wanted, run, local)
-        if complete:
-            # The fingerprints were taken before the copy: anything written
-            # meanwhile changes them, so that record is copied again.
-            synced.update({r: listing[r] for r in wanted})
+        completed = pull(wanted, run, local)
+        # The fingerprints were taken before the copy: anything written
+        # meanwhile changes them, so that record is copied again.
+        synced.update({r: listing[r] for r in completed})
         save(synced, state)
-        print(json.dumps({"pulled": wanted, "complete": complete}))
+        print(json.dumps({"pending": len(wanted) - len(completed), "completed": completed}))
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         print(f"klukai-ci-pull: {error}", file=sys.stderr)
         return 1

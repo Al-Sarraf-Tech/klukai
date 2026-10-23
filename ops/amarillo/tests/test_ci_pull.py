@@ -96,7 +96,7 @@ def test_the_deployer_s_frontend_evidence_goes_first_and_the_rest_is_time_boxed(
     pull.pull([f"{SHA}/39-1"], run, tmp_path)
     (first, _), (rest, kw) = seen
     assert first[0] == "rsync" and "--include=/*/*/frontend/***" in first and "--exclude=/*/*/*" in first
-    assert rest[0] == "timeout" and str(pull.BULK_SECONDS) in rest
+    assert rest[0] == "timeout" and int(rest[rest.index("--kill-after=10") + 1]) <= pull.BULK_SECONDS
     assert not any(a.startswith("--include") or a.startswith("--exclude") for a in rest)
     assert kw["timeout"] > pull.BULK_SECONDS
 
@@ -105,7 +105,34 @@ def test_a_time_boxed_bulk_copy_that_runs_out_of_time_is_not_an_error(tmp_path):
     def run(argv, **kw):
         return subprocess.CompletedProcess(argv, 124 if argv[0] == "timeout" else 0, "", "")
 
-    assert pull.pull([f"{SHA}/39-1"], run, tmp_path) is False
+    assert pull.pull([f"{SHA}/39-1"], run, tmp_path) == []
+
+
+def test_records_are_copied_one_at_a_time_and_each_counts_once_complete(tmp_path):
+    old, new = f"{SHA}/1-1", f"{SHA}/2-1"
+    bulk, now = [], [0.0]
+
+    def run(argv, **kw):
+        if argv[0] != "timeout":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        bulk.append(kw["input"])
+        now[0] += 30  # each copy takes 30 s of the 45 s box
+        return subprocess.CompletedProcess(argv, 0 if len(bulk) == 1 else 124, "", "")
+
+    assert pull.pull([old, new], run, tmp_path, clock=lambda: now[0]) == [old]
+    assert bulk == [old + "\n", new + "\n"]  # oldest first, its own file list only
+    bulk.clear()
+    now[0] = 0.0
+
+    def slow(argv, **kw):
+        if argv[0] == "timeout":
+            bulk.append(kw["input"])
+            now[0] += 42
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    # 3 s left after the first copy: too little to start the next one.
+    assert pull.pull([old, new], slow, tmp_path, clock=lambda: now[0]) == [old]
+    assert bulk == [old + "\n"]
 
 
 def test_a_failed_copy_is_reported(tmp_path):
@@ -117,7 +144,7 @@ def test_a_failed_copy_is_reported(tmp_path):
 
 def test_nothing_to_copy_means_no_rsync():
     calls = []
-    assert pull.pull([], lambda *a, **k: calls.append(a)) is True
+    assert pull.pull([], lambda *a, **k: calls.append(a)) == []
     assert calls == []
 
 
