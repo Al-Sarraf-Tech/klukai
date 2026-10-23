@@ -154,3 +154,10 @@ def test_fix_hint_names_only_major_issues(check):
     assert check.fix_hint([{"severity": "minor", "what": "small"}]) == ""
     assert check.fix_hint([object(), {"severity": "major"}, {"severity": "major", "what": 5}]) == ""
     assert len(check.fix_hint([{"severity": "major", "what": "z" * 500}] * 3)) <= 600
+
+
+def test_rubric_rejects_drift_away_from_2d_anime():
+    """Seedream can drift to semi-realistic; that is a reject, not a minor difference."""
+    import claude_image_check as check
+    assert "- style: the render is photorealistic, photographic, 3D-rendered or semi-realistic" in check.RUBRIC
+    assert "style differences" not in check.RUBRIC

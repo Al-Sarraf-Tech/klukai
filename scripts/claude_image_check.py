@@ -46,10 +46,12 @@ Reject only for clear, major defects a viewer would notice at once:
   (never a woman, a doll or a child);
 - request: the scene, outfit or pose clearly contradicts the request;
 - artifacts: visible text, watermarks, signatures, UI, frames, split panels or collage,
-  heavy blur or corruption.
+  heavy blur or corruption;
+- style: the render is photorealistic, photographic, 3D-rendered or semi-realistic
+  instead of a 2D anime illustration like the reference, in the figures or the background.
 
 Everything else is minor and must not cause a reject: small details, the teardrop mark not
-visible, style differences, small hand imperfections. Do not judge morality, and do not
+visible, small hand imperfections. Do not judge morality, and do not
 penalise intimacy or attire the request asks for.
 
 Answer with only this JSON and nothing else:

@@ -49,6 +49,27 @@ conditioning clips. Dominus XTTS retains its separately pinned
 excerpt and adoption record under `ops/amarillo/voice_xpu`; do not change the
 Dominus lock to deploy that release.
 
+## Klukai's pictures: Seedream 4.5 on fal (owner decisions, 2026-10-23)
+
+Supersedes the Grok-only and "no paid image APIs" rules below for pictures.
+The owner funded fal.ai and made Seedream 4.5 (`fal-ai/bytedance/seedream/v4.5/edit`)
+Klukai's **only** picture provider (`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=fal`), checked
+by Claude as before. `scripts/fal_image_render.py` sends her approved reference
+(and, for the owner's scenes, the Commander reference) with a locked 2D-anime
+style prompt, reserves every paid call in a persistent ledger against
+`KLUKAI_FAL_DAILY_LIMIT=10` / `KLUKAI_FAL_MONTHLY_LIMIT=150` (missing caps fail
+closed), reads `FAL_KEY` from Klukai's encrypted compose env into memory only,
+and gets results inline so fal keeps no copy. The checker rejects renders that
+drift to photorealistic, 3D or semi-realistic.
+
+Standing rules (owner, 2026-10-23):
+- Nudity need not be tasteful; explicit nudity is allowed when Klukai's own
+  intimacy gate grants it. It stays adult (never childlike), Klukai alone,
+  never with the Commander reference (a real person's likeness), no sex acts.
+  Only fal receives the grant flag that lifts its safety filter.
+- **Pictures are made only on demand.** The fal API is paid per image: no
+  automatic, proactive, dream, prewarm or seeding pictures.
+
 ## Klukai's pictures: Grok renders, Claude only checks
 
 Owner decision 2026-10-17. Production pictures come from Grok through the

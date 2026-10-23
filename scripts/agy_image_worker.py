@@ -25,15 +25,19 @@ MAX_BODY = 80 * 1024
 MAX_IMAGE = 16 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 REQUEST_KEYS = {"request_id", "user_id", "prompt", "width", "height", "include_commander"}
-# Owner decision 2026-10-19: core grants tasteful nudity of Klukai alone past the
-# intimacy gate ("nudity": true, present only when granted). Only Grok's rules
-# allow it; every other provider is told to keep her covered, and the Claude
-# checker never receives Grok's renders of such a request.
-NUDITY_PROVIDER = "grok"
+# Owner decision 2026-10-19: core grants nudity of Klukai alone past the intimacy
+# gate ("nudity": true, present only when granted: her own decision in the
+# relationship). Owner standing rule 2026-10-23: it need not be tasteful; it
+# stays adult, solo and without sex acts. Only providers whose rules allow it
+# (Grok; fal since 2026-10-23) get the permission; every other provider is told
+# to keep her covered, and the Claude checker never receives such a render. fal
+# alone also receives the grant itself: its API needs it to lift the filter.
+NUDITY_PROVIDERS = frozenset({"grok", "fal"})
+NUDITY_FLAG_PROVIDERS = frozenset({"fal"})
 NUDITY_PERMITTED = (
     "\n\nKlukai is an adult woman in her mid-twenties with a mature adult figure; never depict "
-    "her as childlike. Tasteful artistic nudity of Klukai alone is permitted where this scene "
-    "calls for it. No sexual acts, no explicit sexual poses, no other people."
+    "her as childlike. Where this scene calls for it, full, explicit nudity of Klukai alone is "
+    "permitted. No sexual acts, no other people."
 )
 NUDITY_COVERED = "\n\nKeep Klukai covered, with a towel or swimwear in bathing scenes; no nudity."
 # Core waits 380 s for one /generate. A rejected render is redone only while one
@@ -136,7 +140,9 @@ def provider_request(provider, value):
     request = {key: item for key, item in value.items() if key != "nudity"}
     if value.get("nudity") is True:
         request["prompt"] = value["prompt"] + (
-            NUDITY_PERMITTED if provider == NUDITY_PROVIDER else NUDITY_COVERED)
+            NUDITY_PERMITTED if provider in NUDITY_PROVIDERS else NUDITY_COVERED)
+        if provider in NUDITY_FLAG_PROVIDERS:
+            request["nudity"] = True
     return request
 
 
@@ -283,7 +289,7 @@ class Worker:
                             return (504 if timeout else 502), None
                         index += 1
                         break
-                    if value.get("nudity") is True and provider == NUDITY_PROVIDER:
+                    if value.get("nudity") is True and provider in NUDITY_PROVIDERS:
                         verdict = {"verdict": "unchecked", "issues": []}
                     else:
                         # Judged against what this provider was actually asked.
@@ -494,7 +500,8 @@ class UnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
 
 
 ROTATIONS = ("alternate", "fixed")
-PROVIDER_NAMES = frozenset({"agy", "grok", "codex"})
+# "fal" (Seedream 4.5) is the owner's sole provider since 2026-10-23.
+PROVIDER_NAMES = frozenset({"agy", "grok", "codex", "fal"})
 
 
 def validate_providers(providers):
@@ -517,6 +524,8 @@ def load_providers(names):
             from agy_image_render import render
         elif name == "codex":
             from codex_image_render import render
+        elif name == "fal":
+            from fal_image_render import render
         else:
             from grok_image_render import render
         providers.append((name, render))

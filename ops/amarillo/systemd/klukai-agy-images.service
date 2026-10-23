@@ -1,5 +1,5 @@
 [Unit]
-Description=Klukai account image worker (Grok, then Codex, then Agy)
+Description=Klukai image worker (Seedream 4.5 on fal, checked by Claude)
 After=default.target
 
 [Service]
@@ -8,7 +8,9 @@ UMask=0077
 WorkingDirectory=%h/git/klukai
 Environment=HOME=%h
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
-Environment=KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok,codex,agy
+Environment=KLUKAI_ACCOUNT_IMAGE_PROVIDERS=fal
+Environment=KLUKAI_FAL_DAILY_LIMIT=10
+Environment=KLUKAI_FAL_MONTHLY_LIMIT=150
 Environment=KLUKAI_IMAGE_ROTATION=fixed
 Environment=KLUKAI_IMAGE_CHECKER=claude
 EnvironmentFile=%h/.config/klukai/agy-images.env

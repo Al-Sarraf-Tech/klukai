@@ -858,3 +858,51 @@ def test_a_failed_attempt_says_why_in_the_journal(worker, setup_files, capsys):
         assert request(path, payload())[0] in (502, 504)
     err = capsys.readouterr().err
     assert "unavailable: ProviderUnavailable: Grok account or image service" in err
+
+
+def test_fal_is_an_accepted_sole_provider():
+    """Owner decision 2026-10-23: Seedream 4.5 on fal is Klukai's only renderer."""
+    import agy_image_worker as w
+    assert w.validate_providers([("fal", lambda *_: None)])[0][0] == "fal"
+    assert [name for name, _ in w.load_providers(["fal"])] == ["fal"]
+
+
+def test_granted_nudity_reaches_fal_with_its_api_switch_and_skips_the_checker(worker, setup_files):
+    seen, checked = [], []
+
+    def fal(value, references):
+        seen.append(value)
+        return PNG
+
+    value = payload(prompt="Klukai bathing in an onsen", nudity=True)
+    with running(worker, setup_files, providers=[("fal", fal)],
+                 checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as path:
+        assert request(path, value)[0] == 200
+    (sent,) = seen
+    assert sent["nudity"] is True and sent["include_commander"] is False
+    assert sent["prompt"] == value["prompt"] + worker.NUDITY_PERMITTED
+    assert checked == []
+
+
+def test_fal_without_a_grant_never_sees_the_switch(worker, setup_files):
+    seen = []
+
+    def fal(value, references):
+        seen.append(value)
+        return PNG
+
+    with running(worker, setup_files, providers=[("fal", fal)]) as path:
+        assert request(path, payload(prompt="Klukai bathing in an onsen"))[0] == 200
+    assert "nudity" not in seen[0]
+
+
+def test_standing_rule_nudity_need_not_be_tasteful_but_stays_adult_and_solo():
+    """Owner standing rule 2026-10-23: Klukai's nudity need not be tasteful.
+    It stays adult, Klukai alone, and free of sexual acts."""
+    import agy_image_worker as w
+    text = w.NUDITY_PERMITTED
+    assert "tasteful" not in text.lower() and "explicit sexual poses" not in text
+    assert "full, explicit nudity of Klukai alone is permitted" in text
+    for kept in ("adult woman in her mid-twenties", "never depict her as childlike", "No sexual acts",
+                 "no other people"):
+        assert kept in text
