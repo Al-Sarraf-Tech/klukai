@@ -60,8 +60,8 @@ with a locked 2D-anime style prompt, reserves every paid call in a persistent le
 closed), reads `FAL_KEY` from Klukai's encrypted compose env into memory only,
 and gets results inline so fal keeps no copy. The checker rejects renders that
 drift to photorealistic, 3D or semi-realistic. For Commander scenes, use his
-detailed text description; never read or send his portrait image to an image
-generation provider.
+detailed text description; the active renderer and checker never read or send
+his portrait image.
 
 Standing rules (owner, 2026-10-23):
 - Nudity need not be tasteful; explicit nudity is allowed when Klukai's own

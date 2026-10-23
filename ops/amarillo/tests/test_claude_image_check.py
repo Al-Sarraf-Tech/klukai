@@ -102,7 +102,7 @@ def test_environment_carries_no_keys(check):
     assert env == {"HOME": "/h", "USER": "u", "PATH": "/usr/bin:/bin", "NO_COLOR": "1"}
 
 
-def test_message_sends_references_then_a_downscaled_candidate(check, references):
+def test_message_sends_klukai_reference_then_a_downscaled_candidate(check, references):
     line = json.loads(check.message(png(3000, 2000), value(), references))
     blocks = line["message"]["content"]
     assert [b["type"] for b in blocks] == ["image", "image", "text"]
@@ -110,7 +110,20 @@ def test_message_sends_references_then_a_downscaled_candidate(check, references)
         assert max(candidate.size) == check.MAX_SIDE
     assert "Klukai in a garden" in blocks[-1]["text"] and "Klukai alone" in blocks[-1]["text"]
     with_commander = json.loads(check.message(png(), value(include_commander=True), references))
-    assert [b["type"] for b in with_commander["message"]["content"]] == ["image", "image", "image", "text"]
+    commander_blocks = with_commander["message"]["content"]
+    assert [b["type"] for b in commander_blocks] == ["image", "image", "text"]
+    for detail in ("short dark crew-cut hair", "brown eyes", "light-olive skin", "mature masculine facial features", "strong build"):
+        assert detail in commander_blocks[-1]["text"]
+
+
+def test_checker_never_reads_commander_portrait(check, references, monkeypatch):
+    read = []
+    original_read = check.read_image
+    monkeypatch.setattr(check, "read_image", lambda entry: (read.append(entry), original_read(entry))[1])
+
+    check.message(png(), value(include_commander=True), references)
+
+    assert read == [references["klukai"]]
 
 
 def fake_claude(tmp_path, body):

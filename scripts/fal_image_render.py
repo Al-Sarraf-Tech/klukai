@@ -35,6 +35,7 @@ from PIL import Image
 
 import agy_art_runtime as agy
 from agy_image_render import MAX_BYTES, normalize
+from commander_description import COMMANDER_TEXT_DESCRIPTION
 from gemini_art_review import read_image
 
 MODEL = "fal-ai/bytedance/seedream/v4.5/edit"
@@ -68,12 +69,7 @@ BACKGROUND = (
 
 def brief(request: dict) -> str:
     people = (
-        "The adult human Commander is a separate anime character: a man with short dark "
-        "crew-cut hair, brown eyes, light-olive skin with natural warm shading, mature "
-        "masculine facial features, and a strong build. Keep his anatomy human and adult, "
-        "with no Doll, android, or mechanical features. Use scene-appropriate clothing from "
-        "the written brief, or understated practical clothing if none is specified. This "
-        "description is text-only: do not imitate or reconstruct a photograph. Exactly two "
+        COMMANDER_TEXT_DESCRIPTION + " Exactly two "
         "people, Klukai and the Commander. "
         if request.get("include_commander") is True
         else "Only Klukai in the image. "

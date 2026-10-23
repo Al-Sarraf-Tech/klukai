@@ -22,6 +22,7 @@ import warnings
 
 from PIL import Image
 
+from commander_description import COMMANDER_TEXT_DESCRIPTION
 from gemini_art_review import read_image
 
 MODEL = "claude-sonnet-5-5"
@@ -35,8 +36,9 @@ MIN_TIMEOUT = 15
 RUBRIC = """You are the image checker for Klukai, a fictional adult woman from Girls' Frontline 2
 (HK416). You only judge images. Never draw, never write image code, never suggest new art.
 
-The first image is her canon reference. When a Commander reference is given it comes next.
-The last image is the new render to judge. The request it was rendered from follows the images.
+The first image is Klukai's canon reference. The last image is the new render to judge.
+The request it was rendered from follows the images. The Commander has no image reference;
+when he is requested, use only the detailed text description in the request.
 
 Reject only for clear, major defects a viewer would notice at once:
 - identity: she is not recognisably Klukai (hair not silver/white, eyes not green, a different
@@ -101,11 +103,17 @@ def _image_block(raw: bytes) -> dict:
 
 def message(candidate: bytes, value: dict, references: dict) -> bytes:
     blocks = [_image_block(downscale_png(read_image(references["klukai"])))]
-    if value.get("include_commander"):
-        blocks.append(_image_block(downscale_png(read_image(references["commander"]))))
     blocks.append(_image_block(downscale_png(candidate)))
     who = "Klukai and the Commander" if value.get("include_commander") else "Klukai alone"
-    blocks.append({"type": "text", "text": f"Expected people: {who}.\nRequest:\n{value['prompt']}"})
+    description = (
+        f"\nCommander description (text only): {COMMANDER_TEXT_DESCRIPTION}"
+        if value.get("include_commander")
+        else ""
+    )
+    blocks.append({
+        "type": "text",
+        "text": f"Expected people: {who}.{description}\nRequest:\n{value['prompt']}",
+    })
     line = {"type": "user", "message": {"role": "user", "content": blocks}}
     return (json.dumps(line) + "\n").encode()
 
