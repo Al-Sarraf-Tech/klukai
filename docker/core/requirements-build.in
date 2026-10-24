@@ -1,4 +1,4 @@
 # Build-only tooling; never copied into the runtime image.
 # Versions selected from official PyPI metadata and locked with hashes.
-setuptools==84.0.0
+setuptools==84.1.0
 wheel==0.48.0
