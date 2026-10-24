@@ -8,9 +8,11 @@ may be submitted later, using the originally journaled payload.
 Background pictures (a missing Live Portrait, the album seeder) use the same
 journal, tagged ``archive_context["kind"]``, and render inside
 :func:`background_render`. The worker has one slot: while a background job
-holds it, an explicit picture that is answered "busy" waits for that job and
-is then submitted once with its journalled payload, so a background render
-never makes his own picture fail.
+holds it, or another picture this process has in flight (a chat picture, Her
+POV), an explicit picture or Her POV that is answered "busy" waits for it and
+is then submitted once more (an explicit picture with its journalled
+payload), so one picture never makes another fail. Only "busy" is retried, at
+most once; a background job itself never waits.
 """
 
 from __future__ import annotations
@@ -476,13 +478,20 @@ async def background_render(kind: str) -> AsyncIterator[None]:
 
 
 async def wait_for_background_render() -> bool:
-    """Wait (bounded) while a background render holds the worker. False when
-    none did, so a plain "busy" is answered exactly as before."""
-    if not background_render_active():
+    """Wait (bounded) while another picture holds the worker's one slot: a
+    background render, or a /generate call this process has in flight (a chat
+    picture, Her POV). False when none did, so a plain "busy" is answered
+    exactly as before. The waiter itself is never counted while it waits."""
+    from .agy_image_provider import generation_in_flight
+
+    def held() -> bool:
+        return background_render_active() or generation_in_flight()
+
+    if not held():
         return False
     loop = asyncio.get_running_loop()
     deadline = loop.time() + background_wait_limit()
-    while background_render_active() and loop.time() < deadline:
+    while held() and loop.time() < deadline:
         await asyncio.sleep(BACKGROUND_WAIT_POLL_S)
     return True
 

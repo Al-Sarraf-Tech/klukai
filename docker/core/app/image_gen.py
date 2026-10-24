@@ -259,8 +259,9 @@ async def generate_image(
             and not account_images.in_background_render()
             and await account_images.wait_for_background_render()
         ):
-            # A background portrait/album render held the worker's one slot;
-            # "busy" proves this was never accepted, so it goes next, once.
+            # Another picture (a background render, a chat picture, another
+            # Her POV) held the worker's one slot; "busy" proves this was never
+            # accepted, so it goes next, once.
             result = await submit_agy_image(description, **request)
         return result.get("image") if result.get("status") == "completed" else None
     if provider == "openai":

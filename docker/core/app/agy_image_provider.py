@@ -260,6 +260,19 @@ async def _validated_payload(
     return payload
 
 
+_generations_in_flight = 0
+
+
+def generation_in_flight() -> bool:
+    """True while this process has a /generate call waiting on the worker.
+
+    Core is one process and the worker has one slot, so another picture here
+    (a chat picture, Her POV) is the likeliest reason a request is answered
+    "busy"; callers use this to wait their turn.
+    """
+    return _generations_in_flight > 0
+
+
 async def submit_agy_image(
     prompt: str,
     *,
@@ -283,7 +296,12 @@ async def submit_agy_image(
         )
         if payload is None:
             return {"status": "refused", "image": None}
-        return await _post_worker("/generate", payload)
+        global _generations_in_flight
+        _generations_in_flight += 1
+        try:
+            return await _post_worker("/generate", payload)
+        finally:
+            _generations_in_flight -= 1
     except (
         OSError,
         ValueError,
