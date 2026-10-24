@@ -12,6 +12,7 @@ import * as life from "../../../flutter_app/web/companion/stage_life.js";
 import { hudView, nextVoicePhase } from "../../../flutter_app/web/companion/hud.js";
 import { createVoice } from "../../../flutter_app/web/companion/voice.js";
 import { createSocket } from "../../../flutter_app/web/companion/net.js";
+import { createAmbience, ambienceKind } from "../../../flutter_app/web/companion/ambience.js";
 import { FakeAudioContext } from "./fake-audio.mjs";
 
 const source = readFileSync(new URL("../../../flutter_app/web/companion/app.js", import.meta.url), "utf8");
@@ -41,7 +42,7 @@ function eventTarget() {
   };
 }
 
-function harness({ ttsImpl, embedded = true, socketFactory } = {}) {
+function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory, ambienceFactory, motionQuery } = {}) {
   const elements = new Map();
   const element = (id) => {
     const classes = new Set();
@@ -78,12 +79,13 @@ function harness({ ttsImpl, embedded = true, socketFactory } = {}) {
   const parent = { postMessage: (message) => messages.push(message) };
   const window = {
     ...eventTarget(), AudioContext, parent,
-    location: { search: embedded ? "?embed=1" : "", origin: "https://klukai.example" },
+    location: { search: embedded ? `?embed=1${embedHidden ? "&hidden=1" : ""}` : "", origin: "https://klukai.example" },
   };
   let hud, onFrame;
   const sandbox = {
     ...embed, ...logic, ...life, hudView, nextVoicePhase,
     window, document, location: window.location,
+    matchMedia: motionQuery ? () => motionQuery : undefined,
     localStorage: { getItem: () => '{"music":false}' },
     readToken: () => "test-token", clearToken() {}, wsUrl: () => "unused",
     AuthExpired: class extends Error {},
@@ -99,7 +101,8 @@ function harness({ ttsImpl, embedded = true, socketFactory } = {}) {
       return socketFactory ? socketFactory(options) : { start() {}, resume() {}, send: () => true };
     },
     createPortrait: () => ({ setFrames() {}, setExpression() {}, setActive() {}, setLevel() {} }),
-    createAmbience: () => ({ start() {}, stop() {}, setKind() {} }), ambienceKind: () => "none",
+    createAmbience: ambienceFactory || (() => ({ start() {}, stop() {}, setKind() {} })),
+    ambienceKind: ambienceFactory ? ambienceKind : () => "none",
     createMusic: () => ({ setHidden() {}, duck() {}, setScene() {} }),
     createHud: (_doc, callbacks) => { hud = callbacks; return { hold() {}, update: (view) => views.push(view) }; },
     createVoice: (options) => createVoice({ ...options, setTick: timer, clearTick: clearTimer }),
@@ -124,6 +127,122 @@ function harness({ ttsImpl, embedded = true, socketFactory } = {}) {
     get sources() { return FakeAudioContext.last?.of("source") || []; },
   };
 }
+
+// Real canvas animation and app media-query wiring, with only browser drawing
+// and animation scheduling replaced. An animation frame runs only when asked.
+function motionHarness({ reduced = false, embedded = false, embedHidden = false } = {}) {
+  const motionQuery = { ...eventTarget(), matches: reduced };
+  const frames = new Map();
+  let nextFrame = 0, draws = 0;
+  const context = {
+    setTransform() {}, clearRect() { draws++; },
+    beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {},
+  };
+  const h = harness({
+    embedded, embedHidden, motionQuery,
+    ambienceFactory: (canvas) => {
+      Object.assign(canvas, { clientWidth: 390, clientHeight: 844, getContext: () => context });
+      return createAmbience(canvas, {
+        raf: (fn) => { const id = ++nextFrame; frames.set(id, fn); return id; },
+        caf: (id) => frames.delete(id),
+        reducedMotion: () => motionQuery.matches,
+        rand: () => 0.5, dpr: () => 1,
+      });
+    },
+  });
+  return {
+    ...h,
+    get pendingFrames() { return frames.size; },
+    get draws() { return draws; },
+    setReduced(matches) {
+      motionQuery.matches = matches;
+      return motionQuery.dispatch("change", { matches });
+    },
+    advanceFrame() {
+      const pending = [...frames.values()];
+      frames.clear();
+      for (const frame of pending) frame();
+    },
+  };
+}
+
+test("live reduced motion stops an already animating ambience canvas", async () => {
+  const h = motionHarness();
+  assert.equal(h.pendingFrames, 1);
+  h.advanceFrame();
+  assert.equal(h.draws, 1);
+  assert.equal(h.pendingFrames, 1);
+  await h.setReduced(true);
+  assert.equal(h.pendingFrames, 0, "the scheduled animation must be cancelled immediately");
+  const stillDraws = h.draws;
+  assert.ok(stillDraws >= 1, "the background remains visible as a still frame");
+  h.advanceFrame();
+  assert.equal(h.draws, stillDraws, "no animated redraw follows the preference change");
+});
+
+test("live reduced motion resumes ambience when the page started with a still canvas", async () => {
+  const h = motionHarness({ reduced: true });
+  assert.equal(h.pendingFrames, 0);
+  assert.ok(h.draws >= 1);
+  const stillDraws = h.draws;
+  await h.setReduced(false);
+  assert.equal(h.pendingFrames, 1, "disabling the preference must restart animation without a reload");
+  h.advanceFrame();
+  assert.equal(h.draws, stillDraws + 1);
+  assert.equal(h.pendingFrames, 1);
+});
+
+test("live reduced motion changes never leave duplicate ambience loops", async () => {
+  const h = motionHarness();
+  for (const reduced of [true, true, false, false, true, false]) {
+    await h.setReduced(reduced);
+    assert.equal(h.pendingFrames, reduced ? 0 : 1);
+    const before = h.draws;
+    h.advanceFrame();
+    assert.equal(h.draws, before + (reduced ? 0 : 1));
+    assert.equal(h.pendingFrames, reduced ? 0 : 1);
+  }
+});
+
+for (const hiddenBy of ["document", "embed"]) {
+  test(`live reduced motion changes do not restart ambience behind a hidden ${hiddenBy}`, async () => {
+    const h = motionHarness({ embedded: hiddenBy === "embed" });
+    const hide = async (hidden) => {
+      if (hiddenBy === "embed") return h.visible(!hidden);
+      h.document.hidden = hidden;
+      return h.document.dispatch("visibilitychange");
+    };
+    h.advanceFrame();
+    await hide(true);
+    assert.equal(h.pendingFrames, 0);
+    const hiddenDraws = h.draws;
+    for (const reduced of [true, false, true]) {
+      await h.setReduced(reduced);
+      h.advanceFrame();
+      assert.equal(h.pendingFrames, 0, "off-screen preference changes must not schedule animation");
+      assert.equal(h.draws, hiddenDraws, "off-screen preference changes must not redraw the canvas");
+    }
+    await hide(false);
+    assert.equal(h.pendingFrames, 0, "returning respects the latest reduced-motion preference");
+    assert.equal(h.draws, hiddenDraws + 1, "returning paints one still frame");
+    await h.setReduced(false);
+    assert.equal(h.pendingFrames, 1, "animation can resume after the stage becomes visible");
+  });
+}
+
+test("live reduced motion does not wake an initially hidden embedded canvas", async () => {
+  const h = motionHarness({ embedded: true, embedHidden: true });
+  assert.equal(h.pendingFrames, 0);
+  assert.equal(h.draws, 0);
+  await h.setReduced(true);
+  await h.setReduced(false);
+  assert.equal(h.pendingFrames, 0);
+  assert.equal(h.draws, 0);
+  await h.visible(true);
+  assert.equal(h.pendingFrames, 1);
+  h.advanceFrame();
+  assert.equal(h.draws, 1);
+});
 
 // The actual app creates/starts the actual transport. Only WebSocket and timers
 // are inert: pageshow drives the production resume handler, not a copied one.
