@@ -184,3 +184,35 @@ def test_all_breakers_returns_registry() -> None:
     snapshot = all_breakers()
     assert "dep-a" in snapshot
     assert "dep-b" in snapshot
+
+
+@pytest.mark.asyncio
+async def test_state_change_log_lines_name_the_dependency(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The core logs plain text, which drops `extra=` fields: production showed
+    # a bare "circuit breaker tripped" with no way to tell which dep it was.
+    cb = CircuitBreaker(
+        cfg=BreakerConfig(
+            name="lm_studio", error_threshold=2, window_seconds=10, probe_interval_seconds=0
+        )
+    )
+
+    async def boom() -> int:
+        raise RuntimeError("boom")
+
+    async def ok() -> int:
+        return 1
+
+    with caplog.at_level("INFO", logger="app.circuit_breakers"):
+        for _ in range(2):
+            with pytest.raises(RuntimeError):
+                await cb.call(boom)
+        await cb.call(ok)
+
+    messages = [r.getMessage() for r in caplog.records if r.name == "app.circuit_breakers"]
+    assert messages == [
+        "circuit breaker lm_studio tripped (2 errors in window)",
+        "circuit breaker lm_studio probing (half-open)",
+        "circuit breaker lm_studio closed",
+    ]

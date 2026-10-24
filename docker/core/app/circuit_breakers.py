@@ -120,8 +120,12 @@ class CircuitBreaker:
 
     def _trip(self) -> None:
         if self._state != State.OPEN:
+            # The dep goes in the message too: the core's plain-text log
+            # format drops `extra=` fields.
             logger.warning(
-                "circuit breaker tripped",
+                "circuit breaker %s tripped (%d errors in window)",
+                self.cfg.name,
+                len(self._errors),
                 extra={"dep": self.cfg.name, "errors_in_window": len(self._errors)},
             )
             self._state = State.OPEN
@@ -133,7 +137,9 @@ class CircuitBreaker:
 
     def _close(self) -> None:
         if self._state != State.CLOSED:
-            logger.info("circuit breaker closed", extra={"dep": self.cfg.name})
+            logger.info(
+                "circuit breaker %s closed", self.cfg.name, extra={"dep": self.cfg.name}
+            )
             self._state = State.CLOSED
             self._epoch += 1
             self._errors.clear()
@@ -145,7 +151,9 @@ class CircuitBreaker:
             and (now - self._last_probe) >= self.cfg.probe_interval_seconds
         ):
             logger.info(
-                "circuit breaker probing (half-open)", extra={"dep": self.cfg.name}
+                "circuit breaker %s probing (half-open)",
+                self.cfg.name,
+                extra={"dep": self.cfg.name},
             )
             self._state = State.HALF_OPEN
             self._epoch += 1
