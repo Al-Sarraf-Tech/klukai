@@ -142,9 +142,10 @@ function boot() {
     const reduced = reducedNow();
     document.documentElement.dataset.reducedMotion = reduced ? "reduce" : "no-preference";
     if (reduced) clearDecorativeMotion(document);
-    // Restart with the current preference, but never wake an off-screen canvas.
+    // Restart with the current preference, under the same on-screen rule as
+    // applyActivity, so an off-screen canvas never wakes.
     ambience.stop();
-    if (!document.hidden && !embedHidden) ambience.start();
+    if (stageActivity({ documentHidden: document.hidden, embedHidden, mode: prefs.mode, awake }).ambience) ambience.start();
   }
 
   function coverForWake(covered) {
