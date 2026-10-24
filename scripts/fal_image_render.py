@@ -61,6 +61,23 @@ NOT_REALISTIC = (
     "NOT photorealistic, NOT a photograph, NOT 3D render, NOT semi-realistic, no realistic "
     "skin texture. "
 )
+# fal's documented machine-readable error types (fal.ai/docs/model-apis/errors).
+# Only these are ever repeated in a message: the rest of an error body (msg,
+# input) can quote the request.
+FAL_ERROR_TYPES = frozenset({
+    "internal_server_error", "generation_timeout", "downstream_service_error",
+    "downstream_service_unavailable", "content_policy_violation", "no_media_generated",
+    "value_error", "input_value_error", "missing", "image_too_small", "image_too_large",
+    "image_load_error", "file_download_error", "face_detection_error", "file_too_large",
+    "greater_than", "greater_than_equal", "less_than", "less_than_equal", "multiple_of",
+    "sequence_too_short", "sequence_too_long", "one_of", "feature_not_supported",
+    "unsupported_image_format", "request_timeout", "startup_timeout",
+    "runner_scheduling_failure", "runner_connection_timeout", "runner_disconnected",
+    "runner_connection_refused", "runner_connection_error", "runner_incomplete_response",
+    "runner_server_error", "client_disconnected", "client_cancelled", "bad_request",
+    "internal_error",
+})
+ERROR_BODY_BYTES = 64 * 1024
 BACKGROUND = (
     "The whole image, background included, is hand-painted anime background art like a TV "
     "anime frame: simplified painted buildings and sky, no photographic detail anywhere. "
@@ -154,6 +171,22 @@ def _data_uri(raw: bytes) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
 
 
+def _error_types(exc: urllib.error.HTTPError) -> str:
+    """': <type>[, <type>]' for documented fal error types in the body, else ''."""
+    try:
+        doc = json.loads(exc.read(ERROR_BODY_BYTES))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(doc, dict):
+        return ""
+    detail = doc.get("detail")
+    found = [doc.get("error_type")]
+    if isinstance(detail, list):
+        found += [item.get("type") for item in detail if isinstance(item, dict)]
+    names = sorted({t for t in found if isinstance(t, str) and t in FAL_ERROR_TYPES})
+    return ": " + ", ".join(names) if names else ""
+
+
 def _call(url: str, key: str, body: dict | None = None) -> dict:
     request = urllib.request.Request(
         url,
@@ -165,10 +198,12 @@ def _call(url: str, key: str, body: dict | None = None) -> dict:
         with _urlopen(request, timeout=60) as response:
             return json.loads(response.read(MAX_BYTES * 2))
     except urllib.error.HTTPError as exc:
-        # Fixed messages only: a response body could quote the request.
+        # Fixed messages plus documented error types only: a response body
+        # could quote the request.
+        reason = f"HTTP {exc.code}{_error_types(exc)}"
         if exc.code in (401, 402, 403, 408, 429) or exc.code >= 500:
-            raise agy.ProviderUnavailable(f"fal unavailable (HTTP {exc.code})") from None
-        raise agy.RuntimeError(f"fal rejected the request (HTTP {exc.code})") from None
+            raise agy.ProviderUnavailable(f"fal unavailable ({reason})") from None
+        raise agy.RuntimeError(f"fal rejected the request ({reason})") from None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise agy.ProviderUnavailable("fal unreachable") from exc
     except ValueError:

@@ -180,6 +180,31 @@ def test_provider_errors_are_classified_and_never_echo_the_key(setup, monkeypatc
     assert attempts(tmp_path) == 1  # the paid attempt was reserved before dispatch
 
 
+@pytest.mark.parametrize("code,body,kind,message", [
+    # A 422 is either a content refusal or a malformed request (a bug on this
+    # side); the journal has to say which, never what was asked.
+    (422, {"detail": [{"loc": ["body", "prompt"], "msg": "private scene words",
+                       "type": "content_policy_violation", "input": "private scene words"}]},
+     agy.RuntimeError, "fal rejected the request (HTTP 422: content_policy_violation)"),
+    (422, {"detail": [{"loc": ["body", "image_size"], "msg": "x", "type": "greater_than_equal"},
+                      {"loc": ["body", "image_size"], "msg": "y", "type": "greater_than_equal"}]},
+     agy.RuntimeError, "fal rejected the request (HTTP 422: greater_than_equal)"),
+    (503, {"detail": "private scene words", "error_type": "runner_scheduling_failure"},
+     agy.ProviderUnavailable, "fal unavailable (HTTP 503: runner_scheduling_failure)"),
+    # Undocumented types are left out rather than echoed.
+    (422, {"detail": [{"msg": "x", "type": "private scene words"}]},
+     agy.RuntimeError, "fal rejected the request (HTTP 422)"),
+    (422, {"detail": "private scene words"}, agy.RuntimeError, "fal rejected the request (HTTP 422)"),
+])
+def test_errors_name_only_documented_fal_error_types(setup, monkeypatch, code, body, kind, message):
+    error = urllib.error.HTTPError("https://queue.fal.run", code, "x", {},
+                                   io.BytesIO(json.dumps(body).encode()))
+    monkeypatch.setattr(fal, "_urlopen", FakeFal(submit_error=error))
+    with closing(error), pytest.raises(kind) as raised:
+        fal.render(REQUEST, {"klukai": "klukai"})
+    assert str(raised.value) == message
+
+
 def test_network_failure_is_a_provider_outage(setup, monkeypatch):
     monkeypatch.setattr(fal, "_urlopen", FakeFal(submit_error=urllib.error.URLError("reset")))
     with pytest.raises(agy.ProviderUnavailable):
