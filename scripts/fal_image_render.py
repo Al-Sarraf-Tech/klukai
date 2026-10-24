@@ -203,6 +203,9 @@ def _call(url: str, key: str, body: dict | None = None) -> dict:
         reason = f"HTTP {exc.code}{_error_types(exc)}"
         if exc.code in (401, 402, 403, 408, 429) or exc.code >= 500:
             raise agy.ProviderUnavailable(f"fal unavailable ({reason})") from None
+        if "content_policy_violation" in reason:
+            # The worker redraws this once, fully clothed (implied_scene.plain).
+            raise agy.ContentRefused(f"fal refused the content ({reason})") from None
         raise agy.RuntimeError(f"fal rejected the request ({reason})") from None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise agy.ProviderUnavailable("fal unreachable") from exc

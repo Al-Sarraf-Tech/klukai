@@ -58,7 +58,8 @@ by Claude as before. `scripts/fal_image_render.py` sends her approved reference
 with a locked 2D-anime style prompt, reserves every paid call in a persistent ledger against
 `KLUKAI_FAL_DAILY_LIMIT=10` / `KLUKAI_FAL_MONTHLY_LIMIT=150` (missing caps fail
 closed), reads `FAL_KEY` from Klukai's encrypted compose env into memory only,
-and gets results inline so fal keeps no copy. The checker rejects renders that
+and gets results inline so fal keeps no copy of the image (its request history
+does keep each request's prompt and status). The checker rejects renders that
 drift to photorealistic, 3D or semi-realistic. For Commander scenes, use his
 detailed text description; the active renderer and checker never read or send
 his portrait image.
@@ -70,6 +71,14 @@ Standing rules (owner, 2026-10-23):
   Character intimacy controls are unchanged. The current renderer does not
   support the nudity grant: it refuses that flag before any private or paid
   work and always keeps provider safety checks enabled.
+- **On fal, intimacy and nudity are implied only** (owner, 2026-10-24: "make it
+  implied nudity ... make sure it doesn't trip the flag"). fal refuses anything
+  its classifier reads as sexual (`content_policy_violation`, category `sexual`),
+  even fully clothed scenes carrying the bond-level body tags. The worker
+  rewrites fal's scene (`scripts/implied_scene.py`): body and arousal tags go,
+  undress becomes a quilt, towel or blanket that covers, and a grant becomes
+  `NUDITY_IMPLIED` instead of the flag. A refusal is redrawn once, fully clothed
+  (`implied_scene.plain`). These renders are checked by Claude as usual.
 - **Pictures are made only on demand.** The fal API is paid per image: no
   automatic, proactive, dream, prewarm or seeding pictures.
 

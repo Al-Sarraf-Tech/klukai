@@ -867,7 +867,15 @@ def test_fal_is_an_accepted_sole_provider():
     assert [name for name, _ in w.load_providers(["fal"])] == ["fal"]
 
 
-def test_granted_nudity_reaches_fal_with_its_api_switch_and_skips_the_checker(worker, setup_files):
+SCENE_PROMPT = (
+    "Create one polished anime illustration of the described scene.\n"
+    "Scene and appearance: Klukai; couple; one man; one woman; hetero; shirtless; bare chest; "
+    "medium breasts; black lace lingerie; lying on bed; seductive pose; kiss; intimate."
+)
+
+
+def test_granted_nudity_reaches_fal_only_implied_and_is_checked(worker, setup_files):
+    """Owner 2026-10-24: on fal nudity is implied only; no API switch, so the render is checked."""
     seen, checked = [], []
 
     def fal(value, references):
@@ -879,9 +887,74 @@ def test_granted_nudity_reaches_fal_with_its_api_switch_and_skips_the_checker(wo
                  checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as path:
         assert request(path, value)[0] == 200
     (sent,) = seen
-    assert sent["nudity"] is True and sent["include_commander"] is False
-    assert sent["prompt"] == value["prompt"] + worker.NUDITY_PERMITTED
-    assert checked == []
+    assert "nudity" not in sent and sent["include_commander"] is False
+    assert sent["prompt"] == value["prompt"] + worker.NUDITY_IMPLIED
+    assert worker.NUDITY_PERMITTED not in sent["prompt"]
+    assert len(checked) == 1 and checked[0][1] == sent["prompt"]
+    for word in ("nude", "nudity", "naked", "explicit", "sexual"):
+        assert word not in worker.NUDITY_IMPLIED.lower()
+
+
+def test_fal_gets_the_implied_scene_and_the_checker_judges_that(worker, setup_files):
+    seen, checked = [], []
+
+    def fal(value, references):
+        seen.append(value["prompt"])
+        return PNG
+
+    with running(worker, setup_files, providers=[("fal", fal)],
+                 checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as path:
+        assert request(path, payload(prompt=SCENE_PROMPT, include_commander=True))[0] == 200
+    (sent,) = seen
+    for gone in ("hetero", "shirtless", "bare chest", "medium breasts", "lingerie", "seductive"):
+        assert gone not in sent
+    assert "kiss" in sent and "quilt" in sent and "tender" in sent
+    assert checked[0][1] == sent
+
+
+def test_a_fal_content_refusal_is_redrawn_once_fully_clothed(worker, setup_files, capsys):
+    from agy_art_runtime import ContentRefused
+
+    seen = []
+
+    def fal(value, references):
+        seen.append(value["prompt"])
+        if len(seen) == 1:
+            raise ContentRefused("fal refused the content (HTTP 422: content_policy_violation)")
+        return PNG
+
+    with running(worker, setup_files, providers=[("fal", fal)]) as path:
+        assert request(path, payload(prompt=SCENE_PROMPT, include_commander=True))[2] == PNG
+    first, second = seen
+    assert "kiss" in first and "kiss" not in second and "lying on bed" not in second
+    assert "fully clothed" in second and "side by side" in second
+    assert "content_refused" in capsys.readouterr().err
+
+
+def test_a_second_fal_refusal_fails_without_a_third_try(worker, setup_files):
+    from agy_art_runtime import ContentRefused
+
+    calls = []
+
+    def fal(value, references):
+        calls.append(value["prompt"])
+        raise ContentRefused("fal refused the content (HTTP 422: content_policy_violation)")
+
+    with running(worker, setup_files, providers=[("fal", fal)]) as path:
+        assert request(path, payload(prompt=SCENE_PROMPT))[0] == 502
+    assert len(calls) == 2
+
+
+def test_other_providers_never_get_the_rewrite(worker, setup_files):
+    seen = []
+
+    def grok(value, references):
+        seen.append(value["prompt"])
+        return PNG
+
+    with running(worker, setup_files, providers=[("grok", grok)]) as path:
+        assert request(path, payload(prompt=SCENE_PROMPT))[0] == 200
+    assert seen == [SCENE_PROMPT]
 
 
 def test_fal_without_a_grant_never_sees_the_switch(worker, setup_files):

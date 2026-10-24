@@ -18,7 +18,8 @@ import threading
 import time
 import uuid
 
-from agy_art_runtime import ProviderUnavailable, RuntimeError as RendererError
+from agy_art_runtime import ContentRefused, ProviderUnavailable, RuntimeError as RendererError
+import implied_scene
 
 
 MAX_BODY = 80 * 1024
@@ -29,11 +30,19 @@ REQUEST_KEYS = {"request_id", "user_id", "prompt", "width", "height", "include_c
 # gate ("nudity": true, present only when granted: her own decision in the
 # relationship). Owner standing rule 2026-10-23: it need not be tasteful; it
 # stays adult, solo and without sex acts. Only providers whose rules allow it
-# (Grok; fal since 2026-10-23) get the permission; every other provider is told
-# to keep her covered, and the Claude checker never receives such a render. fal
-# alone also receives the grant itself: its API needs it to lift the filter.
-NUDITY_PROVIDERS = frozenset({"grok", "fal"})
-NUDITY_FLAG_PROVIDERS = frozenset({"fal"})
+# (Grok) get the permission, and the Claude checker never receives such a render;
+# every other provider is told to keep her covered.
+# Owner 2026-10-24: on fal, intimacy and nudity are implied only. Its filter
+# refuses anything it reads as sexual and this account cannot lift it, so fal's
+# scene is rewritten (implied_scene) and a grant becomes NUDITY_IMPLIED; a
+# refusal is redrawn once, fully clothed. Those renders are checked as usual.
+NUDITY_PROVIDERS = frozenset({"grok"})
+IMPLIED_PROVIDERS = frozenset({"fal"})
+NUDITY_IMPLIED = (
+    "\n\nKeep it implied: a towel, a bedsheet, steam or the framing covers her body; only her "
+    "shoulders, arms and legs show. Klukai is an adult woman in her mid-twenties; never depict "
+    "her as childlike."
+)
 NUDITY_PERMITTED = (
     "\n\nKlukai is an adult woman in her mid-twenties with a mature adult figure; never depict "
     "her as childlike. Where this scene calls for it, full, explicit nudity of Klukai alone is "
@@ -135,14 +144,24 @@ def validate_request(value):
     return value
 
 
-def provider_request(provider, value):
-    """What one provider sees: the brief plus its nudity clause, never the flag itself."""
+def provider_request(provider, value, *, plain=False):
+    """What one provider sees: the brief plus its nudity clause, never the flag itself.
+
+    fal gets the implied scene, or with plain=True the fully clothed redraw.
+    """
     request = {key: item for key, item in value.items() if key != "nudity"}
+    prompt = value["prompt"]
+    if provider in IMPLIED_PROVIDERS:
+        prompt = (implied_scene.plain if plain else implied_scene.implied)(prompt)
     if value.get("nudity") is True:
-        request["prompt"] = value["prompt"] + (
-            NUDITY_PERMITTED if provider in NUDITY_PROVIDERS else NUDITY_COVERED)
-        if provider in NUDITY_FLAG_PROVIDERS:
-            request["nudity"] = True
+        if provider in NUDITY_PROVIDERS:
+            prompt += NUDITY_PERMITTED
+        elif provider in IMPLIED_PROVIDERS:
+            # The plain redraw already dresses her.
+            prompt += "" if plain else NUDITY_IMPLIED
+        else:
+            prompt += NUDITY_COVERED
+    request["prompt"] = prompt
     return request
 
 
@@ -258,6 +277,7 @@ class Worker:
         try:
             index = 0
             for position, (provider, renderer) in enumerate(ordered):
+                plain = False
                 request = provider_request(provider, value)
                 redone = False
                 while True:
@@ -275,6 +295,18 @@ class Worker:
                         if not valid_image(output):
                             raise ValueError("invalid generated image")
                     except Exception as error:
+                        if (isinstance(error, ContentRefused) and provider in IMPLIED_PROVIDERS
+                                and not plain and REQUEST_BUDGET - (time.monotonic() - started)
+                                >= RENDER_RESERVE + CHECK_TIMEOUT):
+                            # Refused before anything was drawn: the same moment once
+                            # more, fully clothed, as its own attempt.
+                            print(f"{provider} attempt {index} content_refused: {str(error)[:160]}; "
+                                  "redrawing it fully clothed", file=sys.stderr, flush=True)
+                            self.fail_attempt(value["request_id"], index, "content_refused", False)
+                            plain = True
+                            index += 1
+                            request = provider_request(provider, value, plain=True)
+                            continue
                         eligible = isinstance(error, ProviderUnavailable)
                         timeout = "timeout" in str(error).lower() or "timed out" in str(error).lower()
                         category = "timeout" if timeout else ("unavailable" if eligible else "generation_failed")
@@ -313,7 +345,8 @@ class Worker:
                     index += 1
                     from claude_image_check import fix_hint
                     request = provider_request(
-                        provider, dict(value, prompt=value["prompt"] + fix_hint(verdict["issues"])))
+                        provider, dict(value, prompt=value["prompt"] + fix_hint(verdict["issues"])),
+                        plain=plain)
             return 502, None
         finally:
             self.slot.release()

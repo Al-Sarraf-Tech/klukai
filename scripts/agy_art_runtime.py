@@ -33,6 +33,10 @@ class ProviderUnavailable(RuntimeError):
     """A service/transport failure eligible for one different-provider attempt."""
 
 
+class ContentRefused(RuntimeError):
+    """The provider's content filter refused the request itself (nothing was drawn)."""
+
+
 def service_unavailable(error) -> bool:
     """Fail over only recognized service errors, never policy/input refusals."""
     if not isinstance(error, dict):

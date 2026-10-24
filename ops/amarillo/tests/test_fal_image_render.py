@@ -185,7 +185,7 @@ def test_provider_errors_are_classified_and_never_echo_the_key(setup, monkeypatc
     # side); the journal has to say which, never what was asked.
     (422, {"detail": [{"loc": ["body", "prompt"], "msg": "private scene words",
                        "type": "content_policy_violation", "input": "private scene words"}]},
-     agy.RuntimeError, "fal rejected the request (HTTP 422: content_policy_violation)"),
+     agy.ContentRefused, "fal refused the content (HTTP 422: content_policy_violation)"),
     (422, {"detail": [{"loc": ["body", "image_size"], "msg": "x", "type": "greater_than_equal"},
                       {"loc": ["body", "image_size"], "msg": "y", "type": "greater_than_equal"}]},
      agy.RuntimeError, "fal rejected the request (HTTP 422: greater_than_equal)"),
