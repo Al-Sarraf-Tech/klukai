@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import multiprocessing
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -215,6 +216,20 @@ def test_a_certified_merge_is_deployed_and_recorded(env):
     assert json.loads(history[-1])["outcome"] == "deployed"
     assert env["world"].notes and "deployed" in env["world"].notes[-1]
     assert env["deployer"].run_once()["status"] == "idle"
+
+
+def test_the_checkout_stays_readable_under_the_units_private_umask(env):
+    sha = env["remote"].commit({"docker/core/app.py": "v2\n", "docker/core/new/mod.py": "v1\n"})
+    certify(env, sha)
+    previous = os.umask(0o077)  # the unit's UMask=0077
+    try:
+        assert env["deployer"].run_once()["status"] == "deployed"
+    finally:
+        os.umask(previous)
+    checkout = env["checkout"]
+    for path, mode in [("docker/core/app.py", 0o644), ("docker/core/new/mod.py", 0o644),
+                       ("docker/core/new", 0o755), (".git/HEAD", 0o644)]:
+        assert (checkout / path).stat().st_mode & 0o777 == mode, path
 
 
 def test_a_web_only_merge_does_not_recreate_core(env):

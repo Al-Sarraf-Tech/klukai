@@ -168,7 +168,11 @@ def checkout_detached(repo: Path, sha: str) -> None:
 
 
 def git(repo: Path, *args: str, check: bool = True) -> str:
-    result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=300)
+    # The unit's UMask=0077 keeps the deployer's own state private, but the
+    # checkout's files are source: the code-search containers (other uids) read
+    # them, so git writes them with the usual 0644/0755.
+    result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=300,
+                            umask=0o022)
     if check and result.returncode:
         raise Refused(f"git {args[0]} failed: {result.stderr.strip()[:200]}")
     return result.stdout.strip()
