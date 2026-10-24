@@ -148,7 +148,8 @@ async def _enqueue_job(job_id: str) -> bool:
 
 # A job that has not moved in this long is not running anywhere: every phase
 # bumps updated_at, and the longest phase (drawing) is bounded by the image
-# lock, the LM gate, the lease acquire deadline and the 7-minute render cap.
+# lock, the LM gate, the lease acquire deadline, one bounded wait for a picture
+# already in flight (410 s) and the 380 s render deadline.
 _STALE_JOB_MINUTES = 20
 # Tighter bound for the worker: a bridge redelivery (JOB_RUN_TIMEOUT=900s)
 # may only take over an in-progress claim once its heartbeat is this old.

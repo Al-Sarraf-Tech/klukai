@@ -400,8 +400,8 @@ def _marker_path() -> Path:
 
 
 def background_wait_limit() -> float:
-    """How long an explicit picture waits for one background render: one full
-    worker request plus slack, after which it is submitted (or stays busy)."""
+    """How long a picture waits for one background render or in-flight picture:
+    one full worker request plus slack, after which it is submitted (or stays busy)."""
     from .agy_image_provider import REQUEST_DEADLINE_SECONDS
 
     return float(REQUEST_DEADLINE_SECONDS + 30)
@@ -535,8 +535,8 @@ async def fulfill_account_image(
 
     ``nudity`` (granted by the caller through image_provider.nudity_allowed) is
     journalled in ``archive_context`` with the request, never re-derived later.
-    A "busy" answer caused by a background render is waited out once (see the
-    module docstring); a background caller never waits.
+    A "busy" answer caused by a background render or another picture in flight
+    is waited out once (see the module docstring); a background caller never waits.
     """
     outcome = await _fulfill(
         user_id,
