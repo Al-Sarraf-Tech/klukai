@@ -39,6 +39,7 @@ export function createMusic({
   let master, bus, filter, wet, rainGain;
   let timer = null;
   let playing = false;
+  let startGeneration = 0;
   let nextTime = 0;
   let step = 0;
   let state = { scene: "deck", rain: false, snow: false, brightness: 0 };
@@ -150,9 +151,11 @@ export function createMusic({
     get scene() { return state.scene; },
     /** Call from a user gesture (iOS). */
     async start() {
+      const generation = ++startGeneration;
       if (!AudioContextImpl && !context) return false;
       if (!ctx) build();
       if (ctx.state === "suspended") await ctx.resume();
+      if (generation !== startGeneration) return false;
       playing = true;
       nextTime = ctx.currentTime + 0.1;
       master.gain.setTargetAtTime(MASTER, ctx.currentTime, 1.2);
@@ -161,6 +164,7 @@ export function createMusic({
       return true;
     },
     stop() {
+      startGeneration++;
       playing = false;
       if (timer) { clearInterval(timer); timer = null; }
       if (ctx) master.gain.setTargetAtTime(0, ctx.currentTime, 0.4);
