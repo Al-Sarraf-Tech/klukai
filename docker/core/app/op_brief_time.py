@@ -127,7 +127,9 @@ def _clock_fragment(text: str, start: int) -> bool:
     before_colon = prefix[:-1].rstrip()
     # A complete date can itself end in a number ("October 27: 09:30").
     for pattern in (_ISO_RE, _SLASH_RE, _MONTH_DAY_RE, _DAY_MONTH_RE):
-        if any(match.end() == len(before_colon) for match in pattern.finditer(before_colon)):
+        if any(
+            match.end() == len(before_colon) for match in pattern.finditer(before_colon)
+        ):
             return False
     return True
 
