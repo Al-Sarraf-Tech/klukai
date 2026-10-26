@@ -437,7 +437,7 @@ class TestLLMConfig:
     def test_defaults(self):
         from app.models import LLMConfig
 
-        config = LLMConfig(provider="lmstudio", model="test-model")
+        config = LLMConfig(provider="anthropic", model="test-model")
         assert config.temperature == 0.8
         assert config.max_tokens == 2048
 

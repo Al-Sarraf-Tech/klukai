@@ -87,7 +87,7 @@ def mock_llm_router() -> Iterator[AsyncMock]:
 
     fake_route = AsyncMock(return_value={
         "model": "test-model",
-        "endpoint": "test://lmstudio",
+        "endpoint": "test://anthropic",
         "max_tokens": 256,
         "temperature": 0.7,
     })

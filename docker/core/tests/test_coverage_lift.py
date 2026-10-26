@@ -187,21 +187,6 @@ class TestHelperDetectors:
 
 # ── llm_router pure helpers ───────────────────────────────────────────────────
 class TestLlmRouterHelpers:
-    def test_lm_gate_is_shared_singleton(self) -> None:
-        from app import llm_router
-        # get_lm_gate returns a real asyncio.Lock and the SAME instance each call
-        # (single shared gate across all LM Studio callers).
-        gate = llm_router.get_lm_gate()
-        assert isinstance(gate, asyncio.Lock)
-        assert llm_router.get_lm_gate() is gate
-        # An unlocked gate is not busy.
-        assert llm_router.lm_gate_busy() is False
-
-    def test_local_tools_aliases_agent_model(self) -> None:
-        from app import llm_router
-        # LOCAL_TOOLS is defined as an alias of LOCAL_AGENT — they must be equal.
-        assert llm_router.LOCAL_TOOLS == llm_router.LOCAL_AGENT
-
     def test_session_state_construction(self) -> None:
         from app.models import SessionState
         s = SessionState(conversation_id="test-conv-id")

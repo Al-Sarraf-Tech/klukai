@@ -13,12 +13,9 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
 import pytest
 
 from app import chat
-from app.circuit_breakers import get_breaker
-from app.lm_gateway import LM_CONNECT_TIMEOUT_SECONDS, lm_timeout
 from app.memory import MemoryManager
 from app.models import SessionState
 
@@ -94,38 +91,6 @@ async def test_session_storage_failure_still_keeps_the_turns_record(
     rt.affection.apply_classification.assert_awaited_once()
     rt.memory.set_relationship_fact.assert_awaited()
     rt.memory.store_exchange.assert_awaited_once()
-
-
-# ── short connects ───────────────────────────────────────────────────────
-
-
-def test_local_requests_connect_with_a_short_timeout():
-    timeout = lm_timeout(120.0)
-    assert timeout.connect == LM_CONNECT_TIMEOUT_SECONDS <= 5.0
-    assert timeout.read == 120.0
-
-
-async def test_complete_local_sends_the_short_connect_timeout():
-    from app.llm_router import LLMRouter
-    from app.models import LLMConfig
-
-    router = LLMRouter()
-    seen = {}
-
-    async def post(url, **kwargs):
-        seen.update(kwargs)
-        return httpx.Response(
-            200,
-            json={"choices": [{"message": {"content": "ok"}}]},
-            request=httpx.Request("POST", url),
-        )
-
-    router._http = MagicMock()
-    router._http.post = post
-    get_breaker("lm_studio").force_close()
-    config = LLMConfig(provider="lmstudio", model="m", base_url="http://x")
-    await router.complete_local("s", [{"role": "user", "content": "u"}], config)
-    assert seen["timeout"].connect == LM_CONNECT_TIMEOUT_SECONDS
 
 
 # ── compaction never makes a turn look stale ─────────────────────────────

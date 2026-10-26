@@ -109,7 +109,7 @@ def _png(size, color, metadata=False):
 @pytest.fixture
 async def creative_app(monkeypatch, tmp_path):
     from app import auth, context, db, events, her_day, image_gen, image_provider
-    from app import llm_router, memory_archive, memory_archive_query, memory_her_pov
+    from app import memory_archive, memory_archive_query, memory_her_pov
     from app.routes import register_routes
 
     image_dir = tmp_path / "images"
@@ -160,7 +160,6 @@ async def creative_app(monkeypatch, tmp_path):
         raise AssertionError("Offline cloud E2E must not reach a socket or Dominus gate")
 
     monkeypatch.setattr(socket.socket, "connect", unavailable)
-    monkeypatch.setattr(llm_router, "get_lm_gate", unavailable)
     monkeypatch.setattr(image_gen, "_leased", unavailable)
     monkeypatch.setattr(image_gen, "check_comfyui_ready", unavailable)
 

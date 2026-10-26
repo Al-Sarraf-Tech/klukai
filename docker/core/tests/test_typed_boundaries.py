@@ -2,20 +2,17 @@
 
 import pytest
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-from app.llm_json import call_llm
+from app import background_llm, extraction_llm
 from app.personality.loader import reload_personality
 
 
 @pytest.mark.parametrize("raw", ["[]", "[1, 2]", "42", "true", "null", '"text"'])
 @pytest.mark.asyncio
-async def test_structured_llm_boundary_rejects_non_object_payloads(raw):
-    response = MagicMock()
-    response.status_code = 200
-    response.json.return_value = {"choices": [{"message": {"content": raw}}]}
-    client = MagicMock(post=AsyncMock(return_value=response))
-    assert await call_llm("http://offline", "test", "prompt", client=client) == {}
+async def test_structured_llm_boundary_rejects_non_object_payloads(raw, monkeypatch):
+    monkeypatch.setattr(extraction_llm, "complete", AsyncMock(return_value=raw))
+    assert await background_llm.json_object("typed", "prompt", max_tokens=64) is None
 
 
 @pytest.mark.parametrize("raw", ["[]", "42", "null", '"text"'])

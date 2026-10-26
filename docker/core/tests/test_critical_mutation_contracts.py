@@ -44,7 +44,6 @@ def haiku_wire(monkeypatch):
     so a request to any other endpoint would be recorded there too.
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "offline-critical-key")
-    monkeypatch.setenv("LM_STUDIO_TOKEN", "offline-local-token")
     monkeypatch.delenv("KLUKAI_EXTRACTION_MODEL", raising=False)
     monkeypatch.setattr(xl, "reserve_attempt", AsyncMock(return_value="attempt-1"))
     monkeypatch.setattr(xl, "record_usage", AsyncMock())
