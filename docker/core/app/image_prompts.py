@@ -109,6 +109,17 @@ _PICTURE_OPT_OUT = re.compile(
     r"\b(?:don't|do not|doesn't|does not|never|not|stop|cancel|avoid|"
     r"no (?:more )?(?:pictures?|photos?|images?|selfies))\b"
 )
+# A terminal cancellation clause is different from a scene constraint such as
+# "no makeup" or depicted text such as a sign saying "no thanks".
+_PICTURE_CANCELLATION = re.compile(
+    r"[,.;!?—–-]\s*(?:(?:actually|on second thought)[,\s]+)?"
+    r"no(?:[,\s]+thanks)?[.!?\s]*$"
+)
+_EDITING_CONTROLS = re.compile(
+    r"^(?:show (?:me|us)|let me see|(?:can|could) i see|"
+    r"i (?:want|would like) to see|i'd like to see) "
+    r"(?:(?:your|the) )?" + _PICTURE_NOUN + r" editing settings?\b"
+)
 _NON_PICTURE_ACTION = re.compile(
     r"^(?:paint|draw|sketch|render|illustrate|depict|visualize) "
     r"(?:(?:me|us) )?(?:(?:the|a|an|this|that|my|your) )?"
@@ -159,11 +170,12 @@ def needs_image(message: str) -> bool:
     An opt-out anywhere in the message is conservatively left as text chat.
     """
     normalized = " ".join(message.casefold().replace("’", "'").split())
-    if _PICTURE_OPT_OUT.search(normalized):
+    if _PICTURE_OPT_OUT.search(normalized) or _PICTURE_CANCELLATION.search(normalized):
         return False
     request = _REQUEST_PREFIX.sub("", normalized, count=1)
     if (
         _PICTURE_DISCUSSION.search(request)
+        or _EDITING_CONTROLS.match(request)
         or _CONDITIONAL_PICTURE.search(request)
         or _NON_PICTURE_ACTION.match(request)
     ):
