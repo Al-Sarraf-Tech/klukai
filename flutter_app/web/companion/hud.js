@@ -83,6 +83,14 @@ export function createHud(doc, { onVoice = () => {}, onHerDay = () => {}, schedu
   let queued = false;
   let held = false;
 
+  // Layout can change without new text (rotation, keyboard, or stage reveal).
+  // Measure only while visible, without rewriting text or moving his scroll.
+  function refreshOverflow() {
+    if (held || el.root.hidden || el.line.hidden) return;
+    const scrolls = el.line.scrollHeight > el.line.clientHeight + 1;
+    if (el.line.classList.contains("scrolls") !== scrolls) el.line.classList.toggle("scrolls", scrolls);
+  }
+
   function renderLine(view, meta) {
     const node = el.line;
     const fresh = meta.lineId !== lineId;
@@ -93,10 +101,7 @@ export function createHud(doc, { onVoice = () => {}, onHerDay = () => {}, schedu
     if (fresh) node.scrollTop = 0;
     else if (follow) node.scrollTop = node.scrollHeight;
     lineId = meta.lineId;
-    // Only a line that overflows takes touches (to scroll); otherwise a drag
-    // there still turns her.
-    const scrolls = node.scrollHeight > node.clientHeight + 1;
-    if (node.classList.contains("scrolls") !== scrolls) node.classList.toggle("scrolls", scrolls);
+    return true;
   }
 
   function render() {
@@ -104,6 +109,7 @@ export function createHud(doc, { onVoice = () => {}, onHerDay = () => {}, schedu
     if (!pending || held) return;
     const { view, meta } = pending;
     pending = null;
+    const first = !shown;
     const was = shown || {};
     if (was.level !== view.level) el.level.textContent = view.level;
     if (was.mood !== view.mood) el.mood.textContent = view.mood;
@@ -119,7 +125,7 @@ export function createHud(doc, { onVoice = () => {}, onHerDay = () => {}, schedu
       el.status.textContent = view.status ? `◢ ${view.status}` : "";
     }
     if (was.line === undefined || (was.line === "") !== (view.line === "")) el.line.hidden = view.line === "";
-    if (view.line) renderLine(view, meta);
+    const lineChanged = view.line && renderLine(view, meta);
     if (was.placeholder !== view.placeholder) el.line.classList.toggle("placeholder", view.placeholder);
     if (was.streaming !== meta.streaming) el.card.setAttribute("aria-busy", String(Boolean(meta.streaming)));
     if (was.voice !== view.voice) {
@@ -137,6 +143,7 @@ export function createHud(doc, { onVoice = () => {}, onHerDay = () => {}, schedu
       doc.documentElement.dataset.hud = "1";
     }
     shown = { ...view, streaming: meta.streaming };
+    if (first || lineChanged) refreshOverflow();
   }
 
   return {
@@ -148,8 +155,12 @@ export function createHud(doc, { onVoice = () => {}, onHerDay = () => {}, schedu
     },
     hold(on) {
       held = Boolean(on);
-      if (!held && pending) render();
+      if (!held) {
+        if (pending) render();
+        refreshOverflow();
+      }
     },
+    resize: refreshOverflow,
     flush: render,
   };
 }

@@ -9,7 +9,7 @@ import vm from "node:vm";
 import * as embed from "../../../flutter_app/web/companion/embed.js";
 import * as logic from "../../../flutter_app/web/companion/logic.js";
 import * as life from "../../../flutter_app/web/companion/stage_life.js";
-import { hudView, nextVoicePhase } from "../../../flutter_app/web/companion/hud.js";
+import { createHud, hudView, nextVoicePhase } from "../../../flutter_app/web/companion/hud.js";
 import { createVoice } from "../../../flutter_app/web/companion/voice.js";
 import { createMusic } from "../../../flutter_app/web/companion/music.js";
 import { createSocket } from "../../../flutter_app/web/companion/net.js";
@@ -43,7 +43,7 @@ function eventTarget() {
   };
 }
 
-function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory, ambienceFactory, motionQuery, prefs = { music: false }, musicFactory, herDayImpl } = {}) {
+function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory, hudFactory, ambienceFactory, motionQuery, prefs = { music: false }, musicFactory, herDayImpl } = {}) {
   const elements = new Map();
   const element = (id) => {
     const classes = new Set();
@@ -102,10 +102,10 @@ function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory,
       return socketFactory ? socketFactory(options) : { start() {}, resume() {}, send: () => true };
     },
     createPortrait: () => ({ setFrames() {}, setExpression() {}, setActive() {}, setLevel() {} }),
-    createAmbience: ambienceFactory || (() => ({ start() {}, stop() {}, setKind() {} })),
+    createAmbience: ambienceFactory || (() => ({ start() {}, stop() {}, setKind() {}, resize() {} })),
     ambienceKind: ambienceFactory ? ambienceKind : () => "none",
     createMusic: musicFactory || (() => ({ setHidden() {}, duck() {}, setScene() {} })),
-    createHud: (_doc, callbacks) => { hud = callbacks; return { hold() {}, update: (view) => views.push(view) }; },
+    createHud: (_doc, callbacks) => { hud = callbacks; return hudFactory ? hudFactory(_doc, callbacks) : { hold() {}, resize() {}, update: (view) => views.push(view) }; },
     createVoice: (options) => createVoice({ ...options, setTick: timer, clearTick: clearTimer }),
     createStageAppearance: () => ({ refreshAppearances() {}, setMode() {}, warmModel() {}, forgetModels() {} }),
     // Resume uses the genuine helper, with this harness's inert timers.
@@ -120,6 +120,7 @@ function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory,
     requests, resumes, messages, document, views,
     element, frame: (data) => onFrame(data), click: (id) => element(id).dispatch("click"),
     showPage: () => window.dispatch("pageshow"),
+    resize: () => window.dispatch("resize"),
     expireResume: () => [...timers.values()].find((entry) => entry.ms === 3000).fn(),
     hasResumeDeadline: () => [...timers.values()].some((entry) => entry.ms === 3000),
     speak: (text, id) => message({ type: embed.SPEAK, text, id }),
@@ -838,4 +839,20 @@ test("composer submission resets interrupted stream text before later tokens", a
   h.frame({ type: "done" });
   assert.equal(h.element("subtitle").textContent, "After submit.");
   assert.deepEqual(h.requests, [], "display updates do not auto-play voice");
+});
+
+
+test("window resize refreshes overflow for the real embedded HUD", async () => {
+  const h = harness({ hudFactory: (doc, callbacks) => createHud(doc, { ...callbacks, schedule: (fn) => fn() }) });
+  const line = h.element("hud-line");
+  line.scrollHeight = 70;
+  line.clientHeight = 88;
+  line.scrollTop = 0;
+  await h.hud("Reply already on screen");
+  assert.equal(line.classList.contains("scrolls"), false);
+  line.clientHeight = 44;
+  await h.resize();
+  assert.equal(line.classList.contains("scrolls"), true);
+  assert.equal(line.textContent, "Reply already on screen");
+  assert.equal(line.scrollTop, 0);
 });
