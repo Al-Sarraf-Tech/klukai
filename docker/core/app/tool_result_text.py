@@ -16,10 +16,10 @@ def _extract_tool_text(result: dict[str, Any]) -> str:
         texts = []
         for item in content:
             if isinstance(item, dict):
-                if item.get("type") == "text":
-                    texts.append(item.get("text", ""))
-                elif "text" in item:
-                    texts.append(item["text"])
+                if item.get("type") == "text" or "text" in item:
+                    text = item.get("text", "")
+                    if isinstance(text, str):
+                        texts.append(text)
             elif isinstance(item, str):
                 texts.append(item)
         if texts:
