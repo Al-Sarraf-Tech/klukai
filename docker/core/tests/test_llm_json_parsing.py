@@ -180,3 +180,55 @@ class TestParseJson:
     def test_prose_with_array_only_does_not_fake_a_dict(self):
         from app.llm_json import parse_json
         assert parse_json("Items: [1, 2, 3] and nothing else") is None
+
+    def test_nested_trailing_comma_keeps_outer_object(self):
+        from app.llm_json import parse_json
+        assert parse_json('{"items":[{"name":"first"}],}') == {
+            "items": [{"name": "first"}],
+        }
+
+    def test_nested_trailing_comma_in_prose_keeps_outer_object(self):
+        from app.llm_json import parse_json
+        assert parse_json('Result: {"outer":{"value":1},} done.') == {
+            "outer": {"value": 1},
+        }
+
+    def test_nested_trailing_comma_in_fence_keeps_outer_object(self):
+        from app.llm_json import parse_json
+        assert parse_json('```json\n{"outer":{"value":1},}\n```') == {
+            "outer": {"value": 1},
+        }
+
+    def test_trailing_comma_repair_preserves_quoted_braces(self):
+        from app.llm_json import parse_json
+        assert parse_json('{"label":"comma,}", "x":1,}') == {
+            "label": "comma,}", "x": 1,
+        }
+
+    def test_trailing_comma_repair_preserves_quoted_brackets(self):
+        from app.llm_json import parse_json
+        assert parse_json('{"label":"comma, ]", "x":[1,],}') == {
+            "label": "comma, ]", "x": [1],
+        }
+
+    def test_trailing_comma_repair_preserves_escaped_quotes_and_backslashes(self):
+        import json
+        from app.llm_json import parse_json
+        value = {"label": 'an escaped "quote,}" and slash \\', "items": [1]}
+        text = json.dumps(value)[:-1] + ',}'
+        assert parse_json(text) == value
+
+    def test_first_outer_object_wins_after_trailing_comma_repair(self):
+        from app.llm_json import parse_json
+        text = 'A: {"outer":{"first":1},} then B: {"second":2}'
+        assert parse_json(text) == {"outer": {"first": 1}}
+
+    def test_unmatched_quote_in_prose_preserves_valid_object_string(self):
+        from app.llm_json import parse_json
+        text = 'Here is " output: {"label":"comma,}","x":1}'
+        assert parse_json(text) == {"label": "comma,}", "x": 1}
+
+    def test_unmatched_quote_in_prose_preserves_repaired_outer_object(self):
+        from app.llm_json import parse_json
+        text = 'Here is " output: {"label":"comma,}","outer":{"x":1},}'
+        assert parse_json(text) == {"label": "comma,}", "outer": {"x": 1}}
