@@ -43,12 +43,12 @@ async def draw_missing(user_id: str, outfit_id: str, level: int) -> bool:
         return True
     plan = portrait._SetPlan(user_id, outfit_id, level, missing)
     crop, _ = await plan(base)
-    with Image.open(io.BytesIO(crop)) as image:
+    with Image.open(io.BytesIO(crop)) as source_image:
         for quality in (80, 65, 50, 35):
             buf = io.BytesIO()
-            image.convert("RGB").resize((512, 512), Image.Resampling.LANCZOS).save(
-                buf, "JPEG", quality=quality
-            )
+            source_image.convert("RGB").resize(
+                (512, 512), Image.Resampling.LANCZOS
+            ).save(buf, "JPEG", quality=quality)
             raw = buf.getvalue()
             if len(raw) <= 42000:
                 break
@@ -58,23 +58,34 @@ async def draw_missing(user_id: str, outfit_id: str, level: int) -> bool:
     encoded = base64.b64encode(raw).decode("ascii")
     for frame in missing:
         identity = str(uuid.uuid5(NAMESPACE, f"{user_id}:{outfit_id}:{digest}:{frame}"))
-        kwargs = dict(
+        source_descriptor = {"sha256": digest, "frame": frame, "image": encoded}
+        result = await provider.submit_agy_image(
+            PROMPTS[frame],
             user_id=user_id,
             width=CROP_PX,
             height=CROP_PX,
             include_commander=False,
             request_id=identity,
-            portrait_source={"sha256": digest, "frame": frame, "image": encoded},
+            portrait_source=source_descriptor,
         )
-        result = await provider.submit_agy_image(PROMPTS[frame], **kwargs)
         if result.get("status") in {"pending", "unknown"}:
-            result = await provider.recover_agy_image(PROMPTS[frame], **kwargs)
-        image = result.get("image")
-        if result.get("status") != "completed" or not image:
+            result = await provider.recover_agy_image(
+                PROMPTS[frame],
+                user_id=user_id,
+                width=CROP_PX,
+                height=CROP_PX,
+                include_commander=False,
+                request_id=identity,
+                portrait_source=source_descriptor,
+            )
+        rendered = result.get("image")
+        if result.get("status") != "completed" or not rendered:
             return False
-        with Image.open(io.BytesIO(image)) as raw:
+        with Image.open(io.BytesIO(rendered)) as pixels:
             normalized = portrait._png(
-                raw.convert("RGB").resize((CROP_PX, CROP_PX), Image.Resampling.LANCZOS)
+                pixels.convert("RGB").resize(
+                    (CROP_PX, CROP_PX), Image.Resampling.LANCZOS
+                )
             )
         if not plan.accept(frame, normalized):
             return False  # never buy automatic re-rolls for a failed blink
