@@ -126,7 +126,7 @@ class AgentLoop:
                 else "No matching facts found."
             )
 
-            # Search episodic memories
+            # Search episodic memories (Postgres candidates, Haiku picks)
             episodes = await memory.recall_episodes(query, user_id=user_id, limit=3)
             ep_text = (
                 "\n".join(f"- {e.get('summary', '')[:150]}" for e in episodes)

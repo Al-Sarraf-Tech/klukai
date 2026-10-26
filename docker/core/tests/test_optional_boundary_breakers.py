@@ -9,7 +9,7 @@ from app.circuit_breakers import State, get_breaker
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("boundary", ["embedding_cache", "rate_limit", "events"])
+@pytest.mark.parametrize("boundary", ["voice_cache", "rate_limit", "events"])
 async def test_optional_redis_boundary_opens_and_stops_network_work(
     monkeypatch, boundary
 ):
@@ -17,12 +17,12 @@ async def test_optional_redis_boundary_opens_and_stops_network_work(
     breaker.cfg.error_threshold = 2
     client = MagicMock()
     operation = AsyncMock(side_effect=OSError("offline"))
-    if boundary == "embedding_cache":
+    if boundary == "voice_cache":
         client.get = operation
         monkeypatch.setattr(caches, "_redis", client)
 
         async def invoke():
-            return await caches.get_embedding("remember this")
+            return await caches.get_voice_translation("remember this")
 
         expected = None
     elif boundary == "rate_limit":

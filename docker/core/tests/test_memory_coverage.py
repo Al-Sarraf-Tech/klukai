@@ -1,15 +1,15 @@
-"""Behavioral coverage for app/memory.py — episodic (Qdrant) + embedding +
-combined-recall + nudge tiers.
+"""Behavioral coverage for app/memory.py — episodic (Postgres) store + recall,
+combined-recall and nudge tiers.
 
 Complements tests/test_memory_session.py (which covers session/fact/milestone
-record). Here we exercise the embedding cache path, Qdrant collection
-bootstrap, episode store (incl. the insert-only PG fallback), episode recall
-scoring, the parallel recall_for_prompt fan-out, and the memory-nudge
-interval/formatting logic.
+record) and tests/test_memory_recall.py (the shared candidate + Haiku
+selection helpers). Here we exercise the lifecycle, the insert-only episode
+store (no vectors, no Qdrant), episode recall through Postgres candidates and
+Claude Haiku's pick, the parallel recall_for_prompt fan-out, and the
+memory-nudge interval/formatting logic.
 
-Every test asserts concrete behavior: what HTTP body was sent, what got
-stored, what got returned, and — for the compaction-adjacent store path —
-that we INSERT-ONLY and never DELETE existing vectors/rows.
+Every test asserts concrete behavior: what SQL ran, what got stored, what got
+returned, and — for the store path — that we INSERT-ONLY and never DELETE.
 
 All I/O is mocked; datetime/random are frozen for determinism.
 """
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -62,8 +62,9 @@ class _Resp:
 
 class TestLifecycle:
     @pytest.mark.asyncio
-    async def test_init_builds_clients_and_ensures_collections(self):
-        """init() must create Redis + HTTP clients and bootstrap BOTH collections."""
+    async def test_init_builds_clients_without_any_vector_store(self):
+        """init() creates the Redis + data-service clients and touches nothing
+        else: no Qdrant collection bootstrap, no embedding service."""
         from app.memory import MemoryManager
 
         m = MemoryManager()
@@ -71,16 +72,18 @@ class TestLifecycle:
         fake_http = MagicMock()
 
         with patch("app.memory.redis.from_url", return_value=fake_redis) as from_url, \
-             patch("app.memory.httpx.AsyncClient", return_value=fake_http), \
-             patch.object(MemoryManager, "_ensure_qdrant_collection", AsyncMock()) as ensure_ep, \
-             patch.object(MemoryManager, "_ensure_msg_collection", AsyncMock()) as ensure_msg:
+             patch("app.memory.httpx.AsyncClient", return_value=fake_http):
             await m.init()
 
         assert m._redis is fake_redis
         assert m._http is fake_http
         from_url.assert_called_once()
-        ensure_ep.assert_awaited_once()
-        ensure_msg.assert_awaited_once()
+        fake_http.put.assert_not_called()
+        fake_http.post.assert_not_called()
+        fake_http.get.assert_not_called()
+        for gone in ("embed_text", "is_zero_vector", "_ensure_qdrant_collection",
+                     "_ensure_msg_collection"):
+            assert not hasattr(m, gone)
 
     @pytest.mark.asyncio
     async def test_close_closes_both_clients(self):
@@ -127,207 +130,19 @@ class TestRedisOpReconnectFails:
         assert result is None
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# _ensure_qdrant_collection — bootstrap branches (lines 136-166)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestEnsureQdrantCollection:
-    @pytest.mark.asyncio
-    async def test_noop_when_already_ready(self):
-        """Idempotent: once ready, it must not touch HTTP again."""
-        m = _mk_manager()
-        m._collection_ready = True
-        m._http.get = AsyncMock()
-
-        await m._ensure_qdrant_collection()
-
-        m._http.get.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_marks_ready_when_collection_exists(self):
-        """A 200 GET means the collection exists — mark ready, don't recreate."""
-        m = _mk_manager()
-        m._http.get = AsyncMock(return_value=_Resp(200))
-        m._http.put = AsyncMock()
-
-        await m._ensure_qdrant_collection()
-
-        assert m._collection_ready is True
-        m._http.put.assert_not_awaited()  # no create when it already exists
-
-    @pytest.mark.asyncio
-    async def test_creates_collection_with_correct_vector_config(self):
-        """A 404 GET triggers a PUT creating a 768-dim Cosine collection,
-        followed by a keyword index on user_id for filtered search."""
-        from app.memory import COLLECTION_NAME, EMBED_DIM
-
-        m = _mk_manager()
-        m._http.get = AsyncMock(return_value=_Resp(404))
-        m._http.put = AsyncMock(return_value=_Resp(200))
-
-        await m._ensure_qdrant_collection()
-
-        assert m._collection_ready is True
-        # First PUT = create collection with the expected vector params.
-        create_call = m._http.put.await_args_list[0]
-        assert COLLECTION_NAME in create_call[0][0]
-        vectors = create_call[1]["json"]["vectors"]
-        assert vectors["size"] == EMBED_DIM
-        assert vectors["distance"] == "Cosine"
-        # Second PUT = the user_id keyword index.
-        index_call = m._http.put.await_args_list[1]
-        assert index_call[1]["json"]["field_name"] == "user_id"
-        assert index_call[1]["json"]["field_schema"] == "keyword"
-
-    @pytest.mark.asyncio
-    async def test_index_failure_does_not_block_readiness(self):
-        """Index creation is non-critical: if it fails, the collection is still ready."""
-        m = _mk_manager()
-        m._http.get = AsyncMock(return_value=_Resp(404))
-
-        calls = {"n": 0}
-
-        async def put(*_a, **_kw):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return _Resp(200)  # create succeeds
-            raise RuntimeError("index boom")  # index fails
-
-        m._http.put = put
-        await m._ensure_qdrant_collection()
-
-        assert m._collection_ready is True
-
-    @pytest.mark.asyncio
-    async def test_create_http_error_leaves_not_ready(self):
-        """If creation itself fails, stay not-ready so a later call retries."""
-        import httpx
-
-        m = _mk_manager()
-        m._http.get = AsyncMock(side_effect=httpx.ConnectError("no qdrant"))
-        m._http.put = AsyncMock(side_effect=httpx.ConnectError("no qdrant"))
-
-        await m._ensure_qdrant_collection()
-
-        assert m._collection_ready is False
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# embed_text — cache-first + service call + failure sentinel (lines 177-201)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestEmbedText:
-    @pytest.mark.asyncio
-    async def test_returns_cached_vector_without_http(self):
-        """Cache hit short-circuits — no embedding service call."""
-        m = _mk_manager()
-        m._http.post = AsyncMock()
-        cached = [0.1] * 768
-
-        with patch("app.caches.get_embedding", AsyncMock(return_value=cached)):
-            vec = await m.embed_text("hello")
-
-        assert vec == cached
-        m._http.post.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_calls_service_on_cache_miss_and_writes_through(self):
-        """Cache miss -> POST to inference -> parse data[0].embedding -> cache it."""
-        m = _mk_manager()
-        service_vec = [0.5] * 768
-        m._http.post = AsyncMock(
-            return_value=_Resp(200, {"data": [{"embedding": service_vec}]})
-        )
-        put = AsyncMock()
-
-        with patch("app.caches.get_embedding", AsyncMock(return_value=None)), \
-             patch("app.caches.put_embedding", put):
-            vec = await m.embed_text("fresh text")
-
-        assert vec == service_vec
-        # POST body must carry the input text + embed model.
-        body = m._http.post.call_args[1]["json"]
-        assert body["input"] == "fresh text"
-        assert body["model"] == "nomic-embed-text-v1.5"
-        # Write-through cache populated with the new vector.
-        put.assert_awaited_once_with("fresh text", service_vec)
-
-    @pytest.mark.asyncio
-    async def test_returns_zero_vector_on_failure_by_default(self):
-        """Search paths degrade quietly: failure -> EMBED_DIM-length zero vector."""
-        from app.memory import EMBED_DIM, MemoryManager
-
-        m = _mk_manager()
-        m._http.post = AsyncMock(side_effect=RuntimeError("inference down"))
-
-        with patch("app.caches.get_embedding", AsyncMock(return_value=None)):
-            vec = await m.embed_text("x")
-
-        assert vec == [0.0] * EMBED_DIM
-        assert MemoryManager.is_zero_vector(vec) is True
-
-    @pytest.mark.asyncio
-    async def test_raises_embedding_failed_when_requested(self):
-        """Store paths pass raise_on_failure=True to avoid indexing a zero vector."""
-        from app.memory import EmbeddingFailed
-
-        m = _mk_manager()
-        m._http.post = AsyncMock(side_effect=RuntimeError("inference down"))
-
-        with patch("app.caches.get_embedding", AsyncMock(return_value=None)):
-            with pytest.raises(EmbeddingFailed):
-                await m.embed_text("x", raise_on_failure=True)
-
-    @pytest.mark.asyncio
-    async def test_cache_read_error_falls_through_to_service(self):
-        """A broken cache must not break embedding — fall through to the service."""
-        m = _mk_manager()
-        service_vec = [0.25] * 768
-        m._http.post = AsyncMock(
-            return_value=_Resp(200, {"data": [{"embedding": service_vec}]})
-        )
-
-        with patch("app.caches.get_embedding", AsyncMock(side_effect=RuntimeError("redis"))), \
-             patch("app.caches.put_embedding", AsyncMock(side_effect=RuntimeError("redis"))):
-            vec = await m.embed_text("text")
-
-        assert vec == service_vec  # cache write failure also swallowed
-
-
-class TestIsZeroVector:
-    def test_detects_all_zero(self):
-        from app.memory import MemoryManager
-
-        assert MemoryManager.is_zero_vector([0.0, 0.0, 0.0]) is True
-
-    def test_rejects_nonzero(self):
-        from app.memory import MemoryManager
-
-        assert MemoryManager.is_zero_vector([0.0, 0.1, 0.0]) is False
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# store_episode — Qdrant upsert + INSERT-ONLY PG fallback (lines 218-261)
-#
-# IMMUTABILITY: the PG fallback is `INSERT ... ON CONFLICT (id) DO NOTHING`.
-# These tests ASSERT we never issue a DELETE/UPDATE — memory writes are
-# insert-only by project mandate.
-# ═══════════════════════════════════════════════════════════════════════════
-
-
 class _RecordingConn:
     """Async connection that records every SQL string + params it executes."""
 
-    def __init__(self, rowcount=1):
+    def __init__(self, rowcount=1, rows=None):
         self.calls: list[tuple[str, tuple]] = []
         self._rowcount = rowcount
+        self._rows = rows or []
 
     async def execute(self, sql, params=None):
         self.calls.append((sql, params))
         result = MagicMock()
         result.rowcount = self._rowcount
+        result.fetchall = AsyncMock(return_value=list(self._rows))
         return result
 
     async def commit(self):
@@ -345,19 +160,24 @@ def _conn_ctx(conn):
     return _ctx
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# store_episode — Postgres only, INSERT-ONLY
+#
+# IMMUTABILITY: `INSERT ... ON CONFLICT (id) DO NOTHING`. These tests ASSERT
+# we never issue a DELETE/UPDATE — memory writes are insert-only by project
+# mandate — and that no vector is computed or sent anywhere.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
 class TestStoreEpisode:
     @pytest.mark.asyncio
-    async def test_upserts_to_qdrant_with_full_payload(self):
-        """The vector PUT must carry id, embedding, and the full metadata payload."""
+    async def test_inserts_the_row_and_sends_no_vector(self):
+        """Storing writes only the Postgres row: summary, keywords, emotion
+        tags, importance, conversation and user. No HTTP, no embedding."""
         m = _mk_manager()
-        m.embed_text = AsyncMock(return_value=[0.3] * 768)
-        m._http.put = AsyncMock(return_value=_Resp(200))
         conn = _RecordingConn()
 
-        frozen = datetime(2026, 5, 25, 12, 0, 0)
-        with patch("app.db.get_conn_autocommit", _conn_ctx(conn)), \
-             patch("app.memory.datetime") as dt:
-            dt.now.return_value = frozen
+        with patch("app.db.get_conn_autocommit", _conn_ctx(conn)):
             result = await m.store_episode(
                 episode_id="ep-1",
                 summary="first kiss on the rooftop",
@@ -369,26 +189,22 @@ class TestStoreEpisode:
             )
 
         assert result == "ep-1"
-        body = m._http.put.call_args[1]["json"]
-        point = body["points"][0]
-        assert point["id"] == "ep-1"
-        assert point["vector"] == [0.3] * 768
-        payload = point["payload"]
-        assert payload["summary"] == "first kiss on the rooftop"
-        assert payload["keywords"] == ["rooftop", "kiss"]
-        assert payload["emotion_tags"] == ["tender"]
-        assert payload["importance"] == 0.9
-        assert payload["conversation_id"] == "conv-7"
-        assert payload["user_id"] == "alice"
-        assert payload["created_at"] == frozen.isoformat()
+        assert len(conn.calls) == 1
+        sql, params = conn.calls[0]
+        assert "INSERT INTO companion_episodes" in sql
+        assert "embedding_id" not in sql  # there is no vector to point at
+        assert params == (
+            "ep-1", "conv-7", "first kiss on the rooftop", ["rooftop", "kiss"],
+            ["tender"], 0.9, "alice",
+        )
+        m._http.put.assert_not_called()
+        m._http.post.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_pg_fallback_is_insert_only_never_deletes(self):
+    async def test_store_is_insert_only_never_deletes(self):
         """SACRED: episode store inserts with ON CONFLICT DO NOTHING and NEVER
         deletes/updates an existing row. This guards the immutability invariant."""
         m = _mk_manager()
-        m.embed_text = AsyncMock(return_value=[0.1] * 768)
-        m._http.put = AsyncMock(return_value=_Resp(200))
         conn = _RecordingConn()
 
         with patch("app.db.get_conn_autocommit", _conn_ctx(conn)):
@@ -400,118 +216,128 @@ class TestStoreEpisode:
                 importance=0.5,
             )
 
-        assert len(conn.calls) == 1
         sql, params = conn.calls[0]
-        assert "INSERT INTO companion_episodes" in sql
         assert "ON CONFLICT (id) DO NOTHING" in sql
-        # Immutability invariant — no destructive SQL on the memory store path.
         upper = sql.upper()
         assert "DELETE" not in upper
         assert "UPDATE" not in upper
         assert "TRUNCATE" not in upper
-        # Episode id is also used as the embedding_id (positions 0 and 6).
         assert params[0] == "ep-2"
-        assert params[6] == "ep-2"
+        assert params[-1] == "jalsarraf"  # default user
 
     @pytest.mark.asyncio
-    async def test_qdrant_failure_still_persists_to_pg(self):
-        """Qdrant outage must not lose the episode — PG fallback still runs."""
+    async def test_db_failure_is_logged_and_id_still_returned(self, caplog):
+        """A database outage never raises into the extraction/milestone paths."""
+        import logging
+
         m = _mk_manager()
-        m.embed_text = AsyncMock(return_value=[0.1] * 768)
-        m._http.put = AsyncMock(side_effect=RuntimeError("qdrant down"))
-        conn = _RecordingConn()
-
-        with patch("app.db.get_conn_autocommit", _conn_ctx(conn)):
-            result = await m.store_episode(
-                episode_id="ep-3", summary="s", keywords=[], emotion_tags=[],
-                importance=0.5,
-            )
-
-        assert result == "ep-3"  # returns id despite Qdrant failure
-        assert len(conn.calls) == 1
-        assert "INSERT INTO companion_episodes" in conn.calls[0][0]
-
-    @pytest.mark.asyncio
-    async def test_pg_failure_is_swallowed_returns_id(self):
-        """If BOTH stores fail the id is still returned (best-effort store)."""
-        m = _mk_manager()
-        m.embed_text = AsyncMock(return_value=[0.1] * 768)
-        m._http.put = AsyncMock(side_effect=RuntimeError("qdrant down"))
 
         def broken():
             raise RuntimeError("pg down")
 
-        with patch("app.db.get_conn_autocommit", side_effect=broken):
+        with patch("app.db.get_conn_autocommit", side_effect=broken), \
+             caplog.at_level(logging.ERROR, logger="app.memory"):
             result = await m.store_episode(
                 episode_id="ep-4", summary="s", keywords=[], emotion_tags=[],
                 importance=0.5,
             )
 
         assert result == "ep-4"
+        assert any("Failed to store episode" in r.getMessage() for r in caplog.records)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# recall_episodes — vector search request + result shaping (lines 267-284)
+# recall_episodes — Postgres candidates, then Claude Haiku's pick
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+def _episode_row(n, summary, keywords=None, emotion_tags=None, importance=0.5,
+                 created_at=None):
+    return (
+        f"ep-{n}", summary, keywords, emotion_tags, importance,
+        created_at or datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc),
+    )
 
 
 class TestRecallEpisodes:
     @pytest.mark.asyncio
-    async def test_builds_user_scoped_search_and_shapes_hits(self):
-        """Search must be user-filtered + threshold-bounded; hits map to dicts
-        carrying summary/score/keywords/emotion_tags."""
+    async def test_haiku_pick_sets_order_and_scores(self):
+        """Candidates come from Postgres scoped to the user; Haiku's ids pick
+        and order them; scores are rank-derived."""
         m = _mk_manager()
-        m.embed_text = AsyncMock(return_value=[0.4] * 768)
-        hits = {
-            "result": [
-                {
-                    "score": 0.91,
-                    "payload": {
-                        "summary": "rooftop kiss",
-                        "keywords": ["rooftop"],
-                        "emotion_tags": ["tender"],
-                    },
-                },
-                {
-                    "score": 0.55,
-                    "payload": {"summary": "coffee run"},  # missing optional fields
-                },
-            ]
-        }
-        m._http.post = AsyncMock(return_value=_Resp(200, hits))
+        rows = [
+            _episode_row(1, "rooftop kiss", ["rooftop"], ["tender"]),
+            _episode_row(2, "coffee run"),  # NULL keywords / tags
+            _episode_row(3, "rain watch", ["rain"], None),
+        ]
+        conn = _RecordingConn(rows=rows)
+        pick = AsyncMock(return_value={"ids": ["3", "1"]})
 
-        results = await m.recall_episodes(
-            "what did we do", limit=3, min_score=0.4, user_id="bob"
-        )
+        with patch("app.db.get_conn", _conn_ctx(conn)), \
+             patch("app.background_llm.json_object", pick):
+            results = await m.recall_episodes(
+                "what did we do on the roof", limit=3, user_id="bob"
+            )
 
-        # Request shape
-        body = m._http.post.call_args[1]["json"]
-        assert body["vector"] == [0.4] * 768
-        assert body["limit"] == 3
-        assert body["score_threshold"] == 0.4
-        assert body["filter"]["must"][0]["match"]["value"] == "bob"
-        # Result shape
-        assert len(results) == 2
-        assert results[0] == {
-            "summary": "rooftop kiss",
-            "score": 0.91,
-            "keywords": ["rooftop"],
-            "emotion_tags": ["tender"],
-        }
-        # Missing optional payload fields default to empty lists.
-        assert results[1]["summary"] == "coffee run"
-        assert results[1]["keywords"] == []
-        assert results[1]["emotion_tags"] == []
+        sql, params = conn.calls[0]
+        assert "FROM companion_episodes" in sql and "ts_rank" in sql
+        assert params[1] == "bob" and params[2] == 40
+        assert pick.await_args.args[0] == "memory_recall_episodes"
+        assert results == [
+            {"summary": "rain watch", "score": 1.0, "keywords": ["rain"],
+             "emotion_tags": []},
+            {"summary": "rooftop kiss", "score": 0.5, "keywords": ["rooftop"],
+             "emotion_tags": ["tender"]},
+        ]
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_non_200(self):
-        """A failed Qdrant search returns [] rather than raising."""
+    async def test_candidate_text_carries_date_summary_and_keywords(self):
         m = _mk_manager()
-        m.embed_text = AsyncMock(return_value=[0.0] * 768)
-        m._http.post = AsyncMock(return_value=_Resp(500, text="boom"))
+        rows = [_episode_row(1, "rooftop kiss", ["rooftop", "night"])]
+        conn = _RecordingConn(rows=rows)
+        pick = AsyncMock(return_value=None)
 
-        results = await m.recall_episodes("q")
-        assert results == []
+        with patch("app.db.get_conn", _conn_ctx(conn)), \
+             patch("app.background_llm.json_object", pick):
+            await m.recall_episodes("roof", user_id="bob")
+
+        prompt = pick.await_args.args[1]
+        assert "[2026-10-20] rooftop kiss (keywords: rooftop, night)" in prompt
+
+    @pytest.mark.asyncio
+    async def test_haiku_unavailable_keeps_postgres_order(self):
+        m = _mk_manager()
+        rows = [_episode_row(n, f"ep {n}", created_at="not-a-date") for n in range(1, 8)]
+        conn = _RecordingConn(rows=rows)
+
+        with patch("app.db.get_conn", _conn_ctx(conn)), \
+             patch("app.background_llm.json_object", AsyncMock(return_value=None)):
+            results = await m.recall_episodes("anything", limit=3)
+
+        assert [r["summary"] for r in results] == ["ep 1", "ep 2", "ep 3"]
+        assert [r["score"] for r in results] == [1.0, 0.6667, 0.3333]
+
+    @pytest.mark.asyncio
+    async def test_no_candidates_skips_haiku(self):
+        m = _mk_manager()
+        conn = _RecordingConn(rows=[])
+        pick = AsyncMock()
+
+        with patch("app.db.get_conn", _conn_ctx(conn)), \
+             patch("app.background_llm.json_object", pick):
+            assert await m.recall_episodes("q") == []
+
+        pick.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_database_error_fails_open(self):
+        m = _mk_manager()
+
+        def broken():
+            raise RuntimeError("pg down")
+
+        with patch("app.db.get_conn", side_effect=broken):
+            assert await m.recall_episodes("q") == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -642,6 +468,16 @@ class TestRecallForPrompt:
         assert m.recall_exchanges_with_recency.call_args[1]["affection_level"] == 9
         assert m.recall_exchanges_with_recency.call_args[1]["user_id"] == "carol"
 
+    @pytest.mark.asyncio
+    async def test_failed_facts_and_exchanges_degrade_to_empty(self):
+        """return_exceptions keeps a raising tier from reaching the chat path."""
+        m = _mk_manager()
+        m.recall_episodes = AsyncMock(return_value=[{"summary": "kept"}])
+        m.get_relationship_facts = AsyncMock(side_effect=RuntimeError("data down"))
+        m.recall_exchanges_with_recency = AsyncMock(side_effect=RuntimeError("pg down"))
+
+        assert await m.recall_for_prompt("hi", user_id="carol") == (["kept"], {}, [])
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # get_memory_nudge — interval gating + nudge formatting (lines 391-419)
@@ -754,39 +590,6 @@ class TestGetMemoryNudge:
         assert "A" * 201 not in nudge
         # Empty topics -> default phrase.
         assert "a past conversation" in nudge
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# store_episode — Qdrant PUT status-check (httpx doesn't raise on 4xx/5xx)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestStoreEpisodeStatusCheck:
-    @pytest.mark.asyncio
-    async def test_qdrant_error_status_routes_to_failure_path(self, caplog):
-        """A 5xx PUT response must be detected (raise_for_status) so the lost
-        vector is logged via the Qdrant-failure path — not silently ignored —
-        while the PG fallback still preserves the episode."""
-        import logging
-
-        m = _mk_manager()
-        m.embed_text = AsyncMock(return_value=[0.1] * 768)
-        m._http.put = AsyncMock(return_value=_Resp(503, text="qdrant overloaded"))
-        conn = _RecordingConn()
-
-        with patch("app.db.get_conn_autocommit", _conn_ctx(conn)), \
-             caplog.at_level(logging.ERROR, logger="app.memory"):
-            result = await m.store_episode(
-                episode_id="ep-9", summary="s", keywords=[], emotion_tags=[],
-                importance=0.5,
-            )
-
-        assert result == "ep-9"
-        # The error status surfaced through the Qdrant exception handler.
-        assert any("Failed to store episode" in r.getMessage() for r in caplog.records)
-        # PG fallback still ran — the episode is not lost.
-        assert len(conn.calls) == 1
-        assert "INSERT INTO companion_episodes" in conn.calls[0][0]
 
 
 class TestMilestoneStamp:

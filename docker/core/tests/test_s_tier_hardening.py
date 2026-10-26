@@ -289,10 +289,11 @@ class TestAtomicTransaction:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestEpisodeDualWrite:
-    """Verify episodes are written to both Qdrant and PostgreSQL."""
+class TestEpisodeStore:
+    """Episodes are written to PostgreSQL only (owner decision 2026-10-26:
+    cloud AI only, no embeddings and no vector store)."""
 
-    def test_store_episode_writes_to_db(self):
+    def test_store_episode_writes_to_db_only(self):
         source = Path(__file__).resolve().parent.parent / "app" / "memory.py"
         text = source.read_text()
         func_start = text.index("async def store_episode")
@@ -301,12 +302,11 @@ class TestEpisodeDualWrite:
         assert "companion_episodes" in func_text, (
             "Must write to companion_episodes DB table"
         )
-        assert "QDRANT_URL" in func_text or "COLLECTION_NAME" in func_text, (
-            "Must write to Qdrant"
-        )
         assert "get_conn_autocommit" in func_text, (
             "Must use DB connection for PostgreSQL write"
         )
+        for gone in ("QDRANT", "qdrant", "embed", "vector"):
+            assert gone not in func_text, f"Episode store must not use {gone}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
