@@ -23,6 +23,7 @@ status, consequences. Format follows [MADR-lite](https://adr.github.io/madr/).
 | [0014](0014-offsite-backup.md) | Off-host recovery copy: amarillo → dominus-nobara over Tailscale | Accepted | 2026-04 / 2026-08 amendment |
 | [0015](0015-wsl2-decommissioned.md) | Windows and WSL2 are not deployment targets | Accepted | 2026-04 / 2026-08 amendment |
 | [0016](0016-tribute-system.md) | Tribute system — Commander's crown-jewel memories | Accepted | 2026-05 |
+| [0019](0019-paid-image-recovery.md) | Recover paid image attempts without resubmission | Proposed | 2026-10 |
 
 ## Conventions
 

@@ -16,7 +16,10 @@ most once; a background job itself never waits.
 """
 
 from __future__ import annotations
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from psycopg import AsyncConnection
 
 
 import asyncio
@@ -71,14 +74,13 @@ def payload_digest(payload: dict[str, Any]) -> str:
 
 _EXPLICIT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "klukai:explicit-account-image:v1")
 
-# Asking again with the same words within this window finds the picture already
-# made (he closed the tab, or didn't see it arrive); after it, the same words
-# make a new picture instead of returning the first one forever.
+# Chat repeats use the original journal row's age, not wall-clock buckets.
 REPEAT_WINDOW_SECONDS = 600
+_REPEAT_LOCK_NAMESPACE = 0x4B4C494D
 
 
 def repeat_window(now: float | None = None) -> int:
-    """The repeat window ``now`` (default: the current time) falls in."""
+    """Legacy bucket helper; new chat claims use elapsed journal age instead."""
     return int((time.time() if now is None else now) // REPEAT_WINDOW_SECONDS)
 
 
@@ -91,13 +93,14 @@ def explicit_request_id(
     scene: str | None = None,
     window: int | None = None,
 ) -> str:
-    """One id for one explicit picture, stable across a closed tab or a new process.
+    """Stable explicit input identity, independent of the composed render prompt.
 
     ``scene`` is the place the picture is set in when it came from outside
     the sentence (his earlier words, where she is): "take a picture of us" in
-    his room and at the beach are two pictures. ``window`` is the
-    :func:`repeat_window` it was asked in, so the same words later make a new
-    picture. None for either keeps the original id.
+    his room and at the beach are two pictures. ``window`` preserves legacy
+    bucket identifiers. New chat requests omit it and pass this identity as
+    ``repeat_key`` to :func:`fulfill_account_image`, which claims an elapsed
+    repeat window atomically in the journal. None for either keeps the old id.
     """
     identity: dict[str, Any] = {
         "height": height,
@@ -173,6 +176,10 @@ async def fetch_request(request_id: str) -> dict[str, Any] | None:
                 (request_id,),
             )
         ).fetchone()
+    return _request_row(row)
+
+
+def _request_row(row: tuple[Any, ...] | None) -> dict[str, Any] | None:
     if row is None:
         return None
     return {
@@ -202,21 +209,87 @@ async def insert_request(
     from .db import get_conn_autocommit
 
     async with get_conn_autocommit() as conn:
-        await conn.execute(
-            "INSERT INTO companion_account_image_requests "
-            "(id, user_id, payload_digest, prompt, width, height, include_commander, phase, archive_context) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'accepted', %s::jsonb)",
-            (
-                request_id,
-                user_id,
-                digest,
-                prompt,
-                width,
-                height,
-                include_commander,
-                json.dumps(archive_context or {}),
-            ),
+        await _insert_request_row(
+            conn,
+            {
+                "id": request_id,
+                "user_id": user_id,
+                "payload_digest": digest,
+                "prompt": prompt,
+                "width": width,
+                "height": height,
+                "include_commander": include_commander,
+                "archive_context": archive_context or {},
+            },
         )
+
+
+async def _insert_request_row(
+    conn: AsyncConnection[tuple[Any, ...]], row: dict[str, Any]
+) -> None:
+    await conn.execute(
+        "INSERT INTO companion_account_image_requests "
+        "(id, user_id, payload_digest, prompt, width, height, include_commander, phase, archive_context) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, 'accepted', %s::jsonb)",
+        (
+            row["id"],
+            row["user_id"],
+            row["payload_digest"],
+            row["prompt"],
+            row["width"],
+            row["height"],
+            row["include_commander"],
+            json.dumps(row["archive_context"]),
+        ),
+    )
+
+
+async def _claim_repeat_request(
+    row: dict[str, Any], repeat_key: str
+) -> dict[str, Any] | None:
+    """Find the exact recent chat claim or durably insert this new one.
+
+    The transaction lock covers lookup and insert across processes. Recovery
+    happens after commit and never renews the original created_at. Old rows
+    without this explicit key cannot be inferred from similar render prompts.
+    """
+    from .db import get_conn_autocommit
+
+    scoped_key = str(
+        uuid.uuid5(
+            uuid.UUID(_normalize_request_id(repeat_key)),
+            "nudity:yes" if _granted_nudity(row) else "nudity:no",
+        )
+    )
+    row["archive_context"]["chat_repeat_key"] = scoped_key
+    async with get_conn_autocommit() as conn:
+        await conn.execute("SET LOCAL lock_timeout = '5s'")
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+            (_REPEAT_LOCK_NAMESPACE, scoped_key),
+        )
+        current = await (
+            await conn.execute(
+                "SELECT id, user_id, payload_digest, prompt, width, height, "
+                "include_commander, phase, memory_id, archive_context "
+                "FROM companion_account_image_requests "
+                "WHERE user_id = %s AND archive_context->>'chat_repeat_key' = %s "
+                "AND width = %s AND height = %s AND include_commander = %s "
+                "AND created_at > NOW() - make_interval(secs => %s) "
+                "ORDER BY created_at DESC, id DESC LIMIT 1",
+                (
+                    row["user_id"],
+                    scoped_key,
+                    row["width"],
+                    row["height"],
+                    row["include_commander"],
+                    REPEAT_WINDOW_SECONDS,
+                ),
+            )
+        ).fetchone()
+        if current is None:
+            await _insert_request_row(conn, row)
+    return _request_row(current)
 
 
 async def update_request(
@@ -530,6 +603,7 @@ async def fulfill_account_image(
     request_id: str | None = None,
     archive_context: dict[str, Any] | None = None,
     nudity: bool = False,
+    repeat_key: str | None = None,
 ) -> dict[str, Any]:
     """Accept one explicit picture, or return the image already stored for that id.
 
@@ -537,6 +611,9 @@ async def fulfill_account_image(
     journalled in ``archive_context`` with the request, never re-derived later.
     A "busy" answer caused by a background render or another picture in flight
     is waited out once (see the module docstring); a background caller never waits.
+    Chat supplies ``repeat_key`` for the original sentence/user/scene/shape.
+    Its elapsed claim also distinguishes the journalled nudity grant. Other
+    callers retain their existing explicit request-id contract.
     """
     outcome = await _fulfill(
         user_id,
@@ -547,6 +624,7 @@ async def fulfill_account_image(
         request_id=request_id,
         archive_context=archive_context,
         nudity=nudity,
+        repeat_key=repeat_key,
     )
     if outcome["phase"] != "busy" or in_background_render():
         return outcome
@@ -568,6 +646,7 @@ async def _fulfill(
     request_id: str | None,
     archive_context: dict[str, Any] | None,
     nudity: bool,
+    repeat_key: str | None = None,
 ) -> dict[str, Any]:
     archive_context = dict(archive_context or {})
     if nudity and not include_commander:
@@ -583,6 +662,21 @@ async def _fulfill(
             include_commander,
         )
     )
+    row = {
+        "id": request_id,
+        "user_id": user_id,
+        "prompt": prompt,
+        "width": width,
+        "height": height,
+        "include_commander": include_commander,
+        "archive_context": archive_context,
+        "payload_digest": digest,
+    }
+    if repeat_key is not None:
+        current = await _claim_repeat_request(row, repeat_key)
+        if current is not None:
+            return await _recover_saved(current)
+        return await _submit_saved(row)
     current = await fetch_request(request_id)
     if current is not None:
         if current["user_id"] != user_id:
@@ -611,14 +705,4 @@ async def _fulfill(
             return _result(request_id, phase="unknown")
         return await _recover_saved(current)
 
-    return await _submit_saved(
-        {
-            "id": request_id,
-            "user_id": user_id,
-            "prompt": prompt,
-            "width": width,
-            "height": height,
-            "include_commander": include_commander,
-            "archive_context": archive_context or {},
-        }
-    )
+    return await _submit_saved(row)

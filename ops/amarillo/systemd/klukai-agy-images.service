@@ -17,9 +17,10 @@ EnvironmentFile=%h/.config/klukai/agy-images.env
 ExecStart=/usr/bin/python3 %h/git/klukai/scripts/agy_image_worker.py --runtime-dir %h/.local/share/klukai/agy-bridge/runtime --state-dir %h/.local/share/klukai/agy-bridge/state --references %h/.local/share/klukai/agy-bridge/references.json --allowed-users ${KLUKAI_AGY_ALLOWED_USERS} --providers ${KLUKAI_ACCOUNT_IMAGE_PROVIDERS} --rotation ${KLUKAI_IMAGE_ROTATION} --checker ${KLUKAI_IMAGE_CHECKER}
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=10
-KillMode=control-group
-# bwrap needs user namespaces; do not add namespace restrictions here.
+# Stop admission in the main process, then let its active request/check finish.
+# The worker budget is 360 s; retain 60 s for transport and shutdown cleanup.
+TimeoutStopSec=420
+KillMode=mixed
 
 [Install]
 WantedBy=default.target

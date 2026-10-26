@@ -862,7 +862,7 @@ class TestBriefOutputs:
         )
         assert len({old, room, beach}) == 3
 
-    def test_same_words_later_draw_a_new_picture(self):
+    def test_legacy_windowed_identifiers_remain_compatible(self):
         from app.account_images import (
             REPEAT_WINDOW_SECONDS,
             explicit_request_id,
@@ -875,10 +875,10 @@ class TestBriefOutputs:
             )
 
         start = 1_792_000_000.0 - (1_792_000_000.0 % REPEAT_WINDOW_SECONDS)
-        # Asking again a few minutes later finds the same picture...
+        # The legacy helper remains available to callers with old bucket IDs.
         assert repeat_window(start + 5) == repeat_window(start + 300)
         assert rid(repeat_window(start + 5)) == rid(repeat_window(start + 300))
-        # ...but once the window has passed, the same words make a new one.
+        # Active chat repeats use the journal's elapsed window instead.
         later = repeat_window(start + REPEAT_WINDOW_SECONDS + 1)
         assert later == repeat_window(start) + 1
         assert rid(later) != rid(repeat_window(start))

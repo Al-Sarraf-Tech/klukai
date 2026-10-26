@@ -4,6 +4,7 @@ approved references, caps reserved before every paid call, nothing leaked."""
 import base64
 from contextlib import closing
 import io
+import http.client
 import json
 from pathlib import Path
 import sqlite3
@@ -168,7 +169,7 @@ def test_missing_or_invalid_caps_fail_closed(setup, monkeypatch, daily, monthly)
 
 
 @pytest.mark.parametrize("code,kind", [(401, agy.ProviderUnavailable), (403, agy.ProviderUnavailable),
-                                       (429, agy.ProviderUnavailable), (503, agy.ProviderUnavailable),
+                                       (429, agy.ProviderUnavailable), (503, fal.PendingGeneration),
                                        (422, agy.RuntimeError)])
 def test_provider_errors_are_classified_and_never_echo_the_key(setup, monkeypatch, code, kind):
     api, tmp_path = setup
@@ -190,7 +191,7 @@ def test_provider_errors_are_classified_and_never_echo_the_key(setup, monkeypatc
                       {"loc": ["body", "image_size"], "msg": "y", "type": "greater_than_equal"}]},
      agy.RuntimeError, "fal rejected the request (HTTP 422: greater_than_equal)"),
     (503, {"detail": "private scene words", "error_type": "runner_scheduling_failure"},
-     agy.ProviderUnavailable, "fal unavailable (HTTP 503: runner_scheduling_failure)"),
+     fal.PendingGeneration, "fal submission outcome unknown (HTTP 503: runner_scheduling_failure)"),
     # Undocumented types are left out rather than echoed.
     (422, {"detail": [{"msg": "x", "type": "private scene words"}]},
      agy.RuntimeError, "fal rejected the request (HTTP 422)"),
@@ -205,9 +206,9 @@ def test_errors_name_only_documented_fal_error_types(setup, monkeypatch, code, b
     assert str(raised.value) == message
 
 
-def test_network_failure_is_a_provider_outage(setup, monkeypatch):
+def test_network_failure_leaves_the_submission_uncertain(setup, monkeypatch):
     monkeypatch.setattr(fal, "_urlopen", FakeFal(submit_error=urllib.error.URLError("reset")))
-    with pytest.raises(agy.ProviderUnavailable):
+    with pytest.raises(fal.PendingGeneration):
         fal.render(REQUEST, {"klukai": "klukai"})
 
 
@@ -221,11 +222,11 @@ def test_blocked_empty_or_remote_results_are_generation_failures(setup, monkeypa
         fal.render(REQUEST, {"klukai": "klukai"})
 
 
-def test_slow_job_times_out_as_an_outage(setup, monkeypatch):
+def test_slow_job_times_out_without_authorizing_another_generation(setup, monkeypatch):
     monkeypatch.setattr(fal, "_urlopen", FakeFal(polls=10_000))
     clock = iter(range(0, 10_000, 30))
     monkeypatch.setattr(fal.time, "monotonic", lambda: next(clock))
-    with pytest.raises(agy.ProviderUnavailable, match="timed out"):
+    with pytest.raises(fal.PendingGeneration, match="timed out"):
         fal.render(REQUEST, {"klukai": "klukai"})
 
 
@@ -298,3 +299,365 @@ def test_nudity_with_the_commander_reference_is_refused_before_spending(setup):
         fal.render(dict(REQUEST, user_id="jalsarraf", include_commander=True, nudity=True),
                    {"klukai": "klukai", "commander": "commander"})
     assert api.calls == []
+
+
+@pytest.mark.parametrize("stage", ["status", "result"])
+def test_transient_observation_recovers_without_another_paid_submission(setup, monkeypatch, stage):
+    api, tmp_path = setup
+    failed = False
+
+    def flaky(request, timeout):
+        nonlocal failed
+        target = request.get_method() == "GET" and request.full_url.endswith("/status") == (stage == "status")
+        if target and not failed:
+            failed = True
+            raise urllib.error.URLError("temporary disconnect")
+        return api(request, timeout)
+
+    monkeypatch.setattr(fal, "_urlopen", flaky)
+    assert fal.render(REQUEST, {"klukai": "klukai"}).startswith(b"\x89PNG")
+    assert failed and sum(call[0] == "POST" for call in api.calls) == 1
+    assert attempts(tmp_path) == 1
+
+
+@pytest.mark.parametrize("url", ["http://queue.fal.run/x", "https://other.test/x",
+                                     "https://queue.fal.run@other.test/x",
+                                     "https://queue.fal.run:444/x", "https://queue.fal.run/x#fragment"])
+def test_queue_endpoints_are_validated_before_sending_a_key(setup, monkeypatch, url):
+    calls = []
+
+    def api(request, timeout):
+        calls.append(request.full_url)
+        assert len(calls) == 1, "untrusted endpoint must not be requested"
+        return Response(json.dumps({"request_id": "q1", "status_url": url,
+                                   "response_url": "https://queue.fal.run/x/requests/q1"}).encode())
+
+    monkeypatch.setattr(fal, "_urlopen", api)
+    with pytest.raises(agy.RuntimeError, match="endpoint"):
+        fal.render(REQUEST, {"klukai": "klukai"})
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("doc", [None, [], "invalid", {"status": "UNKNOWN"}])
+def test_malformed_observation_fails_with_a_sanitized_error(setup, monkeypatch, doc):
+    api, _ = setup
+    clock = iter(range(0, 10_000, 30))
+    monkeypatch.setattr(fal.time, "monotonic", lambda: next(clock))
+
+    def malformed(request, timeout):
+        if request.get_method() == "GET":
+            return Response(json.dumps(doc).encode())
+        return api(request, timeout)
+
+    monkeypatch.setattr(fal, "_urlopen", malformed)
+    with pytest.raises(agy.RuntimeError):
+        fal.render(REQUEST, {"klukai": "klukai"})
+
+
+def test_policy_refusal_takes_precedence_over_http_service_category(setup, monkeypatch):
+    error = urllib.error.HTTPError("https://queue.fal.run", 403, "private", {},
+                                  io.BytesIO(b'{"error_type":"content_policy_violation"}'))
+    monkeypatch.setattr(fal, "_urlopen", FakeFal(submit_error=error))
+    with closing(error), pytest.raises(agy.ContentRefused):
+        fal.render(REQUEST, {"klukai": "klukai"})
+
+
+def test_http_timeout_is_limited_by_remaining_render_budget(setup, monkeypatch):
+    api, _ = setup
+    current = [0.0]
+    timeouts = []
+
+    def delayed(request, timeout):
+        timeouts.append(timeout)
+        if request.get_method() == "POST":
+            current[0] = fal.TIMEOUT_SECONDS - 3
+        return api(request, timeout)
+
+    monkeypatch.setattr(fal.time, "monotonic", lambda: current[0])
+    monkeypatch.setattr(fal, "_urlopen", delayed)
+    fal.render(REQUEST, {"klukai": "klukai"})
+    assert all(0 < timeout <= 3 for timeout in timeouts[1:])
+
+
+def test_submit_disconnect_is_not_safe_for_provider_failover(setup, monkeypatch):
+    calls = []
+
+    def disconnected(request, timeout):
+        calls.append(request.get_method())
+        raise urllib.error.URLError("connection lost after sending")
+
+    monkeypatch.setattr(fal, "_urlopen", disconnected)
+    with pytest.raises(agy.RuntimeError) as raised:
+        fal.render(REQUEST, {"klukai": "klukai"})
+    assert not isinstance(raised.value, agy.ProviderUnavailable)
+    assert calls == ["POST"]
+
+
+def test_authenticated_transport_does_not_follow_redirects():
+    request = urllib.request.Request("https://queue.fal.run/x", headers={"Authorization": f"Key {KEY}"})
+    with pytest.raises(urllib.error.HTTPError):
+        fal.NoRedirect().redirect_request(request, None, 302, "redirect", {}, "https://other.test/")
+
+
+@pytest.mark.parametrize("code", [408, 429, 500, 503])
+def test_transient_status_http_error_retries_observation_only(setup, monkeypatch, code):
+    api, tmp_path = setup
+    failed = False
+
+    def flaky(request, timeout):
+        nonlocal failed
+        if request.get_method() == "GET" and not failed:
+            failed = True
+            raise urllib.error.HTTPError(request.full_url, code, "private scene", {}, io.BytesIO(b"{}"))
+        return api(request, timeout)
+
+    monkeypatch.setattr(fal, "_urlopen", flaky)
+    assert fal.render(REQUEST, {"klukai": "klukai"}).startswith(b"\x89PNG")
+    assert attempts(tmp_path) == 1 and sum(c[0] == "POST" for c in api.calls) == 1
+
+
+def test_persistent_observation_outage_is_bounded_and_not_failover_safe(setup, monkeypatch):
+    api, _ = setup
+    clock = iter(range(0, 10_000, 10))
+    monkeypatch.setattr(fal.time, "monotonic", lambda: next(clock))
+    gets = []
+
+    def unavailable(request, timeout):
+        if request.get_method() == "GET":
+            gets.append(request.full_url)
+            raise urllib.error.URLError("private details")
+        return api(request, timeout)
+
+    monkeypatch.setattr(fal, "_urlopen", unavailable)
+    with pytest.raises(fal.PendingGeneration):
+        fal.render(REQUEST, {"klukai": "klukai"})
+    assert 1 < len(gets) < 20
+    assert len(set(gets)) == 1 and sum(c[0] == "POST" for c in api.calls) == 1
+
+
+@pytest.mark.parametrize("flags", [True, "false", ["false"], [None], {}])
+def test_malformed_safety_metadata_is_never_treated_as_approval(setup, monkeypatch, flags):
+    result = {"images": [{"url": "data:image/png;base64," + base64.b64encode(png()).decode()}],
+              "has_nsfw_concepts": flags}
+    monkeypatch.setattr(fal, "_urlopen", FakeFal(result=result))
+    with pytest.raises(agy.RuntimeError, match="safety metadata"):
+        fal.render(REQUEST, {"klukai": "klukai"})
+
+
+def test_submitted_queue_handle_survives_a_polling_interruption(setup, monkeypatch):
+    api, tmp_path = setup
+
+    def interrupted(request, timeout):
+        if request.get_method() == "GET":
+            raise KeyboardInterrupt
+        return api(request, timeout)
+
+    monkeypatch.setattr(fal, "_urlopen", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        fal.render(REQUEST, {"klukai": "klukai"})
+    with closing(sqlite3.connect(tmp_path / "fal.sqlite3")) as db:
+        rows = db.execute("SELECT request_id, provider_request_id, status_url, response_url FROM fal_jobs").fetchall()
+    assert rows == [("r1", "q1", "https://queue.fal.run/x/requests/q1/status",
+                     "https://queue.fal.run/x/requests/q1")]
+
+
+def test_job_endpoints_must_belong_to_returned_request(setup, monkeypatch):
+    calls = []
+
+    def mismatch(request, timeout):
+        calls.append(request.get_method())
+        assert len(calls) == 1
+        return Response(json.dumps({"request_id": "q1", "status_url": "https://queue.fal.run/x/requests/other/status",
+                                   "response_url": "https://queue.fal.run/x/requests/q1"}).encode())
+
+    monkeypatch.setattr(fal, "_urlopen", mismatch)
+    with pytest.raises(agy.RuntimeError, match="job"):
+        fal.render(REQUEST, {"klukai": "klukai"})
+
+
+@pytest.mark.parametrize("code", [401, 402, 403])
+def test_observation_auth_failure_cannot_authorize_a_second_paid_generation(setup, monkeypatch, code):
+    api, _ = setup
+
+    def unavailable(request, timeout):
+        if request.get_method() == "GET":
+            raise urllib.error.HTTPError(request.full_url, code, "private", {}, io.BytesIO(b"{}"))
+        return api(request, timeout)
+
+    monkeypatch.setattr(fal, "_urlopen", unavailable)
+    with pytest.raises(fal.PendingGeneration):
+        fal.render(REQUEST, {"klukai": "klukai"})
+    assert sum(c[0] == "POST" for c in api.calls) == 1
+
+
+@pytest.mark.parametrize("stage", ["submit", "result"])
+def test_response_finishing_after_deadline_is_not_accepted(setup, monkeypatch, stage):
+    api, _ = setup
+    current = [0.0]
+    monkeypatch.setattr(fal.time, "monotonic", lambda: current[0])
+
+    class LateResponse(Response):
+        def read(self, *args):
+            current[0] = fal.TIMEOUT_SECONDS + 1
+            return super().read(*args)
+
+    def late(request, timeout):
+        response = api(request, timeout)
+        if (request.get_method() == "POST" and stage == "submit"
+                or request.get_method() == "GET" and not request.full_url.endswith("/status") and stage == "result"):
+            return LateResponse(response.getvalue())
+        return response
+
+    monkeypatch.setattr(fal, "_urlopen", late)
+    with pytest.raises(fal.PendingGeneration, match="timed out"):
+        fal.render(REQUEST, {"klukai": "klukai"})
+
+
+def test_incomplete_response_retries_observation_without_resubmission(setup, monkeypatch):
+    api, _ = setup
+    gets = [0]
+
+    def interrupted(request, timeout):
+        if request.get_method() == "GET":
+            gets[0] += 1
+            if gets[0] == 1:
+                raise http.client.IncompleteRead(b"private partial data")
+        return api(request, timeout)
+
+    monkeypatch.setattr(fal, "_urlopen", interrupted)
+    assert fal.render(REQUEST, {"klukai": "klukai"}).startswith(b"\x89PNG")
+    assert sum(c[0] == "POST" for c in api.calls) == 1
+
+
+def test_incomplete_submit_response_is_uncertain_and_sanitized(setup, monkeypatch):
+    def interrupted(*args, **kwargs):
+        raise http.client.IncompleteRead(b"private partial data")
+
+    monkeypatch.setattr(fal, "_urlopen", interrupted)
+    with pytest.raises(fal.PendingGeneration) as raised:
+        fal.render(REQUEST, {"klukai": "klukai"})
+    assert "private" not in str(raised.value)
+
+
+def interrupted_job(setup, monkeypatch):
+    api, tmp_path = setup
+
+    def stop_after_submit(request, timeout):
+        if request.get_method() == "GET":
+            raise KeyboardInterrupt
+        return api(request, timeout)
+
+    monkeypatch.setattr(fal, "_urlopen", stop_after_submit)
+    with pytest.raises(KeyboardInterrupt):
+        fal.render(REQUEST, {"klukai": "klukai"})
+    api.calls.clear()
+    monkeypatch.setattr(fal, "_urlopen", api)
+    return api, tmp_path
+
+
+def test_recovery_fetches_existing_image_with_exhausted_caps_and_no_new_spend(setup, monkeypatch):
+    api, tmp_path = interrupted_job(setup, monkeypatch)
+    monkeypatch.setenv("KLUKAI_FAL_DAILY_LIMIT", "0")
+    monkeypatch.setenv("KLUKAI_FAL_MONTHLY_LIMIT", "0")
+    monkeypatch.setattr(fal, "reserve_attempt", lambda: pytest.fail("recovery cannot spend"))
+    assert fal.recover(REQUEST, {"klukai": "klukai"}).startswith(b"\x89PNG")
+    assert [call[0] for call in api.calls] == ["GET", "GET"]
+    assert attempts(tmp_path) == 1
+    assert fal.render.recover is fal.recover
+
+
+def test_recovery_observes_in_progress_without_waiting_or_resubmitting(setup, monkeypatch):
+    api, tmp_path = interrupted_job(setup, monkeypatch)
+    api.polls = 2
+    assert fal.recover(REQUEST, {"klukai": "klukai"}) is None
+    assert len(api.calls) == 1 and api.calls[0][0] == "GET"
+    assert api.calls[0][1].endswith("/requests/q1/status")
+    assert attempts(tmp_path) == 1
+
+
+@pytest.mark.parametrize("change", [{"prompt": "a different scene"}, {"user_id": "other-user"},
+                                    {"request_id": "other-request"}, {"width": 1024}])
+def test_recovery_requires_exact_stored_provider_request(setup, monkeypatch, change):
+    api, _ = interrupted_job(setup, monkeypatch)
+    monkeypatch.setattr(fal, "fal_key", lambda: pytest.fail("unmatched recovery cannot read key"))
+    monkeypatch.setattr(fal, "read_image", lambda *_: pytest.fail("unmatched recovery cannot read references"))
+    assert fal.recover(dict(REQUEST, **change), {"klukai": "klukai"}) is None
+    assert api.calls == []
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_recovery_without_a_record_has_no_private_or_network_effects(setup, monkeypatch, legacy):
+    api, tmp_path = setup
+    if legacy:
+        fal.reserve_attempt()  # old ledger without a fal_jobs table
+    monkeypatch.setattr(fal, "fal_key", lambda: pytest.fail("missing handle cannot read key"))
+    monkeypatch.setattr(fal, "read_image", lambda *_: pytest.fail("missing handle cannot read references"))
+    assert fal.recover(REQUEST, {"klukai": "klukai"}) is None
+    assert api.calls == []
+    assert (tmp_path / "fal.sqlite3").exists() == legacy
+
+
+def test_recovery_revalidates_persisted_endpoints_before_private_reads(setup, monkeypatch):
+    api, tmp_path = interrupted_job(setup, monkeypatch)
+    with closing(sqlite3.connect(tmp_path / "fal.sqlite3")) as db:
+        db.execute("UPDATE fal_jobs SET status_url = 'https://untrusted.test/requests/q1/status'")
+        db.commit()
+    monkeypatch.setattr(fal, "fal_key", lambda: pytest.fail("invalid endpoint cannot read key"))
+    with pytest.raises(agy.RuntimeError, match="endpoint"):
+        fal.recover(REQUEST, {"klukai": "klukai"})
+    assert api.calls == []
+
+
+def test_recovery_outage_remains_pending_with_no_provider_failover(setup, monkeypatch):
+    api, _ = interrupted_job(setup, monkeypatch)
+    clock = iter(range(0, 10_000, 4))
+    monkeypatch.setattr(fal.time, "monotonic", lambda: next(clock))
+
+    def unavailable(request, timeout):
+        assert request.get_method() == "GET"
+        assert 0 < timeout <= 10
+        raise urllib.error.URLError("private detail")
+
+    monkeypatch.setattr(fal, "_urlopen", unavailable)
+    with pytest.raises(agy.GenerationPending):
+        fal.recover(REQUEST, {"klukai": "klukai"}, timeout=10)
+
+
+def test_recovery_never_returns_a_filtered_result(setup, monkeypatch):
+    api, _ = interrupted_job(setup, monkeypatch)
+    api.result = {"images": [{"url": "data:image/png;base64," + base64.b64encode(png()).decode()}],
+                  "has_nsfw_concepts": [True]}
+    with pytest.raises(agy.RuntimeError):
+        fal.recover(REQUEST, {"klukai": "klukai"})
+    assert all(call[0] == "GET" for call in api.calls)
+
+
+def test_recovery_does_not_return_the_approved_reference(setup, monkeypatch):
+    api, _ = interrupted_job(setup, monkeypatch)
+    api.result = {"images": [{"url": "data:image/png;base64," + base64.b64encode(png("blue", (64, 96))).decode()}],
+                  "has_nsfw_concepts": [False]}
+    with pytest.raises(agy.RuntimeError, match="reference"):
+        fal.recover(REQUEST, {"klukai": "klukai"})
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), True])
+def test_recovery_invalid_deadline_fails_before_private_work(setup, monkeypatch, timeout):
+    api, _ = interrupted_job(setup, monkeypatch)
+    monkeypatch.setattr(fal, "fal_key", lambda: pytest.fail("invalid deadline cannot read key"))
+    with pytest.raises(agy.RuntimeError):
+        fal.recover(REQUEST, {"klukai": "klukai"}, timeout=timeout)
+    assert api.calls == []
+
+
+@pytest.mark.parametrize("unavailable", ["reference", "key"])
+def test_recovery_private_preflight_outage_preserves_existing_job(setup, monkeypatch, unavailable):
+    api, tmp_path = interrupted_job(setup, monkeypatch)
+
+    def fail(*args):
+        raise agy.ProviderUnavailable("private details")
+
+    monkeypatch.setattr(fal, "read_image" if unavailable == "reference" else "fal_key", fail)
+    with pytest.raises(agy.GenerationPending) as raised:
+        fal.recover(REQUEST, {"klukai": "klukai"})
+    assert "private details" not in str(raised.value)
+    assert api.calls == [] and attempts(tmp_path) == 1

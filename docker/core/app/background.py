@@ -369,7 +369,6 @@ async def background_image_gen(
             from .account_images import (
                 explicit_request_id,
                 fulfill_account_image,
-                repeat_window,
             )
             from .image_provider import cloud_prompt, nudity_allowed
 
@@ -379,17 +378,15 @@ async def background_image_gen(
                 negative_extra=avoid,
             )
             full_prompt = f"{user_request}\n\n{brief.sentence()}\n\n{described}"
-            # The id is the explicit sentence (and the place it is set in when
-            # that came from outside it), so a repeat within the repeat window
-            # finds this journal row; later, the same words draw a new picture.
-            request_id = explicit_request_id(
+            # Claim the original sentence and externally supplied place using
+            # elapsed journal age; a wall-clock bucket can split a two-second repeat.
+            repeat_key = explicit_request_id(
                 user_id,
                 user_request,
                 width,
                 height,
                 couple,
                 scene=brief.request_scope(),
-                window=repeat_window(),
             )
             accepted_session = await memory.get_session(session_id(user_id))
             archive_context = {
@@ -405,7 +402,7 @@ async def background_image_gen(
                 width=width,
                 height=height,
                 include_commander=couple,
-                request_id=request_id,
+                repeat_key=repeat_key,
                 archive_context=archive_context,
                 # Only his own words can ask for it, never her replies.
                 nudity=nudity_allowed(

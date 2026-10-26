@@ -12,6 +12,12 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+### Added
+
+- Optional OpenAI and Gemini reference-image adapters in the private image worker,
+  disabled by default with separate daily/monthly attempt limits. Production
+  remains fal-only; no additional provider spending is enabled.
+
 ### Changed
 
 - Her voice can be the Fish Audio community "Klukai" model (`VOICE_BACKEND=fish`, owner
@@ -58,6 +64,13 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- On-demand pictures retain paid fal jobs, rendered candidates and bounded Claude
+  reviews across interruption, so recovery does not submit another image.
+  Transient observation failures retry within one deadline; uncertain submission
+  outcomes stay pending. Invalid or unavailable reviews no longer approve images.
+- Repeated picture requests share an atomic elapsed 600-second claim instead of
+  splitting at a clock-bucket boundary. Image-worker shutdown lets active requests
+  drain before terminating child processes; rollout preserves its durable state.
 - Companion background animation follows live reduced-motion changes without restarting while hidden.
 - Standby-branch audit fixes, ported onto main from `claude/klukai-standby-rqu97r`:
   self-started missions stand down after 180 minutes and stale missions are not

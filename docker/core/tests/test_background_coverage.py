@@ -723,6 +723,7 @@ class TestImageGen:
             patch.object(agy_image_provider, "submit_agy_image", new=generate),
             patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)),
             patch("app.account_images.insert_request", new=AsyncMock()),
+            patch("app.account_images._claim_repeat_request", new=AsyncMock(return_value=None)),
             patch("app.account_images.update_request", new=AsyncMock()),
             patch(
                 "app.image_gen.check_comfyui_ready",
@@ -770,13 +771,14 @@ class TestImageGen:
         from app import agy_image_provider
 
         stack = ExitStack()
+        generate.repeat_claim = AsyncMock(return_value=None)
         for target, value in (
             ("app.account_images.fetch_request", AsyncMock(return_value=None)),
             ("app.account_images.insert_request", AsyncMock()),
+            ("app.account_images._claim_repeat_request", generate.repeat_claim),
             ("app.account_images.update_request", AsyncMock()),
             ("app.her_day.render_costume", AsyncMock(return_value="blazing_star")),
             ("app.her_day.render_place", place),
-            ("app.account_images.repeat_window", lambda: 7),
             (
                 "app.image_gen.check_comfyui_ready",
                 AsyncMock(side_effect=AssertionError("GPU readiness")),
@@ -825,15 +827,15 @@ class TestImageGen:
         assert "moonlight" not in prompt and "floating hair" not in prompt
         assert "Avoid these visual elements: outdoor scenery; open sky." in prompt
         assert generate.await_args.kwargs["include_commander"] is True
-        assert generate.await_args.kwargs["request_id"] == explicit_request_id(
+        assert generate.repeat_claim.await_args.args[1] == explicit_request_id(
             "jalsarraf",
             "take a picture of us",
             832,
             1216,
             True,
             "his_bedroom",
-            window=7,
         )
+        assert generate.await_args.kwargs["request_id"] == generate.repeat_claim.await_args.args[0]["id"]
         assert (
             "Image scene: place=his_bedroom (his bedroom) source=his-history setting=indoor "
             "time=night(clock) weather=clear"
@@ -869,8 +871,8 @@ class TestImageGen:
         prompt = generate.await_args.args[0]
         assert "the vehicle hangar inside a colossal armored land vehicle" in prompt
         assert "naval vessel" in prompt  # the avoid list, never the scene
-        assert generate.await_args.kwargs["request_id"] == explicit_request_id(
-            "u1", "draw yourself", 832, 1216, False, "hangar", window=7
+        assert generate.repeat_claim.await_args.args[1] == explicit_request_id(
+            "u1", "draw yourself", 832, 1216, False, "hangar"
         )
 
     async def test_agy_without_her_day_falls_back_to_a_neutral_setting(
@@ -884,8 +886,8 @@ class TestImageGen:
         with self._agy_patches(generate, AsyncMock(return_value=None)):
             await bg.background_image_gen("draw yourself", user_id="u1")
         assert "Setting: " in generate.await_args.args[0]
-        assert generate.await_args.kwargs["request_id"] == explicit_request_id(
-            "u1", "draw yourself", 832, 1216, False, window=7
+        assert generate.repeat_claim.await_args.args[1] == explicit_request_id(
+            "u1", "draw yourself", 832, 1216, False
         )
 
     async def test_local_renderer_follows_his_request_and_avoids_ships(self, bg_mocks):
@@ -919,6 +921,7 @@ class TestImageGen:
             patch.object(agy_image_provider, "submit_agy_image", new=generate),
             patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)),
             patch("app.account_images.insert_request", new=AsyncMock()),
+            patch("app.account_images._claim_repeat_request", new=AsyncMock(return_value=None)),
             patch("app.account_images.update_request", new=AsyncMock()),
             patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),
             patch(
@@ -948,6 +951,7 @@ class TestImageGen:
             patch.object(agy_image_provider, "submit_agy_image", new=generate),
             patch("app.account_images.fetch_request", new=AsyncMock(return_value=None)),
             patch("app.account_images.insert_request", new=AsyncMock()),
+            patch("app.account_images._claim_repeat_request", new=AsyncMock(return_value=None)),
             patch("app.account_images.update_request", new=AsyncMock()),
             patch.object(bg, "generate_image", new=local),
             patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),

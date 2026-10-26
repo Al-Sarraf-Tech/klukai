@@ -433,22 +433,15 @@ async def test_chat_picture_survives_disconnect_and_repeats_without_another_rend
     """One explicit sentence keeps its archived bytes when affection and outfit change."""
     from unittest.mock import MagicMock, patch
 
-    from app.account_images import explicit_request_id, fulfill_account_image
+    from app.account_images import fulfill_account_image
     from app.chat_handlers import _handle_message
     from app.context import memory, ws
-    from app.image_gen import is_couple_scene, is_landscape
     from app.models import SessionState
 
     prompt = "Draw Klukai standing in a quiet garden"
     user_id = "alice"
     monkeypatch.setattr(memory, "get_session", AsyncMock(return_value=None))
     monkeypatch.setattr(memory, "record_milestone", AsyncMock())
-    width, height = (1216, 832) if is_landscape(prompt) else (832, 1216)
-    # Both sends fall in one repeat window (pinned so a window edge can't split them).
-    monkeypatch.setattr("app.account_images.repeat_window", lambda: 7)
-    expected = explicit_request_id(
-        user_id, prompt, width, height, is_couple_scene(prompt), window=7
-    )
     levels = [2, 8]
     costumes = ["range_kit", "night_ride"]
     composed: list[str] = []
@@ -517,6 +510,8 @@ async def test_chat_picture_survives_disconnect_and_repeats_without_another_rend
     assert "devoted" in composed[1] and "holding helmet" in composed[1]
     assert "fully clothed" not in composed[1]
     frames = _image_payloads(returned)
+    assert len(account_worker["calls"]) == 1
+    expected = account_worker["calls"][0]
     archived = (memory_archive.IMAGES_DIR / f"{expected}.png").read_bytes()
     assert len(frames) == 1
     payload, image = frames[0]

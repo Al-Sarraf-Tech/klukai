@@ -33,6 +33,10 @@ class ProviderUnavailable(RuntimeError):
     """A service/transport failure eligible for one different-provider attempt."""
 
 
+class GenerationPending(RuntimeError):
+    """Accepted work may still exist; observe it without generating again."""
+
+
 class ContentRefused(RuntimeError):
     """The provider's content filter refused the request itself (nothing was drawn)."""
 
