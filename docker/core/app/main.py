@@ -207,8 +207,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         proactive.start()
         load_personality()
 
-        # Never warm/ping models: load-on-demand with a maximum 900s idle TTL.
-        logger.info("LLM load-on-demand mode (keepalive disabled, max idle TTL 900s)")
+        logger.info("LLM: Claude Sonnet for chat, Claude Haiku otherwise (cloud only)")
         task = asyncio.create_task(_session_cleanup_loop(), name="session-cleanup")
         owners.push_async_callback(_cancel_task, task)
         await owners.enter_async_context(job_handoff.running())
