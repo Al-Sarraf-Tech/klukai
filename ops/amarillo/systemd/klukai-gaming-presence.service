@@ -1,0 +1,11 @@
+[Unit]
+Description=Klukai Amarillo gaming presence (no model or GPU)
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/jalsarraf/.local/bin/klukai-gaming-presence --output /home/jalsarraf/git/klukai/config/.amarillo-presence.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

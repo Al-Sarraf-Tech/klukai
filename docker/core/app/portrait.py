@@ -479,3 +479,32 @@ def refresh(user_id: str, outfit_id: str, level: int) -> bool:
     _failed_at.pop(key, None)
     ensure_generation(user_id, outfit_id, level)
     return True
+
+
+def animate(user_id: str, outfit_id: str, level: int) -> bool:
+    """One explicit button press may fill missing cloud blink/talk frames."""
+    from . import portrait_account, portrait_cloud_frames
+
+    key = _key(user_id, outfit_id)
+    if (
+        key in _inflight
+        or _backing_off(key)
+        or not portrait_account.enabled_for(user_id)
+    ):
+        return False
+
+    async def run() -> None:
+        try:
+            if not await portrait_cloud_frames.draw_missing(user_id, outfit_id, level):
+                _fail(key)
+        except Exception as error:
+            logger.warning("Portrait animation failed (%s)", type(error).__name__)
+            _fail(key)
+        finally:
+            _inflight.pop(key, None)
+
+    try:
+        _inflight[key] = spawn(run())
+    except ApplicationClosing:
+        return False
+    return True

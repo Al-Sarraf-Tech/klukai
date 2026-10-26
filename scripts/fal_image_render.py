@@ -101,6 +101,11 @@ BACKGROUND = (
 
 
 def brief(request: dict) -> str:
+    if "portrait_source" in request:
+        return (STYLE + NOT_REALISTIC + "This is an edit of the attached face crop of adult Klukai. "
+                "Preserve her exact pose, face proportions, hairstyle, camera, crop and alignment. "
+                "Do not redraw the background or add a body, border, text or another person. "
+                + request["prompt"])
     people = (
         COMMANDER_TEXT_DESCRIPTION + " Exactly two "
         "people, Klukai and the Commander. "
@@ -364,8 +369,20 @@ def _validate_policy(request: dict) -> None:
         raise agy.RuntimeError("Commander reference is not authorized")
 
 
-def _inputs(references: dict) -> dict:
+def portrait_input(request: dict) -> bytes:
+    from portrait_edit_input import decode_source
+    try:
+        if request.get("include_commander") or request.get("nudity"):
+            raise ValueError("Portrait edits are covered and solo")
+        return decode_source(request["portrait_source"])
+    except (KeyError, ValueError, TypeError) as error:
+        raise agy.RuntimeError("Invalid portrait source") from error
+
+
+def _inputs(references: dict, request: dict | None = None) -> dict:
     # Commander identity is text-only. Never open or send his private reference image.
+    if request and "portrait_source" in request:
+        return {"klukai": portrait_input(request)}
     try:
         return {"klukai": read_image(references["klukai"])}
     except (ValueError, KeyError, TypeError, OSError) as exc:
@@ -390,7 +407,7 @@ def recover(request: dict, references: dict, *, timeout: float = 30.0) -> bytes 
         return None
     deadline = time.monotonic() + min(timeout, TIMEOUT_SECONDS)
     try:
-        inputs = _inputs(references)
+        inputs = _inputs(references, request)
         key = fal_key()
     except agy.RuntimeError:
         raise PendingGeneration("fal recovery inputs unavailable") from None
@@ -404,7 +421,7 @@ def recover(request: dict, references: dict, *, timeout: float = 30.0) -> bytes 
 
 def render(request: dict, references: dict) -> bytes:
     _validate_policy(request)
-    inputs = _inputs(references)
+    inputs = _inputs(references, request)
     width, height = output_size(request["width"], request["height"])
     body = {
         "prompt": brief(request),

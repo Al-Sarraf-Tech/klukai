@@ -230,6 +230,15 @@ class RolloutTests(unittest.TestCase):
             "sleep": lambda _: None,
         }
 
+    def test_image_rollout_keeps_owner_environment_overrides(self) -> None:
+        target = self.target(bad=set())
+        document = json.loads(self.pin.read_text())
+        document["services"]["companion-core"]["environment"] = {"LM_STUDIO_URL": "http://127.0.0.1:9"}
+        self.pin.write_text(json.dumps(document))
+        target.write_pin("klukai-core:new")
+        self.assertEqual(json.loads(self.pin.read_text())["services"]["companion-core"]["environment"],
+                         {"LM_STUDIO_URL": "http://127.0.0.1:9"})
+
     def test_healthy_candidate_is_kept(self) -> None:
         target = self.target(bad=set())
         result = release.rollout(target, "klukai-core:new", "sha256:new", **self.fast())

@@ -43,6 +43,17 @@ class VoiceSettingsService {
     return VoiceLanguageCode.parse(body is Map ? body['language'] : null);
   }
 
+  /// Missing or unreachable capability endpoints keep the microphone hidden.
+  Future<bool> inputEnabled() async {
+    final response = await _client
+        .get(Uri.parse('$serverUrl/api/voice/capabilities'), headers: _headers)
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode == 401) throw const VoiceSettingsAuthExpired();
+    if (response.statusCode != 200) return false;
+    final body = jsonDecode(response.body);
+    return body is Map && body['input_enabled'] == true;
+  }
+
   /// Saves the language; returns what the server stored.
   Future<VoiceLanguage> save(VoiceLanguage language) async {
     final response = await _client

@@ -380,9 +380,11 @@ class Target:
             return
         self.pin.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         staged = self.pin.with_suffix(".tmp")
-        staged.write_text(
-            json.dumps({"services": {self.service: {"image": image}}}, indent=2) + "\n"
-        )
+        # The non-secret pin may carry owner runtime overrides (for example,
+        # disabling local LLM fallback). A new image must not discard them.
+        document = json.loads(self.pin.read_text()) if self.pin.exists() else {"services": {}}
+        document.setdefault("services", {}).setdefault(self.service, {})["image"] = image
+        staged.write_text(json.dumps(document, indent=2) + "\n")
         os.replace(staged, self.pin)
 
     def read_pin(self) -> str | None:

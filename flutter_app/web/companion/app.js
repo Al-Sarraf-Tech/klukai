@@ -2,7 +2,7 @@
 // a generative score, and a chat dock, all on the same session as the PWA
 // (messages sent here appear there too: the server fans out to every device).
 
-import { readToken, clearToken, createApi, AuthExpired, wsUrl, createSocket } from "./net.js?v=312a9805";
+import { readToken, clearToken, createApi, AuthExpired, wsUrl, createSocket } from "./net.js?v=e213dbd3";
 import { moodToExpression, sceneFor, reduceFrame, abandonTurn, avatarCue } from "./logic.js?v=dffc356aca84";
 import { createPortrait } from "./portrait.js?v=7349140c6975";
 import { createAmbience, ambienceKind } from "./ambience.js?v=7d337578ffe9";
@@ -243,6 +243,7 @@ function boot() {
       return;
     }
     if (seq !== portraitSeq) return; // stale: a newer response already applied
+    if ($("btn-animate")) $("btn-animate").hidden = Boolean(p.frames?.blink && p.frames?.talk);
     portraitHasFrames = Boolean(p.frames?.base);
     portrait.setFrames(p.frames || {}, { pending: !portraitHasFrames });
     applyMood();
@@ -559,6 +560,17 @@ function boot() {
 
   // ── Controls ─────────────────────────────────────────────────────────────
   $("wake").addEventListener("click", wake, { once: true });
+  $("btn-animate")?.addEventListener("click", async () => {
+    const button = $("btn-animate");
+    button.disabled = true;
+    try {
+      await api.animatePortrait();
+      notice("Creating missing animation frames. This uses image credit; your existing portrait stays.", 6000);
+      refreshPortrait();
+    } catch (_) {
+      notice("Animation could not start. Your existing portrait is unchanged.", 6000);
+    } finally { button.disabled = false; }
+  });
   $("btn-mode").addEventListener("click", () => setMode(prefs.mode === "model" ? "portrait" : "model"));
   $("btn-zoom-in").addEventListener("click", () => avatar?.zoomBy(0.85));
   $("btn-zoom-out").addEventListener("click", () => avatar?.zoomBy(1 / 0.85));

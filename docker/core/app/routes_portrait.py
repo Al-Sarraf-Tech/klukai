@@ -107,6 +107,28 @@ def register_portrait_routes(app: FastAPI) -> None:
         level, outfit, game = await _context(user_id)
         return await portrait.portrait_state(user_id, outfit, level, game_active=game)
 
+    @app.post("/api/portrait/animate")
+    async def api_portrait_animate(request: Request) -> Any:
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return ec.auth_required()
+        from . import portrait_account
+
+        if not portrait_account.enabled_for(user_id):
+            return ec.err(
+                "UNAVAILABLE",
+                "Portrait animation is not configured for this account.",
+                status_code=403,
+            )
+        level, outfit, _ = await _context(user_id)
+        if not portrait.animate(user_id, outfit, level):
+            return ec.err(
+                "IN_PROGRESS",
+                "Portrait animation is busy or cooling down.",
+                status_code=409,
+            )
+        return await portrait.portrait_state(user_id, outfit, level, game_active=False)
+
     @app.post("/api/portrait/refresh")
     async def api_portrait_refresh(request: Request) -> Any:
         user_id = await _get_user_id(request)
