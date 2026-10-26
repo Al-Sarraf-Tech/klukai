@@ -1,7 +1,7 @@
 # ADR-0003: Three-tier memory — Redis → Qdrant → PostgreSQL
 
 - **Date:** Origin (formalized 2026-05-16)
-- **Status:** Accepted
+- **Status:** Accepted; Qdrant tier superseded by [ADR-0020](0020-cloud-only-ai.md) (2026-10-26): episodes and exchanges live in PostgreSQL, recall uses full-text search and Claude Haiku
 - **Authors:** jalsarraf
 
 ## Context

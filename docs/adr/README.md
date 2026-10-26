@@ -8,12 +8,12 @@ status, consequences. Format follows [MADR-lite](https://adr.github.io/madr/).
 | ADR | Title | Status | Phase |
 |---|---|---|---|
 | [0001](0001-s-tier-uplift.md) | Adopt S+ tier uplift roadmap | Accepted | Spec |
-| [0002](0002-amarillo-dominus-split.md) | Compute split: amarillo (core/gateway) + dominus (voice/GPU) | Accepted | Origin |
-| [0003](0003-three-tier-memory.md) | Three-tier memory: Redis → Qdrant → PostgreSQL | Accepted | Origin |
-| [0004](0004-lm-studio-routing.md) | Local model routing through the compatibility gateway | Accepted | 2026-04 / 2026-08 amendment |
+| [0002](0002-amarillo-dominus-split.md) | Compute split: amarillo (core/gateway) + dominus (voice/GPU) | Accepted; GPU parts superseded by 0020 | Origin |
+| [0003](0003-three-tier-memory.md) | Three-tier memory: Redis → Qdrant → PostgreSQL | Accepted; Qdrant tier superseded by 0020 | Origin |
+| [0004](0004-lm-studio-routing.md) | Local model routing through the compatibility gateway | Superseded by 0020 | 2026-04 / 2026-08 amendment |
 | [0005](0005-affection-taxonomy.md) | Affection level 0-9 with distinct speech patterns | Accepted | Origin |
-| [0006](0006-image-gen-pipeline.md) | Illustrious + Klukai LoRA on dominus ComfyUI | Accepted | 2026-04 |
-| [0007](0007-voice-on-dominus.md) | XTTS v2 on dominus-nobara with bounded GPU lease | Accepted | Origin / 2026-08 amendment |
+| [0006](0006-image-gen-pipeline.md) | Illustrious + Klukai LoRA on dominus ComfyUI | Superseded by 0020 | 2026-04 |
+| [0007](0007-voice-on-dominus.md) | XTTS v2 on dominus-nobara with bounded GPU lease | Superseded by 0020 | Origin / 2026-08 amendment |
 | [0008](0008-audit-chain-hmac.md) | HMAC-chained audit log for tamper detection | Accepted | 2026-04 |
 | [0009](0009-cloudflare-nginx-gateway.md) | Cloudflare → nginx gateway → companion-core | Accepted | Origin |
 | [0010](0010-flutter-pwa-base-href.md) | Flutter PWA at `/app/` base-href (service worker scope) | Accepted | 2026-04 |
@@ -24,6 +24,7 @@ status, consequences. Format follows [MADR-lite](https://adr.github.io/madr/).
 | [0015](0015-wsl2-decommissioned.md) | Windows and WSL2 are not deployment targets | Accepted | 2026-04 / 2026-08 amendment |
 | [0016](0016-tribute-system.md) | Tribute system — Commander's crown-jewel memories | Accepted | 2026-05 |
 | [0019](0019-paid-image-recovery.md) | Recover paid image attempts without resubmission | Proposed | 2026-10 |
+| [0020](0020-cloud-only-ai.md) | Cloud-only AI | Accepted | 2026-10 |
 
 ## Conventions
 

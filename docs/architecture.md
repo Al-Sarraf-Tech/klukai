@@ -8,32 +8,35 @@
 
 ```
 Existing authorized cloud services
-  Sonnet interactive + capped creative text · Brave search
-  Signed-in Agy/Grok account image worker (core host, private Unix socket)
+  Anthropic: Sonnet 5.5 chat, Haiku 5.5 background work and memory recall,
+             capped creative text, render checks
+  Fish Audio: speech and speech-to-text · Brave search
+  Signed-in Grok/Codex/Agy accounts, driven by the image worker
       ▲
       │
 Public TLS edge
       │
       ▼
-┌─────────────────────────────┐         private mesh          ┌─────────────────────────────┐
-│         CORE HOST           │ ─────────────────────────────►│         GPU HOST            │
-│  gateway · companion-core   │                               │  lmstudio-compat (ingress)  │
-│  Postgres · Redis · Qdrant  │                               │  llama-router (internal)    │
-│  events-bridge · RabbitMQ*  │                               │  ComfyUI (leased only)      │
-│  observability stack        │                               │  voice · STT                │
-└─────────────────────────────┘                               └─────────────────────────────┘
+┌─────────────────────────────┐
+│         CORE HOST           │
+│  gateway · companion-core   │
+│  Postgres · Redis           │
+│  events-bridge · RabbitMQ*  │
+│  image worker (Unix socket) │
+│  observability stack        │
+└─────────────────────────────┘
 ```
 
 \* Broker may share the core host or an adjacent ops stack; routing keys are host-scoped (`host.<name>.…`).
 
-The GPU stack retains ComfyUI for explicit rollback/other authorized work. Production Klukai image requests use the account worker; there is no automatic GPU image fallback.
+**Cloud AI only (owner decision, 2026-10-26; [ADR-0020](adr/0020-cloud-only-ai.md)).** Core uses no model, embedding, voice or image service on the GPU host or the core host. `docker/core/tests/test_cloud_only_invariant.py` keeps it that way.
 
 ### Trust boundaries
 
 | Boundary | Policy |
 |---|---|
 | Internet → gateway | TLS at the edge; static `/app/` public; API authed |
-| Core → GPU | Private mesh only; bearer / lease tokens |
+| Core → cloud AI | Canonical HTTPS endpoints only (no redirects, no ambient proxy); keys from the encrypted store |
 | Core → account image worker | Private Unix socket, scoped authentication, owner allowlist, pinned reference paths owned by the worker; no conversational history in account prompts |
 | Bridge → RabbitMQ | Credentials in env; not committed |
 | CI heavy guest → core host | No network route; the core host pulls retained artifacts read-only through the GPU host's guest agent, verifies them against a green CI run and the manifest, then signs the provenance |
@@ -48,18 +51,19 @@ Single FastAPI process. Important modules:
 |---|---|
 | `chat.py` / `chat_handlers.py` | Authenticated multi-device WebSocket admission and conversation coordination |
 | `chat_prompt.py` / `chat_reply.py` / `chat_followups.py` | Prompt preparation, agent/direct reply presentation and follow-up memory work |
-| `llm_router.py` / `llm_completions.py` / `llm_intent.py` | Provider selection, transport/streaming and intent classification; Sonnet primary, Dominus secondary |
+| `llm_router.py` / `llm_completions.py` / `llm_intent.py` | Model selection, transport and intent classification; Sonnet primary, Haiku fallback |
+| `background_llm.py` / `extraction_llm.py` | The one background route: Claude Haiku at high effort under a shared daily cap, else the caller's safe default |
+| `memory_recall.py` | Recall: PostgreSQL full-text candidates, then Haiku picks |
 | `memory_her_pov.py` / `her_pov_*.py` | Durable job board, pipeline, storage and story preparation |
 | `deferred.py` | One-shot future tasks (Postgres + bridge timer) |
 | `proactive/` | Cron engine + durability catch-up |
-| `memory*.py` | Three-tier memory + archive |
+| `memory*.py` | Session and PostgreSQL memory + archive |
 | `image_provider.py` / `agy_image_provider.py` | Provider policy and private account-worker client; production selects `agy` |
 | `image_gen.py` / `image_*.py` | Local Comfy facade, workflows, rendering and lease ownership retained for explicit local deployments/rollback |
 | `runtime_tasks.py` / `ws_manager.py` | Application background-work ownership, admission and cancellation-safe shutdown |
 | `shared_http.py` / `observability/health_cache.py` | Lazy HTTP close contract and lifetime-owned readiness clients |
 | `dependencies.py` / `circuit_breakers.py` | Exercised dependency boundaries and breaker transitions |
 | `events.py` | Redis publish (`companion:events`) |
-| `warmup.py` | Compatibility hooks; load-on-demand policy disables periodic/model prewarming |
 | `migrations.py` | Checksum ledger and advisory-locked transactional startup; see migration runbook |
 
 ### Application lifetime in the uplift
@@ -100,10 +104,11 @@ retention remain separate live release checks.
 
 ### Production provider policy
 
-- Interactive: explicitly enabled Anthropic Sonnet 5.5, medium adaptive thinking; Dominus is secondary. A local GPU outage does not remove the configured cloud chat primary.
-- Dream/Her POV creative text: separately authorized Anthropic route, initially 12 attempts per UTC day and 12 per UTC month. These are attempt limits, not a dollar cap. Other background writers remain local.
+- Interactive: explicitly enabled Anthropic Sonnet 5.5, medium adaptive thinking; Haiku 5.5 answers when Sonnet fails or backs off.
+- Background work (extraction, compaction, proactive lines, captions) and memory recall: Haiku 5.5 at high effort, sharing one daily attempt cap; a refused or failed call uses the caller's safe default.
+- Dream/Her POV creative text: separately authorized Anthropic route, initially 12 attempts per UTC day and 12 per UTC month. These are attempt limits, not a dollar cap. With it off, these writers use the Haiku background route.
 - Images: existing Agy/Grok account quotas, alternating preferred providers and at most one eligible service-error failover. Policy refusals do not fail over. Google paid-credit fallback stays disabled; owner confirmed Grok extra usage off/$0. No paid image API or GPU fallback.
-- Voice/STT: Dominus services. XTTS uses the pinned character reference and 24 kHz output; no automatic Arc or paid voice fallback. Text remains usable when voice is offline.
+- Voice: Fish Audio on the free `s2.1-pro-free` model, tap to play. Speech-to-text: Fish `transcribe-1-pro`, pay-as-you-go (owner authorized 2026-10-26). Text remains usable when voice is off.
 - Web: existing authorized Brave MCP search path. This authorization does not extend to other new paid services.
 - Fresh checkout defaults differ from private deployment configuration. Use the dated handoffs and verified runtime settings when describing what is deployed.
 
@@ -133,7 +138,7 @@ Internal routes fail closed without `CORE_INTERNAL_TOKEN`.
 
 - Table: `companion_her_pov_jobs` (migration `170`); dispatch mark `last_enqueued_at` (migration `200`)
 - One non-terminal job per user (partial unique index)
-- `HER_POV_EXECUTION=queue` in production. Cloud work requires a durable claim and never falls back to inline work after a queue failure. `inline` remains a local-only development path.
+- `HER_POV_EXECUTION=queue` in production. Cloud work requires a durable claim and never falls back to inline work after a queue failure. `inline` remains an in-process development path.
 - The committed PostgreSQL row is acceptance. Redis is only a wake-up hint. A core lifecycle task reconciles immediately at startup and every five seconds: at most 16 unstarted queued rows per pass, with a 30-second per-row retry interval. It commits dispatch marks before publication using `FOR UPDATE SKIP LOCKED`, without changing pipeline timestamps or generation attempts.
 - Reconciliation excludes started, claimed, attempted and terminal jobs. It republishes the same UUID and does not provide end-to-end exactly-once execution. See [durable job recovery](runbooks/durable-job-handoff.md) for ambiguous outcomes and deployment checks.
 
@@ -145,15 +150,17 @@ Internal routes fail closed without `CORE_INTERNAL_TOKEN`.
 - One-shot: `companion_scheduled` + fixed TTL buckets (no per-message TTL head-of-line trap)
 - Sweeper recovers overdue rows if the broker is unavailable
 
-## Three-tier memory
+## Memory
 
 | Tier | Store | Contents |
 |---|---|---|
 | Session | Redis | Live conversation, mood, mission |
-| Episodic | Qdrant | Summaries + embeddings |
+| Episodic | PostgreSQL | Episode summaries and exchanges (`companion_episodes`, `companion_exchanges`) |
 | Factual | PostgreSQL | Messages, affection, jobs, archive metadata |
 
-SACRED: never delete chat/memory/affection vectors for cleanup convenience.
+Recall runs PostgreSQL full-text search (`search_tsv`, migration 260) for up to 40 candidates, then Claude Haiku picks the relevant ones within 10 seconds; if Haiku is unavailable, the best full-text matches are used. No embeddings are made. Until 2026-10-26 episodes and exchanges also lived in Qdrant; `ops/amarillo/scripts/klukai-memory-backfill-from-qdrant.py` copied them into PostgreSQL once, insert-only, and the Qdrant collections were left untouched.
+
+SACRED: never delete chat, memory or affection data for cleanup convenience.
 
 ## Frontend
 
@@ -173,7 +180,8 @@ SACRED: never delete chat/memory/affection vectors for cleanup convenience.
 
 | Domain down | User impact |
 |---|---|
-| GPU host | Local secondary, local background work and voice/STT unavailable; configured Sonnet chat and Agy/Grok pictures remain independent |
+| Anthropic | No replies (she answers with an in-character disruption line); background writers fall back to safe defaults; recall falls back to full-text order |
+| Fish Audio | No speech or speech-to-text; text chat continues |
 | Account image providers | Image request reports provider failure; eligible failover only, no GPU/paid-credit fallback |
 | RabbitMQ / bridge | Text chat continues; queued jobs/deferred tasks can be delayed; recovery guarantees depend on the specific durable path |
 | Redis | Session/events unavailable or degraded; do not equate a pub/sub receipt with durable work acceptance |
@@ -181,10 +189,11 @@ SACRED: never delete chat/memory/affection vectors for cleanup convenience.
 
 ## Related ADRs
 
-- ADR-0002 Compute split (core / GPU)
-- ADR-0004 LM routing (historical local-only decision, superseded by the October 14 owner authorizations above)
-- ADR-0006 Image gen / GPU lease
-- ADR-0007 Voice on GPU host
+- ADR-0020 Cloud-only AI (supersedes the GPU parts of 0002, the Qdrant tier of 0003, and 0004, 0006 and 0007)
+- ADR-0002 Compute split (core / GPU), historical
+- ADR-0004 LM routing, historical
+- ADR-0006 Image gen / GPU lease, historical
+- ADR-0007 Voice on GPU host, historical
 - ADR-0009 Public edge / gateway
 
 
