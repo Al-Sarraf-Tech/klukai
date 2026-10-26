@@ -27,8 +27,16 @@ logger = logging.getLogger(__name__)
 _THINK_TAGS = re.compile(r"<\|?/?think\|?>", re.DOTALL)
 _THINK_BLOCKS = re.compile(r"<\|?think\|?>.*?<\|?/think\|?>", re.DOTALL)
 _MARKDOWN_JSON = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
-_TRAILING_COMMA = re.compile(r",\s*([}\]])")
+# Match complete strings first so punctuation inside them stays literal.
+_TRAILING_COMMA = re.compile(r'("(?:\\.|[^"\\])*")|,\s*([}\]])')
 _DECODER = json.JSONDecoder()
+
+
+def _repair_trailing_commas(text: str) -> str:
+    """Repair a JSON candidate, preserving complete quoted strings verbatim."""
+    return _TRAILING_COMMA.sub(
+        lambda match: match[1] if match[1] is not None else match[2], text
+    )
 
 
 def _first_object(text: str) -> dict[str, Any] | None:
@@ -44,7 +52,16 @@ def _first_object(text: str) -> dict[str, Any] | None:
         try:
             value, _end = _DECODER.raw_decode(text, pos)
         except json.JSONDecodeError:
-            pass
+            # Try repairing this outer candidate before searching its children.
+            # Start at the brace: unmatched quotes in leading prose are not
+            # JSON string delimiters and must not alter tokenization here.
+            try:
+                value, _end = _DECODER.raw_decode(_repair_trailing_commas(text[pos:]))
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(value, dict):
+                    return value
         else:
             if isinstance(value, dict):
                 return value
@@ -108,14 +125,10 @@ def parse_json(text: str) -> JsonValue:
         except json.JSONDecodeError:
             text = md_match.group(1).strip()
 
-    # Find a complete JSON object in mixed text (prose before or after it,
-    # any nesting depth).
-    found = _first_object(text)
-    if found is not None:
-        return found
-
-    # Repair common issues, then look again
-    text = _TRAILING_COMMA.sub(r"\1", text)
+    # A top-level JSON candidate may also be an array. For mixed prose, each
+    # object is decoded/repaired at its own boundary by _first_object below.
+    if text.startswith(("{", "[")):
+        text = _repair_trailing_commas(text)
 
     # Try again
     try:
