@@ -206,6 +206,34 @@ class TestFetchWeatherFailSoft:
         assert result is None
 
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("current", [
+        {},
+        {"temperature_2m": 12.5, "weather_code": 61},
+        {"temperature_2m": 12.5, "is_day": 1},
+        {"weather_code": 61, "is_day": 1},
+        {"temperature_2m": float("nan"), "weather_code": 61, "is_day": 1},
+        {"temperature_2m": float("inf"), "weather_code": 61, "is_day": 1},
+        {"temperature_2m": float("-inf"), "weather_code": 61, "is_day": 1},
+        {"temperature_2m": True, "weather_code": 61, "is_day": 1},
+        {"temperature_2m": "12.5", "weather_code": 61, "is_day": 1},
+        {"temperature_2m": 12.5, "weather_code": 61.9, "is_day": 1},
+        {"temperature_2m": 12.5, "weather_code": True, "is_day": 1},
+        {"temperature_2m": 12.5, "weather_code": "61", "is_day": 1},
+        {"temperature_2m": 12.5, "weather_code": 61, "is_day": "0"},
+        {"temperature_2m": 12.5, "weather_code": 61, "is_day": 2},
+        {"temperature_2m": 12.5, "weather_code": 61, "is_day": True},
+        {"temperature_2m": 12.5, "weather_code": 61, "is_day": None},
+    ])
+    async def test_malformed_current_fields_do_not_invent_weather(self, current):
+        from app.weather_client import fetch_weather
+
+        _reset_singleton()
+        client = _fake_client(resp=_resp(200, {"current": current}))
+        with patch("app.weather_client.httpx.AsyncClient", return_value=client):
+            assert await fetch_weather(1.0, 2.0) is None
+
+
 # ── _get_http singleton ─────────────────────────────────────────────────────
 
 

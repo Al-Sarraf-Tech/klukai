@@ -78,7 +78,9 @@ async def test_weather_fault_and_recovery_uses_one_half_open_probe(monkeypatch):
         requests += 1
         if requests == 1:
             return httpx.Response(503)
-        return httpx.Response(200, json={"current": {"weather_code": 61}})
+        return httpx.Response(200, json={"current": {
+            "temperature_2m": 12.5, "weather_code": 61, "is_day": 1,
+        }})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
         monkeypatch.setattr(weather_client, "_get_http", lambda: client)

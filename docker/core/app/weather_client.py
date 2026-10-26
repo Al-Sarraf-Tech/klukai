@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 import logging
+import math
 import os
 
 import httpx
@@ -156,12 +157,26 @@ async def fetch_weather(
             )
             return None
 
-        code = int(current.get("weather_code", 0))
+        temperature = current.get("temperature_2m")
+        code = current.get("weather_code")
+        is_day = current.get("is_day")
+        # Open-Meteo supplies numeric temperature, integer WMO code and a
+        # numeric 0/1 day flag. Missing or malformed data is not clear weather.
+        if (
+            isinstance(temperature, bool)
+            or not isinstance(temperature, (int, float))
+            or not math.isfinite(temperature)
+            or type(code) is not int
+            or type(is_day) is not int
+            or is_day not in (0, 1)
+        ):
+            logger.warning("Open-Meteo payload has invalid current fields — skipping weather")
+            return None
         return {
-            "temp_c": float(current.get("temperature_2m", 0.0)),
+            "temp_c": float(temperature),
             "code": code,
             "condition": _code_to_condition(code),
-            "is_day": bool(current.get("is_day", 0)),
+            "is_day": bool(is_day),
         }
     except Exception as e:  # noqa: BLE001 — fail-soft: weather must never break chat.
         logger.warning("Weather fetch failed (%s) — skipping weather", e)

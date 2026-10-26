@@ -123,7 +123,7 @@ def _slot_values(commitment: dict[str, Any]) -> _Slots:
 def _fill(template: str, values: _Slots, fallback: str) -> str:
     try:
         return template.format_map(values)
-    except (ValueError, IndexError, AttributeError):
+    except (ValueError, IndexError, AttributeError, TypeError):
         return fallback.format_map(values)
 
 
