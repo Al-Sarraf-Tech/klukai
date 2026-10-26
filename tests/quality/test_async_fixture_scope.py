@@ -41,7 +41,6 @@ def test_session_integration_fixture_keeps_its_own_loop(tmp_path):
             "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
             "DATABASE_URL": "postgresql://disabled:disabled@127.0.0.1:1/disabled",
             "REDIS_URL": "redis://127.0.0.1:1/0",
-            "QDRANT_URL": "http://127.0.0.1:1",
         },
         capture_output=True,
         text=True,

@@ -1,4 +1,4 @@
-"""Run nine real-backend CI cases in pinned CPython with host-owned services."""
+"""Run the real-backend CI cases in pinned CPython with host-owned services."""
 
 from __future__ import annotations
 
@@ -46,7 +46,6 @@ class RunConfig:
     image: str
     postgres_image: str
     redis_image: str
-    qdrant_image: str
     development: bool = False
     timeout: float = 300
 
@@ -239,7 +238,6 @@ def _execute(config: RunConfig, latch: SignalLatch) -> dict[str, Any]:
                 "core": config.image,
                 "postgres": config.postgres_image,
                 "redis": config.redis_image,
-                "qdrant": config.qdrant_image,
             }.items()
         }
         validate_image(
@@ -301,7 +299,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["root", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
-    for name in ["revision", "image", "postgres-image", "redis-image", "qdrant-image"]:
+    for name in ["revision", "image", "postgres-image", "redis-image"]:
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--development", action="store_true")

@@ -4,6 +4,8 @@ Run KLUKAI_RUNTIME_BACKENDS=1 python -m pytest tests/runtime_backends.py -q.
 Missing Docker, cached pinned images or evidence output fails this gate.
 Only the containers created here may be removed. No production endpoints,
 credentials, directories, provider accounts or GPU devices are used.
+Memory lives in PostgreSQL only (cloud-only AI, 2026-10-26), so the gate
+provisions PostgreSQL and Valkey; there is no vector store.
 """
 
 from __future__ import annotations
@@ -35,13 +37,17 @@ from app.observability import health_cache
 IMAGES = {
     "postgres": "sha256:650b442ec4f71f47b92505de963bbc4054f8c7df0df30956aef30e27d7e4dea4",
     "redis": "sha256:e0cd36901ed62fccffb8186d099492a327df98abbe2269ffe0bd2b1b1d6732fb",
-    "qdrant": "sha256:d88816626f62fbf8d3468cd8b6330ba1bff6d2219b05c00d9e1b85311747ac2a",
 }
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATHS = [
     "app/db.py",
     "app/memory.py",
+    "app/memory_exchange.py",
+    "app/memory_recall.py",
     "app/memory_session.py",
+    "app/background_llm.py",
+    "app/migrations.py",
+    "migrations/260_memory_full_text_search.sql",
     "app/dependencies.py",
     "app/circuit_breakers.py",
     "app/observability/health_cache.py",
@@ -126,7 +132,6 @@ def backends(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRe
         for dependency, port, cpus, memory in (
             ("postgres", 5432, ".7", "384m"),
             ("redis", 6379, ".3", "96m"),
-            ("qdrant", 6333, ".8", "384m"),
         ):
             image = os.environ.get(
                 f"KLUKAI_RUNTIME_{dependency.upper()}_IMAGE", IMAGES[dependency]
@@ -168,13 +173,6 @@ def backends(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRe
                     "POSTGRES_DB=runtime_test",
                     "--tmpfs",
                     "/var/lib/postgresql/data:rw,size=256m",
-                ]
-            elif dependency == "qdrant":
-                args += [
-                    "--tmpfs",
-                    "/qdrant/storage:rw,size=128m",
-                    "--env",
-                    "QDRANT__TELEMETRY_DISABLED=true",
                 ]
             args.append(image)
             if dependency == "redis":
@@ -348,16 +346,14 @@ async def clients(
     redis_url = f"redis://127.0.0.1:{ports['redis']}/0"
     monkeypatch.setattr(memory_module, "REDIS_URL", redis_url)
     monkeypatch.setattr(memory_session, "REDIS_URL", redis_url)
-    monkeypatch.setattr(
-        memory_module, "QDRANT_URL", f"http://127.0.0.1:{ports['qdrant']}"
-    )
     monkeypatch.setattr(health_cache, "PING_TIMEOUT_SECONDS", 0.4)
     memory = MemoryManager()
     memory._redis = redis.Redis.from_url(
         redis_url, decode_responses=True, socket_timeout=0.3, socket_connect_timeout=0.3
     )
+    # The data-service (factual memory) client; close() must release it too.
     memory._http = httpx.AsyncClient(timeout=0.4, trust_env=False)
-    for name in ("postgres", "redis", "qdrant"):
+    for name in ("postgres", "redis"):
         get_breaker(name).cfg.error_threshold = 1
     health_cache.clear_cache()
     try:
@@ -393,14 +389,23 @@ async def clients(
 
 
 def evidence(
-    backends: Backends, dependency: str, events: list[dict[str, object]]
+    backends: Backends,
+    dependency: str,
+    events: list[dict[str, object]],
+    breaker: str | None = None,
 ) -> None:
+    """Write ``<dependency>.json``; transitions are read from ``breaker``'s.
+
+    ``breaker`` defaults to ``dependency``; a case named after a feature (the
+    PostgreSQL memory recall cases) names the dependency breaker it exercised.
+    """
     hashes = {
         name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
         for name in SOURCE_PATHS
     }
     document = {
         "dependency": dependency,
+        "breaker": breaker or dependency,
         "timestamp": datetime.now(UTC).isoformat(),
         "source_sha256": hashes,
         "states": events,
@@ -408,11 +413,9 @@ def evidence(
             key: count
             for key, count in metrics.snapshot()["counters"].items()
             if key.startswith("circuit_transitions_total{")
-            and f"dep={dependency}," in key
+            and f"dep={breaker or dependency}," in key
         },
-        "breakers": {
-            name: breaker.state.value for name, breaker in all_breakers().items()
-        },
+        "breakers": {name: each.state.value for name, each in all_breakers().items()},
     }
     (backends.evidence / f"{dependency}.json").write_text(
         json.dumps(document, indent=2) + "\n"

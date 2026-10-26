@@ -243,6 +243,10 @@ jobs:
         run: scripts/ci/core.sh
 
   real-backends:
+    # Provisions PostgreSQL 17 and Valkey only: memory lives in PostgreSQL
+    # (cloud-only AI, 2026-10-26). The display name is a release/deploy gate
+    # key (FULL_CI_GATES in ops/amarillo/scripts/klukai-fetch-ci-artifacts.py,
+    # read by the deployed relay), so it changes only together with that list.
     name: Real PostgreSQL, Valkey and Qdrant recovery
     needs: [source-policy, ci-image]
     runs-on: ${{ fromJSON(needs.source-policy.outputs.labels_serial) }}
@@ -252,7 +256,6 @@ jobs:
       KLUKAI_CORE_CI_IMAGE: ${{ needs.ci-image.outputs.image_id }}
       KLUKAI_CORE_POSTGRES_IMAGE: postgres@sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1
       KLUKAI_CORE_REDIS_IMAGE: valkey/valkey@sha256:cb3339abbd6e18942cd8ac3349f0c371a82ba5b6204b242563ba299e7956cbd0
-      KLUKAI_CORE_QDRANT_IMAGE: qdrant/qdrant@sha256:f1c7272cdac52b38c1a0e89313922d940ba50afd90d593a1605dbbc214e66ffb
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -269,7 +272,7 @@ jobs:
             docker load -q -i "$HANDOFF/image.tar"
           fi
           test "$(docker image inspect --format '{{.Id}}' "$KLUKAI_CORE_CI_IMAGE")" = "$KLUKAI_CORE_CI_IMAGE"
-      - name: Require all nine real-driver fault and recovery cases
+      - name: Require all ten real-driver fault, recovery and memory recall cases
         run: scripts/ci/backends.sh
 
   lint:

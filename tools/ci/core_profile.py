@@ -131,8 +131,6 @@ def safe_environment(password: str) -> dict[str, str]:
         "VOICE_ASYNC_JOBS": "false",
         "DATABASE_URL": "postgresql://disabled:disabled@127.0.0.1:1/disabled",
         "REDIS_URL": "redis://127.0.0.1:1/0",
-        "QDRANT_HOST": "127.0.0.1",
-        "QDRANT_PORT": "1",
         "PERSONALITY_PATH": "/source/config/personality.yaml",
         "OTEL_SDK_DISABLED": "true",
         "KLUKAI_MIGRATION_TEST_DATABASE_URL": f"postgresql://core_test:{password}@postgres:5432/core_test",
@@ -145,7 +143,6 @@ def safe_environment(password: str) -> dict[str, str]:
                 "VOICE_URL",
                 "COMFYUI_URL",
                 "MCP_URL",
-                "QDRANT_URL",
             ]
         }
     )

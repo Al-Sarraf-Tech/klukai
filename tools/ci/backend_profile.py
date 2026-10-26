@@ -11,17 +11,25 @@ from .core_profile import core_flags, safe_environment, validate_core_profile
 from .core_resources import ResourceFailure
 from .python_executor import validate_probe
 
+# Disposable services each driver receives. Memory lives in PostgreSQL only
+# (cloud-only AI, 2026-10-26): recall is full-text candidates plus a Haiku
+# pick, so there is no vector store to provision or fault.
+BACKENDS = ("postgres", "redis")
+# Raw evidence the runtime driver's real-PostgreSQL memory recall cases write.
+RECALL_EVIDENCE = ("memory-recall", "memory-recall-fallback", "memory-recall-recovery")
+
 CASES = {
     "tests/runtime_backends.py": {
         "test_postgres_auth_failure_and_real_protocol_recovery",
         "test_redis_session_failure_closed_and_preserved_owner_recovery",
-        "test_qdrant_real_search_loss_keeps_optional_memory_and_recovers",
+        "test_postgres_memory_recall_full_text_candidates_and_haiku_pick",
+        "test_postgres_memory_recall_without_haiku_keeps_postgres_order",
+        "test_postgres_memory_loss_fails_open_and_recall_recovers",
         "test_real_query_cancellation_releases_pool",
     },
     "tests/health_runtime_backends.py": {
         "test_reused_real_readiness_clients_survive_fault_and_recovery[postgres]",
         "test_reused_real_readiness_clients_survive_fault_and_recovery[redis]",
-        "test_reused_real_readiness_clients_survive_fault_and_recovery[qdrant]",
         "test_real_readiness_cancellation_releases_stream_and_reuses_client",
     },
     "tests/lifecycle_runtime_backends.py": {
@@ -209,12 +217,11 @@ def evidence_names(module: str) -> set[str]:
     names = {"containers.json"} | {name + "-cleanup.json" for name in CASES[module]}
     if module == "tests/lifecycle_runtime_backends.py":
         return names | {"accepted-image-shutdown.json"}
-    names |= {name + ".json" for name in ["postgres", "redis", "qdrant"]}
+    names |= {name + ".json" for name in BACKENDS}
     if module == "tests/runtime_backends.py":
-        return names | {"cancellation.json"}
+        return names | {name + ".json" for name in ("cancellation", *RECALL_EVIDENCE)}
     return names | {
-        name + "-driver-binding.json"
-        for name in ["postgres", "redis", "qdrant", "cancellation"]
+        name + "-driver-binding.json" for name in (*BACKENDS, "cancellation")
     }
 
 
