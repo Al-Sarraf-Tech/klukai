@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -35,8 +35,6 @@ if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
     for _creative_kind in ("IMAGE", "TEXT"):
         for _creative_period in ("DAILY", "MONTHLY"):
             os.environ[f"KLUKAI_CLOUD_{_creative_kind}_{_creative_period}_LIMIT"] = "0"
-    os.environ["LM_STUDIO_URL"] = "http://127.0.0.1:1"
-    os.environ.setdefault("LM_STUDIO_TOKEN", "pytest-local-lm-token")
     os.environ["COMFYUI_URL"] = "http://127.0.0.1:1"
     # Fish is a paid cloud API: unit tests never see a real key.
     os.environ.pop("FISH_API_KEY", None)
@@ -72,64 +70,6 @@ if not os.environ.get("PERSONALITY_PATH"):
     )
     if _repo_personality.exists():
         os.environ["PERSONALITY_PATH"] = str(_repo_personality)
-
-
-# ── LM Studio mock ──────────────────────────────────────────────────────────
-
-def _lm_studio_response(content: str = "Test response.") -> dict:
-    """Build a minimal LM Studio /v1/chat/completions response."""
-    return {
-        "choices": [
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": content,
-                },
-                "finish_reason": "stop",
-            }
-        ],
-        "model": "test-model",
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-    }
-
-
-class FakeHTTPResponse:
-    """Minimal stand-in for httpx.Response."""
-
-    def __init__(self, status_code: int = 200, json_data: dict | None = None):
-        self.status_code = status_code
-        self._json = json_data or _lm_studio_response()
-
-    def json(self) -> dict:
-        return self._json
-
-    def raise_for_status(self) -> None:
-        if self.status_code >= 400:
-            raise Exception(f"HTTP {self.status_code}")
-
-
-@pytest.fixture
-def mock_lm_studio_response():
-    """Return a factory for fake LM Studio HTTP responses."""
-    return _lm_studio_response
-
-
-@pytest.fixture
-def fake_http_response():
-    """Return a factory for FakeHTTPResponse objects."""
-    return FakeHTTPResponse
-
-
-@pytest.fixture
-def mock_httpx_post():
-    """Patch httpx.AsyncClient.post to return a canned LM Studio response.
-
-    Yields the mock so tests can inspect calls or override return_value.
-    """
-    resp = FakeHTTPResponse(200, _lm_studio_response())
-    mock_post = AsyncMock(return_value=resp)
-    with patch("httpx.AsyncClient.post", mock_post):
-        yield mock_post
 
 
 # ── Redis mock ───────────────────────────────────────────────────────────────

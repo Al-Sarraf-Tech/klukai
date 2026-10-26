@@ -272,7 +272,6 @@ class TestFishRequest:
 
 class TestSwitches:
     def test_fish_speaks_and_transcribes_but_letters_stay_text(self, fish):
-        assert voice_client.fish_voice_enabled() is True
         assert voice_client.voice_enabled() is True
         assert voice_client.voice_input_enabled() is True
         assert voice_client.voice_letters_enabled() is False

@@ -46,15 +46,6 @@ def voice_off_response() -> httpx.Response:
     return _fish_response(503, VOICE_OFF_MESSAGE)
 
 
-def fish_voice_enabled() -> bool:
-    """Fish Audio is her only voice.
-
-    Kept because the health report still asks which backend speaks; remove it
-    with that last caller.
-    """
-    return True
-
-
 def voice_input_enabled() -> bool:
     """Microphone transcription: the switch is on and Fish has a key."""
     return voice_enabled() and fish_stt_configured()
