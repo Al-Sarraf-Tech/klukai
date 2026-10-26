@@ -98,6 +98,7 @@ function boot() {
   let hudState = null;      // the latest snapshot (null until the PWA sends one)
   let voicePhase = "idle";  // idle | loading | playing (the HUD's VOICE button)
   let voiceTicket = 0;      // a newer tap (or a stop) supersedes a pending one
+  let audioVisibilityGeneration = 0; // hiding cancels pending music startup too
   const hud = EMBED.embed
     ? createHud(document, { onVoice: onHudVoice, onHerDay: () => postToParent(window, { type: HERDAY }) })
     : null;
@@ -339,17 +340,22 @@ function boot() {
   }
 
   async function startAudio() {
-    const fresh = !audioCtx;
+    const generation = audioVisibilityGeneration;
     const ctx = audioContextNow();
     if (!ctx) return false;
-    if (fresh) {
+    // Bound the shared context resume before starting music: start() can
+    // otherwise wait forever on the default standalone music preference.
+    if (!await resumeWithin(ctx, AUDIO_RESUME_MS)) return false;
+    if (generation !== audioVisibilityGeneration || document.hidden || embedHidden) return false;
+    if (ctx.state !== "running") return false;
+    if (prefs.music && !EMBED.embed && !music.playing) {
       try {
-        if (prefs.music && !EMBED.embed) await music.start(); // the PWA has its own ambience
+        await music.start(); // the PWA has its own ambience
       } catch {
         return false;
       }
     }
-    return resumeWithin(ctx, AUDIO_RESUME_MS);
+    return ctx.state === "running";
   }
 
   // Inside his tap, before any await: create/resume the context and start a
@@ -522,6 +528,7 @@ function boot() {
       embedHidden = !request.visible;
       if (embedHidden) {
         voice?.stop();
+        audioVisibilityGeneration++;
         voiceTicket++;
         setVoicePhase("done");
       }
@@ -599,17 +606,17 @@ function boot() {
   $("btn-voice").addEventListener("click", async () => {
     if (document.hidden) return;
     const ticket = ++voiceTicket;
-    if (!voice) {
-      let ready = false;
-      try { ready = await startAudio(); } catch { ready = false; }
-      if (ticket !== voiceTicket) return;
-      if (!ready) {
-        notice(beginWake().audioMissing, 4000);
-        showAudioStatus(beginWake().audioMissing);
-        return;
-      }
-      showAudioStatus("");
+    // The voice engine exists even when an earlier resume failed or timed
+    // out. Each tap must make sure its shared context can actually play.
+    let ready = false;
+    try { ready = await startAudio(); } catch { ready = false; }
+    if (ticket !== voiceTicket) return;
+    if (!ready) {
+      notice(beginWake().audioMissing, 4000);
+      showAudioStatus(beginWake().audioMissing);
+      return;
     }
+    showAudioStatus("");
     if (!lastLine) { notice("Nothing for her to say yet.", 2000); return; }
     voice.setEnabled(true);
     voice.speak(lastLine);
@@ -652,6 +659,7 @@ function boot() {
   // ── iOS / Safari lifecycle: suspend in the background, heal on return ──
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
+      audioVisibilityGeneration++;
       voiceTicket++;
       voice?.stop();
       setVoicePhase("done");

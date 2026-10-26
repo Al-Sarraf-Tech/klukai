@@ -62,15 +62,21 @@
       const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
       rec.onstop = () => {
         releaseTracks(rec.stream); // the mic goes dark before the clip is encoded
-        const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          // Strip the data URL prefix; a take with no audio data (or a failed
-          // read, whose result is null) is null, not "".
-          settle(String(reader.result || '').split(',')[1] || null);
-        };
-        reader.onerror = () => settle(null);
-        reader.readAsDataURL(blob);
+        try {
+          const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            // Strip the data URL prefix; a take with no audio data (or a failed
+            // read, whose result is null) is null, not "".
+            settle(String(reader.result || '').split(',')[1] || null);
+          };
+          reader.onerror = () => settle(null);
+          reader.readAsDataURL(blob);
+        } catch (e) {
+          // onstop runs after stop() returns, outside its catch below.
+          console.error('[audio_recorder] Failed to encode:', e);
+          settle(null);
+        }
       };
       // A recorder that errors goes inactive without onstop: settle the Dart
       // await instead of hanging it.

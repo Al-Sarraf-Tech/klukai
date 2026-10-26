@@ -223,6 +223,55 @@ test("a failed clip read settles null instead of hanging", async () => {
   assert.equal(await h.rec.stop(), null);
 });
 
+for (const failure of ["construction", "read"]) {
+  test(`a synchronous FileReader ${failure} failure settles null`, async () => {
+    class ThrowingReader {
+      constructor() {
+        if (failure === "construction") throw new Error("Reader unavailable");
+      }
+      readAsDataURL() { throw new Error("Read unavailable"); }
+    }
+    const h = harness({ FileReader: ThrowingReader });
+    const started = h.rec.start();
+    const stream = h.grant();
+    await started;
+    const recorder = h.recorders[0];
+    // Deliver the browser's stop event explicitly, separately from stop().
+    recorder.stop = () => { recorder.state = "inactive"; };
+    const clip = h.rec.stop();
+    assert.doesNotThrow(() => recorder.onstop(), "encoding errors stay inside the bridge");
+    assert.equal(await clip, null);
+    assert.equal(stream.released(), true);
+    assert.equal(h.rec.isRecording(), false);
+    assert.equal(await h.rec.stop(), null);
+  });
+}
+
+test("an encoding failure at the recording cap does not poison the next take", async () => {
+  let reads = 0;
+  class FailsOnceReader extends FakeFileReader {
+    readAsDataURL(blob) {
+      if (++reads === 1) throw new Error("First read unavailable");
+      super.readAsDataURL(blob);
+    }
+  }
+  const h = harness({ FileReader: FailsOnceReader });
+  const first = h.rec.start();
+  const firstStream = h.grant();
+  await first;
+  const recorder = h.recorders[0];
+  recorder.stop = () => { recorder.state = "inactive"; };
+  h.fireTimers();
+  assert.doesNotThrow(() => recorder.onstop());
+  assert.equal(await h.rec.stop(), null);
+  assert.equal(firstStream.released(), true);
+  const second = h.rec.start();
+  const secondStream = h.grant();
+  await second;
+  assert.equal(await h.rec.stop(), "QUJD");
+  assert.equal(secondStream.released(), true);
+});
+
 test("the deployed PWA copy is byte-identical to the source", () => {
   assert.equal(readFileSync(BUILD_URL, "utf8"), readFileSync(SRC_URL, "utf8"));
 });

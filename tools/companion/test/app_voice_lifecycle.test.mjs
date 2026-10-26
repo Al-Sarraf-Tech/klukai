@@ -11,6 +11,7 @@ import * as logic from "../../../flutter_app/web/companion/logic.js";
 import * as life from "../../../flutter_app/web/companion/stage_life.js";
 import { hudView, nextVoicePhase } from "../../../flutter_app/web/companion/hud.js";
 import { createVoice } from "../../../flutter_app/web/companion/voice.js";
+import { createMusic } from "../../../flutter_app/web/companion/music.js";
 import { createSocket } from "../../../flutter_app/web/companion/net.js";
 import { createAmbience, ambienceKind } from "../../../flutter_app/web/companion/ambience.js";
 import { FakeAudioContext } from "./fake-audio.mjs";
@@ -42,7 +43,7 @@ function eventTarget() {
   };
 }
 
-function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory, ambienceFactory, motionQuery } = {}) {
+function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory, ambienceFactory, motionQuery, prefs = { music: false }, musicFactory } = {}) {
   const elements = new Map();
   const element = (id) => {
     const classes = new Set();
@@ -86,7 +87,7 @@ function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory,
     ...embed, ...logic, ...life, hudView, nextVoicePhase,
     window, document, location: window.location,
     matchMedia: motionQuery ? () => motionQuery : undefined,
-    localStorage: { getItem: () => '{"music":false}' },
+    localStorage: { getItem: () => JSON.stringify(prefs) },
     readToken: () => "test-token", clearToken() {}, wsUrl: () => "unused",
     AuthExpired: class extends Error {},
     createApi: () => ({
@@ -103,7 +104,7 @@ function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory,
     createPortrait: () => ({ setFrames() {}, setExpression() {}, setActive() {}, setLevel() {} }),
     createAmbience: ambienceFactory || (() => ({ start() {}, stop() {}, setKind() {} })),
     ambienceKind: ambienceFactory ? ambienceKind : () => "none",
-    createMusic: () => ({ setHidden() {}, duck() {}, setScene() {} }),
+    createMusic: musicFactory || (() => ({ setHidden() {}, duck() {}, setScene() {} })),
     createHud: (_doc, callbacks) => { hud = callbacks; return { hold() {}, update: (view) => views.push(view) }; },
     createVoice: (options) => createVoice({ ...options, setTick: timer, clearTick: clearTimer }),
     createStageAppearance: () => ({ refreshAppearances() {}, setMode() {}, warmModel() {}, forgetModels() {} }),
@@ -120,6 +121,7 @@ function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory,
     element, frame: (data) => onFrame(data), click: (id) => element(id).dispatch("click"),
     showPage: () => window.dispatch("pageshow"),
     expireResume: () => [...timers.values()].find((entry) => entry.ms === 3000).fn(),
+    hasResumeDeadline: () => [...timers.values()].some((entry) => entry.ms === 3000),
     speak: (text, id) => message({ type: embed.SPEAK, text, id }),
     visible: (visible) => message({ type: embed.VISIBILITY, visible }),
     hud: (line) => message({ type: embed.HUD, line, streaming: false }),
@@ -634,3 +636,162 @@ test("a cancelled standalone resume failure does not display a stale audio error
   assert.deepEqual(h.requests, []);
   assert.notEqual(h.element("notice").textContent, life.beginWake().audioMissing);
 });
+
+test("standalone voice retries audio resume after a rejected first attempt", async () => {
+  const h = harness({ embedded: false });
+  h.frame({ type: "done", text: "Retry this line." });
+  const first = h.click("btn-voice");
+  await turn();
+  h.resumes[0].reject();
+  await first;
+  assert.equal(FakeAudioContext.last.state, "suspended");
+  assert.deepEqual(h.requests, []);
+  const second = h.click("btn-voice");
+  await turn();
+  try {
+    assert.equal(h.resumes.length, 2, "retry resumes the existing suspended context");
+    assert.deepEqual(h.requests, [], "synthesis waits for audible output");
+    h.resumes[1]();
+    await second;
+    await turn();
+    assert.deepEqual(h.requests, ["Retry this line."]);
+    assert.equal(FakeAudioContext.last.state, "running");
+  } finally {
+    h.document.hidden = true;
+    await h.document.dispatch("visibilitychange");
+  }
+});
+
+test("standalone voice retries audio resume after the first attempt times out", async () => {
+  const h = harness({ embedded: false });
+  h.frame({ type: "done", text: "Retry after timeout." });
+  const first = h.click("btn-voice");
+  await turn();
+  h.expireResume();
+  await first;
+  const second = h.click("btn-voice");
+  await turn();
+  try {
+    assert.equal(h.resumes.length, 2, "the timeout does not skip future resume attempts");
+    assert.deepEqual(h.requests, []);
+    h.resumes[1]();
+    await second;
+    await turn();
+    assert.deepEqual(h.requests, ["Retry after timeout."]);
+  } finally {
+    h.document.hidden = true;
+    await h.document.dispatch("visibilitychange");
+  }
+});
+
+test("a standalone retry cancelled by backgrounding cannot speak after resume", async () => {
+  const h = harness({ embedded: false });
+  h.frame({ type: "done", text: "Only after a fresh tap." });
+  const first = h.click("btn-voice");
+  await turn();
+  h.resumes[0].reject();
+  await first;
+  const retry = h.click("btn-voice");
+  await turn();
+  assert.equal(h.resumes.length, 2);
+  h.document.hidden = true;
+  await h.document.dispatch("visibilitychange");
+  h.document.hidden = false;
+  await h.document.dispatch("visibilitychange");
+  h.resumes[1]();
+  await retry;
+  assert.deepEqual(h.requests, [], "cancelled retry cannot play when the page returns");
+  await h.click("btn-voice");
+  await turn();
+  assert.deepEqual(h.requests, ["Only after a fresh tap."]);
+  h.document.hidden = true;
+  await h.document.dispatch("visibilitychange");
+});
+
+test("first standalone audio keeps its deadline when default music is enabled", async () => {
+  let music;
+  const h = harness({
+    embedded: false, prefs: {},
+    musicFactory: (options) => (music = createMusic(options)),
+  });
+  h.frame({ type: "done", text: "Wait for audio." });
+  const pending = h.click("btn-voice");
+  await turn();
+  try {
+    assert.equal(h.hasResumeDeadline(), true, "music resume must not bypass the audio deadline");
+    h.expireResume();
+    await pending;
+    assert.deepEqual(h.requests, []);
+    assert.equal(h.element("audio-status").textContent, life.beginWake().audioMissing);
+    assert.equal(music.playing, false);
+  } finally {
+    h.document.hidden = true;
+    await h.document.dispatch("visibilitychange");
+    music.stop();
+    for (const resume of h.resumes) resume();
+    await pending;
+    music.stop();
+  }
+});
+
+test("standalone audio can start default music after an earlier resume timeout", async () => {
+  let music;
+  const h = harness({
+    embedded: false, prefs: {},
+    musicFactory: (options) => (music = createMusic(options)),
+  });
+  h.frame({ type: "done", text: "Audio is ready now." });
+  const first = h.click("btn-voice");
+  await turn();
+  try {
+    h.expireResume();
+    await first;
+    const retry = h.click("btn-voice");
+    await turn();
+    h.resumes[1]();
+    await retry;
+    await turn();
+    assert.equal(music.playing, true, "the saved music preference survives a failed first use");
+    assert.deepEqual(h.requests, ["Audio is ready now."]);
+    const oscillators = FakeAudioContext.last.of("osc").length;
+    h.resumes[0]();
+    await turn();
+    assert.equal(FakeAudioContext.last.of("osc").length, oscillators);
+    assert.deepEqual(h.requests, ["Audio is ready now."], "late first resume does not retry speech");
+  } finally {
+    h.document.hidden = true;
+    await h.document.dispatch("visibilitychange");
+    music.stop();
+    for (const resume of h.resumes) resume();
+    await first;
+  }
+});
+
+for (const returnToPage of [false, true]) {
+  test(`cancelled first audio resume cannot start music after hiding (return=${returnToPage})`, async () => {
+    let music;
+    const h = harness({
+      embedded: false, prefs: {},
+      musicFactory: (options) => (music = createMusic(options)),
+    });
+    h.frame({ type: "done", text: "Do not play this cancelled tap." });
+    const pending = h.click("btn-voice");
+    await turn();
+    try {
+      h.document.hidden = true;
+      await h.document.dispatch("visibilitychange");
+      if (returnToPage) {
+        h.document.hidden = false;
+        await h.document.dispatch("visibilitychange");
+      }
+      h.resumes[0]();
+      await pending;
+      await turn();
+      assert.deepEqual(h.requests, []);
+      assert.equal(music.playing, false, "a cancelled gesture cannot start the score");
+      assert.equal(FakeAudioContext.last.of("osc").length, 0);
+    } finally {
+      music.stop();
+    }
+  });
+}
