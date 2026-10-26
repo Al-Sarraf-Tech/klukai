@@ -108,6 +108,7 @@ export function createApi({ token, fetchImpl = globalThis.fetch, base = "", onAu
   return {
     herDay: () => call("/api/her-day"),
     portrait: () => call("/api/portrait"),
+    animatePortrait: () => call("/api/portrait/animate", { method: "POST" }),
     affection: () => call("/api/affection"),
     tts,
     models: () => call("/api/avatar/models"),

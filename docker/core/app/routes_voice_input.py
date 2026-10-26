@@ -16,6 +16,17 @@ logger = logging.getLogger(__name__)
 def register_voice_input(
     app: FastAPI, resolve_user: Callable[[Request], Awaitable[str | None]]
 ) -> None:
+    @app.get("/api/voice/capabilities")
+    async def api_voice_capabilities(request: Request) -> Any:
+        if not await resolve_user(request):
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from .voice_client import voice_enabled, voice_input_enabled
+
+        return {
+            "output_enabled": voice_enabled(),
+            "input_enabled": voice_input_enabled(),
+        }
+
     @app.post("/api/stt")
     async def api_stt(req: STTRequest, request: Request) -> Any:
         """Proxy STT request to companion-voice."""
@@ -32,30 +43,37 @@ def register_voice_input(
         if not voice_enabled():
             return JSONResponse({"error": VOICE_OFF_MESSAGE}, status_code=503)
         if not voice_input_enabled():
-            # Fish: no transcriber (Dominus is gone; Fish STT is paid).
+            # Fish STT is separately enabled for the funded account.
             return JSONResponse({"error": VOICE_INPUT_OFF_MESSAGE}, status_code=503)
         try:
             from .helpers import voice_auth_headers
             from .voice_client import stt_url
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await http_request(
-                    "voice",
-                    client,
-                    "post",
-                    f"{stt_url()}/stt",
-                    json={"audio": req.audio},
-                    headers=voice_auth_headers(),
-                )
-                # The PWA treats any 200 as a transcript, so an upstream
-                # failure must not come back as a 200 — it would silently do
-                # nothing. Status and {"error": ...} bodies both become a 502.
-                if r.status_code != 200:
-                    logger.warning("STT upstream HTTP %s", r.status_code)
-                    return JSONResponse(
-                        {"error": "Voice service unavailable"}, status_code=502
+            from .voice_client import fish_voice_enabled, post_fish_stt
+
+            if fish_voice_enabled():
+                r = await post_fish_stt(req.audio)
+            else:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    r = await http_request(
+                        "voice",
+                        client,
+                        "post",
+                        f"{stt_url()}/stt",
+                        json={"audio": req.audio},
+                        headers=voice_auth_headers(),
                     )
-                body = r.json()
+            # The PWA treats any 200 as a transcript, so an upstream
+            # failure must not come back as a 200 — it would silently do
+            # nothing. Status and {"error": ...} bodies both become a 502.
+            if r.status_code == 400:
+                return JSONResponse({"error": "Invalid audio"}, status_code=400)
+            if r.status_code != 200:
+                logger.warning("STT upstream HTTP %s", r.status_code)
+                return JSONResponse(
+                    {"error": "Voice service unavailable"}, status_code=502
+                )
+            body = r.json()
         except Exception:
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
         if not isinstance(body, dict):

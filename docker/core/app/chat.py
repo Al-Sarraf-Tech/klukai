@@ -102,7 +102,7 @@ async def _handle_voice(
         )
         return
     if not voice_input_enabled():
-        # Fish speaks when he taps, but nothing transcribes his microphone.
+        # Microphone transcription requires its explicit backend opt-in.
         await ws.send(
             user_id,
             {
@@ -121,14 +121,19 @@ async def _handle_voice(
             try:
                 from .helpers import voice_auth_headers
 
-                r = await http_request(
-                    "voice",
-                    client,
-                    "post",
-                    f"{stt_url()}/stt",
-                    json={"audio": audio_b64},
-                    headers=voice_auth_headers(),
-                )
+                from .voice_client import fish_voice_enabled, post_fish_stt
+
+                if fish_voice_enabled():
+                    r = await post_fish_stt(audio_b64)
+                else:
+                    r = await http_request(
+                        "voice",
+                        client,
+                        "post",
+                        f"{stt_url()}/stt",
+                        json={"audio": audio_b64},
+                        headers=voice_auth_headers(),
+                    )
                 r.raise_for_status()
                 transcript = r.json().get("text", "")
             except Exception as stt_err:

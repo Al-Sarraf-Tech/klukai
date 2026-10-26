@@ -5,10 +5,11 @@ Backends (``VOICE_BACKEND``):
 - ``dominus`` (default): remote XTTS behind the shared LM gate + GPU lease.
 - ``amarillo-xpu``: the native Arc worker, serialized by a local lock.
 - ``fish``: the Fish Audio cloud API speaking with the community "Klukai"
-  model. No gate and no lease: nothing local is loaded. The account has no
-  credit and must never be billed, so every request carries the free model
-  header and a non-free model is refused before anything is sent. Fish
-  speaks only when he taps: no microphone input and no voice letters.
+  model. No gate and no lease: nothing local is loaded. TTS carries the
+  free model header and a non-free TTS model is refused before anything
+  is sent. Fish
+  speaks only when he taps. Funded-account STT has a separate explicit switch;
+  voice letters remain text-only.
 """
 
 from __future__ import annotations
@@ -55,9 +56,17 @@ def fish_voice_enabled() -> bool:
 
 
 def voice_input_enabled() -> bool:
-    """Microphone transcription. Off with Fish: its STT is paid and the
-    Dominus transcriber is gone. ``KLUKAI_VOICE_ENABLED`` still rules first."""
-    return voice_enabled() and not fish_voice_enabled()
+    """Fish transcription requires a separate explicit funded-account opt-in."""
+    if not voice_enabled():
+        return False
+    if fish_voice_enabled():
+        return os.environ.get("KLUKAI_FISH_STT_ENABLED", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        } and bool(os.environ.get("FISH_API_KEY", "").strip())
+    return True
 
 
 def voice_letters_enabled() -> bool:
@@ -285,3 +294,42 @@ async def post_leased_tts(
                 headers=headers,
                 timeout=timeout,
             )
+
+
+async def post_fish_stt(encoded_audio: str) -> httpx.Response:
+    """Bounded, user-requested transcription; no retries or local fallback."""
+    if not fish_voice_enabled() or not voice_input_enabled():
+        return _fish_response(503, VOICE_INPUT_OFF_MESSAGE)
+    try:
+        audio = base64.b64decode(encoded_audio, validate=True)
+    except (ValueError, TypeError):
+        return _fish_response(400, "Invalid audio")
+    if not audio or len(audio) > MAX_AUDIO_BYTES:
+        return _fish_response(400, "Invalid audio")
+    async with httpx.AsyncClient(
+        timeout=30.0, trust_env=False, follow_redirects=False
+    ) as client:
+        response = await http_request(
+            "voice",
+            client,
+            "post",
+            "https://api.fish.audio/v1/asr",
+            headers={
+                "Authorization": f"Bearer {os.environ['FISH_API_KEY']}",
+                "model": "transcribe-1-pro",
+            },
+            files={"audio": ("recording.audio", audio, "application/octet-stream")},
+            data={
+                "ignore_timestamps": "true",
+                "diarize": "false",
+                "tag_audio_events": "false",
+            },
+            timeout=30.0,
+        )
+    if response.status_code != 200:
+        logger.warning("Fish STT HTTP %s", response.status_code)
+        return _fish_response(502, _FISH_FAILED_MESSAGE)
+    body = response.json()
+    if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+        return _fish_response(502, "Transcription failed")
+    return httpx.Response(200, json={"text": body["text"]})

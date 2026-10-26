@@ -234,15 +234,20 @@ class LLMRouter(LLMCompletionsMixin):
         return self._lmstudio_available
 
     async def is_game_active(self) -> bool:
-        """Ask the gateway (the source of truth) whether a game currently
-        owns dominus-nobara's GPU. Cached briefly -- amarillo cannot read
-        dominus's local marker file directly, so this is a network check,
-        not a filesystem one. Fails closed (assumes NOT gaming, i.e. keeps
-        Venice) on a network error, matching this router's existing
-        fail-open-to-local-only-then-fail-closed-on-total-loss posture --
-        the gateway itself is the actual enforcement point and will still
-        503 a blocked model regardless of what this cache believes.
+        """Read a configured host heartbeat independently of LLM availability.
+
+        Legacy deployments without a status file retain their gateway probe.
+        A missing, malformed or stale host heartbeat does not imply gaming.
         """
+        from pathlib import Path
+
+        status_file = os.environ.get("KLUKAI_GAME_STATUS_FILE", "").strip()
+        default_file = "/config/.amarillo-presence.json"
+        if status_file or Path(default_file).is_file():
+            status_file = status_file or default_file
+            from .local_presence import game_active
+
+            return game_active(status_file)
         if self._http is None or not self._lmstudio_available:
             # No client yet, or the gateway is already known-down: don't stall
             # the caller on a doomed /health probe -- keep last-known.

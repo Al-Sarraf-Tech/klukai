@@ -164,7 +164,7 @@ extension _ChatView on _ChatScreenState {
       locked: _state.isInputLocked,
       lockReason: _state.inputLockReason,
       lockColor: _moodGlowColor,
-      leading: widget.voiceInputEnabled
+      leading: (widget.voiceInputEnabled ?? _serverVoiceInputEnabled)
           ? VoiceButton(
               isRecording:
                   _speech.phase == SpeechPhase.recording ||
