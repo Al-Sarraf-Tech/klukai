@@ -119,6 +119,19 @@ def _hour_from(hour: int, suffix: str | None) -> int | None:
     return hour
 
 
+def _clock_fragment(text: str, start: int) -> bool:
+    """A preceding numeric clock component, not a date/punctuation separator."""
+    prefix = text[:start].rstrip()
+    if not re.search(r"\d\s*:$", prefix):
+        return False
+    before_colon = prefix[:-1].rstrip()
+    # A complete date can itself end in a number ("October 27: 09:30").
+    for pattern in (_ISO_RE, _SLASH_RE, _MONTH_DAY_RE, _DAY_MONTH_RE):
+        if any(match.end() == len(before_colon) for match in pattern.finditer(before_colon)):
+            return False
+    return True
+
+
 def _extract_time(text: str) -> tuple[time | None, str]:
     """Return (time, text-with-the-time-removed) so "3" in "at 3pm" can't be
     mistaken for a day of the month afterwards."""
@@ -131,14 +144,14 @@ def _extract_time(text: str) -> tuple[time | None, str]:
         ]
     m = _TIME_COLON_RE.search(text)
     # Never reinterpret the tail of a malformed clock as a separate time.
-    if m and not text[: m.start()].rstrip().endswith(":"):
+    if m and not _clock_fragment(text, m.start()):
         hour = _hour_from(int(m.group(1)), m.group(3))
         if hour is not None:
             return time(hour, int(m.group(2))), text[: m.start()] + " " + text[
                 m.end() :
             ]
     m = _TIME_SUFFIX_RE.search(text)
-    if m and not text[: m.start()].rstrip().endswith(":"):
+    if m and not _clock_fragment(text, m.start()):
         hour = _hour_from(int(m.group(1)), m.group(2))
         if hour is not None:
             return time(hour, 0), text[: m.start()] + " " + text[m.end() :]

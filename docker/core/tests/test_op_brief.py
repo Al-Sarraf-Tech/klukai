@@ -846,3 +846,21 @@ class TestDateTokenValidation:
     def test_malformed_clock_does_not_turn_into_an_exact_time(self, hint):
         now = datetime(2026, 10, 26, 7, 0)
         assert op_brief.resolve_when(hint, now) == When(date(2026, 10, 27), None, False)
+
+    @pytest.mark.parametrize("hint,clock", [
+        ("tomorrow: 3pm", time(15, 0)),
+        ("tomorrow: 7am", time(7, 0)),
+        ("October 27: 09:30", time(9, 30)),
+        ("October 27: 3pm", time(15, 0)),
+        ("2026-10-27: 09:30", time(9, 30)),
+        ("10/27: 3pm", time(15, 0)),
+    ])
+    def test_colon_date_separator_preserves_explicit_time(self, hint, clock):
+        now = datetime(2026, 10, 26, 7, 0)
+        assert op_brief.resolve_when(hint, now) == When(date(2026, 10, 27), clock, True)
+
+    def test_early_event_after_colon_still_suppresses_late_sendoff(self):
+        now = datetime(2026, 10, 26, 7, 0)
+        when = op_brief.resolve_when("tomorrow: 7am", now)
+        assert when is not None
+        assert "sendoff" not in [kind for kind, _due in op_brief.plan_slots(when, now)]
