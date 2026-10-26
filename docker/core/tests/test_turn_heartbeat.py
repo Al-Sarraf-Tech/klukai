@@ -228,11 +228,13 @@ async def test_one_info_line_without_content(rt, caplog):
     assert "secret words" not in joined and "private reply" not in joined
 
 
-async def test_unreported_extractor_logs_unknown_provider(rt, caplog):
+async def test_unreported_extractor_logs_a_pending_outcome(rt, caplog):
+    # An extractor that never fills the report: the only provider is Anthropic,
+    # but no model answered and the outcome stays pending.
     rt.runtime.extract_facts = AsyncMock(return_value=_result())
     with caplog.at_level(logging.INFO, logger="app.memory_extraction"):
         await rt.runtime.process("u", "a", _session(), user_id="u1")
     assert any(
-        "provider=local model=- outcome=pending" in r.getMessage()
+        "provider=anthropic model=- outcome=pending" in r.getMessage()
         for r in caplog.records
     )

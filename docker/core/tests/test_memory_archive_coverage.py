@@ -4,7 +4,7 @@ thumbnailing, and LLM annotation backfill.
 Complements tests/test_memory_archive_pure.py (quality scoring + category
 gating) and tests/test_memory_archive_db.py (query helpers). Here we drive
 the write/curation path end-to-end with the DB pool, filesystem, PIL, and
-LM Studio all mocked.
+the Claude Haiku transport all mocked.
 
 Every test asserts concrete behavior: dedup decisions (overlap ratio),
 category clamping against affection level, the exact INSERT columns, file
@@ -22,6 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.extraction_llm import ExtractionLLMError, ExtractionUnavailable  # noqa: E402
 
 
 # ── DB mock helpers ──────────────────────────────────────────────────────────
@@ -54,48 +56,6 @@ def _conn_ctx(conn):
         yield conn
 
     return _ctx
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# _get_http — lazy client construction / reuse (lines 27-29)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestGetHttp:
-    def test_creates_client_when_none(self):
-        import app.memory_archive as ma
-
-        fake_client = MagicMock()
-        fake_client.is_closed = False
-        with patch.object(ma, "_http", None), \
-             patch("app.memory_archive.httpx.AsyncClient", return_value=fake_client) as ctor:
-            client = ma._get_http()
-        assert client is fake_client
-        ctor.assert_called_once()
-
-    def test_reuses_open_client(self):
-        import app.memory_archive as ma
-
-        existing = MagicMock()
-        existing.is_closed = False
-        with patch.object(ma, "_http", existing), \
-             patch("app.memory_archive.httpx.AsyncClient") as ctor:
-            client = ma._get_http()
-        assert client is existing
-        ctor.assert_not_called()  # reuse, don't rebuild
-
-    def test_rebuilds_when_closed(self):
-        import app.memory_archive as ma
-
-        closed = MagicMock()
-        closed.is_closed = True
-        fresh = MagicMock()
-        fresh.is_closed = False
-        with patch.object(ma, "_http", closed), \
-             patch("app.memory_archive.httpx.AsyncClient", return_value=fresh) as ctor:
-            client = ma._get_http()
-        assert client is fresh
-        ctor.assert_called_once()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -486,33 +446,39 @@ class TestGenerateThumbnail:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class _GateCM:
-    """Async-context-manager stand-in for the LM Studio gate lock."""
+def _haiku(*replies):
+    """Patch the Haiku transport: one reply per call (a string, or an exception)."""
+    return patch("app.extraction_llm.complete", new=AsyncMock(side_effect=list(replies)))
 
-    async def __aenter__(self):
-        return self
 
-    async def __aexit__(self, *a):
-        return False
+def _patch_conns(select_conn, update_conn):
+    return (
+        patch("app.memory_archive.get_conn", side_effect=lambda: _conn_ctx(select_conn)()),
+        patch(
+            "app.memory_archive.get_conn_autocommit",
+            side_effect=lambda: _conn_ctx(update_conn)(),
+        ),
+    )
 
 
 class TestBackfillAnnotations:
     @pytest.mark.asyncio
     async def test_noop_when_nothing_to_backfill(self):
-        """No unannotated rows -> total/updated both 0, no LLM calls."""
+        """No unannotated rows -> total/updated both 0, no model calls."""
         from app.memory_archive import backfill_annotations
 
         conn = _RecordingConn(rows=[])
-        with patch("app.memory_archive.get_conn", _conn_ctx(conn)), \
-             patch("app.llm_router.get_lm_gate", return_value=_GateCM()):
+        with patch("app.memory_archive.get_conn", _conn_ctx(conn)), _haiku() as haiku:
             result = await backfill_annotations(user_id="alice")
 
         assert result == {"total": 0, "updated": 0}
+        haiku.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_generates_and_updates_annotation(self):
-        """For each unannotated row: call LM Studio, then UPDATE the row with the
+        """For each unannotated row: ask Haiku, then UPDATE the row with the
         cleaned caption. Returns total + updated counts."""
+        from app.background_llm import haiku_budget
         from app.memory_archive import backfill_annotations
 
         # SELECT returns one row needing a caption: (id, prompt, category, scene_tags)
@@ -520,30 +486,9 @@ class TestBackfillAnnotations:
             rows=[("mem-1", "rooftop scene", "Quiet Hours", ["rooftop", "night"])]
         )
         update_conn = _RecordingConn()
+        db_select, db_update = _patch_conns(select_conn, update_conn)
 
-        # get_conn (SELECT) and get_conn_autocommit (UPDATE) are distinct ctx mgrs.
-        def get_conn_side():
-            return _conn_ctx(select_conn)()
-
-        def get_conn_ac_side():
-            return _conn_ctx(update_conn)()
-
-        llm_resp = MagicMock()
-        llm_resp.raise_for_status = MagicMock()
-        llm_resp.json = MagicMock(
-            return_value={
-                "choices": [
-                    {"message": {"content": '"The rooftop was ours that night."'}}
-                ]
-            }
-        )
-        fake_http = MagicMock()
-        fake_http.post = AsyncMock(return_value=llm_resp)
-
-        with patch("app.memory_archive.get_conn", side_effect=get_conn_side), \
-             patch("app.memory_archive.get_conn_autocommit", side_effect=get_conn_ac_side), \
-             patch("app.llm_router.get_lm_gate", return_value=_GateCM()), \
-             patch("app.memory_archive._get_http", return_value=fake_http):
+        with db_select, db_update, _haiku('"The rooftop was ours that night."') as haiku:
             result = await backfill_annotations(user_id="alice")
 
         assert result == {"total": 1, "updated": 1}
@@ -552,31 +497,26 @@ class TestBackfillAnnotations:
         sql, params = update_conn.calls[0]
         assert "UPDATE companion_memories SET annotation" in sql
         assert params == ("The rooftop was ours that night.", "mem-1")
+        prompt = haiku.await_args.args[0]
+        assert "rooftop scene" in prompt and "Quiet Hours" in prompt
+        assert "rooftop, night" in prompt
+        assert haiku.await_args.kwargs == {
+            "max_tokens": haiku_budget(150),
+            "route": "archive_caption",
+        }
 
     @pytest.mark.asyncio
     async def test_strips_think_tags_from_llm_output(self):
-        """Reasoning-model <think>...</think> leakage is stripped before storing."""
+        """Reasoning <think>...</think> leakage is stripped before storing."""
         from app.memory_archive import backfill_annotations
 
         select_conn = _RecordingConn(rows=[("mem-2", "p", "Dreams", [])])
         update_conn = _RecordingConn()
+        db_select, db_update = _patch_conns(select_conn, update_conn)
 
-        llm_resp = MagicMock()
-        llm_resp.raise_for_status = MagicMock()
-        llm_resp.json = MagicMock(
-            return_value={
-                "choices": [
-                    {"message": {"content": "<think>plan the caption</think>A soft dream of him."}}
-                ]
-            }
-        )
-        fake_http = MagicMock()
-        fake_http.post = AsyncMock(return_value=llm_resp)
-
-        with patch("app.memory_archive.get_conn", side_effect=lambda: _conn_ctx(select_conn)()), \
-             patch("app.memory_archive.get_conn_autocommit", side_effect=lambda: _conn_ctx(update_conn)()), \
-             patch("app.llm_router.get_lm_gate", return_value=_GateCM()), \
-             patch("app.memory_archive._get_http", return_value=fake_http):
+        with db_select, db_update, _haiku(
+            "<think>plan the caption</think>A soft dream of him."
+        ):
             result = await backfill_annotations()
 
         assert result["updated"] == 1
@@ -587,34 +527,46 @@ class TestBackfillAnnotations:
         assert params[0] == "A soft dream of him."
 
     @pytest.mark.asyncio
-    async def test_empty_llm_output_falls_back_to_placeholder(self):
-        """If the model returns nothing usable, store the placeholder, not NULL."""
-        from app.memory_archive import backfill_annotations
+    @pytest.mark.parametrize("reply", ['""', "<think>only planning</think>"])
+    async def test_reply_that_cleans_to_nothing_stores_the_placeholder(self, reply):
+        """A reply with no caption left after cleaning stores the placeholder
+        (which the next run selects again), not NULL or an empty string."""
+        from app.memory_archive import UNCAPTIONED, backfill_annotations
 
         select_conn = _RecordingConn(rows=[("mem-3", "p", "Dreams", None)])
         update_conn = _RecordingConn()
+        db_select, db_update = _patch_conns(select_conn, update_conn)
 
-        llm_resp = MagicMock()
-        llm_resp.raise_for_status = MagicMock()
-        llm_resp.json = MagicMock(
-            return_value={"choices": [{"message": {"content": "   "}}]}
-        )
-        fake_http = MagicMock()
-        fake_http.post = AsyncMock(return_value=llm_resp)
-
-        with patch("app.memory_archive.get_conn", side_effect=lambda: _conn_ctx(select_conn)()), \
-             patch("app.memory_archive.get_conn_autocommit", side_effect=lambda: _conn_ctx(update_conn)()), \
-             patch("app.llm_router.get_lm_gate", return_value=_GateCM()), \
-             patch("app.memory_archive._get_http", return_value=fake_http):
+        with db_select, db_update, _haiku(reply):
             result = await backfill_annotations()
 
         assert result["updated"] == 1
         _, params = update_conn.calls[0]
-        assert params[0] == "Uncaptioned moment."
+        assert params == (UNCAPTIONED, "mem-3")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "reply", ["   ", ExtractionUnavailable("cap"), ExtractionLLMError("boom")]
+    )
+    async def test_no_caption_from_haiku_skips_the_entry(self, reply):
+        """Haiku blank, capped or failed: nothing is written, so the entry stays
+        selectable for the next run, and no local model is tried."""
+        from app.memory_archive import backfill_annotations
+
+        select_conn = _RecordingConn(rows=[("mem-4", "p", "Dreams", None)])
+        update_conn = _RecordingConn()
+        db_select, db_update = _patch_conns(select_conn, update_conn)
+
+        with db_select, db_update, _haiku(reply) as haiku:
+            result = await backfill_annotations()
+
+        assert result == {"total": 1, "updated": 0}
+        assert update_conn.calls == []
+        haiku.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_per_row_llm_failure_does_not_abort_batch(self):
-        """One failed row doesn't stop the rest: total counts every row,
+        """One failed caption doesn't stop the rest: total counts every row,
         updated counts only the successes."""
         from app.memory_archive import backfill_annotations
 
@@ -625,34 +577,48 @@ class TestBackfillAnnotations:
             ]
         )
         update_conn = _RecordingConn()
+        db_select, db_update = _patch_conns(select_conn, update_conn)
 
-        good = MagicMock()
-        good.raise_for_status = MagicMock()
-        good.json = MagicMock(
-            return_value={"choices": [{"message": {"content": "A good caption here."}}]}
-        )
-
-        calls = {"n": 0}
-
-        async def post(*_a, **_kw):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise RuntimeError("lm studio timeout")  # first row fails
-            return good
-
-        fake_http = MagicMock()
-        fake_http.post = post
-
-        with patch("app.memory_archive.get_conn", side_effect=lambda: _conn_ctx(select_conn)()), \
-             patch("app.memory_archive.get_conn_autocommit", side_effect=lambda: _conn_ctx(update_conn)()), \
-             patch("app.llm_router.get_lm_gate", return_value=_GateCM()), \
-             patch("app.memory_archive._get_http", return_value=fake_http):
+        with db_select, db_update, _haiku(
+            ExtractionLLMError("timeout"), "A good caption here."
+        ):
             result = await backfill_annotations()
 
         assert result["total"] == 2
         assert result["updated"] == 1  # only the second row succeeded
         assert len(update_conn.calls) == 1
-        assert update_conn.calls[0][1][1] == "mem-b"
+        assert update_conn.calls[0][1] == ("A good caption here.", "mem-b")
+
+    @pytest.mark.asyncio
+    async def test_per_row_write_failure_does_not_abort_batch(self):
+        """A failed UPDATE is logged and the batch moves on to the next row."""
+        from app.memory_archive import backfill_annotations
+
+        select_conn = _RecordingConn(
+            rows=[
+                ("mem-a", "pa", "Dreams", []),
+                ("mem-b", "pb", "Dreams", []),
+            ]
+        )
+        update_conn = _RecordingConn()
+        writes = {"n": 0}
+
+        def autocommit():
+            writes["n"] += 1
+            if writes["n"] == 1:
+                raise RuntimeError("db write failed")
+            return _conn_ctx(update_conn)()
+
+        with patch(
+            "app.memory_archive.get_conn", side_effect=lambda: _conn_ctx(select_conn)()
+        ), patch("app.memory_archive.get_conn_autocommit", side_effect=autocommit), _haiku(
+            "First caption.", "Second caption."
+        ), patch("app.memory_archive.logger") as log:
+            result = await backfill_annotations()
+
+        assert result == {"total": 2, "updated": 1}
+        assert update_conn.calls[0][1] == ("Second caption.", "mem-b")
+        assert log.error.called
 
     @pytest.mark.asyncio
     async def test_select_failure_returns_error_dict(self):
@@ -662,10 +628,10 @@ class TestBackfillAnnotations:
         def broken():
             raise RuntimeError("db unreachable")
 
-        with patch("app.memory_archive.get_conn", side_effect=broken), \
-             patch("app.llm_router.get_lm_gate", return_value=_GateCM()):
+        with patch("app.memory_archive.get_conn", side_effect=broken), _haiku() as haiku:
             result = await backfill_annotations()
 
         assert result["total"] == 0
         assert result["updated"] == 0
         assert "error" in result
+        haiku.assert_not_awaited()
