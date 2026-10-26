@@ -114,28 +114,27 @@ class ChatReplyRuntime:
         try:
             config = await self.router.route(content, session, interactive=True)
         except RuntimeError as e:
-            # No local backend: dominus-nobara is off or its gateway port is
-            # not bound yet. That is normal, not a crash — degrade in-band
-            # exactly like a pre-token stream failure (the sentinel is the
-            # whole reply) instead of letting the WS loop log a traceback and
-            # tell him "something glitched" on every turn of the outage.
-            logger.warning("Local LLM unavailable this turn: %s", e)
+            # No cloud model is configured (flag or key missing). Degrade
+            # in-band exactly like a pre-token stream failure (the sentinel is
+            # the whole reply) instead of letting the WS loop log a traceback
+            # and tell him "something glitched" on every turn.
+            logger.warning("No LLM available this turn: %s", e)
             await self.ws.send_token(user_id, FAILURE_SENTINEL)
             await self.ws.send_done(user_id, msg_id, "offline")
             return ChatReply("", "offline", 0, True)
         logger.info("Routing to %s/%s", config.provider, config.model)
 
-        # Fire a delayed "warming up" message if model is slow to respond
-        warmup_timer: asyncio.Task[Any] | None = None
-        if config.provider == "lmstudio":
+        # Fire a delayed "stand by" message if the model is slow to respond
+        # (long adaptive thinking, or a Sonnet failure falling back to Haiku).
+        async def _warmup_notify() -> None:
+            await asyncio.sleep(8.0)
+            await self.ws.send_thinking(
+                user_id, "Loading neural pathways, Commander. Stand by..."
+            )
 
-            async def _warmup_notify() -> None:
-                await asyncio.sleep(8.0)
-                await self.ws.send_thinking(
-                    user_id, "Loading neural pathways, Commander. Stand by..."
-                )
-
-            warmup_timer = asyncio.create_task(_warmup_notify())
+        warmup_timer: asyncio.Task[Any] | None = asyncio.create_task(
+            _warmup_notify()
+        )
 
         full_response = []
         buffer = ""
