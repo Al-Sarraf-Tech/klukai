@@ -165,7 +165,7 @@ class Episode(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    provider: str  # "lmstudio" or "anthropic"
+    provider: str  # always "anthropic" (cloud AI only)
     model: str
     base_url: str | None = None
     max_tokens: int = 2048

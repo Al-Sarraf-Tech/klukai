@@ -166,7 +166,7 @@ jobs:
       KLUKAI_CHROME_BINARY: /opt/klukai-ci/toolchains/b838d34bba223857b3cab6b924de31a9ddee0c1f7c81df7611f3a0cb883a17c7/chrome/chrome
       KLUKAI_TEST_ALLOW_LIVE_BACKENDS: "0"
       KLUKAI_CLAUDE_PRIMARY: "false"
-      KLUKAI_CREATIVE_TEXT_PROVIDER: "local"
+      KLUKAI_CREATIVE_TEXT_PROVIDER: "haiku"
       ANTHROPIC_API_KEY: ""
       OPENAI_API_KEY: ""
       LM_STUDIO_URL: "http://127.0.0.1:1"

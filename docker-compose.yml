@@ -1,6 +1,6 @@
 # Run on amarillo: companion-core (consolidated with aichat infra)
-# Shares Docker networks with infra-postgres, redis, qdrant locally
-# Dominus is the selected voice/STT backend; text remains available when offline.
+# Shares Docker networks with infra-postgres and redis locally.
+# All of Klukai's AI is cloud (Anthropic, Fish Audio, the image accounts).
 # Pin the compose project name so `docker compose` (and every Makefile target)
 # acts on the live stack instead of the directory-default `klukai` project.
 name: companion
@@ -27,7 +27,7 @@ services:
       # Shared secret for /internal/deferred/fire (events-bridge -> core).
       # Fails closed: unset means the endpoint rejects everyone.
       CORE_INTERNAL_TOKEN: "${CORE_INTERNAL_TOKEN:-}"
-      # queue = durable RabbitMQ work rail (prefetch=1 GPU lease via bridge).
+      # queue = durable RabbitMQ work rail (one job at a time via the bridge).
       # inline = in-process asyncio task (unit tests / bridge outage fallback).
       HER_POV_EXECUTION: "${HER_POV_EXECUTION:-queue}"
       MCP_URL: "http://aichat-mcp:8096"
@@ -75,7 +75,7 @@ services:
       KLUKAI_OPENAI_IMAGE_MODEL: "${KLUKAI_OPENAI_IMAGE_MODEL:-gpt-image-2.5-sunburst-2026-09-08}"
       KLUKAI_OPENAI_IMAGE_QUALITY: "${KLUKAI_OPENAI_IMAGE_QUALITY:-max}"
       KLUKAI_IMAGE_REFERENCE_FILES: "${KLUKAI_IMAGE_REFERENCE_FILES:-[]}"
-      KLUKAI_CREATIVE_TEXT_PROVIDER: "${KLUKAI_CREATIVE_TEXT_PROVIDER:-local}"
+      KLUKAI_CREATIVE_TEXT_PROVIDER: "${KLUKAI_CREATIVE_TEXT_PROVIDER:-haiku}"
       KLUKAI_CLOUD_IMAGE_DAILY_LIMIT: "${KLUKAI_CLOUD_IMAGE_DAILY_LIMIT:-0}"
       KLUKAI_CLOUD_IMAGE_MONTHLY_LIMIT: "${KLUKAI_CLOUD_IMAGE_MONTHLY_LIMIT:-0}"
       KLUKAI_CLOUD_TEXT_DAILY_LIMIT: "${KLUKAI_CLOUD_TEXT_DAILY_LIMIT:-0}"
@@ -150,9 +150,6 @@ services:
       start_period: 10s
     labels:
       autoheal: "true"
-
-  # companion-voice runs in the canonical ops/dominus-nobara stack on RAID0.
-  # Reachable only at the target Tailscale address on port 8301.
 
   # Fan companion Redis events onto the shared homelab RabbitMQ bus
   # (see ~/git/rabbitmq-ops). Reachable over Tailscale AMQP only.

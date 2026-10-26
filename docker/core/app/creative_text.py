@@ -29,8 +29,13 @@ class CreativeTextError(RuntimeError):
 
 
 def uses_cloud_text() -> bool:
-    provider = os.environ.get("KLUKAI_CREATIVE_TEXT_PROVIDER", "local").strip().lower()
-    if provider not in {"local", "anthropic"}:
+    """True for capped Sonnet writing; ``haiku`` uses the background route.
+
+    ``local`` is the setting's old name for ``haiku``, kept so existing env
+    files keep working; no local model exists any more.
+    """
+    provider = os.environ.get("KLUKAI_CREATIVE_TEXT_PROVIDER", "haiku").strip().lower()
+    if provider not in {"haiku", "local", "anthropic"}:
         raise CreativeTextError("Unknown creative text provider")
     return provider == "anthropic"
 

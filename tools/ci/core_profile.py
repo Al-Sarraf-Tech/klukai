@@ -117,7 +117,7 @@ def safe_environment(password: str) -> dict[str, str]:
         "KLUKAI_DISABLE_WARMUP": "1",
         "KLUKAI_IMAGE_PROVIDER": "disabled",
         "KLUKAI_CHAT_IMAGE_PROVIDER": "disabled",
-        "KLUKAI_CREATIVE_TEXT_PROVIDER": "local",
+        "KLUKAI_CREATIVE_TEXT_PROVIDER": "haiku",
         "KLUKAI_AGY_ALLOWED_USERS": "",
         "KLUKAI_AGY_SOCKET": "/tmp/disabled/image.sock",
         "KLUKAI_AGY_TOKEN_FILE": "/tmp/disabled/token",
