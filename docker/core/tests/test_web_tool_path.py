@@ -8,6 +8,7 @@ import pytest
 from app import tool_schemas
 from app.agent_loop import AgentLoop, _extract_tool_text
 from app.llm_router import LLMRouter
+from app.models import LLMConfig
 
 
 SEARCH = {
@@ -78,7 +79,7 @@ def reset_catalog_cache():
 ])
 async def test_natural_external_requests_have_tools(query):
     router = LLMRouter()
-    router._lmstudio_available = True
+    router._anthropic_http = AsyncMock()
     assert await router.needs_agent(query) is True
 
 
@@ -102,7 +103,7 @@ async def test_natural_external_requests_have_tools(query):
 ])
 async def test_roleplay_and_casual_chat_do_not_trigger_tools(query):
     router = LLMRouter()
-    router._lmstudio_available = True
+    router._anthropic_http = AsyncMock()
     assert await router.needs_agent(query) is False
 
 
@@ -157,7 +158,10 @@ async def test_cold_catalog_recovers_and_search_sources_reach_synthesis():
             "It is 15 C. [Forecast](https://weather.example/chicago)"}}]}
 
     router = MagicMock()
-    router.complete_local = complete
+    router.route = AsyncMock(return_value=LLMConfig(
+        provider="anthropic", model="claude-haiku-5-5",
+        base_url="https://api.anthropic.com/v1/messages"))
+    router.complete_chat = complete
     result = await AgentLoop(router, catalog, AsyncMock()).run(
         "Use retrieved evidence and cite its sources.",
         [{"role": "user", "content": "Can you search for Chicago weather?"}],
@@ -191,7 +195,10 @@ async def test_local_tool_selection_rejects_undeclared_names_and_nonobjects(name
         return {"choices": [{"message": {"content": "That tool request was rejected."}}]}
 
     router = MagicMock()
-    router.complete_local = complete
+    router.route = AsyncMock(return_value=LLMConfig(
+        provider="anthropic", model="claude-haiku-5-5",
+        base_url="https://api.anthropic.com/v1/messages"))
+    router.complete_chat = complete
     result = await AgentLoop(router, catalog, AsyncMock()).run(
         "persona", [{"role": "user", "content": "look up a reference"}],
     )
@@ -225,7 +232,10 @@ async def test_long_result_keeps_sources_inside_bounded_model_context():
         return {"choices": [{"message": {"content": "Found evidence."}}]}
 
     router = MagicMock()
-    router.complete_local = complete
+    router.route = AsyncMock(return_value=LLMConfig(
+        provider="anthropic", model="claude-haiku-5-5",
+        base_url="https://api.anthropic.com/v1/messages"))
+    router.complete_chat = complete
     result = await AgentLoop(router, catalog, AsyncMock()).run(
         "persona", [{"role": "user", "content": "find a reference"}],
     )

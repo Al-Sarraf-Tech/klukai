@@ -64,16 +64,24 @@ class LLMCompletionsMixin(ABC):
         *,
         allow_tools: bool = True,
     ) -> dict[str, Any]:
-        if config.provider != "anthropic" or self._anthropic_http is None:
-            # A hand-built config cannot enable an unconfigured backend.
-            logger.error("Refusing unavailable LLM provider %r", config.provider)
-            raise ValueError("Unavailable LLM provider")
+        from .llm_router import model_family
+
+        if (
+            config.provider != "anthropic"
+            or self._anthropic_http is None
+            or model_family(config.model) is None
+        ):
+            # A hand-built config cannot enable another backend or model.
+            logger.error(
+                "Refusing unavailable LLM %r/%r", config.provider, config.model
+            )
+            raise ValueError("Unavailable LLM provider or model")
         try:
             return await self._complete_anthropic(
                 system_prompt, messages, config, tools, allow_tools=allow_tools
             )
         except _RETRYABLE as exc:
-            from .llm_router import CLAUDE_PRIMARY, model_family
+            from .llm_router import CLAUDE_PRIMARY
 
             if model_family(config.model) == CLAUDE_PRIMARY:
                 self._primary_failed(exc)

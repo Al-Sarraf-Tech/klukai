@@ -148,11 +148,3 @@ def completion_message(
         "tool_calls": calls,
         "_anthropic_content": data["content"],
     }
-
-
-def local_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep native provider metadata out of OpenAI-compatible local requests."""
-    return [
-        {key: value for key, value in message.items() if not key.startswith("_")}
-        for message in messages
-    ]

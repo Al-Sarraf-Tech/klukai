@@ -1,4 +1,6 @@
-"""Interactive Anthropic routing and native tools, with no live inference."""
+"""Cloud-only Claude routing (Sonnet chat, Haiku otherwise) and native tools.
+
+No live inference: the Anthropic API is a mock transport."""
 
 import asyncio
 import json
@@ -13,14 +15,16 @@ from app.models import LLMConfig, SessionState
 
 
 MODEL = "claude-sonnet-5-5"
+HAIKU = "claude-haiku-5-5"
+HAIKU_DATED = "claude-haiku-5-5-20261001"
 TOOL = {"type": "function", "function": {
     "name": "get_current_time", "description": "Current time",
     "parameters": {"type": "object", "properties": {}},
 }}
 
 
-def reply(content=None, stop_reason="end_turn"):
-    return {"id": "msg_test", "type": "message", "role": "assistant", "model": MODEL,
+def reply(content=None, stop_reason="end_turn", model=MODEL):
+    return {"id": "msg_test", "type": "message", "role": "assistant", "model": model,
             "content": content if content is not None else [{"type": "text", "text": "Hello."}],
             "stop_reason": stop_reason, "usage": {"input_tokens": 10, "output_tokens": 8}}
 
@@ -29,12 +33,8 @@ def reply(content=None, stop_reason="end_turn"):
 async def router(monkeypatch):
     monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "true")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
-    monkeypatch.setenv("LM_STUDIO_TOKEN", "test-local-key")
-    monkeypatch.setattr(lr.LLMRouter, "_check_lmstudio", AsyncMock(return_value=False))
     r = lr.LLMRouter()
     await r.init()
-    r._lmstudio_available = False
-    r._lmstudio_last_check = float("inf")
     yield r
     await r.close()
 
@@ -51,29 +51,40 @@ async def collect(router, config):
     return [x async for x in router.stream("persona", [{"role": "user", "content": "hi"}], config)]
 
 
-async def test_interactive_primary_available_with_dominus_offline_background_stays_local(router):
+async def test_interactive_uses_sonnet_and_everything_else_haiku(router):
     config = await router.route("hi", SessionState(conversation_id="c"), interactive=True)
-    assert config.provider == "anthropic"
-    assert config.model == MODEL
-    with pytest.raises(RuntimeError, match="No local"):
-        await router.route("background", SessionState(conversation_id="bg"))
+    assert (config.provider, config.model) == ("anthropic", MODEL)
+    background = await router.route("background", SessionState(conversation_id="bg"))
+    assert (background.provider, background.model) == ("anthropic", HAIKU)
     assert await router.needs_agent("latest weather", interactive=True) is True
-    assert await router.needs_agent("latest weather") is False
-
+    assert await router.needs_agent("latest weather") is True
+    assert await router.is_game_active() is False
 
 async def test_key_alone_does_not_enable_billable_primary(monkeypatch):
     monkeypatch.delenv("KLUKAI_CLAUDE_PRIMARY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-never-used")
-    monkeypatch.setattr(lr.LLMRouter, "_check_lmstudio", AsyncMock(return_value=False))
+    r = lr.LLMRouter()
+    await r.init()
+    try:
+        assert r._anthropic_http is None
+        with pytest.raises(RuntimeError, match="No cloud LLM"):
+            await r.route("hi", SessionState(conversation_id="c"), interactive=True)
+        assert await r.needs_agent("latest weather", interactive=True) is False
+    finally:
+        await r.close()
+
+
+async def test_flag_without_key_leaves_chat_unavailable(monkeypatch):
+    monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "true")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     r = lr.LLMRouter()
     await r.init()
     try:
         assert r._anthropic_http is None
         with pytest.raises(RuntimeError):
-            await r.route("hi", SessionState(conversation_id="c"), interactive=True)
+            await r.route("hi", SessionState(conversation_id="c"))
     finally:
         await r.close()
-
 
 async def test_api_body_medium_adaptive_and_only_final_text_is_exposed(router):
     calls = []
@@ -103,25 +114,67 @@ async def test_api_body_medium_adaptive_and_only_final_text_is_exposed(router):
     assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
 
 
-async def test_quota_failure_falls_back_before_output_and_records_actual_model(router):
+async def test_quota_failure_falls_back_to_haiku_and_records_actual_model(router):
     calls = []
     def handler(request):
-        calls.append(request)
-        return httpx.Response(429, headers={"retry-after": "120"}, json={"error": {"type": "rate_limit_error"}})
+        body = json.loads(request.content)
+        calls.append(body)
+        if body["model"] == MODEL:
+            return httpx.Response(429, headers={"retry-after": "120"}, json={"error": {"type": "rate_limit_error"}})
+        return httpx.Response(200, json=reply([{"type": "text", "text": "Haiku answer."}], model=HAIKU_DATED))
     await transport(router, handler)
-    router._lmstudio_available = True
-    router.is_game_active = AsyncMock(return_value=True)
-    async def local(*args):
-        yield "Dominus answer."
-    router._stream_lmstudio = local
     config = await router.route("hi", SessionState(conversation_id="c"), interactive=True)
-    assert await collect(router, config) == ["Dominus answer."]
-    assert config.provider == "lmstudio"
-    assert config.model == lr.LOCAL_CASUAL_GAMING
+    assert await collect(router, config) == ["Haiku answer."]
+    assert config.model == HAIKU_DATED
+    assert [c["model"] for c in calls] == [MODEL, HAIKU]
+    assert calls[1]["output_config"] == {"effort": "high"}
+    # Sonnet is backing off: the next interactive turn goes straight to Haiku.
     next_config = await router.route("hi", SessionState(conversation_id="c"), interactive=True)
-    assert next_config.provider == "lmstudio"
-    assert len(calls) == 1
+    assert next_config.model == HAIKU
+    assert await collect(router, next_config) == ["Haiku answer."]
+    assert [c["model"] for c in calls] == [MODEL, HAIKU, HAIKU]
 
+
+async def test_haiku_failure_does_not_retry_and_returns_only_the_sentinel(router):
+    calls = []
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        return httpx.Response(500, json={"error": {"type": "api_error"}})
+    await transport(router, handler)
+    config = await router.route("bg", SessionState(conversation_id="c"))
+    assert await collect(router, config) == [lr.FAILURE_SENTINEL]
+    assert calls == [HAIKU]
+    assert router._anthropic_ready() is True  # a Haiku failure never parks Sonnet
+
+
+@pytest.mark.parametrize(("status", "headers", "delay"), [
+    (429, {"retry-after": "7200"}, 3600.0),
+    (429, {"retry-after": "soon"}, 60.0),
+    (401, {}, 300.0),
+    (403, {}, 300.0),
+])
+async def test_primary_backoff_delay(router, monkeypatch, status, headers, delay):
+    monkeypatch.setattr(lr.time, "monotonic", lambda: 1000.0)
+    request = httpx.Request("POST", lr.ANTHROPIC_MESSAGES_URL)
+    error = httpx.HTTPStatusError("x", request=request, response=httpx.Response(status, headers=headers, request=request))
+    router._primary_failed(error)
+    assert router._anthropic_retry_at == 1000.0 + delay
+
+
+async def test_timeout_backs_off_for_a_minute(router, monkeypatch):
+    monkeypatch.setattr(lr.time, "monotonic", lambda: 50.0)
+    router._primary_failed(TimeoutError())
+    assert router._anthropic_retry_at == 110.0
+
+
+async def test_dated_model_ids_keep_their_family(router):
+    assert lr.model_family(HAIKU_DATED) == HAIKU
+    assert lr.model_family("claude-sonnet-5-5-20261001") == MODEL
+    assert lr.model_family("claude-opus-5-5") is None
+    config = await router.route("hi", SessionState(conversation_id="c"), user_override=HAIKU_DATED, interactive=True)
+    assert config.model == HAIKU
+    ignored = await router.route("hi", SessionState(conversation_id="c"), user_override="dolphin", interactive=True)
+    assert ignored.model == MODEL
 
 async def test_primary_and_secondary_failure_emit_only_failure_sentinel(router):
     await transport(router, lambda request: httpx.Response(401, json={"error": {"type": "authentication_error"}}))
@@ -171,40 +224,27 @@ async def test_native_tool_roundtrip_preserves_thinking_and_never_exposes_it(rou
     assert all("private" not in step.content for step in result.steps)
 
 
-async def test_unknown_tool_selection_fails_over_without_executing_it(router):
-    await transport(router, lambda request: httpx.Response(200, json=reply([
-        {"type": "tool_use", "id": "bad", "name": "shell", "input": {"cmd": "bad"}}
-    ], "tool_use")))
-    router._lmstudio_available = True
-    router.is_game_active = AsyncMock(return_value=False)
-    router.complete_local = AsyncMock(return_value={"choices": [{"message": {"content": "Local."}}]})
+async def test_unknown_tool_selection_fails_over_to_haiku_without_executing_it(router):
+    def handler(request):
+        if json.loads(request.content)["model"] == MODEL:
+            return httpx.Response(200, json=reply([
+                {"type": "tool_use", "id": "bad", "name": "shell", "input": {"cmd": "bad"}}
+            ], "tool_use"))
+        return httpx.Response(200, json=reply([{"type": "text", "text": "Haiku."}], model=HAIKU))
+    await transport(router, handler)
     config = await router.route("time", SessionState(conversation_id="c"), interactive=True)
     result = await router.complete_chat("persona", [{"role": "user", "content": "time"}], config, tools=[TOOL])
-    assert result["choices"][0]["message"]["content"] == "Local."
-    assert config.provider == "lmstudio"
+    assert result["choices"][0]["message"]["content"] == "Haiku."
+    assert (config.provider, config.model) == ("anthropic", HAIKU)
 
 
-async def test_native_metadata_is_not_sent_to_dominus(router):
-    seen = []
-    await router._http.aclose()
-    def handler(request):
-        seen.append(json.loads(request.content))
-        return httpx.Response(200, json={"choices": [{"message": {"content": "Local."}}]})
-    router._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    await router.complete_local("persona", [{"role": "assistant", "content": "hello",
-        "_anthropic_content": [{"type": "thinking", "thinking": "private", "signature": "sig"}]}],
-        LLMConfig(provider="lmstudio", model=lr.LOCAL_CASUAL, base_url="http://local"))
-    assert seen[0]["messages"][1] == {"role": "assistant", "content": "hello"}
-
-
-async def test_api_primary_does_not_warm_the_secondary_gpu(monkeypatch):
-    from app import warmup
-    monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "true")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.delenv("KLUKAI_DISABLE_WARMUP", raising=False)
-    monkeypatch.setattr(warmup, "is_loaded", AsyncMock(side_effect=AssertionError("GPU should stay asleep")))
-    assert await warmup.warm_chat_model(force=True) is False
-
+async def test_haiku_tool_failure_raises_to_the_loop(router):
+    await transport(router, lambda request: httpx.Response(200, json=reply([
+        {"type": "tool_use", "id": "bad", "name": "shell", "input": {}}
+    ], "tool_use", model=HAIKU)))
+    config = await router.route("bg", SessionState(conversation_id="c"))
+    with pytest.raises(ValueError):
+        await router.complete_chat("persona", [{"role": "user", "content": "time"}], config, tools=[TOOL])
 
 async def test_forced_synthesis_keeps_tool_definitions_but_disables_more_calls(router, monkeypatch):
     requests = []
@@ -228,11 +268,26 @@ async def test_forced_synthesis_keeps_tool_definitions_but_disables_more_calls(r
     assert len(requests) == 2
 
 
-async def test_complete_local_rejects_nonlocal_provider_without_a_request(router):
-    await router._http.aclose()
-    router._http = httpx.AsyncClient(transport=httpx.MockTransport(
-        lambda request: httpx.Response(200, json={"choices": [{"message": {"content": "unexpected"}}]})
-    ))
-    with pytest.raises(ValueError, match="local"):
-        await router.complete_local("persona", [{"role": "user", "content": "hi"}],
-            LLMConfig(provider="anthropic", model=MODEL, base_url=lr.ANTHROPIC_MESSAGES_URL))
+async def test_hand_built_configs_cannot_reach_any_other_backend(router):
+    calls = []
+    await transport(router, lambda request: calls.append(request) or httpx.Response(200, json=reply()))
+    rogue = LLMConfig(provider="lmstudio", model="dolphin", base_url="http://elsewhere")
+    assert await collect(router, rogue) == [lr.FAILURE_SENTINEL]
+    with pytest.raises(ValueError, match="Unavailable"):
+        await router.complete_chat("persona", [{"role": "user", "content": "hi"}], rogue)
+    unknown = LLMConfig(provider="anthropic", model="claude-opus-5-5", base_url=lr.ANTHROPIC_MESSAGES_URL)
+    with pytest.raises(ValueError):
+        await router.complete_chat("persona", [{"role": "user", "content": "hi"}], unknown)
+    assert calls == []
+
+
+async def test_backing_off_primary_is_not_called(router, monkeypatch):
+    calls = []
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        return httpx.Response(200, json=reply(model=HAIKU))
+    await transport(router, handler)
+    config = await router.route("hi", SessionState(conversation_id="c"), interactive=True)
+    router._anthropic_retry_at = float("inf")
+    assert await collect(router, config) == ["Hello."]
+    assert calls == [HAIKU]

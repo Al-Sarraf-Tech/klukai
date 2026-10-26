@@ -31,13 +31,13 @@ class TestAgentStepDataclass:
 
 class TestAgentResultDataclass:
     def test_defaults(self):
-        from app.agent_loop import AgentResult, LOCAL_AGENT
+        from app.agent_loop import AgentResult, CLAUDE_SECONDARY
         r = AgentResult(response="hi")
         assert r.response == "hi"
         assert r.steps == []
         assert r.tools_used == []
         assert r.iterations == 0
-        assert r.model == LOCAL_AGENT
+        assert r.model == CLAUDE_SECONDARY
 
     def test_empty_lists_are_independent(self):
         from app.agent_loop import AgentResult

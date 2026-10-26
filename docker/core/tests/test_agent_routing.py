@@ -15,10 +15,9 @@ from app.llm_router import LLMRouter, AGENT_SIGNALS
 
 @pytest.fixture
 def router():
-    """Return an LLMRouter with LM Studio marked as available (no network)."""
+    """Return an LLMRouter with Claude configured (no network)."""
     r = LLMRouter()
-    r._lmstudio_available = True
-    r._http = AsyncMock()
+    r._anthropic_http = AsyncMock()
     return r
 
 
@@ -158,12 +157,9 @@ class TestExclusionWords:
 
 class TestAgentRoutingEdgeCases:
     @pytest.mark.asyncio
-    async def test_lmstudio_unavailable_returns_false(self):
-        """Without LM Studio, needs_agent always returns False."""
+    async def test_unconfigured_claude_returns_false(self):
+        """Without a configured Claude client, needs_agent always returns False."""
         r = LLMRouter()
-        r._lmstudio_available = False
-        r._lmstudio_last_check = 999999999.0  # prevent re-check
-        r._http = AsyncMock()
         result = await r.needs_agent("search for something")
         assert result is False
 

@@ -1,69 +1,30 @@
 """Gaming awareness: Klukai knows when the Commander is mid-game (ADR-0018).
 
 The router's game-active probe feeds a per-message prompt block and holds
-proactive random events off while a game owns the GPU host.
+proactive random events off while a game owns the GPU host. Since Klukai went
+cloud-only (2026-10-26) the probe has no source and answers False.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-import httpx
 import pytest
 
-from app.llm_router import LOCAL_CASUAL, LOCAL_CASUAL_GAMING, LLMRouter
-from app.models import SessionState
+from app.llm_router import LLMRouter
 from app.personality import build_gaming_block, load_personality
 from app.proactive import ProactiveEngine
 
 
-def _router_with_health(*responses) -> LLMRouter:
-    r = LLMRouter()
-    r._lmstudio_available = True
-    r._http = MagicMock()
-    r._http.get = AsyncMock(side_effect=list(responses))
-    return r
-
-
-def _health(status: int = 200, game_active: bool = True) -> MagicMock:
-    resp = MagicMock(status_code=status)
-    resp.json.return_value = {"game_active": game_active}
-    return resp
-
-
 class TestRouterGameActive:
-    async def test_uninitialised_router_keeps_last_known_instead_of_crashing(self):
-        assert await LLMRouter().is_game_active() is False
-
-    async def test_known_down_gateway_is_not_probed(self):
-        r = _router_with_health(_health(game_active=True))
-        r._lmstudio_available = False
-        assert await r.is_game_active() is False
-        r._http.get.assert_not_awaited()
-
-    async def test_game_active_routes_chat_to_gaming_persona(self):
-        r = _router_with_health(_health(game_active=True))
-        cfg = await r.route("hey", SessionState(conversation_id="c"))
-        assert cfg.model == LOCAL_CASUAL_GAMING
-
-    async def test_no_game_routes_to_venice(self):
-        r = _router_with_health(_health(game_active=False))
-        cfg = await r.route("hey", SessionState(conversation_id="c"))
-        assert cfg.model == LOCAL_CASUAL
-
-    async def test_result_is_cached_between_checks(self):
-        r = _router_with_health(_health(game_active=True))
-        assert await r.is_game_active() is True
-        assert await r.is_game_active() is True
-        r._http.get.assert_awaited_once()
-
-    @pytest.mark.parametrize("failure", [httpx.ConnectError("down"), _health(status=503)])
-    async def test_failed_check_keeps_last_known(self, failure):
-        r = _router_with_health(_health(game_active=True), failure)
-        assert await r.is_game_active() is True
-        r._game_active_last_check = 0.0  # force a re-check
-        assert await r.is_game_active() is True
+    async def test_answers_false_without_any_probe(self):
+        # The only source was the Dominus model gateway, which Klukai no longer
+        # uses (cloud AI only); nothing is asked over the network.
+        r = LLMRouter()
+        with patch("httpx.AsyncClient") as client:
+            assert await r.is_game_active() is False
+        client.assert_not_called()
 
 
 class TestGamingBlock:

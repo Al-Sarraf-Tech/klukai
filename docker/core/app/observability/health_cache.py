@@ -1,10 +1,9 @@
 """TTL-cached subsystem health pings.
 
 `/health` is hit by Docker's healthcheck every 15s by default, plus
-Cloudflare uptime probes, plus any operator curl. Pinging PG + Redis +
-Qdrant inline on every call burns ~120ms per probe (measured in
-Phase 1 perf baseline; see docs/perf-baseline.md). At a 1/sec
-aggregate probe rate that's a non-trivial load on the pool.
+Cloudflare uptime probes, plus any operator curl. Pinging PG + Redis
+inline on every call is measurable load (see docs/perf-baseline.md); at a
+1/sec aggregate probe rate that's a non-trivial load on the pool.
 
 This module caches each subsystem's last-seen status for `TTL_SECONDS`
 and refreshes lazily on read (no background thread — async-friendly,
@@ -42,9 +41,8 @@ from .. import __version__
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 import redis.asyncio as aioredis
-from ..dependencies import http_request, json_object
+from ..dependencies import json_object
 from ..circuit_breakers import get_breaker
 from collections.abc import Awaitable, Callable
 from typing import cast
@@ -77,13 +75,11 @@ _cache: dict[str, _CacheEntry] = {}
 _refresh_locks: dict[str, asyncio.Lock] = {
     "database": asyncio.Lock(),
     "redis": asyncio.Lock(),
-    "qdrant": asyncio.Lock(),
 }
 
 
 @dataclass
 class _ProbeClients:
-    http: httpx.AsyncClient
     redis: aioredis.Redis
 
 
@@ -95,9 +91,8 @@ _running = False
 async def running() -> AsyncIterator[None]:
     """Own pooled probe transports for one application lifespan.
 
-    Each readiness request still pings every dependency. Only transports are
-    reused: rebuilding HTTP TLS roots and Redis metadata per ping is needless
-    CPU work. TLS verification and environment trust roots retain their defaults.
+    Each readiness request still pings every dependency. Only the Redis
+    transport is reused: rebuilding its metadata per ping is needless CPU work.
     Standalone callers without a lifespan retain temporary, promptly closed clients.
     """
     global _clients, _running
@@ -108,11 +103,6 @@ async def running() -> AsyncIterator[None]:
         from ..memory import REDIS_URL
 
         async with AsyncExitStack() as cleanup:
-            client = httpx.AsyncClient(
-                timeout=PING_TIMEOUT_SECONDS,
-                limits=httpx.Limits(max_connections=3, max_keepalive_connections=3),
-            )
-            cleanup.push_async_callback(client.aclose)
             factory: Callable[..., aioredis.Redis] = aioredis.from_url
             cache = factory(
                 REDIS_URL,
@@ -122,7 +112,7 @@ async def running() -> AsyncIterator[None]:
                 socket_connect_timeout=PING_TIMEOUT_SECONDS,
             )
             cleanup.push_async_callback(cache.aclose)
-            _clients = _ProbeClients(client, cache)
+            _clients = _ProbeClients(cache)
             try:
                 yield
             finally:
@@ -177,27 +167,9 @@ async def _ping_redis(client: aioredis.Redis) -> None:
     )
 
 
-async def _check_qdrant_fresh() -> dict[str, Any]:
-    try:
-        from ..memory import QDRANT_URL
-
-        if _clients is not None:
-            resp = await http_request(
-                "qdrant", _clients.http, "get", f"{QDRANT_URL}/healthz"
-            )
-            return {"status": "ok"} if resp.status_code == 200 else {"status": "down"}
-        async with httpx.AsyncClient(timeout=PING_TIMEOUT_SECONDS) as client:
-            resp = await http_request("qdrant", client, "get", f"{QDRANT_URL}/healthz")
-            return {"status": "ok"} if resp.status_code == 200 else {"status": "down"}
-    except Exception as e:
-        logger.warning("qdrant health probe failed: %s", e)
-        return {"status": "down"}
-
-
 _FRESH_CHECKS = {
     "database": "_check_database_fresh",
     "redis": "_check_redis_fresh",
-    "qdrant": "_check_qdrant_fresh",
 }
 
 
@@ -232,17 +204,15 @@ async def _get_or_refresh(subsystem: str) -> dict[str, Any]:
 
 async def get_cached_health() -> dict[str, Any]:
     """Return rolled-up health using the cache. Sub-millisecond on cache hit."""
-    db, redis, qdrant = await asyncio.gather(
+    db, redis = await asyncio.gather(
         _get_or_refresh("database"),
         _get_or_refresh("redis"),
-        _get_or_refresh("qdrant"),
     )
 
     db_ok = db.get("status") == "ok"
     redis_ok = redis.get("status") == "ok"
-    qdrant_ok = qdrant.get("status") == "ok"
 
-    if db_ok and redis_ok and qdrant_ok:
+    if db_ok and redis_ok:
         status = "ok"
     elif db_ok:
         status = "degraded"
@@ -255,7 +225,6 @@ async def get_cached_health() -> dict[str, Any]:
         "version": __version__,
         "database": db,
         "redis": redis.get("status", "unknown"),
-        "qdrant": qdrant.get("status", "unknown"),
         "cache": {
             "ttl_seconds": TTL_SECONDS,
             "entries": list(_cache.keys()),

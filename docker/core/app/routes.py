@@ -32,7 +32,6 @@ from .routes_health import register_health_routes
 from .personality import load_personality
 from .push import add_subscription, get_vapid_public_key
 from .passwords import PasswordWorkBusy
-from .voice_client import voice_url as _voice_url
 
 
 # ── Request models ────────────────────────────────────────────────────────
@@ -128,9 +127,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             return {"user_id": user_id}
         return JSONResponse({"error": "Invalid token"}, status_code=401)
 
-    register_health_routes(
-        app, lambda request: _get_user_id(request), lambda: _voice_url()
-    )
+    register_health_routes(app, lambda request: _get_user_id(request))
 
     # ── Push subscription ──────────────────────────────────────────────────
 
