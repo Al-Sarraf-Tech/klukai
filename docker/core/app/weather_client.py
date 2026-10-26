@@ -170,7 +170,9 @@ async def fetch_weather(
             or type(is_day) is not int
             or is_day not in (0, 1)
         ):
-            logger.warning("Open-Meteo payload has invalid current fields — skipping weather")
+            logger.warning(
+                "Open-Meteo payload has invalid current fields — skipping weather"
+            )
             return None
         return {
             "temp_c": float(temperature),
