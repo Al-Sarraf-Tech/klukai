@@ -49,6 +49,7 @@ export function createAmbience(canvas, {
     canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
     reseed();
+    if (running && reducedMotion()) draw();
   }
 
   function reseed() {
@@ -87,11 +88,12 @@ export function createAmbience(canvas, {
       if (next === kind && parts.length) return;
       kind = next;
       reseed();
+      if (running && reducedMotion()) draw();
     },
     start() {
       if (running) return;
-      running = true;
       if (!w) resize();
+      running = true;
       if (reducedMotion()) { draw(); return; } // one still frame, no animation
       loop = raf(frame);
     },
