@@ -1,4 +1,4 @@
-"""The Claude image checker: verdict parsing, hardening and fail-open behaviour, no cloud calls."""
+"""The Claude image checker: verdict parsing and bounded failures, no cloud calls."""
 import base64
 import hashlib
 import importlib.util
@@ -52,24 +52,49 @@ def stream(result, *, is_error=False):
     return "\n".join(json.dumps(e) for e in events).encode()
 
 
-def test_pass_and_conservative_reject_rules(check):
+def test_pass_and_major_reject_rules(check):
     assert check.parse(stream('{"verdict": "pass", "issues": []}')) == {"verdict": "pass", "issues": []}
     major = '{"verdict": "reject", "issues": [{"severity": "major", "what": "extra arm"}]}'
     assert check.parse(stream(major))["verdict"] == "reject"
-    # A reject without a named major defect, or a pass that lists one, never blocks.
-    minor_only = '{"verdict": "reject", "issues": [{"severity": "minor", "what": "teardrop hidden"}]}'
+    minor_only = '{"verdict": "pass", "issues": [{"severity": "minor", "what": "teardrop hidden"}]}'
     assert check.parse(stream(minor_only))["verdict"] == "pass"
-    contradictory = '{"verdict": "pass", "issues": [{"severity": "major", "what": "extra arm"}]}'
-    assert check.parse(stream(contradictory))["verdict"] == "pass"
 
 
 def test_verdict_is_found_in_prose_and_issues_are_bounded(check):
-    issues = [{"severity": "major", "what": "x " * 200}] * 20 + [{"severity": "odd", "what": "y"}]
+    issues = [{"severity": "major", "what": "x " * 200}] * 20
     text = "Here is my verdict:\n" + json.dumps({"verdict": "reject", "issues": issues}) + "\nDone."
     parsed = check.parse(stream(text))
     assert parsed["verdict"] == "reject"
     assert len(parsed["issues"]) == check.MAX_ISSUES
     assert all(len(i["what"]) <= check.MAX_ISSUE_CHARS for i in parsed["issues"])
+
+
+def test_major_issue_after_output_bound_is_retained_and_rejected(check):
+    issues = [{"severity": "minor", "what": "small detail"}] * 8
+    issues.append({"severity": "major", "what": "extra arm"})
+    parsed = check.parse(stream(json.dumps({"verdict": "reject", "issues": issues})))
+    assert parsed["verdict"] == "reject"
+    assert len(parsed["issues"]) <= 8
+    assert {"severity": "major", "what": "extra arm"} in parsed["issues"]
+
+
+@pytest.mark.parametrize("data", [
+    {"verdict": "pass"},
+    {"verdict": "reject"},
+    {"verdict": "reject", "issues": []},
+    {"verdict": "reject", "issues": [{"severity": "minor", "what": "teardrop hidden"}]},
+    {"verdict": "pass", "issues": [{"severity": "major", "what": "extra arm"}]},
+    {"verdict": "pass", "issues": [None]},
+    {"verdict": [], "issues": []},
+    {"verdict": "pass", "issues": [{"severity": [], "what": "small detail"}]},
+    {"verdict": "pass", "issues": [{"severity": "Minor", "what": "small detail"}]},
+    {"verdict": "pass", "issues": [{"severity": "minor", "what": "   "}]},
+    {"verdict": "pass", "issues": [{"severity": "minor"}]},
+    {"verdict": "pass", "issues": [{"severity": "minor", "what": "small detail"}] * 8 + [None]},
+])
+def test_incomplete_or_inconsistent_verdict_is_not_approval(check, data):
+    with pytest.raises(ValueError):
+        check.parse(stream(json.dumps(data)))
 
 
 @pytest.mark.parametrize("raw", [
@@ -90,9 +115,13 @@ def test_command_is_sonnet_high_on_the_subscription_with_no_tools(check):
     assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5-5"
     assert cmd[cmd.index("--effort") + 1] == "high"
     assert cmd[cmd.index("--tools") + 1] == ""
-    assert json.loads(cmd[cmd.index("--settings") + 1]) == {"forceLoginMethod": "claudeai", "apiKeyHelper": ""}
+    assert json.loads(cmd[cmd.index("--settings") + 1]) == {
+        "forceLoginMethod": "claudeai", "apiKeyHelper": "",
+        "sandbox": {"enabled": False}, "skipDangerousModePermissionPrompt": True,
+    }
     assert "--no-session-persistence" in cmd and "--strict-mcp-config" in cmd
-    assert not any("dangerously" in part or "bypass" in part for part in cmd)
+    assert cmd[cmd.index("--permission-mode") + 1] == "bypassPermissions"
+    assert "--restricted" not in cmd
     assert "Never draw" in cmd[cmd.index("--system-prompt") + 1]
 
 

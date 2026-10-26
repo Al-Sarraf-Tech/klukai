@@ -721,13 +721,72 @@ def test_no_redo_when_the_deadline_cannot_fit_another_render(worker, setup_files
 
 @pytest.mark.parametrize("outcome", [RuntimeError("claude unavailable"), {"verdict": "maybe"}, None,
                                      {"verdict": "unchecked", "issues": []},
-                                     {"verdict": "unchecked", "issues": [object()], "seconds": "soon"}])
-def test_checker_failure_delivers_unchecked(worker, setup_files, outcome):
-    with running(worker, setup_files, checker=scripted_checker(outcome)) as path:
+                                     {"verdict": "unchecked", "issues": [object()], "seconds": "soon"},
+                                     {"verdict": "pass"}, {"verdict": "pass", "issues": [None]},
+                                     {"verdict": "reject", "issues": []}])
+def test_checker_failure_withholds_candidate_without_another_render(worker, setup_files, outcome):
+    rendered, seen = [], []
+
+    def render(data, references):
+        rendered.append(data["request_id"])
+        return PNG
+
+    with running(worker, setup_files, render=render,
+                 checker=scripted_checker(outcome, outcome, seen=seen)) as path:
+        value = payload()
+        status, _, data = request(path, value)
+        assert status == 502 and data != PNG
+        assert request(path, value)[0] == 409
+        assert json.loads(request(path, value, target="/recover")[2])["status"] == "failed"
+    assert rendered == [value["request_id"]]
+    assert len(seen) == 2
+    assert checks_of(setup_files[1], value["request_id"]) == [(0, "unchecked")]
+    assert attempts_of(setup_files[1], value["request_id"]) == [(0, "agy", "failed", "check_unavailable")]
+
+
+def test_checker_outage_rechecks_the_same_candidate_before_delivery(worker, setup_files, monkeypatch):
+    rendered, seen, now = [], [], [0.0]
+    monkeypatch.setattr(worker, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    def render(data, references):
+        rendered.append(data["request_id"])
+        return PNG
+
+    def checker(output, value, references, *, timeout):
+        seen.append((output, value["prompt"], timeout))
+        if len(seen) == 1:
+            now[0] = 300.0
+            return {"verdict": "unchecked", "issues": []}
+        return {"verdict": "pass", "issues": []}
+
+    with running(worker, setup_files, render=render, checker=checker) as path:
         value = payload()
         status, _, data = request(path, value)
     assert (status, data) == (200, PNG)
-    assert checks_of(setup_files[1], value["request_id"]) == [(0, "unchecked")]
+    assert rendered == [value["request_id"]]
+    assert seen == [(PNG, value["prompt"], 90), (PNG, value["prompt"], 55)]
+    assert checks_of(setup_files[1], value["request_id"]) == [(0, "pass")]
+
+
+def test_checker_outage_does_not_retry_after_review_budget_expires(worker, setup_files, monkeypatch):
+    rendered, seen, now = [], [], [0.0]
+    monkeypatch.setattr(worker, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    def render(data, references):
+        rendered.append(data["request_id"])
+        return PNG
+
+    def checker(output, value, references, *, timeout):
+        seen.append(output)
+        now[0] = 341.0
+        return {"verdict": "unchecked", "issues": []}
+
+    with running(worker, setup_files, render=render, checker=checker) as path:
+        value = payload()
+        assert request(path, value)[0] == 409
+    assert rendered == [value["request_id"]]
+    assert seen == [PNG]
+    assert attempts_of(setup_files[1], value["request_id"]) == [(0, "agy", "pending", None)]
 
 
 def test_fixed_rotation_always_starts_with_the_first_provider(worker, setup_files):
@@ -867,6 +926,18 @@ def test_fal_is_an_accepted_sole_provider():
     assert [name for name, _ in w.load_providers(["fal"])] == ["fal"]
 
 
+def test_optional_cloud_apis_load_only_when_explicitly_selected(worker, monkeypatch):
+    from types import SimpleNamespace
+    import sys
+
+    openai = lambda *_: PNG
+    gemini = lambda *_: PNG
+    monkeypatch.setitem(sys.modules, "cloud_image_render",
+                        SimpleNamespace(render_openai=openai, render_gemini=gemini))
+    assert worker.load_providers(["openai", "gemini"]) == [("openai", openai), ("gemini", gemini)]
+    assert [name for name, _ in worker.load_providers(["fal"])] == ["fal"]
+
+
 SCENE_PROMPT = (
     "Create one polished anime illustration of the described scene.\n"
     "Scene and appearance: Klukai; couple; one man; one woman; hetero; shirtless; bare chest; "
@@ -979,3 +1050,347 @@ def test_standing_rule_nudity_need_not_be_tasteful_but_stays_adult_and_solo():
     for kept in ("adult woman in her mid-twenties", "never depict her as childlike", "No sexual acts",
                  "no other people"):
         assert kept in text
+
+
+class InterruptedWorker(BaseException):
+    """Simulate process death outside ordinary provider/checker exception handling."""
+
+
+@contextmanager
+def opened_worker(module, setup_files, render, *, checker=None, providers=None):
+    runtime, state, references = setup_files
+    server = module.create_server(
+        runtime, state, references, {"jalsarraf", "test-user"},
+        providers=providers or [("fal", render)], checker=checker, rotation="fixed")
+    try:
+        yield server.worker
+    finally:
+        server.server_close()
+
+
+def test_uncertain_generation_remains_pending_without_failover(worker, setup_files):
+    from agy_art_runtime import GenerationPending
+    rendered = []
+
+    def render(value, references):
+        rendered.append(value)
+        raise GenerationPending("accepted, observation interrupted")
+
+    def alternate(*args):
+        pytest.fail("uncertain paid work must not fail over")
+
+    value = payload()
+    with opened_worker(worker, setup_files, render,
+                       providers=[("fal", render), ("grok", alternate)]) as current:
+        assert current.generate(value)[0] == 409
+        assert current.recover(value) == (409, {"status": "pending"})
+        assert current.generate(value)[0] == 409
+    assert len(rendered) == 1
+    assert attempts_of(setup_files[1], value["request_id"]) == [(0, "fal", "pending", None)]
+
+
+def test_candidate_and_review_reservation_survive_checker_interruption(worker, setup_files):
+    rendered, checked = [], []
+    value = payload()
+
+    def render(request, references):
+        rendered.append(request)
+        return PNG
+
+    def interrupted_check(output, request, references, *, timeout):
+        checked.append(output)
+        # A separate connection observes committed bytes and reservation before inference.
+        with closing(sqlite3.connect(setup_files[1] / "requests.sqlite3")) as db:
+            assert db.execute("SELECT candidate FROM attempt_payloads WHERE request_id = ?",
+                              (value["request_id"],)).fetchone() == (PNG,)
+            assert db.execute("SELECT COUNT(*) FROM review_attempts WHERE request_id = ?",
+                              (value["request_id"],)).fetchone() == (1,)
+        raise InterruptedWorker()
+
+    with opened_worker(worker, setup_files, render, checker=interrupted_check) as current:
+        with pytest.raises(InterruptedWorker):
+            current.generate(value)
+    with opened_worker(worker, setup_files, render,
+                       checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as current:
+        assert current.generate(value)[0] == 409
+        assert current.recover(value) == (200, PNG)
+        assert current.recover(value) == (200, PNG)
+        assert current.db.execute("SELECT COUNT(*) FROM review_attempts").fetchone() == (2,)
+    assert len(rendered) == 1 and len(checked) == 2
+
+
+def test_persisted_pass_completes_after_restart_without_rechecking(worker, setup_files, monkeypatch):
+    rendered, checked = [], []
+    value = payload()
+
+    def render(request, references):
+        rendered.append(request)
+        return PNG
+
+    def interrupt_completion(*args):
+        raise InterruptedWorker()
+
+    with opened_worker(worker, setup_files, render,
+                       checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as current:
+        monkeypatch.setattr(current, "complete_attempt", interrupt_completion, raising=False)
+        with pytest.raises(InterruptedWorker):
+            current.generate(value)
+    with opened_worker(worker, setup_files, render,
+                       checker=lambda *a, **k: pytest.fail("a persisted pass must be reused")) as current:
+        assert current.recover(value) == (200, PNG)
+    assert len(rendered) == 1 and len(checked) == 1
+
+
+def test_completion_keeps_one_image_copy_and_preserves_review_evidence(worker, setup_files):
+    value = payload()
+    with opened_worker(worker, setup_files, lambda *a: PNG,
+                       checker=scripted_checker({"verdict": "pass", "issues": []})) as current:
+        assert current.generate(value) == (200, PNG)
+        assert current.db.execute("SELECT status, output FROM requests WHERE request_id = ?",
+                                  (value["request_id"],)).fetchone() == ("completed", PNG)
+        assert current.db.execute("SELECT candidate FROM attempt_payloads WHERE request_id = ?",
+                                  (value["request_id"],)).fetchone() == (None,)
+        assert current.db.execute("SELECT verdict FROM review_attempts WHERE request_id = ?",
+                                  (value["request_id"],)).fetchall() == [("pass",)]
+        assert current.recover(value) == (200, PNG)
+
+
+def test_two_interrupted_reviews_exhaust_durable_budget(worker, setup_files):
+    rendered, checked = [], []
+    value = payload()
+
+    def render(request, references):
+        rendered.append(request)
+        return PNG
+
+    def interrupt(*args, **kwargs):
+        checked.append(1)
+        raise InterruptedWorker()
+
+    with opened_worker(worker, setup_files, render, checker=interrupt) as current:
+        with pytest.raises(InterruptedWorker):
+            current.generate(value)
+    with opened_worker(worker, setup_files, render, checker=interrupt) as current:
+        with pytest.raises(InterruptedWorker):
+            current.recover(value)
+    with opened_worker(worker, setup_files, render, checker=interrupt) as current:
+        assert current.recover(value) == (409, {"status": "failed"})
+        assert current.recover(value) == (409, {"status": "failed"})
+    assert len(rendered) == 1 and len(checked) == 2
+    assert attempts_of(setup_files[1], value["request_id"]) == [(0, "fal", "failed", "check_unavailable")]
+
+
+def test_saved_rejection_is_terminal_on_recovery_without_redraw(worker, setup_files, monkeypatch):
+    rendered = []
+    value = payload()
+
+    def render(request, references):
+        rendered.append(request)
+        return PNG
+
+    def interrupt(*args):
+        raise InterruptedWorker()
+
+    with opened_worker(worker, setup_files, render, checker=scripted_checker(REJECT)) as current:
+        monkeypatch.setattr(current, "fail_attempt", interrupt)
+        with pytest.raises(InterruptedWorker):
+            current.generate(value)
+    with opened_worker(worker, setup_files, render,
+                       checker=lambda *a, **k: pytest.fail("saved reject must not be rechecked")) as current:
+        assert current.recover(value) == (409, {"status": "failed"})
+    assert len(rendered) == 1
+    assert attempts_of(setup_files[1], value["request_id"]) == [(0, "fal", "failed", "check_rejected")]
+
+
+@pytest.mark.parametrize("variant", ["plain_refusal", "quality_redraw"])
+def test_recovery_observes_the_exact_transformed_attempt_payload(worker, setup_files, variant):
+    from agy_art_runtime import ContentRefused, GenerationPending
+    rendered, observed = [], []
+    value = payload(prompt=SCENE_PROMPT, nudity=True)
+
+    def render(request, references):
+        rendered.append(dict(request))
+        if len(rendered) == 1:
+            if variant == "plain_refusal":
+                raise ContentRefused("content refused")
+            return PNG
+        raise GenerationPending("accepted")
+
+    def observe(request, references, *, timeout):
+        observed.append((request, timeout))
+        return PNG
+
+    render.recover = observe
+    with opened_worker(worker, setup_files, render, checker=scripted_checker(REJECT)) as current:
+        assert current.generate(value)[0] == 409
+    with opened_worker(worker, setup_files, render,
+                       checker=scripted_checker({"verdict": "pass", "issues": []})) as current:
+        assert current.recover(value) == (200, PNG)
+    assert len(rendered) == 2
+    assert rendered[1] != rendered[0]
+    assert observed == [(rendered[1], 30.0)]
+    assert "nudity" not in observed[0][0]
+
+
+def test_recovery_observer_and_review_are_serialized_with_generation(worker, setup_files):
+    from agy_art_runtime import GenerationPending
+    entered, release = threading.Event(), threading.Event()
+    rendered, observed, checked = [], [], []
+    value = payload()
+
+    def render(request, references):
+        rendered.append(request)
+        raise GenerationPending("accepted")
+
+    def observe(request, references, *, timeout):
+        observed.append(request)
+        entered.set()
+        assert release.wait(3)
+        return PNG
+
+    render.recover = observe
+    with opened_worker(worker, setup_files, render,
+                       checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as current:
+        assert current.generate(value)[0] == 409
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future = pool.submit(current.recover, value)
+            try:
+                assert entered.wait(3)
+                assert current.recover(value) == (409, {"status": "pending"})
+                assert current.generate(payload())[0] == 429
+            finally:
+                release.set()
+            assert future.result(timeout=3) == (200, PNG)
+    assert len(rendered) == len(observed) == len(checked) == 1
+
+
+def test_recovery_rejects_wrong_identity_before_observing_or_checking(worker, setup_files):
+    from agy_art_runtime import GenerationPending
+    value = payload()
+
+    def render(request, references):
+        raise GenerationPending("accepted")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("identity must be verified before external work")
+
+    render.recover = forbidden
+    with opened_worker(worker, setup_files, render, checker=forbidden) as current:
+        assert current.generate(value)[0] == 409
+        assert current.recover(dict(value, user_id="outsider"))[0] == 403
+        assert current.recover(dict(value, user_id="test-user")) == (409, {"status": "conflict"})
+        assert current.recover(dict(value, prompt="different")) == (409, {"status": "conflict"})
+        assert current.recover(payload()) == (404, {"status": "unknown"})
+
+
+@pytest.mark.parametrize("result", [None, "pending_error", "unavailable"])
+def test_pending_observation_never_consumes_review_or_new_generation(worker, setup_files, result):
+    from agy_art_runtime import GenerationPending, ProviderUnavailable
+    rendered, observed = [], []
+    value = payload()
+
+    def render(request, references):
+        rendered.append(request)
+        raise GenerationPending("accepted")
+
+    def observe(request, references, *, timeout):
+        observed.append(request)
+        if result == "pending_error":
+            raise GenerationPending("still pending")
+        if result == "unavailable":
+            raise ProviderUnavailable("observer configuration temporarily unavailable")
+        return None
+
+    render.recover = observe
+    with opened_worker(worker, setup_files, render,
+                       checker=lambda *a, **k: pytest.fail("no candidate to check")) as current:
+        assert current.generate(value)[0] == 409
+        assert current.recover(value) == (409, {"status": "pending"})
+        assert current.recover(value) == (409, {"status": "pending"})
+        assert current.db.execute("SELECT COUNT(*) FROM review_attempts").fetchone() == (0,)
+    assert len(rendered) == 1 and len(observed) == 2
+
+
+def test_observed_candidate_survives_interruption_without_reobserving(worker, setup_files):
+    from agy_art_runtime import GenerationPending
+    rendered, observed, checked = [], [], []
+    value = payload()
+
+    def render(request, references):
+        rendered.append(request)
+        raise GenerationPending("accepted")
+
+    def observe(request, references, *, timeout):
+        observed.append(request)
+        return PNG
+
+    def interrupt(*args, **kwargs):
+        checked.append(1)
+        raise InterruptedWorker()
+
+    render.recover = observe
+    with opened_worker(worker, setup_files, render, checker=interrupt) as current:
+        assert current.generate(value)[0] == 409
+        with pytest.raises(InterruptedWorker):
+            current.recover(value)
+    render.recover = lambda *a, **k: pytest.fail("persisted bytes need no further provider observation")
+    with opened_worker(worker, setup_files, render,
+                       checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as current:
+        assert current.recover(value) == (200, PNG)
+    assert len(rendered) == len(observed) == 1 and len(checked) == 2
+
+
+def test_invalid_observed_candidate_is_terminal_without_review(worker, setup_files):
+    from agy_art_runtime import GenerationPending
+    observed = []
+    value = payload()
+
+    def render(request, references):
+        raise GenerationPending("accepted")
+
+    def observe(request, references, *, timeout):
+        observed.append(request)
+        return b"not an image"
+
+    render.recover = observe
+    with opened_worker(worker, setup_files, render,
+                       checker=lambda *a, **k: pytest.fail("invalid image cannot be reviewed")) as current:
+        assert current.generate(value)[0] == 409
+        assert current.recover(value) == (409, {"status": "failed"})
+        assert current.recover(value) == (409, {"status": "failed"})
+        assert current.db.execute("SELECT COUNT(*) FROM review_attempts").fetchone() == (0,)
+    assert len(observed) == 1
+
+
+def test_candidate_with_no_remaining_request_time_can_be_reviewed_afterward(worker, setup_files, monkeypatch):
+    now, rendered, checked = [0.0], [], []
+    monkeypatch.setattr(worker, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    value = payload()
+
+    def render(request, references):
+        rendered.append(request)
+        now[0] = 341.0
+        return PNG
+
+    with opened_worker(worker, setup_files, render,
+                       checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as current:
+        assert current.generate(value)[0] == 409
+        assert checked == []
+        assert current.recover(value) == (200, PNG)
+    assert len(rendered) == len(checked) == 1
+
+
+@pytest.mark.parametrize("provider,grant", [("fal", False), ("grok", True)])
+def test_recovery_preserves_explicit_review_exceptions(worker, setup_files, provider, grant):
+    from agy_art_runtime import GenerationPending
+    value = payload(**({"nudity": True} if grant else {}))
+
+    def render(request, references):
+        raise GenerationPending("accepted")
+
+    render.recover = lambda request, references, *, timeout: PNG
+    checker = (lambda *a, **k: pytest.fail("existing grant must skip review")) if grant else None
+    with opened_worker(worker, setup_files, render, providers=[(provider, render)], checker=checker) as current:
+        assert current.generate(value)[0] == 409
+        assert current.recover(value) == (200, PNG)
+        assert current.db.execute("SELECT COUNT(*) FROM review_attempts").fetchone() == (0,)

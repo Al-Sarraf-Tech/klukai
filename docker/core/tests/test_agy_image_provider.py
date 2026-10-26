@@ -84,6 +84,45 @@ def test_an_unset_image_provider_is_the_account_worker(monkeypatch):
     assert agy.uses_agy_images("tj") is False
 
 
+@pytest.mark.parametrize("outcome", ["complete", "error", "cancel"])
+async def test_recovery_holds_busy_wait_marker_until_finished(agy_config, monkeypatch, outcome):
+    from app import agy_image_provider as agy
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    paths = []
+
+    async def recover(path, payload):
+        paths.append(path)
+        entered.set()
+        await release.wait()
+        if outcome == "error":
+            raise httpx.ReadError("interrupted recovery")
+        return {"status": "pending", "image": None}
+
+    monkeypatch.setattr(agy, "_post_worker", recover)
+    assert not agy.generation_in_flight()
+    task = asyncio.create_task(agy.recover_agy_image(
+        "rooftop garden", user_id="jalsarraf", width=832, height=1216,
+        include_commander=False, request_id="bdcda13d-c025-4b50-bcea-7debe28cc482",
+    ))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        assert agy.generation_in_flight(), "new images must wait while recovery reviews an existing image"
+        if outcome == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            release.set()
+            result = await task
+            assert result["status"] == ("unknown" if outcome == "error" else "pending")
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+    assert not agy.generation_in_flight()
+    assert paths == ["/recover"]
+
+
 async def test_posts_authenticated_identity_once_and_strips_output_metadata(agy_config, monkeypatch):
     from app import agy_image_provider as agy
 

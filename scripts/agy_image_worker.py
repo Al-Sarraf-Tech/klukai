@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 
-from agy_art_runtime import ContentRefused, ProviderUnavailable, RuntimeError as RendererError
+from agy_art_runtime import ContentRefused, GenerationPending, ProviderUnavailable, RuntimeError as RendererError
 import implied_scene
 
 
@@ -54,6 +54,9 @@ NUDITY_COVERED = "\n\nKeep Klukai covered, with a towel or swimwear in bathing s
 REQUEST_BUDGET = 360
 RENDER_RESERVE = 180
 CHECK_TIMEOUT = 90
+MAX_CHECK_ATTEMPTS = 2
+RECOVERY_OBSERVE_TIMEOUT = 30.0
+RECOVERY_BUDGET = RECOVERY_OBSERVE_TIMEOUT + MAX_CHECK_ATTEMPTS * CHECK_TIMEOUT + 5
 
 
 def private_directory(path):
@@ -224,6 +227,13 @@ class Worker:
         self.db.execute("CREATE TABLE IF NOT EXISTS checks ("
                         "request_id TEXT NOT NULL, attempt_index INTEGER NOT NULL, verdict TEXT NOT NULL, "
                         "issues TEXT NOT NULL, seconds REAL NOT NULL, PRIMARY KEY (request_id, attempt_index))")
+        self.db.execute("CREATE TABLE IF NOT EXISTS attempt_payloads ("
+                        "request_id TEXT NOT NULL, attempt_index INTEGER NOT NULL, payload TEXT NOT NULL, "
+                        "candidate BLOB, PRIMARY KEY (request_id, attempt_index))")
+        self.db.execute("CREATE TABLE IF NOT EXISTS review_attempts ("
+                        "request_id TEXT NOT NULL, attempt_index INTEGER NOT NULL, check_index INTEGER NOT NULL, "
+                        "verdict TEXT NOT NULL, issues TEXT NOT NULL, seconds REAL NOT NULL, "
+                        "PRIMARY KEY (request_id, attempt_index, check_index))")
         self.db.commit()
 
     def busy(self):
@@ -281,20 +291,33 @@ class Worker:
                 request = provider_request(provider, value)
                 redone = False
                 while True:
-                    if index:
+                    if provider == "fal":
+                        # Implied and fully clothed retries can have identical
+                        # prompts. Bind recovery to this durable attempt, not
+                        # just the request ID and creative payload.
+                        request = dict(request, _render_attempt=index)
+                    with self.db_lock:
                         # Each later attempt gets its own durable attribution
                         # before its native call; interrupted jobs remain pending.
-                        with self.db_lock:
+                        if index:
                             self.db.execute("INSERT INTO attempts VALUES (?, ?, ?, 'pending', NULL)",
                                             (value["request_id"], index, provider))
                             self.db.execute("UPDATE requests SET selected_provider = ? WHERE request_id = ?",
                                             (provider, value["request_id"]))
-                            self.db.commit()
+                        # Store this exact transformed/refusal/redraw variant. Recovery
+                        # must not rebuild it using changed prompts or provider rules.
+                        self.db.execute("INSERT INTO attempt_payloads (request_id, attempt_index, payload) "
+                                        "VALUES (?, ?, ?)",
+                                        (value["request_id"], index, json.dumps(request)))
+                        self.db.commit()
                     try:
                         output = renderer(request, self.references)
                         if not valid_image(output):
                             raise ValueError("invalid generated image")
                     except Exception as error:
+                        if isinstance(error, GenerationPending):
+                            # A paid request may still exist. Only observation may follow.
+                            return 409, {"status": "pending"}
                         if (isinstance(error, ContentRefused) and provider in IMPLIED_PROVIDERS
                                 and not plain and REQUEST_BUDGET - (time.monotonic() - started)
                                 >= RENDER_RESERVE + CHECK_TIMEOUT):
@@ -321,19 +344,23 @@ class Worker:
                             return (504 if timeout else 502), None
                         index += 1
                         break
-                    if value.get("nudity") is True and provider in NUDITY_PROVIDERS:
+                    self.save_candidate(value["request_id"], index, output)
+                    skip_check = self.checker is None or (
+                        value.get("nudity") is True and provider in NUDITY_PROVIDERS)
+                    if skip_check:
                         verdict = {"verdict": "unchecked", "issues": []}
                     else:
                         # Judged against what this provider was actually asked.
                         verdict = self.check(output, request, index, started)
-                    if verdict["verdict"] != "reject":
-                        with self.db_lock:
-                            self.db.execute("UPDATE attempts SET status = 'completed' WHERE request_id = ? AND attempt_index = ?",
-                                            (value["request_id"], index))
-                            self.db.execute("UPDATE requests SET status = 'completed', output = ? WHERE request_id = ?",
-                                            (output, value["request_id"]))
-                            self.db.commit()
+                    if skip_check or verdict["verdict"] == "pass":
+                        self.complete_attempt(value["request_id"], index, output)
                         return 200, output
+                    if verdict["verdict"] == "unchecked":
+                        # Review availability cannot authorize another paid render.
+                        if self.review_count(value["request_id"], index) < MAX_CHECK_ATTEMPTS:
+                            return 409, {"status": "pending"}
+                        self.fail_attempt(value["request_id"], index, "check_unavailable", True)
+                        return 502, None
                     # One re-render with the same provider, told what to avoid,
                     # and only while it and its check still fit the core deadline.
                     retry = (not redone and REQUEST_BUDGET - (time.monotonic() - started)
@@ -351,6 +378,30 @@ class Worker:
         finally:
             self.slot.release()
 
+    def save_candidate(self, request_id, index, output):
+        with self.db_lock:
+            self.db.execute("UPDATE attempt_payloads SET candidate = ? WHERE request_id = ? AND attempt_index = ?",
+                            (output, request_id, index))
+            self.db.commit()
+
+    def complete_attempt(self, request_id, index, output):
+        with self.db_lock:
+            self.db.execute("UPDATE attempts SET status = 'completed', failure_category = NULL "
+                            "WHERE request_id = ? AND attempt_index = ?", (request_id, index))
+            self.db.execute("UPDATE requests SET status = 'completed', output = ?, failure_category = NULL "
+                            "WHERE request_id = ?", (output, request_id))
+            # Move ownership to the completed output atomically; do not keep a
+            # second copy of the same image in the review cache indefinitely.
+            self.db.execute("UPDATE attempt_payloads SET candidate = NULL "
+                            "WHERE request_id = ? AND attempt_index = ?", (request_id, index))
+            self.db.commit()
+
+    def review_count(self, request_id, index):
+        with self.db_lock:
+            return self.db.execute("SELECT COUNT(*) FROM review_attempts "
+                                   "WHERE request_id = ? AND attempt_index = ?",
+                                   (request_id, index)).fetchone()[0]
+
     def fail_attempt(self, request_id, index, category, terminal):
         with self.db_lock:
             self.db.execute("UPDATE attempts SET status = 'failed', failure_category = ? "
@@ -361,32 +412,53 @@ class Worker:
                                 (category, request_id))
             self.db.commit()
 
-    def check(self, output, value, index, started):
-        """Run the configured checker; with none, or on any checker failure, deliver unchecked."""
+    def check(self, output, value, index, started, *, budget=None):
+        """Reserve at most two reviews per candidate, including interrupted calls."""
         if self.checker is None:
             return {"verdict": "unchecked", "issues": []}
-        remaining = REQUEST_BUDGET - (time.monotonic() - started) - 5
-        try:
-            verdict = self.checker(output, value, self.references, timeout=min(CHECK_TIMEOUT, remaining))
-            if type(verdict) is not dict or verdict.get("verdict") not in {"pass", "reject", "unchecked"}:
-                raise ValueError("invalid checker verdict")
-        except Exception:
-            verdict = {"verdict": "unchecked", "issues": []}
-        issues = verdict.get("issues") if isinstance(verdict.get("issues"), list) else []
-        seconds = verdict.get("seconds", 0.0)
-        seconds = float(seconds) if type(seconds) in (int, float) else 0.0
-        try:
-            issues_text = json.dumps(issues)[:4096]
-        except (TypeError, ValueError):
-            issues_text = "[]"
+        from claude_image_check import MIN_TIMEOUT, validate_verdict
+
+        budget = REQUEST_BUDGET if budget is None else budget
+        identity = (value["request_id"], index)
         with self.db_lock:
-            self.db.execute("INSERT OR REPLACE INTO checks VALUES (?, ?, ?, ?, ?)",
-                            (value["request_id"], index, verdict["verdict"], issues_text, seconds))
-            self.db.commit()
-        return {"verdict": verdict["verdict"], "issues": issues}
+            saved = self.db.execute("SELECT verdict, issues FROM checks WHERE request_id = ? AND attempt_index = ?",
+                                    identity).fetchone()
+        if saved and saved[0] in {"pass", "reject"}:
+            return validate_verdict({"verdict": saved[0], "issues": json.loads(saved[1])})
+        verdict = {"verdict": "unchecked", "issues": []}
+        for _ in range(MAX_CHECK_ATTEMPTS):
+            remaining = budget - (time.monotonic() - started) - 5
+            if remaining < MIN_TIMEOUT:
+                break
+            with self.db_lock:
+                count = self.db.execute("SELECT COUNT(*) FROM review_attempts "
+                                        "WHERE request_id = ? AND attempt_index = ?", identity).fetchone()[0]
+                if count >= MAX_CHECK_ATTEMPTS:
+                    break
+                self.db.execute("INSERT INTO review_attempts VALUES (?, ?, ?, 'pending', '[]', 0)",
+                                (*identity, count))
+                self.db.commit()
+            check_started = time.monotonic()
+            try:
+                result = self.checker(output, value, self.references, timeout=min(CHECK_TIMEOUT, remaining))
+                verdict = validate_verdict(result)
+            except Exception:
+                verdict = {"verdict": "unchecked", "issues": []}
+            seconds = round(time.monotonic() - check_started, 1)
+            issues_text = json.dumps(verdict["issues"])
+            with self.db_lock:
+                self.db.execute("UPDATE review_attempts SET verdict = ?, issues = ?, seconds = ? "
+                                "WHERE request_id = ? AND attempt_index = ? AND check_index = ?",
+                                (verdict["verdict"], issues_text, seconds, *identity, count))
+                self.db.execute("INSERT OR REPLACE INTO checks VALUES (?, ?, ?, ?, ?)",
+                                (*identity, verdict["verdict"], issues_text, seconds))
+                self.db.commit()
+            if verdict["verdict"] != "unchecked":
+                break
+        return verdict
 
     def recover(self, value):
-        """Read one existing claim. Never claims, rotates, renders, or fails over."""
+        """Observe paid work and resume bounded review; never render or fail over."""
         if value["user_id"] not in self.allowed_users:
             return 403, {"status": "refused"}
         if value["include_commander"] and value["user_id"] != "jalsarraf":
@@ -403,11 +475,72 @@ class Worker:
             return 409, {"status": "conflict"}
         if row[1] == "completed" and valid_image(row[2]):
             return 200, row[2]
-        if row[1] == "pending":
-            return 409, {"status": "pending"}
         if row[1] == "failed":
             return 409, {"status": "refused" if row[3] == "refused" else "failed"}
-        return 409, {"status": "unavailable"}
+        if row[1] != "pending":
+            return 409, {"status": "unavailable"}
+        if not self.slot.acquire(blocking=False):
+            return 409, {"status": "pending"}
+        try:
+            # Re-read after taking the slot: another recovery may have completed
+            # between the first lookup and acquisition.
+            with self.db_lock:
+                row = self.db.execute("SELECT status, output FROM requests WHERE request_id = ?",
+                                      (value["request_id"],)).fetchone()
+                attempt = self.db.execute(
+                    "SELECT a.attempt_index, a.provider, a.status, a.failure_category, p.payload, p.candidate "
+                    "FROM attempts a LEFT JOIN attempt_payloads p "
+                    "ON a.request_id = p.request_id AND a.attempt_index = p.attempt_index "
+                    "WHERE a.request_id = ? ORDER BY a.attempt_index DESC LIMIT 1",
+                    (value["request_id"],)).fetchone()
+            if row[0] == "completed" and valid_image(row[1]):
+                return 200, row[1]
+            if row[0] == "failed":
+                return 409, {"status": "failed"}
+            if not attempt or attempt[4] is None:
+                # Legacy/unsupported interrupted requests have no recovery identity.
+                return 409, {"status": "pending"}
+            index, provider, status, failure, payload, output = attempt
+            if status == "failed":
+                self.fail_attempt(value["request_id"], index, failure or "generation_failed", True)
+                return 409, {"status": "failed"}
+            request = json.loads(payload)
+            started = time.monotonic()
+            if output is None:
+                renderer = next((render for name, render in self.providers if name == provider), None)
+                observer = getattr(renderer, "recover", None)
+                if not callable(observer):
+                    return 409, {"status": "pending"}
+                try:
+                    output = observer(request, self.references, timeout=RECOVERY_OBSERVE_TIMEOUT)
+                except (GenerationPending, ProviderUnavailable):
+                    return 409, {"status": "pending"}
+                except Exception:
+                    self.fail_attempt(value["request_id"], index, "generation_failed", True)
+                    return 409, {"status": "failed"}
+                if output is None:
+                    return 409, {"status": "pending"}
+                if valid_image(output):
+                    self.save_candidate(value["request_id"], index, output)
+            if not valid_image(output):
+                self.fail_attempt(value["request_id"], index, "generation_failed", True)
+                return 409, {"status": "failed"}
+            skip_check = self.checker is None or (
+                value.get("nudity") is True and provider in NUDITY_PROVIDERS)
+            verdict = {"verdict": "unchecked", "issues": []} if skip_check else self.check(
+                output, request, index, started, budget=RECOVERY_BUDGET)
+            if skip_check or verdict["verdict"] == "pass":
+                self.complete_attempt(value["request_id"], index, output)
+                return 200, output
+            if verdict["verdict"] == "reject":
+                self.fail_attempt(value["request_id"], index, "check_rejected", True)
+                return 409, {"status": "failed"}
+            if self.review_count(value["request_id"], index) >= MAX_CHECK_ATTEMPTS:
+                self.fail_attempt(value["request_id"], index, "check_unavailable", True)
+                return 409, {"status": "failed"}
+            return 409, {"status": "pending"}
+        finally:
+            self.slot.release()
 
     def close(self):
         self.db.close()
@@ -533,8 +666,9 @@ class UnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
 
 
 ROTATIONS = ("alternate", "fixed")
-# "fal" (Seedream 4.5) is the owner's sole provider since 2026-10-23.
-PROVIDER_NAMES = frozenset({"agy", "grok", "codex", "fal"})
+# Production remains fal-only. API alternatives need explicit selection,
+# their own positive allowances and runtime credentials; none activate here.
+PROVIDER_NAMES = frozenset({"agy", "grok", "codex", "fal", "openai", "gemini"})
 
 
 def validate_providers(providers):
@@ -559,6 +693,10 @@ def load_providers(names):
             from codex_image_render import render
         elif name == "fal":
             from fal_image_render import render
+        elif name == "openai":
+            from cloud_image_render import render_openai as render
+        elif name == "gemini":
+            from cloud_image_render import render_gemini as render
         else:
             from grok_image_render import render
         providers.append((name, render))
@@ -627,7 +765,8 @@ def main():
     parser.add_argument("--references", type=Path, required=True)
     parser.add_argument("--allowed-users", required=True)
     parser.add_argument("--providers", default="agy",
-                        help="Ordered providers from agy, grok and codex, e.g. grok,codex,agy")
+                        help="Ordered providers: fal, openai, gemini, agy, grok, codex. "
+                             "Production uses fal; optional APIs require separate positive allowances.")
     parser.add_argument("--rotation", default="alternate", choices=ROTATIONS,
                         help="alternate: rotate the first provider per request; fixed: always start with the "
                              "first provider and use the rest only as failovers")

@@ -20,3 +20,11 @@ def test_fal_is_the_only_renderer_and_claude_still_checks():
 def test_paid_calls_have_daily_and_monthly_caps():
     assert "Environment=KLUKAI_FAL_DAILY_LIMIT=10" in lines()
     assert "Environment=KLUKAI_FAL_MONTHLY_LIMIT=150" in lines()
+
+
+def test_shutdown_allows_an_inflight_picture_to_finish_before_group_kill():
+    settings = dict(line.split("=", 1) for line in lines() if "=" in line and not line.startswith("#"))
+    # The main process stops admission and joins request threads. Do not send
+    # SIGTERM to its reviewer/provider children before that drain can finish.
+    assert settings["KillMode"] == "mixed"
+    assert int(settings["TimeoutStopSec"]) >= 420  # worker360s plus transport/shutdown margin
