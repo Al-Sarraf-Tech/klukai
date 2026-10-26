@@ -132,9 +132,7 @@ class ChatReplyRuntime:
                 user_id, "Loading neural pathways, Commander. Stand by..."
             )
 
-        warmup_timer: asyncio.Task[Any] | None = asyncio.create_task(
-            _warmup_notify()
-        )
+        warmup_timer: asyncio.Task[Any] | None = asyncio.create_task(_warmup_notify())
 
         full_response = []
         buffer = ""

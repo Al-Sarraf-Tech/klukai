@@ -29,13 +29,11 @@ def _clear_cache_between_tests():
 
 @pytest.fixture
 def _mock_backends():
-    """Patch the per-subsystem fresh checks so tests don't need real PG/Redis/Qdrant."""
+    """Patch the per-subsystem fresh checks so tests don't need real PG/Redis."""
     with (
         patch.object(health_cache, "_check_database_fresh",
                      new=AsyncMock(return_value={"status": "ok", "pool_size": 2})),
         patch.object(health_cache, "_check_redis_fresh",
-                     new=AsyncMock(return_value={"status": "ok"})),
-        patch.object(health_cache, "_check_qdrant_fresh",
                      new=AsyncMock(return_value={"status": "ok"})),
     ):
         yield
@@ -61,9 +59,9 @@ class TestCachedHealth:
         assert result["status"] == "ok"
         assert "database" in result
         assert "redis" in result
-        assert "qdrant" in result
-        # Cache should now contain all three
-        assert set(health_cache._cache.keys()) == {"database", "redis", "qdrant"}
+        assert "qdrant" not in result
+        # Cache should now contain both probes (no vector store any more)
+        assert set(health_cache._cache.keys()) == {"database", "redis"}
 
     @pytest.mark.asyncio
     async def test_cache_hit_skips_backend_calls(self, _mock_backends):

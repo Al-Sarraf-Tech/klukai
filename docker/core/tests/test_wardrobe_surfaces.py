@@ -113,34 +113,20 @@ class TestSfwBackstop:
         assert sfw.startswith(NEGATIVE_TAGS) and "nude" in sfw and "topless" in sfw
 
     @pytest.mark.asyncio
-    async def test_sfw_negative_reaches_the_workflow(self):
-        from unittest.mock import MagicMock
+    async def test_sfw_backstop_reaches_the_cloud_brief(self, monkeypatch):
+        """Below the intimacy gate the renderer is told to keep her covered."""
+        from unittest.mock import AsyncMock
 
         import app.image_gen as ig
+        from app import agy_image_provider
 
-        captured = {}
-
-        class _Resp:
-            status_code = 500
-
-            def json(self):
-                return {}
-
-        async def post(url, json=None, **_):
-            captured["workflow"] = json
-            return _Resp()
-
-        client = MagicMock()
-        client.post = post
-        with patch.object(ig, "_get_http", return_value=client), \
-             patch.object(ig, "_lease_headers", return_value={}, create=True):
-            try:
-                await ig._try_generate("p", 832, 1216, MagicMock(), sfw=True)
-            except Exception:
-                pass
-        wf = captured.get("workflow") or {}
-        prompt = wf.get("prompt", wf)
-        assert "topless" in prompt["7"]["inputs"]["text"]
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
+        submit = AsyncMock(return_value={"status": "completed", "image": b"PNG"})
+        monkeypatch.setattr(agy_image_provider, "submit_agy_image", submit)
+        assert await ig.generate_image("p", sfw=True, user_id="u1") == b"PNG"
+        assert "fully clothed" in submit.await_args.args[0]
+        assert submit.await_args.kwargs["nudity"] is False
 
     def test_originals_spell_out_their_inner_layers(self):
         from app import wardrobe

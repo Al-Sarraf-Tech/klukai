@@ -63,7 +63,6 @@ async def endpoint_setup(monkeypatch):
         'app.chat.proactive': MagicMock(mission_active=False),
         'app.auth.get_user_from_token': AsyncMock(return_value='alice'),
         'app.auth.get_user_from_session_hash': AsyncMock(return_value='alice'),
-        'app.warmup.warm_in_background': lambda: None,
         'app.chat._maybe_reflect_on_return': AsyncMock(),
         'app.chat._maybe_oath_on_connect': AsyncMock(),
         'app.rituals.on_connect': AsyncMock(),

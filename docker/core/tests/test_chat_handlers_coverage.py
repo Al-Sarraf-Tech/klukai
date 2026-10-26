@@ -204,7 +204,6 @@ def _patched_pipeline(
         patch("app.chat_handlers.background_recall", background_recall),
         patch("app.chat_handlers.do_memory_keep", do_memory_keep),
         # deferred imports resolved from their source modules
-        patch("app.llm_router.mark_user_active", MagicMock()),
         patch("app.context.physical", physical),
         patch("app.tributes.get_crown_jewel", tributes.get_crown_jewel),
         patch("app.helpers.detect_squad_address", return_value=None),

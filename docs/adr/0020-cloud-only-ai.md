@@ -52,6 +52,11 @@ endpoint, setting or module returns to the core or its compose service.
 - If Anthropic is down she cannot answer; she replies with an in-character
   disruption line, as before.
 - Voice input needs Fish credit. Without it, `/api/stt` fails closed.
+- Gaming awareness ([ADR-0018](0018-gaming-aware-chat-persona.md)) is dormant:
+  its only game signal came from the Dominus gateway, so she now treats him as
+  not gaming.
+- Animated portrait frames (blink, talk, smile) were drawn only by ComfyUI.
+  Cached frames are still served, but no new ones are made.
 - Recall quality now depends on full-text candidates. A memory that shares no
   words with the message is only a candidate through its importance and
   recency.

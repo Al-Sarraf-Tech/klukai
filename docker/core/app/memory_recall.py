@@ -89,9 +89,7 @@ def clip(text: str, limit: int) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
 
 
-def selection_prompt(
-    subject: str, query: str, texts: Sequence[str], limit: int
-) -> str:
+def selection_prompt(subject: str, query: str, texts: Sequence[str], limit: int) -> str:
     """The Haiku request; candidate ``n`` (1-based) has id ``"n"``."""
     lines = [
         json.dumps({"id": str(n), "text": clip(text, TEXT_CHARS)}, ensure_ascii=False)
@@ -171,14 +169,20 @@ async def select(
                 caller, prompt, max_tokens=SELECTION_MAX_TOKENS
             )
     except TimeoutError:
-        logger.warning("Memory recall %s: selection timed out; using Postgres order", caller)
+        logger.warning(
+            "Memory recall %s: selection timed out; using Postgres order", caller
+        )
         return None
     except Exception as error:  # background_llm never raises; belt and braces
-        logger.warning("Memory recall %s: selection failed (%s)", caller, type(error).__name__)
+        logger.warning(
+            "Memory recall %s: selection failed (%s)", caller, type(error).__name__
+        )
         return None
     picked = parse_selection(result, len(texts), limit)
     if picked is None and result is not None:
-        logger.warning("Memory recall %s: unusable selection; using Postgres order", caller)
+        logger.warning(
+            "Memory recall %s: unusable selection; using Postgres order", caller
+        )
     return picked
 
 

@@ -1,13 +1,12 @@
-"""Live Portrait without Dominus: one base frame per outfit, drawn by the account worker.
+"""Live Portrait on the account worker: one base frame per outfit.
 
-ComfyUI on Dominus drew every portrait set (a base plus five masked inpaints
-for blink, talk, smile, blush and annoyed). With images on the account worker
-(``KLUKAI_IMAGE_PROVIDER=agy``) there is no inpaint, and Dominus is never
-asked (owner order 2026-10-19: no Dominus image work, so the game guard is
-never tripped). An outfit without a cached set gets ONE base portrait, drawn
-through the same journalled path his explicit chat pictures use, so the user
-allowlist, the worker's Grok -> Codex -> Agy rotation and the Claude checker
-all apply. The other frames stay missing; the stage then keeps the base for
+The retired local renderer drew every portrait set (a base plus five masked
+inpaints for blink, talk, smile, blush and annoyed). Pictures are cloud-only
+(owner decisions 2026-10-19 and 2026-10-26), and the account worker
+(``KLUKAI_IMAGE_PROVIDER=agy``) has no inpaint. An outfit without a cached
+set gets ONE base portrait, drawn through the same journalled path his
+explicit chat pictures use, so the user allowlist, the worker's
+Grok -> Codex -> Agy rotation and the Claude checker all apply. The other frames stay missing; the stage then keeps the base for
 them (its breathing and sway are CSS). Cached sets are never touched.
 
 Bounds, all fail-closed:

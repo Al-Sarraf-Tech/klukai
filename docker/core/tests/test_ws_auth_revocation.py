@@ -87,7 +87,6 @@ async def setup(monkeypatch):
     monkeypatch.setattr(chat, "_initialize_session", AsyncMock())
     monkeypatch.setattr(chat, "_maybe_reflect_on_return", AsyncMock())
     monkeypatch.setattr(chat, "_maybe_oath_on_connect", AsyncMock())
-    monkeypatch.setattr("app.warmup.warm_in_background", lambda: None)
     monkeypatch.setattr("app.rituals.on_connect", AsyncMock())
     monkeypatch.setattr("app.wardrobe.warm_today", AsyncMock())
     monkeypatch.setattr("app.audit.log", AsyncMock())

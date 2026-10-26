@@ -711,6 +711,13 @@ class TestCompaction:
 
 
 class TestImageGen:
+    @pytest.fixture(autouse=True)
+    def _cloud_renderer(self, monkeypatch):
+        """Pictures are cloud-only: the non-worker path is the configured
+        OpenAI provider (ready unless a test says otherwise)."""
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "openai")
+        monkeypatch.setattr("app.image_provider.cloud_images_ready", lambda: True)
+
     async def test_agy_uses_explicit_scene_and_outfit_without_history_or_gpu(
         self, bg_mocks, monkeypatch
     ):
@@ -725,10 +732,6 @@ class TestImageGen:
             patch("app.account_images.insert_request", new=AsyncMock()),
             patch("app.account_images._claim_repeat_request", new=AsyncMock(return_value=None)),
             patch("app.account_images.update_request", new=AsyncMock()),
-            patch(
-                "app.image_gen.check_comfyui_ready",
-                new=AsyncMock(side_effect=AssertionError("GPU readiness")),
-            ),
             patch.object(
                 bg,
                 "generate_image",
@@ -779,10 +782,6 @@ class TestImageGen:
             ("app.account_images.update_request", AsyncMock()),
             ("app.her_day.render_costume", AsyncMock(return_value="blazing_star")),
             ("app.her_day.render_place", place),
-            (
-                "app.image_gen.check_comfyui_ready",
-                AsyncMock(side_effect=AssertionError("GPU readiness")),
-            ),
         ):
             stack.enter_context(patch(target, new=value))
         stack.enter_context(
@@ -890,12 +889,9 @@ class TestImageGen:
             "u1", "draw yourself", 832, 1216, False
         )
 
-    async def test_local_renderer_follows_his_request_and_avoids_ships(self, bg_mocks):
+    async def test_cloud_renderer_follows_his_request_and_avoids_ships(self, bg_mocks):
         gen = AsyncMock(return_value=None)
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
             patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),
             patch.object(bg, "generate_image", new=gen),
         ):
@@ -924,10 +920,6 @@ class TestImageGen:
             patch("app.account_images._claim_repeat_request", new=AsyncMock(return_value=None)),
             patch("app.account_images.update_request", new=AsyncMock()),
             patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),
-            patch(
-                "app.image_gen.check_comfyui_ready",
-                new=AsyncMock(side_effect=AssertionError("GPU readiness")),
-            ),
         ):
             await bg.background_image_gen(
                 "Draw us together in a landscape", user_id="jalsarraf"
@@ -955,10 +947,6 @@ class TestImageGen:
             patch("app.account_images.update_request", new=AsyncMock()),
             patch.object(bg, "generate_image", new=local),
             patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),
-            patch(
-                "app.image_gen.check_comfyui_ready",
-                new=AsyncMock(side_effect=AssertionError("GPU readiness")),
-            ),
         ):
             await bg.background_image_gen("Draw Klukai", user_id="u1")
         generate.assert_awaited_once()
@@ -969,7 +957,7 @@ class TestImageGen:
         ]
         bg_mocks.memory_archive.save_image.assert_not_awaited()
 
-    async def test_nonallowlisted_user_retains_existing_local_renderer(
+    async def test_nonallowlisted_user_uses_the_configured_cloud_renderer(
         self, bg_mocks, monkeypatch
     ):
         from app import agy_image_provider
@@ -985,9 +973,6 @@ class TestImageGen:
             ),
             patch.object(bg, "generate_image", new=local),
             patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
         ):
             await bg.background_image_gen(
                 "Draw Klukai",
@@ -1001,16 +986,12 @@ class TestImageGen:
             for call in bg_mocks.ws.send.await_args_list
         )
 
-    async def test_cloud_image_avoids_gpu_readiness_and_prompt_logging(
+    async def test_cloud_image_avoids_prompt_logging(
         self, bg_mocks, monkeypatch, caplog
     ):
         caplog.set_level(logging.INFO, logger="app.background")
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "openai")
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready",
-                new=AsyncMock(side_effect=AssertionError("Dominus readiness")),
-            ),
             patch("app.image_provider.cloud_images_ready", return_value=True),
             patch.object(
                 bg, "_enhance_image_prompt", return_value="private-scene-description"
@@ -1027,10 +1008,6 @@ class TestImageGen:
     ):
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "openai")
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready",
-                new=AsyncMock(side_effect=AssertionError("Dominus readiness")),
-            ),
             patch("app.image_provider.cloud_images_ready", return_value=False),
             patch.object(
                 bg,
@@ -1044,11 +1021,8 @@ class TestImageGen:
         assert not any(frame.get("type") == "image" for frame in frames)
         bg_mocks.ws.send_proactive.assert_awaited_once()
 
-    async def test_sleeps_then_checks_comfyui_and_sends_thinking(self, bg_mocks):
+    async def test_sends_thinking_without_a_vram_wait(self, bg_mocks):
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
             patch.object(bg, "is_couple_scene", return_value=False),
             patch.object(bg, "is_landscape", return_value=False),
             patch.object(bg, "_enhance_image_prompt", return_value="tags"),
@@ -1056,15 +1030,14 @@ class TestImageGen:
             patch.object(bg, "generate_image", new=AsyncMock(return_value=None)),
         ):
             await bg.background_image_gen("draw a sunset", user_id="u1")
-        assert bg_mocks.sleep.await_args_list[0].args == (1,)
-        bg_mocks.ws.send_thinking.assert_awaited()
+        bg_mocks.sleep.assert_not_awaited()
+        bg_mocks.ws.send_thinking.assert_awaited_once_with(
+            "u1", "Compiling tactical visualization, Commander..."
+        )
 
     async def test_portrait_dimensions_for_non_landscape(self, bg_mocks):
         gen = AsyncMock(return_value=None)
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
             patch.object(bg, "is_couple_scene", return_value=False),
             patch.object(bg, "is_landscape", return_value=False),
             patch.object(bg, "_enhance_image_prompt", return_value="tags"),
@@ -1080,9 +1053,6 @@ class TestImageGen:
     async def test_landscape_dimensions_swapped(self, bg_mocks):
         gen = AsyncMock(return_value=None)
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
             patch.object(bg, "is_couple_scene", return_value=False),
             patch.object(bg, "is_landscape", return_value=True),
             patch.object(bg, "_enhance_image_prompt", return_value="tags"),
@@ -1097,9 +1067,6 @@ class TestImageGen:
 
     async def test_successful_image_archived_and_sent(self, bg_mocks):
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
             patch.object(bg, "is_couple_scene", return_value=False),
             patch.object(bg, "is_landscape", return_value=False),
             patch.object(bg, "_enhance_image_prompt", return_value="tags"),
@@ -1127,9 +1094,6 @@ class TestImageGen:
         picture = MagicMock()
         picture.picture_saved = AsyncMock()
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
             patch.object(bg, "is_couple_scene", return_value=False),
             patch.object(bg, "is_landscape", return_value=False),
             patch.object(bg, "_enhance_image_prompt", return_value="tags"),
@@ -1141,9 +1105,6 @@ class TestImageGen:
 
     async def test_failed_generation_sends_graceful_message(self, bg_mocks, caplog):
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
             patch.object(bg, "is_couple_scene", return_value=False),
             patch.object(bg, "is_landscape", return_value=False),
             patch.object(bg, "_enhance_image_prompt", return_value="tags"),
@@ -1162,31 +1123,31 @@ class TestImageGen:
         ]
         assert clear_frames
 
-    async def test_comfyui_warmup_message_when_not_ready(self, bg_mocks):
+    @pytest.mark.parametrize("provider", ["comfyui", "disabled"])
+    async def test_retired_or_unknown_provider_is_unavailable(
+        self, bg_mocks, monkeypatch, provider
+    ):
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", provider)
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=False)
+            patch.object(
+                bg,
+                "_enhance_image_prompt",
+                side_effect=AssertionError("composed for no renderer"),
             ),
-            patch.object(bg, "is_couple_scene", return_value=False),
-            patch.object(bg, "is_landscape", return_value=False),
-            patch.object(bg, "_enhance_image_prompt", return_value="tags"),
-            patch.object(bg, "build_prompt", return_value="p"),
-            patch.object(bg, "generate_image", new=AsyncMock(return_value=None)),
+            patch.object(
+                bg, "generate_image", new=AsyncMock(side_effect=AssertionError("render"))
+            ),
         ):
             await bg.background_image_gen("draw", user_id="u1")
-        warmups = [
-            c
-            for c in bg_mocks.ws.send_thinking.await_args_list
-            if "Warming up" in c.args[1]
-        ]
-        assert warmups
+        bg_mocks.ws.send_proactive.assert_awaited_once()
+        assert "unavailable" in bg_mocks.ws.send_proactive.await_args.args[1]
+        frames = [call.args[1] for call in bg_mocks.ws.send.await_args_list]
+        assert {"type": "thinking", "content": ""} in frames
+        bg_mocks.ws.send_thinking.assert_not_awaited()
 
     async def test_exception_path_clears_thinking_bubble(self, bg_mocks):
         """If generate_image raises, the except block still surfaces a message."""
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
             patch.object(bg, "is_couple_scene", return_value=False),
             patch.object(bg, "is_landscape", return_value=False),
             patch.object(bg, "_enhance_image_prompt", return_value="tags"),
@@ -1207,9 +1168,6 @@ class TestImageGen:
         bg_mocks.affection.get_state.return_value = _aff_state(8)
         build = MagicMock(return_value="prompt")
         with (
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
             patch.object(bg, "is_couple_scene", return_value=True),
             patch.object(bg, "is_landscape", return_value=False),
             patch.object(bg, "_enhance_image_prompt", return_value="tags"),
@@ -1226,9 +1184,6 @@ class TestImageGen:
         build = MagicMock(return_value="prompt")
         with (
             patch("app.her_day.render_costume", new=render),
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
             patch.object(bg, "is_couple_scene", return_value=False),
             patch.object(bg, "is_landscape", return_value=False),
             patch.object(bg, "_enhance_image_prompt", return_value="tags"),
@@ -1246,9 +1201,6 @@ class TestImageGen:
         build = MagicMock(return_value="prompt")
         with (
             patch("app.her_day.render_costume", new=AsyncMock(return_value=None)),
-            patch(
-                "app.image_gen.check_comfyui_ready", new=AsyncMock(return_value=True)
-            ),
             patch.object(bg, "is_couple_scene", return_value=False),
             patch.object(bg, "is_landscape", return_value=False),
             patch.object(bg, "_enhance_image_prompt", return_value="tags"),

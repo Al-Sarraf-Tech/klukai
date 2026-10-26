@@ -30,7 +30,7 @@ class BlockingTransport(httpx.AsyncBaseTransport):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "module_name", ["image_gen", "weather_client"]
+    "module_name", ["weather_client"]
 )
 @pytest.mark.parametrize("startup_failure", [False, True])
 async def test_repeated_resource_exit_cancellation_joins_actual_lazy_transport(

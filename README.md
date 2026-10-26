@@ -270,7 +270,7 @@ Distress always routes to **protective**, never irritated. Test accounts at leve
   - Goodbyes are clean ("…Go. I'll be here."), and a goodnight holds her pings until 08:00.
   - The 0200 watch: write to her late at night and she is already awake, quieter and protective.
   - Before his real-life events she sends a short operation brief, then a send-off, then "Report."
-- **Gaming-aware.** When he is mid-game she keeps replies short and holds unprompted pings until the match ends. She uses no GPU, so she never competes with a game.
+- **Gaming-aware (dormant).** The persona can keep replies short and hold unprompted pings while he is mid-game, but the only game signal came from the Dominus gateway, which she no longer contacts (2026-10-26). Until another signal exists she treats him as not gaming. She uses no GPU, so she never competes with a game.
 
 ---
 
@@ -332,8 +332,8 @@ Hard rules:
 
 | Work | Production | Fresh-checkout default |
 |---|---|---|
-| Chat and tools | Sonnet 5.5 primary (owner-approved API key), Haiku 5.5 fallback | Haiku 5.5 once `ANTHROPIC_API_KEY` is set (Sonnet also needs `KLUKAI_CLAUDE_PRIMARY=true`); with no key she cannot answer |
-| Background work and memory recall | Haiku 5.5 at high effort, one shared daily cap | Same |
+| Chat and tools | Sonnet 5.5 primary (owner-approved API key), Haiku 5.5 fallback | Off: chat needs `KLUKAI_CLAUDE_PRIMARY=true` and `ANTHROPIC_API_KEY`; without them she cannot answer |
+| Background work and memory recall | Haiku 5.5 at high effort, one shared daily cap (`KLUKAI_EXTRACTION_DAILY_LIMIT`, 400) | Off (cap 0): background writers use safe defaults and recall keeps the full-text order |
 | Dreams and Her POV writing | Sonnet 5.5, **20 attempts/day and 300/month**, shared | Haiku 5.5 background route |
 | Pictures | Private worker: Grok → Codex → Agy, included quotas only | Same worker, empty allowlist (no pictures) |
 | Speech | Fish Audio, `s2.1-pro-free` only, tap-to-play | Off |
@@ -430,7 +430,7 @@ docker compose build companion-core && docker compose up -d companion-core   # a
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `KLUKAI_CLAUDE_PRIMARY` | `false` | Sonnet as the interactive primary (needs its key) |
+| `KLUKAI_CLAUDE_PRIMARY` | `false` | Turns chat on: Sonnet 5.5, with Haiku 5.5 as fallback (needs `ANTHROPIC_API_KEY`). Off, she cannot chat |
 | `KLUKAI_VOICE_ENABLED` | `false` in compose | Owner switch for all speech |
 | `FISH_API_KEY` | empty | From the encrypted env file; with it empty, nothing is sent; never logged |
 | `KLUKAI_FISH_VOICE_ID` | `47fc35b7…de1f3` | The community "Klukai" voice (Danastico) |

@@ -267,31 +267,16 @@ async def background_image_gen(
     only the chosen place's words ever leave core; ``chat_context`` is the
     older flattened form of the same turns.
     """
-    from .image_gen import check_comfyui_ready
     from .image_provider import cloud_images_ready, selected_provider
     from .agy_image_provider import commander_reference_allowed, uses_agy_images
 
     try:
         provider = selected_provider()
+        # The host worker fails visibly, so it is never probed first.
         use_agy = provider == "agy" or uses_agy_images(user_id)
-        if use_agy:
-            ready = True  # The host worker fails visibly; never probe the GPU.
-        elif provider == "openai":
-            if not await asyncio.to_thread(cloud_images_ready):
-                await ws.send_proactive(
-                    user_id,
-                    "...Visualization is unavailable right now, Commander.",
-                    persist=False,
-                )
-                await ws.send(user_id, {"type": "thinking", "content": ""})
-                return
-            ready = True
-        elif provider == "comfyui":
-            # Only local rendering waits for VRAM and probes the GPU gateway.
-            logger.info("Image gen: waiting 1s for VRAM...")
-            await asyncio.sleep(1)
-            ready = await check_comfyui_ready()
-        else:
+        if not use_agy and not (
+            provider == "openai" and await asyncio.to_thread(cloud_images_ready)
+        ):
             await ws.send_proactive(
                 user_id,
                 "...Visualization is unavailable right now, Commander.",
@@ -300,14 +285,9 @@ async def background_image_gen(
             await ws.send(user_id, {"type": "thinking", "content": ""})
             return
         logger.info("Image gen: starting")
-        if not ready:
-            await ws.send_thinking(
-                user_id, "Warming up image systems, Commander. Stand by..."
-            )
-        else:
-            await ws.send_thinking(
-                user_id, "Compiling tactical visualization, Commander..."
-            )
+        await ws.send_thinking(
+            user_id, "Compiling tactical visualization, Commander..."
+        )
 
         # Who is in it, the moods and the orientation come from his request
         # alone; the recent turns only set the scene (app/image_scene.py), and

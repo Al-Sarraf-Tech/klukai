@@ -172,7 +172,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from .rate_limit import close as _rate_limit_close
     from .observability.health_cache import running as _health_checks_running
     from .runtime_tasks import running as _application_work
-    from . import image_gen, weather_client
+    from . import weather_client
 
     async with _application_work(ws) as (cleanup, owners):
         # Register before each init: clients/pool workers can exist even when
@@ -180,8 +180,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         cleanup.push_async_callback(close_pool)
         cleanup.push_async_callback(_caches_close)
         cleanup.push_async_callback(_rate_limit_close)
-        for close in (image_gen.close, weather_client.close):
-            cleanup.push_async_callback(close)
+        cleanup.push_async_callback(weather_client.close)
         await cleanup.enter_async_context(_health_checks_running())
         await init_pool(min_size=2, max_size=10)
         await run_migration()

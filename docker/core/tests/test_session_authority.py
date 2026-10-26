@@ -223,7 +223,6 @@ async def test_endpoint_two_connected_devices_use_latest_session(manager, monkey
     monkeypatch.setattr(chat, 'proactive', MagicMock(mission_active=False))
     monkeypatch.setattr('app.auth.get_user_from_token', AsyncMock(return_value='alice'))
     monkeypatch.setattr('app.auth.get_user_from_session_hash', AsyncMock(return_value='alice'))
-    monkeypatch.setattr('app.warmup.warm_in_background', lambda: None)
     for name in ['_maybe_reflect_on_return', '_maybe_oath_on_connect']:
         monkeypatch.setattr(chat, name, AsyncMock())
     monkeypatch.setattr('app.rituals.on_connect', AsyncMock())

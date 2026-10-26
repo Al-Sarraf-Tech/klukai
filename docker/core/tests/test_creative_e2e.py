@@ -108,7 +108,7 @@ def _png(size, color, metadata=False):
 
 @pytest.fixture
 async def creative_app(monkeypatch, tmp_path):
-    from app import auth, context, db, events, her_day, image_gen, image_provider
+    from app import auth, context, db, events, her_day, image_provider
     from app import memory_archive, memory_archive_query, memory_her_pov
     from app.routes import register_routes
 
@@ -157,11 +157,9 @@ async def creative_app(monkeypatch, tmp_path):
     monkeypatch.setattr(events, "_redis", redis)
 
     def unavailable(*_args, **_kwargs):
-        raise AssertionError("Offline cloud E2E must not reach a socket or Dominus gate")
+        raise AssertionError("Offline cloud E2E must not reach a socket")
 
     monkeypatch.setattr(socket.socket, "connect", unavailable)
-    monkeypatch.setattr(image_gen, "_leased", unavailable)
-    monkeypatch.setattr(image_gen, "check_comfyui_ready", unavailable)
 
     state = SimpleNamespace(
         database=database, ledger=ledger, image_dir=image_dir, redis=redis,

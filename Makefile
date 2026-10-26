@@ -4,8 +4,6 @@ AMARILLO_TAILSCALE_IPV4 ?= 100.111.198.19
 DOMINUS_RAID_MOUNT ?= /mnt/nvmer0
 DOMINUS_AI_DIR ?= /mnt/nvmer0/services/ai-stack/source/klukai/ops/dominus-nobara
 DOMINUS_STACK_ENV ?= /mnt/nvmer0/services/ai-stack/config/stack.env
-LM_STUDIO_URL ?= http://$(DOMINUS_TAILSCALE_IPV4):1234
-VOICE_URL ?= http://$(DOMINUS_TAILSCALE_IPV4):8301
 CURL_HEALTH = curl -sf --connect-timeout 3 --max-time 10
 DOMINUS_SSH = ssh -T -o AddressFamily=inet -o BatchMode=yes -o ClearAllForwardings=yes -o ConnectTimeout=10 -o ControlMaster=no -o ControlPath=none -o ForwardAgent=no -o StrictHostKeyChecking=yes
 
@@ -120,25 +118,15 @@ rebuild: stop build run
 health:
 	@echo "=== companion-core (amarillo) ==="
 	@$(CURL_HEALTH) http://localhost:8300/health 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
-	@echo ""
-	@echo "=== LLM compatibility gateway ($(LM_STUDIO_URL), Tailscale only) ==="
-	@$(CURL_HEALTH) '$(LM_STUDIO_URL)/health' 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
-	@echo ""
-	@echo "=== companion-voice ($(VOICE_URL), Tailscale) ==="
-	@$(CURL_HEALTH) '$(VOICE_URL)/health' 2>/dev/null | python3 -m json.tool || echo "UNREACHABLE"
-	@echo ""
-	@echo "=== ComfyUI (authenticated gateway facade; no raw host port) ==="
-	@$(CURL_HEALTH) '$(LM_STUDIO_URL)/health' 2>/dev/null | jq -e '.comfyui_status == "ok"' >/dev/null && echo "ok" || echo "UNREACHABLE"
+	@echo "(Klukai's AI is all cloud: Anthropic and Fish Audio. Nothing on Dominus to check.)"
 
-# ── Full deploy: core on amarillo, GPU services on dominus-nobara ───────────────────
+# ── Full deploy: core on amarillo ───────────────────────────────────────────
 
 deploy: gateway
 	@echo "Core runs on amarillo (this host). Deploy steps:"
 	@echo "  1. Python change:  docker compose build companion-core && docker compose up -d companion-core"
 	@echo "  2. Web change:     rsync web-build/ into the bind-mount (no rebuild)"
-	@echo "  3. GPU sidecar:    follow the guarded runbook; installation does not enable/start units without explicit GPU clearance"
-	@echo "     Canonical file: $(DOMINUS_AI_DIR)/compose.yaml"
-	@echo "     Published APIs: $(DOMINUS_TAILSCALE_IPV4):1234, :8301, :8390 (Tailnet only; ComfyUI uses :1234 facade; Whisper STT on :8301)"
+	@echo "  Klukai uses no GPU services on dominus-nobara (cloud AI only, ADR-0020)."
 
 # ── Quality gates (mirror CI) ────────────────────────────────────────────────
 

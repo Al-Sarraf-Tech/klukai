@@ -21,7 +21,7 @@ if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
     os.environ["KLUKAI_CLAUDE_PRIMARY"] = "false"
     os.environ.pop("ANTHROPIC_API_KEY", None)
     os.environ.pop("OPENAI_API_KEY", None)
-    os.environ["KLUKAI_IMAGE_PROVIDER"] = "comfyui"
+    os.environ["KLUKAI_IMAGE_PROVIDER"] = "disabled"  # no renderer unless a test picks one
     os.environ["KLUKAI_CHAT_IMAGE_PROVIDER"] = ""
     os.environ["KLUKAI_AGY_ALLOWED_USERS"] = ""
     os.environ["KLUKAI_AGY_SOCKET"] = "/tmp/pytest-klukai-agy-unavailable/image.sock"
@@ -35,7 +35,6 @@ if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
     for _creative_kind in ("IMAGE", "TEXT"):
         for _creative_period in ("DAILY", "MONTHLY"):
             os.environ[f"KLUKAI_CLOUD_{_creative_kind}_{_creative_period}_LIMIT"] = "0"
-    os.environ["COMFYUI_URL"] = "http://127.0.0.1:1"
     # Fish is a paid cloud API: unit tests never see a real key.
     os.environ.pop("FISH_API_KEY", None)
 

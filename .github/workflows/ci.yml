@@ -169,9 +169,6 @@ jobs:
       KLUKAI_CREATIVE_TEXT_PROVIDER: "haiku"
       ANTHROPIC_API_KEY: ""
       OPENAI_API_KEY: ""
-      LM_STUDIO_URL: "http://127.0.0.1:1"
-      VOICE_URL: "http://127.0.0.1:1"
-      COMFYUI_URL: "http://127.0.0.1:1"
       KLUKAI_AGY_SOCKET: "/tmp/klukai-ci-no-account/image.sock"
       KLUKAI_AGY_TOKEN_FILE: "/tmp/klukai-ci-no-account/token"
     steps:

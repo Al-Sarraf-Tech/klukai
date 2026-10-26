@@ -129,7 +129,9 @@ async def test_voice_letter_falls_back_to_text_when_off(voice_off):
 
 
 @pytest.mark.asyncio
-async def test_health_reports_voice_disabled_without_probing(voice_off):
+async def test_health_reports_voice_disabled_without_probing(voice_off, monkeypatch):
+    monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "true")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     handler = _route("/api/health/subsystems", "GET")
     probed: list[str] = []
 

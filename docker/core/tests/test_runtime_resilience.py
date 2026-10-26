@@ -270,7 +270,9 @@ async def test_direct_pool_connection_obeys_postgres_breaker():
 
 
 @pytest.mark.asyncio
-async def test_readiness_requires_session_store_but_qdrant_is_optional(monkeypatch):
+async def test_readiness_requires_the_session_store_and_probes_no_vector_store(
+    monkeypatch,
+):
     from app.observability import health_cache
 
     health_cache.clear_cache()
@@ -280,12 +282,11 @@ async def test_readiness_requires_session_store_but_qdrant_is_optional(monkeypat
     monkeypatch.setattr(
         health_cache, "_check_redis_fresh", AsyncMock(return_value={"status": "down"})
     )
-    monkeypatch.setattr(
-        health_cache, "_check_qdrant_fresh", AsyncMock(return_value={"status": "down"})
-    )
     assert (await health_cache.get_fresh_health())["status"] == "unhealthy"
     monkeypatch.setattr(
         health_cache, "_check_redis_fresh", AsyncMock(return_value={"status": "ok"})
     )
-    assert (await health_cache.get_fresh_health())["status"] == "degraded"
+    ready = await health_cache.get_fresh_health()
+    assert ready["status"] == "ok"
+    assert "qdrant" not in ready
     health_cache.clear_cache()

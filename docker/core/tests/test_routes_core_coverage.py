@@ -195,7 +195,6 @@ class TestSubsystemHealth:
     @pytest.mark.parametrize("ready", [True, False])
     async def test_agy_diagnostics_report_worker_without_gpu_probe_or_google_auth_claim(self, monkeypatch, ready):
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
-        monkeypatch.setenv("LM_STUDIO_URL", "http://lm.test:1234")
         handler = _find_route(_app_with_routes(), "/api/health/subsystems", "GET")
         redis_mock = MagicMock(ping=AsyncMock(), aclose=AsyncMock())
         client = _fake_async_client(get_resp=_Resp(200, {"data": []}))
@@ -210,8 +209,7 @@ class TestSubsystemHealth:
             "source": "host_worker", "google_auth": "not_checked",
         }
         assert "comfyui" not in result["subsystems"]
-        urls = [call.args[0] for call in client._client.get.call_args_list]
-        assert "http://lm.test:1234/health" not in urls
+        client._client.get.assert_not_called()  # no GPU or model probe
 
     async def test_disabled_image_diagnostics_do_not_probe_renderer(self, monkeypatch):
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "disabled")
@@ -226,73 +224,44 @@ class TestSubsystemHealth:
         assert result["subsystems"]["images"] == {"provider": "disabled", "status": "disabled"}
         assert "comfyui" not in result["subsystems"]
 
-    @pytest.mark.parametrize("primary", [True, False])
-    async def test_dominus_off_is_standby_when_claude_answers(self, monkeypatch, primary):
-        """Dominus powered off is normal: with Claude primary configured the
-        local model is only the fallback, so it reads "standby" and does not
-        degrade the overall status. Without Claude it is still "down"."""
+    async def _subsystems(self, monkeypatch, *, primary=True, worker_ready=True,
+                          redis_ping=None, db=None):
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
-        monkeypatch.setenv("LM_STUDIO_URL", "http://lm.test:1234")
         monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "true" if primary else "false")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         handler = _find_route(_app_with_routes(), "/api/health/subsystems", "GET")
-        redis_mock = MagicMock(ping=AsyncMock(), aclose=AsyncMock())
-
-        async def get(url, **kwargs):
-            if url.startswith("http://lm.test:1234"):
-                raise RuntimeError("Dominus is off")
-            return _Resp(200, {})
-
-        client = _fake_async_client()
-        client._client.get = AsyncMock(side_effect=get)
+        redis_mock = MagicMock(ping=redis_ping or AsyncMock(), aclose=AsyncMock())
+        no_http = MagicMock(side_effect=AssertionError("no subsystem is probed over HTTP"))
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
+             patch("app.db.check_health", new=db or AsyncMock(return_value={"status": "ok"})), \
              patch("redis.asyncio.from_url", return_value=redis_mock), \
-             patch("httpx.AsyncClient", return_value=client), \
-             patch("app.agy_image_provider.agy_images_ready", new=AsyncMock(return_value=True)):
-            result = await handler(_mk_request())
-        if primary:
-            assert result["subsystems"]["lm_studio"] == {"status": "standby", "role": "fallback"}
-            assert result["status"] == "ok"
-        else:
-            assert result["subsystems"]["lm_studio"] == {"status": "down"}
-            assert result["status"] == "degraded"
-
-    async def _health_with(self, monkeypatch, get):
-        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
-        monkeypatch.setenv("LM_STUDIO_URL", "http://lm.test:1234")
-        monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "true")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-        handler = _find_route(_app_with_routes(), "/api/health/subsystems", "GET")
-        redis_mock = MagicMock(ping=AsyncMock(), aclose=AsyncMock())
-        client = _fake_async_client()
-        client._client.get = AsyncMock(side_effect=get)
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
-             patch("redis.asyncio.from_url", return_value=redis_mock), \
-             patch("httpx.AsyncClient", return_value=client), \
-             patch("app.agy_image_provider.agy_images_ready", new=AsyncMock(return_value=True)):
+             patch("httpx.AsyncClient", no_http), \
+             patch("app.agy_image_provider.agy_images_ready",
+                   new=AsyncMock(return_value=worker_ready)):
             return await handler(_mk_request())
 
-    async def test_a_degraded_subsystem_degrades_the_overall_status(self, monkeypatch):
-        async def get(url, **kwargs):
-            if "/healthz" in url:
-                return _Resp(503, {})  # Qdrant answering, but not healthy
-            return _Resp(200, {"data": [{"id": "m"}]})
+    @pytest.mark.parametrize("primary", [True, False])
+    async def test_llm_status_follows_the_claude_configuration(self, monkeypatch, primary):
+        """Claude is a paid API: its configuration is reported, never a request."""
+        result = await self._subsystems(monkeypatch, primary=primary)
+        assert result["subsystems"]["llm"] == {
+            "status": "ok" if primary else "down", "provider": "anthropic",
+        }
+        assert result["status"] == ("ok" if primary else "degraded")
 
-        result = await self._health_with(monkeypatch, get)
-        assert result["subsystems"]["qdrant"]["status"] == "degraded"
+    async def test_a_down_image_worker_degrades_the_overall_status(self, monkeypatch):
+        result = await self._subsystems(monkeypatch, worker_ready=False)
+        assert result["subsystems"]["images"]["status"] == "down"
         assert result["status"] == "degraded"
 
-    async def test_a_rejected_lm_token_is_not_a_healthy_model(self, monkeypatch):
-        """A 401 from the gateway has no model list; every local call would fail."""
-        async def get(url, **kwargs):
-            if url.startswith("http://lm.test:1234"):
-                return _Resp(401, {"error": {"message": "bad bearer"}})
-            return _Resp(200, {})
-
-        result = await self._health_with(monkeypatch, get)
-        assert result["subsystems"]["lm_studio"]["status"] != "ok"
+    async def test_all_ok_overall_ok_and_no_local_ai_subsystem(self, monkeypatch):
+        result = await self._subsystems(monkeypatch)
+        assert result["status"] == "ok"
+        subs = result["subsystems"]
+        assert set(subs) == {"database", "redis", "llm", "images", "voice"}
+        for local in ("qdrant", "lm_studio", "comfyui", "embeddings"):
+            assert local not in subs
+        assert subs["voice"] == {"status": "ok", "backend": "fish"}
 
     @pytest.mark.asyncio
     async def test_requires_auth(self):
@@ -302,107 +271,20 @@ class TestSubsystemHealth:
             resp = await handler(_mk_request(token=None))
         assert resp.status_code == 401
 
-    @pytest.mark.asyncio
-    async def test_all_ok_overall_ok(self):
-        app = _app_with_routes()
-        handler = _find_route(app, "/api/health/subsystems", "GET")
-
-        # httpx client returns 200 + healthy JSON for every probe.
-        good = _Resp(200, {
-            "data": [{"id": "model-a"}],
-            "comfyui_status": "ok",
-        })
-        redis_mock = MagicMock()
-        redis_mock.ping = AsyncMock()
-        redis_mock.aclose = AsyncMock()
-
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
-             patch("redis.asyncio.from_url", return_value=redis_mock), \
-             patch("httpx.AsyncClient", return_value=_fake_async_client(get_resp=good)):
-            result = await handler(_mk_request())
-
-        assert result["status"] == "ok"
-        subs = result["subsystems"]
-        assert subs["database"]["status"] == "ok"
-        assert subs["redis"]["status"] == "ok"
-        assert subs["qdrant"]["status"] == "ok"
-        assert subs["lm_studio"]["status"] == "ok"
-        assert subs["lm_studio"]["models_loaded"] == 1
-        assert subs["lm_studio"]["models"] == ["model-a"]
-        assert subs["comfyui"]["status"] == "ok"
-        assert subs["comfyui"]["source"] == "gpu_gateway"
-        assert subs["embeddings"]["status"] == "ok"
-        assert subs["voice"]["status"] == "ok"
-
-    @pytest.mark.asyncio
-    async def test_database_down_is_critical(self):
-        app = _app_with_routes()
-        handler = _find_route(app, "/api/health/subsystems", "GET")
-
-        good = _Resp(200, {"data": [], "devices": [{}]})
-        redis_mock = MagicMock()
-        redis_mock.ping = AsyncMock()
-        redis_mock.aclose = AsyncMock()
-
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.db.check_health", new=AsyncMock(side_effect=RuntimeError("pg gone"))), \
-             patch("redis.asyncio.from_url", return_value=redis_mock), \
-             patch("httpx.AsyncClient", return_value=_fake_async_client(get_resp=good)):
-            result = await handler(_mk_request())
-
+    async def test_database_down_is_critical(self, monkeypatch):
+        result = await self._subsystems(
+            monkeypatch, db=AsyncMock(side_effect=RuntimeError("pg gone"))
+        )
         # DB down dominates -> overall "critical".
         assert result["subsystems"]["database"]["status"] == "down"
         assert result["status"] == "critical"
 
-    @pytest.mark.asyncio
-    async def test_non_db_outage_is_degraded(self):
-        app = _app_with_routes()
-        handler = _find_route(app, "/api/health/subsystems", "GET")
-
-        # DB ok, but every HTTP probe + redis fails -> degraded (not critical).
-        redis_mock = MagicMock()
-        redis_mock.ping = AsyncMock(side_effect=RuntimeError("redis gone"))
-        redis_mock.aclose = AsyncMock()
-
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
-             patch("redis.asyncio.from_url", return_value=redis_mock), \
-             patch("httpx.AsyncClient",
-                   return_value=_fake_async_client(get_exc=RuntimeError("net down"))):
-            result = await handler(_mk_request())
-
+    async def test_redis_outage_is_degraded(self, monkeypatch):
+        result = await self._subsystems(
+            monkeypatch, redis_ping=AsyncMock(side_effect=RuntimeError("redis gone"))
+        )
         assert result["subsystems"]["database"]["status"] == "ok"
-        assert result["subsystems"]["qdrant"]["status"] == "down"
-        assert result["subsystems"]["lm_studio"]["status"] == "down"
-        assert result["status"] == "degraded"
-
-    @pytest.mark.asyncio
-    async def test_degraded_when_probe_returns_non_200(self):
-        """Qdrant/embeddings/voice report 'degraded' on a non-200 (not down)."""
-        app = _app_with_routes()
-        handler = _find_route(app, "/api/health/subsystems", "GET")
-
-        # 500 for the GET-based probes; lm_studio/comfyui still parse JSON so
-        # give them benign shapes. A 500 -> "degraded" for qdrant/emb/voice.
-        degraded = _Resp(500, {"data": [], "devices": [{}]})
-        redis_mock = MagicMock()
-        redis_mock.ping = AsyncMock()
-        redis_mock.aclose = AsyncMock()
-
-        with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
-             patch("redis.asyncio.from_url", return_value=redis_mock), \
-             patch("httpx.AsyncClient", return_value=_fake_async_client(get_resp=degraded)):
-            result = await handler(_mk_request())
-
-        assert result["subsystems"]["qdrant"]["status"] == "degraded"
-        assert result["subsystems"]["embeddings"]["status"] == "degraded"
-        # Fish is a cloud API: reported from configuration, never probed.
-        assert result["subsystems"]["voice"] == {"status": "ok", "backend": "fish"}
-        # Gateway health itself returned 500, so the protected Comfy facade is
-        # correctly down and the aggregate degrades.
-        assert result["subsystems"]["comfyui"]["status"] == "down"
+        assert result["subsystems"]["redis"]["status"] == "down"
         assert result["status"] == "degraded"
 
     @pytest.mark.asyncio
@@ -411,7 +293,7 @@ class TestSubsystemHealth:
         app = _app_with_routes()
         handler = _find_route(app, "/api/health/subsystems", "GET")
 
-        good = _Resp(200, {"data": [], "comfyui_status": "ok"})
+        good = _Resp(200, {"data": []})
         redis_mock = MagicMock()
         redis_mock.ping = AsyncMock()
         redis_mock.aclose = AsyncMock()

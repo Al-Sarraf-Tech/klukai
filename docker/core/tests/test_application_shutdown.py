@@ -145,7 +145,7 @@ async def test_shielded_wardrobe_pick_survives_budget_but_settles_before_shutdow
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "module_name", ["image_gen", "weather_client"]
+    "module_name", ["weather_client"]
 )
 async def test_lazy_http_clients_close_once_and_repeated_lifespan_gets_a_fresh_client(
     application, monkeypatch, module_name

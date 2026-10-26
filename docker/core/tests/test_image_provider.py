@@ -1,4 +1,4 @@
-"""Cloud images are opt-in, bounded, reference-based, and never use the GPU."""
+"""Cloud images are opt-in, bounded, reference-based, and never fall back."""
 
 from __future__ import annotations
 
@@ -66,39 +66,27 @@ def attempts():
         return conn.execute("SELECT COUNT(*) FROM creative_attempts WHERE kind='image'").fetchone()[0]
 
 
-async def test_cloud_dispatch_never_enters_local_lease_when_key_missing(monkeypatch):
+async def test_cloud_dispatch_without_a_key_makes_no_request(monkeypatch):
     monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "openai")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-    async def forbidden(*args, **kwargs):
-        pytest.fail("Cloud selection touched Dominus")
-
-    monkeypatch.setattr(image_gen, "_leased", forbidden)
+    fake_api(monkeypatch, lambda request: pytest.fail("unconfigured cloud sent HTTP"))
     assert await image_gen.generate_image("portrait") is None
 
 
-async def test_unset_provider_is_the_account_worker_never_dominus(monkeypatch):
-    """Owner order 2026-10-19: no Dominus image work. ComfyUI is only the
-    explicit KLUKAI_IMAGE_PROVIDER=comfyui option, never a missing setting."""
+async def test_unset_provider_is_the_account_worker(monkeypatch):
+    """An unset KLUKAI_IMAGE_PROVIDER is the account worker; without an
+    allowlisted user nothing is drawn (there is no local renderer)."""
     from app import image_provider
 
     monkeypatch.delenv("KLUKAI_IMAGE_PROVIDER", raising=False)
     assert image_provider.selected_provider() == "agy"
-    monkeypatch.setattr(image_gen, "_leased", AsyncMock(side_effect=AssertionError("Dominus")))
-    # No allowlisted user: refused, and nothing reached ComfyUI.
     assert await image_gen.generate_image("portrait") is None
-    assert await image_gen.free_comfyui_vram() is True
 
 
-async def test_explicit_comfyui_still_uses_local_renderer(monkeypatch):
-    monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "comfyui")
-    monkeypatch.setattr(image_gen, "_leased", AsyncMock(return_value=b"local"))
-    assert await image_gen.generate_image("portrait") == b"local"
-
-
-async def test_unknown_provider_fails_closed(monkeypatch):
-    monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "openia")
-    monkeypatch.setattr(image_gen, "_leased", AsyncMock(side_effect=AssertionError("local fallback")))
+@pytest.mark.parametrize("provider", ["comfyui", "openia"])
+async def test_unknown_or_retired_provider_fails_closed(monkeypatch, provider):
+    monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", provider)
+    fake_api(monkeypatch, lambda request: pytest.fail("unknown provider sent HTTP"))
     assert await image_gen.generate_image("portrait") is None
 
 
@@ -121,9 +109,8 @@ async def test_reference_edit_request_and_png_result(configured, monkeypatch):
         return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(image_bytes(fmt="JPEG")).decode()}], "usage": {"total_tokens": 100}})
 
     clients = fake_api(monkeypatch, handler)
-    monkeypatch.setattr(image_gen, "_leased", AsyncMock(side_effect=AssertionError("Dominus")))
     assert image_provider.cloud_images_ready()
-    result = await image_gen.generate_image("<lora:Klukai:0.9>, (green eyes:1.4), black gloves", retry=True)
+    result = await image_gen.generate_image("<lora:Klukai:0.9>, (green eyes:1.4), black gloves")
     assert len(requests) == 1
     assert result.startswith(b"\x89PNG\r\n\x1a\n")
     with Image.open(io.BytesIO(result)) as image:
@@ -189,8 +176,7 @@ async def test_provider_failure_consumes_one_attempt_without_retry(configured, m
         return response
 
     fake_api(monkeypatch, handler)
-    monkeypatch.setattr(image_gen, "_leased", AsyncMock(side_effect=AssertionError("fallback")))
-    assert await image_gen.generate_image("private prompt", retry=True) is None
+    assert await image_gen.generate_image("private prompt") is None
     assert len(calls) == 1 and attempts() == 1
     assert "private prompt" not in caplog.text and "test-image-key" not in caplog.text
 
@@ -231,12 +217,6 @@ def test_cloud_prompt_preserves_identity_and_outfit_without_diffusion_markup():
     assert "lora" not in text and "private_file" not in text and ":1.2" not in text
     assert "one woman" in text and "fully clothed" in text
     assert "red hair" in text
-
-
-async def test_img2img_cannot_fall_back_to_gpu_when_cloud_selected(configured, monkeypatch):
-    monkeypatch.setattr(image_gen, "gpu_lease", lambda *a, **kw: pytest.fail("cloud mode acquired GPU"))
-    fake_api(monkeypatch, lambda request: pytest.fail("portrait sent cloud HTTP"))
-    assert await image_gen.generate_img2img(b"source", "blink", denoise=0.2, seed=42) is None
 
 
 async def test_cloud_renders_serialize_before_reference_loading(configured, monkeypatch):

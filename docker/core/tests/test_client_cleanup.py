@@ -10,17 +10,24 @@ from app.llm_router import LLMRouter
 from app.memory import MemoryManager
 
 
-@pytest.mark.parametrize("kind", ["memory", "router"])
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_second_client_closes_even_if_first_close_fails(kind, cancel):
-    resource = MemoryManager() if kind == "memory" else LLMRouter()
+async def test_second_client_closes_even_if_first_close_fails(cancel):
+    resource = MemoryManager()
     failure = asyncio.CancelledError() if cancel else RuntimeError("first close failed")
     first = SimpleNamespace(aclose=AsyncMock(side_effect=failure))
     second = SimpleNamespace(aclose=AsyncMock())
-    if kind == "memory":
-        resource._redis, resource._http = first, second
-    else:
-        resource._http, resource._anthropic_http = first, second
+    resource._redis, resource._http = first, second
     with pytest.raises(type(failure)):
         await resource.close()
     second.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_router_close_awaits_its_only_client_and_surfaces_failure(cancel):
+    router = LLMRouter()
+    failure = asyncio.CancelledError() if cancel else RuntimeError("close failed")
+    client = SimpleNamespace(aclose=AsyncMock(side_effect=failure))
+    router._anthropic_http = client
+    with pytest.raises(type(failure)):
+        await router.close()
+    client.aclose.assert_awaited_once()
