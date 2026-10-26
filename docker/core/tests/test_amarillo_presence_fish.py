@@ -41,7 +41,13 @@ def enabled(monkeypatch):
 
 
 async def test_fish_transcription_contract(enabled):
-    request = AsyncMock(return_value=httpx.Response(200, json={"text": "Hello."}))
+    request = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            json={"text": "Hello."},
+            request=httpx.Request("POST", "https://api.fish.audio/v1/asr"),
+        )
+    )
     with patch("app.voice_client.http_request", request):
         result = await voice_client.post_fish_stt(
             base64.b64encode(b"RIFFtestWAVE").decode()
@@ -119,6 +125,45 @@ async def test_fish_websocket_uses_cloud_transcriber(enabled):
         patch.object(chat.ws, "send_thinking", AsyncMock()),
         patch.object(chat, "_handle_message", AsyncMock(return_value=None)) as message,
     ):
-        await chat._handle_voice("YWJj", SessionState(conversation_id="fish-stt-test"), "claude")
+        await chat._handle_voice(
+            "YWJj", SessionState(conversation_id="fish-stt-test"), "claude"
+        )
     stt.assert_awaited_once_with("YWJj")
     assert message.call_args.args[0] == "Hello."
+
+
+async def test_fish_transcription_preserves_request_for_status_checks(enabled):
+    upstream = httpx.Response(
+        200,
+        json={"text": "Hello.", "provider_metadata": "not forwarded"},
+        request=httpx.Request("POST", "https://api.fish.audio/v1/asr"),
+    )
+    with patch("app.voice_client.http_request", AsyncMock(return_value=upstream)):
+        result = await voice_client.post_fish_stt("YWJj")
+    assert result.json() == {"text": "Hello."}
+    result.raise_for_status()
+    assert result.request is upstream.request
+
+
+async def test_fish_websocket_processes_actual_transcriber_result(enabled):
+    from app import chat
+    from app.models import SessionState
+
+    upstream = httpx.Response(
+        200,
+        json={"text": "Hello."},
+        request=httpx.Request("POST", "https://api.fish.audio/v1/asr"),
+    )
+    with (
+        patch(
+            "app.voice_client.http_request", AsyncMock(return_value=upstream)
+        ) as request,
+        patch.object(chat.ws, "send_thinking", AsyncMock()),
+        patch.object(chat.ws, "send", AsyncMock()) as send,
+        patch.object(chat, "_handle_message", AsyncMock(return_value=None)) as message,
+    ):
+        session = SessionState(conversation_id="fish-stt-contract")
+        await chat._handle_voice("YWJj", session, "claude")
+    request.assert_awaited_once()
+    message.assert_awaited_once_with("Hello.", session, "claude")
+    send.assert_not_awaited()

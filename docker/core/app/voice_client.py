@@ -332,4 +332,4 @@ async def post_fish_stt(encoded_audio: str) -> httpx.Response:
     body = response.json()
     if not isinstance(body, dict) or not isinstance(body.get("text"), str):
         return _fish_response(502, "Transcription failed")
-    return httpx.Response(200, json={"text": body["text"]})
+    return httpx.Response(200, json={"text": body["text"]}, request=response.request)
