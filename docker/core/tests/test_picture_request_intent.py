@@ -194,3 +194,37 @@ def test_effective_scene_keeps_existing_participants_setting_and_time():
     assert scene.key == "balcony"
     assert scene.time == "evening"  # Existing resolver's sunset period.
     assert scene.time_source == "words"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Send me a selfie, actually no thanks.",
+        "Send me a selfie. No thanks!",
+        "Can you take a picture? Actually, no.",
+        "Show me your outfit — no, thanks.",
+        "Can you show me your photo editing settings?",
+        "Show me the photo editing settings",
+        "Let me see your photo editing settings",
+    ],
+)
+def test_cancelled_requests_and_editing_controls_are_not_picture_requests(message):
+    assert needs_image(message) is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Can you send me a selfie?",
+        "Send me a selfie, no makeup please",
+        "Take a photo of you, no flash",
+        "Show me your outfit, actually no hat",
+        "Take a photo of a sign saying no thanks",
+        'Take a photo of a sign saying "no thanks"',
+        "Take a photo of you changing the photo editing settings",
+        "Show me yourself changing the photo editing settings",
+        "Can you send me a photo of your camera settings?",
+    ],
+)
+def test_scene_constraints_and_depicted_settings_remain_picture_requests(message):
+    assert needs_image(message) is True
