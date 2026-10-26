@@ -30,28 +30,6 @@ in `docs/superpowers/plans/`.
 - `KLUKAI_CREATIVE_TEXT_PROVIDER` defaults to `haiku` (`local` is still accepted as its old
   name).
 - Gaming awareness is dormant: its only game signal was the Dominus gateway.
-
-### Added
-
-- `ops/amarillo/scripts/klukai-memory-backfill-from-qdrant.py`: a one-off, insert-only copy
-  of the Qdrant exchange and episode payloads into PostgreSQL (dry run unless `--apply`).
-- `docker/core/tests/test_cloud_only_invariant.py` fails the build if a local AI endpoint,
-  setting or module returns to the core.
-
-### Removed
-
-- `lm_gateway.py`, `warmup.py`, `gpu_lease.py`, the ComfyUI modules and
-  `reannotate_existing.py`; `seed_memories.py` is reduced to the retired no-op entry point
-  that amarillo's timer still runs.
-
-### Added
-
-- Optional OpenAI and Gemini reference-image adapters in the private image worker,
-  disabled by default with separate daily/monthly attempt limits. Production
-  remains fal-only; no additional provider spending is enabled.
-
-### Changed
-
 - Her voice can be the Fish Audio community "Klukai" model (`VOICE_BACKEND=fish`, owner
   decision 2026-10-19): core calls `https://api.fish.audio/v1/tts` with no LM gate or GPU
   lease, always with the free `model: s2.1-pro-free` header, and refuses (503) an empty key or
@@ -86,6 +64,22 @@ in `docs/superpowers/plans/`.
   accessories from a seed (`app/wardrobe_variation.py`). His granted outfit
   request still wins, the bath/bed intimacy gate is unchanged, and Live Portrait
   keeps its fixed base. The new tag sets still need a render check.
+
+### Added
+
+- `ops/amarillo/scripts/klukai-memory-backfill-from-qdrant.py`: a one-off, insert-only copy
+  of the Qdrant exchange and episode payloads into PostgreSQL (dry run unless `--apply`).
+- `docker/core/tests/test_cloud_only_invariant.py` fails the build if a local AI endpoint,
+  setting or module returns to the core.
+- Optional OpenAI and Gemini reference-image adapters in the private image worker,
+  disabled by default with separate daily/monthly attempt limits. Production
+  remains fal-only; no additional provider spending is enabled.
+
+### Removed
+
+- `lm_gateway.py`, `warmup.py`, `gpu_lease.py`, the ComfyUI modules and
+  `reannotate_existing.py`; `seed_memories.py` is reduced to the retired no-op entry point
+  that amarillo's timer still runs.
 
 ### Security
 
