@@ -70,15 +70,18 @@ _NUMBER_WORDS = {
 _MONTH_ALT = "|".join(sorted(_MONTHS, key=len, reverse=True))
 _WEEKDAY_ALT = "|".join(sorted(_WEEKDAYS, key=len, reverse=True))
 
-_TIME_COLON_RE = re.compile(r"\b(\d{1,2}):([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)?")
+_TIME_COLON_RE = re.compile(r"\b(\d{1,2}):([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)?(?![\w:])")
 _TIME_SUFFIX_RE = re.compile(r"\b(\d{1,2})\s*(a\.?m\.?|p\.?m\.?)(?![a-z])")
 _TIME_MILITARY_RE = re.compile(r"\b([01]\d|2[0-3])([0-5]\d)\s*(?:hours|hrs|h)\b")
-_TIME_AT_RE = re.compile(r"\bat\s+(\d{1,2})\b(?!\s*(?:st|nd|rd|th|/|-))")
+_TIME_AT_RE = re.compile(r"\bat\s+(\d{1,2})\b(?!\s*(?:st|nd|rd|th|/|-|:))")
 _ISO_RE = re.compile(r"\b(20\d\d)-(\d{1,2})-(\d{1,2})\b")
 _SLASH_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b")
-_MONTH_DAY_RE = re.compile(rf"\b({_MONTH_ALT})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?\b")
+_NAMED_YEAR = r"(?:(?:\s*,\s*|\s+)(\d{4})\b)?"
+_MONTH_DAY_RE = re.compile(
+    rf"\b({_MONTH_ALT})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?\b" + _NAMED_YEAR
+)
 _DAY_MONTH_RE = re.compile(
-    rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({_MONTH_ALT})\b"
+    rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({_MONTH_ALT})\b\.?" + _NAMED_YEAR
 )
 _ORDINAL_RE = re.compile(r"\bthe\s+(\d{1,2})(?:st|nd|rd|th)\b")
 _IN_DAYS_RE = re.compile(r"\bin\s+(\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")\s+days?\b")
@@ -127,14 +130,15 @@ def _extract_time(text: str) -> tuple[time | None, str]:
             m.end() :
         ]
     m = _TIME_COLON_RE.search(text)
-    if m:
+    # Never reinterpret the tail of a malformed clock as a separate time.
+    if m and not text[: m.start()].rstrip().endswith(":"):
         hour = _hour_from(int(m.group(1)), m.group(3))
         if hour is not None:
             return time(hour, int(m.group(2))), text[: m.start()] + " " + text[
                 m.end() :
             ]
     m = _TIME_SUFFIX_RE.search(text)
-    if m:
+    if m and not text[: m.start()].rstrip().endswith(":"):
         hour = _hour_from(int(m.group(1)), m.group(2))
         if hour is not None:
             return time(hour, 0), text[: m.start()] + " " + text[m.end() :]
@@ -192,9 +196,13 @@ def _extract_day(text: str, today: date) -> date | None:
         return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
     m = _MONTH_DAY_RE.search(text)
     if m:
+        if m.group(3):
+            return date(int(m.group(3)), _MONTHS[m.group(1)], int(m.group(2)))
         return _month_day(today, _MONTHS[m.group(1)], int(m.group(2)))
     m = _DAY_MONTH_RE.search(text)
     if m:
+        if m.group(3):
+            return date(int(m.group(3)), _MONTHS[m.group(2)], int(m.group(1)))
         return _month_day(today, _MONTHS[m.group(2)], int(m.group(1)))
     m = _SLASH_RE.search(text)
     if m:
