@@ -80,3 +80,43 @@ test("backgrounding with the music off still resumes the shared context on retur
   await m.setHidden(false);
   assert.equal(ctx.state, "running");
 });
+
+test("stopping during audio resume prevents a late music restart", async (t) => {
+  const ctx = new FakeAudioContext();
+  let finishResume;
+  ctx.resume = () => new Promise((resolve) => {
+    finishResume = () => { ctx.state = "running"; resolve(); };
+  });
+  const m = createMusic({ context: ctx, rand: () => 0 });
+  t.after(() => m.stop());
+  const starting = m.start();
+  m.stop();
+  finishResume();
+  assert.equal(await starting, false, "the stopped start is cancelled");
+  assert.equal(m.playing, false);
+  assert.equal(ctx.of("osc").length, 0, "no notes are scheduled after stop");
+  assert.equal(ctx.of("gain")[0].gain.events.at(-1)[1], 0);
+});
+
+test("a stopped start cannot supersede a newer music start", async (t) => {
+  const ctx = new FakeAudioContext();
+  const resumes = [];
+  ctx.resume = () => new Promise((resolve) => {
+    resumes.push(() => { ctx.state = "running"; resolve(); });
+  });
+  const m = createMusic({ context: ctx, rand: () => 0 });
+  t.after(() => m.stop());
+  const first = m.start();
+  m.stop();
+  const second = m.start();
+  resumes[1]();
+  assert.equal(await second, true);
+  const notes = ctx.of("osc").length;
+  resumes[0]();
+  assert.equal(await first, false);
+  assert.equal(m.playing, true, "the newer start keeps playing");
+  assert.equal(ctx.of("osc").length, notes, "stale resume schedules no extra notes");
+  m.stop();
+  m.stop();
+  assert.equal(await m.start(), true, "a fresh start still works after repeated stop");
+});
