@@ -77,6 +77,7 @@ function boot() {
   const ambience = createAmbience($("ambience"));
   let state = { line: "", mood: "composed", thinking: false, streaming: false };
   let day = null;
+  let daySeq = 0;
   let music = null;
   let voice = null;
   let avatar = null;
@@ -204,8 +205,11 @@ function boot() {
   }
 
   async function refreshDay() {
+    const seq = ++daySeq;
     try {
-      day = await api.herDay();
+      const next = await api.herDay();
+      if (seq !== daySeq) return;
+      day = next;
       $("status-line").textContent = day.status?.label || "The Elmo";
       const chip = $("outfit-chip");
       chip.textContent = day.outfit?.name || "";

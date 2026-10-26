@@ -32,6 +32,8 @@ export function createPortrait(root, {
   let level = 0;
   let active = false;
   let blinkTimer = null;
+  const blinkTimers = new Set();
+  let blinkGeneration = 0;
   let talkLoop = null;
 
   const on = (node, yes) => node.classList.toggle("on", Boolean(yes));
@@ -46,11 +48,23 @@ export function createPortrait(root, {
     }
   }
 
+  function armBlink(fn, ms) {
+    const generation = blinkGeneration;
+    const id = setTimer(() => {
+      if (generation !== blinkGeneration || !active) return;
+      blinkTimers.delete(id);
+      fn();
+    }, ms);
+    blinkTimers.add(id);
+    return id;
+  }
+
   function scheduleBlink() {
     clearTimer(blinkTimer);
+    blinkTimers.delete(blinkTimer);
     if (!active) return;
     const b = nextBlink(rand);
-    blinkTimer = setTimer(() => blink(b.closedMs, b.double), b.delay);
+    blinkTimer = armBlink(() => blink(b.closedMs, b.double), b.delay);
   }
 
   function blink(closedMs, double) {
@@ -58,10 +72,10 @@ export function createPortrait(root, {
     // skip this one but always book the next, or she stops blinking for good.
     if (!frames.blink || level > 0.06) { scheduleBlink(); return; }
     on(el.blink, true);
-    setTimer(() => {
+    armBlink(() => {
       on(el.blink, false);
       // Second half of a double blink; it books the next blink itself.
-      if (double) setTimer(() => blink(closedMs, false), 140);
+      if (double) armBlink(() => blink(closedMs, false), 140);
     }, closedMs);
     if (!double) scheduleBlink();
   }
@@ -98,10 +112,14 @@ export function createPortrait(root, {
       if (active && level > 0.06 && !talkLoop) talkLoop = raf(talkFrame);
     },
     setActive(yes) {
-      active = yes;
-      if (yes) scheduleBlink();
+      const next = Boolean(yes);
+      if (next === active) return;
+      active = next;
+      if (active) scheduleBlink();
       else {
-        clearTimer(blinkTimer);
+        blinkGeneration++;
+        for (const timer of blinkTimers) clearTimer(timer);
+        blinkTimers.clear();
         blinkTimer = null;
         if (talkLoop) { caf(talkLoop); talkLoop = null; }
         on(el.blink, false);
