@@ -46,7 +46,9 @@ async def draw_missing(user_id: str, outfit_id: str, level: int) -> bool:
     with Image.open(io.BytesIO(crop)) as image:
         for quality in (80, 65, 50, 35):
             buf = io.BytesIO()
-            image.convert("RGB").save(buf, "JPEG", quality=quality)
+            image.convert("RGB").resize((512, 512), Image.Resampling.LANCZOS).save(
+                buf, "JPEG", quality=quality
+            )
             raw = buf.getvalue()
             if len(raw) <= 42000:
                 break

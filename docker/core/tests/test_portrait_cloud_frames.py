@@ -35,6 +35,8 @@ async def test_only_missing_frames_and_base_unchanged(setup, monkeypatch):
         src = call.kwargs["portrait_source"]
         raw = base64.b64decode(src["image"])
         assert len(raw) <= 42000 and hashlib.sha256(raw).hexdigest() == src["sha256"]
+        with Image.open(io.BytesIO(raw)) as uploaded:
+            assert uploaded.size == (512, 512)
         assert call.kwargs["include_commander"] is False
     assert (
         frame_file("claude", "blazing_star", "base").read_bytes()
