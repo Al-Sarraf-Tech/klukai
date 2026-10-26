@@ -599,17 +599,17 @@ function boot() {
   $("btn-voice").addEventListener("click", async () => {
     if (document.hidden) return;
     const ticket = ++voiceTicket;
-    if (!voice) {
-      let ready = false;
-      try { ready = await startAudio(); } catch { ready = false; }
-      if (ticket !== voiceTicket) return;
-      if (!ready) {
-        notice(beginWake().audioMissing, 4000);
-        showAudioStatus(beginWake().audioMissing);
-        return;
-      }
-      showAudioStatus("");
+    // The voice engine exists even when an earlier resume failed or timed
+    // out. Each tap must make sure its shared context can actually play.
+    let ready = false;
+    try { ready = await startAudio(); } catch { ready = false; }
+    if (ticket !== voiceTicket) return;
+    if (!ready) {
+      notice(beginWake().audioMissing, 4000);
+      showAudioStatus(beginWake().audioMissing);
+      return;
     }
+    showAudioStatus("");
     if (!lastLine) { notice("Nothing for her to say yet.", 2000); return; }
     voice.setEnabled(true);
     voice.speak(lastLine);

@@ -634,3 +634,74 @@ test("a cancelled standalone resume failure does not display a stale audio error
   assert.deepEqual(h.requests, []);
   assert.notEqual(h.element("notice").textContent, life.beginWake().audioMissing);
 });
+
+test("standalone voice retries audio resume after a rejected first attempt", async () => {
+  const h = harness({ embedded: false });
+  h.frame({ type: "done", text: "Retry this line." });
+  const first = h.click("btn-voice");
+  await turn();
+  h.resumes[0].reject();
+  await first;
+  assert.equal(FakeAudioContext.last.state, "suspended");
+  assert.deepEqual(h.requests, []);
+  const second = h.click("btn-voice");
+  await turn();
+  try {
+    assert.equal(h.resumes.length, 2, "retry resumes the existing suspended context");
+    assert.deepEqual(h.requests, [], "synthesis waits for audible output");
+    h.resumes[1]();
+    await second;
+    await turn();
+    assert.deepEqual(h.requests, ["Retry this line."]);
+    assert.equal(FakeAudioContext.last.state, "running");
+  } finally {
+    h.document.hidden = true;
+    await h.document.dispatch("visibilitychange");
+  }
+});
+
+test("standalone voice retries audio resume after the first attempt times out", async () => {
+  const h = harness({ embedded: false });
+  h.frame({ type: "done", text: "Retry after timeout." });
+  const first = h.click("btn-voice");
+  await turn();
+  h.expireResume();
+  await first;
+  const second = h.click("btn-voice");
+  await turn();
+  try {
+    assert.equal(h.resumes.length, 2, "the timeout does not skip future resume attempts");
+    assert.deepEqual(h.requests, []);
+    h.resumes[1]();
+    await second;
+    await turn();
+    assert.deepEqual(h.requests, ["Retry after timeout."]);
+  } finally {
+    h.document.hidden = true;
+    await h.document.dispatch("visibilitychange");
+  }
+});
+
+test("a standalone retry cancelled by backgrounding cannot speak after resume", async () => {
+  const h = harness({ embedded: false });
+  h.frame({ type: "done", text: "Only after a fresh tap." });
+  const first = h.click("btn-voice");
+  await turn();
+  h.resumes[0].reject();
+  await first;
+  const retry = h.click("btn-voice");
+  await turn();
+  assert.equal(h.resumes.length, 2);
+  h.document.hidden = true;
+  await h.document.dispatch("visibilitychange");
+  h.document.hidden = false;
+  await h.document.dispatch("visibilitychange");
+  h.resumes[1]();
+  await retry;
+  assert.deepEqual(h.requests, [], "cancelled retry cannot play when the page returns");
+  await h.click("btn-voice");
+  await turn();
+  assert.deepEqual(h.requests, ["Only after a fresh tap."]);
+  h.document.hidden = true;
+  await h.document.dispatch("visibilitychange");
+});
