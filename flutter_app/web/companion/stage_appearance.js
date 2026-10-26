@@ -127,13 +127,13 @@ export function createStageAppearance({ $, api, prefs, savePrefs, notice, portra
           savePrefs(prefs);
           stage.dataset.mode = "portrait";
           model.hidden = true;
-          portrait.setActive(runtime.awake);
+          portrait.setActive(runtime.awake && !runtime.hidden);
         }
       }
       syncInsets();
     } else {
       model.hidden = true;
-      portrait.setActive(runtime.awake);
+      portrait.setActive(runtime.awake && !runtime.hidden);
     }
     runtime.avatar?.setPaused(prefs.mode !== "model" || runtime.hidden);
     syncButtons();

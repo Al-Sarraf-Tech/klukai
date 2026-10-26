@@ -8,7 +8,7 @@ import { createPortrait } from "./portrait.js";
 import { createAmbience, ambienceKind } from "./ambience.js";
 import { createMusic } from "./music.js";
 import { createVoice } from "./voice.js?v=20ea8f11";
-import { createStageAppearance } from "./stage_appearance.js?v=de4fa2ed";
+import { createStageAppearance } from "./stage_appearance.js?v=ce5c9690";
 import {
   applySubtitle, completedAnnouncement, clearDecorativeMotion, motionPreference,
   beginWake, portraitStatusNotice,
