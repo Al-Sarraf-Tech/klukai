@@ -1,157 +1,158 @@
-"""Behavioral coverage for the voice round-trip in ``app.chat._handle_voice``.
+"""The spoken round trip in ``app.chat._handle_voice``, end to end on Fish.
 
-The STT-then-TTS shim talks to the dominus voice service at ``$VOICE_URL``
-(default http://100.107.121.5:8301 over Tailscale), the TTS leg through
-``app.voice_client.post_leased_tts``.
+Speech-to-text and TTS both go to the Fish Audio cloud API. Here the real
+``voice_client`` code runs against an ``httpx.MockTransport``, so these tests
+check the wire: the multipart ASR request, the TTS request that follows, and
+the base64 contract of the audio pushed over the WebSocket.
 
-These tests deliberately do NOT duplicate the cases already in
-``test_chat_coverage.py`` (happy path / STT failure / empty transcript /
-TTS HTTP 500). They cover the remaining voice behaviors with real assertions:
-
-  * the audio bytes returned by the dominus /tts endpoint are base64-encoded
-    correctly before being pushed over the WebSocket (the TTS encode contract);
-  * ``VOICE_URL`` is honoured, with or without a trailing slash;
-  * when ``_handle_message`` had nothing of hers to return, no /tts call is made;
-  * a catastrophic failure (e.g. httpx client construction blows up) surfaces
-    the "voice channel broke" text fallback rather than ghosting the user.
-
-All network + WS are mocked. No real dominus, no sockets.
+Complements ``test_chat_coverage.py`` (which patches the Fish calls) and
+``test_voice_stt_fish.py`` (the ASR client on its own). No network, no WS.
 """
 
 from __future__ import annotations
 
 import base64
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from app.chat import _handle_voice
 from app.models import SessionState
 
+WAV = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32
+KEY = "pytest-fish-key-never-logged"
 
-pytestmark = pytest.mark.usefixtures("mock_voice_gpu_lease")
+
+@pytest.fixture(autouse=True)
+def fish(monkeypatch):
+    monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "true")
+    monkeypatch.setenv("FISH_API_KEY", KEY)
+    monkeypatch.delenv("KLUKAI_FISH_MODEL", raising=False)
+    monkeypatch.delenv("KLUKAI_FISH_VOICE_ID", raising=False)
 
 
-def _routing_client(stt_text: str, tts_status: int = 200, tts_bytes: bytes = b"audio"):
-    """Fake httpx.AsyncClient whose post() routes by URL suffix to /stt or /tts.
+def _fish_transport(transcript: str = "hello", tts_status: int = 200, tts_body: bytes = WAV):
+    """Patch httpx.AsyncClient onto a MockTransport playing Fish; returns (patch, seen)."""
+    seen: list[httpx.Request] = []
 
-    Records every URL it was POSTed to in ``client.posted_urls``.
-    """
-    stt_resp = MagicMock()
-    stt_resp.raise_for_status = MagicMock()
-    stt_resp.json = MagicMock(return_value={"text": stt_text})
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/v1/asr":
+            return httpx.Response(200, json={"text": transcript, "duration": 1.2})
+        assert request.url.path == "/v1/tts"
+        return httpx.Response(tts_status, content=tts_body)
 
-    tts_resp = MagicMock()
-    tts_resp.status_code = tts_status
-    tts_resp.content = tts_bytes
-    tts_resp.text = "err"
-
-    client = MagicMock()
-    client.posted_urls = []
-
-    async def _post(url, **kwargs):
-        client.posted_urls.append(url)
-        return stt_resp if url.endswith("/stt") else tts_resp
-
-    client.__aenter__ = AsyncMock(return_value=client)
-    client.__aexit__ = AsyncMock(return_value=False)
-    client.post = AsyncMock(side_effect=_post)
-    return client
+    real = httpx.AsyncClient
+    factory = patch(
+        "httpx.AsyncClient",
+        lambda **kwargs: real(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    return factory, seen
 
 
 def _ws() -> MagicMock:
     ws = MagicMock()
+    ws.send = AsyncMock()
     ws.send_thinking = AsyncMock()
     ws.send_voice = AsyncMock()
     ws.send_proactive = AsyncMock()
     return ws
 
 
-class TestVoiceTTSEncoding:
+AUDIO_B64 = base64.b64encode(b"\x1aE\xdf\xa3webm-take").decode()
+
+
+class TestFishRoundTrip:
     @pytest.mark.asyncio
-    async def test_dominus_audio_is_base64_encoded_over_ws(self):
-        """The raw audio bytes from dominus /tts are base64-encoded and pushed
-        with final=True — the decoded payload must equal the original bytes."""
-        raw = b"\x00\x01\x02RIFFWAVE\xff\xfe"  # binary, non-utf8
-        client = _routing_client("read this aloud", tts_status=200, tts_bytes=raw)
+    async def test_asr_then_tts_and_base64_audio_over_ws(self):
+        factory, seen = _fish_transport("read this aloud")
         ws = _ws()
+        handle = AsyncMock(return_value="Acknowledged, Commander.")
 
-        with patch("httpx.AsyncClient", return_value=client), \
-             patch("app.chat.ws", ws), \
-             patch("app.chat._handle_message", new=AsyncMock(return_value="Acknowledged, Commander.")):
-            await _handle_voice("inbound-audio", SessionState(conversation_id="c1"), "u1")
+        with factory, patch("app.chat.ws", ws), patch("app.chat._handle_message", handle):
+            await _handle_voice(AUDIO_B64, SessionState(conversation_id="c1"), "u1")
 
-        ws.send_voice.assert_awaited_once()
-        sent_b64 = ws.send_voice.await_args.args[1]
-        assert base64.b64decode(sent_b64) == raw
-        assert ws.send_voice.await_args.kwargs.get("final") is True
-        # Both legs of the round-trip hit the dominus voice service.
-        assert any(u.endswith("/stt") for u in client.posted_urls)
-        assert any(u.endswith("/tts") for u in client.posted_urls)
-
-    @pytest.mark.asyncio
-    async def test_voice_url_env_override_is_used(self):
-        """VOICE_URL redirects both /stt and /tts to the configured host, and a
-        trailing slash in the env value does not produce a `//stt` (404)."""
-        client = _routing_client("hello", tts_status=200, tts_bytes=b"x")
-        ws = _ws()
-
-        import os
-        with patch("httpx.AsyncClient", return_value=client), \
-             patch("app.chat.ws", ws), \
-             patch("app.chat._handle_message", new=AsyncMock(return_value="Hi.")), \
-             patch.dict(os.environ, {"VOICE_URL": "http://dominus.local:8301/"}, clear=False):
-            await _handle_voice("a", SessionState(conversation_id="c1"), "u1")
-
-        assert client.posted_urls == [
-            "http://dominus.local:8301/stt",
-            "http://dominus.local:8301/tts",
+        assert [str(r.url) for r in seen] == [
+            "https://api.fish.audio/v1/asr",
+            "https://api.fish.audio/v1/tts",
         ]
-
-
-class TestVoiceNoTTSWithoutAReply:
-    @pytest.mark.asyncio
-    async def test_skips_tts_when_she_had_no_answer(self):
-        """_handle_message returns None when her core produced nothing (the
-        sentinel turn, never persisted as hers): no /tts request is made and
-        no audio is sent — the outage notice is not read aloud in her voice."""
-        client = _routing_client("a question", tts_status=200, tts_bytes=b"x")
-        ws = _ws()
-
-        with patch("httpx.AsyncClient", return_value=client), \
-             patch("app.chat.ws", ws), \
-             patch("app.chat._handle_message", new=AsyncMock(return_value=None)):
-            await _handle_voice("a", SessionState(conversation_id="c1"), "u1")
-
-        assert not any(u.endswith("/tts") for u in client.posted_urls)
-        ws.send_voice.assert_not_called()
+        asr, tts = seen
+        assert asr.headers["model"] == "transcribe-1-pro"
+        assert asr.headers["authorization"] == f"Bearer {KEY}"
+        assert asr.headers["content-type"].startswith("multipart/form-data")
+        assert b"\x1aE\xdf\xa3webm-take" in asr.content
+        assert json.loads(tts.content)["text"] == "Acknowledged, Commander."
+        assert handle.await_args.args[0] == "read this aloud"
+        ws.send_voice.assert_awaited_once()
+        assert base64.b64decode(ws.send_voice.await_args.args[1]) == WAV
+        assert ws.send_voice.await_args.kwargs.get("final") is True
 
     @pytest.mark.asyncio
-    async def test_skips_tts_when_reply_is_empty(self):
-        """An empty reply (the model streamed nothing) must not attempt TTS."""
-        client = _routing_client("hi", tts_status=200, tts_bytes=b"x")
+    async def test_fish_tts_failure_falls_back_to_text(self):
+        factory, _ = _fish_transport("hi", tts_status=402, tts_body=b'{"message":"no credit"}')
         ws = _ws()
-
-        with patch("httpx.AsyncClient", return_value=client), \
-             patch("app.chat.ws", ws), \
-             patch("app.chat._handle_message", new=AsyncMock(return_value="")):
-            await _handle_voice("a", SessionState(conversation_id="c1"), "u1")
-
-        assert not any(u.endswith("/tts") for u in client.posted_urls)
+        with factory, patch("app.chat.ws", ws), patch(
+            "app.chat._handle_message", AsyncMock(return_value="Hi.")
+        ):
+            await _handle_voice(AUDIO_B64, SessionState(conversation_id="c1"), "u1")
         ws.send_voice.assert_not_called()
+        assert "offline" in ws.send_proactive.await_args.args[1].lower()
+
+
+class TestNoTTSWithoutAReply:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reply", [None, ""])
+    async def test_nothing_of_hers_is_not_voiced(self, reply):
+        """No answer (the sentinel turn) or an empty one: Fish TTS is never
+        called and no audio is sent."""
+        factory, seen = _fish_transport("a question")
+        ws = _ws()
+        with factory, patch("app.chat.ws", ws), patch(
+            "app.chat._handle_message", AsyncMock(return_value=reply)
+        ):
+            await _handle_voice(AUDIO_B64, SessionState(conversation_id="c1"), "u1")
+        assert [r.url.path for r in seen] == ["/v1/asr"]
+        ws.send_voice.assert_not_called()
+
+
+class TestVoiceInputGuards:
+    @pytest.mark.asyncio
+    async def test_without_a_fish_key_nothing_is_sent(self, monkeypatch):
+        monkeypatch.delenv("FISH_API_KEY")
+        ws = _ws()
+        with patch("httpx.AsyncClient", side_effect=AssertionError("Fish contacted")), \
+             patch("app.chat.ws", ws), \
+             patch("app.chat._handle_message", AsyncMock(side_effect=AssertionError("replied"))):
+            await _handle_voice(AUDIO_B64, SessionState(conversation_id="c1"), "u1")
+        ws.send_thinking.assert_not_called()
+        frame = ws.send.await_args.args[1]
+        assert frame["type"] == "error"
+        assert "Voice input is off" in frame["message"]
+
+    @pytest.mark.asyncio
+    async def test_the_transcript_is_never_logged(self, caplog):
+        caplog.set_level("DEBUG")
+        factory, _ = _fish_transport("my private words", tts_status=500, tts_body=b"")
+        ws = _ws()
+        with factory, patch("app.chat.ws", ws), patch(
+            "app.chat._handle_message", AsyncMock(return_value="Noted.")
+        ):
+            await _handle_voice(AUDIO_B64, SessionState(conversation_id="c1"), "u1")
+        assert "my private words" not in caplog.text
+        assert KEY not in caplog.text
 
 
 class TestVoiceCatastrophicFallback:
     @pytest.mark.asyncio
     async def test_outer_failure_sends_broke_entirely_text(self):
-        """If the httpx client itself can't be created, the broad outer handler
-        surfaces the 'voice channel broke' text fallback (never ghosts)."""
+        """A failure outside the STT/TTS legs surfaces the 'voice channel
+        broke' text fallback (never ghosts)."""
         ws = _ws()
-        with patch("httpx.AsyncClient", side_effect=RuntimeError("no transport")), \
-             patch("app.chat.ws", ws), \
-             patch("app.chat._handle_message", new=AsyncMock()):
-            # Must not raise
-            await _handle_voice("a", SessionState(conversation_id="c1"), "u1")
+        ws.send_thinking = AsyncMock(side_effect=RuntimeError("socket hiccup"))
+        with patch("app.chat.ws", ws), patch("app.chat._handle_message", new=AsyncMock()):
+            await _handle_voice(AUDIO_B64, SessionState(conversation_id="c1"), "u1")
 
         ws.send_proactive.assert_awaited_once()
         assert "broke entirely" in ws.send_proactive.await_args.args[1].lower()
@@ -159,11 +160,10 @@ class TestVoiceCatastrophicFallback:
     @pytest.mark.asyncio
     async def test_outer_failure_swallows_secondary_ws_error(self):
         """Even if the fallback send_proactive ALSO raises, _handle_voice never
-        propagates (the inner try/except pass guard)."""
+        propagates."""
         ws = _ws()
+        ws.send_thinking = AsyncMock(side_effect=RuntimeError("socket hiccup"))
         ws.send_proactive = AsyncMock(side_effect=RuntimeError("ws gone too"))
-        with patch("httpx.AsyncClient", side_effect=RuntimeError("no transport")), \
-             patch("app.chat.ws", ws), \
-             patch("app.chat._handle_message", new=AsyncMock()):
-            await _handle_voice("a", SessionState(conversation_id="c1"), "u1")  # must not raise
+        with patch("app.chat.ws", ws), patch("app.chat._handle_message", new=AsyncMock()):
+            await _handle_voice(AUDIO_B64, SessionState(conversation_id="c1"), "u1")
         ws.send_proactive.assert_awaited_once()

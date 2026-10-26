@@ -41,19 +41,16 @@ services:
       # Overrides are for isolated integration tests only; production must not
       # use an RFC1918/LAN endpoint.
       # Owner switch (2026-10-19): voice is off for now. Off, core sends no
-      # speech or transcription work to Dominus. Set true to bring it back.
+      # speech or transcription work anywhere. Set true to bring it back.
       KLUKAI_VOICE_ENABLED: "${KLUKAI_VOICE_ENABLED:-false}"
-      VOICE_URL: "${VOICE_URL:-http://100.107.121.5:8301}"
-      VOICE_BACKEND: "${VOICE_BACKEND:-dominus}"
-      # Keep long cold GPU synthesis off the browser's synchronous deadline.
+      # Opt-in submit/poll speech for long lines.
       VOICE_ASYNC_JOBS: "${VOICE_ASYNC_JOBS:-false}"
-      VOICE_STT_URL: "${VOICE_STT_URL:-http://100.107.121.5:8301}"
-      # Must match the canonical target stack's VOICE_API_TOKEN.
-      VOICE_API_TOKEN: "${VOICE_API_TOKEN:?VOICE_API_TOKEN is required}"
-      # VOICE_BACKEND=fish: the Fish Audio community "Klukai" model (Danastico).
-      # The account has no credit and must never be billed: the model header
-      # stays a free model (s2.1-pro-free is free through 2026-11-30); core
-      # refuses an empty key/model and any model not ending in "-free".
+      # Voice is Fish Audio only (cloud), both directions, with one key:
+      # - speech: the community "Klukai" model (Danastico) on a free model
+      #   header (s2.1-pro-free is free through 2026-11-30); core refuses an
+      #   empty key/model and any model not ending in "-free".
+      # - transcription: transcribe-1-pro, pay-as-you-go ($0.36 per audio
+      #   hour, owner authorized 2026-10-26). No key: voice input is off.
       FISH_API_KEY: "${FISH_API_KEY:-}"
       KLUKAI_FISH_VOICE_ID: "${KLUKAI_FISH_VOICE_ID:-47fc35b7311944bc9fa238ed856de1f3}"
       KLUKAI_FISH_MODEL: "${KLUKAI_FISH_MODEL:-s2.1-pro-free}"

@@ -25,9 +25,12 @@ class VoiceSettingsRequest(BaseModel):
 
 
 class STTRequest(BaseModel):
-    # Same ceiling as the voice service's own STTRequest (~6 MB of audio once
-    # decoded): refuse at validation rather than proxy a multi-MB body to it.
+    # Base64 audio, ~6 MB once decoded: refuse at validation rather than
+    # send a multi-MB body on to Fish.
     audio: str = Field(min_length=1, max_length=8_000_000)
+    # Optional hint for what he speaks: "en" or "ja" is passed to Fish;
+    # absent or anything else lets Fish detect the language.
+    language: str | None = Field(default=None, max_length=16)
 
 
 class ImageGenRequest(BaseModel):

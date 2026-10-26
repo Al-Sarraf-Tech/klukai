@@ -1,4 +1,4 @@
-"""The Fish Audio voice: free model only, taps only, English or Japanese.
+"""The Fish Audio voice: free TTS model only, English or Japanese, text letters.
 
 No test reaches Fish or any LLM: ``http_request``, ``httpx.AsyncClient``, the
 chat router and the database are all fakes.
@@ -28,7 +28,6 @@ VOICE_ID = "47fc35b7311944bc9fa238ed856de1f3"
 @pytest.fixture
 def fish(monkeypatch):
     monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "true")
-    monkeypatch.setenv("VOICE_BACKEND", "fish")
     monkeypatch.setenv("FISH_API_KEY", SECRET)
     monkeypatch.delenv("KLUKAI_FISH_MODEL", raising=False)
     monkeypatch.delenv("KLUKAI_FISH_VOICE_ID", raising=False)
@@ -92,8 +91,7 @@ class TestFishRequest:
         with patch("app.voice_client.http_request", reply), patch(
             "httpx.AsyncClient", clients
         ):
-            response = await voice_client.post_leased_tts(
-                MagicMock(), {"text": "Good evening, Commander.", "language": "en"}
+            response = await voice_client.post_tts({"text": "Good evening, Commander.", "language": "en"}
             )
 
         assert response.status_code == 200
@@ -130,7 +128,7 @@ class TestFishRequest:
         with patch("app.voice_client.http_request", reply), patch(
             "httpx.AsyncClient", _Clients()
         ):
-            await voice_client.post_leased_tts(MagicMock(), {"text": "hello"})
+            await voice_client.post_tts({"text": "hello"})
         assert reply.await_args.kwargs["headers"]["model"] == "s3-mini-free"
         assert reply.await_args.kwargs["json"]["reference_id"] == "other-voice"
 
@@ -145,7 +143,7 @@ class TestFishRequest:
         with patch("app.voice_client.http_request", reply), patch(
             "httpx.AsyncClient", _Clients()
         ):
-            await voice_client.post_leased_tts(MagicMock(), payload)
+            await voice_client.post_tts(payload)
         assert reply.await_args.kwargs["json"]["language"] == sent
 
     async def test_deadline_is_capped(self, fish):
@@ -154,22 +152,10 @@ class TestFishRequest:
         with patch("app.voice_client.http_request", reply), patch(
             "httpx.AsyncClient", clients
         ):
-            await voice_client.post_leased_tts(
-                MagicMock(), {"text": "hello"}, timeout=600.0
+            await voice_client.post_tts({"text": "hello"}, timeout=600.0
             )
         assert reply.await_args.kwargs["timeout"] == 60.0
         assert clients.built[0]["timeout"] == 60.0
-
-    async def test_no_lm_gate_and_no_gpu_lease(self, fish):
-        with patch("app.voice_client.http_request", _fish_reply()), patch(
-            "httpx.AsyncClient", _Clients()
-        ), patch(
-            "app.voice_client.gpu_lease", side_effect=AssertionError("GPU lease taken")
-        ), patch(
-            "app.llm_router.get_lm_gate", side_effect=AssertionError("LM gate taken")
-        ):
-            response = await voice_client.post_leased_tts(MagicMock(), {"text": "hi"})
-        assert response.status_code == 200
 
     @pytest.mark.parametrize(
         ("name", "value"),
@@ -186,7 +172,7 @@ class TestFishRequest:
         with patch("app.voice_client.http_request", reply), patch(
             "httpx.AsyncClient", side_effect=AssertionError("client built")
         ):
-            response = await voice_client.post_leased_tts(MagicMock(), {"text": "hi"})
+            response = await voice_client.post_tts({"text": "hi"})
         assert response.status_code == 503
         assert response.json() == {"error": "Voice is not configured"}
 
@@ -196,7 +182,7 @@ class TestFishRequest:
             "app.voice_client.http_request",
             AsyncMock(side_effect=AssertionError("Fish contacted")),
         ):
-            response = await voice_client.post_leased_tts(MagicMock(), {"text": "hi"})
+            response = await voice_client.post_tts({"text": "hi"})
         assert response.status_code == 503
 
     @pytest.mark.parametrize("model", ["s2.1-pro", "s1", "s2.1-pro-free-trial"])
@@ -206,7 +192,7 @@ class TestFishRequest:
             "app.voice_client.http_request",
             AsyncMock(side_effect=AssertionError("Fish contacted")),
         ):
-            response = await voice_client.post_leased_tts(MagicMock(), {"text": "hi"})
+            response = await voice_client.post_tts({"text": "hi"})
         assert response.status_code == 503
 
     async def test_empty_text_is_not_sent(self, fish):
@@ -214,7 +200,7 @@ class TestFishRequest:
             "app.voice_client.http_request",
             AsyncMock(side_effect=AssertionError("Fish contacted")),
         ):
-            response = await voice_client.post_leased_tts(MagicMock(), {"text": "  "})
+            response = await voice_client.post_tts({"text": "  "})
         assert response.status_code == 400
 
     @pytest.mark.parametrize("status", [400, 401, 402, 403, 429, 500, 503])
@@ -223,7 +209,7 @@ class TestFishRequest:
         with patch(
             "app.voice_client.http_request", _fish_reply(status, upstream)
         ), patch("httpx.AsyncClient", _Clients()):
-            response = await voice_client.post_leased_tts(MagicMock(), {"text": "hi"})
+            response = await voice_client.post_tts({"text": "hi"})
         assert response.status_code == 502
         assert response.json() == {"error": "Voice service unavailable"}
         assert b"acct_123" not in response.content
@@ -241,7 +227,7 @@ class TestFishRequest:
             "app.voice_client.http_request", _fish_reply(200, content)
         ), patch("httpx.AsyncClient", _Clients()):
             with pytest.raises(ValueError, match="Invalid voice audio"):
-                await voice_client.post_leased_tts(MagicMock(), {"text": "hi"})
+                await voice_client.post_tts({"text": "hi"})
 
     async def test_oversized_audio_is_rejected(self, fish, monkeypatch):
         monkeypatch.setattr(voice_client, "MAX_AUDIO_BYTES", len(WAV) - 1)
@@ -249,7 +235,7 @@ class TestFishRequest:
             "httpx.AsyncClient", _Clients()
         ):
             with pytest.raises(ValueError, match="Invalid voice audio"):
-                await voice_client.post_leased_tts(MagicMock(), {"text": "hi"})
+                await voice_client.post_tts({"text": "hi"})
 
     async def test_master_switch_still_rules(self, fish, monkeypatch):
         monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "false")
@@ -257,7 +243,7 @@ class TestFishRequest:
             "app.voice_client.http_request",
             AsyncMock(side_effect=AssertionError("Fish contacted")),
         ):
-            response = await voice_client.post_leased_tts(MagicMock(), {"text": "hi"})
+            response = await voice_client.post_tts({"text": "hi"})
         assert response.status_code == 503
         assert response.json() == {"error": "Voice is turned off"}
 
@@ -273,38 +259,39 @@ class TestFishRequest:
                 "httpx.AsyncClient", _Clients()
             ):
                 try:
-                    response = await voice_client.post_leased_tts(
-                        MagicMock(), {"text": "hi"}
+                    response = await voice_client.post_tts({"text": "hi"}
                     )
                 except (ValueError, httpx.HTTPError):
                     continue
                 assert SECRET.encode() not in response.content
         monkeypatch.setenv("KLUKAI_FISH_MODEL", "s2.1-pro")
-        await voice_client.post_leased_tts(MagicMock(), {"text": "hi"})
+        await voice_client.post_tts({"text": "hi"})
         assert caplog.records, "expected the refusals to be logged"
         assert SECRET not in caplog.text
 
 
-class TestBackendSwitches:
-    def test_fish_turns_off_input_and_letters_only(self, fish):
+class TestSwitches:
+    def test_fish_speaks_and_transcribes_but_letters_stay_text(self, fish):
         assert voice_client.fish_voice_enabled() is True
         assert voice_client.voice_enabled() is True
-        assert voice_client.voice_input_enabled() is False
-        assert voice_client.voice_letters_enabled() is False
-        assert voice_client.local_voice_enabled() is False
-
-    @pytest.mark.parametrize("backend", ["dominus", "amarillo-xpu"])
-    def test_other_backends_keep_input_and_letters(self, monkeypatch, backend):
-        monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "true")
-        monkeypatch.setenv("VOICE_BACKEND", backend)
-        assert voice_client.fish_voice_enabled() is False
         assert voice_client.voice_input_enabled() is True
-        assert voice_client.voice_letters_enabled() is True
+        assert voice_client.voice_letters_enabled() is False
 
     def test_master_switch_turns_everything_off(self, fish, monkeypatch):
         monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "false")
         assert voice_client.voice_input_enabled() is False
         assert voice_client.voice_letters_enabled() is False
+
+    @pytest.mark.parametrize(
+        ("value", "queued"),
+        [(None, False), ("false", False), ("true", True), (" ON ", True), ("1", True)],
+    )
+    def test_async_jobs_are_opt_in(self, monkeypatch, value, queued):
+        if value is None:
+            monkeypatch.delenv("VOICE_ASYNC_JOBS", raising=False)
+        else:
+            monkeypatch.setenv("VOICE_ASYNC_JOBS", value)
+        assert voice_client.async_voice_jobs_enabled() is queued
 
 
 # ── The per-Commander setting ─────────────────────────────────────────────
@@ -640,7 +627,7 @@ class TestApiTts:
         )
         with patch(
             "app.routes._get_user_id", new=AsyncMock(return_value="claude")
-        ), patch("app.voice_client.post_leased_tts", synth):
+        ), patch("app.voice_client.post_tts", synth):
             result = await handler(TTSRequest(text=text, language=language), _request())
         return result, synth, app
 
@@ -653,7 +640,7 @@ class TestApiTts:
         ):
             result, synth, _ = await self._speak("(smiles) Good evening, Commander.")
         assert base64.b64decode(result["audio"]) == WAV
-        assert synth.await_args.args[1] == {
+        assert synth.await_args.args[0] == {
             "text": "Good evening, Commander.",
             "language": "en",
         }
@@ -666,7 +653,7 @@ class TestApiTts:
             result, synth, _ = await self._speak("*bows* Good evening, Commander.")
         setting.assert_awaited_once_with("claude")
         translate.assert_awaited_once_with("Good evening, Commander.")
-        assert synth.await_args.args[1] == {
+        assert synth.await_args.args[0] == {
             "text": "こんばんは、指揮官。",
             "language": "ja",
         }
@@ -679,7 +666,7 @@ class TestApiTts:
             "app.voice_language.translate_to_japanese", AsyncMock(return_value=None)
         ):
             result, synth, _ = await self._speak("Good evening.")
-        assert synth.await_args.args[1] == {"text": "Good evening.", "language": "en"}
+        assert synth.await_args.args[0] == {"text": "Good evening.", "language": "en"}
         assert "audio" in result
 
     async def test_japanese_text_is_spoken_as_written(self, fish):
@@ -688,7 +675,7 @@ class TestApiTts:
             AsyncMock(side_effect=AssertionError("setting read")),
         ):
             _result, synth, _ = await self._speak("はい、指揮官。", language="ja")
-        assert synth.await_args.args[1] == {"text": "はい、指揮官。", "language": "ja"}
+        assert synth.await_args.args[0] == {"text": "はい、指揮官。", "language": "ja"}
 
     async def test_other_text_languages_are_refused(self, fish):
         result, synth, _ = await self._speak("Bonjour.", language="fr")
@@ -749,21 +736,10 @@ class TestApiTts:
         assert response.status_code == 502
 
 
-# ── Taps only: no microphone, no letters that play themselves ─────────────
+# ── Letters stay text: she speaks only when he taps ───────────────────────
 
 
-class TestTapsOnly:
-    async def test_stt_is_off(self, fish):
-        from app.api_schemas import STTRequest
-
-        handler, _ = _route("/api/stt", "POST")
-        with patch(
-            "app.routes_extras._get_user_id", new=AsyncMock(return_value="claude")
-        ), patch("httpx.AsyncClient", side_effect=AssertionError("network")):
-            response = await handler(STTRequest(audio="AAAA"), _request())
-        assert response.status_code == 503
-        assert response.body == b'{"error":"Voice input is off"}'
-
+class TestLettersStayText:
     async def test_stt_still_requires_a_login(self, fish):
         from app.api_schemas import STTRequest
 
@@ -771,29 +747,6 @@ class TestTapsOnly:
         with patch("app.routes_extras._get_user_id", new=AsyncMock(return_value=None)):
             response = await handler(STTRequest(audio="AAAA"), _request())
         assert response.status_code == 401
-
-    async def test_spoken_chat_gets_an_error_frame(self, fish):
-        from app.chat import _handle_voice
-        from app.models import SessionState
-
-        ws = MagicMock()
-        ws.send = AsyncMock()
-        ws.send_thinking = AsyncMock()
-        ws.send_voice = AsyncMock()
-        with patch("app.chat.ws", ws), patch(
-            "httpx.AsyncClient", side_effect=AssertionError("network")
-        ), patch(
-            "app.chat._handle_message",
-            new=AsyncMock(side_effect=AssertionError("replied")),
-        ):
-            await _handle_voice("AAAA", SessionState(conversation_id="c1"), "claude")
-        ws.send_thinking.assert_not_called()
-        ws.send_voice.assert_not_called()
-        frame = ws.send.await_args.args[1]
-        assert frame == {
-            "type": "error",
-            "message": "...Voice input is off for now, Commander. Type to me instead.",
-        }
 
     @staticmethod
     def _letter_would_succeed(tmp_path, monkeypatch):
@@ -822,19 +775,18 @@ class TestTapsOnly:
         from app.voice_archive import save_voice_note
 
         synth = self._letter_would_succeed(tmp_path, monkeypatch)
-        with patch("app.voice_client.post_leased_tts", synth):
+        with patch("app.voice_client.post_tts", synth):
             assert await save_voice_note("I missed you.", user_id="claude") is None
         synth.assert_not_awaited()
         assert list(tmp_path.iterdir()) == []
 
-    async def test_the_guard_is_what_stops_it(self, tmp_path, monkeypatch):
-        """Control: the same setup on Dominus does save a letter."""
+    async def test_the_guard_is_what_stops_it(self, fish, tmp_path, monkeypatch):
+        """Control: with the guard lifted, the same setup does save a letter."""
         from app.voice_archive import save_voice_note
 
-        monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "true")
-        monkeypatch.setenv("VOICE_BACKEND", "dominus")
+        monkeypatch.setattr(voice_client, "voice_letters_enabled", lambda: True)
         synth = self._letter_would_succeed(tmp_path, monkeypatch)
-        with patch("app.voice_client.post_leased_tts", synth):
+        with patch("app.voice_client.post_tts", synth):
             assert await save_voice_note("I missed you.", user_id="claude")
         synth.assert_awaited_once()
 
@@ -850,7 +802,7 @@ class TestTapsOnly:
         ws.send = AsyncMock()
         ws.send_proactive = AsyncMock()
         with patch("app.reflect_helpers.ws", ws), patch(
-            "app.voice_client.post_leased_tts", synth
+            "app.voice_client.post_tts", synth
         ):
             await _deliver_return_greeting(
                 "claude",
@@ -868,17 +820,6 @@ class TestTapsOnly:
             frame = call.args[1]
             assert frame.get("type") != "voice_letter"
             assert "voice_id" not in frame
-
-    async def test_letters_still_synthesize_on_other_backends(self, monkeypatch):
-        """The Fish guard is scoped: Dominus letters keep their audio."""
-        from app import voice_archive
-
-        monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "true")
-        monkeypatch.setenv("VOICE_BACKEND", "dominus")
-        synth = AsyncMock(side_effect=RuntimeError("voice host down"))
-        with patch("app.voice_client.post_leased_tts", synth):
-            assert await voice_archive.save_voice_note("Hi.", user_id="claude") is None
-        synth.assert_awaited_once()
 
 
 # ── Health ────────────────────────────────────────────────────────────────

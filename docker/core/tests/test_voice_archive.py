@@ -1,8 +1,11 @@
 """Tests for app/voice_archive.py — voice letters (async JP voice notes).
 
-All external services are mocked: the voice HTTP POST (httpx.AsyncClient.post),
+All external services are mocked: Fish synthesis (``voice_client.post_tts``),
 the audio volume (AUDIO_DIR via tmp_path monkeypatch), and the DB pool.
 NO real network and NO real disk under /audio.
+
+Letters stay text-only in production (``voice_letters_enabled()`` is false);
+the synthesis tests lift that guard to cover the path behind it.
 """
 
 from __future__ import annotations
@@ -16,13 +19,18 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-pytestmark = pytest.mark.usefixtures("mock_voice_gpu_lease")
 
+@pytest.fixture(autouse=True)
+def letters_on(monkeypatch):
+    """Lift the text-only guard so the synthesis path behind it is exercised."""
+    from app import voice_client
+
+    monkeypatch.setattr(voice_client, "voice_letters_enabled", lambda: True)
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
 
 class _FakeVoiceResponse:
-    """Stand-in for the httpx.Response from the voice /tts endpoint."""
+    """Stand-in for the httpx.Response from Fish TTS."""
 
     def __init__(self, status_code: int = 200, content: bytes = b"RIFFwav-bytes"):
         self.status_code = status_code
@@ -71,7 +79,7 @@ class _Pool:
 
 
 def _voice_post(status_code: int = 200, content: bytes = b"RIFFwav-bytes") -> AsyncMock:
-    """An AsyncMock standing in for httpx.AsyncClient.post returning a voice resp."""
+    """An AsyncMock standing in for voice_client.post_tts returning a voice resp."""
     return AsyncMock(return_value=_FakeVoiceResponse(status_code, content))
 
 
@@ -89,9 +97,8 @@ class TestSaveVoiceNoteHappy:
         conn = _RecordingConn()
 
         post = _voice_post(200, b"RIFF....WEBPwav")
-        with patch("httpx.AsyncClient.post", post), \
-             patch("app.voice_archive.get_pool", return_value=_Pool(conn)), \
-             patch("app.helpers.voice_auth_headers", return_value={}):
+        with patch("app.voice_client.post_tts", post), \
+             patch("app.voice_archive.get_pool", return_value=_Pool(conn)):
             note_id = await voice_archive.save_voice_note(
                 "Welcome back, Commander. I missed you.",
                 user_id="alice",
@@ -121,30 +128,22 @@ class TestSaveVoiceNoteHappy:
         assert params[7] == "alice"           # user_id
 
     @pytest.mark.asyncio
-    async def test_posts_japanese_language_and_auth_headers(self, tmp_path, monkeypatch):
-        """The synth POST mirrors /api/tts: {text, language} + voice auth headers,
-        and defaults to Klukai's JP voice."""
+    async def test_posts_english_text_like_api_tts(self, tmp_path, monkeypatch):
+        """The synthesis payload mirrors /api/tts: {text, language}, with the
+        language of the (English) text."""
         from app import voice_archive
 
         monkeypatch.setattr(voice_archive, "AUDIO_DIR", tmp_path)
         conn = _RecordingConn()
         post = _voice_post(200)
 
-        with patch("httpx.AsyncClient.post", post), \
-             patch("app.voice_archive.get_pool", return_value=_Pool(conn)), \
-             patch("app.helpers.voice_auth_headers", return_value={"Authorization": "Bearer vtok"}):
+        with patch("app.voice_client.post_tts", post), \
+             patch("app.voice_archive.get_pool", return_value=_Pool(conn)):
             await voice_archive.save_voice_note("Commander. You came back.", user_id="alice")
 
-        # URL ends with /tts; the text is English (her JP voice comes from the
-        # reference clip), so the language is "en" — "ja" 500s without cutlet.
-        call = post.await_args
-        assert call.args[0].endswith("/tts")
-        assert call.kwargs["json"]["language"] == "en"
-        assert call.kwargs["json"]["text"] == "Commander. You came back."
-        assert call.kwargs["headers"] == {
-            "Authorization": "Bearer vtok",
-            "X-GPU-Lease-Token": "pytest-voice-lease",
-        }
+        post.assert_awaited_once_with(
+            {"text": "Commander. You came back.", "language": "en"}
+        )
 
     @pytest.mark.asyncio
     async def test_truncates_long_text_for_synth_but_stores_full(self, tmp_path, monkeypatch):
@@ -155,13 +154,12 @@ class TestSaveVoiceNoteHappy:
         post = _voice_post(200)
         long_text = "x" * 900
 
-        with patch("httpx.AsyncClient.post", post), \
-             patch("app.voice_archive.get_pool", return_value=_Pool(conn)), \
-             patch("app.helpers.voice_auth_headers", return_value={}):
+        with patch("app.voice_client.post_tts", post), \
+             patch("app.voice_archive.get_pool", return_value=_Pool(conn)):
             await voice_archive.save_voice_note(long_text, user_id="alice")
 
         # Synth text capped at 500 chars …
-        assert len(post.await_args.kwargs["json"]["text"]) == 500
+        assert len(post.await_args.args[0]["text"]) == 500
         # … but the full text is persisted as text_prompt.
         assert conn.executed[0][1][2] == long_text
 
@@ -175,18 +173,17 @@ class TestSaveVoiceNoteHappy:
         post = _voice_post(200)
         long_text = "Welcome back, Commander. " * 40  # 1000 chars
 
-        with patch("httpx.AsyncClient.post", post), \
-             patch("app.voice_archive.get_pool", return_value=_Pool(conn)), \
-             patch("app.helpers.voice_auth_headers", return_value={}):
+        with patch("app.voice_client.post_tts", post), \
+             patch("app.voice_archive.get_pool", return_value=_Pool(conn)):
             await voice_archive.save_voice_note(long_text, user_id="alice")
 
-        sent = post.await_args.kwargs["json"]["text"]
+        sent = post.await_args.args[0]["text"]
         assert len(sent) <= 500
         assert sent.endswith("Welcome back, Commander.")
 
     @pytest.mark.asyncio
     async def test_stage_directions_are_not_read_aloud(self, tmp_path, monkeypatch):
-        """"(she smiles)" and "*a pause*" are stripped from what XTTS reads;
+        """"(she smiles)" and "*a pause*" are stripped from what she reads;
         the full greeting is still stored as the prompt."""
         from app import voice_archive
 
@@ -195,23 +192,22 @@ class TestSaveVoiceNoteHappy:
         post = _voice_post(200)
         text = "(she looks up from the data pad) *a pause* Welcome back, Commander."
 
-        with patch("httpx.AsyncClient.post", post), \
-             patch("app.voice_archive.get_pool", return_value=_Pool(conn)), \
-             patch("app.helpers.voice_auth_headers", return_value={}):
+        with patch("app.voice_client.post_tts", post), \
+             patch("app.voice_archive.get_pool", return_value=_Pool(conn)):
             note_id = await voice_archive.save_voice_note(text, user_id="alice")
 
         assert note_id is not None
-        assert post.await_args.kwargs["json"]["text"] == "Welcome back, Commander."
+        assert post.await_args.args[0]["text"] == "Welcome back, Commander."
         assert conn.executed[0][1][2] == text
 
     @pytest.mark.asyncio
     async def test_only_stage_directions_skips_synth_entirely(self, tmp_path, monkeypatch):
-        """Nothing speakable -> no GPU lease, no voice call, no row."""
+        """Nothing speakable -> no voice call, no row."""
         from app import voice_archive
 
         monkeypatch.setattr(voice_archive, "AUDIO_DIR", tmp_path)
         post = _voice_post(200)
-        with patch("httpx.AsyncClient.post", post), \
+        with patch("app.voice_client.post_tts", post), \
              patch("app.voice_archive.get_pool") as gp:
             note_id = await voice_archive.save_voice_note("(she nods) *silence*", user_id="alice")
 
@@ -235,9 +231,8 @@ class TestSaveVoiceNoteFailSoft:
         conn = _RecordingConn()
         post = _voice_post(500, b"TTS failed")
 
-        with patch("httpx.AsyncClient.post", post), \
-             patch("app.voice_archive.get_pool", return_value=_Pool(conn)) as gp, \
-             patch("app.helpers.voice_auth_headers", return_value={}):
+        with patch("app.voice_client.post_tts", post), \
+             patch("app.voice_archive.get_pool", return_value=_Pool(conn)) as gp:
             note_id = await voice_archive.save_voice_note("hi", user_id="alice")
 
         assert note_id is None
@@ -252,9 +247,8 @@ class TestSaveVoiceNoteFailSoft:
         monkeypatch.setattr(voice_archive, "AUDIO_DIR", tmp_path)
         post = AsyncMock(side_effect=RuntimeError("connection refused"))
 
-        with patch("httpx.AsyncClient.post", post), \
-             patch("app.voice_archive.get_pool") as gp, \
-             patch("app.helpers.voice_auth_headers", return_value={}):
+        with patch("app.voice_client.post_tts", post), \
+             patch("app.voice_archive.get_pool") as gp:
             note_id = await voice_archive.save_voice_note("hi", user_id="alice")
 
         assert note_id is None
@@ -268,9 +262,8 @@ class TestSaveVoiceNoteFailSoft:
         monkeypatch.setattr(voice_archive, "AUDIO_DIR", tmp_path)
         post = _voice_post(200, b"")  # 200 but no bytes
 
-        with patch("httpx.AsyncClient.post", post), \
-             patch("app.voice_archive.get_pool") as gp, \
-             patch("app.helpers.voice_auth_headers", return_value={}):
+        with patch("app.voice_client.post_tts", post), \
+             patch("app.voice_archive.get_pool") as gp:
             note_id = await voice_archive.save_voice_note("hi", user_id="alice")
 
         assert note_id is None
@@ -283,7 +276,7 @@ class TestSaveVoiceNoteFailSoft:
 
         monkeypatch.setattr(voice_archive, "AUDIO_DIR", tmp_path)
         post = _voice_post(200)
-        with patch("httpx.AsyncClient.post", post) as p:
+        with patch("app.voice_client.post_tts", post) as p:
             assert await voice_archive.save_voice_note("   ", user_id="alice") is None
         p.assert_not_called()  # never even hits the voice service
 
@@ -294,9 +287,8 @@ class TestSaveVoiceNoteFailSoft:
         monkeypatch.setattr(voice_archive, "AUDIO_DIR", tmp_path)
         post = _voice_post(200)
 
-        with patch("httpx.AsyncClient.post", post), \
+        with patch("app.voice_client.post_tts", post), \
              patch("app.voice_archive.get_pool") as gp, \
-             patch("app.helpers.voice_auth_headers", return_value={}), \
              patch("pathlib.Path.write_bytes", side_effect=OSError("disk full")):
             note_id = await voice_archive.save_voice_note("hi", user_id="alice")
 
@@ -313,9 +305,8 @@ class TestSaveVoiceNoteFailSoft:
         broken_pool = MagicMock()
         broken_pool.connection.side_effect = RuntimeError("db down")
 
-        with patch("httpx.AsyncClient.post", post), \
-             patch("app.voice_archive.get_pool", return_value=broken_pool), \
-             patch("app.helpers.voice_auth_headers", return_value={}):
+        with patch("app.voice_client.post_tts", post), \
+             patch("app.voice_archive.get_pool", return_value=broken_pool):
             note_id = await voice_archive.save_voice_note("hi", user_id="alice")
 
         assert note_id is None

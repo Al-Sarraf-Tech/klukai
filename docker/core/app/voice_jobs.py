@@ -15,12 +15,13 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
-
-from .voice_client import LOCAL_TTS_DEADLINE, post_leased_tts
+from .voice_client import post_tts
 
 logger = logging.getLogger(__name__)
 _TERMINAL = {"completed", "failed", "cancelled"}
+# From submission to audio, queue wait included: eight queued lines at Fish's
+# 60 s synthesis cap still finish inside it.
+VOICE_JOB_DEADLINE = 600.0
 
 
 class VoiceQueueFull(Exception):
@@ -40,12 +41,9 @@ class _Job:
 
 
 async def _synthesize(payload: dict[str, Any]) -> str:
-    async with httpx.AsyncClient(
-        timeout=LOCAL_TTS_DEADLINE, trust_env=False, follow_redirects=False
-    ) as client:
-        response = await post_leased_tts(client, payload, timeout=LOCAL_TTS_DEADLINE)
-        response.raise_for_status()
-        return base64.b64encode(response.content).decode("ascii")
+    response = await post_tts(payload)
+    response.raise_for_status()
+    return base64.b64encode(response.content).decode("ascii")
 
 
 class VoiceJobs:
@@ -53,7 +51,7 @@ class VoiceJobs:
         self,
         *,
         synthesize: Callable[[dict[str, Any]], Coroutine[Any, Any, str]] = _synthesize,
-        deadline: float = LOCAL_TTS_DEADLINE,
+        deadline: float = VOICE_JOB_DEADLINE,
         max_outstanding: int = 8,
         terminal_ttl: float = 300.0,
         max_result_bytes: int = 8 * 1024 * 1024,

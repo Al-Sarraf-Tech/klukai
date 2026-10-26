@@ -59,14 +59,15 @@ def test_on_by_default_in_code(monkeypatch, value):
 
 
 @pytest.mark.asyncio
-async def test_synthesis_takes_no_gate_or_lease_when_off(voice_off):
-    client = MagicMock()
-    client.post = AsyncMock(side_effect=AssertionError("voice host contacted"))
-    with patch("app.voice_client.gpu_lease", side_effect=AssertionError("GPU lease taken")), \
-         patch("app.llm_router.get_lm_gate", side_effect=AssertionError("LM gate taken")):
-        response = await voice_client.post_leased_tts(client, {"text": "hello"})
+async def test_synthesis_sends_nothing_when_off(voice_off, monkeypatch):
+    monkeypatch.setenv("FISH_API_KEY", "pytest-fish-key")
+    with _no_network():
+        response = await voice_client.post_tts({"text": "hello"})
     assert response.status_code == 503
     assert response.json() == {"error": "Voice is turned off"}
+    # Callers may raise_for_status(); it must raise, not crash on no request.
+    with pytest.raises(httpx.HTTPStatusError):
+        response.raise_for_status()
 
 
 @pytest.mark.asyncio
@@ -123,7 +124,7 @@ async def test_spoken_chat_says_voice_is_off(voice_off):
 async def test_voice_letter_falls_back_to_text_when_off(voice_off):
     from app.voice_archive import save_voice_note
 
-    with patch("app.voice_client.gpu_lease", side_effect=AssertionError("GPU lease taken")):
+    with patch("app.voice_client.post_tts", side_effect=AssertionError("synthesized")):
         assert await save_voice_note("I missed you.", user_id="claude") is None
 
 

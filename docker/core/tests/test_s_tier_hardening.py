@@ -413,6 +413,5 @@ class TestTailscaleBackendConfig:
             pytest.skip("docker-compose.yml not shipped into runtime image")
         text = compose.read_text()
         assert "${LM_STUDIO_URL:-http://100.107.121.5:1234}" in text
-        assert "${VOICE_URL:-http://100.107.121.5:8301}" in text
         assert "${COMFYUI_URL:-http://100.107.121.5:1234/api/v1/comfy}" in text
         assert "192.168.50.2" not in text

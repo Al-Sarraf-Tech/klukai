@@ -30,9 +30,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.models import SessionState  # noqa: E402
 
 
-pytestmark = pytest.mark.usefixtures("mock_voice_gpu_lease")
-
-
 # ── Fakes ─────────────────────────────────────────────────────────────────────
 
 
@@ -174,27 +171,26 @@ class TestTapInteract:
 # ── _handle_voice ────────────────────────────────────────────────────────────────
 
 
-def _voice_client(stt_text="hello there", tts_status=200, tts_bytes=b"audio"):
-    """Build a fake httpx.AsyncClient whose post() routes by URL suffix."""
-    stt_resp = MagicMock()
-    stt_resp.raise_for_status = MagicMock()
-    stt_resp.json = MagicMock(return_value={"text": stt_text})
+@pytest.fixture
+def fish_voice(monkeypatch):
+    """Voice on with a Fish key; the Fish calls themselves are patched."""
+    monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "true")
+    monkeypatch.setenv("FISH_API_KEY", "pytest-fish-key")
 
-    tts_resp = MagicMock()
-    tts_resp.status_code = tts_status
-    tts_resp.content = tts_bytes
-    tts_resp.text = "err"
 
-    async def _post(url, **kwargs):
-        if url.endswith("/stt"):
-            return stt_resp
-        return tts_resp
+def _fish(stt_text="hello there", tts_status=200, tts_bytes=b"audio"):
+    """Patch Fish speech-to-text and TTS; returns (transcribe, post_tts, patches)."""
+    import httpx
 
-    client = MagicMock()
-    client.__aenter__ = AsyncMock(return_value=client)
-    client.__aexit__ = AsyncMock(return_value=False)
-    client.post = AsyncMock(side_effect=_post)
-    return client
+    transcribe = AsyncMock(return_value={"text": stt_text})
+    post_tts = AsyncMock(
+        return_value=httpx.Response(tts_status, content=tts_bytes)
+    )
+    patches = (
+        patch("app.voice_client.transcribe", transcribe),
+        patch("app.voice_client.post_tts", post_tts),
+    )
+    return transcribe, post_tts, patches
 
 
 def _voice_ws() -> MagicMock:
@@ -206,13 +202,12 @@ def _voice_ws() -> MagicMock:
     return ws
 
 
-def _tts_posts(client) -> list:
-    """The JSON bodies POSTed to the voice /tts endpoint."""
-    return [
-        c.kwargs["json"] for c in client.post.call_args_list if c.args[0].endswith("/tts")
-    ]
+def _tts_posts(post_tts) -> list:
+    """The payloads sent to Fish TTS."""
+    return [c.args[0] for c in post_tts.await_args_list]
 
 
+@pytest.mark.usefixtures("fish_voice")
 class TestHandleVoice:
     @pytest.mark.asyncio
     async def test_happy_path_stt_llm_tts(self):
@@ -220,18 +215,20 @@ class TestHandleVoice:
         from app.chat import _handle_voice
 
         session = SessionState(conversation_id="c1")
-        client = _voice_client(stt_text="draw yourself", tts_status=200, tts_bytes=b"wavdata")
+        transcribe, post_tts, (p1, p2) = _fish("draw yourself", 200, b"wavdata")
         ws = _voice_ws()
         handle_message = AsyncMock(return_value="Here you go.")
 
-        with patch("httpx.AsyncClient", return_value=client), patch(
-            "app.chat.ws", ws
-        ), patch("app.chat._handle_message", handle_message):
+        with p1, p2, patch("app.chat.ws", ws), patch(
+            "app.chat._handle_message", handle_message
+        ):
             await _handle_voice("base64audio", session, "u1")
 
+        transcribe.assert_awaited_once_with("base64audio")
         handle_message.assert_awaited_once()
         assert handle_message.await_args.args[0] == "draw yourself"
-        assert _tts_posts(client) == [{"text": "Here you go."}]
+        assert _tts_posts(post_tts) == [{"text": "Here you go."}]
+        assert post_tts.await_args.kwargs == {"timeout": 30.0}
         ws.send_voice.assert_awaited_once()
         assert ws.send_voice.await_args.kwargs.get("final") is True
 
@@ -240,20 +237,20 @@ class TestHandleVoice:
         """STT failure goes out as an `error` frame (never a proactive toast,
         never persisted) — that is what clears the client's "Listening..."."""
         from app.chat import _handle_voice
+        from app.voice_client import SpeechToTextError
 
-        client = MagicMock()
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        client.post = AsyncMock(side_effect=RuntimeError("stt 500"))
+        _, post_tts, (p1, p2) = _fish()
         ws = _voice_ws()
         handle_message = AsyncMock()
 
-        with patch("httpx.AsyncClient", return_value=client), patch(
-            "app.chat.ws", ws
-        ), patch("app.chat._handle_message", handle_message):
+        with p1, p2, patch(
+            "app.voice_client.transcribe",
+            AsyncMock(side_effect=SpeechToTextError(502, "Transcription failed")),
+        ), patch("app.chat.ws", ws), patch("app.chat._handle_message", handle_message):
             await _handle_voice("aud", SessionState(conversation_id="c1"), "u1")
 
         handle_message.assert_not_called()
+        post_tts.assert_not_called()
         ws.send.assert_awaited_once()
         frame = ws.send.await_args.args[1]
         assert frame["type"] == "error"
@@ -264,13 +261,13 @@ class TestHandleVoice:
     async def test_empty_transcript_sends_error_frame(self):
         from app.chat import _handle_voice
 
-        client = _voice_client(stt_text="   ")  # whitespace only
+        _, _, (p1, p2) = _fish(stt_text="   ")  # whitespace only
         ws = _voice_ws()
         handle_message = AsyncMock()
 
-        with patch("httpx.AsyncClient", return_value=client), patch(
-            "app.chat.ws", ws
-        ), patch("app.chat._handle_message", handle_message):
+        with p1, p2, patch("app.chat.ws", ws), patch(
+            "app.chat._handle_message", handle_message
+        ):
             await _handle_voice("aud", SessionState(conversation_id="c1"), "u1")
 
         handle_message.assert_not_called()
@@ -283,19 +280,19 @@ class TestHandleVoice:
     @pytest.mark.asyncio
     async def test_no_tts_when_she_had_no_answer(self):
         """_handle_message returns None when her core produced nothing (the
-        sentinel turn): no GPU lease is spent voicing an outage notice, and
-        no fallback toast either — the sentinel bubble already says it."""
+        sentinel turn): the outage notice is not voiced, and no fallback
+        toast either — the sentinel bubble already says it."""
         from app.chat import _handle_voice
 
-        client = _voice_client(stt_text="are you there", tts_status=200)
+        _, post_tts, (p1, p2) = _fish("are you there")
         ws = _voice_ws()
 
-        with patch("httpx.AsyncClient", return_value=client), patch(
-            "app.chat.ws", ws
-        ), patch("app.chat._handle_message", AsyncMock(return_value=None)):
+        with p1, p2, patch("app.chat.ws", ws), patch(
+            "app.chat._handle_message", AsyncMock(return_value=None)
+        ):
             await _handle_voice("aud", SessionState(conversation_id="c1"), "u1")
 
-        assert _tts_posts(client) == []
+        assert _tts_posts(post_tts) == []
         ws.send_voice.assert_not_called()
         ws.send_proactive.assert_not_called()
 
@@ -303,49 +300,49 @@ class TestHandleVoice:
     async def test_tts_text_has_stage_directions_stripped(self):
         from app.chat import _handle_voice
 
-        client = _voice_client(stt_text="status", tts_status=200)
+        _, post_tts, (p1, p2) = _fish("status")
         ws = _voice_ws()
         reply = "(she looks up) *a short nod* Acknowledged, Commander."
 
-        with patch("httpx.AsyncClient", return_value=client), patch(
-            "app.chat.ws", ws
-        ), patch("app.chat._handle_message", AsyncMock(return_value=reply)):
+        with p1, p2, patch("app.chat.ws", ws), patch(
+            "app.chat._handle_message", AsyncMock(return_value=reply)
+        ):
             await _handle_voice("aud", SessionState(conversation_id="c1"), "u1")
 
-        assert _tts_posts(client) == [{"text": "Acknowledged, Commander."}]
+        assert _tts_posts(post_tts) == [{"text": "Acknowledged, Commander."}]
         ws.send_voice.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_no_tts_when_reply_is_only_stage_directions(self):
         from app.chat import _handle_voice
 
-        client = _voice_client(stt_text="status", tts_status=200)
+        _, post_tts, (p1, p2) = _fish("status")
         ws = _voice_ws()
 
-        with patch("httpx.AsyncClient", return_value=client), patch(
-            "app.chat.ws", ws
-        ), patch("app.chat._handle_message", AsyncMock(return_value="(she nods) *silence*")):
+        with p1, p2, patch("app.chat.ws", ws), patch(
+            "app.chat._handle_message", AsyncMock(return_value="(she nods) *silence*")
+        ):
             await _handle_voice("aud", SessionState(conversation_id="c1"), "u1")
 
-        assert _tts_posts(client) == []
+        assert _tts_posts(post_tts) == []
         ws.send_voice.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_long_reply_is_clipped_at_a_sentence_end(self):
-        """The voice path had no cap at all; XTTS now gets one clip's worth,
-        cut after a sentence rather than mid-word."""
+        """Fish gets one clip's worth, cut after a sentence rather than
+        mid-word."""
         from app.chat import _handle_voice
 
-        client = _voice_client(stt_text="tell me everything", tts_status=200)
+        _, post_tts, (p1, p2) = _fish("tell me everything")
         ws = _voice_ws()
         reply = "This is one full sentence of hers. " * 40  # 1400 chars
 
-        with patch("httpx.AsyncClient", return_value=client), patch(
-            "app.chat.ws", ws
-        ), patch("app.chat._handle_message", AsyncMock(return_value=reply)):
+        with p1, p2, patch("app.chat.ws", ws), patch(
+            "app.chat._handle_message", AsyncMock(return_value=reply)
+        ):
             await _handle_voice("aud", SessionState(conversation_id="c1"), "u1")
 
-        [body] = _tts_posts(client)
+        [body] = _tts_posts(post_tts)
         assert len(body["text"]) <= 500
         assert body["text"].endswith("sentence of hers.")
 
@@ -354,12 +351,12 @@ class TestHandleVoice:
         from app.chat import _handle_voice
 
         session = SessionState(conversation_id="c1")
-        client = _voice_client(stt_text="say hi", tts_status=500)
+        _, _, (p1, p2) = _fish("say hi", tts_status=502)
         ws = _voice_ws()
 
-        with patch("httpx.AsyncClient", return_value=client), patch(
-            "app.chat.ws", ws
-        ), patch("app.chat._handle_message", AsyncMock(return_value="Hi.")):
+        with p1, p2, patch("app.chat.ws", ws), patch(
+            "app.chat._handle_message", AsyncMock(return_value="Hi.")
+        ):
             await _handle_voice("aud", session, "u1")
 
         ws.send_voice.assert_not_called()
@@ -371,25 +368,14 @@ class TestHandleVoice:
         from app.chat import _handle_voice
 
         session = SessionState(conversation_id="c1")
-
-        stt_resp = MagicMock()
-        stt_resp.raise_for_status = MagicMock()
-        stt_resp.json = MagicMock(return_value={"text": "say hi"})
-
-        async def _post(url, **kwargs):
-            if url.endswith("/stt"):
-                return stt_resp
-            raise RuntimeError("tts boom")
-
-        client = MagicMock()
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        client.post = AsyncMock(side_effect=_post)
+        _, _, (p1, _p2) = _fish("say hi")
         ws = _voice_ws()
 
-        with patch("httpx.AsyncClient", return_value=client), patch(
-            "app.chat.ws", ws
-        ), patch("app.chat._handle_message", AsyncMock(return_value="Hi.")):
+        with p1, patch(
+            "app.voice_client.post_tts", AsyncMock(side_effect=RuntimeError("tts boom"))
+        ), patch("app.chat.ws", ws), patch(
+            "app.chat._handle_message", AsyncMock(return_value="Hi.")
+        ):
             await _handle_voice("aud", session, "u1")
 
         ws.send_voice.assert_not_called()
@@ -403,30 +389,26 @@ class TestHandleVoice:
         from app.chat import _handle_voice
 
         ws = MagicMock()
-        ws.send_thinking = AsyncMock()
+        ws.send_thinking = AsyncMock(side_effect=RuntimeError("ws gone"))
         ws.send_proactive = AsyncMock(side_effect=RuntimeError("ws gone"))
 
-        with patch("httpx.AsyncClient", side_effect=RuntimeError("no client")), patch(
-            "app.chat.ws", ws
-        ), patch("app.chat._handle_message", AsyncMock()):
-            # Must not raise despite both the client and the fallback failing.
+        with patch("app.chat.ws", ws), patch("app.chat._handle_message", AsyncMock()):
+            # Must not raise despite both the socket and the fallback failing.
             await _handle_voice("aud", SessionState(conversation_id="c1"), "u1")
 
         ws.send_proactive.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_outer_failure_surfaces_channel_broke(self):
-        """An exception before/around the client (here: client construction)
-        hits the outer except and sends the 'channel broke' fallback."""
+        """An exception outside the STT/TTS legs hits the outer except and
+        sends the 'channel broke' fallback."""
         from app.chat import _handle_voice
 
         ws = MagicMock()
-        ws.send_thinking = AsyncMock()
+        ws.send_thinking = AsyncMock(side_effect=RuntimeError("ws hiccup"))
         ws.send_proactive = AsyncMock()
 
-        with patch("httpx.AsyncClient", side_effect=RuntimeError("no client")), patch(
-            "app.chat.ws", ws
-        ), patch("app.chat._handle_message", AsyncMock()):
+        with patch("app.chat.ws", ws), patch("app.chat._handle_message", AsyncMock()):
             await _handle_voice("aud", SessionState(conversation_id="c1"), "u1")
 
         ws.send_proactive.assert_awaited_once()
@@ -937,12 +919,10 @@ class TestWSLoopOwnSocket:
 
         import httpx
 
-        monkeypatch.setenv("VOICE_BACKEND", "dominus")
-        monkeypatch.setenv("VOICE_ASYNC_JOBS", "true")
-        monkeypatch.setenv("VOICE_URL", "http://dominus.test:8301")
-        monkeypatch.delenv("VOICE_STT_URL", raising=False)
+        monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "true")
+        monkeypatch.setenv("FISH_API_KEY", "pytest-fish-key")
         sock = _FakeWebSocket(token="good", frames=[
-            {"type": "voice_end", "audio": "voice-input"},
+            {"type": "voice_end", "audio": "dm9pY2UtaW5wdXQ="},
             {"type": "message", "content": "Continue in text."},
         ])
         session_seen = None
@@ -958,11 +938,13 @@ class TestWSLoopOwnSocket:
         endpoint, ws, patches = self._run(sock, _handle_message=text_reply)
         contacted = []
 
+        stage_paths = {"stt": "/v1/asr", "tts": "/v1/tts"}
+
         def upstream(request):
             contacted.append(str(request.url))
-            if request.url.path == f"/{failed_stage}":
-                raise httpx.ConnectError("Nobara voice is offline", request=request)
-            assert request.url.path == "/stt"
+            if request.url.path == stage_paths[failed_stage]:
+                raise httpx.ConnectError("Fish is unreachable", request=request)
+            assert request.url.path == "/v1/asr"
             return httpx.Response(200, json={"text": "Spoken question."})
 
         client_type = httpx.AsyncClient
@@ -983,7 +965,7 @@ class TestWSLoopOwnSocket:
         ws.send_voice.assert_not_awaited()
         sock.close.assert_not_awaited()
         assert sock.receive_text.await_count == 3  # Both turns, then client disconnect.
-        assert all(url.startswith("http://dominus.test:8301/") for url in contacted)
+        assert all(url.startswith("https://api.fish.audio/v1/") for url in contacted)
 
     @pytest.mark.asyncio
     async def test_malformed_frame_is_skipped_and_loop_continues(self):

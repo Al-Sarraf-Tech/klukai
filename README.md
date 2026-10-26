@@ -30,7 +30,7 @@ This README explains **how all of it works**: the app he holds, what happens whe
 |---|---|
 | **The app** | A new *Tactical HUD* PWA built for phones (360–430 px wide). There are five tabs: Chat, Album, Day, Kit and Me. Chat flips between a text view and her live 3D model |
 | **Conversation** | Claude Sonnet 5.5 (adaptive thinking, medium effort) writes every reply; a local model on the Dominus GPU host is the secondary |
-| **Voice** | Fish Audio with a community "Klukai" voice, **free model only**. Each Commander picks English or Japanese, and she speaks **only when he taps** ▶ VOICE. Voice input is off |
+| **Voice** | Fish Audio with a community "Klukai" voice, **free model only**. Each Commander picks English or Japanese, and she speaks **only when he taps** ▶ VOICE. Voice input is transcribed by Fish speech-to-text |
 | **Pictures** | A private worker on amarillo tries **Grok first, then Codex, then Agy**. Claude Sonnet 5.5 checks renders and never draws. Nothing renders on a GPU, and no image service is ever paid |
 | **Dreams & Her POV writing** | Anthropic text, capped at 20 attempts a day and 300 a month across both features |
 | **Memory** | Redis (today) → Qdrant (episodes) → PostgreSQL (facts). Chat history, episodes, affection and vectors are **sacred**: additive only, never deleted |
@@ -185,9 +185,10 @@ sequenceDiagram
   - **English** reads her line as written.
   - **Japanese** first translates it into her polite register through the chat model. The translation is cached in Redis by text hash, and if translation fails she speaks English instead.
 - **One sentence at a time.** The PWA splits her line into sentences and plays each as its own short job, so playback starts quickly and long replies keep their order.
-- **Free model, enforced in code.** Every Fish request carries the `s2.1-pro-free` model header, and core refuses any model that does not end in `-free`. With no key configured, nothing is sent. The voice is a public community model on Fish ("Klukai" by Danastico); no recordings of the actress are uploaded anywhere.
-- **Switches.** `KLUKAI_VOICE_ENABLED=false` turns all speech off: `/api/tts` and `/api/stt` answer 503 and voice letters fall back to text. Voice *input* is off in Fish mode: `/api/stt` answers 503 "Voice input is off" and the mic button is hidden.
-- **Other backends.** The local XTTS backends (`dominus` on the RTX 3090, `amarillo-xpu` on the Arc A380) remain selectable rollback options, each with its own pinned reference clip.
+- **Free model, enforced in code.** Every Fish TTS request carries the `s2.1-pro-free` model header, and core refuses any model that does not end in `-free`. With no key configured, nothing is sent. The voice is a public community model on Fish ("Klukai" by Danastico); no recordings of the actress are uploaded anywhere.
+- **Voice input.** `POST /api/stt` (`{"audio": base64}` → `{"text", "language", "duration"}`) sends his recording to Fish speech-to-text (`transcribe-1-pro`, pay-as-you-go, owner authorized 2026-10-26) with the same key. An optional `language` of `en` or `ja` is passed as a hint; otherwise Fish detects it. Without a key it answers 503 "Voice input is off". The app's mic button is still hidden.
+- **Switches.** `KLUKAI_VOICE_ENABLED=false` turns all speech off: `/api/tts` and `/api/stt` answer 503 and voice letters fall back to text.
+- **Cloud only.** Fish is the only voice backend; the local XTTS/Whisper services on Dominus and Amarillo are no longer used.
 
 ---
 
