@@ -809,3 +809,58 @@ class TestDeliver:
         with pytest.raises(RuntimeError):
             await op_brief.deliver("claude", _action())
         ctx.ws.send_proactive.assert_not_awaited()
+
+
+class TestDateTokenValidation:
+    @pytest.mark.parametrize("hint", [
+        "October 27, 2027 at 3pm",
+        "October 27, 2025 at 3pm",
+        "27 October 2027 at 3pm",
+        "27 Oct. 2027 at 3pm",
+        "27th of October 2025 at 3pm",
+    ])
+    def test_named_date_keeps_explicit_year_outside_window(self, hint):
+        now = datetime(2026, 10, 26, 7, 0)
+        assert op_brief.resolve_when(hint, now) is None
+
+    @pytest.mark.parametrize("hint", [
+        "January 3, 2027 at 3pm",
+        "Jan. 3 2027 at 3pm",
+        "3rd of January 2027 at 3pm",
+    ])
+    def test_explicit_year_can_cross_calendar_boundary(self, hint):
+        now = datetime(2026, 12, 28, 9, 0)
+        assert op_brief.resolve_when(hint, now) == When(date(2027, 1, 3), time(15, 0), True)
+
+    @pytest.mark.parametrize("hint", [
+        "tomorrow at 9:99",
+        "tomorrow at 12:345",
+        "tomorrow at 9 : 99",
+        "tomorrow at 12:345pm",
+        "tomorrow at 13:30pm",
+        "tomorrow at 25:10pm",
+        "tomorrow at 25: 10pm",
+        "tomorrow at 9:12:34",
+        "tomorrow at 9: 12:34",
+    ])
+    def test_malformed_clock_does_not_turn_into_an_exact_time(self, hint):
+        now = datetime(2026, 10, 26, 7, 0)
+        assert op_brief.resolve_when(hint, now) == When(date(2026, 10, 27), None, False)
+
+    @pytest.mark.parametrize("hint,clock", [
+        ("tomorrow: 3pm", time(15, 0)),
+        ("tomorrow: 7am", time(7, 0)),
+        ("October 27: 09:30", time(9, 30)),
+        ("October 27: 3pm", time(15, 0)),
+        ("2026-10-27: 09:30", time(9, 30)),
+        ("10/27: 3pm", time(15, 0)),
+    ])
+    def test_colon_date_separator_preserves_explicit_time(self, hint, clock):
+        now = datetime(2026, 10, 26, 7, 0)
+        assert op_brief.resolve_when(hint, now) == When(date(2026, 10, 27), clock, True)
+
+    def test_early_event_after_colon_still_suppresses_late_sendoff(self):
+        now = datetime(2026, 10, 26, 7, 0)
+        when = op_brief.resolve_when("tomorrow: 7am", now)
+        assert when is not None
+        assert "sendoff" not in [kind for kind, _due in op_brief.plan_slots(when, now)]
