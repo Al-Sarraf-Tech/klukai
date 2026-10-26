@@ -8,7 +8,6 @@ import logging
 
 from .context import (
     affection,
-    router,
     ws,
 )
 from .proactive.state import now_local
@@ -169,16 +168,6 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
                 "Last exchanges (resume from here):\n" + excerpt_text
             )
 
-        import os
-        from .models import LLMConfig
-
-        config = LLMConfig(
-            provider="lmstudio",
-            model="cognitivecomputations_dolphin-mistral-24b-venice-edition",
-            base_url=os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234"),
-            temperature=0.9,
-            max_tokens=180,
-        )
         from .creative_text import complete_creative_text, uses_cloud_text
 
         if kind == "dream" and uses_cloud_text():
@@ -188,24 +177,12 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
         else:
             from . import background_llm
 
-            async def local() -> str:
-                resp = await router.complete_local(
-                    system_prompt=system_prompt,
-                    messages=[{"role": "user", "content": user_prompt}],
-                    config=config,
-                )
-                content = (
-                    resp.get("choices", [{}])[0].get("message", {}).get("content", "")
-                )
-                return content if isinstance(content, str) else ""
-
             greeting = (
                 await background_llm.text(
                     "return_greeting",
                     user_prompt,
                     system=system_prompt,
                     max_tokens=180,
-                    local=local,
                 )
             ).strip()
         if not greeting or len(greeting) < 10:

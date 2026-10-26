@@ -31,7 +31,6 @@ from .chat import register_websocket
 from .db import init_pool, close_pool, get_pool
 from .events import init as events_init, close as events_close
 from .helpers import fix_narration as _fix_narration
-from .llm_router import FAILURE_SENTINEL
 from .migrations import apply_migrations
 from .models import SessionState
 from .personality import load_personality
@@ -119,21 +118,7 @@ async def generate_daily_recap(
 
         from . import background_llm
 
-        async def local() -> str:
-            config = await router.route("recap", SessionState(conversation_id="recap"))
-            full = []
-            async for token in router.stream(
-                prompt, [{"role": "user", "content": prompt}], config
-            ):
-                full.append(token)
-            recap = "".join(full)
-            # With the GPU host down the stream is the sentinel — that is not her
-            # evening log, and delivering it would push an outage notice as her words.
-            return "" if recap.startswith(FAILURE_SENTINEL) else recap
-
-        recap = await background_llm.text(
-            "daily_recap", prompt, max_tokens=2048, local=local
-        )
+        recap = await background_llm.text("daily_recap", prompt, max_tokens=2048)
         return recap or None
     except Exception as e:
         logger.warning("Daily recap generation failed: %s", e)
@@ -187,7 +172,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from .rate_limit import close as _rate_limit_close
     from .observability.health_cache import running as _health_checks_running
     from .runtime_tasks import running as _application_work
-    from . import image_gen, memory_archive, weather_client
+    from . import image_gen, weather_client
 
     async with _application_work(ws) as (cleanup, owners):
         # Register before each init: clients/pool workers can exist even when
@@ -195,7 +180,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         cleanup.push_async_callback(close_pool)
         cleanup.push_async_callback(_caches_close)
         cleanup.push_async_callback(_rate_limit_close)
-        for close in (image_gen.close, memory_archive.close, weather_client.close):
+        for close in (image_gen.close, weather_client.close):
             cleanup.push_async_callback(close)
         await cleanup.enter_async_context(_health_checks_running())
         await init_pool(min_size=2, max_size=10)

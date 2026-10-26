@@ -2,22 +2,18 @@
 
 Owner decisions, 2026-10-19: the per-turn background extraction (mood,
 interaction and affection, intensity for her heart rate, facts) and the
-session compaction summaries may run on Claude Haiku at high effort, on the
-Anthropic key interactive chat already uses; then "close any gaps from
-reliance on dominus": every other background text/JSON call (promise and
-event detection, episode journal entries, proactive lines, the weekly
-reflection, return greetings, Her POV and memory-archive captions when
-creative text is local) uses the same route through app/background_llm.py,
-which owns the Haiku -> local -> safe-default policy and its log line.
-Image prompts, rendering and seeding are not text routes and stay put.
+session compaction summaries run on Claude Haiku at high effort, on the
+Anthropic key interactive chat already uses; every other background text/JSON
+call uses the same route through app/background_llm.py. Owner decision,
+2026-10-26: Klukai runs on cloud AI only, so this is the only background
+model; there is no local fallback.
 
-A paid request needs both explicit switches: ``KLUKAI_EXTRACTION_PROVIDER=
-anthropic`` and a positive ``KLUKAI_EXTRACTION_DAILY_LIMIT``. Each request
-first reserves one attempt in the persistent creative ledger (kind
-``extraction``: one UTC-day cap shared by every background call). A
-reserved attempt stays spent after failures and timeouts. This module raises
-only credential- and content-free errors; callers fall back to the local
-model or to safe defaults and never surface them to the chat turn.
+A paid request needs the Anthropic key and a positive
+``KLUKAI_EXTRACTION_DAILY_LIMIT``. Each request first reserves one attempt in
+the persistent creative ledger (kind ``extraction``: one UTC-day cap shared by
+every background call). A reserved attempt stays spent after failures and
+timeouts. This module raises only credential- and content-free errors;
+callers fall back to safe defaults and never surface them to the chat turn.
 """
 
 from __future__ import annotations
@@ -39,7 +35,6 @@ from .dependencies import http_stream
 
 logger = logging.getLogger(__name__)
 
-PROVIDER_ENV = "KLUKAI_EXTRACTION_PROVIDER"
 MODEL_ENV = "KLUKAI_EXTRACTION_MODEL"
 DEFAULT_MODEL = "claude-haiku-5-5"
 EFFORT = "high"
@@ -78,7 +73,7 @@ class CallReport:
     line in app/memory_extraction.py) can log it without ever logging content.
     """
 
-    provider: str = "local"
+    provider: str = "anthropic"
     model: str = ""
     outcome: str = "pending"
 
@@ -102,16 +97,12 @@ def _warn_once(key: str, message: str, *args: object) -> None:
 
 
 def provider() -> str:
-    """``local`` (default) or ``anthropic``; anything else stays local."""
-    value = os.environ.get(PROVIDER_ENV, "local").strip().lower()
-    if value in {"local", "anthropic"}:
-        return value
-    _warn_once(f"provider:{value}", "Unknown %s; using local", PROVIDER_ENV)
-    return "local"
+    """Always ``anthropic``: Klukai has no local background model."""
+    return "anthropic"
 
 
 def uses_anthropic() -> bool:
-    return provider() == "anthropic"
+    return True
 
 
 def model() -> str:
@@ -136,8 +127,8 @@ def _log_cap_once() -> None:
     if _cap_logged_day != day:
         _cap_logged_day = day
         logger.warning(
-            "Extraction daily allowance unavailable for %s (UTC); using the local "
-            "model or safe defaults until it resets",
+            "Extraction daily allowance unavailable for %s (UTC); using safe "
+            "defaults until it resets",
             day,
         )
 
@@ -187,17 +178,13 @@ async def complete(
 ) -> str:
     """Return the visible text of one authorized, budgeted Haiku request.
 
-    ``system`` replaces the default background instructions, for callers whose
-    local request already carries its own system prompt (her character
-    preamble); it is sent as given.
+    ``system`` replaces the default background instructions, for callers that
+    carry their own system prompt (her character preamble); it is sent as
+    given.
     """
-    if not uses_anthropic():
-        raise ExtractionUnavailable("Haiku extraction is not enabled")
     key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not key:
-        _warn_once(
-            "key", "%s=anthropic but no API key is set; using local", PROVIDER_ENV
-        )
+        _warn_once("key", "No Anthropic API key is set; using safe defaults")
         raise ExtractionUnavailable("Haiku extraction has no API key")
     if (
         not isinstance(prompt, str)
@@ -231,8 +218,7 @@ async def complete(
     started = time.monotonic()
     try:
         async with _gate:
-            # A dedicated client keeps the local bearer token on its side of the
-            # provider boundary. Canonical endpoint; no redirects or ambient proxy.
+            # A dedicated client; canonical endpoint, no redirects or ambient proxy.
             async with asyncio.timeout(REQUEST_TIMEOUT_S):
                 async with httpx.AsyncClient(
                     headers={"x-api-key": key, "anthropic-version": "2023-06-01"},

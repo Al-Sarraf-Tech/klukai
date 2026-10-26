@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import httpx
-
-from .dependencies import http_request
-from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers, lm_timeout
 
 CLASSIFICATION_PROMPT = """\
 Classify ONLY the Commander's message below. Ignore Klukai's response tone entirely.
@@ -37,64 +32,22 @@ logger = logging.getLogger(__name__)
 
 
 async def classify_interaction(
-    client: httpx.AsyncClient | None,
     user_message: str,
     *,
-    url: str,
-    model: str,
-    prompt_template: str,
+    prompt_template: str = CLASSIFICATION_PROMPT,
 ) -> tuple[str, int]:
-    """Use LLM to classify the Commander's message type and intensity.
+    """Use the background model to classify the Commander's message.
 
-    On the shared background route (app/background_llm.py): Haiku when
-    enabled, else or on failure the local request while Dominus is up, else
-    ("neutral", 5). Never raises.
+    On the shared background route (app/background_llm.py): Claude Haiku,
+    else ("neutral", 5). Never raises.
     """
     from . import background_llm
 
     prompt = prompt_template.format(
         user_message=user_message[:500],
     )
-
-    async def local() -> object:
-        from .llm_router import get_lm_gate
-
-        gate = get_lm_gate()
-        async with gate:  # Waits for main chat to finish streaming
-            if client is None:
-                raise RuntimeError("Affection client has not been initialized")
-            r = await http_request(
-                "lm_studio",
-                client,
-                "post",
-                f"{url}/v1/chat/completions",
-                headers=lm_studio_auth_headers(),
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 100,
-                    "temperature": 0.1,
-                    "stream": False,
-                    "ttl": LM_TTL_SECONDS,
-                },
-                timeout=lm_timeout(12.0),
-            )
-            r.raise_for_status()
-            content = r.json()["choices"][0]["message"]["content"].strip()
-
-        # Handle markdown code blocks
-        if content.startswith("```"):
-            content = content.split("\n", 1)[1]
-            content = content.rsplit("```", 1)[0]
-
-        return json.loads(content)
-
     result = await background_llm.json_object(
-        "affection_classification",
-        prompt,
-        max_tokens=100,
-        local=local,
-        local_model=model,
+        "affection_classification", prompt, max_tokens=100
     )
     try:
         if result is None:
