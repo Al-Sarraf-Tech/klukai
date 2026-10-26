@@ -256,3 +256,55 @@ test("stage directions never reach her voice", () => {
   assert.equal(speakable("(I look away) ...Fine. *sighs* Go."), "...Fine. Go.");
   assert.equal(speakable(null), "");
 });
+
+// A background image failure can deliver a proactive line during the next reply.
+test("proactive subtitles do not replace the current reply's token buffer", () => {
+  let { state } = reduceFrame({ line: "Earlier." }, { type: "token", text: "I am " });
+  const partial = state;
+  const proactive = reduceFrame(state, { type: "proactive", message: "Visualization failed." });
+  assert.equal(proactive.state.line, "Visualization failed.", "latest proactive stays visible");
+  assert.deepEqual(proactive.effects, [{ kind: "speak", text: "Visualization failed." }]);
+  ({ state } = reduceFrame(proactive.state, { type: "token", text: "here, Commander." }));
+  assert.equal(state.line, "I am here, Commander.");
+  assert.equal(partial.line, "I am ", "reduction must not mutate the earlier state");
+  assert.equal(abandonTurn(state).line, "I am here, Commander.");
+});
+
+test("a textless done completes the stream rather than the intervening proactive line", () => {
+  let { state } = reduceFrame({ line: "" }, { type: "token", text: "Her complete reply." });
+  ({ state } = reduceFrame(state, { type: "proactive", message: "A separate update." }));
+  const done = reduceFrame(state, { type: "done", message_id: "turn" });
+  assert.equal(done.state.line, "Her complete reply.");
+  assert.deepEqual(done.effects, [{ kind: "speak", text: "Her complete reply." }]);
+  assert.equal(done.state.streaming, false);
+});
+
+for (const terminal of ["done", "error", "disconnect"]) {
+  test(`${terminal} drops the previous stream without changing latest-line precedence`, () => {
+    let { state } = reduceFrame({ line: "" }, { type: "token", text: "Old partial." });
+    ({ state } = reduceFrame(state, { type: "proactive", message: "Newest update." }));
+    state = terminal === "disconnect" ? abandonTurn(state) :
+      reduceFrame(state, terminal === "done" ? { type: "done", text: "Canonical reply." } :
+        { type: "error", message: "Interrupted." }).state;
+    assert.equal(state.line, terminal === "done" ? "Canonical reply." :
+      terminal === "error" ? "Interrupted." : "Newest update.");
+    const settledLine = state.line;
+    assert.equal(reduceFrame(state, { type: "done" }).state.line, settledLine,
+      "textless done must not resurrect a discarded stream");
+    ({ state } = reduceFrame(state, { type: "token", text: "New reply." }));
+    assert.equal(state.line, "New reply.");
+    ({ state } = reduceFrame(state, { type: "proactive", message: "Another update." }));
+    assert.equal(reduceFrame(state, { type: "done" }).state.line, "New reply.");
+  });
+}
+
+for (const message of [null, 42, true, [], { text: "unexpected object" }]) {
+  test(`non-string proactive payload ${JSON.stringify(message)} clears thinking without replacing text`, () => {
+    let { state } = reduceFrame({ line: "" }, { type: "token", text: "Current reply." });
+    const result = reduceFrame({ ...state, thinking: true }, { type: "proactive", message });
+    assert.equal(result.state.line, "Current reply.");
+    assert.equal(result.state.thinking, false);
+    assert.deepEqual(result.effects, []);
+    assert.equal(reduceFrame(result.state, { type: "done" }).state.line, "Current reply.");
+  });
+}

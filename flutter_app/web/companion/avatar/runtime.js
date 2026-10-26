@@ -1,6 +1,6 @@
 import { installMaterials } from './runtime-materials.js';
-import { initializeMotion, installMotion } from './runtime-motion.js';
-import { initializePresence, installPresence } from './runtime-presence.js';
+import { initializeMotion, installMotion } from './runtime-motion.js?v=6a4151d1fddb';
+import { initializePresence, installPresence } from './runtime-presence.js?v=bdba871a8026';
 import { initializeSprings, installSprings } from './runtime-springs.js';
 import { initializeCamera, installCamera } from './runtime-camera.js';
 import { initializeLifecycle, initializeLoop, installLifecycle } from './runtime-lifecycle.js';
@@ -8,9 +8,9 @@ import { BASE_FOV, cameraFarPlane, createCameraView, detectIOS, iosMajorVersion,
 import { importLibs, modelCache } from './loader.js';
 import { awaitWithAbort } from '../appearance.js';
 import { LIGHT } from './shaders.js';
-import { RIM_TINTS } from './state.js';
+import { RIM_TINTS } from './state.js?v=7697bf55d563';
 import { loadScene } from './runtime-load.js';
-import { createPublicApi } from './runtime-api.js';
+import { createPublicApi } from './runtime-api.js?v=2b7f03e88020';
 
 // One runtime context owns renderer, model, animation, input and disposal.
 export async function createAvatar3D(container, opts = {}) {

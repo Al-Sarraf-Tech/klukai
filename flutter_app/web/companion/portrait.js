@@ -3,7 +3,7 @@
 // to life: irregular blinks, mouth flaps driven by her voice level, mood
 // crossfades. Breathing/sway is pure CSS (companion.css).
 
-import { nextBlink, mouthOpen } from "./logic.js";
+import { nextBlink, mouthOpen } from "./logic.js?v=dffc356aca84";
 
 export const FALLBACK_PORTRAIT = "assets/assets/klukai_portrait.png";
 

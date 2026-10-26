@@ -824,3 +824,18 @@ test("a failed day refresh preserves the last good status and outfit", async () 
   assert.equal(h.element("status-line").textContent, "Current status");
   assert.equal(h.element("outfit-chip").textContent, "Current outfit");
 });
+
+test("composer submission resets interrupted stream text before later tokens", async () => {
+  const h = harness({ embedded: false });
+  h.frame({ type: "token", text: "Old reply prefix. " });
+  h.element("input").value = "New question";
+  await h.element("composer").dispatch("submit", { preventDefault() {} });
+  assert.equal(h.element("input").value, "");
+  assert.equal(h.element("subtitle").textContent, "");
+  h.frame({ type: "token", text: "After submit." });
+  assert.equal(h.element("subtitle").textContent, "After submit.");
+  h.frame({ type: "proactive", message: "Background update." });
+  h.frame({ type: "done" });
+  assert.equal(h.element("subtitle").textContent, "After submit.");
+  assert.deepEqual(h.requests, [], "display updates do not auto-play voice");
+});
