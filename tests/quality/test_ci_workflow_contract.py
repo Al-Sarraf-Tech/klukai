@@ -292,7 +292,8 @@ def test_core_and_real_backends_use_one_source_bound_tool_image():
         assert "@sha256:" in job["env"]["KLUKAI_CORE_POSTGRES_IMAGE"]
         if name == "real-backends":
             assert "@sha256:" in job["env"]["KLUKAI_CORE_REDIS_IMAGE"]
-            assert "@sha256:" in job["env"]["KLUKAI_CORE_QDRANT_IMAGE"]
+            # Memory lives in PostgreSQL only: the job provisions no vector store.
+            assert not any("QDRANT" in key for key in job["env"])
 
 
 def test_node_archive_checksum_failure_stops_before_unpack_or_path_selection(tmp_path):

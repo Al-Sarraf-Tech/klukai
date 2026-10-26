@@ -179,7 +179,6 @@ def _environment(core: Path, output: Path, run_id: str) -> dict[str, str]:
             "KLUKAI_TEST_ALLOW_LIVE_BACKENDS": "0",
             "DATABASE_URL": "postgresql://invalid:invalid@127.0.0.1:1/invalid",
             "REDIS_URL": "redis://127.0.0.1:1/0",
-            "QDRANT_URL": "http://127.0.0.1:1",
             "PERSONALITY_PATH": str(core.parents[1] / "config/personality.yaml"),
             "PYTHONPATH": str(core.parents[1] / "tools/ci"),
             "PYTHONHASHSEED": "0",

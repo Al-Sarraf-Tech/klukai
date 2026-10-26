@@ -124,7 +124,7 @@ ruff check tools/ci/perf_*.py tests/release/test_perf_gate.py
 ## Managed real-backend gate
 
 The heavy guest's host Python orchestrates Docker; the source-bound CI image
-runs all nine real-backend cases under CPython 3.14.8 and the complete hashed
+runs all ten real-backend cases under CPython 3.14.8 and the complete hashed
 CI dependency lock. Supply immutable cached image IDs or repository digests and
 the full expected clean Git revision:
 
@@ -134,16 +134,21 @@ export KLUKAI_CI_REVISION="$EXPECTED_SOURCE_REVISION"
 export KLUKAI_CORE_CI_IMAGE="$CI_IMAGE_DIGEST"
 export KLUKAI_CORE_POSTGRES_IMAGE="$POSTGRES_IMAGE_DIGEST"
 export KLUKAI_CORE_REDIS_IMAGE="$VALKEY_IMAGE_DIGEST"
-export KLUKAI_CORE_QDRANT_IMAGE="$QDRANT_IMAGE_DIGEST"
 scripts/ci/backends.sh
 ```
 
 Each of the runtime, readiness and accepted-image shutdown drivers receives a
-fresh PostgreSQL 17, Valkey and Qdrant set on its own internal network. Services
+fresh PostgreSQL 17 and Valkey pair on its own internal network. There is no
+vector store: memory lives in PostgreSQL only (cloud-only AI, 2026-10-26), and
+the runtime driver stores episodes and exchanges through `MemoryManager`, then
+recalls them through the full-text candidate query (migration 260) with the
+Claude Haiku pick faked in-process (a pick, an unusable or absent reply that
+keeps the PostgreSQL order, and a PostgreSQL loss that fails open and
+recovers). Nothing is sent to Anthropic. Services
 have no published ports or host mounts. The worker has a read-only committed
 source snapshot, a separate read-only generated connection context, and writable
 private evidence. It has no Docker socket, owner home, GPU, external provider
-credentials or network fallback. Existing TCP fault proxies and all nine driver
+credentials or network fallback. Existing TCP fault proxies and all ten driver
 assertions remain in the worker. The original opt-in manual Docker fixture mode
 remains available for local checks.
 
@@ -155,9 +160,10 @@ The output directory must be new and outside the checkout. Evidence contains
 only freshly generated disposable service credentials; preserve its private
 permissions. `--development` is explicitly noncertifying.
 
-Validation status: clean checkpoint `4afa6db` completed all nine managed-mode
-real-backend cases in the heavy guest under CPython 3.14.8, with inspected
-resources removed and source unchanged. The retained core coverage database was
+Validation status: clean checkpoint `4afa6db` completed the then nine
+managed-mode real-backend cases (Qdrant included; since removed) in the heavy
+guest under CPython 3.14.8, with inspected resources removed and source
+unchanged. The retained core coverage database was
 also independently checked. This establishes that checkpoint's managed mode;
 final-source execution, complete GitHub CI and deployment remain separate
 requirements. See the [dated validation evidence](../../docs/handoff/2026-10-15-s-tier-packaging.md).
