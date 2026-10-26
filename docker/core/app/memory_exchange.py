@@ -2,91 +2,82 @@
 
 The mixin owns exchange persistence and ranking. It has no manager import,
 instance patching, separate client or duplicated state.
+
+Exchanges live in the companion_exchanges Postgres table only (owner
+decision 2026-10-26, cloud AI only: no embeddings, no vector store). Recall
+takes Postgres full-text candidates and lets Claude Haiku pick the relevant
+ones (app/memory_recall.py).
 """
 
 from __future__ import annotations
 
-from abc import abstractmethod
-from datetime import datetime
+from datetime import UTC, datetime
 import logging
 from typing import Any
 
-import httpx
-
-from .dependencies import http_request
-from .memory_settings import (
-    EMBED_DIM,
-    MSG_COLLECTION_NAME,
-    MSG_MIN_SCORE,
-    MSG_RECALL_LIMIT,
-    QDRANT_URL,
-    RECENCY_WEIGHT,
-)
+from . import memory_recall
+from .memory_settings import MSG_RECALL_LIMIT, RECENCY_WEIGHT
 
 logger = logging.getLogger(__name__)
 
+# Haiku reads this much of each side of a candidate exchange.
+_SIDE_CHARS = 160
+# Unparseable timestamps count as a month old.
+_UNKNOWN_AGE_DAYS = 30.0
+
+# Full-text match on both sides + topics (search_tsv, migration 260), then
+# importance and recency. Rows that match nothing rank by the last two alone.
+_EXCHANGES_RANKED_SQL = (
+    "SELECT x.id::text, x.user_content, x.assistant_content, x.topics, x.mood, "
+    "x.importance, x.created_at "
+    "FROM companion_exchanges AS x, websearch_to_tsquery('english', %s) AS q "
+    "WHERE x.user_id = %s "
+    "ORDER BY ts_rank(x.search_tsv, q, 1) DESC, "
+    "x.importance DESC NULLS LAST, x.created_at DESC "
+    "LIMIT %s"
+)
+_EXCHANGES_RECENT_SQL = (
+    "SELECT x.id::text, x.user_content, x.assistant_content, x.topics, x.mood, "
+    "x.importance, x.created_at "
+    "FROM companion_exchanges AS x "
+    "WHERE x.user_id = %s "
+    "ORDER BY x.importance DESC NULLS LAST, x.created_at DESC "
+    "LIMIT %s"
+)
+
+
+def _exchange_text(row: tuple[Any, ...]) -> str:
+    """What Haiku reads for one exchange candidate."""
+    _, user_content, assistant_content, topics, _, _, created_at = row
+    day = (
+        f"[{created_at.strftime('%Y-%m-%d')}] "
+        if hasattr(created_at, "strftime")
+        else ""
+    )
+    text = (
+        f"{day}Commander: {memory_recall.clip(user_content or '', _SIDE_CHARS)} "
+        f"| Klukai: {memory_recall.clip(assistant_content or '', _SIDE_CHARS)}"
+    )
+    words = ", ".join(str(t) for t in (topics or [])[:5])
+    return text + (f" (topics: {words})" if words else "")
+
+
+def _iso(value: object) -> str:
+    return value.isoformat() if isinstance(value, datetime) else ""
+
+
+def _days_ago(created_at: object, now: datetime) -> float:
+    """Age in days of an ISO timestamp; naive stamps are read as local time."""
+    try:
+        created = datetime.fromisoformat(str(created_at))
+    except ValueError:
+        return _UNKNOWN_AGE_DAYS
+    if created.tzinfo is None:
+        created = created.astimezone()
+    return max(0.0, (now - created).total_seconds() / 86400)
+
 
 class ExchangeMemoryMixin:
-    _http: httpx.AsyncClient | None
-    _msg_collection_ready: bool
-
-    @abstractmethod
-    async def embed_text(
-        self, text: str, *, raise_on_failure: bool = False
-    ) -> list[float]:
-        """The manager supplies its shared embedding implementation."""
-        raise NotImplementedError
-
-    async def _ensure_msg_collection(self) -> None:
-        """Create the companion_exchanges Qdrant collection if needed."""
-        if self._msg_collection_ready:
-            return
-        try:
-            r = await http_request(
-                "qdrant",
-                self._http,
-                "get",
-                f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}",
-            )
-            if r.status_code == 200:
-                self._msg_collection_ready = True
-                return
-        except httpx.HTTPError:
-            pass
-
-        try:
-            await http_request(
-                "qdrant",
-                self._http,
-                "put",
-                f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}",
-                json={
-                    "vectors": {"size": EMBED_DIM, "distance": "Cosine"},
-                },
-            )
-            # Create keyword indexes for filtered search
-            await http_request(
-                "qdrant",
-                self._http,
-                "put",
-                f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/index",
-                json={"field_name": "topics", "field_schema": "keyword"},
-            )
-            try:
-                await http_request(
-                    "qdrant",
-                    self._http,
-                    "put",
-                    f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/index",
-                    json={"field_name": "user_id", "field_schema": "keyword"},
-                )
-            except Exception:
-                pass  # Non-critical
-            self._msg_collection_ready = True
-            logger.info("Created Qdrant collection: %s", MSG_COLLECTION_NAME)
-        except httpx.HTTPError:
-            logger.warning("Failed to create msg collection, will retry later")
-
     async def store_exchange(
         self,
         exchange_id: str,
@@ -98,52 +89,10 @@ class ExchangeMemoryMixin:
         conversation_id: str | None = None,
         user_id: str = "jalsarraf",
     ) -> None:
-        """Store a user+assistant exchange pair with vector embedding, scoped to user.
+        """Insert a user+assistant exchange pair, scoped to user (insert-only).
 
-        SACRED: on ANY Qdrant/embed failure the exchange falls back to the
-        companion_exchanges Postgres table (mirroring the episodes fallback in
-        app/memory.py) instead of being stored nowhere. Insert-only — a later
-        job can re-vectorize from the raw text pair.
+        SACRED: never raises into the chat path; a database failure is logged.
         """
-        try:
-            combined = (
-                f"Commander: {user_content[:500]}\nKlukai: {assistant_content[:500]}"
-            )
-            vector = await self.embed_text(combined, raise_on_failure=True)
-            r = await http_request(
-                "qdrant",
-                self._http,
-                "put",
-                f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points",
-                json={
-                    "points": [
-                        {
-                            "id": exchange_id,
-                            "vector": vector,
-                            "payload": {
-                                "user_content": user_content,
-                                "assistant_content": assistant_content,
-                                "topics": topics,
-                                "mood": mood,
-                                "importance": importance,
-                                "conversation_id": conversation_id,
-                                "user_id": user_id,
-                                "created_at": datetime.now().isoformat(),
-                            },
-                        }
-                    ]
-                },
-            )
-            # httpx does NOT raise on 4xx/5xx — a Qdrant error status must route
-            # to the PG fallback, not be silently treated as a success.
-            r.raise_for_status()
-            return
-        except Exception as e:
-            logger.warning(
-                "Failed to store exchange %s in Qdrant: %s", exchange_id[:8], e
-            )
-
-        # PostgreSQL fallback — ensures exchanges survive Qdrant/embed outages.
         try:
             from .db import get_conn_autocommit
 
@@ -166,58 +115,49 @@ class ExchangeMemoryMixin:
                     ),
                 )
         except Exception as e:
-            # Double failure: never let a memory write kill the chat path.
+            # Never let a memory write kill the chat path.
             logger.error("Failed to store exchange %s in DB: %s", exchange_id[:8], e)
 
     async def recall_exchanges(
         self,
         query: str,
         limit: int = MSG_RECALL_LIMIT,
-        min_score: float = MSG_MIN_SCORE,
+        min_score: float = 0.0,
         user_id: str = "jalsarraf",
     ) -> list[dict[str, Any]]:
-        """Semantic search over past conversation exchanges, scoped to user."""
+        """Past exchanges relevant to ``query``, most relevant first, scoped to user.
+
+        Postgres candidates, then Claude Haiku's pick (memory_recall).
+        ``score`` is rank-derived (first = 1.0). ``min_score`` is kept for
+        callers and ignored: there are no similarity scores any more.
+        """
         try:
-            vector = await self.embed_text(query)
-            if not vector or all(v == 0.0 for v in vector):
-                # Embedding failed — don't search Qdrant with an all-zero vector.
-                logger.warning(
-                    "Exchange recall skipped — embedding failed (zero vector)"
-                )
-                return []
-            r = await http_request(
-                "qdrant",
-                self._http,
-                "post",
-                f"{QDRANT_URL}/collections/{MSG_COLLECTION_NAME}/points/search",
-                json={
-                    "vector": vector,
-                    "limit": limit,
-                    "score_threshold": min_score,
-                    "with_payload": True,
-                    "filter": {
-                        "must": [{"key": "user_id", "match": {"value": user_id}}]
-                    },
-                },
+            rows = await memory_recall.fetch_candidates(
+                _EXCHANGES_RANKED_SQL, _EXCHANGES_RECENT_SQL, query, user_id
             )
-            if r.status_code != 200:
-                logger.warning("Exchange recall failed: %s", r.text)
+            if not rows:
                 return []
-            results = r.json().get("result", [])
+            picked = await memory_recall.select(
+                "memory_recall_exchanges",
+                "past exchanges between the Commander and Klukai",
+                query,
+                [_exchange_text(row) for row in rows],
+                limit,
+            )
+            chosen = memory_recall.ordered(rows, picked, limit)
             return [
                 {
-                    "user_content": hit["payload"]["user_content"],
-                    "assistant_content": hit["payload"]["assistant_content"],
-                    "topics": hit["payload"].get("topics", []),
-                    "mood": hit["payload"].get("mood", "composed"),
-                    "score": hit["score"],
-                    "created_at": hit["payload"].get("created_at", ""),
-                    # Carry the stored importance through so the affection-weighted
-                    # re-rank in recall_exchanges_with_recency biases on a real value
-                    # instead of a constant 0.5 (which made the bias a no-op).
-                    "importance": hit["payload"].get("importance", 0.5),
+                    "user_content": row[1] or "",
+                    "assistant_content": row[2] or "",
+                    "topics": list(row[3] or []),
+                    "mood": row[4] or "composed",
+                    "score": memory_recall.rank_score(position, len(chosen)),
+                    "created_at": _iso(row[6]),
+                    # The stored importance feeds the affection-weighted re-rank
+                    # in recall_exchanges_with_recency.
+                    "importance": 0.5 if row[5] is None else float(row[5]),
                 }
-                for hit in results
+                for position, row in enumerate(chosen)
             ]
         except Exception as e:
             # Fail open: recall feeds the live chat read path; a backing-store
@@ -237,21 +177,16 @@ class ExchangeMemoryMixin:
         if not exchanges:
             return []
 
-        now = datetime.now()
+        now = datetime.now(UTC)
         for ex in exchanges:
-            try:
-                created = datetime.fromisoformat(ex["created_at"])
-                days_ago = max(0, (now - created).total_seconds() / 86400)
-            except (ValueError, KeyError):
-                days_ago = 30
-
+            days_ago = _days_ago(ex.get("created_at"), now)
             recency_factor = 1.0 / (1.0 + days_ago)
-            ex["final_score"] = (1 - RECENCY_WEIGHT) * ex[
-                "score"
-            ] + RECENCY_WEIGHT * recency_factor
+            ex["final_score"] = (1 - RECENCY_WEIGHT) * ex.get(
+                "score", 0.0
+            ) + RECENCY_WEIGHT * recency_factor
 
             # Affection-weighted importance bias
-            importance = ex.get("importance", 0.5) if isinstance(ex, dict) else 0.5
+            importance = ex.get("importance", 0.5)
             if affection_level >= 6:
                 ex["final_score"] += importance * 0.2
             elif affection_level <= 2:
@@ -262,7 +197,6 @@ class ExchangeMemoryMixin:
 
 
 # Explicit unbound exports retain existing controlled-test injection seams.
-_ensure_msg_collection = ExchangeMemoryMixin._ensure_msg_collection
 store_exchange = ExchangeMemoryMixin.store_exchange
 recall_exchanges = ExchangeMemoryMixin.recall_exchanges
 recall_exchanges_with_recency = ExchangeMemoryMixin.recall_exchanges_with_recency

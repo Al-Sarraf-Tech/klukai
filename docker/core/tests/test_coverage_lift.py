@@ -208,22 +208,6 @@ class TestLlmRouterHelpers:
         assert s.conversation_id == "test-conv-id"
 
 
-# ── memory pure helpers ───────────────────────────────────────────────────────
-class TestMemoryPure:
-    def test_is_zero_vector_all_zeros(self) -> None:
-        from app.memory import MemoryManager
-        assert MemoryManager.is_zero_vector([0.0, 0.0, 0.0]) is True
-
-    def test_is_zero_vector_non_zero(self) -> None:
-        from app.memory import MemoryManager
-        assert MemoryManager.is_zero_vector([0.0, 0.1, 0.0]) is False
-
-    def test_is_zero_vector_empty(self) -> None:
-        from app.memory import MemoryManager
-        # all([]) is True → an empty vector is treated as a zero vector.
-        assert MemoryManager.is_zero_vector([]) is True
-
-
 # ── physical_state coverage ───────────────────────────────────────────────────
 class TestPhysicalState:
     def test_normal_state_has_empty_description(self) -> None:
@@ -257,28 +241,6 @@ class TestBillingPure:
         assert e.tier == "free"
         assert e.limit == 50
         assert str(e) == "Quota exceeded: chat_messages_per_day (tier=free, limit=50/period)"
-
-
-# ── caches ────────────────────────────────────────────────────────────────────
-class TestCaches:
-    def test_cosine_identical_and_orthogonal(self) -> None:
-        from app import caches
-        # Identical unit vectors → 1.0; orthogonal → 0.0.
-        assert caches.cosine([1.0, 0.0], [1.0, 0.0]) == 1.0
-        assert caches.cosine([1.0, 0.0], [0.0, 1.0]) == 0.0
-
-    def test_cosine_zero_and_mismatched_return_zero(self) -> None:
-        from app import caches
-        # Zero-magnitude or length-mismatched inputs fail safe to 0.0.
-        assert caches.cosine([0.0, 0.0], [1.0, 1.0]) == 0.0
-        assert caches.cosine([1.0], [1.0, 0.0]) == 0.0
-
-    def test_text_key_is_namespaced_and_stable(self) -> None:
-        from app import caches
-        # Embedding cache keys are namespaced and deterministic per text.
-        assert caches._text_key("hello").startswith("cache:embed:")
-        assert caches._text_key("hello") == caches._text_key("hello")
-        assert caches._text_key("hello") != caches._text_key("world")
 
 
 # ── circuit_breakers extended ─────────────────────────────────────────────────
