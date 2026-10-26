@@ -1,8 +1,9 @@
 """Opt-in, bounded OpenAI image edits using an operator-selected reference pack.
 
-No client, network request, GPU gate or budget reservation is created on import.
-The account worker is the default renderer; ComfyUI (Dominus) is only the
-explicit legacy option, and this module never falls back to it.
+No client, network request or budget reservation is created on import.
+The account worker is the default renderer; this provider is the explicit
+``KLUKAI_IMAGE_PROVIDER=openai`` option. Pictures are cloud-only: there is no
+local renderer to fall back to.
 """
 
 from __future__ import annotations
@@ -46,8 +47,8 @@ class ImageProviderError(ValueError):
 
 
 def selected_provider() -> str:
-    """The scene renderer. Unset means the account worker ("agy"): ComfyUI on
-    Dominus is only ever the explicit ``KLUKAI_IMAGE_PROVIDER=comfyui``."""
+    """The scene renderer. Unset means the account worker ("agy"); "openai"
+    is the opt-in edit provider. Any other value disables generation."""
     return os.environ.get("KLUKAI_IMAGE_PROVIDER", "agy").strip().lower()
 
 

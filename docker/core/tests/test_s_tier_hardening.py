@@ -352,14 +352,14 @@ class TestSubsystemHealth:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 8. ComfyUI authenticated facade
+# 8. Cloud-only pictures (the ComfyUI facade and GPU lease were removed)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestComfyUIFacade:
-    """Verify Klukai cannot bypass the gateway's exclusive GPU lease."""
+class TestCloudOnlyImages:
+    """Pictures are cloud-only: no local renderer, raw ComfyUI port or GPU lease."""
 
-    def test_docker_compose_uses_gateway_facade(self):
+    def test_docker_compose_never_names_the_raw_comfyui_port(self):
         compose = (
             Path(__file__).resolve().parent.parent.parent.parent / "docker-compose.yml"
         )
@@ -367,15 +367,14 @@ class TestComfyUIFacade:
             import pytest
 
             pytest.skip("docker-compose.yml not shipped into runtime image")
-        text = compose.read_text()
-        assert "http://100.107.121.5:1234/api/v1/comfy" in text
-        assert "100.107.121.5:8388" not in text
+        assert "100.107.121.5:8388" not in compose.read_text()
 
-    def test_image_gen_default_uses_gateway_facade(self):
+    def test_image_gen_has_no_local_renderer(self):
         source = Path(__file__).resolve().parent.parent / "app" / "image_gen.py"
         text = source.read_text()
-        assert "http://100.107.121.5:1234/api/v1/comfy" in text
-        assert "GPU_LEASE_HEADER" not in text  # use the central header helper
+        assert "100.107.121.5" not in text
+        assert "comfy" not in text.lower()
+        assert "gpu_lease" not in text
 
     def test_retired_seed_memories_cannot_load_image_provider(self):
         source = Path(__file__).resolve().parent.parent / "seed_memories.py"
@@ -384,7 +383,7 @@ class TestComfyUIFacade:
         assert '"/prompt"' not in text
         assert '"/free"' not in text
 
-    def test_regen_images_reuses_protected_image_path(self):
+    def test_regen_images_reuses_the_cloud_dispatch(self):
         source = (
             Path(__file__).resolve().parent.parent.parent.parent
             / "scripts"

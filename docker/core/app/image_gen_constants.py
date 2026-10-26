@@ -1,24 +1,38 @@
-"""Constants for image generation: prompts, tags, outfits, workflow.
+"""Constants for image generation: prompts, tags and outfits.
 
 Extracted from app/image_gen.py (S+ Phase 2 — file-size hygiene per
 docs/superpowers/specs/2026-05-16-s-plus-uplift.md §6.1).
 
-NoobAI-XL / Illustrious + Klukai IL LoRA. Per reference_illustrious.md these
-constants encode the canonical Danbooru tag conventions used by the image
-gen pipeline. Don't mutate these maps casually — character outfit selection
-is a content gate (matched in app/image_gen.py:_select_outfit).
+These constants encode the Danbooru tag conventions the scene prompts are
+written in; the cloud renderers read them as plain descriptions
+(image_provider.cloud_prompt). Don't mutate these maps casually — character
+outfit selection is a content gate (matched in app/image_prompts.py:_select_outfit).
 """
 
 from __future__ import annotations
 
-from .image_workflow_templates import (
-    NEGATIVE_TAGS as NEGATIVE_TAGS,
-    SFW_NEGATIVE_TAGS as SFW_NEGATIVE_TAGS,
-    KLUKAI_LORA as KLUKAI_LORA,
-    KLUKAI_LORA_TRIGGER as KLUKAI_LORA_TRIGGER,
-    WORKFLOW_TEMPLATE as WORKFLOW_TEMPLATE,
-    IMG2IMG_TEMPLATE as IMG2IMG_TEMPLATE,
-    INPAINT_NODES as INPAINT_NODES,
+KLUKAI_LORA_TRIGGER = "Klukai"
+
+NEGATIVE_TAGS = (
+    "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, "
+    "fewer digits, cropped, worst quality, low quality, normal quality, "
+    "jpeg artifacts, signature, watermark, username, blurry, artist name, "
+    "deformed, ugly, duplicate, morbid, mutilated, extra limbs, "
+    "extra arms, extra legs, fused limbs, limbs through body, clipping, "
+    "multiple people, multiple boys, multiple girls, clone, twin, "
+    "two heads, two faces, extra faces, disfigured, "
+    "interlocking limbs, overlapping bodies, merged bodies, "
+    "thick thighs, wide hips, chubby, plump, fat, overweight, huge breasts, "
+    "androgynous, feminine boy, crossdressing, male in female clothes, "
+    "flat chest, child, loli, shota"
+)
+
+# Added to the negative prompt for wardrobe-driven renders below the intimacy
+# gate (INTIMATE_MIN_LEVEL). Outfit tags that leave a layer unspecified ("open
+# coat") let the model fill it with skin; this is the backstop to the tags.
+SFW_NEGATIVE_TAGS = (
+    "nsfw, nude, naked, nipples, topless, bare breasts, breasts out, no bra, "
+    "underwear, panties, lingerie, open clothes, unbuttoned, exposed chest"
 )
 
 

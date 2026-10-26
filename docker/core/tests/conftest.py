@@ -22,7 +22,7 @@ if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
     os.environ["KLUKAI_CLAUDE_PRIMARY"] = "false"
     os.environ.pop("ANTHROPIC_API_KEY", None)
     os.environ.pop("OPENAI_API_KEY", None)
-    os.environ["KLUKAI_IMAGE_PROVIDER"] = "comfyui"
+    os.environ["KLUKAI_IMAGE_PROVIDER"] = "disabled"  # no renderer unless a test picks one
     os.environ["KLUKAI_CHAT_IMAGE_PROVIDER"] = ""
     os.environ["KLUKAI_AGY_ALLOWED_USERS"] = ""
     os.environ["KLUKAI_AGY_SOCKET"] = "/tmp/pytest-klukai-agy-unavailable/image.sock"

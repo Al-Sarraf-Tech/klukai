@@ -30,7 +30,8 @@ def client(tmp_path, monkeypatch):
     aff = MagicMock()
     aff.get_state = AsyncMock(return_value=SimpleNamespace(level=4))
     router = MagicMock()
-    router.is_game_active = AsyncMock(return_value=False)
+    # Pictures are cloud-only: no portrait route asks for a game guard.
+    router.is_game_active = AsyncMock(side_effect=AssertionError("game probed"))
     monkeypatch.setattr(context, "affection", aff)
     monkeypatch.setattr(context, "router", router)
 
@@ -89,19 +90,13 @@ class TestPortrait:
             assert img.headers["cache-control"] == "private, max-age=1800"
             assert img.content.endswith(f.encode())
 
-    def test_unavailable_while_gaming(self, client):
-        client.router.is_game_active = AsyncMock(return_value=True)
-        assert client.get("/api/portrait", headers=AUTH).json()["status"] == "unavailable"
-        client.ensure.assert_not_called()
-
 
 class TestAccountWorkerMode:
-    """Off the GPU (images on the account worker) Dominus is never asked."""
+    """On the account worker (production) nothing probes a game guard."""
 
     @pytest.fixture
     def account(self, client, monkeypatch):
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
-        client.router.is_game_active = AsyncMock(side_effect=AssertionError("Dominus probed"))
         return client
 
     def test_get_never_probes_the_game_guard(self, account):
@@ -144,24 +139,22 @@ class TestFrames:
 
 
 class TestRefresh:
-    def test_refresh_wipes_and_restarts(self, client):
-        _frames()
-        r = client.post("/api/portrait/refresh", headers=AUTH)
-        assert r.status_code == 200
-        assert r.json()["status"] == "pending"
-        assert pt.existing_frames("claude", "speed_star") == set()
+    """No renderer redraws a whole set (pictures are cloud-only), so the
+    refresh POST always keeps the cached set and answers 409."""
 
-    def test_refused_during_a_game(self, client):
+    @pytest.mark.parametrize("provider", ["agy", "openai", "comfyui"])
+    def test_refresh_never_redraws(self, client, monkeypatch, provider):
+        monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", provider)
         _frames()
-        client.router.is_game_active = AsyncMock(return_value=True)
         r = client.post("/api/portrait/refresh", headers=AUTH)
-        assert r.status_code == 409 and r.json()["code"] == "GPU_BUSY"
+        assert r.status_code == 409 and r.json()["code"] == "REDRAW_UNAVAILABLE"
         assert pt.existing_frames("claude", "speed_star") == set(pt.FRAME_NAMES)
+        client.ensure.assert_not_called()
 
-    def test_refused_while_already_drawing(self, client):
-        pt._inflight[pt._key("claude", "speed_star")] = MagicMock()
+    def test_refused_even_with_nothing_on_disk(self, client):
         r = client.post("/api/portrait/refresh", headers=AUTH)
-        assert r.status_code == 409 and r.json()["code"] == "IN_PROGRESS"
+        assert r.status_code == 409 and r.json()["code"] == "REDRAW_UNAVAILABLE"
+        client.ensure.assert_not_called()
 
     def test_rate_limited_to_once_per_ten_minutes(self):
         from app import main, rate_limit
@@ -172,12 +165,11 @@ class TestRefresh:
 
     def test_a_409_gives_the_ten_minute_token_back(self, client):
         """Through the real app (middleware + handler): the limiter charges
-        before the handler runs, so a GPU-busy 409 must refund — otherwise
-        nothing rendered and he is still 429'd once the game ends."""
+        before the handler runs, so the refusal must refund — otherwise
+        nothing was drawn and he is still 429'd for ten minutes."""
         from fastapi.testclient import TestClient
         from app import main
 
-        client.router.is_game_active = AsyncMock(return_value=True)
         from app.rate_limit import Consumption
 
         receipt = Consumption("k", 1)
@@ -187,7 +179,7 @@ class TestRefresh:
             "app.rate_limit.refund", new=AsyncMock(return_value=True)
         ) as refund:
             r = TestClient(main.app).post("/api/portrait/refresh", headers=AUTH)
-        assert r.status_code == 409 and r.json()["code"] == "GPU_BUSY"
+        assert r.status_code == 409 and r.json()["code"] == "REDRAW_UNAVAILABLE"
         cac.assert_awaited_once_with("claude", "portrait_refresh")
         refund.assert_awaited_once_with(receipt)
         assert r.headers["x-ratelimit-remaining"] == "1"

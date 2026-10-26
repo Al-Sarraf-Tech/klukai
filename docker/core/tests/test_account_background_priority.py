@@ -313,9 +313,6 @@ class TestDirectAccountPictures:
 
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
         monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "jalsarraf")
-        monkeypatch.setattr(
-            image_gen, "_leased", AsyncMock(side_effect=AssertionError("GPU lease"))
-        )
         return image_gen
 
     async def test_waits_for_the_background_render_then_goes(

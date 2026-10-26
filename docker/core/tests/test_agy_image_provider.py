@@ -4,7 +4,6 @@ import asyncio
 import io
 import json
 from uuid import UUID
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -56,7 +55,7 @@ def worker_api(monkeypatch, handler):
 
 @pytest.mark.parametrize(("provider", "allowed", "user_id", "expected"), [
     ("", "jalsarraf", "jalsarraf", False),
-    ("comfyui", "jalsarraf", "jalsarraf", False),
+    ("openai", "jalsarraf", "jalsarraf", False),
     ("agy", "", "jalsarraf", False),
     ("agy", "jalsarraf", "other", False),
     ("agy", "jalsarraf", "jalsarraf-extra", False),
@@ -271,12 +270,11 @@ async def test_transport_error_is_generic_and_not_retried(agy_config, monkeypatc
     assert "secret scene" not in caplog.text and "test-private-agy-token" not in caplog.text
 
 
-async def test_global_agy_dispatch_preserves_identity_and_never_acquires_gpu(agy_config, monkeypatch):
+async def test_global_agy_dispatch_preserves_identity(agy_config, monkeypatch):
     from app import agy_image_provider as agy, image_gen
 
     monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
     monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "")
-    monkeypatch.setattr(image_gen, "_leased", AsyncMock(side_effect=AssertionError("GPU lease")))
     requests = []
 
     async def handler(request):
@@ -298,22 +296,15 @@ async def test_global_agy_missing_or_unauthorized_user_cannot_fall_back(agy_conf
     from app import image_gen
 
     monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
-    monkeypatch.setattr(image_gen, "_leased", AsyncMock(side_effect=AssertionError("GPU fallback")))
     worker_api(monkeypatch, lambda request: pytest.fail("unauthorized worker call"))
     assert await image_gen.generate_image("scene", user_id=user_id) is None
 
 
-@pytest.mark.parametrize("provider", ["agy", "disabled", "openai", "invalid"])
-async def test_nonlocal_provider_blocks_all_legacy_gpu_image_entrypoints(monkeypatch, provider):
+def test_no_legacy_gpu_image_entrypoints_remain():
     from app import image_gen
 
-    monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", provider)
-    monkeypatch.setattr(image_gen, "gpu_lease", lambda *a, **kw: pytest.fail("GPU image lease"))
-    assert await image_gen.generate_img2img(b"source", "portrait", denoise=0.2, seed=1) is None
-    assert await image_gen.generate_inpaint_set(base_prompt="portrait", base_png=None, plan=lambda *a: [], seed=1) == {}
-    assert await image_gen.free_comfyui_vram() is True
-    if provider != "agy":
-        assert await image_gen.check_comfyui_ready() is False
+    for name in ("generate_img2img", "generate_inpaint_set", "free_comfyui_vram", "check_comfyui_ready", "_leased", "gpu_lease"):
+        assert not hasattr(image_gen, name), name
 
 
 @pytest.mark.parametrize("payload,expected", [
@@ -323,10 +314,9 @@ async def test_nonlocal_provider_blocks_all_legacy_gpu_image_entrypoints(monkeyp
     ({"status": "ready", "provider": "other", "busy": False}, False),
 ])
 async def test_global_image_readiness_uses_authenticated_unix_health(agy_config, monkeypatch, payload, expected):
-    from app import image_gen
+    from app import agy_image_provider as agy
 
     monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
-    monkeypatch.setattr(image_gen, "gpu_lease", lambda *a, **kw: pytest.fail("GPU readiness"))
 
     def handler(request):
         assert request.method == "GET" and request.url.path == "/health"
@@ -334,7 +324,7 @@ async def test_global_image_readiness_uses_authenticated_unix_health(agy_config,
         return httpx.Response(200, json=payload)
 
     worker_api(monkeypatch, handler)
-    assert await image_gen.check_comfyui_ready() is expected
+    assert await agy.agy_images_ready() is expected
 
 
 def test_agy_background_jobs_use_durable_remote_generation_guards(monkeypatch):

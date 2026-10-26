@@ -1,9 +1,9 @@
-"""Live Portrait — base + img2img expression frames per (user, outfit).
+"""Live Portrait — cached frames per (user, outfit), base drawn by the account worker.
 
-Covers storage layout and id safety, deterministic seeds, the prompts, signed
-frame URLs, status, the lazy idempotent generation chain (one per key, base
-first, yields, stops for games, backs off on failure, never overlaps a chat
-turn), and refresh.
+Covers storage layout and id safety, the prompts, signed
+frame URLs, status, and the lazy idempotent base chain (one per key, yields,
+backs off on failure, never overlaps a chat turn). Pictures are cloud-only:
+nothing here redraws a cached set or asks for a game guard.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from app import portrait as pt
 
@@ -37,14 +37,13 @@ def _isolated(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fast(monkeypatch):
-    """No start delay, no quiet-gap waiting, no game."""
+    """No start delay, no quiet-gap waiting; the account worker's draw mocked."""
     monkeypatch.setattr(pt, "START_DELAY_S", 0)
     monkeypatch.setattr(pt, "QUIET_POLL_S", 0)
-    router = MagicMock()
-    router.is_game_active = AsyncMock(return_value=False)
-    monkeypatch.setattr(pt.context, "router", router)
     monkeypatch.setattr(pt, "seconds_since_user_message", lambda: None)
-    return router
+    draw = AsyncMock(return_value=True)
+    monkeypatch.setattr("app.portrait_account.draw_base", draw)
+    return draw
 
 
 def _write_all(user="claude", outfit="speed_star", frames=pt.FRAME_NAMES):
@@ -81,13 +80,6 @@ class TestLayout:
         assert pt.existing_frames("claude", "speed_star") == set()
         _write_all(frames=("base", "blink"))
         assert pt.existing_frames("claude", "speed_star") == {"base", "blink"}
-
-    def test_seed_is_deterministic_per_user_and_outfit(self):
-        a = pt.portrait_seed("claude", "speed_star")
-        assert a == pt.portrait_seed("claude", "speed_star")
-        assert a != pt.portrait_seed("claude", "night_ride")
-        assert a != pt.portrait_seed("jalsarraf", "speed_star")
-        assert 0 <= a < 2**32
 
 
 class TestPrompts:
@@ -154,7 +146,6 @@ class TestPrompts:
         assert "frown" in pt.EXPRESSIONS["annoyed"][0]
         for _tags, denoise in pt.EXPRESSIONS.values():
             assert 0.6 <= denoise <= 0.9  # masked inpaint: strong inside, nothing outside
-        assert set(pt.FRAME_REGIONS) == set(pt.EXPRESSIONS)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -215,141 +206,25 @@ class TestCurrentOutfit:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _crop_png(color=(255, 0, 255)) -> bytes:
-    """What ComfyUI hands back for one branch: a CROP_PX square."""
-    buf = io.BytesIO()
-    Image.new("RGB", (pt.CROP_PX, pt.CROP_PX), color).save(buf, "PNG")
-    return buf.getvalue()
-
-
-class _FakeSet:
-    """Stands in for image_gen.generate_inpaint_set, honouring its contract:
-    base first (unless given), plan(base), then accept + on_image per branch."""
-
-    def __init__(self, base: bytes | None = None, drop=(), crop=None):
-        self.base = base if base is not None else _portrait_png()
-        self.drop = set(drop)
-        self.crop = crop or _crop_png()
-        self.kwargs: dict = {}
-        self.branches: list = []
-        self.source = b""
-        self.calls = 0
-
-    async def __call__(self, **kw):
-        self.calls += 1
-        self.kwargs = kw
-        out = {}
-        base = kw["base_png"]
-        if base is None:
-            base = self.base
-            out["base"] = base
-            await kw["on_image"]("base", base)
-        self.source, self.branches = await kw["plan"](base)
-        for b in self.branches:
-            if b.name in self.drop:
-                continue
-            kw["accept"](b.name, self.crop)
-            out[b.name] = self.crop
-            await kw["on_image"](b.name, self.crop)
-        return out
-
-
 class TestChain:
     @pytest.mark.asyncio
-    async def test_one_leased_set_renders_base_and_every_frame(self, fast):
-        fake = _FakeSet()
-        with patch("app.image_gen.generate_inpaint_set", new=fake):
-            assert await pt._chain("claude", "speed_star", 4) is True
-        assert fake.calls == 1
-        assert pt.existing_frames("claude", "speed_star") == set(pt.FRAME_NAMES)
-        kw = fake.kwargs
-        assert kw["base_png"] is None and kw["seed"] == pt.portrait_seed("claude", "speed_star")
-        assert (kw["width"], kw["height"], kw["sfw"]) == (pt.WIDTH, pt.HEIGHT, True)
-        assert kw["negative_extra"] == pt.PALETTE_NEGATIVE
-        # The model's own sampler/CFG (the template's), portrait step counts.
-        for sampling, steps in ((kw["base_sampling"], pt.BASE_STEPS), (kw["inpaint_sampling"], pt.INPAINT_STEPS)):
-            assert (sampling.sampler, sampling.scheduler, sampling.cfg, sampling.steps) == (
-                "euler", "normal", 4.5, steps)
-        assert kw["retry_denoise_step"] == pt.BLINK_RETRY_DENOISE
-        assert [b.name for b in fake.branches] == list(pt.EXPRESSIONS)
-        assert [b.denoise for b in fake.branches] == [pt.EXPRESSIONS[f][1] for f in pt.EXPRESSIONS]
-        assert fake.branches[0].negative == pt.FRAME_NEGATIVES["blink"]
-        assert all(b.negative == "" for b in fake.branches[1:])
-        with Image.open(io.BytesIO(fake.source)) as src:
-            assert src.size == (pt.CROP_PX, pt.CROP_PX)
-        assert pt.frame_dir("claude", "speed_star").joinpath(pt.SOURCE_NAME).read_bytes() == fake.base
+    async def test_draws_the_missing_base_through_the_account_worker(self, fast):
+        assert await pt._chain("claude", "speed_star", 4) is True
+        fast.assert_awaited_once_with("claude", "speed_star", 4)
+        assert not pt._backing_off(pt._key("claude", "speed_star"))
 
     @pytest.mark.asyncio
-    async def test_frames_change_only_inside_their_mask(self, fast):
-        fake = _FakeSet()
-        with patch("app.image_gen.generate_inpaint_set", new=fake):
-            await pt._chain("claude", "speed_star", 4)
-        base = Image.open(io.BytesIO(fake.base)).convert("RGB")
-        with Image.open(pt.frame_file("claude", "speed_star", "talk")) as img:
-            talk = img.convert("RGB")
-        mouth = (420, 330 + int(0.68 * 120))
-        far = (60, 1150)
-        assert talk.getpixel(mouth)[1] < 60            # magenta landed on the mouth
-        assert all(abs(a - b) <= 6 for a, b in zip(talk.getpixel(far), base.getpixel(far), strict=True))
+    async def test_an_existing_base_does_nothing(self, fast):
+        _write_all(frames=("base",))
+        assert await pt._chain("claude", "speed_star", 4) is True
+        fast.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_bonded_portraits_are_not_sfw_forced(self, fast):
-        fake = _FakeSet()
-        with patch("app.image_gen.generate_inpaint_set", new=fake):
-            await pt._chain("claude", "speed_star", 8)
-        assert fake.kwargs["sfw"] is False
-
-    @pytest.mark.asyncio
-    async def test_resumes_only_missing_frames_from_the_stored_base(self, fast):
-        _write_all(frames=("base", "blink", "talk"))
-        stored = _portrait_png()
-        pt.frame_dir("claude", "speed_star").joinpath(pt.SOURCE_NAME).write_bytes(stored)
-        fake = _FakeSet()
-        with patch("app.image_gen.generate_inpaint_set", new=fake):
-            assert await pt._chain("claude", "speed_star", 4) is True
-        assert fake.kwargs["base_png"] == stored
-        assert [b.name for b in fake.branches] == ["smile", "blush", "annoyed"]
-
-    @pytest.mark.asyncio
-    async def test_a_complete_set_does_nothing(self, fast):
-        _write_all()
-        fake = _FakeSet()
-        with patch("app.image_gen.generate_inpaint_set", new=fake):
-            assert await pt._chain("claude", "speed_star", 4) is True
-        assert fake.calls == 0
-
-    @pytest.mark.asyncio
-    async def test_frames_without_their_base_are_all_redone(self, fast):
-        _write_all(frames=("blink", "talk"))
-        pt.frame_dir("claude", "speed_star").joinpath(pt.SOURCE_NAME).unlink()
-        fake = _FakeSet()
-        with patch("app.image_gen.generate_inpaint_set", new=fake):
-            await pt._chain("claude", "speed_star", 4)
-        assert fake.kwargs["base_png"] is None and len(fake.branches) == 5
-
-    @pytest.mark.asyncio
-    async def test_base_failure_backs_off(self, fast):
-        with patch("app.image_gen.generate_inpaint_set", new=AsyncMock(return_value={})):
-            assert await pt._chain("claude", "speed_star", 4) is False
+    async def test_a_failed_draw_backs_off(self, fast):
+        fast.return_value = False
+        assert await pt._chain("claude", "speed_star", 4) is False
         assert pt._backing_off(pt._key("claude", "speed_star"))
         assert pt.existing_frames("claude", "speed_star") == set()
-
-    @pytest.mark.asyncio
-    async def test_a_lost_frame_keeps_the_rest_and_backs_off(self, fast):
-        fake = _FakeSet(drop={"talk"})
-        with patch("app.image_gen.generate_inpaint_set", new=fake):
-            assert await pt._chain("claude", "speed_star", 4) is False
-        assert pt.existing_frames("claude", "speed_star") == set(pt.FRAME_NAMES) - {"talk"}
-        assert pt._backing_off(pt._key("claude", "speed_star"))
-
-    @pytest.mark.asyncio
-    async def test_never_while_a_game_owns_the_gpu(self, fast):
-        fast.is_game_active = AsyncMock(return_value=True)
-        fake = _FakeSet()
-        with patch("app.image_gen.generate_inpaint_set", new=fake):
-            assert await pt._chain("claude", "speed_star", 4) is False
-        assert fake.calls == 0
-        assert not pt._backing_off(pt._key("claude", "speed_star"))  # a game isn't a failure
 
     @pytest.mark.asyncio
     async def test_background_delay_is_honoured(self, fast, monkeypatch):
@@ -381,15 +256,14 @@ class TestChain:
         monkeypatch.setattr(pt, "seconds_since_user_message", lambda: 1.0)
         monkeypatch.setattr(pt, "QUIET_MAX_WAIT_S", 0)
         assert await pt._wait_for_quiet() is False
-        fake = _FakeSet()
-        with patch("app.image_gen.generate_inpaint_set", new=fake):
-            assert await pt._chain("claude", "speed_star", 4) is False
-        assert fake.calls == 0
+        assert await pt._chain("claude", "speed_star", 4) is False
+        fast.assert_not_awaited()
+        assert not pt._backing_off(pt._key("claude", "speed_star"))
 
     @pytest.mark.asyncio
     async def test_unexpected_error_is_contained(self, fast):
-        with patch("app.image_gen.generate_inpaint_set", new=AsyncMock(side_effect=RuntimeError("x"))):
-            assert await pt._chain("claude", "speed_star", 4) is False
+        fast.side_effect = RuntimeError("x")
+        assert await pt._chain("claude", "speed_star", 4) is False
         assert pt._backing_off(pt._key("claude", "speed_star"))
 
     def test_backoff_expires(self, monkeypatch):
@@ -401,6 +275,10 @@ class TestChain:
 
 
 class TestEnsure:
+    @pytest.fixture(autouse=True)
+    def _drawable(self, monkeypatch):
+        monkeypatch.setattr("app.portrait_account.enabled_for", lambda user_id: True)
+
     @pytest.mark.asyncio
     async def test_one_chain_per_key(self):
         started = asyncio.Event()
@@ -430,9 +308,26 @@ class TestEnsure:
             assert pt.ensure_generation("claude", "speed_star", 4) is False
         chain.assert_not_called()
 
+    def test_not_for_an_account_that_cannot_draw(self, monkeypatch):
+        monkeypatch.setattr("app.portrait_account.enabled_for", lambda user_id: False)
+        with patch("app.portrait._chain") as chain:
+            assert pt.ensure_generation("claude", "speed_star", 4) is False
+        chain.assert_not_called()
+
+    def test_not_while_the_application_closes(self, monkeypatch):
+        from app.runtime_tasks import ApplicationClosing
+
+        def closing(coro):
+            coro.close()
+            raise ApplicationClosing()
+
+        monkeypatch.setattr(pt, "spawn", closing)
+        assert pt.ensure_generation("claude", "speed_star", 4) is False
+        assert pt._inflight == {}
+
 
 # ═══════════════════════════════════════════════════════════════════════════
-# State + refresh
+# State
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -441,7 +336,7 @@ class TestState:
     async def test_ready_when_every_frame_exists(self):
         _write_all()
         with patch("app.portrait.ensure_generation") as ensure:
-            state = await pt.portrait_state("claude", "speed_star", 4, game_active=True)
+            state = await pt.portrait_state("claude", "speed_star", 4)
         assert state["status"] == "ready" and state["outfit"] == "speed_star"
         assert all(state["frames"][f] for f in pt.FRAME_NAMES)
         assert "/api/portrait/frame/claude/speed_star/base.webp?v=" in state["frames"]["base"]
@@ -450,7 +345,7 @@ class TestState:
     @pytest.mark.asyncio
     async def test_missing_frames_never_enqueue(self):
         with patch("app.portrait.ensure_generation", return_value=True) as ensure:
-            state = await pt.portrait_state("claude", "speed_star", 4, game_active=False)
+            state = await pt.portrait_state("claude", "speed_star", 4)
         assert state["status"] == "unavailable"
         assert state["frames"] == dict.fromkeys(pt.FRAME_NAMES)
         ensure.assert_not_called()
@@ -459,54 +354,30 @@ class TestState:
     async def test_partial_while_frames_render(self):
         _write_all(frames=("base", "blink"))
         with patch("app.portrait.ensure_generation", return_value=False):
-            state = await pt.portrait_state("claude", "speed_star", 4, game_active=False)
+            state = await pt.portrait_state("claude", "speed_star", 4)
         assert state["status"] == "ready"
         assert state["frames"]["blink"] and state["frames"]["talk"] is None
 
     @pytest.mark.asyncio
-    async def test_game_or_backoff_settles_on_what_exists(self):
-        # With a base on disk she has a portrait: "ready" (no false "GPU busy"),
-        # the missing frames simply don't animate.
+    async def test_backoff_settles_on_what_exists(self):
+        # With a base on disk she has a portrait: "ready", and the missing
+        # frames simply don't animate.
         _write_all(frames=("base",))
         with patch("app.portrait.ensure_generation") as ensure:
-            state = await pt.portrait_state("claude", "speed_star", 4, game_active=True)
+            state = await pt.portrait_state("claude", "speed_star", 4)
         assert state["status"] == "ready"
         assert state["frames"]["base"] and state["frames"]["blink"] is None
         ensure.assert_not_called()
         pt._failed_at[pt._key("claude", "speed_star")] = pt.time.monotonic()
-        state = await pt.portrait_state("claude", "speed_star", 4, game_active=False)
+        state = await pt.portrait_state("claude", "speed_star", 4)
         assert state["status"] == "ready"
 
     @pytest.mark.asyncio
     async def test_unavailable_only_without_a_base(self):
         with patch("app.portrait.ensure_generation") as ensure:
-            state = await pt.portrait_state("claude", "night_ride", 4, game_active=True)
+            state = await pt.portrait_state("claude", "night_ride", 4)
         assert state["status"] == "unavailable"
         ensure.assert_not_called()
-
-
-class TestRefresh:
-    @pytest.mark.asyncio
-    async def test_wipes_the_set_and_regenerates(self):
-        _write_all()
-        (pt.frame_dir("claude", "speed_star") / "keep_me").mkdir()
-        pt._failed_at[pt._key("claude", "speed_star")] = pt.time.monotonic()
-        with patch("app.portrait.ensure_generation", return_value=True) as ensure:
-            assert pt.refresh("claude", "speed_star", 4) is True
-        assert pt.existing_frames("claude", "speed_star") == set()
-        assert not pt.frame_dir("claude", "speed_star").joinpath(pt.SOURCE_NAME).exists()
-        ensure.assert_called_once_with("claude", "speed_star", 4)
-
-    @pytest.mark.asyncio
-    async def test_never_pulls_files_out_from_under_a_running_chain(self):
-        _write_all()
-        pt._inflight[pt._key("claude", "speed_star")] = MagicMock()
-        assert pt.refresh("claude", "speed_star", 4) is False
-        assert pt.existing_frames("claude", "speed_star") == set(pt.FRAME_NAMES)
-
-    def test_refresh_with_nothing_on_disk(self):
-        with patch("app.portrait.ensure_generation", return_value=True):
-            assert pt.refresh("claude", "speed_star", 4) is True
 
 
 def test_webp_conversion_and_atomic_write(tmp_path):
@@ -525,83 +396,11 @@ def test_portraits_root_defaults_to_images(monkeypatch):
 
 def test_seconds_since_user_message(monkeypatch):
     from app import llm_router
-    monkeypatch.setattr(llm_router, "_last_user_message", 0.0)
+    monkeypatch.delattr(llm_router, "_last_user_message", raising=False)
+    assert pt.seconds_since_user_message() is None  # not recorded: no wait
+    monkeypatch.setattr(llm_router, "_last_user_message", 0.0, raising=False)
     assert pt.seconds_since_user_message() is None
-    monkeypatch.setattr(llm_router, "_last_user_message", pt.time.monotonic() - 30)
+    monkeypatch.setattr(
+        llm_router, "_last_user_message", pt.time.monotonic() - 30, raising=False
+    )
     assert 29 <= pt.seconds_since_user_message() < 60
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Face location + masks
-# ═══════════════════════════════════════════════════════════════════════════
-
-_GREEN = (150, 230, 40)  # her canon yellow-green irises
-
-
-def _portrait_png(eyes=((360, 330), (480, 330)), r=22, extra=()) -> bytes:
-    img = Image.new("RGB", (pt.WIDTH, pt.HEIGHT), (235, 225, 230))
-    draw = ImageDraw.Draw(img)
-    for (x, y), rad in [*((e, r) for e in eyes), *extra]:
-        draw.ellipse((x - rad, y - rad, x + rad, y + rad), fill=_GREEN)
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    return buf.getvalue()
-
-
-class TestLocateFace:
-    def test_finds_the_pair_of_green_irises(self):
-        face = pt.locate_face(_portrait_png())
-        assert face.found
-        assert abs(face.mid_x - 420) < 6 and abs(face.eye_y - 330) < 6
-        assert abs(face.d - 120) < 8
-
-    def test_ignores_distractors(self):
-        extra = (
-            ((420, 900), 22),   # below the face zone (outfit trim)
-            ((150, 200), 3),    # a speck: too small to be an eye
-            ((640, 335), 60),   # far bigger than its neighbour: not an eye
-            ((395, 334), 22),   # too close to the left eye to pair as a face
-        )
-        face = pt.locate_face(_portrait_png(extra=extra))
-        assert face.found and abs(face.mid_x - 420) < 30
-
-    def test_prefers_the_centred_pair(self):
-        face = pt.locate_face(_portrait_png(extra=(((600, 330), 22), ((240, 330), 22))))
-        assert face.found and abs(face.mid_x - 420) < 6 and abs(face.d - 120) < 8
-
-    def test_unlevel_or_lopsided_pairs_are_rejected(self):
-        assert not pt.locate_face(_portrait_png(eyes=((360, 300), (480, 380)))).found
-        assert not pt.locate_face(_portrait_png(eyes=((360, 330),), extra=(((480, 330), 70),))).found
-
-    def test_falls_back_to_the_composition(self):
-        face = pt.locate_face(_png())
-        assert not face.found
-        assert (face.mid_x, face.eye_y) == (32 * 0.5, 48 * 0.27)
-
-
-class TestFrameMask:
-    _FACE = pt.Face(mid_x=420, eye_y=330, d=120)
-
-    def _mask(self, frame) -> Image.Image:
-        return Image.open(io.BytesIO(pt.frame_mask((pt.WIDTH, pt.HEIGHT), self._FACE, frame)))
-
-    def test_blink_repaints_the_eyes_only(self):
-        m = self._mask("blink")
-        assert m.mode == "L"
-        assert m.getpixel((360, 330)) == 255 and m.getpixel((480, 330)) == 255
-        assert m.getpixel((420, 330 + int(0.68 * 120))) == 0   # mouth untouched
-        assert m.getpixel((420, 330 + int(0.35 * 120))) == 0   # nose untouched
-        assert m.getpixel((10, 10)) == 0
-
-    @pytest.mark.parametrize("frame", ["talk", "smile", "blush", "annoyed"])
-    def test_mouth_frames_repaint_the_mouth_not_the_nose(self, frame):
-        m = self._mask(frame)
-        assert m.getpixel((420, 330 + int(0.68 * 120))) == 255
-        # The nose is in no region; at most a feathered edge brushes it.
-        assert m.getpixel((420, 330 + int(0.35 * 120))) < 128
-        assert m.getpixel((10, 1200)) == 0
-
-    def test_edges_are_feathered(self):
-        m = self._mask("talk")
-        edge = m.getpixel((420 + int(0.34 * 120), 330 + int(0.68 * 120)))
-        assert 0 < edge < 255

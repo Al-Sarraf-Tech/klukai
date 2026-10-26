@@ -73,9 +73,7 @@ async def test_portrait_poll_is_cache_only(monkeypatch, provider):
     with patch.object(portrait, "ensure_generation") as ensure, patch(
         "app.portrait_account.allowance_left", AsyncMock(return_value=True)
     ):
-        state = await portrait.portrait_state(
-            "claude", "speed_star", 9, game_active=False
-        )
+        state = await portrait.portrait_state("claude", "speed_star", 9)
     assert state["status"] == "unavailable"
     ensure.assert_not_called()
 
