@@ -144,12 +144,17 @@ export function reduceFrame(state, frame) {
   };
   switch (frame && frame.type) {
     case "token":
-      if (!s.streaming) { s.streaming = true; s.line = ""; }
-      s.line += frame.text || "";
+      // Proactive subtitles can arrive between tokens. Keep the reply's
+      // accumulation separate from whichever line is currently displayed.
+      if (!s.streaming) { s.streaming = true; s._streamLine = ""; }
+      s._streamLine = (s._streamLine ?? s.line ?? "") + (frame.text || "");
+      s.line = s._streamLine;
       s.thinking = false;
       break;
     case "done": {
-      const text = typeof frame.text === "string" ? frame.text : s.line;
+      const text = typeof frame.text === "string" ? frame.text :
+        (s.streaming ? s._streamLine ?? s.line : s.line);
+      delete s._streamLine;
       s.streaming = false;
       s.thinking = false;
       s.line = text;
@@ -169,7 +174,7 @@ export function reduceFrame(state, frame) {
       break;
     case "proactive":
       s.thinking = false;
-      if (frame.message) {
+      if (typeof frame.message === "string" && frame.message) {
         s.line = frame.message;
         say(frame.message);
       }
@@ -183,6 +188,7 @@ export function reduceFrame(state, frame) {
       // every reply from its `done` text, so playing this too said it twice.
       break;
     case "error":
+      delete s._streamLine;
       s.thinking = false;
       s.streaming = false;
       // Show the server's apology instead of a blank dock. Not spoken: it isn't
@@ -201,7 +207,9 @@ export function reduceFrame(state, frame) {
  * being appended to the cut-off one); the partial line stays readable.
  */
 export function abandonTurn(state) {
-  return { ...state, thinking: false, streaming: false };
+  const next = { ...state, thinking: false, streaming: false };
+  delete next._streamLine;
+  return next;
 }
 
 /**

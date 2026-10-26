@@ -635,7 +635,7 @@ function boot() {
       return;
     }
     input.value = "";
-    state = { ...state, thinking: true, line: "" };
+    state = { ...abandonTurn(state), thinking: true, line: "" };
     renderLine();
   });
 
