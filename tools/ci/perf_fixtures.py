@@ -2,28 +2,17 @@
 
 This never calls another service, loads a model or accesses a GPU. Performance
 reports cover HTTP/admission/database paths, not real provider/model timing.
+There is no voice route: voice is Fish Audio only and is never measured.
 """
 
 from __future__ import annotations
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import io
 import json
 import threading
-import wave
 
 COUNTS: Counter[str] = Counter()
 LOCK = threading.Lock()
-
-
-def silence() -> bytes:
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as output:
-        output.setnchannels(1)
-        output.setsampwidth(2)
-        output.setframerate(24000)
-        output.writeframes(b"\0\0" * 240)
-    return buffer.getvalue()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -33,16 +22,11 @@ class Handler(BaseHTTPRequestHandler):
         pass  # No headers, credentials, prompts or query strings in fixture logs.
 
     def answer(
-        self,
-        value: object,
-        *,
-        status: int = 200,
-        binary: bool = False,
-        session: bool = False,
+        self, value: object, *, status: int = 200, session: bool = False
     ) -> None:
-        raw = value if isinstance(value, bytes) else json.dumps(value).encode()
+        raw = json.dumps(value).encode()
         self.send_response(status)
-        self.send_header("Content-Type", "audio/wav" if binary else "application/json")
+        self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
         if session:
             self.send_header("Mcp-Session-Id", "isolated-fixture-session")
@@ -62,7 +46,7 @@ class Handler(BaseHTTPRequestHandler):
                     "gpu_calls": 0,
                 }
             )
-        elif path == "/v1/models":
+        elif path == "/v1/models":  # LM Studio: pre-2026-10-26 baseline only
             self.answer(
                 {
                     "data": [
@@ -72,7 +56,7 @@ class Handler(BaseHTTPRequestHandler):
                     ]
                 }
             )
-        elif path == "/health":
+        elif path == "/health":  # LM Studio gateway: pre-2026-10-26 baseline only
             self.answer({"status": "ok", "game_active": False})
         elif path == "/memory/recall":
             self.answer({"found": False, "entries": []})
@@ -101,21 +85,9 @@ class Handler(BaseHTTPRequestHandler):
             self.answer(
                 {"jsonrpc": "2.0", "id": body.get("id"), "result": result}, session=True
             )
-        elif path.endswith("/gpu/lease/acquire"):
-            self.answer(
-                {
-                    "status": "acquired",
-                    "lease_token": "isolated-no-gpu-capability",
-                    "ttl_seconds": 600,
-                }
-            )
-        elif path.endswith("/gpu/lease/release"):
-            self.answer({"status": "released"})
-        elif path == "/tts":
-            self.answer(silence(), binary=True)
-        elif path == "/v1/embeddings":
+        elif path == "/v1/embeddings":  # pre-2026-10-26 baseline only
             self.answer({"data": [{"embedding": [1.0] + [0.0] * 767}]})
-        elif path == "/v1/chat/completions":
+        elif path == "/v1/chat/completions":  # pre-2026-10-26 baseline only
             if body.get("stream"):
                 raw = b'data: {"choices":[{"delta":{"content":"Deterministic isolated fixture."}}]}\n\ndata: [DONE]\n\n'
                 self.send_response(200)
@@ -138,7 +110,7 @@ class Handler(BaseHTTPRequestHandler):
                         "usage": {"prompt_tokens": 1, "completion_tokens": 1},
                     }
                 )
-        elif path in {"/unload", "/memory/store"}:
+        elif path == "/memory/store":
             self.answer({"status": "ok"})
         else:
             self.answer({"error": "Fixture path not implemented"}, status=404)

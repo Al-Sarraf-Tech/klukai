@@ -29,6 +29,8 @@ from .perf_recording import (
 BACKEND_IMAGES = {
     "postgres": "sha256:650b442ec4f71f47b92505de963bbc4054f8c7df0df30956aef30e27d7e4dea4",
     "redis": "sha256:e0cd36901ed62fccffb8186d099492a327df98abbe2269ffe0bd2b1b1d6732fb",
+    # Qdrant only serves the pre-2026-10-26 baseline, whose readiness requires
+    # it; the cloud-only core never connects. Remove it once main is cloud-only.
     "qdrant": "sha256:d88816626f62fbf8d3468cd8b6330ba1bff6d2219b05c00d9e1b85311747ac2a",
     "fixture": "sha256:18e30fdc01cec4f4e299dff7e93c1acc385807403c6bcb1ffdfe704d2bf64202",
 }

@@ -24,8 +24,13 @@ default command with identical explicit configuration and fresh PostgreSQL
 database, Redis state, and deterministic two-owner seed data.
 
 The PostgreSQL 17, Valkey 8, Qdrant and Python fixture image IDs are pinned in
-`perf_resources.py`. A worker with registry digests can explicitly supply
-`KLUKAI_PERF_POSTGRES_IMAGE`, `KLUKAI_PERF_REDIS_IMAGE`,
+`perf_resources.py`. Qdrant, `QDRANT_URL`, `LM_STUDIO_URL`/`LM_STUDIO_TOKEN`,
+`INFERENCE_URL` and the fixture's LM Studio/embedding routes exist only for the
+pre-2026-10-26 baseline (main before the cloud-only core): its readiness needs a
+healthy Qdrant and its startup and scheduler call LM Studio and embeddings. The
+cloud-only candidate ignores them; remove them once main is cloud-only.
+
+A worker with registry digests can explicitly supply `KLUKAI_PERF_POSTGRES_IMAGE`, `KLUKAI_PERF_REDIS_IMAGE`,
 `KLUKAI_PERF_QDRANT_IMAGE` and `KLUKAI_PERF_FIXTURE_IMAGE`; each value must be
 immutable and cached. Resolved image IDs enter the fixture fingerprint. Total
 container limits are 2.5 CPU and 1728 MiB RAM, including the active core. No
@@ -47,26 +52,31 @@ writer container.
 | `GET /api/affection` | Authenticated state has a numeric level |
 | `GET /api/messages` | 50 actual SQL messages, all belong to the seeded owner |
 | `GET /api/memories` | 20 actual archive metadata records, all belong to that owner |
-| `POST /api/tts` | 202 accepted bounded job with a nonempty ID |
-| `GET /api/tts/jobs/{job_id}` | Owned completed job contains valid fixture WAV bytes |
+
+Voice is not measured. Since 2026-10-26 the core speaks and listens only through
+the paid Fish Audio API at a hardcoded endpoint, and CI never calls a paid
+provider; without a key the voice routes answer 503. The stack therefore sets no
+voice settings and the fixture has no voice or GPU-lease route.
 
 The SQL seed includes 100 messages and 20 archives **for each of two owners**;
 scope checks reject the other owner's rows. Protected routes must first reject
 unauthenticated access with 401. Login rate limits intentionally allow only 10
 requests per five minutes; the harness clears only its disposable Redis
 `ratelimit:*` keys **outside** each request timer. It applies this same setup to
-both inputs, including voice polls. This measures admitted route service time,
-not rate limiter saturation or overload behavior. Each accepted voice job must
-finish through the deterministic no-charge HTTP fixture before the next
-admission. Fixture synthesis and completion wait are outside admission timing.
-Only the latest retained completed job is polled in the measured poll route.
+both inputs. This measures admitted route service time, not rate limiter
+saturation or overload behavior.
 
-This covers process/readiness, bcrypt/session auth, owner-scoped database reads,
-and queue admission/polling. It does not claim real LLM, image, voice synthesis,
-GPU, websocket streaming, browser, TLS/ingress, archive-image download, production
-network, or production-load timing. No image job is submitted. Provider fixtures
+This covers process/readiness, bcrypt/session auth and owner-scoped database
+reads. It does not claim real LLM, image, voice, GPU, websocket streaming,
+browser, TLS/ingress, archive-image download, production network, or
+production-load timing. No image or voice job is submitted. Provider fixtures
 perform no external requests and load no model. Existing image/core startup
-behavior is preserved; background fixture calls are recorded per round.
+behavior is preserved; background fixture calls are recorded per round. The
+measured routes reach no provider, so the evidence validator's proof of actual
+fixture work is the startup MCP handshake: every core opens its MCP session
+against the fixture before readiness, so each round's `POST /mcp` count must
+grow, its `GET /fixture-stats` count must equal the round's position, and no
+counter may shrink.
 
 `baseline.json` and `candidate.json` are schema-v1 raw reports; `*-round-N.json`
 retain each completed round immediately. Reports bind explicit input references,
@@ -89,10 +99,11 @@ gate only when it regresses in at least two measured rounds
 on a single noisy `/api/tts` round with a pooled ratio of 1.12. Every row still
 records `regressed` for review. Availability must satisfy the canonical policy for both inputs;
 candidate latency must satisfy absolute thresholds from
-`docker/core/app/observability/slos.json`. Voice admission has no invented
-absolute threshold: it requires 100% observed availability and the ratio gate.
-401/404 and incorrect payloads never count as healthy samples. Missing routes,
-duplicate routes, nonfinite or zero timing, unequal resource/configuration/source
+`docker/core/app/observability/slos.json`; policy entries for routes this gate
+does not measure (the voice job poll and image generation) are left to
+production monitoring. A measured route without a policy entry would need 100%
+observed availability and the ratio gate. 401/404 and incorrect payloads never
+count as healthy samples. Missing routes, duplicate routes, nonfinite or zero timing, unequal resource/configuration/source
 fingerprints, stale evidence and unverified cleanup fail closed. Existing raw
 baseline files are never refreshed or overwritten.
 

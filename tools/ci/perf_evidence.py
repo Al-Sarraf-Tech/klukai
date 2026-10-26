@@ -177,6 +177,7 @@ def rounds_bound(
             outer_start <= start <= end <= outer_end,
             "Report timestamp outside producer",
         )
+    counts: dict[str, int] = {}
     for index in range(config["rounds"]):
         for role in (
             ("baseline", "candidate") if index % 2 == 0 else ("candidate", "baseline")
@@ -195,12 +196,21 @@ def rounds_bound(
                 "Round timestamps/alternation differ",
             )
             previous = end
-            fixture_bound(run["fixture"], index, role, config)
+            counts = fixture_bound(run["fixture"], index, role, counts)
+
+
+# Both the pre-2026-10-26 baseline and the cloud-only core open their MCP
+# session against MCP_URL during application startup, before readiness can
+# pass. One new handshake per measured core proves that core really ran wired
+# to the isolated fixture. The measured routes themselves reach no provider
+# since paid Fish voice left the gate, so per-sample fixture work is not
+# expected.
+FIXTURE_WORK = "POST /mcp"
 
 
 def fixture_bound(
-    fixture: dict[str, Any], index: int, role: str, config: dict[str, Any]
-) -> None:
+    fixture: dict[str, Any], index: int, role: str, earlier: dict[str, int]
+) -> dict[str, int]:
     require(
         fixture["fixture"] == "klukai-deterministic-v1"
         and all(
@@ -209,22 +219,27 @@ def fixture_bound(
         ),
         "Fixture external/GPU calls",
     )
-    counts = fixture["counts"]
+    counts: dict[str, int] = fixture["counts"]
     require(
         type(counts) is dict
         and counts
         and all(type(k) is str and type(v) is int and v > 0 for k, v in counts.items()),
         "Invalid fixture counters",
     )
+    # One fixture process serves every round, so its counters only grow.
+    require(
+        all(counts.get(key, 0) >= value for key, value in earlier.items()),
+        "Fixture counters went backwards",
+    )
     ordinal = index * 2 + (
         1 if role == ("baseline" if index % 2 == 0 else "candidate") else 2
     )
     require(
         counts.get("GET /fixture-stats") == ordinal
-        and counts.get("POST /tts", 0)
-        >= ordinal * (config["samples"] + config["warmup"]),
+        and counts.get(FIXTURE_WORK, 0) > earlier.get(FIXTURE_WORK, 0),
         "Missing actual fixture work",
     )
+    return counts
 
 
 def validate(root: Path, output: Path, revision: str, max_age: int) -> dict[str, Any]:

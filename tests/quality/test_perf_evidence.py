@@ -104,6 +104,8 @@ def rewrite(output, filename, mutate):
         "gpu",
         "boolfixture",
         "fixturecounts",
+        "fixtureidle",
+        "fixturereset",
         "unknownfile",
         "symlink",
         "hardlink",
@@ -219,6 +221,10 @@ def test_rehashed_inconsistent_artifacts_never_certify(tmp_path, mutation):
                 ] = False if mutation == "boolfixture" else 1
             elif mutation == "fixturecounts":
                 run["fixture"]["counts"] = {}
+            elif mutation == "fixtureidle":  # this core never reached the fixture
+                run["fixture"]["counts"]["POST /mcp"] -= 1
+            elif mutation == "fixturereset":  # the next round's counters shrink
+                run["fixture"]["counts"]["GET /v1/models"] = 5
             # Keep retained round objects consistent to force semantic interpretation.
             role = (
                 "baseline"
@@ -241,6 +247,37 @@ def test_rehashed_inconsistent_artifacts_never_certify(tmp_path, mutation):
         rehash(output)
     with pytest.raises((ValueError, KeyError, IndexError, subprocess.SubprocessError)):
         validate(root, output, revision, 30)
+
+
+def _fixture(counts, **calls):
+    return {
+        "fixture": "klukai-deterministic-v1",
+        "external_calls": 0,
+        "gpu_calls": 0,
+        "counts": counts,
+    } | calls
+
+
+def test_each_measured_core_must_open_its_own_fixture_session():
+    from tools.ci.perf_evidence import fixture_bound
+
+    earlier = {"GET /fixture-stats": 1, "POST /mcp": 1, "GET /v1/models": 1}
+    # Round 0 candidate: second core; the cloud-only core calls no LM Studio.
+    counts = {"GET /fixture-stats": 2, "POST /mcp": 2, "GET /v1/models": 1}
+    assert fixture_bound(_fixture(counts), 0, "candidate", earlier) == counts
+    for changed, message in (
+        ({"POST /mcp": 1}, "fixture work"),  # no new handshake for this core
+        ({"GET /fixture-stats": 3}, "fixture work"),  # wrong round position
+        ({"GET /v1/models": 0}, "counters"),  # zero counters are never retained
+    ):
+        with pytest.raises(ValueError, match=message):
+            fixture_bound(_fixture(counts | changed), 0, "candidate", earlier)
+    shrunk = {k: v for k, v in counts.items() if k != "GET /v1/models"}
+    with pytest.raises(ValueError, match="backwards"):
+        fixture_bound(_fixture(shrunk), 0, "candidate", earlier)
+    for calls in ({"external_calls": 1}, {"gpu_calls": 1}):
+        with pytest.raises(ValueError, match="external/GPU"):
+            fixture_bound(_fixture(counts, **calls), 0, "candidate", earlier)
 
 
 def test_cli_and_audit_consume_real_format_evidence(tmp_path, monkeypatch):
@@ -267,8 +304,11 @@ def test_cli_and_audit_consume_real_format_evidence(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(
         str(Path(__file__).resolve().parents[2] / "tools/quality")
     )
-    from checks import performance
+    from checks import MIN_PERF_COMPARISONS, performance
+    from tools.ci.perf_schema import MIN_ROUNDS, TARGETS
 
+    # The audit's floor is exactly the producer's minimum: every route, every round.
+    assert MIN_PERF_COMPARISONS == len(TARGETS) * (MIN_ROUNDS + 1)
     assert "max p99 ratio=1.1000" in performance(root, revision, 1, output)
 
 
