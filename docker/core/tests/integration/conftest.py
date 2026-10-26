@@ -1,11 +1,11 @@
-"""Integration test fixtures — real PG/Redis/Qdrant via the running stack.
+"""Integration test fixtures — real PG/Redis via the running stack.
 
 These tests only run inside companion-core (or any environment with
-DATABASE_URL + REDIS_URL + QDRANT_URL reachable). On a dev workstation
-without the stack, they autoskip.
+DATABASE_URL + REDIS_URL reachable). On a dev workstation without the
+stack, they autoskip.
 
-LM Studio is mocked at the router level so chat tests stay deterministic;
-every other backend is real.
+The language model is mocked at the router level so chat tests stay
+deterministic; every other backend is real.
 """
 
 from __future__ import annotations
@@ -40,14 +40,12 @@ def _tcp_open(host: str, port: int, timeout: float = 0.4) -> bool:
 
 
 def _backends_reachable() -> tuple[bool, str]:
-    """Return (ok, reason). Probe DSN host:port for PG, Redis, Qdrant."""
+    """Return (ok, reason). Probe DSN host:port for PG and Redis."""
     db = os.environ.get("DATABASE_URL", "postgresql://aichat:aichat@aichat-db:5432/aichat")
     redis_url = os.environ.get("REDIS_URL", "redis://aichat-redis:6379/1")
-    qdrant_url = os.environ.get("QDRANT_URL", "http://aichat-vector:6333")
     for url, default_port, name in (
         (db, 5432, "postgres"),
         (redis_url, 6379, "redis"),
-        (qdrant_url, 6333, "qdrant"),
     ):
         u = urlparse(url)
         host = u.hostname or "localhost"
@@ -69,7 +67,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
                 item.add_marker(skip_marker)
 
 
-# ── LM Studio mock — only the external HTTP call ────────────────────────────
+# ── Language-model mock — only the external HTTP call ───────────────────────
 
 
 @pytest.fixture
@@ -95,8 +93,7 @@ def mock_llm_router() -> Iterator[AsyncMock]:
     with patch("app.context.router.stream", new=fake_stream), \
          patch("app.context.router.route", new=fake_route), \
          patch("app.context.router.init", new=AsyncMock()), \
-         patch("app.context.router.close", new=AsyncMock()), \
-         patch("app.context.router.keepalive", new=AsyncMock()):
+         patch("app.context.router.close", new=AsyncMock()):
         yield fake_route
 
 

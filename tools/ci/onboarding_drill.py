@@ -41,7 +41,6 @@ def built_images(checkout: Path) -> list[str]:
 INFRA = {
     "infra-postgres": "KLUKAI_PERF_POSTGRES_IMAGE",
     "aichat-redis": "KLUKAI_PERF_REDIS_IMAGE",
-    "aichat-vector": "KLUKAI_PERF_QDRANT_IMAGE",
 }
 LOGIN = (
     "TOKEN=$(curl -s -X POST http://127.0.0.1:8300/api/auth/login \\\n"
@@ -115,7 +114,6 @@ def provide_infrastructure(password: str) -> None:
             f"POSTGRES_PASSWORD={password}",
         ],
         "aichat-redis": [],
-        "aichat-vector": [],
     }
     for name, variable in INFRA.items():
         image = os.environ[variable]
@@ -242,8 +240,6 @@ def drill(source: Path, revision: str) -> dict[str, Any]:
     }
     secrets_env = {
         "POSTGRES_PASSWORD": secrets.token_urlsafe(24),
-        "LM_STUDIO_TOKEN": secrets.token_urlsafe(24),
-        "VOICE_API_TOKEN": secrets.token_urlsafe(24),
         "RABBITMQ_PASSWORD": secrets.token_urlsafe(24),
         "SEED_PASSWORD_JALSARRAF": secrets.token_urlsafe(24),
     }
@@ -291,7 +287,7 @@ def drill(source: Path, revision: str) -> dict[str, Any]:
                     health = json.loads(output)
                     step["ok"] = step["ok"] and health.get("status") == "ok"
                     step["health"] = {
-                        k: health.get(k) for k in ("status", "redis", "qdrant")
+                        k: health.get(k) for k in ("status", "redis")
                     }
                     step["health"]["database"] = (health.get("database") or {}).get(
                         "status"

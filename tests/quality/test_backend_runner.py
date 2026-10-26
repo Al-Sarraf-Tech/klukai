@@ -311,10 +311,9 @@ def test_worker_context_cannot_alias_writable_evidence(tmp_path):
         )
 
 
-def test_worker_environment_keeps_global_sdk_and_warmup_guards():
+def test_worker_environment_keeps_global_sdk_guards():
     env = profile.worker_environment("tests/runtime_backends.py", "a" * 64)
     assert env["OTEL_SDK_DISABLED"] == "true"
-    assert env["KLUKAI_DISABLE_WARMUP"] == "1"
     assert env["DATABASE_URL"] == "postgresql://disabled:disabled@127.0.0.1:1/disabled"
     assert env["ANTHROPIC_API_KEY"] == env["OPENAI_API_KEY"] == ""
     assert env["KLUKAI_RUNTIME_CONTEXT"] == "/runtime-context/context.json"

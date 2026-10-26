@@ -14,11 +14,11 @@
 - `git`, `make`, `curl`, `jq`.
 - **The shared aichat infrastructure.** Core does not ship its own database: it
   joins the external Docker networks `aichat_default`, `infra` and `klukai-obs`
-  and expects `infra-postgres`, `aichat-redis` and `aichat-vector` (Qdrant) on
-  them. Bring that stack up first, or provide equivalent containers on those
-  networks.
-- Chat, voice and images use the guarded GPU services on `dominus-nobara` over
-  Tailscale. Without them core still starts and answers health/auth requests.
+  and expects `infra-postgres` and `aichat-redis` on them. Bring that stack up
+  first, or provide equivalent containers on those networks.
+- All of Klukai's AI is cloud (ADR-0020): chat needs `KLUKAI_CLAUDE_PRIMARY=true`
+  and `ANTHROPIC_API_KEY`, voice needs `FISH_API_KEY`. Without them core still
+  starts and answers health/auth requests.
 
 ## 1. Clone the repo
 
@@ -33,8 +33,8 @@ cd ~/git/klukai
 test -e .env || cp .env.example .env   # never overwrite an existing .env
 chmod 600 .env
 # Required (compose refuses to render without them): POSTGRES_PASSWORD,
-# LM_STUDIO_TOKEN, RABBITMQ_PASSWORD. Add the SEED_PASSWORD_* values for the
-# accounts you want created.
+# RABBITMQ_PASSWORD. Add the SEED_PASSWORD_* values for the accounts you want
+# created.
 docker compose config --quiet           # validates interpolation, prints nothing
 ```
 
@@ -55,7 +55,7 @@ Expected shape:
 
 ```json
 {"status": "ok", "service": "companion-core",
- "database": {"status": "ok"}, "redis": "ok", "qdrant": "ok"}
+ "database": {"status": "ok"}, "redis": "ok"}
 ```
 
 ## 4. Verify the auth path
@@ -82,9 +82,8 @@ live end-to-end suite, which mints a short-lived session for the dedicated
 python3 scripts/e2e_live.py --only chat
 ```
 
-If the GPU gateway on `dominus-nobara` is unreachable, chat degrades with a
-clear error and the legacy `lm_studio` breaker label opens; health and auth
-keep working.
+Without the Anthropic settings (or if Anthropic is down) she answers with an
+in-character disruption line; health and auth keep working.
 
 ## 6. Run the tests
 
@@ -132,11 +131,11 @@ unverified. The honest per-row status lives in the latest handoff document.
 
 | Symptom | Fix |
 |---|---|
-| `docker compose` refuses to render | A required `.env` value is missing (`POSTGRES_PASSWORD`, `LM_STUDIO_TOKEN`, `RABBITMQ_PASSWORD`) |
+| `docker compose` refuses to render | A required `.env` value is missing (`POSTGRES_PASSWORD`, `RABBITMQ_PASSWORD`) |
 | `network aichat_default not found` | Start the shared aichat infrastructure first (Prerequisites) |
 | `companion-core` exits immediately | `docker compose logs companion-core` — usually a missing env var or an unreachable `infra-postgres` |
 | `companion-core` restarts with `PermissionError` under `/app/app` | The checkout was made with a private umask (077). The image copies source files with their modes and runs as UID 1000; clone with umask 022 or `chmod -R a+rX` the checkout, then rebuild |
-| `voice` service is unavailable | Follow [voice-unreachable](runbooks/voice-unreachable.md); recover only the canonical `ops/dominus-nobara` Compose service after checking the game guard and GPU lease |
+| Voice answers 503 | `KLUKAI_VOICE_ENABLED` is off or `FISH_API_KEY` is empty; speech-to-text also needs Fish credit |
 | Flutter app login page is blank | Service worker intercepted; rebuild with `--base-href=/app/` (`scripts/deploy-web.sh` does) |
 | Images fail to load on web | `Image.network(headers:)` is ignored on web; use `http.get` + `Image.memory` |
 | Coverage gate fails | Read the per-module report from the CI core job; the floor is 95% statements and branches |
