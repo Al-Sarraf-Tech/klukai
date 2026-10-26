@@ -56,7 +56,7 @@ class TestNeedsImage:
         assert needs_image("just a regular chat message") is False
 
     def test_case_insensitive(self):
-        assert needs_image("SHOW ME") is True or needs_image("show me") is True
+        assert needs_image("SHOW ME YOURSELF") is True
 
     @pytest.mark.parametrize("text", [
         "check the drawer for my keys",
@@ -73,7 +73,7 @@ class TestNeedsImage:
         "paint me something",
         "render that again",
         "send me a selfie",
-        "SHOW ME",
+        "SHOW ME YOURSELF",
     ])
     def test_real_requests_still_match(self, text):
         assert needs_image(text) is True
