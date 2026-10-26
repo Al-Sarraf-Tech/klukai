@@ -6,6 +6,8 @@ import json
 import math
 from typing import Any
 
+# Voice is not measured: since 2026-10-26 the core speaks only through the paid
+# Fish Audio API at a hardcoded endpoint, and CI never calls a paid provider.
 TARGETS: tuple[tuple[str, str, int], ...] = (
     ("GET", "/health", 200),
     ("GET", "/api/health/live", 200),
@@ -15,8 +17,6 @@ TARGETS: tuple[tuple[str, str, int], ...] = (
     ("GET", "/api/affection", 200),
     ("GET", "/api/messages", 200),
     ("GET", "/api/memories", 200),
-    ("POST", "/api/tts", 202),
-    ("GET", "/api/tts/jobs/{job_id}", 200),
 )
 MIN_SAMPLES = 100
 MIN_ROUNDS = 3
