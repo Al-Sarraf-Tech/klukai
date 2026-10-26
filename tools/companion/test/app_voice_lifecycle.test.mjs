@@ -43,7 +43,7 @@ function eventTarget() {
   };
 }
 
-function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory, ambienceFactory, motionQuery, prefs = { music: false }, musicFactory } = {}) {
+function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory, ambienceFactory, motionQuery, prefs = { music: false }, musicFactory, herDayImpl } = {}) {
   const elements = new Map();
   const element = (id) => {
     const classes = new Set();
@@ -91,7 +91,7 @@ function harness({ ttsImpl, embedded = true, embedHidden = false, socketFactory,
     readToken: () => "test-token", clearToken() {}, wsUrl: () => "unused",
     AuthExpired: class extends Error {},
     createApi: () => ({
-      herDay: async () => ({}), portrait: async () => ({ frames: {} }),
+      herDay: herDayImpl || (async () => ({})), portrait: async () => ({ frames: {} }),
       tts: (text, options) => {
         requests.push(text);
         return ttsImpl ? ttsImpl(text, options) : Promise.resolve({ audio: btoa(text) });
@@ -795,3 +795,32 @@ for (const returnToPage of [false, true]) {
     }
   });
 }
+
+test("an older day refresh cannot overwrite newer status and outfit", async () => {
+  const older = deferred(), newer = deferred();
+  let calls = 0;
+  const h = harness({ herDayImpl: () => ++calls === 1 ? older.promise : newer.promise });
+  await turn();
+  await h.document.dispatch("visibilitychange");
+  newer.resolve({ status: { label: "New status" }, outfit: { name: "New outfit" } });
+  await turn();
+  assert.equal(h.element("status-line").textContent, "New status");
+  assert.equal(h.element("outfit-chip").textContent, "New outfit");
+  older.resolve({ status: { label: "Old status" }, outfit: { name: "Old outfit" } });
+  await turn();
+  assert.equal(h.element("status-line").textContent, "New status");
+  assert.equal(h.element("outfit-chip").textContent, "New outfit");
+});
+
+test("a failed day refresh preserves the last good status and outfit", async () => {
+  const first = deferred(), failing = deferred();
+  let calls = 0;
+  const h = harness({ herDayImpl: () => ++calls === 1 ? first.promise : failing.promise });
+  first.resolve({ status: { label: "Current status" }, outfit: { name: "Current outfit" } });
+  await turn();
+  await h.document.dispatch("visibilitychange");
+  failing.reject(new Error("Network unavailable"));
+  await turn();
+  assert.equal(h.element("status-line").textContent, "Current status");
+  assert.equal(h.element("outfit-chip").textContent, "Current outfit");
+});
