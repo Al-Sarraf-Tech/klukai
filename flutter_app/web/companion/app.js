@@ -83,6 +83,7 @@ function boot() {
   let avatar = null;
   let portraitTimer = null;
   let portraitSeq = 0;           // refreshPortrait() calls in flight: only the newest may apply
+  let portraitAnimationMissing = false;
   let portraitHasFrames = false; // she has real frames showing (keep them through a blip)
   let frameErrorTimer = null;
   let lastFrameErrorRefresh = 0;
@@ -243,7 +244,8 @@ function boot() {
       return;
     }
     if (seq !== portraitSeq) return; // stale: a newer response already applied
-    if ($("btn-animate")) $("btn-animate").hidden = Boolean(p.frames?.blink && p.frames?.talk);
+    portraitAnimationMissing = !(p.frames?.blink && p.frames?.talk);
+    if ($("btn-animate")) $("btn-animate").hidden = prefs.mode !== "portrait" || !portraitAnimationMissing;
     portraitHasFrames = Boolean(p.frames?.base);
     portrait.setFrames(p.frames || {}, { pending: !portraitHasFrames });
     applyMood();
@@ -414,6 +416,7 @@ function boot() {
     $("btn-voice").disabled = !lastLine;
     $("btn-voice").setAttribute("aria-label", lastLine ? "Hear her last line" : "Her voice (nothing to play yet)");
     const m = prefs.mode === "model";
+    if ($("btn-animate")) $("btn-animate").hidden = m || !portraitAnimationMissing;
     $("btn-mode").textContent = m ? "2D" : "3D";
     $("btn-mode").setAttribute("aria-label", m ? "Switch to portrait" : "Switch to 3D");
     $("camera-controls").hidden = !m;

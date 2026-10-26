@@ -51,3 +51,9 @@ The owner subsequently requested “Finish the rest for klukai,” including the
 - Per-frame request identities bind user, outfit, source digest and frame. Pending work is observed through recovery; there is no unjournalled resubmission or automatic re-roll after a blink fails acceptance. Polling, outfit changes and startup remain non-generating.
 - Fixed release image pin writes to preserve the owner's environment overrides, including the disconnected local LLM endpoint. This is required before any rollout.
 - 469 focused tests passed for the combined Fish, portrait, worker, renderer and release changes. A live isolated-worker rendering check and certified CI are pending at this entry's creation; this paragraph does not claim they passed.
+
+### Live continuation evidence
+
+The isolated fal worker completed both blink and talk edits and the existing checker accepted both. The resulting blink also passed the iris-closure check. The preserved base WebP SHA-256 is `c15fdcf3e6438bebc37f479df5a852d830b27f3d72102a32884c7938f947adae`. In Cindy VM Chrome, the new frames all decoded, with three observed blink closures over 12 seconds and a talk opening during a simulated voice-level interval. This was a direct test of the actual portrait-renderer module using the newly generated test-account assets, not a claim that production has been upgraded. The temporary loopback server and SSH forwards were closed.
+
+The updated companion action is hidden when both frames already exist or when 3D mode is selected. It remains an explicit, credit-labelled action for a portrait missing frames. The full companion suite passed 239 tests.
