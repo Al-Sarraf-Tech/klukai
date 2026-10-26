@@ -47,6 +47,7 @@ from .helpers import (
     store_message as _store_message,
 )
 from .image_gen import needs_image
+from .image_request_intent import resolve_picture_request
 from .memory_archive import update_curation
 from .llm_router import FAILURE_SENTINEL
 from .models import SessionState, new_id
@@ -320,6 +321,14 @@ async def _handle_message(
             except Exception as e:
                 logger.warning("Could not deliver store-failure warning: %s", e)
 
+        # Resolve once from his prior turns, before her reply can add context.
+        image_request = resolve_picture_request(
+            content, before_turn.turns, detector=needs_image
+        )
+
+        def picture_requested(_content: str) -> bool:
+            return image_request is not None
+
         prompt_builder = ChatPromptBuilder(
             memory,
             affection,
@@ -329,7 +338,7 @@ async def _handle_message(
             assemble_system_prompt,
             load_personality,
             _wants_thread_inquiry,
-            needs_image,
+            picture_requested,
             _hours_since_last_exchange,
             _HER_DAY_WARM_BUDGET_S,
             _HER_DAY_TURN_BUDGET_S,
@@ -433,7 +442,7 @@ async def _handle_message(
         ws,
         context.get_last_memory_id,
         _wants_recall,
-        needs_image,
+        picture_requested,
         do_memory_keep,
         background_recall,
         background_image_gen,
@@ -444,6 +453,7 @@ async def _handle_message(
         TRIVIAL_PATTERNS,
         COMPACT_THRESHOLD,
         curate=update_curation,
+        image_request=image_request,
     )
     await followups.admit(content, response_text, session, user_id)
 

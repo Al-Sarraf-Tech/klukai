@@ -1211,3 +1211,99 @@ class TestHoursSinceLastExchange:
         )
         with patch("app.db.get_conn", cm):
             assert await _hours_since_last_exchange("claude") == 0.0
+
+
+class TestContextualPictureRequests:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "content,turns,expected",
+        [
+            (
+                "Show us sitting together on the balcony at sunset",
+                [],
+                "Show us sitting together on the balcony at sunset",
+            ),
+            (
+                "show me",
+                [
+                    {
+                        "role": "user",
+                        "content": "We are sitting together on the balcony at sunset",
+                    },
+                    {"role": "assistant", "content": "The breeze is warm."},
+                ],
+                "show me\n\nScene: We are sitting together on the balcony at sunset",
+            ),
+            ("show me", [], None),
+            (
+                "show me",
+                [
+                    {
+                        "role": "assistant",
+                        "content": "We are sitting together on the balcony at sunset",
+                    }
+                ],
+                None,
+            ),
+            (
+                "show me",
+                [
+                    {
+                        "role": "user",
+                        "content": "We are sitting together on the balcony at sunset",
+                    },
+                    {"role": "user", "content": "Explain the server logs"},
+                ],
+                None,
+            ),
+            (
+                "show me",
+                [{"role": "user", "content": "We are debugging code in the office"}],
+                None,
+            ),
+            (
+                "show me",
+                [
+                    {
+                        "role": "user",
+                        "content": "We are sitting together on the balcony but do not take a picture",
+                    }
+                ],
+                None,
+            ),
+            ("We are sitting together on the balcony at sunset", [], None),
+            ("Can you show us sitting together on the balcony if I ask?", [], None),
+        ],
+    )
+    async def test_picture_decision_and_render_scene_are_consistent(
+        self, content, turns, expected
+    ):
+        from app.chat_handlers import _handle_message
+        from app.image_prompts import needs_image
+
+        session = _fresh_session(turns=turns.copy())
+        prompts = []
+
+        async def stream(system_prompt, messages, config):
+            prompts.append(system_prompt)
+            yield "All right."
+
+        with _patched_pipeline() as ns:
+            ns.router.stream = stream
+            with patch("app.chat_handlers.needs_image", needs_image):
+                await _handle_message(content, session)
+                await _drain_tasks()
+
+        assert ("IMAGE GENERATION ACTIVE" in prompts[0]) is (expected is not None)
+        assert any(
+            t["role"] == "user" and t["content"] == content for t in session.turns
+        )
+        if expected is None:
+            ns.background_image_gen.assert_not_called()
+        else:
+            ns.background_image_gen.assert_awaited_once()
+            assert ns.background_image_gen.await_args.args[0] == expected
+            assert (
+                ns.background_image_gen.await_args.kwargs["recent_turns"][-2]["content"]
+                == content
+            )

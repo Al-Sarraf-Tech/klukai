@@ -12,7 +12,6 @@ from app.image_gen_constants import (
     COMMANDER_OUTFIT_MAP,
     COUPLE_KEYWORDS,
     COUPLE_TAGS,
-    IMAGE_KEYWORDS,
     KLUKAI_DEFAULT_OUTFIT,
     KLUKAI_IDENTITY,
     KLUKAI_LORA_TRIGGER,
@@ -96,18 +95,88 @@ def build_mission_prompt(
     return ", ".join(parts)
 
 
-# Whole words, with the plain verb endings ("drawing", "rendered"), so a
-# keyword inside another word ("drawer", "surrender", "withdraw") is no request.
-_IMAGE_REQUEST = re.compile(
-    r"\b(?:"
-    + "|".join(re.escape(kw) for kw in IMAGE_KEYWORDS)
-    + r")(?:s|es|d|ed|ing)?\b"
+# Picture generation is an explicit request, not any mention of a picture.
+# These patterns only route text; provider, scene and consent gates stay in
+# their existing downstream owners. Ambiguous "show me" / "try again" need
+# a visual target rather than silently starting a paid render.
+_PICTURE_NOUN = r"(?:selfie|photo(?:graph)?|picture|pic|image|snapshot)"
+_PICTURE_ARTICLE = r"(?:(?:a|an|another|one|new) )?"
+_REQUEST_PREFIX = re.compile(
+    r"^(?:(?:hey|hi)[ ,]+)?(?:klukai[ ,]+)?(?:please )?"
+    r"(?:(?:can|could|would|will) you )?(?:please )?"
+)
+_PICTURE_OPT_OUT = re.compile(
+    r"\b(?:don't|do not|doesn't|does not|never|not|stop|cancel|avoid|"
+    r"no (?:more )?(?:pictures?|photos?|images?|selfies))\b"
+)
+_NON_PICTURE_ACTION = re.compile(
+    r"^(?:paint|draw|sketch|render|illustrate|depict|visualize) "
+    r"(?:(?:me|us) )?(?:(?:the|a|an|this|that|my|your) )?"
+    r"(?:wall|fence|code|logs?|react|component|html|css|sql|function|"
+    r"algorithm|conclusion|inference|attention)\b"
+)
+_PICTURE_DISCUSSION = re.compile(
+    _PICTURE_NOUN + r" (?:generation )?"
+    r"(?:settings?|features?|capabilit(?:y|ies)|keywords?)\b"
+)
+_CONDITIONAL_PICTURE = re.compile(
+    r"\b(?:if|when|whenever|unless|until) (?:i|we|someone|asked|requested)\b|"
+    r"\bor (?:(?:only|just) (?:send|write|reply|answer|describe|chat)|"
+    r"are you|can you|do you)\b"
+)
+_PICTURE_ACTION = re.compile(
+    r"^(?:take|snap|send|give|generate|create|make) "
+    r"(?:(?:me|us) )?" + _PICTURE_ARTICLE + _PICTURE_NOUN + r"\b"
+)
+_VISUAL_TARGET = (
+    r"(?:you(?:rself)?|us|together|both of us|the two of us|"
+    r"your (?:outfit|clothes|dress|uniform|look|picture|photo)|"
+    r"what you look like|what you're wearing|"
+    + _PICTURE_ARTICLE
+    + _PICTURE_NOUN
+    + r")\b"
+)
+_SHOW_PICTURE = re.compile(
+    r"^(?:show (?:me|us)|let me see|can i see|could i see|"
+    r"i (?:want|would like) to see|i'd like to see) " + _VISUAL_TARGET
+)
+_PICTURE_FOLLOWUP = re.compile(
+    r"^(?:how about |what about |i (?:want|would like) |i'd like |"
+    r"(?:can|could) i have )" + _PICTURE_ARTICLE + _PICTURE_NOUN + r"\b|"
+    r"^(?:another|one more) " + _PICTURE_NOUN + r"\b"
+)
+_DRAW_PICTURE = re.compile(
+    r"^(?:(?:draw|paint|render|sketch|illustrate|depict|visualize) \S|"
+    r"(?:a |an )?(?:drawing|painting|sketch|illustration|picture|image|photo) of )"
 )
 
 
 def needs_image(message: str) -> bool:
-    """Check if the message is requesting image generation."""
-    return _IMAGE_REQUEST.search(message.lower()) is not None
+    """Recognize an explicit generated-picture request, without any I/O.
+
+    Accept polite requests and common selfie/photo wording, but not bare
+    follow-ups, quoted examples, capability questions or technical questions.
+    An opt-out anywhere in the message is conservatively left as text chat.
+    """
+    normalized = " ".join(message.casefold().replace("’", "'").split())
+    if _PICTURE_OPT_OUT.search(normalized):
+        return False
+    request = _REQUEST_PREFIX.sub("", normalized, count=1)
+    if (
+        _PICTURE_DISCUSSION.search(request)
+        or _CONDITIONAL_PICTURE.search(request)
+        or _NON_PICTURE_ACTION.match(request)
+    ):
+        return False
+    return any(
+        pattern.match(request) is not None
+        for pattern in (
+            _PICTURE_ACTION,
+            _SHOW_PICTURE,
+            _PICTURE_FOLLOWUP,
+            _DRAW_PICTURE,
+        )
+    )
 
 
 def is_couple_scene(text: str) -> bool:

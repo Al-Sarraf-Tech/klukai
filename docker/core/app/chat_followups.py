@@ -37,6 +37,9 @@ class ChatFollowups:
     # Writes her keep/caption/category onto a saved picture (update_curation).
     curate: Callable[..., Coroutine[Any, Any, bool]] | None = None
 
+    # Render-only contextual wording; never replaces the stored user turn.
+    image_request: str | None = None
+
     async def admit(
         self, content: str, response_text: str, session: SessionState, user_id: str
     ) -> None:
@@ -96,7 +99,9 @@ class ChatFollowups:
                 user_id,
                 asyncio.create_task(
                     self.image(
-                        content,
+                        self.image_request
+                        if self.image_request is not None
+                        else content,
                         chat_context=chat_ctx,
                         squad_members=mentioned_squad,
                         user_id=user_id,
