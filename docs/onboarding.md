@@ -33,8 +33,8 @@ cd ~/git/klukai
 test -e .env || cp .env.example .env   # never overwrite an existing .env
 chmod 600 .env
 # Required (compose refuses to render without them): POSTGRES_PASSWORD,
-# LM_STUDIO_TOKEN, VOICE_API_TOKEN, RABBITMQ_PASSWORD. Add the SEED_PASSWORD_*
-# values for the accounts you want created.
+# LM_STUDIO_TOKEN, RABBITMQ_PASSWORD. Add the SEED_PASSWORD_* values for the
+# accounts you want created.
 docker compose config --quiet           # validates interpolation, prints nothing
 ```
 
@@ -132,7 +132,7 @@ unverified. The honest per-row status lives in the latest handoff document.
 
 | Symptom | Fix |
 |---|---|
-| `docker compose` refuses to render | A required `.env` value is missing (`POSTGRES_PASSWORD`, `LM_STUDIO_TOKEN`, `VOICE_API_TOKEN`, `RABBITMQ_PASSWORD`) |
+| `docker compose` refuses to render | A required `.env` value is missing (`POSTGRES_PASSWORD`, `LM_STUDIO_TOKEN`, `RABBITMQ_PASSWORD`) |
 | `network aichat_default not found` | Start the shared aichat infrastructure first (Prerequisites) |
 | `companion-core` exits immediately | `docker compose logs companion-core` — usually a missing env var or an unreachable `infra-postgres` |
 | `companion-core` restarts with `PermissionError` under `/app/app` | The checkout was made with a private umask (077). The image copies source files with their modes and runs as UID 1000; clone with umask 022 or `chmod -R a+rX` the checkout, then rebuild |

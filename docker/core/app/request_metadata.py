@@ -1,18 +1,7 @@
-"""Request peer identity and explicit internal voice authentication headers."""
+"""Request peer identity."""
 
 from __future__ import annotations
-import os
 from fastapi import Request
-
-
-def voice_auth_headers() -> dict[str, str]:
-    """Bearer header for calls to the voice service when VOICE_API_TOKEN is set.
-
-    Empty (no auth) when unset, so it stays a no-op until the token is
-    provisioned on the voice host — core->voice keeps working either way.
-    """
-    tok = os.environ.get("VOICE_API_TOKEN")
-    return {"Authorization": f"Bearer {tok}"} if tok else {}
 
 
 def client_ip(request: "Request") -> str:

@@ -49,10 +49,7 @@ from .conversation_store import (
 )
 
 
-from .request_metadata import (
-    voice_auth_headers as voice_auth_headers,
-    client_ip as client_ip,
-)
+from .request_metadata import client_ip as client_ip
 
 
 def chunk_text(text: str, chunk_size: int = 8) -> list[str]:
@@ -145,12 +142,13 @@ _TTS_BOUNDARIES = (". ", "! ", "? ", ".\n")
 
 
 def tts_clip(text: str, limit: int = 500) -> str:
-    """Cap text for XTTS at ``limit`` chars, cutting at the last sentence end.
+    """Cap text for speech at ``limit`` chars, cutting at the last sentence end.
 
-    XTTS rejects very long inputs, and a hard cut leaves her trailing off
-    mid-word. When the text is over the limit, cut after the last sentence
-    boundary inside it; fall back to a hard cut only when that boundary is so
-    early (before ``limit // 3``) that it would drop most of the clip.
+    One spoken line stays short and quick to synthesize, and a hard cut
+    leaves her trailing off mid-word. When the text is over the limit, cut
+    after the last sentence boundary inside it; fall back to a hard cut only
+    when that boundary is so early (before ``limit // 3``) that it would drop
+    most of the clip.
     """
     if len(text) <= limit:
         return text

@@ -26,10 +26,16 @@ from fastapi import FastAPI
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-pytestmark = pytest.mark.usefixtures("mock_voice_gpu_lease")
-
-
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def fish_configured(monkeypatch):
+    """Fish has a key: health reports her voice from configuration alone."""
+    monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "true")
+    monkeypatch.setenv("FISH_API_KEY", "pytest-fish-key")
+    monkeypatch.delenv("KLUKAI_FISH_MODEL", raising=False)
+    monkeypatch.delenv("KLUKAI_FISH_VOICE_ID", raising=False)
 
 
 def _mk_request(token: str | None = "good") -> MagicMock:
@@ -392,17 +398,16 @@ class TestSubsystemHealth:
 
         assert result["subsystems"]["qdrant"]["status"] == "degraded"
         assert result["subsystems"]["embeddings"]["status"] == "degraded"
-        assert result["subsystems"]["voice"]["status"] == "degraded"
+        # Fish is a cloud API: reported from configuration, never probed.
+        assert result["subsystems"]["voice"] == {"status": "ok", "backend": "fish"}
         # Gateway health itself returned 500, so the protected Comfy facade is
         # correctly down and the aggregate degrades.
         assert result["subsystems"]["comfyui"]["status"] == "down"
         assert result["status"] == "degraded"
 
     @pytest.mark.asyncio
-    async def test_voice_probe_honours_trailing_slash_in_voice_url(self):
-        """A trailing slash in VOICE_URL must not become `//health` (a 404
-        that reports the voice service down while it is fine)."""
-        import os
+    async def test_fish_voice_is_reported_without_a_request(self):
+        """No voice host is probed: a Fish request would spend on every check."""
         app = _app_with_routes()
         handler = _find_route(app, "/api/health/subsystems", "GET")
 
@@ -415,14 +420,12 @@ class TestSubsystemHealth:
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
              patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})), \
              patch("redis.asyncio.from_url", return_value=redis_mock), \
-             patch("httpx.AsyncClient", return_value=ctx), \
-             patch.dict(os.environ, {"VOICE_URL": "http://voice.local:8301/"}):
+             patch("httpx.AsyncClient", return_value=ctx):
             result = await handler(_mk_request())
 
-        assert result["subsystems"]["voice"]["status"] == "ok"
+        assert result["subsystems"]["voice"] == {"status": "ok", "backend": "fish"}
         urls = [c.args[0] for c in ctx._client.get.call_args_list]
-        assert "http://voice.local:8301/health" in urls
-        assert not any("//health" in u for u in urls)
+        assert not any("fish.audio" in u or ":8301" in u for u in urls)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -453,81 +456,85 @@ class TestTTSProxy:
     @pytest.mark.asyncio
     async def test_returns_base64_audio_on_success(self):
         import base64
+        import httpx
         from app.routes import TTSRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/tts", "POST")
 
         audio = b"\x00\x01RIFFWAVE"
-        ctx = _fake_async_client(post_resp=_Resp(200, content=audio))
+        synth = AsyncMock(return_value=httpx.Response(200, content=audio))
 
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.httpx.AsyncClient", return_value=ctx):
+             patch("app.voice_client.post_tts", synth):
             result = await handler(TTSRequest(text="Hello there.", language="ja"), _mk_request())
 
         assert result == {"audio": base64.b64encode(audio).decode()}
-        # Voice service called with the cleaned, length-capped text + language.
-        body = ctx._client.post.call_args.kwargs["json"]
-        assert body["text"] == "Hello there."
-        assert body["language"] == "ja"
+        # Fish gets the cleaned, length-capped text + language (ja text as written).
+        assert synth.await_args.args[0] == {"text": "Hello there.", "language": "ja"}
+        assert synth.await_args.kwargs == {"timeout": 60.0}
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("upstream", [401, 403, 422, 500])
+    @pytest.mark.parametrize("upstream", [400, 502, 503])
     async def test_upstream_error_is_502_never_forwarded(self, upstream):
-        """The voice host's status is NOT passed through: a VOICE_API_TOKEN
-        mismatch is a 401 from upstream, and the companion stage's net.js
-        reads any 401 as HIS session expiring and logs him out."""
+        """The voice status is NOT passed through: the companion stage's
+        net.js reads any 401 as HIS session expiring and logs him out."""
         import json as _json
+        import httpx
         from app.routes import TTSRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/tts", "POST")
-        ctx = _fake_async_client(post_resp=_Resp(upstream, content=b""))
+        synth = AsyncMock(return_value=httpx.Response(upstream, json={"error": "x"}))
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.httpx.AsyncClient", return_value=ctx):
+             patch("app.voice_language.voice_language_for", new=AsyncMock(return_value="en")), \
+             patch("app.voice_client.post_tts", synth):
             resp = await handler(TTSRequest(text="speak"), _mk_request())
         assert resp.status_code == 502
         assert _json.loads(resp.body) == {"error": "TTS failed"}
 
     @pytest.mark.asyncio
-    async def test_timeout_waiting_on_the_lease_is_503(self):
-        """The whole leased call (gate wait + GPU lease + synth) is bounded;
-        running out of that budget is a 503, not a hung request."""
+    async def test_timeout_is_503(self):
+        """The whole synthesis call is bounded; running out of that budget is
+        a 503, not a hung request."""
         from app.routes import TTSRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/tts", "POST")
-        ctx = _fake_async_client(post_resp=_Resp(200, content=b"never"))
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.httpx.AsyncClient", return_value=ctx), \
-             patch("app.voice_client.post_leased_tts", new=AsyncMock(side_effect=TimeoutError())):
+             patch("app.voice_language.voice_language_for", new=AsyncMock(return_value="en")), \
+             patch("app.voice_client.post_tts", new=AsyncMock(side_effect=TimeoutError())):
             resp = await handler(TTSRequest(text="speak"), _mk_request())
         assert resp.status_code == 503
 
     @pytest.mark.asyncio
     async def test_long_text_is_clipped_at_a_sentence_end(self):
+        import httpx
         from app.routes import TTSRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/tts", "POST")
-        ctx = _fake_async_client(post_resp=_Resp(200, content=b"wav"))
+        synth = AsyncMock(return_value=httpx.Response(200, content=b"wav"))
         text = "Sentence one is here. " * 40  # 880 chars
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.httpx.AsyncClient", return_value=ctx):
+             patch("app.voice_language.voice_language_for", new=AsyncMock(return_value="en")), \
+             patch("app.voice_client.post_tts", synth):
             await handler(TTSRequest(text=text), _mk_request())
-        sent = ctx._client.post.call_args.kwargs["json"]["text"]
+        sent = synth.await_args.args[0]["text"]
         assert len(sent) <= 500
         assert sent.endswith("Sentence one is here.")  # not a mid-word hard cut
 
     @pytest.mark.asyncio
     async def test_503_when_voice_unreachable(self, caplog):
-        """The failure is logged in core: before, the only trace was on the GPU host."""
+        """The failure is logged in core by type, never with its message."""
         from app.routes import TTSRequest
         app = _app_with_routes()
         handler = _find_route(app, "/api/tts", "POST")
-        ctx = _fake_async_client(post_exc=RuntimeError("connection refused"))
+        boom = AsyncMock(side_effect=RuntimeError("connection refused to secret-host"))
         with patch("app.routes._get_user_id", new=AsyncMock(return_value="alice")), \
-             patch("app.routes.httpx.AsyncClient", return_value=ctx), \
+             patch("app.voice_language.voice_language_for", new=AsyncMock(return_value="en")), \
+             patch("app.voice_client.post_tts", boom), \
              caplog.at_level("ERROR", logger="app.routes"):
             resp = await handler(TTSRequest(text="speak"), _mk_request())
         assert resp.status_code == 503
-        assert any("TTS failed: RuntimeError: connection refused" in r.getMessage() for r in caplog.records)
+        assert any("TTS failed: RuntimeError" in r.getMessage() for r in caplog.records)
+        assert "secret-host" not in caplog.text
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -39,11 +39,15 @@ services:
       # service on Dominus-Nobara or Amarillo is used by core.
       # Voice in and out is Fish Audio. Off, core sends no speech work at all.
       KLUKAI_VOICE_ENABLED: "${KLUKAI_VOICE_ENABLED:-false}"
-      # Fish Audio community "Klukai" model (Danastico). Speech output stays on
-      # a free model (s2.1-pro-free is free through 2026-11-30; core refuses
-      # any TTS model not ending in "-free"). Speech input uses the paid
-      # transcribe-1-pro ASR, owner-authorized 2026-10-26; it needs API credit
-      # on the Fish account and fails closed without it.
+      # Opt-in submit/poll speech for long lines.
+      VOICE_ASYNC_JOBS: "${VOICE_ASYNC_JOBS:-false}"
+      # Voice is Fish Audio only (cloud), both directions, with one key:
+      # - speech: the community "Klukai" model (Danastico) on a free model
+      #   header (s2.1-pro-free is free through 2026-11-30); core refuses an
+      #   empty key/model and any model not ending in "-free".
+      # - transcription: transcribe-1-pro, pay-as-you-go ($0.36 per audio
+      #   hour, owner authorized 2026-10-26). It needs API credit on the Fish
+      #   account and fails closed without it. No key: voice input is off.
       FISH_API_KEY: "${FISH_API_KEY:-}"
       KLUKAI_FISH_VOICE_ID: "${KLUKAI_FISH_VOICE_ID:-47fc35b7311944bc9fa238ed856de1f3}"
       KLUKAI_FISH_MODEL: "${KLUKAI_FISH_MODEL:-s2.1-pro-free}"

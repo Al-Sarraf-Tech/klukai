@@ -1,7 +1,7 @@
 """Bounded voice work stays private, ordered, and cancellable."""
 
 import asyncio
-import base64
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -133,8 +133,7 @@ async def test_completed_result_expires_and_shutdown_cancels_upstream():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend,async_jobs", [("amarillo-xpu", "false"), ("dominus", "true")])
-async def test_job_routes_require_auth_and_hide_foreign_jobs(monkeypatch, backend, async_jobs):
+async def test_job_routes_require_auth_and_hide_foreign_jobs(monkeypatch):
     from app.routes import register_routes
     from app.voice_jobs import VoiceJobs
 
@@ -145,8 +144,11 @@ async def test_job_routes_require_auth_and_hide_foreign_jobs(monkeypatch, backen
     register_routes(app)
     jobs = VoiceJobs(synthesize=synth)
     app.state.voice_jobs = jobs
-    monkeypatch.setenv("VOICE_BACKEND", backend)
-    monkeypatch.setenv("VOICE_ASYNC_JOBS", async_jobs)
+    monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "true")
+    monkeypatch.setenv("VOICE_ASYNC_JOBS", "true")
+    monkeypatch.setattr(
+        "app.voice_language.voice_language_for", AsyncMock(return_value="en")
+    )
 
     async def user(request):
         return request.headers.get("x-user")
@@ -173,54 +175,25 @@ async def test_job_routes_require_auth_and_hide_foreign_jobs(monkeypatch, backen
 
 
 @pytest.mark.asyncio
-async def test_local_voice_bypasses_dominus_lease_and_decodes_json(monkeypatch):
-    from app.voice_client import post_leased_tts, stt_url
-
-    monkeypatch.setenv("VOICE_BACKEND", "amarillo-xpu")
-    monkeypatch.setenv("VOICE_URL", "http://local:8301")
-    monkeypatch.setenv("VOICE_API_TOKEN", "test-only")
-    monkeypatch.delenv("VOICE_STT_URL", raising=False)
-
-    def forbidden(*_args, **_kwargs):
-        pytest.fail("local voice contacted the Dominus lease gate")
-
-    monkeypatch.setattr("app.voice_client.gpu_lease", forbidden)
-    monkeypatch.setattr("app.llm_router.get_lm_gate", forbidden)
-    raw = b"RIFF\x00WAVE"
-
-    def handle(request):
-        assert request.headers["Authorization"] == "Bearer test-only"
-        assert "X-GPU-Lease-Token" not in request.headers
-        return httpx.Response(200, json={"audio": base64.b64encode(raw).decode()})
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
-        result = await post_leased_tts(client, {"text": "test"}, timeout=600)
-    assert result.content == raw
-    assert stt_url() == "http://100.107.121.5:8301"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("upstream_status", [200, 503])
-async def test_synthesize_handles_normalized_local_response_status(monkeypatch, upstream_status):
+@pytest.mark.parametrize("upstream_status", [200, 502])
+async def test_synthesize_encodes_fish_audio_or_raises(monkeypatch, upstream_status):
     from app import voice_jobs
 
-    monkeypatch.setenv("VOICE_BACKEND", "amarillo-xpu")
-    monkeypatch.setenv("VOICE_URL", "http://local:8301")
-    monkeypatch.setenv("VOICE_API_TOKEN", "test-only")
-    client_type = httpx.AsyncClient
-
-    def handle(request):
-        return httpx.Response(upstream_status, json={"audio": "YXVkaW8="})
-
-    monkeypatch.setattr(voice_jobs.httpx, "AsyncClient", lambda **kwargs: client_type(
-        transport=httpx.MockTransport(handle), **kwargs
-    ))
+    response = httpx.Response(
+        upstream_status,
+        content=b"audio",
+        request=httpx.Request("POST", "https://api.fish.audio/v1/tts"),
+    )
+    post_tts = AsyncMock(return_value=response)
+    monkeypatch.setattr(voice_jobs, "post_tts", post_tts)
+    payload = {"text": "Hello.", "language": "en"}
     if upstream_status == 200:
-        assert await voice_jobs._synthesize({"text": "Hello.", "language": "en"}) == "YXVkaW8="
+        assert await voice_jobs._synthesize(payload) == "YXVkaW8="
     else:
         with pytest.raises(httpx.HTTPStatusError) as failed:
-            await voice_jobs._synthesize({"text": "Hello.", "language": "en"})
-        assert failed.value.response.status_code == 503
+            await voice_jobs._synthesize(payload)
+        assert failed.value.response.status_code == 502
+    post_tts.assert_awaited_once_with(payload)
 
 
 @pytest.mark.asyncio
@@ -249,47 +222,3 @@ async def test_poll_and_cancel_do_not_spend_synthesis_rate_limit(monkeypatch):
         assert (await client.post("/api/tts")).status_code == 429
         assert (await client.get("/api/tts/jobs/test")).status_code == 200
         assert (await client.delete("/api/tts/jobs/test")).status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_cancel_waits_for_native_unload_before_starting_next_synthesis(monkeypatch):
-    from app import voice_client
-
-    first_started = asyncio.Event()
-    unloading = asyncio.Event()
-    reaped = asyncio.Event()
-    second_started = asyncio.Event()
-    monkeypatch.setenv("VOICE_BACKEND", "amarillo-xpu")
-    monkeypatch.setenv("VOICE_API_TOKEN", "test-only")
-    monkeypatch.setattr(voice_client, "_local_gate", asyncio.Lock())
-
-    async def unload():
-        unloading.set()
-        await reaped.wait()
-
-    monkeypatch.setattr(voice_client, "_unload_local_voice", unload, raising=False)
-
-    async def handle(request):
-        if b'first' in request.content:
-            first_started.set()
-            await asyncio.Event().wait()
-        second_started.set()
-        return httpx.Response(200, json={"audio": "YXVkaW8="})
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
-        first = asyncio.create_task(voice_client.post_leased_tts(client, {"text": "first"}))
-        await first_started.wait()
-        second = asyncio.create_task(voice_client.post_leased_tts(client, {"text": "second"}))
-        first.cancel()
-        try:
-            await asyncio.wait_for(unloading.wait(), timeout=0.1)
-            assert not second_started.is_set()
-            reaped.set()
-            with pytest.raises(asyncio.CancelledError):
-                await first
-            assert (await second).content == b"audio"
-        finally:
-            reaped.set()
-            first.cancel()
-            second.cancel()
-            await asyncio.gather(first, second, return_exceptions=True)
