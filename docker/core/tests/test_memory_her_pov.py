@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -12,6 +13,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app import memory_her_pov as hp
+
+
+def _haiku(reply):
+    """Patch the Haiku transport: an object is replied as JSON text, a string as
+    is, and an exception is its failure."""
+    if isinstance(reply, BaseException):
+        mock = AsyncMock(side_effect=reply)
+    else:
+        mock = AsyncMock(
+            return_value=reply if isinstance(reply, str) else json.dumps(reply)
+        )
+    return patch("app.extraction_llm.complete", mock)
 
 
 def test_is_trivial():
@@ -88,16 +101,8 @@ async def test_compose_pov_fallback_on_bad_llm():
         "mood": "composed",
     }
 
-    class _Gate:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *a):
-            return False
-
-    with patch("app.llm_router.get_lm_gate", return_value=_Gate()):
-        with patch("app.llm_json.call_llm", AsyncMock(return_value={})):
-            pov = await hp.compose_pov(exchange, affection_level=5)
+    with _haiku({}):
+        pov = await hp.compose_pov(exchange, affection_level=5)
     assert len(pov["annotation"]) >= 8
     assert len(pov["scene_tags"]) >= 8
 
@@ -110,13 +115,6 @@ async def test_compose_pov_uses_llm_fields():
         "mood": "tender",
     }
 
-    class _Gate:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *a):
-            return False
-
     llm = {
         "annotation": "He waited. I pretended I arrived first.",
         "scene_tags": "hangar, night, silver hair, looking away",
@@ -124,9 +122,8 @@ async def test_compose_pov_uses_llm_fields():
         "mood": "tender",
         "title": "Hangar Wait",
     }
-    with patch("app.llm_router.get_lm_gate", return_value=_Gate()):
-        with patch("app.llm_json.call_llm", AsyncMock(return_value=llm)):
-            pov = await hp.compose_pov(exchange, affection_level=7)
+    with _haiku(llm):
+        pov = await hp.compose_pov(exchange, affection_level=7)
     assert pov["annotation"].startswith("He waited")
     assert pov["couple"] is True
     assert pov["title"] == "Hangar Wait"
@@ -172,14 +169,6 @@ def _patch_conn(rows):
         yield FakeConn()
 
     return patch("app.db.get_conn", fake_get_conn)
-
-
-class _Gate:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *a):
-        return False
 
 
 @pytest.fixture
@@ -967,31 +956,23 @@ class TestComposePov:
 
     @pytest.mark.asyncio
     async def test_llm_exception_falls_back(self):
-        with patch("app.llm_router.get_lm_gate", return_value=_Gate()):
-            with patch(
-                "app.llm_json.call_llm",
-                AsyncMock(side_effect=RuntimeError("gateway down")),
-            ):
-                pov = await hp.compose_pov(self._exchange(), affection_level=5)
+        with _haiku(RuntimeError("gateway down")):
+            pov = await hp.compose_pov(self._exchange(), affection_level=5)
         assert len(pov["annotation"]) >= 8
         assert pov["title"] == "From my side"
         assert pov["couple"] is False
 
     @pytest.mark.asyncio
     async def test_non_dict_llm_response_falls_back(self):
-        with patch("app.llm_router.get_lm_gate", return_value=_Gate()):
-            with patch(
-                "app.llm_json.call_llm", AsyncMock(return_value=["not", "a", "dict"])
-            ):
-                pov = await hp.compose_pov(self._exchange(), affection_level=5)
+        with _haiku(["not", "a", "dict"]):
+            pov = await hp.compose_pov(self._exchange(), affection_level=5)
         assert pov["title"] == "From my side"
 
     @pytest.mark.asyncio
     async def test_too_short_fields_fall_back(self):
         bad = {"annotation": "hm", "scene_tags": "x", "couple": "yes", "title": "  "}
-        with patch("app.llm_router.get_lm_gate", return_value=_Gate()):
-            with patch("app.llm_json.call_llm", AsyncMock(return_value=bad)):
-                pov = await hp.compose_pov(self._exchange(), affection_level=5)
+        with _haiku(bad):
+            pov = await hp.compose_pov(self._exchange(), affection_level=5)
         assert pov["annotation"] != "hm"
         assert pov["scene_tags"] != "x"
         # a non-bool `couple` must not be trusted as truthy
@@ -1006,9 +987,8 @@ class TestComposePov:
             "couple": False,
             "title": "Hangar Wait",
         }
-        with patch("app.llm_router.get_lm_gate", return_value=_Gate()):
-            with patch("app.llm_json.call_llm", AsyncMock(return_value=raw)):
-                pov = await hp.compose_pov(self._exchange(), affection_level=5)
+        with _haiku(raw):
+            pov = await hp.compose_pov(self._exchange(), affection_level=5)
         assert pov["mood"] == "wistful"
 
     @pytest.mark.asyncio
@@ -1019,9 +999,8 @@ class TestComposePov:
             "couple": False,
             "title": "  A   ridiculously\n\tlong " + "title " * 20,
         }
-        with patch("app.llm_router.get_lm_gate", return_value=_Gate()):
-            with patch("app.llm_json.call_llm", AsyncMock(return_value=raw)):
-                pov = await hp.compose_pov(self._exchange(), affection_level=5)
+        with _haiku(raw):
+            pov = await hp.compose_pov(self._exchange(), affection_level=5)
         assert len(pov["title"]) <= 48
         assert "\n" not in pov["title"]
         assert "  " not in pov["title"]
@@ -1035,9 +1014,8 @@ class TestComposePov:
             "mood": "M" * 90,
             "title": "Long Night",
         }
-        with patch("app.llm_router.get_lm_gate", return_value=_Gate()):
-            with patch("app.llm_json.call_llm", AsyncMock(return_value=raw)):
-                pov = await hp.compose_pov(self._exchange(), affection_level=9)
+        with _haiku(raw):
+            pov = await hp.compose_pov(self._exchange(), affection_level=9)
         assert len(pov["annotation"]) <= 500
         assert len(pov["scene_tags"]) <= 600
         assert len(pov["mood"]) <= 40
@@ -1046,13 +1024,14 @@ class TestComposePov:
     async def test_affection_level_reaches_the_prompt(self):
         captured = {}
 
-        async def _capture(url, model, prompt, **kw):
+        async def _capture(prompt, **kw):
             captured["prompt"] = prompt
-            return {}
+            captured.update(kw)
+            return "{}"
 
-        with patch("app.llm_router.get_lm_gate", return_value=_Gate()):
-            with patch("app.llm_json.call_llm", _capture):
-                await hp.compose_pov(self._exchange(), affection_level=8)
+        with patch("app.extraction_llm.complete", _capture):
+            await hp.compose_pov(self._exchange(), affection_level=8)
+        assert captured["route"] == "her_pov"
         assert "8/9" in captured["prompt"]
         assert "I waited for you at the hangar." in captured["prompt"]
 

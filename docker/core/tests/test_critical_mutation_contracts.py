@@ -3,14 +3,18 @@
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 import json
+import logging
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from app import affection
+from app import extraction_llm as xl
 from app.affection import AffectionManager
 from app.affection_classifier import classify_interaction
 from app.affection_types import compute_level
+from app.background_llm import THINKING_HEADROOM_TOKENS
 from app.circuit_breakers import State, get_breaker
 
 TODAY = date(2026, 5, 20)
@@ -21,18 +25,38 @@ LEVELS = [
 ]
 
 
-class Gate:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_args):
-        return False
+def _haiku_message(text):
+    return {
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-5-5",
+        "stop_reason": "end_turn",
+        "content": [{"type": "text", "text": text}],
+        "usage": {"input_tokens": 5, "output_tokens": 3},
+    }
 
 
 @pytest.fixture
-def model_gate(monkeypatch):
-    monkeypatch.setenv("LM_STUDIO_TOKEN", "offline-critical-token")
-    monkeypatch.setattr("app.llm_router.get_lm_gate", Gate)
+def haiku_wire(monkeypatch):
+    """The real Haiku transport, against an in-process Anthropic server.
+
+    Every HTTP client created during the test goes to ``server["handler"]``,
+    so a request to any other endpoint would be recorded there too.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "offline-critical-key")
+    monkeypatch.setenv("LM_STUDIO_TOKEN", "offline-local-token")
+    monkeypatch.delenv("KLUKAI_EXTRACTION_MODEL", raising=False)
+    monkeypatch.setattr(xl, "reserve_attempt", AsyncMock(return_value="attempt-1"))
+    monkeypatch.setattr(xl, "record_usage", AsyncMock())
+    server = {"handler": None}
+    real_client = httpx.AsyncClient
+
+    def client(**kwargs):
+        transport = httpx.MockTransport(lambda request: server["handler"](request))
+        return real_client(transport=transport, **kwargs)
+
+    monkeypatch.setattr(xl.httpx, "AsyncClient", client)
+    return server
 
 
 @pytest.mark.parametrize(
@@ -45,43 +69,47 @@ def model_gate(monkeypatch):
         ('{"intensity":6}', ("neutral", 6)),
     ],
 )
-async def test_classifier_obeys_complete_wire_contract(model_gate, content, expected):
+async def test_classifier_obeys_complete_wire_contract(haiku_wire, content, expected):
     sent = []
     message = "A" * 499 + "Z" + "PRIVATE_TAIL"
 
     def model_server(request):
         sent.append(request)
-        return httpx.Response(
-            200, json={"choices": [{"message": {"content": content}}]}
-        )
+        return httpx.Response(200, json=_haiku_message(content))
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(model_server)) as client:
-        result = await classify_interaction(
-            client,
-            message,
-            url="http://model.test",
-            model="classifier-preset",
-            prompt_template="ONLY COMMANDER: {user_message}",
-        )
+    haiku_wire["handler"] = model_server
+    result = await classify_interaction(
+        message, prompt_template="ONLY COMMANDER: {user_message}"
+    )
     assert result == expected
     assert len(sent) == 1
     request = sent[0]
     assert request.method == "POST"
-    assert str(request.url) == "http://model.test/v1/chat/completions"
-    assert request.headers["authorization"] == "Bearer offline-critical-token"
+    assert str(request.url) == "https://api.anthropic.com/v1/messages"
+    assert request.headers["x-api-key"] == "offline-critical-key"
+    # The local model's bearer token never crosses to the cloud request.
+    assert "authorization" not in request.headers
     assert json.loads(request.content) == {
-        "model": "classifier-preset",
-        "messages": [{"role": "user", "content": "ONLY COMMANDER: " + "A" * 499 + "Z"}],
-        "max_tokens": 100,
-        "temperature": 0.1,
-        "stream": False,
-        "ttl": 900,
+        "model": "claude-haiku-5-5",
+        "system": xl.SYSTEM_PROMPT,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "ONLY COMMANDER: " + "A" * 499 + "Z"}
+                ],
+            }
+        ],
+        "max_tokens": 100 + THINKING_HEADROOM_TOKENS,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
     }
 
 
-async def test_classifier_failures_open_model_breaker_without_secret_logs(
-    model_gate, caplog
+async def test_classifier_failures_open_haiku_breaker_without_secret_logs(
+    haiku_wire, caplog
 ):
+    caplog.set_level(logging.DEBUG)
     attempts = []
     secret = "server-secret-must-not-leak"
 
@@ -89,17 +117,19 @@ async def test_classifier_failures_open_model_breaker_without_secret_logs(
         attempts.append(request)
         raise httpx.ConnectError(secret, request=request)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(unavailable)) as client:
-        for _ in range(4):
-            assert await classify_interaction(
-                client,
-                "hi",
-                url="http://model.test",
-                model="classifier",
-                prompt_template="{user_message}",
-            ) == ("neutral", 5)
-    assert len(attempts) == 3
-    assert get_breaker("lm_studio").state == State.OPEN
+    haiku_wire["handler"] = unavailable
+    threshold = get_breaker("anthropic_extraction").cfg.error_threshold
+    for _ in range(threshold + 2):
+        assert await classify_interaction("hi", prompt_template="{user_message}") == (
+            "neutral",
+            5,
+        )
+    # Once open, the breaker rejects before dispatch; nothing else is tried.
+    assert len(attempts) == threshold
+    assert {str(r.url) for r in attempts} == {xl.MESSAGES_URL}
+    assert get_breaker("anthropic_extraction").state == State.OPEN
+    # Background failures never trip interactive chat's breaker.
+    assert get_breaker("anthropic").state == State.CLOSED
     assert secret not in caplog.text
 
 
@@ -223,24 +253,14 @@ async def test_flat_reward_persists_result_under_requested_owner(configured_mana
     "method", ["add_score", "apply_classification", "classify_and_adjust"]
 )
 async def test_legacy_default_owner_is_commander(
-    configured_manager, model_gate, method
+    configured_manager, haiku_wire, method
 ):
     manager, rows = configured_manager
     if method == "classify_and_adjust":
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(
-                lambda _: httpx.Response(
-                    200,
-                    json={
-                        "choices": [
-                            {"message": {"content": '{"type":"neutral","intensity":5}'}}
-                        ]
-                    },
-                )
-            )
-        ) as client:
-            manager._http = client
-            await manager.classify_and_adjust("Hi Commander", "Hi")
+        haiku_wire["handler"] = lambda _: httpx.Response(
+            200, json=_haiku_message('{"type":"neutral","intensity":5}')
+        )
+        await manager.classify_and_adjust("Hi Commander", "Hi")
     elif method == "add_score":
         await manager.add_score(-9)
     else:
@@ -261,11 +281,10 @@ async def test_optional_affection_configuration_initializes_safely(monkeypatch, 
         await manager.init()
         assert manager._compute_level(50) == (0, "Cold Assessment")
         assert manager._levels == []
-        assert manager._http.timeout.read == 12.0
-        assert manager._http.timeout.connect == 12.0
     finally:
         await manager.close()
-    assert manager._http.is_closed
+    # Classification uses the shared background route: no client to own.
+    assert not hasattr(manager, "_http")
 
 
 @pytest.mark.parametrize(

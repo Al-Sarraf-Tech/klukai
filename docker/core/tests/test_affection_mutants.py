@@ -127,17 +127,11 @@ def _days_ago(n: int) -> date:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # __init__ — initial state values
-# Kills: __init__ _2 (self._http = "" instead of None),
-#        __init__ _3 (self._levels = None instead of []).
+# Kills: the __init__ mutant that sets self._levels = None instead of [].
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestInit:
-    def test_http_starts_none(self):
-        mgr = AffectionManager()
-        # Mutant sets self._http = "" — `is None` would then be False.
-        assert mgr._http is None
-
     def test_levels_starts_empty_list(self):
         mgr = AffectionManager()
         # Mutant sets self._levels = None — these would raise / mis-behave.

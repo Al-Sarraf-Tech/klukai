@@ -17,6 +17,7 @@ SimpleNamespace stand-ins) and test_memory_facts.py (AsyncMock'd _http).
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -229,13 +230,14 @@ class TestInsideJokeExtraction:
             "interaction": {"type": "neutral", "intensity": 5},
             "inside_joke": raw_joke,
         }
-        with patch.object(fe, "call_llm", new=AsyncMock(return_value=result)), \
-                patch("app.llm_router.get_lm_gate", return_value=AsyncMock()):
+        haiku = AsyncMock(return_value=json.dumps(result))
+        with patch("app.extraction_llm.complete", new=haiku):
             return await fe.extract_facts("u", "a", affection_level=5)
 
     async def test_valid_inside_joke_passes_through(self):
         out = await self._run({"label": "Klukadile denial", "note": "she denies the plush"})
         assert out["inside_joke"] == {"label": "Klukadile denial", "note": "she denies the plush"}
+        assert out["mood"] == "playful"  # the Haiku reply was used, not the defaults
 
     async def test_bare_string_inside_joke_dropped(self):
         out = await self._run("just a string")
@@ -252,9 +254,10 @@ class TestInsideJokeExtraction:
     async def test_default_when_absent(self):
         from app import fact_extractor as fe
         result = {"mood": "composed", "interaction": {"type": "neutral", "intensity": 5}}
-        with patch.object(fe, "call_llm", new=AsyncMock(return_value=result)), \
-                patch("app.llm_router.get_lm_gate", return_value=AsyncMock()):
+        haiku = AsyncMock(return_value=json.dumps(result))
+        with patch("app.extraction_llm.complete", new=haiku):
             out = await fe.extract_facts("u", "a")
+        assert out["mood"] == "composed"
         assert out["inside_joke"] is None
 
 

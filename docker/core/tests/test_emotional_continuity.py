@@ -163,19 +163,16 @@ def _mk_affection(level: int = 5) -> SimpleNamespace:
                            first_interaction=datetime(2026, 1, 1, tzinfo=timezone.utc))
 
 
-def _capture_router():
-    """Router whose complete_local records the user prompt it received."""
+def _capture_haiku():
+    """Haiku transport that records the prompts it received."""
     captured: dict[str, str] = {}
 
-    async def _complete(system_prompt, messages, config):
-        captured["system"] = system_prompt
-        captured["user"] = messages[0]["content"]
-        return {"choices": [{"message": {"content":
-                "Welcome back, Commander. You were telling me about the recon route."}}]}
+    async def _complete(prompt, *, max_tokens, route, system=None):
+        captured["system"] = system
+        captured["user"] = prompt
+        return "Welcome back, Commander. You were telling me about the recon route."
 
-    router = MagicMock()
-    router.complete_local = AsyncMock(side_effect=_complete)
-    return router, captured
+    return AsyncMock(side_effect=_complete), captured
 
 
 def _run_return(level: int, hours: float, mood: str, excerpts: list[tuple[str, str]]):
@@ -190,7 +187,7 @@ def _run_return(level: int, hours: float, mood: str, excerpts: list[tuple[str, s
         (mood,),                 # persistent mood -> fetchone
     ])
 
-    router, captured = _capture_router()
+    haiku, captured = _capture_haiku()
 
     fake_ws = MagicMock()
     fake_ws.is_connected = MagicMock(return_value=True)
@@ -201,7 +198,7 @@ def _run_return(level: int, hours: float, mood: str, excerpts: list[tuple[str, s
 
     async def _go():
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.reflect_helpers.router", router), \
+             patch("app.extraction_llm.complete", haiku), \
              patch("app.reflect_helpers.ws", fake_ws), \
              patch("app.reflect_helpers.affection", fake_aff), \
              patch("app.personality.load_personality",
@@ -224,6 +221,7 @@ class TestReturnFlowEmotionalContinuity:
                       ("assistant", "go on, I'm listening")],
         )
         ws.send_proactive.assert_awaited_once()
+        assert captured["system"] == "You are Klukai."
         # The recent exchange content must be embedded so she can resume it.
         assert "recon route" in captured["user"]
         assert "resume from here" in captured["user"].lower()

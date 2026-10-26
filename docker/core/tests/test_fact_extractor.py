@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def _haiku(reply: Any):
+    """Patch the Haiku transport: a reply object is sent back as its JSON text,
+    a string as is; None means Haiku is unavailable (no key or no allowance)."""
+    from app.extraction_llm import ExtractionUnavailable
+
+    if reply is None:
+        mock = AsyncMock(side_effect=ExtractionUnavailable("off"))
+    else:
+        mock = AsyncMock(
+            return_value=reply if isinstance(reply, str) else json.dumps(reply)
+        )
+    return patch("app.extraction_llm.complete", new=mock)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -18,15 +34,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 class TestExtractFacts:
     @pytest.mark.asyncio
-    async def test_returns_defaults_when_llm_returns_none(self):
+    async def test_returns_defaults_when_haiku_is_unavailable(self):
         from app.fact_extractor import extract_facts, _DEFAULT_RESULT
 
-        class _FakeGate:
-            async def __aenter__(self): return None
-            async def __aexit__(self, *a): return None
-
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate(), create=True), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=None)):
+        with _haiku(None):
             out = await extract_facts("hi", "hello")
 
         assert out == dict(_DEFAULT_RESULT)
@@ -39,12 +50,7 @@ class TestExtractFacts:
         skipped storing the exchange."""
         from app.fact_extractor import extract_facts, _DEFAULT_RESULT
 
-        class _FakeGate:
-            async def __aenter__(self): return None
-            async def __aexit__(self, *a): return None
-
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=odd)):
+        with _haiku(json.dumps(odd)):
             out = await extract_facts("hi", "hello")
 
         assert out == dict(_DEFAULT_RESULT)
@@ -52,10 +58,6 @@ class TestExtractFacts:
     @pytest.mark.asyncio
     async def test_invalid_mood_defaults_to_composed(self):
         from app.fact_extractor import extract_facts
-
-        class _FakeGate:
-            async def __aenter__(self): return None
-            async def __aexit__(self, *a): return None
 
         bad_result = {
             "mood": "rampaging-dragon",  # not in VALID_MOODS
@@ -65,8 +67,7 @@ class TestExtractFacts:
             "interaction": {"type": "neutral", "intensity": 5},
         }
 
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=bad_result)):
+        with _haiku(bad_result):
             out = await extract_facts("hi", "hello")
 
         assert out["mood"] == "composed"
@@ -74,10 +75,6 @@ class TestExtractFacts:
     @pytest.mark.asyncio
     async def test_valid_mood_preserved(self):
         from app.fact_extractor import extract_facts, VALID_MOODS
-
-        class _FakeGate:
-            async def __aenter__(self): return None
-            async def __aexit__(self, *a): return None
 
         # Pick a known-good mood
         good_mood = next(iter(VALID_MOODS))
@@ -89,8 +86,7 @@ class TestExtractFacts:
             "interaction": {"type": "neutral", "intensity": 5},
         }
 
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+        with _haiku(result):
             out = await extract_facts("x", "y")
 
         assert out["mood"] == good_mood
@@ -98,10 +94,6 @@ class TestExtractFacts:
     @pytest.mark.asyncio
     async def test_missing_interaction_gets_default(self):
         from app.fact_extractor import extract_facts
-
-        class _FakeGate:
-            async def __aenter__(self): return None
-            async def __aexit__(self, *a): return None
 
         result = {
             "mood": "composed",
@@ -111,8 +103,7 @@ class TestExtractFacts:
             # interaction missing
         }
 
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+        with _haiku(result):
             out = await extract_facts("x", "y")
 
         assert out["interaction"]["type"] == "neutral"
@@ -123,17 +114,12 @@ class TestExtractFacts:
         """interaction as a string instead of dict should be replaced."""
         from app.fact_extractor import extract_facts
 
-        class _FakeGate:
-            async def __aenter__(self): return None
-            async def __aexit__(self, *a): return None
-
         result = {
             "mood": "composed",
             "interaction": "flirty",   # should be dict
         }
 
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+        with _haiku(result):
             out = await extract_facts("x", "y")
 
         assert isinstance(out["interaction"], dict)
@@ -144,10 +130,6 @@ class TestExtractFacts:
         """When image_generated=True and result has memory_curation, it's preserved."""
         from app.fact_extractor import extract_facts
 
-        class _FakeGate:
-            async def __aenter__(self): return None
-            async def __aexit__(self, *a): return None
-
         result = {
             "mood": "composed",
             "facts": [],
@@ -157,8 +139,7 @@ class TestExtractFacts:
             "memory_curation": {"kept": True, "annotation": "nice one"},
         }
 
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)), \
+        with _haiku(result), \
              patch("app.memory_archive.available_categories", return_value=["portrait"]):
             out = await extract_facts("x", "y", image_generated=True)
 
@@ -171,21 +152,12 @@ class TestExtractFacts:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class _FakeGate:
-    async def __aenter__(self):
-        return None
-
-    async def __aexit__(self, *a):
-        return None
-
-
 class TestExtractPromises:
     @pytest.mark.asyncio
-    async def test_none_result_returns_empty(self):
+    async def test_haiku_unavailable_returns_empty(self):
         from app.fact_extractor import extract_promises
 
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate(), create=True), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=None)):
+        with _haiku(None):
             out = await extract_promises("I'll fix it tomorrow", affection_level=5)
         assert out == {"promises": [], "events": []}
 
@@ -197,8 +169,7 @@ class TestExtractPromises:
             {"action": "fix the door", "target": "the door",
              "deadline_hint": "tomorrow", "confidence": 0.9},
         ]}
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+        with _haiku(result):
             out = await extract_promises("I'll fix the door tomorrow", affection_level=3)
 
         assert len(out["promises"]) == 1
@@ -217,8 +188,7 @@ class TestExtractPromises:
             {"action": "submit the report", "confidence": 0.7},  # boundary kept
             {"action": "finish painting", "confidence": 0.95},
         ]}
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+        with _haiku(result):
             out = await extract_promises("...", affection_level=5)
 
         actions = {p["action"] for p in out["promises"]}
@@ -236,8 +206,7 @@ class TestExtractPromises:
             {"action": "do it", "confidence": "high"},     # bad confidence
             {"action": "real one", "confidence": 0.8},     # the only keeper
         ]}
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+        with _haiku(result):
             out = await extract_promises("...", affection_level=5)
 
         assert [p["action"] for p in out["promises"]] == ["real one"]
@@ -246,9 +215,7 @@ class TestExtractPromises:
     async def test_promises_not_a_list_returns_empty(self):
         from app.fact_extractor import extract_promises
 
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm",
-                   new=AsyncMock(return_value={"promises": "nope"})):
+        with _haiku({"promises": "nope"}):
             out = await extract_promises("...", affection_level=5)
         assert out == {"promises": [], "events": []}
 
@@ -256,9 +223,7 @@ class TestExtractPromises:
     async def test_non_dict_result_returns_empty(self):
         from app.fact_extractor import extract_promises
 
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm",
-                   new=AsyncMock(return_value=["unexpected"])):
+        with _haiku(["unexpected"]):
             out = await extract_promises("...", affection_level=5)
         assert out == {"promises": [], "events": []}
 
@@ -270,12 +235,11 @@ class TestExtractEvents:
     async def test_prompt_asks_for_events_in_the_same_call(self):
         from app.fact_extractor import extract_promises
 
-        llm = AsyncMock(return_value={"promises": [], "events": []})
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=llm):
+        with _haiku({"promises": [], "events": []}) as llm:
             await extract_promises("interview thursday", affection_level=3)
         assert llm.await_count == 1
-        prompt = llm.await_args.args[2]
+        prompt = llm.await_args.args[0]
+        assert llm.await_args.kwargs["route"] == "promises"
         assert '"events"' in prompt and "when_hint" in prompt and "sensitivity" in prompt
 
     @pytest.mark.asyncio
@@ -290,8 +254,7 @@ class TestExtractEvents:
             {"what": "exam", "when_hint": "friday", "sensitivity": "whatever",
              "confidence": 0.8},
         ]}
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+        with _haiku(result):
             out = await extract_promises("...", affection_level=5)
         assert out["events"] == [
             {"what": "job interview", "when_hint": "thursday at 9am",
@@ -314,8 +277,7 @@ class TestExtractEvents:
             {"what": "exam", "when_hint": "tomorrow", "confidence": "sure"},
             {"what": "exam", "when_hint": "tomorrow", "confidence": 0.74},
         ]}
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+        with _haiku(result):
             out = await extract_promises("...", affection_level=5)
         assert out["events"] == []
 
@@ -325,8 +287,7 @@ class TestExtractEvents:
 
         result = {"promises": "nope", "events": [
             {"what": "flight", "when_hint": "tomorrow", "confidence": 0.9}]}
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm", new=AsyncMock(return_value=result)):
+        with _haiku(result):
             out = await extract_promises("...", affection_level=5)
         assert out["promises"] == [] and len(out["events"]) == 1
 
@@ -334,9 +295,7 @@ class TestExtractEvents:
     async def test_events_not_a_list(self):
         from app.fact_extractor import extract_promises
 
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm",
-                   new=AsyncMock(return_value={"promises": [], "events": {"what": "x"}})):
+        with _haiku({"promises": [], "events": {"what": "x"}}):
             out = await extract_promises("...", affection_level=5)
         assert out["events"] == []
 
@@ -363,22 +322,26 @@ class TestCreateEpisodeSummary:
     async def test_enough_turns_calls_llm(self):
         from app.fact_extractor import create_episode_summary
 
-        class _FakeGate:
-            async def __aenter__(self): return None
-            async def __aexit__(self, *a): return None
-
         turns = [
             {"role": "user", "content": "a"},
             {"role": "assistant", "content": "b"},
             {"role": "user", "content": "c"},
         ]
 
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm_text",
-                   new=AsyncMock(return_value="Klukai's little journal.")):
+        with _haiku("Klukai's little journal.") as llm:
             result = await create_episode_summary(turns)
 
         assert result == "Klukai's little journal."
+        assert llm.await_args.kwargs["route"] == "episode_summary"
+
+    @pytest.mark.asyncio
+    async def test_haiku_unavailable_returns_none(self):
+        from app.fact_extractor import create_episode_summary
+
+        turns = [{"role": "user", "content": "a"}] * 3
+        with _haiku(None) as llm:
+            assert await create_episode_summary(turns) is None
+        llm.assert_awaited_once()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -393,17 +356,12 @@ class TestCompactTurns:
         assert await compact_turns([]) is None
 
     @pytest.mark.asyncio
-    async def test_calls_llm_text_for_compaction(self):
+    async def test_calls_haiku_for_compaction(self):
         from app.fact_extractor import compact_turns
 
-        class _FakeGate:
-            async def __aenter__(self): return None
-            async def __aexit__(self, *a): return None
-
         turns = [{"role": "user", "content": "long"}] * 5
-        with patch("app.llm_router.get_lm_gate", return_value=_FakeGate()), \
-             patch("app.fact_extractor.call_llm_text",
-                   new=AsyncMock(return_value="compact summary")):
+        with _haiku("compact summary") as llm:
             result = await compact_turns(turns)
 
         assert result == "compact summary"
+        assert llm.await_args.kwargs["route"] == "compaction"

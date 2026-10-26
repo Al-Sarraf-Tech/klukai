@@ -24,7 +24,7 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -39,6 +39,7 @@ from app.affection import (  # noqa: E402
     AffectionManager,
     AffectionState,
 )
+from app.extraction_llm import ExtractionLLMError, ExtractionUnavailable  # noqa: E402
 
 # Real production level thresholds (config/personality.yaml). Used both to
 # configure the manager and to assert level boundaries match the live config.
@@ -605,48 +606,32 @@ class TestClassificationWrappers:
         assert change.delta == 5
 
 
-# ── _classify_interaction: LLM call, parsing, fallback ───────────────────────
+# ── _classify_interaction: background model call, parsing, fallback ──────
 
 
-def _gate_cm():
-    """Return an async-context-manager mock usable as `async with gate:`."""
-    gate = MagicMock()
-    gate.__aenter__ = AsyncMock(return_value=None)
-    gate.__aexit__ = AsyncMock(return_value=None)
-    return gate
-
-
-def _llm_response(content: str):
-    resp = MagicMock()
-    resp.raise_for_status = MagicMock()
-    resp.json = MagicMock(
-        return_value={"choices": [{"message": {"content": content}}]}
-    )
-    return resp
+def _haiku(reply):
+    """Patch the Haiku transport: a string is its reply, an exception its failure."""
+    if isinstance(reply, BaseException):
+        return patch("app.extraction_llm.complete", new=AsyncMock(side_effect=reply))
+    return patch("app.extraction_llm.complete", new=AsyncMock(return_value=reply))
 
 
 class TestClassifyInteraction:
     @pytest.mark.asyncio
     async def test_parses_plain_json(self, manager):
-        manager._http = MagicMock()
-        manager._http.post = AsyncMock(
-            return_value=_llm_response('{"type": "compliment", "intensity": 7}')
-        )
-        with patch("app.llm_router.get_lm_gate", return_value=_gate_cm()), patch(
-            "app.llm_router.LM_TTL_SECONDS", 60, create=True
-        ):
+        with _haiku('{"type": "compliment", "intensity": 7}') as haiku:
             itype, intensity = await manager._classify_interaction("you rock", "hm")
         assert itype == "compliment"
         assert intensity == 7
+        # Only the Commander's message is classified, on the shared Haiku route.
+        prompt = haiku.await_args.args[0]
+        assert "Commander's message: you rock" in prompt
+        assert haiku.await_args.kwargs["route"] == "affection_classification"
 
     @pytest.mark.asyncio
     async def test_strips_markdown_code_fence(self, manager):
         fenced = '```json\n{"type": "rude", "intensity": 9}\n```'
-        manager._http = MagicMock()
-        manager._http.post = AsyncMock(return_value=_llm_response(fenced))
-        with patch("app.llm_router.get_lm_gate", return_value=_gate_cm()), patch(
-            "app.llm_router.LM_TTL_SECONDS", 60, create=True
-        ):
+        with _haiku(fenced):
             itype, intensity = await manager._classify_interaction("shut up", "...")
         assert itype == "rude"
         assert intensity == 9
@@ -654,60 +639,43 @@ class TestClassifyInteraction:
     @pytest.mark.asyncio
     async def test_intensity_clamped_to_range(self, manager):
         # intensity 99 must clamp to 10.
-        manager._http = MagicMock()
-        manager._http.post = AsyncMock(
-            return_value=_llm_response('{"type": "compliment", "intensity": 99}')
-        )
-        with patch("app.llm_router.get_lm_gate", return_value=_gate_cm()), patch(
-            "app.llm_router.LM_TTL_SECONDS", 60, create=True
-        ):
+        with _haiku('{"type": "compliment", "intensity": 99}'):
             itype, intensity = await manager._classify_interaction("a", "b")
         assert intensity == 10
 
     @pytest.mark.asyncio
     async def test_low_intensity_clamped_up(self, manager):
-        manager._http = MagicMock()
-        manager._http.post = AsyncMock(
-            return_value=_llm_response('{"type": "neutral", "intensity": 0}')
-        )
-        with patch("app.llm_router.get_lm_gate", return_value=_gate_cm()), patch(
-            "app.llm_router.LM_TTL_SECONDS", 60, create=True
-        ):
+        with _haiku('{"type": "neutral", "intensity": 0}'):
             _, intensity = await manager._classify_interaction("a", "b")
         assert intensity == 1
 
     @pytest.mark.asyncio
     async def test_malformed_json_falls_back_to_neutral(self, manager):
-        manager._http = MagicMock()
-        manager._http.post = AsyncMock(return_value=_llm_response("not json at all"))
-        with patch("app.llm_router.get_lm_gate", return_value=_gate_cm()), patch(
-            "app.llm_router.LM_TTL_SECONDS", 60, create=True
-        ):
+        with _haiku("not json at all"):
             itype, intensity = await manager._classify_interaction("a", "b")
         assert itype == "neutral"
         assert intensity == 5
 
     @pytest.mark.asyncio
-    async def test_http_error_falls_back_to_neutral(self, manager):
-        manager._http = MagicMock()
-        manager._http.post = AsyncMock(side_effect=RuntimeError("connection refused"))
-        with patch("app.llm_router.get_lm_gate", return_value=_gate_cm()), patch(
-            "app.llm_router.LM_TTL_SECONDS", 60, create=True
-        ):
+    @pytest.mark.parametrize(
+        "error",
+        [
+            ExtractionUnavailable("no key"),
+            ExtractionLLMError("http 529"),
+            RuntimeError("connection refused"),
+        ],
+    )
+    async def test_haiku_failure_falls_back_to_neutral(self, manager, error):
+        with _haiku(error) as haiku:
             itype, intensity = await manager._classify_interaction("a", "b")
         assert itype == "neutral"
         assert intensity == 5
+        haiku.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_missing_type_defaults_to_neutral(self, manager):
         # Valid JSON but no "type" key → defaults to "neutral".
-        manager._http = MagicMock()
-        manager._http.post = AsyncMock(
-            return_value=_llm_response('{"intensity": 4}')
-        )
-        with patch("app.llm_router.get_lm_gate", return_value=_gate_cm()), patch(
-            "app.llm_router.LM_TTL_SECONDS", 60, create=True
-        ):
+        with _haiku('{"intensity": 4}'):
             itype, intensity = await manager._classify_interaction("a", "b")
         assert itype == "neutral"
         assert intensity == 4
@@ -888,30 +856,23 @@ class TestPersistence:
 class TestLifecycle:
     @pytest.mark.asyncio
     async def test_init_loads_levels_and_runs_decay(self, manager, freeze_time):
-        # init() creates an httpx client, loads levels from personality, then
-        # runs _load_state + _apply_absence_decay for jalsarraf (the decay is a
-        # no-op for jalsarraf, but _load_state still runs).
+        # init() loads levels from personality, then runs _load_state +
+        # _apply_absence_decay for jalsarraf (the decay is a no-op for
+        # jalsarraf, but _load_state still runs). No model client is created:
+        # classification uses the shared background route.
         with _patch_db(fetchone_result=None):
             await manager.init()
-        assert manager._http is not None
+        assert not hasattr(manager, "_http")
         assert len(manager._levels) >= 1
         # personality.yaml level 0 is Cold Assessment.
         assert manager._levels[0]["name"] == "Cold Assessment"
         await manager.close()
 
     @pytest.mark.asyncio
-    async def test_close_is_safe_when_http_none(self, manager):
-        manager._http = None
-        # Should not raise.
-        await manager.close()
-
-    @pytest.mark.asyncio
-    async def test_close_closes_http_client(self, manager):
-        fake_http = MagicMock()
-        fake_http.aclose = AsyncMock()
-        manager._http = fake_http
-        await manager.close()
-        fake_http.aclose.assert_awaited_once()
+    async def test_close_is_a_safe_repeatable_noop(self, manager):
+        # Nothing to release; closing before init or twice must not raise.
+        assert await manager.close() is None
+        assert await manager.close() is None
 
 
 # ── _state property (legacy jalsarraf accessor) ──────────────────────────────

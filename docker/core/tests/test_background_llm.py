@@ -1,7 +1,8 @@
-"""The one background-model route: Haiku, then Dominus while it is up, else defaults."""
+"""The one background-model route: Claude Haiku, else the caller's safe default."""
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from datetime import datetime, timezone
@@ -12,23 +13,13 @@ import pytest
 
 from app import background_llm as bg
 from app import extraction_llm as xl
-from app.circuit_breakers import get_breaker
 
 SECRET_PROMPT = "the Commander's private words"
 SECRET_REPLY = "her private reply"
 
 
 @pytest.fixture
-def breaker():
-    b = get_breaker("lm_studio")
-    b.force_close()
-    yield b
-    b.force_close()
-
-
-@pytest.fixture
-def haiku(monkeypatch, breaker):
-    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "anthropic")
+def haiku(monkeypatch):
     monkeypatch.delenv("KLUKAI_EXTRACTION_MODEL", raising=False)
     complete = AsyncMock(return_value=SECRET_REPLY)
     monkeypatch.setattr(xl, "complete", complete)
@@ -36,11 +27,16 @@ def haiku(monkeypatch, breaker):
 
 
 @pytest.fixture
-def local_only(monkeypatch, breaker):
-    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "local")
-    complete = AsyncMock(side_effect=AssertionError("Haiku must not be called"))
-    monkeypatch.setattr(xl, "complete", complete)
-    return complete
+def no_network(monkeypatch):
+    """Record every HTTP request any client tries to send (there must be none)."""
+    sent: list[httpx.Request] = []
+
+    async def send(self, request, *args, **kwargs):
+        sent.append(request)
+        raise httpx.ConnectError("no network in this test", request=request)
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+    return sent
 
 
 def _lines(caplog):
@@ -62,82 +58,42 @@ def test_haiku_budget_adds_thinking_headroom_and_caps(visible, expected):
     assert bg.haiku_budget(visible) == expected
 
 
-def test_local_circuit_closed_tracks_the_dominus_breaker(breaker):
-    assert bg.local_circuit_closed() is True
-    breaker.force_open()
-    assert bg.local_circuit_closed() is False
+# ── no local route ───────────────────────────────────────────────────────
 
 
-# ── local provider: unchanged behaviour ──────────────────────────────────
+@pytest.mark.parametrize("entry", [bg.text, bg.json_object])
+def test_callers_cannot_attach_a_local_fallback(entry):
+    params = inspect.signature(entry).parameters
+    assert "local" not in params
+    assert "local_model" not in params
 
 
-async def test_local_provider_runs_only_the_local_request(local_only, caplog):
-    local = AsyncMock(return_value=SECRET_REPLY)
-    with caplog.at_level(logging.INFO, logger="app.background_llm"):
-        out = await bg.text("dream", SECRET_PROMPT, max_tokens=200, local=local)
-    assert out == SECRET_REPLY
-    local.assert_awaited_once()
-    local_only.assert_not_awaited()
-    assert _lines(caplog) == [
-        f"Background model: caller=dream provider=local model={bg.LOCAL_MODEL} "
-        "outcome=ok"
-    ]
+@pytest.mark.parametrize("entry", [bg.text, bg.json_object])
+async def test_a_local_request_argument_is_rejected(haiku, entry):
+    local = AsyncMock(return_value="local line")
+    with pytest.raises(TypeError):
+        await entry("dream", "p", max_tokens=200, local=local)
+    local.assert_not_awaited()
+    haiku.assert_not_awaited()
 
 
-async def test_local_provider_ignores_the_circuit(local_only, breaker):
-    # The local path is exactly what it was: no new circuit gate in front of it.
-    breaker.force_open()
-    local = AsyncMock(return_value="line")
-    assert await bg.text("dream", "p", max_tokens=200, local=local) == "line"
+def test_the_route_has_no_local_model_knobs():
+    for name in (
+        "local_circuit_closed",
+        "LOCAL_MODEL",
+        "LOCAL_FALLBACK_DEADLINE_SECONDS",
+        "LOCAL_PRIMARY_DEADLINE_SECONDS",
+    ):
+        assert not hasattr(bg, name), name
 
 
-@pytest.mark.parametrize("value", ["", "   ", None, 7])
-async def test_local_provider_unusable_text_is_empty(local_only, caplog, value):
+# ── Haiku answers ────────────────────────────────────────────────────────
+
+
+async def test_haiku_answers_and_logs_one_content_free_line(haiku, caplog):
     report = xl.CallReport()
     with caplog.at_level(logging.INFO, logger="app.background_llm"):
-        out = await bg.text(
-            "romance",
-            "p",
-            max_tokens=200,
-            local=AsyncMock(return_value=value),
-            report=report,
-        )
-    assert out == ""
-    assert report.outcome == "defaults"
-    assert _lines(caplog)[0].endswith("outcome=defaults")
-
-
-async def test_local_failure_never_raises(local_only):
-    local = AsyncMock(side_effect=RuntimeError("Dominus is off"))
-    assert await bg.text("dream", "p", max_tokens=200, local=local) == ""
-    assert await bg.json_object("promises", "p", max_tokens=640, local=local) is None
-
-
-@pytest.mark.parametrize("value", [{}, [], ["a"], "text", None])
-async def test_local_provider_json_needs_a_non_empty_object(local_only, value):
-    out = await bg.json_object(
-        "promises", "p", max_tokens=640, local=AsyncMock(return_value=value)
-    )
-    assert out is None
-
-
-async def test_local_provider_json_object_passes_through(local_only):
-    out = await bg.json_object(
-        "promises", "p", max_tokens=640, local=AsyncMock(return_value={"a": 1})
-    )
-    assert out == {"a": 1}
-
-
-# ── anthropic provider ───────────────────────────────────────────────────
-
-
-async def test_haiku_answers_without_touching_dominus(haiku, caplog):
-    local = AsyncMock(side_effect=AssertionError("Dominus must not be called"))
-    report = xl.CallReport()
-    with caplog.at_level(logging.INFO, logger="app.background_llm"):
-        out = await bg.text(
-            "mission_update", SECRET_PROMPT, max_tokens=150, local=local, report=report
-        )
+        out = await bg.text("mission_update", SECRET_PROMPT, max_tokens=150, report=report)
     assert out == SECRET_REPLY
     haiku.assert_awaited_once_with(
         SECRET_PROMPT,
@@ -149,8 +105,7 @@ async def test_haiku_answers_without_touching_dominus(haiku, caplog):
         "claude-haiku-5-5",
         "ok",
     )
-    lines = _lines(caplog)
-    assert lines == [
+    assert _lines(caplog) == [
         "Background model: caller=mission_update provider=anthropic "
         "model=claude-haiku-5-5 outcome=ok"
     ]
@@ -160,6 +115,13 @@ async def test_haiku_answers_without_touching_dominus(haiku, caplog):
         assert SECRET_REPLY not in record.getMessage()
 
 
+async def test_configured_haiku_model_is_reported(haiku, monkeypatch):
+    monkeypatch.setenv("KLUKAI_EXTRACTION_MODEL", "claude-haiku-5-6")
+    report = xl.CallReport()
+    await bg.text("dream", "p", max_tokens=200, report=report)
+    assert (report.provider, report.model) == ("anthropic", "claude-haiku-5-6")
+
+
 async def test_system_prompt_and_explicit_budget_are_forwarded(haiku):
     await bg.text(
         "weekly_reflection",
@@ -167,11 +129,17 @@ async def test_system_prompt_and_explicit_budget_are_forwarded(haiku):
         system="You are Klukai.",
         max_tokens=400,
         haiku_max_tokens=1234,
-        local=AsyncMock(),
     )
     haiku.assert_awaited_once_with(
         "write", max_tokens=1234, route="weekly_reflection", system="You are Klukai."
     )
+
+
+async def test_report_is_optional(haiku):
+    assert await bg.text("dream", "p", max_tokens=10) == SECRET_REPLY
+
+
+# ── Haiku problems: safe default, nothing else is tried ──────────────────
 
 
 @pytest.mark.parametrize(
@@ -182,54 +150,46 @@ async def test_system_prompt_and_explicit_budget_are_forwarded(haiku):
         (RuntimeError("unexpected"), "failed"),
     ],
 )
-async def test_haiku_problem_falls_back_to_dominus_while_its_circuit_is_closed(
-    haiku, effect, reason, caplog
+async def test_haiku_problem_returns_the_default_without_a_local_request(
+    haiku, no_network, effect, reason, caplog
 ):
     haiku.side_effect = effect
-    local = AsyncMock(return_value="local line")
     report = xl.CallReport()
     with caplog.at_level(logging.INFO, logger="app.background_llm"):
-        out = await bg.text("dream", "p", max_tokens=200, local=local, report=report)
-    assert out == "local line"
-    assert (report.provider, report.model) == ("local", bg.LOCAL_MODEL)
-    assert report.outcome == f"{reason}->local"
-    assert _lines(caplog)[-1].endswith(f"outcome={reason}->local")
-
-
-async def test_blank_haiku_text_counts_as_empty(haiku):
-    haiku.return_value = "   "
-    report = xl.CallReport()
-    out = await bg.text(
-        "dream", "p", max_tokens=200, local=AsyncMock(return_value="x"), report=report
-    )
-    assert out == "x"
-    assert report.outcome == "empty->local"
-
-
-async def test_haiku_problem_with_dominus_down_returns_the_default(haiku, breaker):
-    haiku.side_effect = xl.ExtractionUnavailable("cap")
-    breaker.force_open()
-    local = AsyncMock(side_effect=AssertionError("circuit is open"))
-    report = xl.CallReport()
-    assert await bg.text("dream", "p", max_tokens=200, local=local, report=report) == ""
-    assert await bg.json_object("promises", "p", max_tokens=640, local=local) is None
-    local.assert_not_awaited()
-    assert report.provider == "anthropic"
-    assert report.outcome == "unavailable->defaults"
-
-
-async def test_local_fallback_failure_is_defaults(haiku):
-    haiku.side_effect = xl.ExtractionLLMError("boom")
-    report = xl.CallReport()
-    out = await bg.text(
-        "dream",
-        "p",
-        max_tokens=200,
-        local=AsyncMock(side_effect=RuntimeError("down")),
-        report=report,
-    )
+        out = await bg.text("dream", SECRET_PROMPT, max_tokens=200, report=report)
     assert out == ""
-    assert report.outcome == "failed->defaults"
+    haiku.assert_awaited_once()
+    assert no_network == []
+    assert (report.provider, report.model) == ("anthropic", "claude-haiku-5-5")
+    assert report.outcome == f"{reason}->defaults"
+    assert _lines(caplog) == [
+        "Background model: caller=dream provider=anthropic "
+        f"model=claude-haiku-5-5 outcome={reason}->defaults"
+    ]
+    for record in caplog.records:
+        assert SECRET_PROMPT not in record.getMessage()
+
+
+@pytest.mark.parametrize(
+    "effect",
+    [xl.ExtractionUnavailable("cap"), xl.ExtractionLLMError("boom"), ValueError("x")],
+)
+async def test_haiku_problem_json_is_none(haiku, no_network, effect):
+    haiku.side_effect = effect
+    report = xl.CallReport()
+    assert await bg.json_object("promises", "p", max_tokens=640, report=report) is None
+    haiku.assert_awaited_once()
+    assert no_network == []
+    assert report.outcome.endswith("->defaults")
+
+
+@pytest.mark.parametrize("reply", ["", "   ", "\n\t"])
+async def test_blank_haiku_text_counts_as_empty(haiku, no_network, reply):
+    haiku.return_value = reply
+    report = xl.CallReport()
+    assert await bg.text("dream", "p", max_tokens=200, report=report) == ""
+    assert report.outcome == "empty->defaults"
+    assert no_network == []
 
 
 @pytest.mark.parametrize(
@@ -238,31 +198,27 @@ async def test_local_fallback_failure_is_defaults(haiku):
         '{"promises": [], "events": [{"what": "x"}]}',
         'Sure:\n```json\n{"promises": [], "events": [{"what": "x"}]}\n```',
         'Here you go {"promises": [], "events": [{"what": "x"}]} done',
+        '{"promises": [], "events": [{"what": "x"},],}',
     ],
 )
 async def test_haiku_json_is_parsed_tolerantly(haiku, reply):
     haiku.return_value = reply
-    out = await bg.json_object("promises", "p", max_tokens=640, local=AsyncMock())
+    report = xl.CallReport()
+    out = await bg.json_object("promises", "p", max_tokens=640, report=report)
     assert out == {"promises": [], "events": [{"what": "x"}]}
+    assert report.outcome == "ok"
 
 
-@pytest.mark.parametrize("reply", ["no json here", "[1, 2]", "{}"])
-async def test_haiku_json_without_an_object_falls_back(haiku, reply):
+@pytest.mark.parametrize("reply", ["no json here", "[1, 2]", "{}", '"text"', ""])
+async def test_haiku_json_without_an_object_is_unparsable_defaults(
+    haiku, no_network, reply
+):
     haiku.return_value = reply
     report = xl.CallReport()
-    out = await bg.json_object(
-        "promises",
-        "p",
-        max_tokens=640,
-        local=AsyncMock(return_value={"promises": []}),
-        report=report,
-    )
-    assert out == {"promises": []}
-    assert report.outcome == "unparsable->local"
-
-
-async def test_report_is_optional(haiku):
-    assert await bg.text("dream", "p", max_tokens=10, local=AsyncMock()) == SECRET_REPLY
+    out = await bg.json_object("promises", "p", max_tokens=640, report=report)
+    assert out is None
+    assert report.outcome == "unparsable->defaults"
+    assert no_network == []
 
 
 # ── transport: the system override ───────────────────────────────────────
@@ -281,7 +237,6 @@ def _reply():
 
 @pytest.fixture
 def wire(monkeypatch):
-    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-background-key")
     reserve = AsyncMock(return_value="attempt-1")
     monkeypatch.setattr(xl, "reserve_attempt", reserve)
@@ -329,16 +284,27 @@ async def test_invalid_system_never_reserves(wire, system):
     assert seen == []
 
 
+async def test_without_a_key_nothing_is_sent_and_the_caller_gets_its_default(
+    monkeypatch, no_network
+):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    reserve = AsyncMock(return_value="attempt-1")
+    monkeypatch.setattr(xl, "reserve_attempt", reserve)
+    report = xl.CallReport()
+    assert await bg.text("dream", "p", max_tokens=200, report=report) == ""
+    assert await bg.json_object("promises", "p", max_tokens=640) is None
+    assert report.outcome == "unavailable->defaults"
+    reserve.assert_not_awaited()
+    assert no_network == []
+
+
 # ── one cap for every caller ─────────────────────────────────────────────
 
 
-async def test_every_caller_spends_the_same_daily_allowance(
-    monkeypatch, tmp_path, breaker
-):
+async def test_every_caller_spends_the_same_daily_allowance(monkeypatch, tmp_path):
     """Two attempts allowed: the third caller of any kind gets its default."""
     from app import creative_budget as budget
 
-    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-background-key")
     monkeypatch.setenv("KLUKAI_EXTRACTION_DAILY_LIMIT", "2")
     monkeypatch.setenv("KLUKAI_CREATIVE_LEDGER", str(tmp_path / "l" / "a.sqlite3"))
@@ -358,10 +324,11 @@ async def test_every_caller_spends_the_same_daily_allowance(
         "AsyncClient",
         lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
     )
-    breaker.force_open()  # Dominus off
-    local = AsyncMock(side_effect=AssertionError("circuit is open"))
 
-    assert await bg.text("dream", "p", max_tokens=200, local=local)
-    assert await bg.text("memory_recall", "p", max_tokens=160, local=local)
-    assert await bg.text("mission_update", "p", max_tokens=150, local=local) == ""
+    assert await bg.text("dream", "p", max_tokens=200)
+    assert await bg.text("memory_recall", "p", max_tokens=160)
+    report = xl.CallReport()
+    assert await bg.text("mission_update", "p", max_tokens=150, report=report) == ""
+    assert report.outcome == "unavailable->defaults"
     assert len(sent) == 2
+    assert all(str(r.url) == xl.MESSAGES_URL for r in sent)

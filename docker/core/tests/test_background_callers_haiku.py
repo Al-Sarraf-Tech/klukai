@@ -1,9 +1,10 @@
-"""With Dominus powered off, every background text feature still works on Haiku.
+"""Every background text feature runs on Claude Haiku alone.
 
-Each test turns Haiku on (mocked: no real API calls), opens the Dominus
-circuit and makes every local entry point raise, then checks the feature's
-own output and the request it sent: the caller's prompt, its route name and
-a budget that leaves room for adaptive thinking.
+Each test mocks Haiku (no real API calls) and records any other HTTP request,
+then checks the feature's own output and the request it sent to Haiku: the
+caller's prompt, its route name and a budget that leaves room for adaptive
+thinking. When Haiku is unavailable or fails the feature keeps its safe
+default, and no local model request is attempted.
 """
 
 from __future__ import annotations
@@ -13,51 +14,42 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
+import app.context as context_mod
 from app import background_llm as bg
 from app import extraction_llm as xl
 from app import fact_extractor as fe
-from app.circuit_breakers import get_breaker
 
 from .test_reflection_on_return import _FakePool, _mk_affection
 from .test_weekly_reflection import _FakePool as _WeeklyPool
 
 
-class _DeadGate:
-    """The Dominus gate: entering it means a local call was attempted."""
-
-    async def __aenter__(self):
-        raise AssertionError("Dominus was called with its circuit open")
-
-    async def __aexit__(self, *exc):
-        return False
-
-
 def _dead_router():
     router = MagicMock()
-    router.complete_local = AsyncMock(side_effect=AssertionError("Dominus called"))
-    router.route = AsyncMock(side_effect=AssertionError("Dominus called"))
+    router.complete_local = AsyncMock(side_effect=AssertionError("local model called"))
+    router.route = AsyncMock(side_effect=AssertionError("local model called"))
+    router.stream = MagicMock(side_effect=AssertionError("local model called"))
     return router
 
 
 @pytest.fixture
 def haiku_only(monkeypatch):
-    """Haiku on, Dominus off: the owner's usual night."""
-    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "anthropic")
+    """Haiku mocked; any other model request (local or otherwise) fails the test."""
     monkeypatch.delenv("KLUKAI_EXTRACTION_MODEL", raising=False)
     complete = AsyncMock(return_value="")
     monkeypatch.setattr(xl, "complete", complete)
-    dead = AsyncMock(side_effect=AssertionError("Dominus called"))
-    monkeypatch.setattr(fe, "call_llm", dead)
-    monkeypatch.setattr(fe, "call_llm_text", dead)
-    monkeypatch.setattr("app.llm_json.call_llm", dead)
-    monkeypatch.setattr("app.llm_json.call_llm_text", dead)
-    breaker = get_breaker("lm_studio")
-    breaker.force_open()
-    with patch("app.llm_router.get_lm_gate", return_value=_DeadGate()):
-        yield complete
-    breaker.force_close()
+    sent: list[httpx.Request] = []
+
+    async def send(self, request, *args, **kwargs):
+        sent.append(request)
+        raise httpx.ConnectError("no network in unit tests", request=request)
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+    monkeypatch.setattr(context_mod, "router", _dead_router())
+    yield complete
+    assert sent == [], [str(r.url) for r in sent]
 
 
 def _sent(complete):
@@ -229,7 +221,6 @@ async def test_memory_recall_on_haiku(haiku_only):
 
 async def test_weekly_reflection_on_haiku_with_her_preamble(haiku_only):
     from app.proactive import ProactiveEngine
-    import app.context as context_mod
 
     reflection = (
         "A quiet week. He came back every evening, and I found myself waiting "
@@ -240,8 +231,8 @@ async def test_weekly_reflection_on_haiku_with_her_preamble(haiku_only):
     pool = _WeeklyPool([[("alice",)]], [[("user", "hello")] * 15])
     memory = MagicMock()
     memory.store_episode = AsyncMock(return_value="ep")
-    orig = context_mod.memory, context_mod.router
-    context_mod.memory, context_mod.router = memory, _dead_router()
+    orig_memory = context_mod.memory
+    context_mod.memory = memory
     try:
         with (
             patch("app.db.get_pool", return_value=pool),
@@ -253,7 +244,7 @@ async def test_weekly_reflection_on_haiku_with_her_preamble(haiku_only):
         ):
             await engine._weekly_reflection()
     finally:
-        context_mod.memory, context_mod.router = orig
+        context_mod.memory = orig_memory
     kwargs = memory.store_episode.await_args.kwargs
     assert kwargs["summary"] == reflection
     # companion_episodes.conversation_id is a UUID foreign key.
@@ -269,15 +260,14 @@ async def test_weekly_reflection_on_haiku_with_her_preamble(haiku_only):
 
 async def test_weekly_reflection_with_nothing_available_stores_nothing(haiku_only):
     from app.proactive import ProactiveEngine
-    import app.context as context_mod
 
     haiku_only.side_effect = xl.ExtractionUnavailable("cap")
     engine = ProactiveEngine()
     pool = _WeeklyPool([[("alice",)]], [[("user", "hello")] * 15])
     memory = MagicMock()
     memory.store_episode = AsyncMock()
-    orig = context_mod.memory, context_mod.router
-    context_mod.memory, context_mod.router = memory, _dead_router()
+    orig_memory = context_mod.memory
+    context_mod.memory = memory
     try:
         with (
             patch("app.db.get_pool", return_value=pool),
@@ -286,7 +276,7 @@ async def test_weekly_reflection_with_nothing_available_stores_nothing(haiku_onl
         ):
             await engine._weekly_reflection()
     finally:
-        context_mod.memory, context_mod.router = orig
+        context_mod.memory = orig_memory
     memory.store_episode.assert_not_awaited()
 
 
@@ -303,7 +293,6 @@ async def test_return_greeting_on_haiku_with_her_preamble(haiku_only):
     aff.get_state = AsyncMock(return_value=_mk_affection())
     with (
         patch("app.db.get_pool", return_value=pool),
-        patch("app.reflect_helpers.router", _dead_router()),
         patch("app.reflect_helpers.ws", ws),
         patch("app.reflect_helpers.affection", aff),
         patch("app.reflect_helpers.now_local", return_value=datetime(2026, 10, 14, 15)),
@@ -335,10 +324,7 @@ async def test_daily_recap_on_haiku(haiku_only):
 
     haiku_only.return_value = "Today we talked about the ridge and coffee."
     pool = _recap_pool([("user", f"msg {i}") for i in range(8)])
-    with (
-        patch.object(main, "get_pool", return_value=pool),
-        patch("app.context.router.route", AsyncMock(side_effect=AssertionError)),
-    ):
+    with patch.object(main, "get_pool", return_value=pool):
         out = await main.generate_daily_recap(affection_level=5)
     assert out == "Today we talked about the ridge and coffee."
     prompt, sent = _sent(haiku_only)
@@ -435,29 +421,43 @@ async def test_legacy_affection_classifier_on_haiku(haiku_only):
     from app.affection_classifier import CLASSIFICATION_PROMPT, classify_interaction
 
     haiku_only.return_value = '{"type": "compliment", "intensity": 12}'
-    out = await classify_interaction(
-        None,
-        "You did well today.",
-        url="http://unused",
-        model="unused",
-        prompt_template=CLASSIFICATION_PROMPT,
-    )
+    out = await classify_interaction("You did well today.")
     assert out == ("compliment", 10)
-    assert _sent(haiku_only)[1]["route"] == "affection_classification"
+    prompt, sent = _sent(haiku_only)
+    assert prompt == CLASSIFICATION_PROMPT.format(user_message="You did well today.")
+    assert sent == {
+        "max_tokens": bg.haiku_budget(100),
+        "route": "affection_classification",
+    }
 
 
-@pytest.mark.parametrize("reply", [None, '{"type": "neutral", "intensity": "very"}'])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        xl.ExtractionUnavailable("cap"),
+        xl.ExtractionLLMError("boom"),
+        "not json",
+        '{"type": "neutral", "intensity": "very"}',
+    ],
+)
 async def test_legacy_classifier_failures_are_neutral(haiku_only, reply):
-    from app.affection_classifier import CLASSIFICATION_PROMPT, classify_interaction
+    from app.affection_classifier import classify_interaction
 
-    if reply is None:
-        haiku_only.side_effect = xl.ExtractionUnavailable("cap")
+    if isinstance(reply, Exception):
+        haiku_only.side_effect = reply
     else:
         haiku_only.return_value = reply
-    out = await classify_interaction(
-        None, "hm", url="u", model="m", prompt_template=CLASSIFICATION_PROMPT
-    )
-    assert out == ("neutral", 5)
+    assert await classify_interaction("hm") == ("neutral", 5)
+    haiku_only.assert_awaited_once()
+
+
+async def test_legacy_classifier_uses_a_custom_template(haiku_only):
+    from app.affection_classifier import classify_interaction
+
+    haiku_only.return_value = '{"type": "flirt", "intensity": 6}'
+    out = await classify_interaction("x" * 900, prompt_template="Rate: {user_message}")
+    assert out == ("flirt", 6)
+    assert _sent(haiku_only)[0] == "Rate: " + "x" * 500
 
 
 async def test_return_greeting_once_per_absence_across_reconnects(haiku_only):
@@ -480,8 +480,7 @@ async def test_return_greeting_once_per_absence_across_reconnects(haiku_only):
         pool = _FakePool([(last_at,), [("user", "We talked about rain.")], ("tender",)])
         with (
             patch("app.db.get_pool", return_value=pool),
-            patch("app.reflect_helpers.router", _dead_router()),
-            patch("app.reflect_helpers.ws", ws),
+                patch("app.reflect_helpers.ws", ws),
             patch("app.reflect_helpers.affection", aff),
             patch("app.reflect_helpers.now_local", return_value=datetime(2026, 10, 14, 15)),
             patch("app.personality.load_personality", return_value={}),

@@ -66,12 +66,8 @@ def _patch_now(value: datetime = _AFTERNOON_SUNDAY):
         yield mock_dt
 
 
-def _gate():
-    """An async-context-manager stand-in for the LM concurrency gate."""
-    gate = AsyncMock()
-    gate.__aenter__ = AsyncMock()
-    gate.__aexit__ = AsyncMock()
-    return gate
+# Every background line goes to Claude Haiku; tests patch its transport.
+_HAIKU = "app.extraction_llm.complete"
 
 
 def _ready_engine(affection: int = 5) -> ProactiveEngine:
@@ -170,16 +166,14 @@ class TestMemoryRecallDispatchE2E:
         callback receives exactly that text, and the once/day + count/answered
         bookkeeping all flips."""
         e = _ready_engine(affection=4)
-        gate = _gate()
         with _patch_now(), \
              patch("app.memory_archive.recall_memory",
                    new=AsyncMock(return_value=_FAKE_MEMORY)), \
-             patch("app.llm_json.call_llm_text",
-                   new=AsyncMock(return_value=_RECALL_TEXT)), \
-             patch("app.llm_router.get_lm_gate", return_value=gate):
+             patch(_HAIKU, new=AsyncMock(return_value=_RECALL_TEXT)) as haiku:
             await e._memory_recall_event()
 
         e._on_message_callback.assert_awaited_once_with(_RECALL_TEXT)
+        assert haiku.await_args.kwargs["route"] == "memory_recall"
         assert e._memory_recall_delivered_today is True
         assert e._proactive_count_today == 1
         assert e._last_proactive_answered is False
@@ -190,16 +184,14 @@ class TestMemoryRecallDispatchE2E:
         real event, which then dispatches through the callback — proving the
         cron entry point is wired to the delivery path, not just the helper."""
         e = _ready_engine(affection=5)
-        gate = _gate()
         with _patch_now(), \
              patch("app.proactive.events.random.random", return_value=0.10), \
              patch("app.memory_archive.recall_memory",
                    new=AsyncMock(return_value=_FAKE_MEMORY)), \
-             patch("app.llm_json.call_llm_text",
-                   new=AsyncMock(return_value=_RECALL_TEXT)), \
-             patch("app.llm_router.get_lm_gate", return_value=gate):
+             patch(_HAIKU, new=AsyncMock(return_value=_RECALL_TEXT)) as haiku:
             await e._memory_recall_tick()
 
+        haiku.assert_awaited_once()
         e._on_message_callback.assert_awaited_once_with(_RECALL_TEXT)
         assert e._memory_recall_delivered_today is True
 
@@ -208,17 +200,15 @@ class TestMemoryRecallDispatchE2E:
         """After one delivery the flag suppresses a second send; _reset_daily
         clears it so the next day can fire again."""
         e = _ready_engine(affection=5)
-        gate = _gate()
         recall = AsyncMock(return_value=_FAKE_MEMORY)
         with _patch_now(), \
              patch("app.memory_archive.recall_memory", new=recall), \
-             patch("app.llm_json.call_llm_text",
-                   new=AsyncMock(return_value=_RECALL_TEXT)), \
-             patch("app.llm_router.get_lm_gate", return_value=gate):
+             patch(_HAIKU, new=AsyncMock(return_value=_RECALL_TEXT)) as haiku:
             await e._memory_recall_event()   # 1st: delivers
             await e._memory_recall_event()   # 2nd: blocked by once/day flag
 
         assert e._on_message_callback.await_count == 1
+        assert haiku.await_count == 1
         assert recall.await_count == 1  # gated out before touching the archive
 
         # Daily reset re-opens the gate.
@@ -514,19 +504,17 @@ class _FakePool:
         return _FakeConn(*seq)
 
 
-def _capture_router():
-    """Router whose complete_local records the prompt it received."""
+def _capture_haiku():
+    """Haiku transport that records the prompts it received."""
     captured: dict[str, str] = {}
 
-    async def _complete(system_prompt, messages, config):
-        captured["system"] = system_prompt
-        captured["user"] = messages[0]["content"]
-        return {"choices": [{"message": {"content":
-                "Welcome back, Commander. You were telling me about the recon route."}}]}
+    async def _complete(prompt, *, max_tokens, route, system=None):
+        captured["system"] = system
+        captured["user"] = prompt
+        captured["route"] = route
+        return "Welcome back, Commander. You were telling me about the recon route."
 
-    router = MagicMock()
-    router.complete_local = AsyncMock(side_effect=_complete)
-    return router, captured
+    return AsyncMock(side_effect=_complete), captured
 
 
 class TestContinuityReflectionE2E:
@@ -547,7 +535,7 @@ class TestContinuityReflectionE2E:
         # Three queries in one connection: MAX(created_at), recent rows, mood.
         pool = _FakePool([(away,), excerpts, ("yearning",)])
 
-        router, captured = _capture_router()
+        haiku, captured = _capture_haiku()
 
         fake_ws = MagicMock()
         fake_ws.is_connected = MagicMock(return_value=True)
@@ -559,7 +547,7 @@ class TestContinuityReflectionE2E:
         )
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.reflect_helpers.router", router), \
+             patch(_HAIKU, haiku), \
              patch("app.reflect_helpers.ws", fake_ws), \
              patch("app.reflect_helpers.affection", fake_aff), \
              patch("app.personality.load_personality",
@@ -570,7 +558,11 @@ class TestContinuityReflectionE2E:
             await _maybe_reflect_on_return("alice")
 
         # The greeting actually went out through the wired delivery path.
-        fake_ws.send_proactive.assert_awaited_once()
+        fake_ws.send_proactive.assert_awaited_once_with(
+            "alice", "Welcome back, Commander. You were telling me about the recon route."
+        )
+        assert captured["route"] == "return_greeting"
+        assert captured["system"] == "You are Klukai."
 
         prompt = captured["user"]
         lowered = prompt.lower()
@@ -590,7 +582,7 @@ class TestContinuityReflectionE2E:
         from app.chat import _maybe_reflect_on_return
 
         pool = _FakePool([(None,)])  # MAX(created_at) -> NULL
-        router, captured = _capture_router()
+        haiku, captured = _capture_haiku()
         fake_ws = MagicMock()
         fake_ws.is_connected = MagicMock(return_value=True)
         fake_ws.send_proactive = AsyncMock()
@@ -600,13 +592,13 @@ class TestContinuityReflectionE2E:
         )
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.reflect_helpers.router", router), \
+             patch(_HAIKU, haiku), \
              patch("app.reflect_helpers.ws", fake_ws), \
              patch("app.reflect_helpers.affection", fake_aff), \
              patch("asyncio.sleep", new=AsyncMock(return_value=None)):
             await _maybe_reflect_on_return("brand-new")
 
-        router.complete_local.assert_not_awaited()
+        haiku.assert_not_awaited()
         fake_ws.send_proactive.assert_not_awaited()
         assert captured == {}
 

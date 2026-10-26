@@ -51,6 +51,9 @@ from app.proactive import (
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────
 
+# Every background line (dreams, weekly reflection) goes to Claude Haiku here.
+_HAIKU = "app.extraction_llm.complete"
+
 # A "safe" send window: 14:00, not muted, under cap, last answered.
 _NOON = datetime(2026, 5, 17, 14, 0, 0)
 
@@ -1289,17 +1292,13 @@ class TestDreamEvent:
         """Fire a dream with deterministic rolls, capturing the LLM prompt."""
         captured = {}
 
-        async def fake_text(url, model, prompt, **kwargs):
+        async def fake_text(prompt, **kwargs):
             captured["prompt"] = prompt
             captured["kwargs"] = kwargs
             return "I dreamt of you, Commander. I woke reaching for your hand."
 
         # random() order: fire-gate (0.1 to pass), dream-type roll (roll_value).
         rolls = iter([0.1, roll_value])
-
-        gate = AsyncMock()
-        gate.__aenter__ = AsyncMock()
-        gate.__aexit__ = AsyncMock()
 
         # Patch the re-exported list_memories attribute directly. `_dream_event`
         # does `from . import memory_archive` then `memory_archive.list_memories`,
@@ -1310,8 +1309,7 @@ class TestDreamEvent:
             patch(
                 "app.proactive.events.random.random", side_effect=lambda: next(rolls)
             ),
-            patch("app.llm_json.call_llm_text", side_effect=fake_text),
-            patch("app.llm_router.get_lm_gate", return_value=gate),
+            patch(_HAIKU, side_effect=fake_text),
             patch("app.memory_archive.list_memories", new=AsyncMock(return_value=[])),
         ):
             await e._dream_event()
@@ -1323,6 +1321,7 @@ class TestDreamEvent:
         captured = await self._run_dream_collecting_prompt(e, roll_value=0.1)
         # erotic branch (roll<0.30 at aff>=8): prompt mentions erotic dream
         assert "erotic" in captured["prompt"].lower()
+        assert captured["kwargs"]["route"] == "dream"
         e._on_message_callback.assert_awaited_once()
         assert e._dream_delivered_today is True
 
@@ -1389,7 +1388,6 @@ class TestDreamEvent:
 
     @pytest.mark.asyncio
     async def test_lower_affection_nightmare_and_random(self):
-        e = _dream_engine(affection=5)
         cap_nm = await self._run_dream_collecting_prompt(
             _dream_engine(affection=5), 0.5
         )
@@ -1409,14 +1407,11 @@ class TestDreamEvent:
         e = _dream_engine(affection=8)
         captured = {}
 
-        async def fake_text(url, model, prompt, **kwargs):
+        async def fake_text(prompt, **kwargs):
             captured["prompt"] = prompt
             return "Dream text."
 
         rolls = iter([0.1, 0.1])
-        gate = AsyncMock()
-        gate.__aenter__ = AsyncMock()
-        gate.__aexit__ = AsyncMock()
         archive_mem = AsyncMock(
             return_value=[{"annotation": "The night on the observation deck."}]
         )
@@ -1427,8 +1422,7 @@ class TestDreamEvent:
                 "app.proactive.events.random.random", side_effect=lambda: next(rolls)
             ),
             patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]),
-            patch("app.llm_json.call_llm_text", side_effect=fake_text),
-            patch("app.llm_router.get_lm_gate", return_value=gate),
+            patch(_HAIKU, side_effect=fake_text),
             patch("app.memory_archive.list_memories", new=archive_mem),
         ):
             await e._dream_event()
@@ -1443,21 +1437,17 @@ class TestDreamEvent:
         e = _dream_engine(affection=8)
         captured = {}
 
-        async def fake_text(url, model, prompt, **kwargs):
+        async def fake_text(prompt, **kwargs):
             captured["prompt"] = prompt
             return "Dream text."
 
         rolls = iter([0.1, 0.1])
-        gate = AsyncMock()
-        gate.__aenter__ = AsyncMock()
-        gate.__aexit__ = AsyncMock()
         with (
             _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
             patch(
                 "app.proactive.events.random.random", side_effect=lambda: next(rolls)
             ),
-            patch("app.llm_json.call_llm_text", side_effect=fake_text),
-            patch("app.llm_router.get_lm_gate", return_value=gate),
+            patch(_HAIKU, side_effect=fake_text),
             patch(
                 "app.memory_archive.list_memories",
                 new=AsyncMock(side_effect=RuntimeError("archive down")),
@@ -1472,16 +1462,12 @@ class TestDreamEvent:
     async def test_empty_llm_message_not_delivered(self):
         e = _dream_engine(affection=8)
         rolls = iter([0.1, 0.1])
-        gate = AsyncMock()
-        gate.__aenter__ = AsyncMock()
-        gate.__aexit__ = AsyncMock()
         with (
             _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
             patch(
                 "app.proactive.events.random.random", side_effect=lambda: next(rolls)
             ),
-            patch("app.llm_json.call_llm_text", AsyncMock(return_value="")),
-            patch("app.llm_router.get_lm_gate", return_value=gate),
+            patch(_HAIKU, AsyncMock(return_value="")),
             patch("app.memory_archive.list_memories", new=AsyncMock(return_value=[])),
         ):
             await e._dream_event()
@@ -1492,19 +1478,12 @@ class TestDreamEvent:
     async def test_llm_error_swallowed(self):
         e = _dream_engine(affection=8)
         rolls = iter([0.1, 0.1])
-        gate = AsyncMock()
-        gate.__aenter__ = AsyncMock()
-        gate.__aexit__ = AsyncMock()
         with (
             _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
             patch(
                 "app.proactive.events.random.random", side_effect=lambda: next(rolls)
             ),
-            patch(
-                "app.llm_json.call_llm_text",
-                AsyncMock(side_effect=RuntimeError("down")),
-            ),
-            patch("app.llm_router.get_lm_gate", return_value=gate),
+            patch(_HAIKU, AsyncMock(side_effect=RuntimeError("down"))),
             patch("app.memory_archive.list_memories", new=AsyncMock(return_value=[])),
         ):
             await e._dream_event()  # no raise
@@ -1922,16 +1901,12 @@ class TestWeeklyReflectionSaveFailure:
             [msgs],  # alice's messages
         )
 
-        fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock(
-            return_value={"choices": [{"message": {"content": "A" * 80}}]}
-        )
         fake_memory = MagicMock()
         fake_memory.store_episode = AsyncMock(side_effect=RuntimeError("qdrant down"))
 
         with (
             patch("app.db.get_pool", return_value=pool),
-            patch("app.context.router", fake_router),
+            patch(_HAIKU, AsyncMock(return_value="A" * 80)),
             patch("app.context.memory", fake_memory),
             patch("app.personality.load_personality", return_value={}),
             patch("app.personality.build_character_preamble", return_value="preamble"),
@@ -1948,24 +1923,13 @@ class TestWeeklyReflectionSaveFailure:
         msgs = [("user", f"line {i}") for i in range(15)]
         pool = _FakePool([[("alice",)]], [msgs])
 
-        fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock(
-            return_value={
-                "choices": [
-                    {
-                        "message": {
-                            "content": "This week we held the ridge together." * 3
-                        }
-                    }
-                ]
-            }
-        )
+        haiku = AsyncMock(return_value="This week we held the ridge together." * 3)
         fake_memory = MagicMock()
         fake_memory.store_episode = AsyncMock()
 
         with (
             patch("app.db.get_pool", return_value=pool),
-            patch("app.context.router", fake_router),
+            patch(_HAIKU, haiku),
             patch("app.context.memory", fake_memory),
             patch("app.personality.load_personality", return_value={}),
             patch("app.personality.build_character_preamble", return_value="preamble"),
@@ -1977,6 +1941,9 @@ class TestWeeklyReflectionSaveFailure:
         assert kwargs["importance"] == 8
         assert "weekly_reflection" in kwargs["keywords"]
         assert kwargs["user_id"] == "alice"
+        assert kwargs["summary"] == "This week we held the ridge together." * 3
+        assert haiku.await_args.kwargs["route"] == "weekly_reflection"
+        assert haiku.await_args.kwargs["system"] == "preamble"
 
     @pytest.mark.asyncio
     async def test_outer_job_failure_swallowed(self):
@@ -1996,17 +1963,16 @@ class TestWeeklyReflectionSaveFailure:
         e = ProactiveEngine()
         msgs = [("user", "hi"), ("assistant", "hello")]  # only 2
         pool = _FakePool([[("alice",)]], [msgs])
-        fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock()
+        haiku = AsyncMock()
         with (
             patch("app.db.get_pool", return_value=pool),
-            patch("app.context.router", fake_router),
+            patch(_HAIKU, haiku),
             patch("app.context.memory", MagicMock()),
             patch("app.personality.load_personality", return_value={}),
             patch("app.personality.build_character_preamble", return_value="p"),
         ):
             await e._weekly_reflection()
-        fake_router.complete_local.assert_not_awaited()
+        haiku.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_no_active_users_skips(self):

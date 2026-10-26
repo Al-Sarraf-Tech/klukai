@@ -50,6 +50,9 @@ def _mk_affection(level: int = 5) -> SimpleNamespace:
                            first_interaction=datetime(2026, 1, 1, tzinfo=timezone.utc))
 
 
+_HAIKU = "app.extraction_llm.complete"
+
+
 class TestReflectionOnReturn:
     @pytest.mark.asyncio
     async def test_skips_when_no_last_message(self):
@@ -74,14 +77,13 @@ class TestReflectionOnReturn:
             [("user", "hello"), ("assistant", "hi")],
         ])
 
-        fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock()
+        haiku = AsyncMock()
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.reflect_helpers.router", fake_router):
+             patch(_HAIKU, haiku):
             await _maybe_reflect_on_return("alice")
 
-        fake_router.complete_local.assert_not_called()
+        haiku.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_skips_when_user_away_too_long(self):
@@ -94,14 +96,13 @@ class TestReflectionOnReturn:
             [("user", "hello")],
         ])
 
-        fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock()
+        haiku = AsyncMock()
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.reflect_helpers.router", fake_router):
+             patch(_HAIKU, haiku):
             await _maybe_reflect_on_return("alice")
 
-        fake_router.complete_local.assert_not_called()
+        haiku.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_triggers_greeting_in_window(self):
@@ -114,10 +115,7 @@ class TestReflectionOnReturn:
             [("user", "we talked about dreams"), ("assistant", "i liked that")],
         ])
 
-        fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock(return_value={
-            "choices": [{"message": {"content": "Welcome back, Commander. I kept thinking about dreams."}}]
-        })
+        haiku = AsyncMock(return_value="Welcome back, Commander. I kept thinking about dreams.")
 
         fake_ws = MagicMock()
         fake_ws.is_connected = MagicMock(return_value=True)
@@ -127,7 +125,7 @@ class TestReflectionOnReturn:
         fake_aff.get_state = AsyncMock(return_value=_mk_affection())
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.reflect_helpers.router", fake_router), \
+             patch(_HAIKU, haiku), \
              patch("app.reflect_helpers.ws", fake_ws), \
              patch("app.reflect_helpers.affection", fake_aff), \
              patch("app.chat.load_personality", return_value={"user_title": "Commander"}, create=True), \
@@ -136,9 +134,13 @@ class TestReflectionOnReturn:
              patch("asyncio.sleep", new=AsyncMock(return_value=None)):
             await _maybe_reflect_on_return("alice")
 
-        assert fake_router.complete_local.await_count == 1
-        fake_ws.send_proactive.assert_awaited_once()
-        assert "Commander" in fake_ws.send_proactive.await_args[0][1]
+        assert haiku.await_count == 1
+        assert haiku.await_args.kwargs["route"] == "return_greeting"
+        assert haiku.await_args.kwargs["system"] == "You are Klukai."
+        assert "we talked about dreams" in haiku.await_args.args[0]
+        fake_ws.send_proactive.assert_awaited_once_with(
+            "alice", "Welcome back, Commander. I kept thinking about dreams."
+        )
 
     @pytest.mark.asyncio
     async def test_skips_send_when_ws_disconnected(self):
@@ -151,10 +153,7 @@ class TestReflectionOnReturn:
             [("user", "hello")],
         ])
 
-        fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock(return_value={
-            "choices": [{"message": {"content": "Welcome back, Commander."}}]
-        })
+        haiku = AsyncMock(return_value="Welcome back, Commander.")
 
         fake_ws = MagicMock()
         fake_ws.is_connected = MagicMock(return_value=False)
@@ -164,7 +163,7 @@ class TestReflectionOnReturn:
         fake_aff.get_state = AsyncMock(return_value=_mk_affection())
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.reflect_helpers.router", fake_router), \
+             patch(_HAIKU, haiku), \
              patch("app.reflect_helpers.ws", fake_ws), \
              patch("app.reflect_helpers.affection", fake_aff), \
              patch("app.personality.load_personality", return_value={"user_title": "Commander"}), \
@@ -176,7 +175,7 @@ class TestReflectionOnReturn:
 
     @pytest.mark.asyncio
     async def test_skips_short_greeting(self):
-        """Greetings < 10 chars are discarded (LLM probably errored)."""
+        """Greetings < 10 chars are discarded (the model probably misfired)."""
         from app.chat import _maybe_reflect_on_return
 
         away = datetime.now(timezone.utc) - timedelta(hours=12)
@@ -185,10 +184,7 @@ class TestReflectionOnReturn:
             [("user", "hello")],
         ])
 
-        fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock(return_value={
-            "choices": [{"message": {"content": "ok"}}]
-        })
+        haiku = AsyncMock(return_value="ok")
 
         fake_ws = MagicMock()
         fake_ws.is_connected = MagicMock(return_value=True)
@@ -198,7 +194,7 @@ class TestReflectionOnReturn:
         fake_aff.get_state = AsyncMock(return_value=_mk_affection())
 
         with patch("app.db.get_pool", return_value=pool), \
-             patch("app.reflect_helpers.router", fake_router), \
+             patch(_HAIKU, haiku), \
              patch("app.reflect_helpers.ws", fake_ws), \
              patch("app.reflect_helpers.affection", fake_aff), \
              patch("app.personality.load_personality", return_value={"user_title": "Commander"}), \
@@ -206,6 +202,38 @@ class TestReflectionOnReturn:
              patch("asyncio.sleep", new=AsyncMock(return_value=None)):
             await _maybe_reflect_on_return("alice")
 
+        fake_ws.send_proactive.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_greeting_when_haiku_is_unavailable(self):
+        """Haiku capped or failed: she stays quiet; no canned line, no local model."""
+        from app.chat import _maybe_reflect_on_return
+        from app.extraction_llm import ExtractionUnavailable
+
+        away = datetime.now(timezone.utc) - timedelta(hours=13)
+        pool = _FakePool([
+            (away,),
+            [("user", "hello")],
+        ])
+        haiku = AsyncMock(side_effect=ExtractionUnavailable("cap"))
+
+        fake_ws = MagicMock()
+        fake_ws.is_connected = MagicMock(return_value=True)
+        fake_ws.send_proactive = AsyncMock()
+
+        fake_aff = MagicMock()
+        fake_aff.get_state = AsyncMock(return_value=_mk_affection())
+
+        with patch("app.db.get_pool", return_value=pool), \
+             patch(_HAIKU, haiku), \
+             patch("app.reflect_helpers.ws", fake_ws), \
+             patch("app.reflect_helpers.affection", fake_aff), \
+             patch("app.personality.load_personality", return_value={"user_title": "Commander"}), \
+             patch("app.personality.build_character_preamble", return_value="You are Klukai."), \
+             patch("asyncio.sleep", new=AsyncMock(return_value=None)):
+            await _maybe_reflect_on_return("alice")
+
+        haiku.assert_awaited_once()
         fake_ws.send_proactive.assert_not_called()
 
     @pytest.mark.asyncio
