@@ -597,7 +597,7 @@ class TestRender:
         cfg = _cfg_with("normal", "debrief", {0: ["Report{nope}."]})
         assert op_brief.render("debrief", _commitment(), 3, cfg) == "Report."
 
-    @pytest.mark.parametrize("bad", ["Broken {", "Index {0}", "Attr {what.nope}"])
+    @pytest.mark.parametrize("bad", ["Broken {", "Index {0}", "Attr {what.nope}", "Lookup {what[name]}"])
     def test_malformed_template_falls_back_to_default(self, bad):
         cfg = _cfg_with("normal", "debrief", {0: [bad]})
         assert op_brief.render("debrief", _commitment(), 3, cfg) == "Report."
