@@ -1,4 +1,4 @@
-import { FIDGETS, REACTION_CATALOG, STATE_CLIPS, createPassiveController, createReactionController, createStateMachine } from './state.js';
+import { FIDGETS, REACTION_CATALOG, STATE_CLIPS, createPassiveController, createReactionController, createStateMachine } from './state.js?v=7697bf55d563';
 import { DEG } from './common.js';
 
 // Motion operations on the single avatar runtime owner.

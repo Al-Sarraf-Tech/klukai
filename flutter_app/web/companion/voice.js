@@ -6,7 +6,7 @@
 // clip may synthesize while the current one plays.
 // Each reply is spoken once, from its `done` text; see speak().
 
-import { speakable } from "./logic.js";
+import { speakable } from "./logic.js?v=dffc356aca84";
 
 export function base64ToArrayBuffer(b64) {
   const bin = atob(b64);

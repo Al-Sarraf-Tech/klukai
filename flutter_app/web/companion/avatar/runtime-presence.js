@@ -1,7 +1,7 @@
 import { DEG, clamp, smoothstep, wrapPi } from './common.js';
 import { EYE_GUARD, LOOK_WEIGHT, lookSplit, softLimit } from './presence.js';
 import { blinkCurve, nodCurve, stepEnvelope } from './physics.js';
-import { nextBlink } from '../logic.js';
+import { nextBlink } from '../logic.js?v=dffc356aca84';
 
 // Presence operations on the single avatar runtime owner.
 export function installPresence(ctx) {

@@ -28,9 +28,9 @@
 // three.js is loaded lazily.
 
 // Stable public entrypoint; pure policies stay lightweight and Three remains lazy.
-export { STATES, STATE_CLIPS, moodToState, mappedMoods, moodCoverage, createReactionController, RIM_TINTS, parseTint, STRONG_MOODS, MOOD_HOLD_MS, moodGate, createStateMachine, pickFidget, createPassiveController } from './avatar/state.js';
+export { STATES, STATE_CLIPS, moodToState, mappedMoods, moodCoverage, createReactionController, RIM_TINTS, parseTint, STRONG_MOODS, MOOD_HOLD_MS, moodGate, createStateMachine, pickFidget, createPassiveController } from './avatar/state.js?v=7697bf55d563';
 export { renderSettings, iosMajorVersion, cameraFraming, CAMERA_ZOOM_RANGE, cameraFarPlane, createCameraView, createAvatarGesture, detectIOS, nextPixelRatio, nextQuality } from './avatar/camera.js';
 export { speechMouthDelta, speechMouthLevel, LOOK_WEIGHT, lookSplit, EYE_GUARD, softLimit } from './avatar/presence.js';
 export { stepEnvelope, nodCurve, blinkCurve, closestOnSegment, collidePoint, coneClamp, springStep, springHang, springSubsteps, poseJumped, SPRING } from './avatar/physics.js';
 export { warmAvatar3D, forgetAvatarModels } from './avatar/loader.js';
-export { createAvatar3D } from './avatar/runtime.js';
+export { createAvatar3D } from './avatar/runtime.js?v=6f540f7da5c2';

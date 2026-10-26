@@ -1,5 +1,5 @@
 import { clamp } from './common.js';
-import { MOODS } from '../logic.js';
+import { MOODS } from '../logic.js?v=dffc356aca84';
 
 /** Viewer states. */
 export const STATES = Object.freeze([

@@ -4,7 +4,7 @@
 // brightness, rain and snow add a noise bed, and the music ducks under her
 // voice. iOS: start() must run inside a user gesture.
 
-import { SCENES, chordNotes, midiToHz } from "./logic.js";
+import { SCENES, chordNotes, midiToHz } from "./logic.js?v=dffc356aca84";
 
 const LOOKAHEAD_S = 0.25;
 const TICK_MS = 60;

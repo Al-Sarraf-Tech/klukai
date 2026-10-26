@@ -1,7 +1,7 @@
 // Appearance catalog, transactional model replacement and portrait/3D switching.
 // The app retains avatar ownership through explicit live accessors on runtime.
 import { createAppearanceSwitcher } from './appearance.js';
-import { moodToExpression } from './logic.js';
+import { moodToExpression } from './logic.js?v=dffc356aca84';
 
 // `framing`/`viewKey`: the embedded view frames her waist-up and keeps its
 // own saved camera (prefs.embedView), so a full-body view saved on the full
@@ -16,7 +16,7 @@ export function createStageAppearance({ $, api, prefs, savePrefs, notice, portra
   // second download. Her model comes through the authenticated API, once per
   // model id per page (the cache passes its own abort signal).
   let avatarLib = null;
-  const loadAvatarLib = () => (avatarLib ||= import("./avatar3d.js?v=9b6eaa258bac")
+  const loadAvatarLib = () => (avatarLib ||= import("./avatar3d.js?v=b0edf2e7922a")
     .catch((e) => { avatarLib = null; throw e; }));
   const modelLoader = (id) => (signal) => api.model(id, { signal });
   const appearances = createAppearanceSwitcher({
