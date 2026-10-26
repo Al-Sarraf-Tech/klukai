@@ -112,7 +112,7 @@ test("voice phases: one state per tap, steady across clip gaps, back to idle whe
 });
 
 // ── DOM binder against a tiny fake document ──────────────────────────────
-function fakeDocument() {
+function fakeDocument({ hiddenLayout = false } = {}) {
   const nodes = new Map();
   const writes = [];
   const make = (id) => {
@@ -122,8 +122,13 @@ function fakeDocument() {
     let text = "";
     let hidden = id === "hud" || id === "hud-status";
     let scrollTop = 0;
+    let scrollHeight = 40, clientHeight = 88;
     const el = {
-      id, dataset: {}, listeners, attrs, scrollHeight: 40, clientHeight: 88,
+      id, dataset: {}, listeners, attrs,
+      get scrollHeight() { return hiddenLayout && nodes.get("hud")?.hidden ? 0 : scrollHeight; },
+      set scrollHeight(v) { scrollHeight = v; },
+      get clientHeight() { return hiddenLayout && nodes.get("hud")?.hidden ? 0 : clientHeight; },
+      set clientHeight(v) { clientHeight = v; },
       get textContent() { return text; },
       set textContent(v) { writes.push([id, "text", v]); text = String(v); if (el.heightFor) el.scrollHeight = el.heightFor(text); },
       get hidden() { return hidden; },
@@ -258,4 +263,72 @@ test("companion.html carries the HUD; the CSS draws it only embedded, without an
   const hudCss = css.slice(css.indexOf("/* ── Embedded HUD"));
   assert.ok(hudCss.length > 200, "the embedded HUD block exists");
   assert.doesNotMatch(hudCss, /infinite|animation:|backdrop-filter/);
+});
+
+
+test("first long reply is measured after the hidden HUD becomes visible", () => {
+  const doc = fakeDocument({ hiddenLayout: true });
+  const hud = createHud(doc, { schedule: (fn) => fn() });
+  const line = doc.getElementById("hud-line");
+  line.heightFor = () => 300;
+  hud.update(hudView({ ...EMPTY_HUD, line: "Existing long reply" }), { lineId: 1 });
+  assert.equal(doc.getElementById("hud").hidden, false);
+  assert.equal(line.classList.contains("scrolls"), true);
+  assert.equal(line.scrollTop, 0);
+});
+
+test("HUD resize remeasures unchanged text without rewriting it or moving its scroll", () => {
+  const doc = fakeDocument();
+  const hud = createHud(doc, { schedule: (fn) => fn() });
+  const line = doc.getElementById("hud-line");
+  line.heightFor = () => 200;
+  line.clientHeight = 220;
+  hud.update(hudView({ ...EMPTY_HUD, line: "Same reply" }), { lineId: 1 });
+  assert.equal(line.classList.contains("scrolls"), false);
+  line.clientHeight = 44;
+  line.scrollTop = 30;
+  doc.writes.length = 0;
+  hud.resize();
+  assert.equal(line.classList.contains("scrolls"), true);
+  assert.equal(line.scrollTop, 30);
+  assert.deepEqual(doc.writes, [["hud-line", "class", "scrolls", true]]);
+  doc.writes.length = 0;
+  hud.resize();
+  assert.deepEqual(doc.writes, [], "repeated resize is idempotent");
+  line.clientHeight = 220;
+  hud.resize();
+  assert.equal(line.classList.contains("scrolls"), false);
+  assert.equal(line.textContent, "Same reply");
+});
+
+test("HUD reveal remeasures resized text even without a pending update", () => {
+  const doc = fakeDocument();
+  const hud = createHud(doc, { schedule: (fn) => fn() });
+  const line = doc.getElementById("hud-line");
+  line.heightFor = () => 70;
+  hud.update(hudView({ ...EMPTY_HUD, line: "Existing reply" }), { lineId: 1 });
+  hud.hold(true);
+  line.clientHeight = 44;
+  doc.writes.length = 0;
+  hud.resize();
+  assert.deepEqual(doc.writes, [], "parked HUD is not touched");
+  hud.hold(false);
+  assert.equal(line.classList.contains("scrolls"), true);
+  assert.deepEqual(doc.writes, [["hud-line", "class", "scrolls", true]]);
+});
+
+test("HUD reveal remeasures even when only a heart update was pending", () => {
+  const doc = fakeDocument();
+  const hud = createHud(doc, { schedule: (fn) => fn() });
+  const line = doc.getElementById("hud-line");
+  line.heightFor = () => 70;
+  const snapshot = { ...EMPTY_HUD, line: "Existing reply", bpm: 72 };
+  hud.update(hudView(snapshot), { lineId: 1 });
+  hud.hold(true);
+  line.clientHeight = 44;
+  hud.update(hudView({ ...snapshot, bpm: 75 }), { lineId: 1 });
+  doc.writes.length = 0;
+  hud.hold(false);
+  assert.equal(line.classList.contains("scrolls"), true);
+  assert.deepEqual(doc.writes, [["hud-heart", "text", "75 bpm"], ["hud-line", "class", "scrolls", true]]);
 });

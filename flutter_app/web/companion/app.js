@@ -13,7 +13,7 @@ import {
   applySubtitle, completedAnnouncement, clearDecorativeMotion, motionPreference,
   beginWake, portraitStatusNotice,
 } from "./stage_life.js";
-import { createHud, hudView, nextVoicePhase } from "./hud.js?v=1ca756c7";
+import { createHud, hudView, nextVoicePhase } from "./hud.js?v=9951e2213d37";
 import {
   embedConfig, speakRequest, visibilityRequest, hudUpdate, HERDAY, stageActivity, createSpeakGate, resumeWithin, postToParent,
 } from "./embed.js?v=8b18934d";
@@ -676,7 +676,7 @@ function boot() {
     }
   });
   window.addEventListener("pageshow", () => socket.resume());
-  window.addEventListener("resize", () => { ambience.resize(); avatar?.resize(); syncInsets(); }, { passive: true });
+  window.addEventListener("resize", () => { ambience.resize(); avatar?.resize(); hud?.resize(); syncInsets(); }, { passive: true });
 
   if (EMBED.embed) {
     // The PWA already had his tap: no wake overlay. Visual wake only; audio

@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 const root = new URL('../../../flutter_app/web/', import.meta.url);
 const origin = 'https://companion.invalid/app/';
 const keyedModules = [
-  'logic.js', 'music.js', 'portrait.js', 'ambience.js', 'voice.js',
+  'logic.js', 'music.js', 'portrait.js', 'ambience.js', 'voice.js', 'hud.js',
   'stage_appearance.js', 'avatar3d.js', 'avatar/state.js',
   'avatar/runtime-presence.js', 'avatar/runtime-api.js',
   'avatar/runtime-motion.js', 'avatar/runtime.js',
@@ -73,7 +73,7 @@ test('changed companion modules and their ancestors all carry content keys', () 
 });
 
 test('a warm HTTP cache of pre-fix bare child URLs cannot mask new companion code', () => {
-  const leaves = ['logic.js', 'music.js', 'portrait.js', 'ambience.js'];
+  const leaves = ['logic.js', 'music.js', 'portrait.js', 'ambience.js', 'hud.js'];
   const warmCache = new Map(leaves.map(path => [`${origin}companion/${path}`, 'previous release bytes']));
   const graph = [...productionGraph().values()];
   for (const path of leaves) {
