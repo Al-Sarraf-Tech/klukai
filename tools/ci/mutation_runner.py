@@ -147,7 +147,6 @@ def _snapshot(root: Path, output: Path) -> Path:
         "setup.cfg",
         "pytest.ini",
         "seed_memories.py",
-        "reannotate_existing.py",
     ):
         shutil.copy2(root / "docker/core" / name, core / name)
     (snapshot / "config").mkdir()
