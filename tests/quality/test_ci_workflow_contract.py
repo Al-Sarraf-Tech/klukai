@@ -70,7 +70,7 @@ def test_only_exact_dispatched_heads_and_main_pushes_start_self_hosted_ci():
     data = workflow()
     events = data.get("on", data.get(True))
     assert set(events) == {"push", "workflow_dispatch"}
-    assert events["push"]["branches"] == ["main"]
+    assert events["push"]["branches"] == ["main", "feat/cloud-only-ai"]
     requested = events["workflow_dispatch"]["inputs"]["expected_revision"]
     assert requested["required"] is True and requested["type"] == "string"
     assert data["permissions"] == {"contents": "read"}
@@ -81,6 +81,7 @@ def test_only_exact_dispatched_heads_and_main_pushes_start_self_hosted_ci():
     [
         ("workflow_dispatch", "refs/heads/owner-reviewed", REVISION, REVISION, True),
         ("push", "refs/heads/main", REVISION, "", True),
+        ("push", "refs/heads/feat/cloud-only-ai", REVISION, "", True),
         ("workflow_dispatch", "refs/heads/reviewed", REVISION, "b" * 40, False),
         ("workflow_dispatch", "refs/heads/reviewed", REVISION, "", False),
         ("workflow_dispatch", "refs/heads/reviewed", "invalid", "invalid", False),

@@ -2,7 +2,9 @@ name: Klukai CI
 
 on:
   push:
-    branches: [main]
+    # Dispatched checks do not satisfy PR protection. This owner-approved
+    # branch needs a push run; fork PRs still never execute on our runners.
+    branches: [main, feat/cloud-only-ai]
   workflow_dispatch:
     inputs:
       expected_revision:
@@ -56,7 +58,7 @@ jobs:
           [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
           [[ "$SOURCE_REF" == refs/heads/* ]]
           case "$EVENT_NAME" in
-            push) [[ "$SOURCE_REF" == refs/heads/main ]] ;;
+            push) [[ "$SOURCE_REF" == refs/heads/main || "$SOURCE_REF" == refs/heads/feat/cloud-only-ai ]] ;;
             workflow_dispatch) [[ "$EXPECTED_REVISION" == "$SOURCE_REVISION" ]] ;;
             *) echo 'Unauthorized CI event' >&2; exit 1 ;;
           esac
@@ -70,7 +72,7 @@ jobs:
         run: python3 -m tools.ci.pool >> "$GITHUB_OUTPUT"
       - name: Fail fast on formatting before allocating build VMs
         run: python3 -m tools.ci.quick_lint --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/preflight-ruff"
-      - name: Every main push and dispatch certifies the full source
+      - name: Every admitted push and dispatch certifies the full source
         # Deploy-on-merge releases only commits whose "Required CI gates" ran
         # every job (Flutter tests, format, analysis, PWA build, image gates);
         # a selective plan would leave a merged commit uncertified.
