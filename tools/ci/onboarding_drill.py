@@ -25,7 +25,7 @@ import tempfile
 import time
 from typing import Any
 
-NETWORKS = ("aichat_default", "infra", "klukai-obs")
+NETWORKS = ("infra", "klukai-obs")
 BUILT_SERVICES = ("companion-core", "events-bridge")
 
 
@@ -55,7 +55,7 @@ STEPS = (
     ("2", "chmod 600 .env"),
     ("fill", ""),  # the doc's manual edit of the required values
     ("2", "docker compose config --quiet"),
-    ("3", "docker network ls | grep -E 'aichat_default|infra|klukai-obs'"),
+    ("3", "docker network ls | grep -E 'infra|klukai-obs'"),
     ("3", "docker compose up -d companion-core"),
     ("wait", ""),  # the doc expects "Up (healthy)" before the next commands
     ("3", "docker compose ps"),
@@ -125,14 +125,14 @@ def provide_infrastructure(password: str) -> None:
                 "--name",
                 name,
                 "--network",
-                NETWORKS[1],
+                NETWORKS[0],
                 *env[name],
                 image,
             ],
             check=True,
             capture_output=True,
         )
-        for network in (NETWORKS[0], NETWORKS[2]):
+        for network in NETWORKS[1:]:
             subprocess.run(["docker", "network", "connect", network, name], check=True)
     for _ in range(90):
         ready = subprocess.run(

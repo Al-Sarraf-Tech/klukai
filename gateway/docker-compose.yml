@@ -1,23 +1,17 @@
-# Run on amarillo: bridges aichat internals to Tailscale + reverse proxies web to dominus
+# Run on amarillo: publishes infra-postgres on the tailnet (15432).
 services:
   companion-gateway:
     image: nginx:alpine
     container_name: companion-gateway
     mem_limit: 256m
     ports:
-      # companion-core serves 8300 directly now (no longer proxied)
-      # aichat HTTP services on Tailscale
-      - "100.111.198.19:18105:18105"  # Inference
-      # aichat TCP services on Tailscale
-      # Redis (16379) is deliberately NOT published: aichat-redis has no auth and
-      # every legitimate client (companion-core, events-bridge) reaches it on the
-      # aichat_default Docker network. Security fix 2026-10-27.
+      # companion-core serves 8300 directly now (no longer proxied).
+      # The aichat stack's inference (18105), Redis, Qdrant, data and MCP
+      # services are not published (aichat decoupling, 2026-10-27).
       - "100.111.198.19:15432:15432"  # PostgreSQL
-      # Qdrant (16333) is deliberately NOT published either (no API key). Security fix 2026-10-27.
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     networks:
-      - aichat_default
       - infra
     restart: unless-stopped
     healthcheck:
@@ -29,7 +23,5 @@ services:
       autoheal: "true"
 
 networks:
-  aichat_default:
-    external: true
   infra:
     external: true

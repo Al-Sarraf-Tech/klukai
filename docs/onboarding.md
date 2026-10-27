@@ -13,11 +13,9 @@
 - Python 3.14 for tooling outside the container (the app runs in Docker).
 - `git`, `make`, `curl`, `jq`.
 - **The shared database.** Core does not ship its own PostgreSQL: it joins the
-  external Docker networks `aichat_default`, `infra` and `klukai-obs` and
-  expects `infra-postgres` on `infra`. Redis is Klukai's own (`companion-redis`,
-  started with core). `aichat_default` is still joined for one release so a
-  rollback can reach the previous image's services; create it empty if the
-  aichat stack is not running.
+  external Docker networks `infra` and `klukai-obs` and expects
+  `infra-postgres` on `infra`. Redis is Klukai's own (`companion-redis`,
+  started with core).
 - All of Klukai's AI is cloud (ADR-0020): chat needs `KLUKAI_CLAUDE_PRIMARY=true`
   and `ANTHROPIC_API_KEY`, voice needs `FISH_API_KEY`. Without them core still
   starts and answers health/auth requests.
@@ -46,7 +44,7 @@ private Compose override outside Git (see the README's operator section).
 ## 3. Bring up core
 
 ```bash
-docker network ls | grep -E 'aichat_default|infra|klukai-obs'   # must exist
+docker network ls | grep -E 'infra|klukai-obs'   # must exist
 docker compose up -d companion-core     # starts companion-redis first; migrations apply at startup
 docker compose -f docker-compose.obs.yml up -d   # observability (optional)
 docker compose ps                        # companion-core "Up (healthy)"
@@ -134,7 +132,7 @@ unverified. The honest per-row status lives in the latest handoff document.
 | Symptom | Fix |
 |---|---|
 | `docker compose` refuses to render | A required `.env` value is missing (`POSTGRES_PASSWORD`, `KLUKAI_REDIS_PASSWORD`, `RABBITMQ_PASSWORD`) |
-| `network aichat_default not found` | `docker network create aichat_default` (Prerequisites) |
+| `network infra not found` | Start infra-postgres on the `infra` network first (Prerequisites) |
 | `companion-core` exits immediately | `docker compose logs companion-core` — usually a missing env var or an unreachable `infra-postgres` |
 | `companion-core` restarts with `PermissionError` under `/app/app` | The checkout was made with a private umask (077). The image copies source files with their modes and runs as UID 1000; clone with umask 022 or `chmod -R a+rX` the checkout, then rebuild |
 | Voice answers 503 | `KLUKAI_VOICE_ENABLED` is off or `FISH_API_KEY` is empty; speech-to-text also needs Fish credit |
