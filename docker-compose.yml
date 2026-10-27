@@ -1,6 +1,6 @@
 # Run on amarillo: companion-core, its own Redis (companion-redis) and the
 # events bridge. PostgreSQL is the shared infra-postgres (database "aichat",
-# Klukai's own data under an old name).
+# Klukai's own data under an old name). Nothing here uses the aichat stack.
 # All of Klukai's AI is cloud (Anthropic, Fish Audio, the image accounts).
 # Pin the compose project name so `docker compose` (and every Makefile target)
 # acts on the live stack instead of the directory-default `klukai` project.
@@ -35,10 +35,6 @@ services:
       # Empty means no external tools (there is no aichat-mcp fallback).
       KLUKAI_MCP_CONFIG: "${KLUKAI_MCP_CONFIG:-}"
       KLUKAI_BRAVE_ENABLED: "${KLUKAI_BRAVE_ENABLED:-false}"
-      # Unused since facts moved into core (app/fact_store.py). Kept for one
-      # release, with the aichat network below, so an automatic rollback to
-      # the previous image still reaches every aichat path it used.
-      DATA_URL: "http://aichat-data:8091"
       # Cloud AI only (owner, 2026-10-26): no model, embedding, voice or image
       # service on Dominus-Nobara or Amarillo is used by core.
       # Voice in and out is Fish Audio. Off, core sends no speech work at all.
@@ -145,7 +141,6 @@ services:
           memory: 1g
     networks:
       - default
-      - aichat
       - infra
       - obs
     restart: unless-stopped
@@ -222,8 +217,6 @@ services:
           memory: 64m
     networks:
       - default
-      # Previous release's Redis; removed with the aichat network next release.
-      - aichat
     restart: unless-stopped
     labels:
       autoheal: "true"
@@ -235,9 +228,6 @@ volumes:
   companion-redis:
 
 networks:
-  aichat:
-    external: true
-    name: aichat_default
   infra:
     external: true
   obs:

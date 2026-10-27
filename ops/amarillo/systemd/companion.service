@@ -2,8 +2,8 @@
 # active release overlay. See docs/runbooks/encrypted-credentials.md.
 [Unit]
 Description=Klukai verified release with encrypted credentials
-After=aichat.service
-Wants=aichat.service
+After=docker.service
+Wants=docker.service
 
 [Service]
 Type=oneshot
