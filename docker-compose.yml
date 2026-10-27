@@ -171,7 +171,10 @@ services:
     environment:
       KLUKAI_REDIS_PASSWORD: "${KLUKAI_REDIS_PASSWORD:?Klukai Redis password required}"
     # The password reaches valkey on stdin, never on its command line.
-    command: ["sh", "-c", "exec valkey-server - <<EOF\nappendonly yes\nsave 3600 1 300 100 60 10000\nrequirepass $$KLUKAI_REDIS_PASSWORD\nEOF\n"]
+    # Every key core writes has a TTL, so eviction only ever drops expiring
+    # state (volatile-lru) under the 200 MB cap. Commands core never uses that
+    # could wipe or reconfigure the store are disabled.
+    command: ["sh", "-c", "exec valkey-server - <<EOF\nappendonly yes\nsave 3600 1 300 100 60 10000\nmaxmemory 200mb\nmaxmemory-policy volatile-lru\nrename-command FLUSHALL \"\"\nrename-command FLUSHDB \"\"\nrename-command CONFIG \"\"\nrename-command DEBUG \"\"\nrequirepass $$KLUKAI_REDIS_PASSWORD\nEOF\n"]
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=8m
     volumes:
@@ -210,6 +213,9 @@ services:
       # and the core-side sweeper delivers instead, just less punctually.
       CORE_URL: "${CORE_URL:-http://companion-core:8300}"
       CORE_INTERNAL_TOKEN: "${CORE_INTERNAL_TOKEN:-}"
+    depends_on:
+      redis:
+        condition: service_healthy
     deploy:
       resources:
         limits:

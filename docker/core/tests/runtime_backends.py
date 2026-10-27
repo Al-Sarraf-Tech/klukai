@@ -545,3 +545,47 @@ async def test_postgres_fact_memory_keeps_the_data_service_contract(
         ).fetchone()
     # birthday, tea, milestone, mood and 55 notes: nothing was deleted.
     assert counts == (59, 0)
+
+    # An existing table (production: created by the data service) is used as
+    # is: concurrent first use by fresh processes changes no schema object.
+    async def schema() -> list[tuple[object, ...]]:
+        async with db.get_conn() as conn:
+            return await (
+                await conn.execute(
+                    "SELECT c.oid::bigint, c.relname FROM pg_class c "
+                    "WHERE c.relname IN ('memory', 'memory_pkey', "
+                    "'idx_memory_category', 'idx_memory_expires') ORDER BY 2"
+                )
+            ).fetchall()
+
+    before = await schema()
+    assert [row[1] for row in before] == [
+        "idx_memory_category",
+        "idx_memory_expires",
+        "memory",
+        "memory_pkey",
+    ]
+    monkeypatch.setattr(fact_store, "_ready", False)
+    await asyncio.gather(*(fact_store._ensure_table() for _ in range(4)))
+    assert await schema() == before
+    # TTL 0 or None stores a permanent fact.
+    await memory.store_fact("zero", "z", ttl=0, user_id=owner)
+    await memory.store_fact("none", "n", ttl=None, user_id=owner)
+    async with db.get_conn() as conn:
+        permanent = await (
+            await conn.execute(
+                "SELECT count(*) FROM memory WHERE key = ANY(%s) AND expires_at IS NULL",
+                ([f"companion:{owner}:zero", f"companion:{owner}:none"],),
+            )
+        ).fetchone()
+    assert permanent == (2,)
+    # LIKE metacharacters in a user id match only that user's rows.
+    await memory.store_fact("rel:secret", "theirs", user_id="axb")
+    await memory.store_fact("rel:mine", "ours", user_id="a_b")
+    assert await memory.get_relationship_facts("a_b") == {"mine": "ours"}
+    assert await memory.get_relationship_facts("%") == {}
+    # Concurrent firsts: exactly one caller records the milestone.
+    results = await asyncio.gather(
+        *(memory.record_milestone("first_storm", user_id=owner) for _ in range(5))
+    )
+    assert sorted(results) == [False, False, False, False, True]

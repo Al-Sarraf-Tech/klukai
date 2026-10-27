@@ -27,6 +27,15 @@ class FakeFactStore:
         self.rows[key] = value
         self.ttls[key] = ttl_seconds
 
+    async def insert_if_absent(self, key, value):
+        if self.fail:
+            raise RuntimeError("postgres down")
+        if key in self.rows:
+            return False
+        self.stores.append((key, value, None))
+        self.rows[key] = value
+        return True
+
     async def recall(self, key):
         if self.fail:
             raise RuntimeError("postgres down")
@@ -37,9 +46,17 @@ class FakeFactStore:
     async def recall_pattern(self, pattern):
         if self.fail:
             raise RuntimeError("postgres down")
-        rx = re.compile(
-            "^" + re.escape(pattern).replace("%", ".*").replace("_", ".") + "$"
-        )
+        # SQL LIKE with the default escape character (backslash).
+        parts, i = [], 0
+        while i < len(pattern):
+            ch = pattern[i]
+            if ch == "\\" and i + 1 < len(pattern):
+                parts.append(re.escape(pattern[i + 1]))
+                i += 2
+                continue
+            parts.append(".*" if ch == "%" else "." if ch == "_" else re.escape(ch))
+            i += 1
+        rx = re.compile("^" + "".join(parts) + "$")
         return [
             {"key": k, "value": v, "ts": "2026-10-27 00:00:00+00"}
             for k, v in self.rows.items()
@@ -50,7 +67,7 @@ class FakeFactStore:
 @pytest.fixture
 def facts(monkeypatch):
     fake = FakeFactStore()
-    for name in ("store", "recall", "recall_pattern"):
+    for name in ("store", "insert_if_absent", "recall", "recall_pattern"):
         monkeypatch.setattr(fact_store, name, getattr(fake, name))
     return fake
 
@@ -184,16 +201,31 @@ class TestRelationshipFacts:
 
 class TestMilestones:
     @pytest.mark.asyncio
-    async def test_record_milestone_returns_true_on_new(self):
-        m = MemoryManager()
-        with patch.object(m, "recall_fact", new=AsyncMock(return_value=None)):
-            ok = await m.record_milestone("first_kiss", "alice")
-        assert ok is True
+    async def test_record_milestone_returns_true_on_new(self, facts):
+        assert await MemoryManager().record_milestone("first_kiss", "alice") is True
 
     @pytest.mark.asyncio
-    async def test_record_milestone_returns_false_on_duplicate(self):
+    async def test_record_milestone_returns_false_on_duplicate(self, facts):
+        facts.rows["companion:alice:milestone:first_kiss"] = "2026-01-01"
+        assert await MemoryManager().record_milestone("first_kiss", "alice") is False
+        assert facts.rows["companion:alice:milestone:first_kiss"] == "2026-01-01"
+
+    @pytest.mark.asyncio
+    async def test_record_milestone_fails_closed_on_database_error(self, facts):
+        facts.fail = True
+        assert await MemoryManager().record_milestone("first_kiss", "alice") is False
+
+
+class TestLikeScoping:
+    @pytest.mark.asyncio
+    async def test_user_id_wildcards_cannot_reach_other_users(self, facts):
+        facts.rows.update(
+            {
+                "companion:axb:rel:secret": "theirs",
+                "companion:a_b:rel:mine": "ours",
+                "companion:anyone:rel:x": "theirs too",
+            }
+        )
         m = MemoryManager()
-        # Already exists
-        with patch.object(m, "recall_fact", new=AsyncMock(return_value="2026-01-01")):
-            ok = await m.record_milestone("first_kiss", "alice")
-        assert ok is False
+        assert await m.get_relationship_facts("a_b") == {"mine": "ours"}
+        assert await m.get_relationship_facts("%") == {}

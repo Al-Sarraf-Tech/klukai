@@ -35,8 +35,11 @@ class MemoryFactsMixin:
     async def recall_facts_by_pattern(
         self, pattern: str, user_id: str = "jalsarraf"
     ) -> list[dict[str, Any]]:
+        # The caller's pattern may use LIKE wildcards; the user scope never
+        # does, so a user id containing % or _ cannot reach another user's rows.
+        scope = fact_store.escape_like(f"companion:{user_id}:")
         try:
-            return await fact_store.recall_pattern(f"companion:{user_id}:{pattern}")
+            return await fact_store.recall_pattern(scope + pattern)
         except Exception as e:
             logger.warning("recall_facts_by_pattern failed (%s): %s", pattern, e)
             return []
@@ -120,21 +123,25 @@ class MemoryFactsMixin:
     async def record_milestone(
         self, milestone: str, user_id: str = "jalsarraf"
     ) -> bool:
-        """Record a relationship milestone. Returns True if new."""
-        existing = await self.recall_fact(f"milestone:{milestone}", user_id=user_id)
-        if existing:
-            return False
+        """Record a relationship milestone once. True only if this call
+        recorded it; an existing first date is never overwritten, and a
+        database error reports False rather than a milestone that was not
+        stored."""
         from . import memory
 
-        await self.store_fact(
-            f"milestone:{milestone}",
-            # Aware UTC: the app renders milestones in his local time, and a
-            # naive container-clock stamp cannot be converted.
-            memory.datetime.now(timezone.utc).isoformat(),
-            user_id=user_id,
-        )
-        logger.info("New milestone recorded: %s for %s", milestone, user_id)
-        return True
+        # Aware UTC: the app renders milestones in his local time, and a
+        # naive container-clock stamp cannot be converted.
+        when = memory.datetime.now(timezone.utc).isoformat()
+        try:
+            new = await fact_store.insert_if_absent(
+                f"companion:{user_id}:milestone:{milestone}", when
+            )
+        except Exception as e:
+            logger.warning("record_milestone failed for %s: %s", milestone, e)
+            return False
+        if new:
+            logger.info("New milestone recorded: %s for %s", milestone, user_id)
+        return new
 
     async def get_milestones(self, user_id: str = "jalsarraf") -> dict[str, str]:
         """Get all recorded relationship milestones for a user."""

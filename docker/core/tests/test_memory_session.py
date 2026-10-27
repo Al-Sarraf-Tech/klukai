@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 def _mk_manager():
     """Construct a MemoryManager with Redis mocked."""
     from app.memory import MemoryManager
+
     m = MemoryManager()
     m._redis = AsyncMock()
     m._redis_available = True
@@ -50,6 +51,7 @@ class TestRedisOp:
             if call_count["n"] == 1:
                 raise _redis_mod.ConnectionError("broken")
             return "recovered"
+
         flaky.__name__ = "get"  # _redis_op calls getattr(self._redis, op.__name__)
 
         with patch("app.memory.redis.from_url") as fake_from_url:
@@ -77,6 +79,7 @@ class TestGetSession:
     @pytest.mark.asyncio
     async def test_parses_stored_state(self):
         from app.models import SessionState
+
         m = _mk_manager()
 
         state = SessionState(conversation_id="conv-1")
@@ -93,6 +96,7 @@ class TestGetSession:
         m = _mk_manager()
         m._redis.get = AsyncMock(return_value="not-json-at-all")
         from app.memory import SessionUnavailable
+
         with pytest.raises(SessionUnavailable, match="invalid"):
             await m.get_session("conv-1")
 
@@ -126,8 +130,7 @@ class TestSaveSession:
 
         state = SessionState(conversation_id="conv-1")
         state.turns = [
-            {"role": "user", "content": f"t{i}"}
-            for i in range(MAX_SESSION_TURNS + 10)
+            {"role": "user", "content": f"t{i}"} for i in range(MAX_SESSION_TURNS + 10)
         ]
 
         await m.save_session("conv-1", state)
@@ -179,19 +182,10 @@ class TestAddTurn:
 
 class TestMilestones:
     @pytest.mark.asyncio
-    async def test_record_milestone_calls_store_fact(self):
+    async def test_record_milestone_inserts_under_the_users_key(self):
         m = _mk_manager()
-        m.recall_fact = AsyncMock(return_value=None)
-
-        captured = {}
-
-        async def fake_store_fact(key, value, ttl=None, user_id="jalsarraf"):
-            captured["key"] = key
-            captured["user_id"] = user_id
-
-        with patch.object(m, "store_fact", side_effect=fake_store_fact):
+        insert = AsyncMock(return_value=True)
+        with patch("app.memory_facts.fact_store.insert_if_absent", insert):
             result = await m.record_milestone("first_message", user_id="alice")
-
         assert result is True
-        assert "milestone" in captured["key"]
-        assert captured["user_id"] == "alice"
+        assert insert.await_args.args[0] == "companion:alice:milestone:first_message"

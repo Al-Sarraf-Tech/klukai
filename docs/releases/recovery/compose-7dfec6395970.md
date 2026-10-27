@@ -6,12 +6,24 @@ This compose change adds Klukai's own Redis, `companion-redis` (valkey pinned
 by digest, password from `KLUKAI_REDIS_PASSWORD` in the encrypted compose env,
 append-only file on the `companion-redis` volume, no published port) and
 points core and the events bridge at it instead of the aichat stack's Redis.
+Redis is capped at 200 MB with `volatile-lru` (every key core writes has a
+TTL) and refuses FLUSHALL, FLUSHDB, CONFIG and DEBUG.
 Factual memory moves from the aichat data service into core, which now reads
 and writes the same `memory` table rows itself: no row is moved, rewritten or
-deleted, and no migration is added. Redis holds only rebuildable state (rate
-limits, caches, session scratch, the `companion:events` channel); the few
-keys in aichat-redis db 1 are copied with their TTLs before cutover, and the
-source keys are left in place.
+deleted, and no migration is added. Core never deletes a fact row: expired
+rows are hidden on read, exactly as before. The data service also deleted
+expired rows hourly; that stops. Every TTL'd fact key is a fixed per-user
+name that is overwritten in place (`decision:pending`, `decision:last:<kind>`,
+`outfit:tomorrow`, `late_nights`), so lapsed rows cannot accumulate.
+
+Redis holds only rebuildable state (rate limits, caches, session scratch, the
+`companion:events` channel). Before core switches, `companion-redis` is
+started and the keys of aichat-redis db 1 are copied with their TTLs, never
+replacing a key that already exists; the source keys are left in place. The
+copy is repeated immediately before the core rollout. Keys written to
+aichat-redis between that copy and core's switch (a few minutes at most:
+rate-limit counters, a session refresh, a voice-cache entry) are not carried
+over; their loss resets a rate window or costs one cache miss.
 
 Before release keep: `SELECT count(*) FROM memory` and the `companion:%`
 subset, the deployer's restore-verified dump under

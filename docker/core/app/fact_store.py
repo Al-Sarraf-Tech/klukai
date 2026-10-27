@@ -33,15 +33,19 @@ _SCHEMA = (
     "CREATE INDEX IF NOT EXISTS idx_memory_expires ON memory (expires_at) "
     "WHERE expires_at IS NOT NULL",
 )
+# Serializes the first-use check across processes (two cores starting at once).
+_SCHEMA_LOCK_ID = 7231904518846102717
 _ready = False
 
 
 async def _ensure_table() -> None:
-    """Idempotent; checked once per process, every statement IF NOT EXISTS."""
+    """Idempotent; checked once per process under a transaction-scoped
+    advisory lock, every statement IF NOT EXISTS."""
     global _ready
     if _ready:
         return
     async with get_conn_autocommit() as conn:
+        await conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_ID,))
         found = await (
             await conn.execute("SELECT to_regclass('public.memory') IS NOT NULL")
         ).fetchone()
@@ -49,6 +53,11 @@ async def _ensure_table() -> None:
             for statement in _SCHEMA:
                 await conn.execute(statement)
     _ready = True
+
+
+def escape_like(text: str) -> str:
+    """``text`` as a literal inside a LIKE pattern (default escape ``\\``)."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _entry(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -79,6 +88,22 @@ async def store(key: str, value: str, ttl_seconds: int | None = None) -> None:
                 "expires_at=NULL",
                 (key, value),
             )
+
+
+async def insert_if_absent(key: str, value: str) -> bool:
+    """Store a permanent fact only if no row holds ``key``; True if stored.
+    Atomic, so two concurrent callers never both record the same first."""
+    key = key.strip()
+    if not key:
+        raise ValueError("key must not be empty")
+    await _ensure_table()
+    async with get_conn_autocommit() as conn:
+        cur = await conn.execute(
+            "INSERT INTO memory(key, value, ts) VALUES(%s, %s, NOW()) "
+            "ON CONFLICT(key) DO NOTHING RETURNING key",
+            (key, value),
+        )
+        return await cur.fetchone() is not None
 
 
 async def recall(key: str) -> dict[str, Any] | None:
