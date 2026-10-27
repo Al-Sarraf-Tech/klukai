@@ -229,3 +229,14 @@ class TestLikeScoping:
         m = MemoryManager()
         assert await m.get_relationship_facts("a_b") == {"mine": "ours"}
         assert await m.get_relationship_facts("%") == {}
+
+
+class TestPurgeGuards:
+    def test_purge_never_targets_rows_without_an_expiry(self):
+        """Every predicate that selects rows to delete requires an expiry."""
+        import inspect
+
+        code = inspect.getsource(fact_store.purge_expired).split('"""')[2]
+        assert code.count("expires_at IS NOT NULL") == 2
+        assert "expires_at IS NULL" not in code
+        assert fact_store.PURGE_MARGIN_SECONDS >= 3600

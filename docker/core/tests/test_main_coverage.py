@@ -37,8 +37,12 @@ from app.ws_manager import WSManager
 # ── Request stub for BaseHTTPMiddleware.dispatch ─────────────────────────────
 
 
-def _request(path: str = "/health", headers: dict | None = None,
-             client_host: str = "1.2.3.4", routes: list | None = None):
+def _request(
+    path: str = "/health",
+    headers: dict | None = None,
+    client_host: str = "1.2.3.4",
+    routes: list | None = None,
+):
     """Minimal stand-in for starlette Request used by the middlewares.
 
     `routes` populates request.app.routes for the metrics middleware's
@@ -69,6 +73,7 @@ def _response_factory(status_code: int = 200):
 class TestAppConstruction:
     def test_app_is_fastapi_with_title_and_lifespan(self):
         from fastapi import FastAPI
+
         assert isinstance(main.app, FastAPI)
         assert main.app.title == "Companion Core"
         # lifespan wired in (router has a lifespan context).
@@ -77,9 +82,13 @@ class TestAppConstruction:
     def test_security_and_tracing_middlewares_registered(self):
         names = {m.cls.__name__ for m in main.app.user_middleware}
         # Every custom middleware class is mounted on the app.
-        for cls in ("_SecurityHeadersMiddleware", "_RequestIdMiddleware",
-                    "_RateLimitMiddleware", "_MetricsMiddleware",
-                    "CORSMiddleware"):
+        for cls in (
+            "_SecurityHeadersMiddleware",
+            "_RequestIdMiddleware",
+            "_RateLimitMiddleware",
+            "_MetricsMiddleware",
+            "CORSMiddleware",
+        ):
             assert cls in names, f"{cls} not mounted"
 
     def test_getattr_lazy_reexports_enhance_image_prompt(self):
@@ -165,11 +174,10 @@ class TestRateLimitMiddleware:
         mw = main._RateLimitMiddleware(app=MagicMock())
         resp = _response_factory()
         call_next = AsyncMock(return_value=resp)
-        with patch("app.rate_limit.consume",
-                   new=AsyncMock(return_value=(7, 0, None))) as cac:
-            out = await mw.dispatch(
-                _request(path="/api/auth/login"), call_next
-            )
+        with patch(
+            "app.rate_limit.consume", new=AsyncMock(return_value=(7, 0, None))
+        ) as cac:
+            out = await mw.dispatch(_request(path="/api/auth/login"), call_next)
         cac.assert_awaited_once()
         # Pre-auth login resolves identity to the client IP.
         assert cac.await_args.args == ("1.2.3.4", "login")
@@ -180,13 +188,21 @@ class TestRateLimitMiddleware:
         """If token resolution raises, identity falls back to the client IP."""
         mw = main._RateLimitMiddleware(app=MagicMock())
         resp = _response_factory()
-        with patch("app.auth.get_user_from_token",
-                   new=AsyncMock(side_effect=RuntimeError("bad token"))), \
-             patch("app.rate_limit.consume",
-                   new=AsyncMock(return_value=(1, 0, None))) as cac:
+        with (
+            patch(
+                "app.auth.get_user_from_token",
+                new=AsyncMock(side_effect=RuntimeError("bad token")),
+            ),
+            patch(
+                "app.rate_limit.consume", new=AsyncMock(return_value=(1, 0, None))
+            ) as cac,
+        ):
             await mw.dispatch(
-                _request(path="/api/user/export", client_host="9.9.9.9",
-                         headers={"Authorization": "Bearer broken"}),
+                _request(
+                    path="/api/user/export",
+                    client_host="9.9.9.9",
+                    headers={"Authorization": "Bearer broken"},
+                ),
                 AsyncMock(return_value=resp),
             )
         assert cac.await_args.args == ("9.9.9.9", "export")
@@ -194,13 +210,17 @@ class TestRateLimitMiddleware:
     async def test_bearer_token_resolves_user_identity(self):
         mw = main._RateLimitMiddleware(app=MagicMock())
         resp = _response_factory()
-        with patch("app.auth.get_user_from_token",
-                   new=AsyncMock(return_value="alice")), \
-             patch("app.rate_limit.consume",
-                   new=AsyncMock(return_value=(3, 0, None))) as cac:
+        with (
+            patch("app.auth.get_user_from_token", new=AsyncMock(return_value="alice")),
+            patch(
+                "app.rate_limit.consume", new=AsyncMock(return_value=(3, 0, None))
+            ) as cac,
+        ):
             await mw.dispatch(
-                _request(path="/api/user/export",
-                         headers={"Authorization": "Bearer good-token"}),
+                _request(
+                    path="/api/user/export",
+                    headers={"Authorization": "Bearer good-token"},
+                ),
                 AsyncMock(return_value=resp),
             )
         # Identity is the resolved user, not the IP.
@@ -208,14 +228,12 @@ class TestRateLimitMiddleware:
 
     async def test_overflow_returns_429_without_calling_handler(self):
         from app.rate_limit import RateLimitExceeded
+
         mw = main._RateLimitMiddleware(app=MagicMock())
         call_next = AsyncMock()
         exc = RateLimitExceeded("search", 30)
-        with patch("app.rate_limit.consume",
-                   new=AsyncMock(side_effect=exc)):
-            out = await mw.dispatch(
-                _request(path="/api/memories/search"), call_next
-            )
+        with patch("app.rate_limit.consume", new=AsyncMock(side_effect=exc)):
+            out = await mw.dispatch(_request(path="/api/memories/search"), call_next)
         # Downstream handler is never reached; a 429 with Retry-After is returned.
         call_next.assert_not_awaited()
         assert out.status_code == 429
@@ -230,15 +248,18 @@ class TestRateLimitMiddleware:
         receipt = Consumption("k", 1)
         mw = main._RateLimitMiddleware(app=MagicMock())
         resp = _response_factory(status_code=409)
-        with patch("app.auth.get_user_from_token",
-                   new=AsyncMock(return_value="alice")), \
-             patch("app.rate_limit.consume",
-                   new=AsyncMock(return_value=(0, 600, receipt))), \
-             patch("app.rate_limit.refund",
-                   new=AsyncMock(return_value=True)) as refund:
+        with (
+            patch("app.auth.get_user_from_token", new=AsyncMock(return_value="alice")),
+            patch(
+                "app.rate_limit.consume", new=AsyncMock(return_value=(0, 600, receipt))
+            ),
+            patch("app.rate_limit.refund", new=AsyncMock(return_value=True)) as refund,
+        ):
             out = await mw.dispatch(
-                _request(path="/api/portrait/refresh",
-                         headers={"Authorization": "Bearer good-token"}),
+                _request(
+                    path="/api/portrait/refresh",
+                    headers={"Authorization": "Bearer good-token"},
+                ),
                 AsyncMock(return_value=resp),
             )
         refund.assert_awaited_once_with(receipt)
@@ -251,11 +272,13 @@ class TestRateLimitMiddleware:
     async def test_other_statuses_keep_the_token(self, status):
         mw = main._RateLimitMiddleware(app=MagicMock())
         resp = _response_factory(status_code=status)
-        with patch("app.rate_limit.consume",
-                   new=AsyncMock(return_value=(4, 0, None))), \
-             patch("app.rate_limit.refund", new=AsyncMock()) as refund:
-            out = await mw.dispatch(_request(path="/api/portrait/refresh"),
-                                    AsyncMock(return_value=resp))
+        with (
+            patch("app.rate_limit.consume", new=AsyncMock(return_value=(4, 0, None))),
+            patch("app.rate_limit.refund", new=AsyncMock()) as refund,
+        ):
+            out = await mw.dispatch(
+                _request(path="/api/portrait/refresh"), AsyncMock(return_value=resp)
+            )
         refund.assert_not_awaited()
         assert out.headers["X-RateLimit-Remaining"] == "4"
 
@@ -264,12 +287,13 @@ class TestRateLimitMiddleware:
         the remaining count is not inflated."""
         mw = main._RateLimitMiddleware(app=MagicMock())
         resp = _response_factory(status_code=409)
-        with patch("app.rate_limit.consume",
-                   new=AsyncMock(return_value=(999, 0, None))), \
-             patch("app.rate_limit.refund",
-                   new=AsyncMock(return_value=False)) as refund:
-            out = await mw.dispatch(_request(path="/api/portrait/refresh"),
-                                    AsyncMock(return_value=resp))
+        with (
+            patch("app.rate_limit.consume", new=AsyncMock(return_value=(999, 0, None))),
+            patch("app.rate_limit.refund", new=AsyncMock(return_value=False)) as refund,
+        ):
+            out = await mw.dispatch(
+                _request(path="/api/portrait/refresh"), AsyncMock(return_value=resp)
+            )
         refund.assert_awaited_once_with(None)
         assert out.headers["X-RateLimit-Remaining"] == "999"
 
@@ -281,10 +305,13 @@ class TestMetricsMiddleware:
     async def test_records_counter_and_latency_on_success(self):
         mw = main._MetricsMiddleware(app=MagicMock())
         resp = _response_factory(status_code=200)
-        with patch("app.metrics.incr") as incr, \
-             patch("app.metrics.observe_latency") as obs:
-            out = await mw.dispatch(_request(path="/api/x"),
-                                    AsyncMock(return_value=resp))
+        with (
+            patch("app.metrics.incr") as incr,
+            patch("app.metrics.observe_latency") as obs,
+        ):
+            out = await mw.dispatch(
+                _request(path="/api/x"), AsyncMock(return_value=resp)
+            )
         assert out is resp
         assert incr.call_count == 2  # canonical RED plus legacy JSON counter
         assert incr.call_args.kwargs["status"] == "200"
@@ -294,11 +321,12 @@ class TestMetricsMiddleware:
     async def test_records_500_and_reraises_on_handler_exception(self):
         mw = main._MetricsMiddleware(app=MagicMock())
         boom = RuntimeError("handler exploded")
-        with patch("app.metrics.incr") as incr, \
-             patch("app.metrics.observe_latency") as obs:
+        with (
+            patch("app.metrics.incr") as incr,
+            patch("app.metrics.observe_latency") as obs,
+        ):
             with pytest.raises(RuntimeError):
-                await mw.dispatch(_request(path="/api/y"),
-                                  AsyncMock(side_effect=boom))
+                await mw.dispatch(_request(path="/api/y"), AsyncMock(side_effect=boom))
         # Even on failure, a 500 metric + latency are recorded before re-raise.
         assert incr.call_args.kwargs["status"] == "500"
         assert obs.call_count == 2  # canonical RED plus legacy JSON histogram
@@ -307,8 +335,10 @@ class TestMetricsMiddleware:
         """Scan/404 paths must not mint unbounded metric label values."""
         mw = main._MetricsMiddleware(app=MagicMock())
         resp = _response_factory(status_code=404)
-        with patch("app.metrics.incr") as incr, \
-             patch("app.metrics.observe_latency") as obs:
+        with (
+            patch("app.metrics.incr") as incr,
+            patch("app.metrics.observe_latency") as obs,
+        ):
             await mw.dispatch(
                 _request(path="/wp-admin/setup.php", routes=[]),
                 AsyncMock(return_value=resp),
@@ -319,14 +349,14 @@ class TestMetricsMiddleware:
     async def test_templated_route_label_uses_route_path(self):
         """Parameterised routes label by template, not per-id raw path."""
         import re
+
         route = SimpleNamespace(
             path="/api/memories/{memory_id}/image",
             path_regex=re.compile(r"^/api/memories/[^/]+/image$"),
         )
         mw = main._MetricsMiddleware(app=MagicMock())
         resp = _response_factory(status_code=200)
-        with patch("app.metrics.incr") as incr, \
-             patch("app.metrics.observe_latency"):
+        with patch("app.metrics.incr") as incr, patch("app.metrics.observe_latency"):
             await mw.dispatch(
                 _request(path="/api/memories/abc123/image", routes=[route]),
                 AsyncMock(return_value=resp),
@@ -344,6 +374,7 @@ class TestGlobalExceptionHandler:
         )
         assert out.status_code == 500
         import json
+
         assert json.loads(bytes(out.body))["error"] == "Internal server error"
 
 
@@ -362,9 +393,11 @@ class TestRunMigration:
         pool.connection.return_value.__aexit__ = AsyncMock(return_value=False)
         fake_path = MagicMock()
         fake_path.parent.parent.__truediv__ = MagicMock(return_value=tmp_path)
-        with patch.object(main, "Path", return_value=fake_path), \
-             patch.object(main, "get_pool", return_value=pool), \
-             pytest.raises(RuntimeError, match="database failure"):
+        with (
+            patch.object(main, "Path", return_value=fake_path),
+            patch.object(main, "get_pool", return_value=pool),
+            pytest.raises(RuntimeError, match="database failure"),
+        ):
             await main.run_migration()
 
 
@@ -395,8 +428,10 @@ def _haiku(reply):
 class TestGenerateDailyRecap:
     async def test_returns_none_when_too_few_messages(self):
         pool = _recap_pool([("user", "hi"), ("assistant", "hello")])  # < 4 rows
-        with patch.object(main, "get_pool", return_value=pool), \
-             _haiku("unused") as haiku:
+        with (
+            patch.object(main, "get_pool", return_value=pool),
+            _haiku("unused") as haiku,
+        ):
             out = await main.generate_daily_recap(affection_level=5)
         assert out is None
         haiku.assert_not_awaited()
@@ -406,12 +441,16 @@ class TestGenerateDailyRecap:
 
         rows = [("user", f"msg {i}") for i in range(8)]
         pool = _recap_pool(rows)
-        with patch.object(main, "get_pool", return_value=pool), \
-             _haiku("Today we talked.") as haiku:
+        with (
+            patch.object(main, "get_pool", return_value=pool),
+            _haiku("Today we talked.") as haiku,
+        ):
             out = await main.generate_daily_recap(affection_level=5)
         assert out == "Today we talked."
         prompt = haiku.await_args.args[0]
-        assert prompt.startswith("You are Klukai writing a brief evening operational log")
+        assert prompt.startswith(
+            "You are Klukai writing a brief evening operational log"
+        )
         assert "Commander: msg 7" in prompt
         assert haiku.await_args.kwargs == {
             "max_tokens": haiku_budget(2048),
@@ -461,9 +500,11 @@ class TestGenerateDailyRecap:
         # 21:00 Chicago on the 11th is already 02:00Z on the 12th.
         local_evening = datetime(2026, 10, 11, 21, 0)
 
-        with patch.object(main, "get_pool", return_value=pool), \
-             patch("app.proactive.state.now_local", return_value=local_evening), \
-             _haiku("Today we talked."):
+        with (
+            patch.object(main, "get_pool", return_value=pool),
+            patch("app.proactive.state.now_local", return_value=local_evening),
+            _haiku("Today we talked."),
+        ):
             out = await main.generate_daily_recap(affection_level=5)
 
         assert out == "Today we talked."
@@ -490,8 +531,10 @@ class TestProactiveCallback:
         ws = MagicMock()
         ws.is_connected = MagicMock(return_value=True)
         ws.send_proactive = AsyncMock()
-        with patch.object(main, "ws", ws), \
-             patch.object(main, "send_push", new=AsyncMock(return_value=0)) as push:
+        with (
+            patch.object(main, "ws", ws),
+            patch.object(main, "send_push", new=AsyncMock(return_value=0)) as push,
+        ):
             delivered = await main.proactive_callback("Mission update.")
         assert delivered is True
         ws.send_proactive.assert_awaited_once_with(PRIMARY_USER, "Mission update.")
@@ -503,8 +546,10 @@ class TestProactiveCallback:
         ws = MagicMock()
         ws.is_connected = MagicMock(return_value=False)
         ws.send_proactive = AsyncMock()
-        with patch.object(main, "ws", ws), \
-             patch.object(main, "send_push", new=AsyncMock(return_value=1)) as push:
+        with (
+            patch.object(main, "ws", ws),
+            patch.object(main, "send_push", new=AsyncMock(return_value=1)) as push,
+        ):
             delivered = await main.proactive_callback("Ping.")
         assert delivered is True
         # History gets the line even though no device was listening.
@@ -518,8 +563,10 @@ class TestProactiveCallback:
         ws = MagicMock()
         ws.is_connected = MagicMock(return_value=False)
         ws.send_proactive = AsyncMock()
-        with patch.object(main, "ws", ws), \
-             patch.object(main, "send_push", new=AsyncMock(return_value=0)):
+        with (
+            patch.object(main, "ws", ws),
+            patch.object(main, "send_push", new=AsyncMock(return_value=0)),
+        ):
             delivered = await main.proactive_callback("Ping.")
         assert delivered is False
         ws.send_proactive.assert_awaited_once()  # still in history
@@ -574,8 +621,7 @@ def lifespan_mocks(monkeypatch):
 
     # auth.init_users + cleanup are imported lazily inside lifespan.
     monkeypatch.setattr("app.auth.init_users", AsyncMock(), raising=False)
-    monkeypatch.setattr("app.auth.cleanup_expired_sessions", AsyncMock(),
-                        raising=False)
+    monkeypatch.setattr("app.auth.cleanup_expired_sessions", AsyncMock(), raising=False)
 
     # Run real owned tasks so shutdown cancellation/join is exercised.
     created = []
@@ -588,14 +634,21 @@ def lifespan_mocks(monkeypatch):
     monkeypatch.setattr(main.asyncio, "create_task", fake_create_task)
 
     return SimpleNamespace(
-        init_pool=init_pool, close_pool=close_pool, memory=memory,
-        router=router, mcp=mcp, affection=affection, proactive=proactive,
+        init_pool=init_pool,
+        close_pool=close_pool,
+        memory=memory,
+        router=router,
+        mcp=mcp,
+        affection=affection,
+        proactive=proactive,
         created=created,
     )
 
 
 class TestLifespan:
-    async def test_startup_opens_pool_and_inits_services(self, lifespan_mocks, monkeypatch):
+    async def test_startup_opens_pool_and_inits_services(
+        self, lifespan_mocks, monkeypatch
+    ):
         monkeypatch.delenv("KLUKAI_LLM_KEEPALIVE", raising=False)
         async with main.lifespan(main.app):
             # Inside the context: startup ran.
@@ -607,7 +660,9 @@ class TestLifespan:
             # Pool not yet closed while the app is "running".
             lifespan_mocks.close_pool.assert_not_awaited()
 
-    async def test_shutdown_closes_pool_and_stops_proactive(self, lifespan_mocks, monkeypatch):
+    async def test_shutdown_closes_pool_and_stops_proactive(
+        self, lifespan_mocks, monkeypatch
+    ):
         monkeypatch.delenv("KLUKAI_LLM_KEEPALIVE", raising=False)
         async with main.lifespan(main.app):
             pass
@@ -645,7 +700,9 @@ class TestLifespan:
         async with main.lifespan(main.app):
             pass
         lifespan_mocks.router.keepalive.assert_not_awaited()
-        assert [task.get_name() for task in lifespan_mocks.created].count("session-cleanup") == 1
+        assert [task.get_name() for task in lifespan_mocks.created].count(
+            "session-cleanup"
+        ) == 1
         assert all(task.done() for task in lifespan_mocks.created)
 
     async def test_keepalive_task_is_never_created(self, lifespan_mocks, monkeypatch):
@@ -653,15 +710,19 @@ class TestLifespan:
         async with main.lifespan(main.app):
             pass
         lifespan_mocks.router.keepalive.assert_not_awaited()
-        assert [task.get_name() for task in lifespan_mocks.created].count("session-cleanup") == 1
+        assert [task.get_name() for task in lifespan_mocks.created].count(
+            "session-cleanup"
+        ) == 1
         assert all(task.done() for task in lifespan_mocks.created)
 
-    async def test_session_getter_falls_back_to_primary_user(self, lifespan_mocks, monkeypatch):
+    async def test_session_getter_falls_back_to_primary_user(
+        self, lifespan_mocks, monkeypatch
+    ):
         """The lifespan-local session getter tries connected users, then primary."""
         monkeypatch.delenv("KLUKAI_LLM_KEEPALIVE", raising=False)
         captured = {}
-        lifespan_mocks.proactive.set_session_getter.side_effect = (
-            lambda fn: captured.setdefault("getter", fn)
+        lifespan_mocks.proactive.set_session_getter.side_effect = lambda fn: (
+            captured.setdefault("getter", fn)
         )
         ws = WSManager()
         monkeypatch.setattr(main, "ws", ws)
@@ -673,14 +734,18 @@ class TestLifespan:
             result = await getter()  # no connected users -> primary fallback
         assert result is primary
         # The fallback queried the primary user's session key.
-        assert lifespan_mocks.memory.get_session.await_args.args[0] == "session:jalsarraf"
+        assert (
+            lifespan_mocks.memory.get_session.await_args.args[0] == "session:jalsarraf"
+        )
 
-    async def test_session_getter_returns_specific_user_when_found(self, lifespan_mocks, monkeypatch):
+    async def test_session_getter_returns_specific_user_when_found(
+        self, lifespan_mocks, monkeypatch
+    ):
         """When a user_id is given and has a session, return it immediately."""
         monkeypatch.delenv("KLUKAI_LLM_KEEPALIVE", raising=False)
         captured = {}
-        lifespan_mocks.proactive.set_session_getter.side_effect = (
-            lambda fn: captured.setdefault("getter", fn)
+        lifespan_mocks.proactive.set_session_getter.side_effect = lambda fn: (
+            captured.setdefault("getter", fn)
         )
         ws = WSManager()
         monkeypatch.setattr(main, "ws", ws)
@@ -692,12 +757,14 @@ class TestLifespan:
         assert result is wanted
         assert lifespan_mocks.memory.get_session.await_args.args[0] == "session:bob"
 
-    async def test_session_getter_defaults_to_primary_despite_other_connections(self, lifespan_mocks, monkeypatch):
+    async def test_session_getter_defaults_to_primary_despite_other_connections(
+        self, lifespan_mocks, monkeypatch
+    ):
         """Connected users never supply private context to the primary schedule."""
         monkeypatch.delenv("KLUKAI_LLM_KEEPALIVE", raising=False)
         captured = {}
-        lifespan_mocks.proactive.set_session_getter.side_effect = (
-            lambda fn: captured.setdefault("getter", fn)
+        lifespan_mocks.proactive.set_session_getter.side_effect = lambda fn: (
+            captured.setdefault("getter", fn)
         )
         ws = WSManager()
         socket = MagicMock(close=AsyncMock())
@@ -709,11 +776,17 @@ class TestLifespan:
         async with main.lifespan(main.app):
             result = await captured["getter"]()  # no user_id -> primary owner
         assert result is primary_session
-        assert lifespan_mocks.memory.get_session.await_args.args[0] == "session:jalsarraf"
+        assert (
+            lifespan_mocks.memory.get_session.await_args.args[0] == "session:jalsarraf"
+        )
 
-    async def test_keepalive_override_cannot_trigger_warmup(self, lifespan_mocks, monkeypatch):
+    async def test_keepalive_override_cannot_trigger_warmup(
+        self, lifespan_mocks, monkeypatch
+    ):
         monkeypatch.setenv("KLUKAI_LLM_KEEPALIVE", "1")
-        lifespan_mocks.router.keepalive = AsyncMock(side_effect=RuntimeError("warmup boom"))
+        lifespan_mocks.router.keepalive = AsyncMock(
+            side_effect=RuntimeError("warmup boom")
+        )
         async with main.lifespan(main.app):
             pass
         lifespan_mocks.router.keepalive.assert_not_awaited()
@@ -724,47 +797,75 @@ class TestLifespan:
         cleanup = AsyncMock(side_effect=RuntimeError("db blip") if fail else None)
         monkeypatch.setattr("app.auth.cleanup_expired_sessions", cleanup)
         calls = 0
+
         async def sleep_then_cancel(_secs):
             nonlocal calls
             calls += 1
             if calls >= 2:
                 raise asyncio.CancelledError
+
+        purge = AsyncMock(return_value=3)
+        monkeypatch.setattr("app.fact_store.purge_expired", purge)
         with patch("app.main.asyncio.sleep", new=sleep_then_cancel):
             with pytest.raises(asyncio.CancelledError):
                 await main._session_cleanup_loop()
         cleanup.assert_awaited_once()
+        # The expired-fact purge runs every cycle, even after a session error.
+        purge.assert_awaited_once()
+
+    async def test_fact_purge_failure_does_not_stop_the_loop(self, monkeypatch):
+        monkeypatch.setattr("app.auth.cleanup_expired_sessions", AsyncMock())
+        purge = AsyncMock(side_effect=RuntimeError("postgres down"))
+        monkeypatch.setattr("app.fact_store.purge_expired", purge)
+        calls = 0
+
+        async def sleep_then_cancel(_secs):
+            nonlocal calls
+            calls += 1
+            if calls >= 3:
+                raise asyncio.CancelledError
+
+        with patch("app.main.asyncio.sleep", new=sleep_then_cancel):
+            with pytest.raises(asyncio.CancelledError):
+                await main._session_cleanup_loop()
+        assert purge.await_count == 2
 
 
-@pytest.mark.parametrize('cancelled', [False, True])
-async def test_lifespan_owns_handoff_before_closing_dependencies(lifespan_mocks, monkeypatch, cancelled):
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_lifespan_owns_handoff_before_closing_dependencies(
+    lifespan_mocks, monkeypatch, cancelled
+):
     from contextlib import asynccontextmanager
     from app import job_handoff
+
     order = []
 
     @asynccontextmanager
     async def running():
-        order.append('start')
+        order.append("start")
         try:
             yield
         finally:
-            order.append('stop')
+            order.append("stop")
 
     async def close_events():
-        order.append('events_closed')
+        order.append("events_closed")
 
-    monkeypatch.setattr(job_handoff, 'running', running)
-    monkeypatch.setattr(main, 'events_close', close_events)
+    monkeypatch.setattr(job_handoff, "running", running)
+    monkeypatch.setattr(main, "events_close", close_events)
+
     async def serve():
         async with main.lifespan(main.app):
-            assert order == ['start']
+            assert order == ["start"]
             if cancelled:
                 raise asyncio.CancelledError
+
     if cancelled:
         with pytest.raises(asyncio.CancelledError):
             await serve()
     else:
         await serve()
-    assert order == ['start', 'stop', 'events_closed']
+    assert order == ["start", "stop", "events_closed"]
     lifespan_mocks.close_pool.assert_awaited_once()
 
 
@@ -800,8 +901,10 @@ class TestDailyRecapWindow:
         the day, not messages 21-40 of the morning."""
         rows = [("user", f"msg {i:02d}") for i in range(60)]
         text = AsyncMock(return_value="Today.")
-        with patch.object(main, "get_pool", return_value=_ordered_pool(rows)), \
-             patch("app.background_llm.text", new=text):
+        with (
+            patch.object(main, "get_pool", return_value=_ordered_pool(rows)),
+            patch("app.background_llm.text", new=text),
+        ):
             assert await main.generate_daily_recap(affection_level=5) == "Today."
         prompt = text.await_args.args[1]
         assert "msg 59" in prompt and "msg 40" in prompt

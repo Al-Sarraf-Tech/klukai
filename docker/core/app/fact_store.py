@@ -4,8 +4,11 @@ The rows live in the ``memory`` key/value table of the database core already
 uses (``DATABASE_URL``). Until 2026-10 core reached them through the aichat
 stack's data service (``aichat-data`` ``/memory/store`` and ``/memory/recall``);
 these queries are the same ones that service ran, so the existing rows are
-read and written in place and nothing is migrated. Nothing here deletes a row:
-an expired entry is only hidden, exactly as the data service hid it.
+read and written in place and nothing is migrated. An expired entry is hidden
+on read, exactly as the data service hid it. The only delete is
+``purge_expired``, which removes what the data service's hourly purge removed:
+rows whose TTL has run out (never a row without an expiry), here only once
+they have been expired for more than an hour.
 """
 
 from __future__ import annotations
@@ -104,6 +107,43 @@ async def insert_if_absent(key: str, value: str) -> bool:
             (key, value),
         )
         return await cur.fetchone() is not None
+
+
+# Expired TTL rows go only after this grace period, a batch at a time.
+PURGE_MARGIN_SECONDS = 3600
+PURGE_BATCH = 500
+PURGE_MAX_BATCHES = 20
+
+
+async def purge_expired(
+    margin_seconds: int = PURGE_MARGIN_SECONDS,
+    batch: int = PURGE_BATCH,
+    max_batches: int = PURGE_MAX_BATCHES,
+) -> int:
+    """Delete fact rows whose TTL expired more than ``margin_seconds`` ago.
+
+    Rows with no expiry (``expires_at IS NULL``: every permanent fact) are
+    never touched; the condition is in the inner select and the delete
+    re-checks it. Returns the number of rows removed."""
+    margin = max(0, int(margin_seconds))
+    await _ensure_table()
+    removed = 0
+    for _ in range(max_batches):
+        async with get_conn_autocommit() as conn:
+            cur = await conn.execute(
+                "DELETE FROM memory WHERE key IN ("
+                "SELECT key FROM memory WHERE expires_at IS NOT NULL "
+                "AND expires_at < NOW() - make_interval(secs => %s) "
+                "ORDER BY expires_at LIMIT %s) "
+                "AND expires_at IS NOT NULL "
+                "AND expires_at < NOW() - make_interval(secs => %s)",
+                (margin, batch, margin),
+            )
+            count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        removed += count
+        if count < batch:
+            break
+    return removed
 
 
 async def recall(key: str) -> dict[str, Any] | None:
