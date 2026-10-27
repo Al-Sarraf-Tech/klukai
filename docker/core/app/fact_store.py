@@ -18,8 +18,6 @@ from .db import get_conn, get_conn_autocommit
 # first. Callers (dossier, inside jokes, milestones) rely on the same bound.
 PATTERN_LIMIT = 50
 
-_LIVE = "(expires_at IS NULL OR expires_at > NOW())"
-
 
 # The table predates Klukai's migration ledger (aichat-data created it) and
 # already exists in production. A fresh database gets the identical schema on
@@ -88,7 +86,8 @@ async def recall(key: str) -> dict[str, Any] | None:
     await _ensure_table()
     async with get_conn() as conn:
         cur = await conn.execute(
-            f"SELECT key, value, ts FROM memory WHERE key=%s AND {_LIVE}",
+            "SELECT key, value, ts FROM memory "
+            "WHERE key=%s AND (expires_at IS NULL OR expires_at > NOW())",
             (key.strip(),),
         )
         row = await cur.fetchone()
@@ -100,7 +99,8 @@ async def recall_pattern(pattern: str) -> list[dict[str, Any]]:
     await _ensure_table()
     async with get_conn() as conn:
         cur = await conn.execute(
-            f"SELECT key, value, ts FROM memory WHERE key LIKE %s AND {_LIVE} "
+            "SELECT key, value, ts FROM memory "
+            "WHERE key LIKE %s AND (expires_at IS NULL OR expires_at > NOW()) "
             "ORDER BY ts DESC LIMIT %s",
             (pattern.strip(), PATTERN_LIMIT),
         )
