@@ -200,18 +200,18 @@ class GitHub:
         return json.loads(raw) if raw else None
 
     def queued_jobs(self) -> list[dict[str, Any]]:
-        """Queued jobs of Klukai's queued or in-progress runs, oldest first."""
+        """Queued jobs of Klukai's pending, queued or running workflows."""
         jobs = []
         assigned: set[int] = set()
         seen_runs: set[int] = set()
-        for status in ("queued", "in_progress"):
+        for status in ("pending", "queued", "in_progress"):
             runs = self.call(
                 "GET", f"/repos/{REPO}/actions/runs?status={status}&per_page=30"
             )
             for run in runs.get("workflow_runs", []):
                 run_id = int(run["id"])
                 if run_id in seen_runs:
-                    continue  # a run can transition between the two API reads
+                    continue  # a run can transition between API reads
                 seen_runs.add(run_id)
                 try:
                     listing = self.call(
