@@ -2,8 +2,7 @@
 
 ## Data preserved
 
-This adds generated search columns and GIN indexes to existing episode and
-exchange tables. It does not delete or rewrite messages, annotations, episodes,
+This adds generated search columns to existing episode and exchange tables. It does not delete or rewrite messages, annotations, episodes,
 exchanges, users or affection. The one-time Qdrant backfill is a separate,
 insert-only transaction; existing PostgreSQL rows and Qdrant points remain intact.
 
