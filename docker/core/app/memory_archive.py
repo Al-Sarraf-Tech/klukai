@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from .dependencies import http_request
 from typing import Any
 
 
@@ -12,33 +11,11 @@ import re
 import uuid
 from pathlib import Path
 
-import httpx
 from PIL import Image
 
 from .db import get_conn, get_conn_autocommit
-from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers, lm_timeout
-from .shared_http import client as http_client, close as close_http_client
 
 logger = logging.getLogger(__name__)
-
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
-EXTRACTION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
-
-# Shared httpx client for LM Studio calls
-_http: httpx.AsyncClient | None = None
-
-
-def _get_http() -> httpx.AsyncClient:
-    global _http
-    _http = http_client(_http, timeout=60.0)
-    return _http
-
-
-async def close() -> None:
-    global _http
-    client, _http = _http, None
-    await close_http_client(client)
-
 
 IMAGES_DIR = Path(os.environ.get("IMAGES_DIR", "/images"))
 # Stored when no caption was written; the backfill replaces it later.
@@ -379,14 +356,13 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict[str, Any]:
     "Uncaptioned moment." placeholder) and write one.
 
     Scoped to a specific user. Caption text comes from the shared background
-    route (app/background_llm.py): Haiku when enabled, else dolphin through the
-    LM Studio gate while Dominus is up; each caption is one capped attempt.
+    route (app/background_llm.py): Claude Haiku; each caption is one capped
+    attempt.
 
     Returns:
         dict with "total" (entries needing backfill) and "updated" (successful).
     """
     from . import background_llm
-    from .llm_router import get_lm_gate
 
     try:
         async with get_conn() as conn:
@@ -410,7 +386,6 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict[str, Any]:
 
     logger.info("Backfill: %d memories need annotations.", total)
     updated = 0
-    gate = get_lm_gate()
 
     for row in rows:
         mem_id = str(row[0])
@@ -422,45 +397,13 @@ async def backfill_annotations(user_id: str = "jalsarraf") -> dict[str, Any]:
             prompt=prompt[:300], category=category, tags=tags
         )
 
-        answered: list[bool] = []  # the local model replied, even if blank
-
-        async def local(
-            llm_prompt: str = llm_prompt, answered: list[bool] = answered
-        ) -> str:
-            async with gate:
-                client = _get_http()
-                r = await http_request(
-                    "lm_studio",
-                    client,
-                    "post",
-                    f"{LM_STUDIO_URL}/v1/chat/completions",
-                    headers=lm_studio_auth_headers(),
-                    json={
-                        "model": EXTRACTION_MODEL,
-                        "messages": [{"role": "user", "content": llm_prompt}],
-                        "max_tokens": 150,
-                        "temperature": 0.7,
-                        "stream": False,
-                        "ttl": LM_TTL_SECONDS,
-                    },
-                    timeout=lm_timeout(60.0),
-                )
-                r.raise_for_status()
-                content = r.json()["choices"][0]["message"]["content"]
-                answered.append(True)
-                return content.strip() if isinstance(content, str) else ""
-
         try:
             content = await background_llm.text(
-                "archive_caption",
-                llm_prompt,
-                max_tokens=150,
-                local=local,
-                local_model=EXTRACTION_MODEL,
+                "archive_caption", llm_prompt, max_tokens=150
             )
-            if not content and not answered:
-                # No model answered (Haiku capped/failed and Dominus down):
-                # leave the entry for the next run instead of a placeholder.
+            if not content:
+                # Haiku capped or failed: leave the entry for the next run
+                # instead of a placeholder.
                 logger.warning("Backfill skipped %s: no model available", mem_id)
                 continue
 

@@ -12,14 +12,24 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
-### Added
-
-- Optional OpenAI and Gemini reference-image adapters in the private image worker,
-  disabled by default with separate daily/monthly attempt limits. Production
-  remains fal-only; no additional provider spending is enabled.
-
 ### Changed
 
+- **Cloud AI only (owner decision 2026-10-26, ADR-0020).** No model, embedding, speech or
+  image service on Dominus-Nobara or amarillo is used by core any more:
+  - chat is Claude Sonnet 5.5 with Claude Haiku 5.5 as the fallback (the Dominus model
+    secondary is gone);
+  - every background call (extraction, compaction, proactive lines, captions, the legacy
+    affection classifier) runs on Haiku 5.5 at high effort under the shared daily cap;
+  - memory recall uses PostgreSQL full-text candidates (migration 260 `search_tsv`) that
+    Haiku ranks, instead of nomic embeddings and Qdrant;
+  - speech-to-text is Fish Audio `transcribe-1-pro` (pay-as-you-go, owner authorized);
+  - the ComfyUI provider and the GPU lease are removed, along with the animated portrait
+    frames and portrait redraw that only ComfyUI could draw.
+- `/health` and `/api/health/subsystems` no longer report Qdrant, LM Studio, ComfyUI or
+  embeddings; the subsystems are database, redis, llm, images and voice.
+- `KLUKAI_CREATIVE_TEXT_PROVIDER` defaults to `haiku` (`local` is still accepted as its old
+  name).
+- Gaming awareness is dormant: its only game signal was the Dominus gateway.
 - Her voice can be the Fish Audio community "Klukai" model (`VOICE_BACKEND=fish`, owner
   decision 2026-10-19): core calls `https://api.fish.audio/v1/tts` with no LM gate or GPU
   lease, always with the free `model: s2.1-pro-free` header, and refuses (503) an empty key or
@@ -54,6 +64,22 @@ in `docs/superpowers/plans/`.
   accessories from a seed (`app/wardrobe_variation.py`). His granted outfit
   request still wins, the bath/bed intimacy gate is unchanged, and Live Portrait
   keeps its fixed base. The new tag sets still need a render check.
+
+### Added
+
+- `ops/amarillo/scripts/klukai-memory-backfill-from-qdrant.py`: a one-off, insert-only copy
+  of the Qdrant exchange and episode payloads into PostgreSQL (dry run unless `--apply`).
+- `docker/core/tests/test_cloud_only_invariant.py` fails the build if a local AI endpoint,
+  setting or module returns to the core.
+- Optional OpenAI and Gemini reference-image adapters in the private image worker,
+  disabled by default with separate daily/monthly attempt limits. Production
+  remains fal-only; no additional provider spending is enabled.
+
+### Removed
+
+- `lm_gateway.py`, `warmup.py`, `gpu_lease.py`, the ComfyUI modules and
+  `reannotate_existing.py`; `seed_memories.py` is reduced to the retired no-op entry point
+  that amarillo's timer still runs.
 
 ### Security
 

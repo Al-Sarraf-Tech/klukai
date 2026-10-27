@@ -1,8 +1,16 @@
 # Klukai
 
-Read `docs/handoff/2026-09-25-dominus-tailscale-publish.md` before touching the Dominus GPU stack, Docker startup, or the chat path to the RTX 3090.
+**Cloud AI only (owner decision, 2026-10-26).** Klukai runs no inference on
+Dominus-Nobara or Amarillo: chat is Claude Sonnet 5.5, every background model
+call and memory recall is Claude Haiku 5.5 (high effort), voice in and out is
+Fish Audio, pictures use the cloud providers. There is no local fallback of
+any kind. Design: `docs/superpowers/specs/2026-10-26-cloud-only-ai-design.md`.
+Do not reintroduce LM Studio, Dominus voice, ComfyUI, the GPU lease, local
+embeddings or Qdrant into `docker/core`; `tests/test_cloud_only_invariant.py`
+fails if any of them comes back. `ops/dominus-nobara` is the retired Dominus
+stack, kept only until it is decommissioned separately.
 
-Powering that computer off is normal. On boot, Docker can restore the AI containers before Tailscale has `100.107.121.5` and then never bind `1234`, `8301`, or `8390`. A healthy container and `docker restart` do not mean Amarillo can reach her. The repair is `ops/dominus-nobara/scripts/repair-tailscale-publish.sh`. It must keep refusing to run while `/run/user/1000/dominus-gpu/game-active` exists, and it must not recreate `llama-router` or `comfyui`.
+## History (superseded where it mentions Dominus or local models)
 
 On 2026-10-14 the owner explicitly authorized paid Anthropic API use for
 Klukai: Sonnet 5.5 with medium adaptive thinking is the interactive primary,

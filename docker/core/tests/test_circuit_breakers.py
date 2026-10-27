@@ -103,12 +103,17 @@ def test_get_breaker_singleton() -> None:
 
 
 def test_for_dep_presets_match_spec() -> None:
-    """Per spec §5.4: postgres / qdrant / lm_studio / voice / comfyui."""
-    for name in ("postgres", "redis", "qdrant", "lm_studio", "voice", "comfyui"):
+    """Per spec §5.4, minus the local AI deps retired on 2026-10-26."""
+    for name in ("postgres", "redis", "voice"):
         cfg = BreakerConfig.for_dep(name)
         assert cfg.name == name
         assert cfg.error_threshold > 0
         assert cfg.window_seconds > 0
+
+
+def test_unknown_dep_gets_the_default_config() -> None:
+    cfg = BreakerConfig.for_dep("anthropic")
+    assert cfg == BreakerConfig(name="anthropic")
 
 
 def test_force_open_close() -> None:
@@ -194,7 +199,7 @@ async def test_state_change_log_lines_name_the_dependency(
     # a bare "circuit breaker tripped" with no way to tell which dep it was.
     cb = CircuitBreaker(
         cfg=BreakerConfig(
-            name="lm_studio", error_threshold=2, window_seconds=10, probe_interval_seconds=0
+            name="anthropic", error_threshold=2, window_seconds=10, probe_interval_seconds=0
         )
     )
 
@@ -212,7 +217,7 @@ async def test_state_change_log_lines_name_the_dependency(
 
     messages = [r.getMessage() for r in caplog.records if r.name == "app.circuit_breakers"]
     assert messages == [
-        "circuit breaker lm_studio tripped (2 errors in window)",
-        "circuit breaker lm_studio probing (half-open)",
-        "circuit breaker lm_studio closed",
+        "circuit breaker anthropic tripped (2 errors in window)",
+        "circuit breaker anthropic probing (half-open)",
+        "circuit breaker anthropic closed",
     ]

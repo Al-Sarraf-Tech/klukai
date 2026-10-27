@@ -24,6 +24,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app.agent_loop as al
+from app.models import LLMConfig
 from app.agent_loop import AgentLoop, AgentResult, AgentStep, _extract_tool_text
 from app.tool_schemas import get_builtin_tools
 
@@ -58,7 +59,14 @@ def _make_loop(complete_side_effect=None, list_tools=None):
     patched here — patch them per-test as needed.
     """
     router = MagicMock()
-    router.complete_local = AsyncMock(side_effect=complete_side_effect)
+    router.route = AsyncMock(
+        return_value=LLMConfig(
+            provider="anthropic",
+            model=al.CLAUDE_SECONDARY,
+            base_url="https://api.anthropic.com/v1/messages",
+        )
+    )
+    router.complete_chat = AsyncMock(side_effect=complete_side_effect)
     router.stream = MagicMock()
     mcp = MagicMock()
     mcp.list_tools = AsyncMock(return_value=list_tools or [])
@@ -100,14 +108,13 @@ class TestPlainResponse:
         # exactly one response step recorded
         assert [s.type for s in res.steps] == ["response"]
         # only one LLM round trip
-        assert router.complete_local.await_count == 1
+        assert router.complete_chat.await_count == 1
         ws.send_thinking.assert_awaited()  # "Analyzing request..."
 
     @pytest.mark.asyncio
     async def test_result_model_is_the_model_that_answered(self):
-        """The loop runs LOCAL_CASUAL; the result must say so rather than keep
-        the dataclass default (LOCAL_AGENT), which is what gets persisted with
-        the message and shown in the UI's done frame."""
+        """The result names the model the router chose, which is what gets
+        persisted with the message and shown in the UI's done frame."""
         loop, router, mcp, ws = _make_loop(
             complete_side_effect=[_msg_response(content="Hello Commander.")]
         )
@@ -115,8 +122,9 @@ class TestPlainResponse:
             al, "get_builtin_tools", return_value=[]
         ):
             res = await loop.run("sys", [{"role": "user", "content": "hi"}])
-        assert res.model == al.LOCAL_CASUAL
-        assert res.model == router.complete_local.await_args.args[2].model
+        assert res.model == al.CLAUDE_SECONDARY
+        assert res.model == router.complete_chat.await_args.args[2].model
+        assert router.route.await_args.kwargs["interactive"] is False
 
 
 # ── MCP recovery when no tools load (lines 105-113) ─────────────────────────
@@ -150,7 +158,7 @@ class TestMCPRecovery:
         ):
             res = await loop.run("sys", [{"role": "user", "content": "hi"}])
         # builtins still appended despite recovery failure
-        passed_tools = router.complete_local.await_args.kwargs["tools"]
+        passed_tools = router.complete_chat.await_args.kwargs["tools"]
         assert {"builtin": True} in passed_tools
         assert res.response == "ok"
 
@@ -267,7 +275,7 @@ class TestMCPToolDispatch:
         assert res.tools_used == ["web_search"]
         assert res.response == "Here is what I found."
         # second LLM call must include the threaded tool result message
-        second_msgs = router.complete_local.await_args_list[1].args[1]
+        second_msgs = router.complete_chat.await_args_list[1].args[1]
         roles = [m["role"] for m in second_msgs]
         assert "assistant" in roles and "tool" in roles
         tool_msg = [m for m in second_msgs if m["role"] == "tool"][0]
@@ -296,7 +304,7 @@ class TestMCPToolDispatch:
         mcp._initialize_session.assert_awaited()
         tool_msg = [
             m
-            for m in router.complete_local.await_args_list[1].args[1]
+            for m in router.complete_chat.await_args_list[1].args[1]
             if m["role"] == "tool"
         ][0]
         assert "timed out" in tool_msg["content"]
@@ -353,7 +361,7 @@ class TestMCPToolDispatch:
         ):
             await loop.run("sys", [{"role": "user", "content": "go"}])
         mcp.invoke_tool.assert_not_awaited()
-        tool_message = router.complete_local.await_args_list[1].args[1][-1]
+        tool_message = router.complete_chat.await_args_list[1].args[1][-1]
         assert "JSON object" in tool_message["content"]
 
     @pytest.mark.asyncio
@@ -428,7 +436,7 @@ class TestStreamingFallback:
             return _msg_response(content="synth briefing")
 
         loop, router, mcp, ws = _make_loop()
-        router.complete_local = AsyncMock(side_effect=_complete)
+        router.complete_chat = AsyncMock(side_effect=_complete)
 
         async def _empty_stream(sp, msgs, cfg):
             if False:  # pragma: no cover
@@ -467,7 +475,7 @@ class TestForcedSynthesis:
             res = await loop.run("sys", [{"role": "user", "content": "go"}])
         assert res.iterations == al.MAX_ITERATIONS
         # synthesis call has tools=None
-        last_call = router.complete_local.await_args_list[-1]
+        last_call = router.complete_chat.await_args_list[-1]
         assert last_call.kwargs["tools"] is None
         assert res.response == "Final synthesized briefing."
         sent = [c.args[1] for c in ws.send_thinking.await_args_list]
@@ -487,7 +495,7 @@ class TestForcedSynthesis:
             return responses.pop(0)
 
         loop, router, mcp, ws = _make_loop()
-        router.complete_local = AsyncMock(side_effect=_complete)
+        router.complete_chat = AsyncMock(side_effect=_complete)
         mcp.invoke_tool = AsyncMock(return_value=_mcp_text("data"))
         with patch.object(al, "get_tool_schemas", AsyncMock(return_value=_schemas("web_search"))), patch.object(
             al, "get_builtin_tools", return_value=[]
@@ -522,7 +530,7 @@ class TestTimeoutGuard:
             complete_side_effect=[_msg_response(content="should-not-run")]
         )
         # forced-synthesis (after break) returns the only real content
-        router.complete_local = AsyncMock(
+        router.complete_chat = AsyncMock(
             return_value=_msg_response(content="post-timeout synth")
         )
         # start_time=1000; first iteration sees elapsed = 1000+200-1000 = 200 > 150
@@ -584,7 +592,7 @@ class TestDataclasses:
     def test_agent_result_defaults(self):
         r = AgentResult(response="hi")
         assert r.steps == [] and r.tools_used == [] and r.iterations == 0
-        assert r.model == al.LOCAL_AGENT
+        assert r.model == al.CLAUDE_SECONDARY
 
     def test_agent_step_optional_fields(self):
         s = AgentStep(type="tool_call", content="x", tool_name="t", tool_args={"a": 1})

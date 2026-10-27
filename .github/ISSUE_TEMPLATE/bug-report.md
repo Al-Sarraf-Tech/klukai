@@ -21,8 +21,8 @@ labels: bug
 ## Affects
 
 - [ ] Chat (companion-core)
-- [ ] Voice (companion-voice on dominus-nobara)
-- [ ] Image gen (ComfyUI on dominus-nobara)
+- [ ] Voice (Fish Audio speech or speech-to-text)
+- [ ] Pictures (account image worker on amarillo)
 - [ ] Memory archive
 - [ ] Affection state
 - [ ] Auth / login

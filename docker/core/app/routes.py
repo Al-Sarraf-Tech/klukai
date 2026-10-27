@@ -12,7 +12,6 @@ from typing import Any
 import asyncio
 import logging
 
-import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -32,7 +31,6 @@ from .routes_health import register_health_routes
 from .personality import load_personality
 from .push import add_subscription, get_vapid_public_key
 from .passwords import PasswordWorkBusy
-from .voice_client import voice_url as _voice_url
 
 
 # ── Request models ────────────────────────────────────────────────────────
@@ -77,8 +75,6 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
         FISH_LANGUAGES,
         VOICE_OFF_MESSAGE,
         async_voice_jobs_enabled,
-        fish_voice_enabled,
-        local_voice_enabled,
         voice_enabled,
     )
 
@@ -128,9 +124,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             return {"user_id": user_id}
         return JSONResponse({"error": "Invalid token"}, status_code=401)
 
-    register_health_routes(
-        app, lambda request: _get_user_id(request), lambda: _voice_url()
-    )
+    register_health_routes(app, lambda request: _get_user_id(request))
 
     # ── Push subscription ──────────────────────────────────────────────────
 
@@ -160,7 +154,7 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
 
     @app.post("/api/tts")
     async def api_tts(req: TTSRequest, request: Request) -> Any:
-        """Proxy TTS request to companion-voice and return base64 audio."""
+        """Her voice for one tap: Fish Audio speech as base64 WAV (or a job)."""
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
@@ -176,21 +170,14 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                 {"error": "Split speech into chunks of at most 500 characters"},
                 status_code=400,
             )
-        if queued and local_voice_enabled() and req.language != "en":
+        if req.language not in FISH_LANGUAGES:
             return JSONResponse(
-                {"error": "This voice currently supports English text"},
+                {"error": "This voice reads English or Japanese text"},
                 status_code=400,
             )
-        language = req.language
-        if fish_voice_enabled():
-            if language not in FISH_LANGUAGES:
-                return JSONResponse(
-                    {"error": "This voice reads English or Japanese text"},
-                    status_code=400,
-                )
-            tts_text, language = await _fish_speech(
-                user_id, tts_text if queued else _tts_clip(tts_text), language
-            )
+        tts_text, language = await _fish_speech(
+            user_id, tts_text if queued else _tts_clip(tts_text), req.language
+        )
         if queued:
             try:
                 job = app.state.voice_jobs.submit(
@@ -206,36 +193,30 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                     headers={"Retry-After": "5"},
                 )
         try:
-            from .voice_client import post_leased_tts
+            from .voice_client import post_tts
 
-            async with httpx.AsyncClient(
-                timeout=60.0, trust_env=False, follow_redirects=False
-            ) as client:
-                # Bound the WHOLE leased call — gate wait, GPU lease, synth —
-                # not just the HTTP leg the client timeout covers.
-                r = await asyncio.wait_for(
-                    post_leased_tts(
-                        client,
-                        {"text": _tts_clip(tts_text), "language": language},
-                        timeout=60.0,
-                    ),
-                    timeout=45.0,
-                )
-                if r.status_code == 200:
-                    import base64
+            # Bound the whole call, not just the HTTP leg the client covers.
+            r = await asyncio.wait_for(
+                post_tts(
+                    {"text": _tts_clip(tts_text), "language": language},
+                    timeout=60.0,
+                ),
+                timeout=45.0,
+            )
+            if r.status_code == 200:
+                import base64
 
-                    return {"audio": base64.b64encode(r.content).decode()}
-                # Never forward the upstream status: a VOICE_API_TOKEN mismatch
-                # is a 401 from the voice host, and the stage's net.js reads any
-                # 401 as HIS session expiring and logs him out.
-                logger.error("TTS upstream HTTP %s", r.status_code)
-                return JSONResponse({"error": "TTS failed"}, status_code=502)
+                return {"audio": base64.b64encode(r.content).decode()}
+            # Never forward the upstream status: the stage's net.js reads any
+            # 401 as HIS session expiring and logs him out.
+            logger.error("TTS upstream HTTP %s", r.status_code)
+            return JSONResponse({"error": "TTS failed"}, status_code=502)
         except TimeoutError:
-            logger.warning("TTS timed out waiting on the voice GPU lease")
+            logger.warning("TTS timed out waiting on the voice service")
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
         except Exception as e:
             # Upstream authentication errors must not expire the user's session.
-            logger.error("TTS failed: %s: %s", type(e).__name__, e)
+            logger.error("TTS failed: %s", type(e).__name__)
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
 
     @app.get("/api/tts/jobs/{job_id}")

@@ -54,7 +54,7 @@ def _patched_pipeline(
     needs_agent=False,
     game_active=False,
     birthday_block="",
-    provider="lmstudio",
+    provider="anthropic",
     aff_level=5,
     nudge=None,
     needs_image_val=False,
@@ -204,7 +204,6 @@ def _patched_pipeline(
         patch("app.chat_handlers.background_recall", background_recall),
         patch("app.chat_handlers.do_memory_keep", do_memory_keep),
         # deferred imports resolved from their source modules
-        patch("app.llm_router.mark_user_active", MagicMock()),
         patch("app.context.physical", physical),
         patch("app.tributes.get_crown_jewel", tributes.get_crown_jewel),
         patch("app.helpers.detect_squad_address", return_value=None),
@@ -343,13 +342,13 @@ class TestDirectStreamingPath:
         assert kwargs["affection_level"] == ns.affection.get_state.return_value.level
 
     @pytest.mark.asyncio
-    async def test_warmup_timer_scheduled_for_lmstudio(self):
+    async def test_warmup_timer_scheduled_for_any_model(self):
         from app.chat_handlers import _handle_message
 
-        # provider lmstudio -> a warmup task is created (then cancelled). With
+        # any provider -> a warmup task is created (then cancelled). With
         # asyncio.sleep no-op'd it never fires send_thinking the 2nd time, but
         # the path is exercised. Assert the first thinking message still sent.
-        with _patched_pipeline(provider="lmstudio", stream_tokens=["Yo."]) as ns:
+        with _patched_pipeline(provider="anthropic", stream_tokens=["Yo."]) as ns:
             await _handle_message("A normal length question here", _fresh_session())
             await _drain_tasks()
 
@@ -779,7 +778,7 @@ class TestWarmupTimer:
 
         # Patch chat_handlers' asyncio.sleep so the warmup 8s wait is instant,
         # but the stream above uses the captured real sleep to yield the loop.
-        with _patched_pipeline(provider="lmstudio") as ns:
+        with _patched_pipeline(provider="anthropic") as ns:
             ns.router.stream = _slow_stream
             with patch("app.chat_handlers.router", ns.router), patch(
                 "app.chat_handlers.asyncio.sleep", new=AsyncMock(return_value=None)
@@ -805,7 +804,7 @@ class TestWarmupTimer:
         async def _hang(*_a, **_k):
             await never.wait()
 
-        with _patched_pipeline(provider="lmstudio") as ns:
+        with _patched_pipeline(provider="anthropic") as ns:
             ns.router.stream = _empty_stream
             with patch("app.chat_handlers.router", ns.router), patch(
                 "app.chat_handlers.asyncio.sleep", new=_hang

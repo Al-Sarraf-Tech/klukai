@@ -6,7 +6,6 @@
 !package_runtime.py
 !healthcheck.py
 !seed_memories.py
-!reannotate_existing.py
 !app/
 !app/**
 !migrations/

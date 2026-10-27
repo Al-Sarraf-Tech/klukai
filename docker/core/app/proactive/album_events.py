@@ -168,9 +168,6 @@ class AlbumEventsMixin(_EngineBase):
         message = ""
         try:
             from .. import background_llm
-            from ..fact_extractor import EXTRACTION_MODEL, LM_STUDIO_URL
-            from ..llm_json import call_llm_text
-            from ..llm_router import get_lm_gate
 
             prompt = (
                 f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
@@ -183,19 +180,7 @@ class AlbumEventsMixin(_EngineBase):
                 f"Write ONLY the message. No explanation."
             )
 
-            async def local() -> str:
-                async with get_lm_gate():
-                    return await call_llm_text(
-                        LM_STUDIO_URL,
-                        EXTRACTION_MODEL,
-                        prompt,
-                        max_tokens=160,
-                        temperature=0.8,
-                    )
-
-            message = await background_llm.text(
-                "memory_recall", prompt, max_tokens=160, local=local
-            )
+            message = await background_llm.text("memory_recall", prompt, max_tokens=160)
         except Exception as e:
             logger.warning("Memory recall LLM failed, falling back to template: %s", e)
             message = ""

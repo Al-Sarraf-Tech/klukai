@@ -12,7 +12,7 @@ controlled entirely by:
     - Future flip-on: add STRIPE_API_KEY + restore activation endpoints.
 
 SACRED invariants (CLAUDE.md):
-- Tier downgrade NEVER deletes chat memories, episodes, affection, Qdrant vectors.
+- Tier downgrade NEVER deletes chat memories, episodes or affection.
 - Subscription cancel only revokes future feature access.
 - Stripe webhook validates HMAC; replays are idempotent via event_id PK.
 """

@@ -432,9 +432,10 @@ def bundle(tmp_path, millis=11):
                             "fixture": "klukai-deterministic-v1",
                             "external_calls": 0,
                             "gpu_calls": 0,
+                            # One startup MCP handshake per core so far.
                             "counts": {
                                 "GET /fixture-stats": ordinal,
-                                "POST /tts": ordinal * 110,
+                                "POST /mcp": ordinal,
                             },
                         },
                         "routes": [

@@ -163,18 +163,11 @@ async def compose_pov(
     affection_level: int,
 ) -> POVScene:
     """LLM: journal annotation + scene tags for the picked exchange."""
-    from .llm_json import call_llm
-    import os
-
-    LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
-
     prompt = _POV_PROMPT.format(
         user_msg=exchange.get("user_content", "")[:700],
         assistant_msg=exchange.get("assistant_content", "")[:900],
         affection_level=affection_level,
     )
-    model = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
-    from .llm_router import get_lm_gate
     from .creative_text import (
         CreativeTextError,
         complete_creative_text,
@@ -196,23 +189,8 @@ async def compose_pov(
     else:
         from . import background_llm
 
-        async def local() -> dict[str, Any]:
-            async with get_lm_gate():
-                return await call_llm(
-                    LM_STUDIO_URL,
-                    model,
-                    prompt,
-                    max_tokens=512,
-                    temperature=0.4,
-                )
-
-        # Never raises: Haiku, else Dominus while it is up, else the defaults.
-        raw = (
-            await background_llm.json_object(
-                "her_pov", prompt, max_tokens=512, local=local, local_model=model
-            )
-            or {}
-        )
+        # Never raises: Haiku, else the defaults.
+        raw = await background_llm.json_object("her_pov", prompt, max_tokens=512) or {}
 
     if not isinstance(raw, dict):
         raw = {}

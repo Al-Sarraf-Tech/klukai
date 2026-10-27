@@ -105,7 +105,7 @@ async def check_health(ctx: dict[str, Any]) -> str:
 
     if body.get("status") != "ok":
         raise CheckFailed(f"status={body.get('status')}")
-    for dep in ("redis", "qdrant"):
+    for dep in ("redis",):
         if body.get(dep) != "ok":
             raise CheckFailed(f"{dep}={body.get(dep)}")
     if (body.get("database") or {}).get("status") != "ok":

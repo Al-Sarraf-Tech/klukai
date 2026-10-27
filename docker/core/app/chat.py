@@ -6,8 +6,6 @@ and all supporting handlers (message, voice, tap-interact).
 
 from __future__ import annotations
 
-from .dependencies import http_request
-
 
 import asyncio
 import json
@@ -16,7 +14,6 @@ import math
 from datetime import datetime, timedelta
 from typing import Any
 
-import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
@@ -83,14 +80,14 @@ async def _handle_tap_interact(user_id: str) -> None:
 async def _handle_voice(
     audio_b64: str, session: SessionState, user_id: str = "default"
 ) -> None:
-    """Process voice: STT -> text -> LLM -> TTS -> audio.
+    """Process voice: Fish speech-to-text -> text -> LLM -> Fish TTS -> audio.
 
     Failure modes surface a UX signal — the user never gets ghosted. STT
     problems go out as ``error`` frames (never persisted) because that is what
     clears the client's "Listening..." indicator; a proactive toast leaves it
-    spinning.
+    spinning. Neither the audio nor the transcript is logged.
     """
-    from .voice_client import stt_url, voice_enabled, voice_input_enabled
+    from .voice_client import post_tts, transcribe, voice_enabled, voice_input_enabled
 
     if not voice_enabled():
         await ws.send(
@@ -102,7 +99,7 @@ async def _handle_voice(
         )
         return
     if not voice_input_enabled():
-        # Microphone transcription requires its explicit backend opt-in.
+        # No Fish key: nothing can transcribe his microphone.
         await ws.send(
             user_id,
             {
@@ -114,97 +111,73 @@ async def _handle_voice(
         return
 
     try:
-        async with httpx.AsyncClient(
-            timeout=30.0, trust_env=False, follow_redirects=False
-        ) as client:
-            await ws.send_thinking(user_id, "Listening...")
-            try:
-                from .helpers import voice_auth_headers
+        await ws.send_thinking(user_id, "Listening...")
+        try:
+            transcript = (await transcribe(audio_b64))["text"]
+        except Exception as stt_err:
+            logger.error("STT failed: %s", type(stt_err).__name__)
+            await ws.send(
+                user_id,
+                {
+                    "type": "error",
+                    "message": "...Voice link garbled, Commander — I couldn't make out "
+                    "the transmission. Try again or switch to text.",
+                },
+            )
+            return
 
-                from .voice_client import fish_voice_enabled, post_fish_stt
+        if not transcript.strip():
+            await ws.send(
+                user_id,
+                {
+                    "type": "error",
+                    "message": "...I heard nothing on the channel, Commander. "
+                    "Try again, closer to the mic.",
+                },
+            )
+            return
 
-                if fish_voice_enabled():
-                    r = await post_fish_stt(audio_b64)
-                else:
-                    r = await http_request(
-                        "voice",
-                        client,
-                        "post",
-                        f"{stt_url()}/stt",
-                        json={"audio": audio_b64},
-                        headers=voice_auth_headers(),
-                    )
-                r.raise_for_status()
-                transcript = r.json().get("text", "")
-            except Exception as stt_err:
-                logger.error("STT failed: %s", stt_err)
-                await ws.send(
-                    user_id,
-                    {
-                        "type": "error",
-                        "message": "...Voice link garbled, Commander — I couldn't make out "
-                        "the transmission. Try again or switch to text.",
-                    },
-                )
-                return
+        # Process as text message (which streams the text response). None
+        # means she had no answer this turn — her core is down — so there
+        # is nothing of hers to voice: an outage notice is never read aloud.
+        reply = await _handle_message(transcript, session, user_id)
+        if reply is None:
+            return
 
-            if not transcript.strip():
-                await ws.send(
-                    user_id,
-                    {
-                        "type": "error",
-                        "message": "...I heard nothing on the channel, Commander. "
-                        "Try again, closer to the mic.",
-                    },
-                )
-                return
+        # Stage directions — "(she smiles)", "*nods*" — are not read aloud,
+        # and Fish gets at most one clip's worth, cut at a sentence end.
+        from .helpers import strip_actions_for_tts, tts_clip
 
-            # Process as text message (which streams the text response). None
-            # means she had no answer this turn — her core is down — so there
-            # is nothing of hers to voice. The sentinel must never reach XTTS:
-            # that spends a GPU lease reading an outage notice in her voice.
-            reply = await _handle_message(transcript, session, user_id)
-            if reply is None:
-                return
+        speech = tts_clip(strip_actions_for_tts(reply))
+        if not speech:
+            return
 
-            # Stage directions — "(she smiles)", "*nods*" — are not read aloud,
-            # and XTTS gets at most one clip's worth, cut at a sentence end.
-            from .helpers import strip_actions_for_tts, tts_clip
+        try:
+            r = await post_tts({"text": speech}, timeout=30.0)
+            if r.status_code == 200:
+                import base64
 
-            speech = tts_clip(strip_actions_for_tts(reply))
-            if not speech:
-                return
-
-            try:
-                from .voice_client import post_leased_tts, tts_timeout
-
-                r = await post_leased_tts(
-                    client, {"text": speech}, timeout=tts_timeout(30.0)
-                )
-                if r.status_code == 200:
-                    import base64
-
-                    audio_out = base64.b64encode(r.content).decode()
-                    await ws.send_voice(user_id, audio_out, final=True)
-                else:
-                    logger.error("TTS HTTP %s: %s", r.status_code, r.text[:200])
-                    await ws.send_proactive(
-                        user_id,
-                        "...The voice synth is offline, Commander — "
-                        "I'm reading you in text instead.",
-                        persist=False,
-                    )
-            except Exception as tts_err:
-                logger.error("TTS failed: %s", tts_err)
+                audio_out = base64.b64encode(r.content).decode()
+                await ws.send_voice(user_id, audio_out, final=True)
+            else:
+                logger.error("TTS HTTP %s", r.status_code)
                 await ws.send_proactive(
                     user_id,
-                    "...Voice synth dropped, Commander — text reply only.",
+                    "...The voice synth is offline, Commander — "
+                    "I'm reading you in text instead.",
                     persist=False,
                 )
+        except Exception as tts_err:
+            logger.error("TTS failed: %s", type(tts_err).__name__)
+            await ws.send_proactive(
+                user_id,
+                "...Voice synth dropped, Commander — text reply only.",
+                persist=False,
+            )
     except SessionUnavailable:
         raise
     except Exception as e:
-        logger.error("Voice processing failed: %s", e, exc_info=True)
+        logger.error("Voice processing failed: %s", type(e).__name__)
         try:
             await ws.send_proactive(
                 user_id,
@@ -470,20 +443,6 @@ def register_websocket(app: FastAPI) -> None:
             token = (
                 ""  # Do not keep another bearer reference for the socket's lifetime.
             )
-
-            # He just opened the app. Start loading the model now so it is resident
-            # by the time he has finished typing, instead of making him watch a
-            # loading bar after he hits send. Fire-and-forget: this must never delay
-            # the connect, and a failure only costs the slow first reply he would
-            # have had anyway.
-            try:
-                from .warmup import warm_in_background
-
-                warm_task = warm_in_background()
-                if warm_task is not None:
-                    ws.track_task(user_id, warm_task)
-            except Exception as e:
-                logger.debug("Warm-up on connect skipped: %s", e)
 
             session = await _initialize_session(user_id)
 

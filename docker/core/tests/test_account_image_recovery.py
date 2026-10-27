@@ -408,7 +408,6 @@ def _chat_turn_patches():
             ("app.tributes.get_crown_jewel", AsyncMock(return_value=None)),
             ("app.helpers.detect_squad_address", lambda _text: None),
             ("app.helpers.detect_jealousy_trigger", lambda _text: None),
-            ("app.llm_router.mark_user_active", MagicMock()),
         ):
             stack.enter_context(patch(target, value))
         yield

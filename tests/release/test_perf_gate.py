@@ -29,8 +29,6 @@ TARGETS = [
     ("GET", "/api/affection"),
     ("GET", "/api/messages"),
     ("GET", "/api/memories"),
-    ("POST", "/api/tts"),
-    ("GET", "/api/tts/jobs/{job_id}"),
 ]
 
 
@@ -65,9 +63,9 @@ def test_disposable_qdrant_snapshots_writable_only_on_tmpfs(tmp_path, monkeypatc
         ("/api/auth/verify", {"user_id": "ricky"}),
         ("/api/messages", {"messages": [{"content": "seed:ricky:0"}] * 50}),
         ("/api/memories", [{"annotation": "seed:ricky:0"}] * 20),
-        ("/api/tts/jobs/{job_id}", {"status": "completed", "audio": "invalid"}),
-        ("/api/tts", {"status": "failed", "job_id": "test"}),
         ("/api/health/ready", {"status": "degraded"}),
+        # Voice is Fish Audio only (paid); it is no longer a measured contract.
+        ("/api/tts", {"status": "queued", "job_id": "test"}),
     ],
 )
 def test_actual_contract_validation_rejects_wrong_owner_and_fake_work(route, body):
@@ -134,9 +132,7 @@ def report(role="baseline", millis=10.0):
                         "warmup_count": 10,
                         "samples": [
                             {
-                                "status": 202
-                                if (method, route) == ("POST", "/api/tts")
-                                else 200,
+                                "status": 200,
                                 "elapsed_ms": millis,
                                 "contract_ok": True,
                             }
@@ -514,3 +510,45 @@ def test_messages_contract_tolerates_owner_scheduler_rows_not_leaks():
     assert not contract("/api/messages", {"messages": [*seed, leak]})
     assert not contract("/api/messages", {"messages": seed})  # 49 rows
     assert not contract("/api/messages", {"messages": [replay] * 50})
+
+
+def test_paid_cloud_voice_is_never_measured_or_configured():
+    from tools.ci.perf_schema import TARGETS as MEASURED
+    from tools.ci.perf_stack import environment
+
+    assert not [route for _, route, _ in MEASURED if "/tts" in route]
+    env = environment(argparse.Namespace(password="disposable"), "perf_candidate_0")
+    assert not [key for key in env if key.startswith(("VOICE_", "FISH_"))]
+    assert not [value for value in env.values() if "fish.audio" in value]
+
+
+def test_fixture_counts_the_startup_mcp_handshake_and_serves_no_voice():
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    from tools.ci import perf_fixtures
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), perf_fixtures.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    before = dict(perf_fixtures.COUNTS)
+    try:
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{server.server_address[1]}",
+            trust_env=False,
+            timeout=5,
+        ) as client:
+            session = client.post(
+                "/mcp", json={"jsonrpc": "2.0", "id": "1", "method": "initialize"}
+            )
+            for path in ("/tts", "/unload", "/api/v1/gpu/lease/acquire"):
+                assert client.post(path, json={"text": "no voice"}).status_code == 404
+            stats = client.get("/fixture-stats").json()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+    assert session.headers["Mcp-Session-Id"] == "isolated-fixture-session"
+    assert session.json()["result"]["serverInfo"]["name"] == "isolated-fixture"
+    assert stats["external_calls"] == 0 and stats["gpu_calls"] == 0
+    assert stats["counts"]["POST /mcp"] == before.get("POST /mcp", 0) + 1

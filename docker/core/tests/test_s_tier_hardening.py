@@ -289,10 +289,11 @@ class TestAtomicTransaction:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestEpisodeDualWrite:
-    """Verify episodes are written to both Qdrant and PostgreSQL."""
+class TestEpisodeStore:
+    """Episodes are written to PostgreSQL only (owner decision 2026-10-26:
+    cloud AI only, no embeddings and no vector store)."""
 
-    def test_store_episode_writes_to_db(self):
+    def test_store_episode_writes_to_db_only(self):
         source = Path(__file__).resolve().parent.parent / "app" / "memory.py"
         text = source.read_text()
         func_start = text.index("async def store_episode")
@@ -301,12 +302,11 @@ class TestEpisodeDualWrite:
         assert "companion_episodes" in func_text, (
             "Must write to companion_episodes DB table"
         )
-        assert "QDRANT_URL" in func_text or "COLLECTION_NAME" in func_text, (
-            "Must write to Qdrant"
-        )
         assert "get_conn_autocommit" in func_text, (
             "Must use DB connection for PostgreSQL write"
         )
+        for gone in ("QDRANT", "qdrant", "embed", "vector"):
+            assert gone not in func_text, f"Episode store must not use {gone}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -322,22 +322,14 @@ class TestSubsystemHealth:
         text = source.read_text()
         assert "/api/health/subsystems" in text
 
-    def test_checks_all_seven_subsystems(self):
+    def test_checks_every_cloud_only_subsystem(self):
         source = Path(__file__).resolve().parent.parent / "app" / "routes_health.py"
         text = source.read_text()
-        # Find the subsystem_health function
-        func_text = text
-        assert "results.update(await _image_subsystems())" in func_text
-        for subsystem in [
-            "database",
-            "redis",
-            "qdrant",
-            "lm_studio",
-            "comfyui",
-            "embeddings",
-            "voice",
-        ]:
-            assert subsystem in func_text, f"Must check {subsystem} subsystem"
+        assert "results.update(await _image_subsystems())" in text
+        for subsystem in ["database", "redis", "llm", "images", "voice"]:
+            assert f'"{subsystem}"' in text, f"Must check {subsystem} subsystem"
+        for local in ["qdrant", "lm_studio", "comfyui", "embeddings"]:
+            assert local not in text, f"{local} is not a subsystem any more"
 
     def test_subsystem_health_requires_auth(self):
         source = Path(__file__).resolve().parent.parent / "app" / "routes_health.py"
@@ -352,14 +344,14 @@ class TestSubsystemHealth:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 8. ComfyUI authenticated facade
+# 8. Cloud-only pictures (the ComfyUI facade and GPU lease were removed)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestComfyUIFacade:
-    """Verify Klukai cannot bypass the gateway's exclusive GPU lease."""
+class TestCloudOnlyImages:
+    """Pictures are cloud-only: no local renderer, raw ComfyUI port or GPU lease."""
 
-    def test_docker_compose_uses_gateway_facade(self):
+    def test_docker_compose_never_names_the_raw_comfyui_port(self):
         compose = (
             Path(__file__).resolve().parent.parent.parent.parent / "docker-compose.yml"
         )
@@ -367,15 +359,14 @@ class TestComfyUIFacade:
             import pytest
 
             pytest.skip("docker-compose.yml not shipped into runtime image")
-        text = compose.read_text()
-        assert "http://100.107.121.5:1234/api/v1/comfy" in text
-        assert "100.107.121.5:8388" not in text
+        assert "100.107.121.5:8388" not in compose.read_text()
 
-    def test_image_gen_default_uses_gateway_facade(self):
+    def test_image_gen_has_no_local_renderer(self):
         source = Path(__file__).resolve().parent.parent / "app" / "image_gen.py"
         text = source.read_text()
-        assert "http://100.107.121.5:1234/api/v1/comfy" in text
-        assert "GPU_LEASE_HEADER" not in text  # use the central header helper
+        assert "100.107.121.5" not in text
+        assert "comfy" not in text.lower()
+        assert "gpu_lease" not in text
 
     def test_retired_seed_memories_cannot_load_image_provider(self):
         source = Path(__file__).resolve().parent.parent / "seed_memories.py"
@@ -384,7 +375,7 @@ class TestComfyUIFacade:
         assert '"/prompt"' not in text
         assert '"/free"' not in text
 
-    def test_regen_images_reuses_protected_image_path(self):
+    def test_regen_images_reuses_the_cloud_dispatch(self):
         source = (
             Path(__file__).resolve().parent.parent.parent.parent
             / "scripts"
@@ -412,7 +403,6 @@ class TestTailscaleBackendConfig:
 
             pytest.skip("docker-compose.yml not shipped into runtime image")
         text = compose.read_text()
-        assert "${LM_STUDIO_URL:-http://100.107.121.5:1234}" in text
-        assert "${VOICE_URL:-http://100.107.121.5:8301}" in text
-        assert "${COMFYUI_URL:-http://100.107.121.5:1234/api/v1/comfy}" in text
+        # Cloud AI only (2026-10-26): no Dominus or LAN AI endpoint at all.
+        assert "100.107.121.5" not in text
         assert "192.168.50.2" not in text

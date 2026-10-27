@@ -1,9 +1,7 @@
 """Background fact extraction, mood classification, and content generation.
 
-Every model call goes through app/background_llm.py: Claude Haiku when
-``KLUKAI_EXTRACTION_PROVIDER=anthropic`` (within the shared daily cap), else
-or on failure the original local request via llm_json.call_llm() /
-call_llm_text() while the Dominus circuit is closed, else the safe default.
+Every model call goes through app/background_llm.py: Claude Haiku within the
+shared daily cap, else the safe default.
 """
 
 from __future__ import annotations
@@ -11,19 +9,14 @@ from typing import Any
 
 
 import logging
-import os
 
 from . import background_llm, extraction_llm
 from .extraction_llm import CallReport
-from .llm_json import call_llm, call_llm_text
 from .models import Mood
 
 logger = logging.getLogger(__name__)
 
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
-EXTRACTION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
-
-# Paid-route compaction bounds (app/background_llm.py); the local prompt is unchanged.
+# Compaction bounds for the background route (app/background_llm.py).
 MAX_COMPACT_TURNS = 24
 MAX_PRIOR_SUMMARY_CHARS = 2000
 MAX_COMPACT_SUMMARY_CHARS = 1500
@@ -188,22 +181,6 @@ Commander: {user_message}"""
 # ── Public API ───────────────────────────────────────────────────────────
 
 
-async def _local_extraction(prompt: str) -> dict[str, Any]:
-    """The original Dominus extraction request, unchanged."""
-    from .llm_router import get_lm_gate
-
-    gate = get_lm_gate()
-    async with gate:
-        result = await call_llm(
-            LM_STUDIO_URL,
-            EXTRACTION_MODEL,
-            prompt,
-            max_tokens=2048,
-            temperature=0.1,
-        )
-    return result
-
-
 async def extract_facts(
     user_message: str,
     assistant_message: str,
@@ -216,11 +193,10 @@ async def extract_facts(
     Returns dict with: mood, interaction, facts, topics, should_remember.
     Never raises — returns safe defaults on any failure.
 
-    With ``KLUKAI_EXTRACTION_PROVIDER=anthropic`` the call goes to Claude
-    Haiku (app/background_llm.py). If Haiku is unavailable, capped, fails or
-    returns no JSON object, the local model is tried when its circuit is
-    closed, else the safe defaults are used. ``report`` (optional) records
-    which provider/model answered and the outcome, never content.
+    The call goes to Claude Haiku (app/background_llm.py). If Haiku is
+    unavailable, capped, fails or returns no JSON object, the safe defaults
+    are used. ``report`` (optional) records which provider/model answered and
+    the outcome, never content.
     """
     prompt = EXTRACTION_PROMPT.format(
         user_message=user_message[:800],
@@ -241,8 +217,6 @@ async def extract_facts(
         prompt,
         max_tokens=2048,
         haiku_max_tokens=extraction_llm.EXTRACTION_MAX_TOKENS,
-        local=lambda: _local_extraction(prompt),
-        local_model=EXTRACTION_MODEL,
         report=report,
     )
     if result is None:
@@ -333,23 +307,8 @@ async def extract_promises(user_message: str, affection_level: int) -> dict[str,
     on any failure or malformed output, so background extraction stays
     fail-soft. Events feed the Operation Brief (app/op_brief.py).
     """
-    from .llm_router import get_lm_gate
-
     prompt = PROMISE_PROMPT.format(user_message=user_message[:800])
-
-    async def local() -> dict[str, Any]:
-        async with get_lm_gate():
-            return await call_llm(
-                LM_STUDIO_URL,
-                EXTRACTION_MODEL,
-                prompt,
-                max_tokens=640,
-                temperature=0.1,
-            )
-
-    result = await background_llm.json_object(
-        "promises", prompt, max_tokens=640, local=local, local_model=EXTRACTION_MODEL
-    )
+    result = await background_llm.json_object("promises", prompt, max_tokens=640)
     if result is None:
         return {"promises": [], "events": []}
 
@@ -390,30 +349,12 @@ async def create_episode_summary(
     if len(turns) < 3:
         return None
 
-    from .llm_router import get_lm_gate
-
     conversation = "\n".join(
         f"{t['role'].title()}: {t['content'][:200]}" for t in turns[-max_turns:]
     )
     prompt = f"Write a 1-2 sentence Klukai journal entry about this interaction.\n\n{conversation}"
 
-    async def local() -> str:
-        async with get_lm_gate():
-            return await call_llm_text(
-                LM_STUDIO_URL,
-                EXTRACTION_MODEL,
-                prompt,
-                max_tokens=150,
-                temperature=0.3,
-            )
-
-    text = await background_llm.text(
-        "episode_summary",
-        prompt,
-        max_tokens=150,
-        local=local,
-        local_model=EXTRACTION_MODEL,
-    )
+    text = await background_llm.text("episode_summary", prompt, max_tokens=150)
     return text or None
 
 
@@ -426,8 +367,6 @@ async def generate_mission_update(
     affection_level: int,
 ) -> str:
     """Generate an in-character field radio report."""
-    from .llm_router import get_lm_gate
-
     prompt = MISSION_UPDATE_PROMPT.format(
         mission_desc=mission_desc,
         elapsed_minutes=elapsed_minutes,
@@ -439,25 +378,10 @@ async def generate_mission_update(
         affection_level=affection_level,
     )
 
-    async def local() -> str:
-        async with get_lm_gate():
-            return await call_llm_text(
-                LM_STUDIO_URL,
-                EXTRACTION_MODEL,
-                prompt,
-                max_tokens=150,
-                temperature=0.6,
-            )
-
-    # No canned substitute: with the GPU host powered off this ran every
-    # ~15 minutes, and callers persisted and pushed the placeholder as if it
-    # were a real field report, all night.
+    # No canned substitute: this runs every ~15 minutes, and callers would
+    # persist and push a placeholder as if it were a real field report.
     return await background_llm.text(
-        "mission_update",
-        prompt,
-        max_tokens=150,
-        local=local,
-        local_model=EXTRACTION_MODEL,
+        "mission_update", prompt, max_tokens=150
     )  # "" on failure; callers decide
 
 
@@ -468,8 +392,6 @@ async def generate_romance_message(
     time_of_day: str,
 ) -> str:
     """Generate a context-aware evening romance message."""
-    from .llm_router import get_lm_gate
-
     prompt = ROMANCE_PROMPT.format(
         affection_level=affection_level,
         mood=mood,
@@ -477,23 +399,7 @@ async def generate_romance_message(
         time_of_day=time_of_day,
     )
 
-    async def local() -> str:
-        async with get_lm_gate():
-            return await call_llm_text(
-                LM_STUDIO_URL,
-                EXTRACTION_MODEL,
-                prompt,
-                max_tokens=200,
-                temperature=0.7,
-            )
-
-    text = await background_llm.text(
-        "romance",
-        prompt,
-        max_tokens=200,
-        local=local,
-        local_model=EXTRACTION_MODEL,
-    )
+    text = await background_llm.text("romance", prompt, max_tokens=200)
     return text or "...The evening is quiet. I was thinking about today."
 
 
@@ -514,37 +420,17 @@ def _bounded_transcript(turns: list[dict[str, Any]]) -> str:
 async def compact_turns(turns: list[dict[str, Any]]) -> str | None:
     """Summarize conversation turns into a compact recap.
 
-    On the shared background route: Haiku (with a bounded transcript) when
-    enabled, falling back to the local model only while its circuit is
-    closed (else None, and the raw turns stay in the session).
+    On the shared background route: Haiku with a bounded transcript (else
+    None, and the raw turns stay in the session).
     """
     if len(turns) < 2:
         return None
-
-    from .llm_router import get_lm_gate
-
-    async def local() -> str:
-        conversation = "\n".join(
-            f"{'Commander' if t['role'] == 'user' else 'Klukai'}: {t['content'][:300]}"
-            for t in turns
-        )
-        async with get_lm_gate():
-            return await call_llm_text(
-                LM_STUDIO_URL,
-                EXTRACTION_MODEL,
-                COMPACTION_PROMPT.format(conversation=conversation),
-                max_tokens=200,
-                temperature=0.2,
-            )
 
     text = await background_llm.text(
         "compaction",
         COMPACTION_PROMPT.format(conversation=_bounded_transcript(turns)),
         max_tokens=200,
         haiku_max_tokens=extraction_llm.COMPACTION_MAX_TOKENS,
-        local=local,
-        local_model=EXTRACTION_MODEL,
     )
-    # Haiku's budget includes thinking, so it does not bound the stored recap;
-    # the local 200-token reply is always well inside this.
+    # Haiku's budget includes thinking, so it does not bound the stored recap.
     return text.strip()[:MAX_COMPACT_SUMMARY_CHARS] or None

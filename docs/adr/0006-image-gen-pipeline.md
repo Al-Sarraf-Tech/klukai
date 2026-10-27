@@ -2,7 +2,7 @@
 
 - **Date:** 2026-04 (formalized 2026-05-16)
 - **Updated:** 2026-08-01 (authenticated facade and bounded GPU lease)
-- **Status:** Accepted (superseded Animagine XL + Pony)
+- **Status:** Superseded by [ADR-0020](0020-cloud-only-ai.md) (2026-10-26); it had superseded Animagine XL + Pony
 - **Authors:** jalsarraf
 
 ## Context

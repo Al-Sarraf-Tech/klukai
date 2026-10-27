@@ -66,29 +66,11 @@ class BreakerConfig:
                 window_seconds=10,
                 probe_interval_seconds=15,
             ),
-            "qdrant": cls(
-                name="qdrant",
-                error_threshold=3,
-                window_seconds=30,
-                probe_interval_seconds=60,
-            ),
-            "lm_studio": cls(
-                name="lm_studio",
-                error_threshold=3,
-                window_seconds=60,
-                probe_interval_seconds=120,
-            ),
             "voice": cls(
                 name="voice",
                 error_threshold=5,
                 window_seconds=60,
                 probe_interval_seconds=120,
-            ),
-            "comfyui": cls(
-                name="comfyui",
-                error_threshold=3,
-                window_seconds=60,
-                probe_interval_seconds=300,
             ),
         }
         return presets.get(name, cls(name=name))

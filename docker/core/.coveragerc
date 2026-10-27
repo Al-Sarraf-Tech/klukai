@@ -24,7 +24,6 @@ omit =
     # is ~96%. Do NOT re-add app/ modules here to prop up the headline — the
     # audit caps this list and reports the true no-omit number alongside it.
     seed_memories.py
-    reannotate_existing.py
     tools/*
 
 [report]

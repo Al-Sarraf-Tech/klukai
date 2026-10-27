@@ -1,8 +1,8 @@
 """Behavioral tests for Living Memory Recall (``_memory_recall_event``).
 
 Klukai surfaces a REAL archive entry as a warm "remember when…" message once
-she's bonded. These tests mock the LLM/gate and the memory archive — they never
-touch a live LLM or DB. Patterns mirror ``TestDreamEvent`` in
+she's bonded. These tests mock the Haiku transport and the memory archive —
+they never touch a live model or DB. Patterns mirror ``TestDreamEvent`` in
 ``test_proactive_coverage.py``.
 """
 
@@ -18,6 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.extraction_llm import ExtractionLLMError
 from app.proactive import ProactiveEngine
 
 _NOON = datetime(2026, 5, 17, 14, 0, 0)
@@ -46,11 +47,7 @@ def _recall_engine(affection: int = 5):
     return e
 
 
-def _gate():
-    gate = AsyncMock()
-    gate.__aenter__ = AsyncMock()
-    gate.__aexit__ = AsyncMock()
-    return gate
+_HAIKU = "app.extraction_llm.complete"
 
 
 _FAKE_MEMORY = {"annotation": "The night on the observation deck, watching the rain."}
@@ -61,18 +58,17 @@ class TestMemoryRecallEvent:
     async def test_fires_with_memory_at_affection_4(self):
         """Affection >= 4 + a real memory + a working LLM -> delivers LLM text."""
         e = _recall_engine(affection=4)
-        gate = _gate()
         with _patch_now(), \
              patch("app.memory_archive.recall_memory",
                    new=AsyncMock(return_value=_FAKE_MEMORY)), \
-             patch("app.llm_json.call_llm_text",
-                   new=AsyncMock(return_value="Remember the rain on the deck, Commander? I do.")), \
-             patch("app.llm_router.get_lm_gate", return_value=gate):
+             patch(_HAIKU, new=AsyncMock(return_value="Remember the rain on the deck, Commander? I do.")) as haiku:
             await e._memory_recall_event()
 
         e._on_message_callback.assert_awaited_once_with(
             "Remember the rain on the deck, Commander? I do."
         )
+        assert haiku.await_args.kwargs["route"] == "memory_recall"
+        assert "observation deck" in haiku.await_args.args[0]
         assert e._memory_recall_delivered_today is True
         assert e._proactive_count_today == 1
         assert e._last_proactive_answered is False
@@ -81,18 +77,16 @@ class TestMemoryRecallEvent:
     async def test_falls_back_to_list_when_recall_empty(self):
         """If recall_memory returns nothing, it pulls from list_memories."""
         e = _recall_engine(affection=6)
-        gate = _gate()
         with _patch_now(), \
              patch("app.memory_archive.recall_memory", new=AsyncMock(return_value=None)), \
              patch("app.memory_archive.list_memories",
                    new=AsyncMock(return_value=[_FAKE_MEMORY])), \
              patch("app.proactive.events.random.choice", side_effect=lambda seq: seq[0]), \
-             patch("app.llm_json.call_llm_text",
-                   new=AsyncMock(return_value="That deck, that rain. I kept it.")), \
-             patch("app.llm_router.get_lm_gate", return_value=gate):
+             patch(_HAIKU, new=AsyncMock(return_value="That deck, that rain. I kept it.")) as haiku:
             await e._memory_recall_event()
 
         e._on_message_callback.assert_awaited_once_with("That deck, that rain. I kept it.")
+        haiku.assert_awaited_once()
         assert e._memory_recall_delivered_today is True
 
     @pytest.mark.asyncio
@@ -153,17 +147,15 @@ class TestMemoryRecallEvent:
 
     @pytest.mark.asyncio
     async def test_llm_failure_falls_back_to_template(self):
-        """LLM raises -> a non-empty fallback message is still delivered."""
+        """Haiku fails -> a non-empty fallback message is still delivered."""
         e = _recall_engine(affection=7)
-        gate = _gate()
         with _patch_now(), \
              patch("app.memory_archive.recall_memory",
                    new=AsyncMock(return_value=_FAKE_MEMORY)), \
-             patch("app.llm_json.call_llm_text",
-                   new=AsyncMock(side_effect=RuntimeError("LM down"))), \
-             patch("app.llm_router.get_lm_gate", return_value=gate):
+             patch(_HAIKU, new=AsyncMock(side_effect=ExtractionLLMError("down"))) as haiku:
             await e._memory_recall_event()  # must not raise
 
+        haiku.assert_awaited_once()
         e._on_message_callback.assert_awaited_once()
         delivered = e._on_message_callback.call_args.args[0]
         assert delivered and delivered.strip()  # non-empty fallback
@@ -173,19 +165,19 @@ class TestMemoryRecallEvent:
 
     @pytest.mark.asyncio
     async def test_empty_llm_string_falls_back_to_template(self):
-        """LLM returns an empty string -> fallback template is delivered."""
+        """Haiku returns a blank string -> fallback template is delivered."""
         e = _recall_engine(affection=5)
-        gate = _gate()
         with _patch_now(), \
              patch("app.memory_archive.recall_memory",
                    new=AsyncMock(return_value=_FAKE_MEMORY)), \
-             patch("app.llm_json.call_llm_text", new=AsyncMock(return_value="   ")), \
-             patch("app.llm_router.get_lm_gate", return_value=gate):
+             patch(_HAIKU, new=AsyncMock(return_value="   ")) as haiku:
             await e._memory_recall_event()
 
+        haiku.assert_awaited_once()
         e._on_message_callback.assert_awaited_once()
         delivered = e._on_message_callback.call_args.args[0]
         assert delivered and delivered.strip()
+        assert "observation deck" not in delivered
 
     @pytest.mark.asyncio
     async def test_archive_exception_returns_silently(self):

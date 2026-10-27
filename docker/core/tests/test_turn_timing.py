@@ -1,11 +1,11 @@
-"""A down Dominus never holds back her mood, heart rate or affection.
+"""A slow background step never holds back her mood, heart rate or affection.
 
 Production, 2026-10-19 (bbaef74, extraction on Haiku): with Dominus off, the
 still-local promise detection waited out a 120 s connect inside the turn's
 background step, ahead of the mood and heartbeat, so both arrived minutes
 late. Mood, heartbeat and affection now come straight after the extraction
-result; local requests connect with a short timeout and, as Haiku's
-fallback, run under a deadline that includes the wait for the LM gate.
+result. Since 2026-10-26 every background call is Haiku-only (no local
+fallback to wait for); the turn-order tests keep the ordering guarantee.
 """
 
 from __future__ import annotations
@@ -13,14 +13,9 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
 import pytest
 
-from app import background_llm as bg
 from app import chat
-from app import extraction_llm as xl
-from app.circuit_breakers import get_breaker
-from app.lm_gateway import LM_CONNECT_TIMEOUT_SECONDS, lm_timeout
 from app.memory import MemoryManager
 from app.models import SessionState
 
@@ -96,83 +91,6 @@ async def test_session_storage_failure_still_keeps_the_turns_record(
     rt.affection.apply_classification.assert_awaited_once()
     rt.memory.set_relationship_fact.assert_awaited()
     rt.memory.store_exchange.assert_awaited_once()
-
-
-# ── short connects and bounded fallbacks ─────────────────────────────────
-
-
-def test_local_requests_connect_with_a_short_timeout():
-    timeout = lm_timeout(120.0)
-    assert timeout.connect == LM_CONNECT_TIMEOUT_SECONDS <= 5.0
-    assert timeout.read == 120.0
-
-
-async def test_complete_local_sends_the_short_connect_timeout():
-    from app.llm_router import LLMRouter
-    from app.models import LLMConfig
-
-    router = LLMRouter()
-    seen = {}
-
-    async def post(url, **kwargs):
-        seen.update(kwargs)
-        return httpx.Response(
-            200,
-            json={"choices": [{"message": {"content": "ok"}}]},
-            request=httpx.Request("POST", url),
-        )
-
-    router._http = MagicMock()
-    router._http.post = post
-    get_breaker("lm_studio").force_close()
-    config = LLMConfig(provider="lmstudio", model="m", base_url="http://x")
-    await router.complete_local("s", [{"role": "user", "content": "u"}], config)
-    assert seen["timeout"].connect == LM_CONNECT_TIMEOUT_SECONDS
-
-
-@pytest.fixture
-def closed_circuit():
-    breaker = get_breaker("lm_studio")
-    breaker.force_close()
-    yield
-    breaker.force_close()
-
-
-async def test_a_hanging_fallback_is_cut_off_at_its_deadline(
-    monkeypatch, closed_circuit
-):
-    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "anthropic")
-    monkeypatch.setattr(
-        xl, "complete", AsyncMock(side_effect=xl.ExtractionLLMError("boom"))
-    )
-    monkeypatch.setattr(bg, "LOCAL_FALLBACK_DEADLINE_SECONDS", 0.05)
-    gate = asyncio.Lock()
-    await gate.acquire()  # someone else holds the LM gate and never lets go
-
-    async def local():
-        async with gate:
-            return "never"
-
-    report = xl.CallReport()
-    out = await asyncio.wait_for(
-        bg.text("promises", "p", max_tokens=640, local=local, report=report), 2.0
-    )
-    assert out == ""
-    assert report.outcome == "failed->defaults"
-    assert not gate._waiters  # the cancelled waiter left the queue
-
-
-async def test_local_provider_has_a_backstop_too(monkeypatch, closed_circuit):
-    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "local")
-    monkeypatch.setattr(bg, "LOCAL_PRIMARY_DEADLINE_SECONDS", 0.05)
-
-    async def local():
-        await asyncio.Event().wait()
-
-    out = await asyncio.wait_for(
-        bg.text("dream", "p", max_tokens=200, local=local), 2.0
-    )
-    assert out == ""
 
 
 # ── compaction never makes a turn look stale ─────────────────────────────

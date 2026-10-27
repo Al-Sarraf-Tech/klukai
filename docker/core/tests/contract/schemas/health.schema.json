@@ -4,7 +4,6 @@
   "required": [
     "cache",
     "database",
-    "qdrant",
     "redis",
     "service",
     "status",
@@ -29,9 +28,6 @@
       "type": "object"
     },
     "redis": {
-      "type": "string"
-    },
-    "qdrant": {
       "type": "string"
     },
     "cache": {

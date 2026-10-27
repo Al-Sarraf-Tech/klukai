@@ -1,10 +1,11 @@
-"""Settings shared by exchange storage and its manager; no runtime state."""
+"""Settings shared by memory storage, recall and its manager; no runtime state."""
 
-import os
-
-EMBED_DIM = 768
-MSG_COLLECTION_NAME = "companion_exchanges"
 MSG_RECALL_LIMIT = 5
-MSG_MIN_SCORE = 0.35
 RECENCY_WEIGHT = 0.15
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://aichat-vector:6333")
+
+# Recall (owner decision 2026-10-26: cloud AI only, no embeddings). Postgres
+# returns at most this many candidates per search; Claude Haiku picks from them.
+RECALL_CANDIDATES = 40
+# Recall runs before her reply is written. A slow or queued Haiku selection is
+# abandoned after this long and the Postgres ranking is used instead.
+RECALL_SELECTION_TIMEOUT_S = 10.0

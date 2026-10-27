@@ -1,4 +1,8 @@
-"""Dominus can opt into queued speech without changing its GPU lease boundary."""
+"""Opt-in queued speech (``VOICE_ASYNC_JOBS``) on the Fish voice.
+
+The real routes, job queue and Fish client run; only the network is a
+``httpx.MockTransport`` standing in for ``api.fish.audio``.
+"""
 
 import asyncio
 import base64
@@ -9,128 +13,94 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+WAV = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32
 
-def _app(monkeypatch, *, backend="dominus", async_jobs="true"):
+
+def _app(monkeypatch, *, async_jobs="true"):
     from app.routes import register_routes
 
-    monkeypatch.setenv("VOICE_BACKEND", backend)
+    monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "true")
+    monkeypatch.setenv("FISH_API_KEY", "pytest-fish-key")
+    monkeypatch.delenv("KLUKAI_FISH_MODEL", raising=False)
+    monkeypatch.delenv("KLUKAI_FISH_VOICE_ID", raising=False)
     if async_jobs is None:
         monkeypatch.delenv("VOICE_ASYNC_JOBS", raising=False)
     else:
         monkeypatch.setenv("VOICE_ASYNC_JOBS", async_jobs)
+    # His voice setting: English, so no translation call is made.
+    monkeypatch.setattr(
+        "app.voice_language.voice_language_for", AsyncMock(return_value="en")
+    )
     app = FastAPI()
     register_routes(app)
     monkeypatch.setattr("app.routes._get_user_id", AsyncMock(return_value="owner"))
     return app
 
 
-def _upstream(monkeypatch, handler):
-    """Replace only network I/O, retaining real jobs, gates, and lease handling."""
-    from app import gpu_lease, voice_jobs
-
+def _fish(monkeypatch, handler):
+    """Route Fish's client to ``handler``; returns the real client type."""
     client_type = httpx.AsyncClient
-    monkeypatch.setenv("VOICE_URL", "http://voice.test:8301")
-    monkeypatch.setenv("LM_STUDIO_URL", "http://gateway.test:1234")
-    monkeypatch.setenv("VOICE_API_TOKEN", "voice-only")
-    monkeypatch.setenv("LM_STUDIO_TOKEN", "gateway-only")
-    monkeypatch.setattr(gpu_lease, "_publish_lease_event", AsyncMock())
-    gate = asyncio.Lock()
-    monkeypatch.setattr("app.llm_router.get_lm_gate", lambda: gate)
-    monkeypatch.setattr(voice_jobs.httpx, "AsyncClient", lambda **kwargs: client_type(
-        transport=httpx.MockTransport(handler), **kwargs
-    ))
-    return client_type, gate
-
-
-@pytest.mark.parametrize("remote_default", [30.0, 60.0])
-@pytest.mark.parametrize("backend,flag,extended", [
-    ("dominus", "true", True),
-    ("dominus", "false", False),
-    ("dominus", None, False),
-    ("amarillo-xpu", "false", True),
-])
-def test_voice_timeout_uses_opt_in_for_microphone_and_archive(
-    monkeypatch, remote_default, backend, flag, extended,
-):
-    from app.voice_client import tts_timeout
-
-    monkeypatch.setenv("VOICE_BACKEND", backend)
-    if flag is None:
-        monkeypatch.delenv("VOICE_ASYNC_JOBS", raising=False)
-    else:
-        monkeypatch.setenv("VOICE_ASYNC_JOBS", flag)
-    assert tts_timeout(remote_default) == (600.0 if extended else remote_default)
+    monkeypatch.setattr(
+        "httpx.AsyncClient",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    return client_type
 
 
 @pytest.mark.asyncio
-async def test_dominus_async_job_preserves_japanese_binary_wav_and_gpu_lease(monkeypatch):
+async def test_queued_japanese_line_is_spoken_by_fish(monkeypatch):
     app = _app(monkeypatch)
-    raw = b"RIFF\x04\x00\x00\x00WAVE"
-    events = []
+    sent = []
 
-    def upstream(request):
-        body = json.loads(request.content)
-        if request.url.path.endswith("/acquire"):
-            events.append("acquired")
-            assert body["workload"] == "companion-voice"
-            assert body["ttl_seconds"] == 600
-            return httpx.Response(200, json={"status": "acquired", "ttl_seconds": 600, "lease_token": "opaque-capability"})
-        if request.url.path == "/tts":
-            events.append("synthesis")
-            assert gate.locked()
-            assert request.headers["Authorization"] == "Bearer voice-only"
-            assert request.headers["X-GPU-Lease-Token"] == "opaque-capability"
-            assert request.extensions["timeout"]["read"] == 600
-            assert body == {"text": "準備はできています。", "language": "ja"}
-            return httpx.Response(200, content=raw, headers={"Content-Type": "audio/wav"})
-        assert request.url.path.endswith("/release")
-        events.append("released")
-        assert body == {"lease_token": "opaque-capability"}
-        return httpx.Response(204)
+    def fish(request):
+        assert str(request.url) == "https://api.fish.audio/v1/tts"
+        assert request.headers["model"] == "s2.1-pro-free"
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, content=WAV, headers={"Content-Type": "audio/wav"})
 
-    client_type, gate = _upstream(monkeypatch, upstream)
+    client_type = _fish(monkeypatch, fish)
     try:
-        async with client_type(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            submitted = await client.post("/api/tts", json={"text": "準備はできています。", "language": "ja"})
+        async with client_type(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            submitted = await client.post(
+                "/api/tts", json={"text": "準備はできています。", "language": "ja"}
+            )
             assert submitted.status_code == 202
             assert submitted.headers["Cache-Control"] == "no-store"
             await asyncio.wait_for(app.state.voice_jobs._queue.join(), timeout=1)
             result = await client.get(f'/api/tts/jobs/{submitted.json()["job_id"]}')
             assert result.json()["status"] == "completed"
-            assert base64.b64decode(result.json()["audio"]) == raw
+            assert base64.b64decode(result.json()["audio"]) == WAV
             assert result.headers["Cache-Control"] == "no-store"
-        assert events == ["acquired", "synthesis", "released"]
-        assert not gate.locked()
+        assert [(body["text"], body["language"]) for body in sent] == [
+            ("準備はできています。", "ja")
+        ]
     finally:
         await app.state.voice_jobs.close()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["gateway-offline", "voice-offline", "upstream-auth"])
-async def test_dominus_failed_job_keeps_session_and_next_request_recovers(monkeypatch, failure):
+@pytest.mark.parametrize("failure", ["offline", "upstream-auth", "no-credit"])
+async def test_failed_job_keeps_session_and_next_request_recovers(monkeypatch, failure):
     app = _app(monkeypatch)
     online = False
-    hosts = []
 
-    def upstream(request):
-        hosts.append(request.url.host)
-        if not online and failure == "gateway-offline":
-            raise httpx.ConnectError("Nobara is offline", request=request)
-        if request.url.path.endswith("/acquire"):
-            return httpx.Response(200, json={"status": "acquired", "ttl_seconds": 600, "lease_token": "opaque-capability"})
-        if request.url.path == "/tts":
-            if not online and failure == "voice-offline":
-                raise httpx.ConnectError("Voice is offline", request=request)
-            if not online and failure == "upstream-auth":
-                return httpx.Response(401)
-            return httpx.Response(200, content=b"recovered-wav")
-        assert request.url.path.endswith("/release")
-        return httpx.Response(204)
+    def fish(request):
+        if not online:
+            if failure == "offline":
+                raise httpx.ConnectError("Fish is unreachable", request=request)
+            return httpx.Response(401 if failure == "upstream-auth" else 402)
+        return httpx.Response(200, content=WAV)
 
-    client_type, gate = _upstream(monkeypatch, upstream)
+    client_type = _fish(monkeypatch, fish)
     try:
-        async with client_type(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            first = await client.post("/api/tts", json={"text": "This text remains available without speech."})
+        async with client_type(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first = await client.post(
+                "/api/tts", json={"text": "This text remains available without speech."}
+            )
             assert first.status_code == 202
             await asyncio.wait_for(app.state.voice_jobs._queue.join(), timeout=1)
             failed = await client.get(f'/api/tts/jobs/{first.json()["job_id"]}')
@@ -141,38 +111,37 @@ async def test_dominus_failed_job_keeps_session_and_next_request_recovers(monkey
                 "status": "failed",
                 "error": "Voice service unavailable",
             }
-            assert not gate.locked()
             online = True
-            second = await client.post("/api/tts", json={"text": "Nobara is back."})
+            second = await client.post("/api/tts", json={"text": "Fish is back."})
             assert second.status_code == 202
             await asyncio.wait_for(app.state.voice_jobs._queue.join(), timeout=1)
             recovered = await client.get(f'/api/tts/jobs/{second.json()["job_id"]}')
-            assert recovered.status_code == 200
             assert recovered.json()["status"] == "completed"
-            assert base64.b64decode(recovered.json()["audio"]) == b"recovered-wav"
-            assert set(hosts) <= {"gateway.test", "voice.test"}
-            assert not gate.locked()
+            assert base64.b64decode(recovered.json()["audio"]) == WAV
     finally:
         await app.state.voice_jobs.close()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend,language,text", [
-    ("dominus", "en", "x" * 501),
-    ("dominus", "ja", "あ" * 501),
-    ("amarillo-xpu", "en", "x" * 501),
-    ("amarillo-xpu", "ja", "こんにちは"),
-], ids=["dominus-long-en", "dominus-long-ja", "arc-long-en", "arc-ja"])
-async def test_queued_speech_is_bounded_and_arc_stays_english_only(monkeypatch, backend, language, text):
-    app = _app(monkeypatch, backend=backend)
+@pytest.mark.parametrize(
+    "language,text",
+    [("en", "x" * 501), ("ja", "あ" * 501), ("fr", "Bonjour.")],
+    ids=["long-en", "long-ja", "other-language"],
+)
+async def test_queued_speech_is_bounded_and_en_or_ja(monkeypatch, language, text):
+    app = _app(monkeypatch)
 
     def no_network(_request):
-        pytest.fail("Rejected speech must not contact a GPU service")
+        pytest.fail("Rejected speech must not contact Fish")
 
-    client_type, _gate = _upstream(monkeypatch, no_network)
+    client_type = _fish(monkeypatch, no_network)
     try:
-        async with client_type(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/api/tts", json={"text": text, "language": language})
+        async with client_type(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/tts", json={"text": text, "language": language}
+            )
             assert response.status_code == 400
     finally:
         await app.state.voice_jobs.close()
@@ -180,11 +149,16 @@ async def test_queued_speech_is_bounded_and_arc_stays_english_only(monkeypatch, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("flag", [None, "false", "", "invalid"])
-async def test_dominus_default_and_disabled_flag_keep_synchronous_response(monkeypatch, flag):
+async def test_default_and_disabled_flag_keep_synchronous_response(monkeypatch, flag):
     app = _app(monkeypatch, async_jobs=flag)
-    monkeypatch.setattr("app.voice_client.post_leased_tts", AsyncMock(return_value=httpx.Response(200, content=b"audio")))
+    monkeypatch.setattr(
+        "app.voice_client.post_tts",
+        AsyncMock(return_value=httpx.Response(200, content=b"audio")),
+    )
     try:
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.post("/api/tts", json={"text": "Hello"})
             assert response.status_code == 200
             assert response.json() == {"audio": "YXVkaW8="}
@@ -193,21 +167,16 @@ async def test_dominus_default_and_disabled_flag_keep_synchronous_response(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend,flag", [
-    ("amarillo-xpu", "false"),
-    ("dominus", "true"),
-    ("dominus", " TRUE "),
-    ("dominus", "1"),
-    ("dominus", "yes"),
-    ("dominus", "on"),
-])
-async def test_async_backends_accept_500_character_requests(monkeypatch, backend, flag):
+@pytest.mark.parametrize("flag", ["true", " TRUE ", "1", "yes", "on"])
+async def test_queued_speech_accepts_500_character_requests(monkeypatch, flag):
     from app.voice_jobs import VoiceJobs
 
-    app = _app(monkeypatch, backend=backend, async_jobs=flag)
+    app = _app(monkeypatch, async_jobs=flag)
     app.state.voice_jobs = VoiceJobs(synthesize=AsyncMock(return_value="YXVkaW8="))
     try:
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.post("/api/tts", json={"text": "x" * 500})
             assert response.status_code == 202
     finally:
@@ -215,49 +184,33 @@ async def test_async_backends_accept_500_character_requests(monkeypatch, backend
 
 
 @pytest.mark.asyncio
-async def test_dominus_job_cancellation_waits_for_lease_release_before_next_job(monkeypatch):
+async def test_cancelling_a_running_job_lets_the_next_one_speak(monkeypatch):
     app = _app(monkeypatch)
-    started, cleaning, allow_release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    started = asyncio.Event()
     synthesizing = []
 
-    async def upstream(request):
-        if request.url.path.endswith("/acquire"):
-            return httpx.Response(200, json={"status": "acquired", "ttl_seconds": 600, "lease_token": "opaque-capability"})
-        if request.url.path == "/tts":
-            text = json.loads(request.content)["text"]
-            synthesizing.append(text)
-            if text == "first":
-                started.set()
-                await asyncio.Event().wait()
-            return httpx.Response(200, content=b"wav")
-        assert request.url.path.endswith("/release")
-        cleaning.set()
-        await allow_release.wait()
-        return httpx.Response(204)
+    async def fish(request):
+        text = json.loads(request.content)["text"]
+        synthesizing.append(text)
+        if text == "first":
+            started.set()
+            await asyncio.Event().wait()
+        return httpx.Response(200, content=WAV)
 
-    client_type, gate = _upstream(monkeypatch, upstream)
-    cancellation = None
+    client_type = _fish(monkeypatch, fish)
     try:
-        async with client_type(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        async with client_type(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
             first = app.state.voice_jobs.submit("owner", {"text": "first"})
             await asyncio.wait_for(started.wait(), timeout=1)
             second = app.state.voice_jobs.submit("owner", {"text": "second"})
-            cancellation = asyncio.create_task(client.delete(f'/api/tts/jobs/{first["job_id"]}'))
-            await asyncio.wait_for(cleaning.wait(), timeout=1)
-            assert not cancellation.done()
-            assert gate.locked()
-            assert synthesizing == ["first"]
-            allow_release.set()
-            cancelled = await asyncio.wait_for(cancellation, timeout=1)
+            cancelled = await client.delete(f'/api/tts/jobs/{first["job_id"]}')
             assert cancelled.json()["status"] == "cancelled"
             assert "audio" not in cancelled.json()
             await asyncio.wait_for(app.state.voice_jobs._queue.join(), timeout=1)
             completed = await client.get(f'/api/tts/jobs/{second["job_id"]}')
             assert completed.json()["status"] == "completed"
             assert synthesizing == ["first", "second"]
-            assert not gate.locked()
     finally:
-        allow_release.set()
-        if cancellation is not None:
-            await asyncio.gather(cancellation, return_exceptions=True)
         await app.state.voice_jobs.close()

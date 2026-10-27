@@ -26,7 +26,7 @@ from tests.runtime_backend_support import (
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("dependency", ["postgres", "redis", "qdrant"])
+@pytest.mark.parametrize("dependency", ["postgres", "redis"])
 async def test_reused_real_readiness_clients_survive_fault_and_recovery(
     backends, clients, dependency
 ):
@@ -39,9 +39,8 @@ async def test_reused_real_readiness_clients_survive_fault_and_recovery(
         accepted = {name: value.accepted for name, value in proxies.items()}
         for _ in range(3):
             assert (await health.get_fresh_health())["status"] == "ok"
-        # Real persistent Redis/Qdrant protocol connections carry fresh commands.
+        # The real persistent Redis protocol connection carries fresh commands.
         assert proxies["redis"].accepted == accepted["redis"]
-        assert proxies["qdrant"].accepted == accepted["qdrant"]
         events.append(
             {
                 "phase": "healthy_reused",
@@ -51,9 +50,8 @@ async def test_reused_real_readiness_clients_survive_fault_and_recovery(
         )
         await proxy.cut()
         failed = await health.get_fresh_health()
-        assert failed["status"] == (
-            "degraded" if dependency == "qdrant" else "unhealthy"
-        )
+        # Readiness needs both: no database, or no session store, is unhealthy.
+        assert failed["status"] == "unhealthy"
         assert breaker.state is State.OPEN
         events.append(
             {
@@ -75,7 +73,6 @@ async def test_reused_real_readiness_clients_survive_fault_and_recovery(
         )
         managed = health._clients
         assert managed is not None
-    assert managed.http.is_closed
     connections = managed.redis.connection_pool._available_connections
     assert all(not connection.is_connected for connection in connections)
     evidence(backends, dependency, events)
@@ -93,7 +90,6 @@ async def test_reused_real_readiness_clients_survive_fault_and_recovery(
                     path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
                     for path in paths
                 },
-                "managed_http_closed": managed.http.is_closed,
                 "managed_redis_connections_closed": True,
             },
             indent=2,
@@ -107,7 +103,7 @@ async def test_real_readiness_cancellation_releases_stream_and_reuses_client(
     backends, clients, monkeypatch
 ):
     _, proxies = clients
-    proxy = proxies["qdrant"]
+    proxy = proxies["redis"]
     entered, release = asyncio.Event(), asyncio.Event()
     original = proxy._relay
 
@@ -115,8 +111,9 @@ async def test_real_readiness_cancellation_releases_stream_and_reuses_client(
         proxy.accepted += 1
         proxy.writers.add(writer)
         try:
-            request = await reader.readuntil(b"\r\n\r\n")
-            assert request.startswith(b"GET /healthz HTTP/1.1")
+            # The first RESP command on the probe's fresh pooled connection.
+            request = await reader.readuntil(b"\r\n")
+            assert request.startswith(b"*")
             entered.set()
             await release.wait()
         finally:
@@ -126,7 +123,7 @@ async def test_real_readiness_cancellation_releases_stream_and_reuses_client(
 
     # Prove the actual backend first, then start the cancellation case with a
     # clean transport. Cutting an idle reused socket would inject an additional
-    # RemoteProtocolError unrelated to cancellation and legitimately trip it.
+    # ConnectionError unrelated to cancellation and legitimately trip it.
     async with health.running():
         assert (await health.get_fresh_health())["status"] == "ok"
     async with health.running():
@@ -139,13 +136,17 @@ async def test_real_readiness_cancellation_releases_stream_and_reuses_client(
             with pytest.raises(asyncio.CancelledError):
                 await task
             assert health._clients is managed and managed is not None
-            assert not managed.http.is_closed
+            # Cancellation is not a dependency failure.
+            assert get_breaker("redis").state is State.CLOSED
         finally:
             release.set()
             monkeypatch.setattr(proxy, "_relay", original)
             await asyncio.sleep(0)
+        # The same managed client serves the next probe on a fresh stream.
         assert (await health.get_fresh_health())["status"] == "ok"
-    assert managed.http.is_closed
+        assert health._clients is managed
+    connections = managed.redis.connection_pool._available_connections
+    assert all(not connection.is_connected for connection in connections)
     (backends.evidence / "cancellation-driver-binding.json").write_text(
         json.dumps(
             {
@@ -157,7 +158,7 @@ async def test_real_readiness_cancellation_releases_stream_and_reuses_client(
                     (ROOT / "app/observability/health_cache.py").read_bytes()
                 ).hexdigest(),
                 "cancelled_probe_recovered": True,
-                "managed_http_closed": True,
+                "managed_redis_connections_closed": True,
             },
             indent=2,
         )

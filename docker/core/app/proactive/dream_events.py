@@ -83,10 +83,6 @@ class DreamEventsMixin(_EngineBase):
                 for k, tmpl in self._event_dream_prompts().items()
             }
 
-            from ..llm_json import call_llm_text
-            from ..fact_extractor import LM_STUDIO_URL, EXTRACTION_MODEL
-            from ..llm_router import get_lm_gate
-
             prompt = (
                 f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
                 f"You are NOT an AI. {dream_prompts[dream_type]}{dream_memory_ref} "
@@ -101,19 +97,7 @@ class DreamEventsMixin(_EngineBase):
             else:
                 from .. import background_llm
 
-                async def local() -> str:
-                    async with get_lm_gate():
-                        return await call_llm_text(
-                            LM_STUDIO_URL,
-                            EXTRACTION_MODEL,
-                            prompt,
-                            max_tokens=200,
-                            temperature=0.8,
-                        )
-
-                message = await background_llm.text(
-                    "dream", prompt, max_tokens=200, local=local
-                )
+                message = await background_llm.text("dream", prompt, max_tokens=200)
 
             if message and self._on_message_callback:
                 self._dream_delivered_today = True

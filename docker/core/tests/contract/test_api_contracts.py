@@ -15,8 +15,12 @@ SCHEMA_DIR = Path(__file__).parent / "schemas"
 
 
 def test_health_schema_pinned() -> None:
-    """The /health endpoint contract MUST be pinned. Drift = breaking change."""
-    expected_keys = {"status", "service", "version", "database", "redis", "qdrant", "cache"}
+    """The /health endpoint contract MUST be pinned. Drift = breaking change.
+
+    "qdrant" left the contract with ADR-0020 (cloud-only AI, 2026-10-26): there
+    is no vector store any more.
+    """
+    expected_keys = {"status", "service", "version", "database", "redis", "cache"}
     schema_path = SCHEMA_DIR / "health.schema.json"
     assert schema_path.exists(), (
         f"pinned contract missing: {schema_path}. The schema must be a committed "
@@ -26,6 +30,8 @@ def test_health_schema_pinned() -> None:
     assert set(schema["required"]) >= expected_keys, (
         "health schema drifted — keys removed from required list"
     )
+    assert "qdrant" not in schema["required"]
+    assert "qdrant" not in schema["properties"]
 
 
 def test_chat_turn_contract_pinned() -> None:

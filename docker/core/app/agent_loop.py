@@ -1,4 +1,4 @@
-"""Klukai's existing tools with opt-in Sonnet reasoning and local fallback."""
+"""Klukai's tools with Claude reasoning: Sonnet in chat, Haiku otherwise."""
 
 from __future__ import annotations
 from typing import Any
@@ -12,14 +12,11 @@ import time
 from dataclasses import dataclass, field
 
 from .llm_router import (
+    CLAUDE_SECONDARY,
     FAILURE_SENTINEL,
     LLMRouter,
-    LLMConfig,
-    LM_STUDIO_URL,
-    LOCAL_AGENT,
-    LOCAL_CASUAL,
 )
-from .models import SessionState
+from .models import LLMConfig, SessionState
 from .mcp_client import MCPClient
 from .tool_schemas import get_tool_schemas, get_builtin_tools
 from .ws_manager import WSManager
@@ -53,7 +50,7 @@ class AgentResult:
     steps: list[AgentStep] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)
     iterations: int = 0
-    model: str = LOCAL_AGENT
+    model: str = CLAUDE_SECONDARY
 
 
 # Status messages for tool operations
@@ -129,7 +126,7 @@ class AgentLoop:
                 else "No matching facts found."
             )
 
-            # Search episodic memories via Qdrant
+            # Search episodic memories (Postgres candidates, Haiku picks)
             episodes = await memory.recall_episodes(query, user_id=user_id, limit=3)
             ep_text = (
                 "\n".join(f"- {e.get('summary', '')[:150]}" for e in episodes)
@@ -188,36 +185,24 @@ class AgentLoop:
         *,
         interactive: bool = False,
     ) -> AgentResult:
-        """Use the interactive primary when opted in; otherwise stay local."""
+        """Sonnet for interactive turns, Haiku otherwise (router decides)."""
         result = AgentResult(response="")
         start_time = time.monotonic()
 
         tools, declared_names = await self._available_tools()
 
-        # Try agent model first, fall back to chat model if not available
-        config = LLMConfig(
-            provider="lmstudio",
-            model=LOCAL_CASUAL,  # Use R1 model — handles tools + chat
-            base_url=LM_STUDIO_URL,
-            max_tokens=2048,
-            temperature=0.7,
-        )
-        if interactive:
-            try:
-                config = await self._router.route(
-                    "",
-                    SessionState(conversation_id="agent"),
-                    needs_tools=True,
-                    interactive=True,
-                )
-            except RuntimeError:
-                return AgentResult(response=FAILURE_SENTINEL, model="offline")
-        complete = (
-            self._router.complete_chat if interactive else self._router.complete_local
-        )
-        # Record the model that actually answers — the dataclass default is
-        # LOCAL_AGENT, which is not what runs here, and the name is persisted
-        # with the message and shown in the UI's done frame.
+        try:
+            config = await self._router.route(
+                "",
+                SessionState(conversation_id="agent"),
+                needs_tools=True,
+                interactive=interactive,
+            )
+        except RuntimeError:
+            return AgentResult(response=FAILURE_SENTINEL, model="offline")
+        complete = self._router.complete_chat
+        # Record the model that answers; it is persisted with the message and
+        # shown in the UI's done frame.
         result.model = config.model
 
         work_messages = list(messages)

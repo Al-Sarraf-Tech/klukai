@@ -1,7 +1,7 @@
 """Observability primitives for klukai.
 
 Submodules:
-- :mod:`.health_cache` — TTL-cached subsystem pings (PG / Redis / Qdrant)
+- :mod:`.health_cache` — TTL-cached subsystem pings (PG / Redis)
 
 Module-level helpers (re-exported for backward-compatibility):
 - :func:`structured_log` — single-line JSON log for indexable observability

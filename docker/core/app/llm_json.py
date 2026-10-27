@@ -7,7 +7,6 @@ blocks, trailing commas, truncated strings. Returns clean dicts or defaults.
 
 from __future__ import annotations
 
-from .dependencies import http_request
 from typing import Any
 
 
@@ -16,10 +15,6 @@ import logging
 import re
 
 from pydantic import JsonValue
-
-import httpx
-
-from .lm_gateway import LM_TTL_SECONDS, lm_studio_auth_headers, lm_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -153,119 +148,3 @@ def parse_json(text: str) -> JsonValue:
         return _parse_value(fixed)
     except json.JSONDecodeError:
         return None
-
-
-async def call_llm(  # pragma: no cover - integration (LM Studio HTTP)
-    url: str,
-    model: str,
-    prompt: str,
-    *,
-    max_tokens: int = 2048,
-    temperature: float = 0.1,
-    system: str | None = None,
-    client: httpx.AsyncClient | None = None,
-) -> dict[str, Any]:
-    """Call LLM and return parsed JSON. Never raises — returns empty dict on failure.
-
-    This is the ONE function all modules use for structured LLM output.
-    """
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
-    http = client or httpx.AsyncClient(timeout=lm_timeout(120.0))
-    close_after = client is None
-
-    try:
-        r = await http_request(
-            "lm_studio",
-            http,
-            "post",
-            f"{url}/v1/chat/completions",
-            headers=lm_studio_auth_headers(),
-            json={
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "stream": False,
-                "ttl": LM_TTL_SECONDS,
-            },
-        )
-        r.raise_for_status()
-
-        text = extract_text(r.json())
-        if not text:
-            logger.warning("LLM returned empty response (model=%s)", model)
-            return {}
-
-        result = parse_json(text)
-        if not isinstance(result, dict):
-            logger.warning(
-                "Failed to parse JSON from LLM (model=%s): %s", model, text[:100]
-            )
-            return {}
-
-        return result
-
-    except httpx.HTTPStatusError as e:
-        logger.warning("LLM HTTP error (model=%s): %s", model, e.response.status_code)
-        return {}
-    except Exception as e:
-        logger.warning("LLM call failed (model=%s, %s)", model, type(e).__name__)
-        return {}
-    finally:
-        if close_after:
-            await http.aclose()
-
-
-async def call_llm_text(  # pragma: no cover - integration (LM Studio HTTP)
-    url: str,
-    model: str,
-    prompt: str,
-    *,
-    max_tokens: int = 200,
-    temperature: float = 0.5,
-    system: str | None = None,
-    client: httpx.AsyncClient | None = None,
-) -> str:
-    """Call LLM and return plain text. Never raises — returns empty string on failure.
-
-    For non-JSON responses (summaries, mission updates, romance messages).
-    """
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
-    http = client or httpx.AsyncClient(timeout=lm_timeout(120.0))
-    close_after = client is None
-
-    try:
-        r = await http_request(
-            "lm_studio",
-            http,
-            "post",
-            f"{url}/v1/chat/completions",
-            headers=lm_studio_auth_headers(),
-            json={
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "stream": False,
-                "ttl": LM_TTL_SECONDS,
-            },
-        )
-        r.raise_for_status()
-
-        text = extract_text(r.json())
-        return text or ""
-
-    except Exception as e:
-        logger.warning("LLM text call failed (model=%s, %s)", model, type(e).__name__)
-        return ""
-    finally:
-        if close_after:
-            await http.aclose()

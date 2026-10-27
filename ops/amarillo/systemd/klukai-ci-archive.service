@@ -9,8 +9,6 @@ WorkingDirectory=%h/git/klukai
 Environment=HOME=%h
 # Amarillo's own CI VMs write /docker/klukai/ci-artifacts (ops/amarillo/ci-runner).
 ExecStart=/usr/bin/python3 %h/git/klukai/ops/amarillo/scripts/klukai-fetch-ci-artifacts.py --source amarillo archive
-# Drains what is left on the Dominus heavy guest; a no-op while Dominus is off.
-ExecStart=/usr/bin/python3 %h/git/klukai/ops/amarillo/scripts/klukai-fetch-ci-artifacts.py --source dominus archive
 TimeoutStartSec=45min
 Nice=10
 IOSchedulingClass=idle

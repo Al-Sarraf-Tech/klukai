@@ -30,7 +30,7 @@ MOVABLE_JOBS = {"ci-image": "build", "test": "serial", "real-backends": "serial"
                 "components": "serial", "frontend": "frontend"}
 
 
-def test_the_router_only_ever_yields_amarillo_or_dominus_one_job_vm_labels():
+def test_the_router_only_ever_yields_amarillo_one_job_vm_labels():
     from tools.ci import pool
 
     routed = workflow()["jobs"]["source-policy"]["outputs"]
@@ -42,7 +42,9 @@ def test_the_router_only_ever_yields_amarillo_or_dominus_one_job_vm_labels():
             assert json.loads(plan[f"labels_{group}"]) == [
                 "self-hosted", "Linux", "X64", f"klukai-{plan['pool']}-{group}"]
     route = next(s for s in workflow()["jobs"]["source-policy"]["steps"] if s.get("id") == "route")
-    assert route["env"]["DOMINUS_HEARTBEAT"] == "${{ vars.KLUKAI_CI_DOMINUS_HEARTBEAT }}"
+    assert "DOMINUS_HEARTBEAT" not in route.get("env", {})
+    assert "KLUKAI_CI_DOMINUS_HEARTBEAT" not in route["run"]
+    assert plan["pool"] == "amarillo"
     assert "${{" not in route["run"]  # the variable enters through the environment
 
 
@@ -68,7 +70,7 @@ def test_only_exact_dispatched_heads_and_main_pushes_start_self_hosted_ci():
     data = workflow()
     events = data.get("on", data.get(True))
     assert set(events) == {"push", "workflow_dispatch"}
-    assert events["push"]["branches"] == ["main"]
+    assert events["push"]["branches"] == ["main", "feat/cloud-only-ai"]
     requested = events["workflow_dispatch"]["inputs"]["expected_revision"]
     assert requested["required"] is True and requested["type"] == "string"
     assert data["permissions"] == {"contents": "read"}
@@ -79,6 +81,7 @@ def test_only_exact_dispatched_heads_and_main_pushes_start_self_hosted_ci():
     [
         ("workflow_dispatch", "refs/heads/owner-reviewed", REVISION, REVISION, True),
         ("push", "refs/heads/main", REVISION, "", True),
+        ("push", "refs/heads/feat/cloud-only-ai", REVISION, "", True),
         ("workflow_dispatch", "refs/heads/reviewed", REVISION, "b" * 40, False),
         ("workflow_dispatch", "refs/heads/reviewed", REVISION, "", False),
         ("workflow_dispatch", "refs/heads/reviewed", "invalid", "invalid", False),
@@ -292,7 +295,8 @@ def test_core_and_real_backends_use_one_source_bound_tool_image():
         assert "@sha256:" in job["env"]["KLUKAI_CORE_POSTGRES_IMAGE"]
         if name == "real-backends":
             assert "@sha256:" in job["env"]["KLUKAI_CORE_REDIS_IMAGE"]
-            assert "@sha256:" in job["env"]["KLUKAI_CORE_QDRANT_IMAGE"]
+            # Memory lives in PostgreSQL only: the job provisions no vector store.
+            assert not any("QDRANT" in key for key in job["env"])
 
 
 def test_node_archive_checksum_failure_stops_before_unpack_or_path_selection(tmp_path):

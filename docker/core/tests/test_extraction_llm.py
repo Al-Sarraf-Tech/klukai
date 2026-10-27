@@ -1,4 +1,4 @@
-"""The owner-approved Haiku route: explicit switches, capped, credential-safe."""
+"""The owner-approved Haiku route: always Anthropic, key-gated, capped, credential-safe."""
 
 from __future__ import annotations
 
@@ -30,7 +30,6 @@ def response(**overrides):
 
 @pytest.fixture
 def remote(monkeypatch):
-    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "anthropic")
     monkeypatch.delenv("KLUKAI_EXTRACTION_MODEL", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-extraction-key")
     reserve = AsyncMock(return_value="attempt-1")
@@ -61,32 +60,26 @@ def test_utc_clock_is_aware():
     assert xl._utc_now().tzinfo is not None
 
 
-def test_provider_defaults_to_local(monkeypatch):
-    monkeypatch.delenv("KLUKAI_EXTRACTION_PROVIDER", raising=False)
-    assert xl.provider() == "local"
-    assert xl.uses_anthropic() is False
-
-
-@pytest.mark.parametrize("value", ["anthropic", " Anthropic ", "ANTHROPIC"])
-def test_anthropic_provider_is_explicit(monkeypatch, value):
-    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", value)
+@pytest.mark.parametrize("value", [None, "local", "anthropic", "openai", ""])
+def test_provider_is_always_anthropic(monkeypatch, value):
+    # KLUKAI_EXTRACTION_PROVIDER is retired: whatever an old deployment still
+    # exports, there is no local background model to select.
+    if value is None:
+        monkeypatch.delenv("KLUKAI_EXTRACTION_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", value)
+    assert xl.provider() == "anthropic"
     assert xl.uses_anthropic() is True
+    assert not hasattr(xl, "PROVIDER_ENV")
 
 
-def test_unknown_provider_stays_local(monkeypatch, caplog):
-    monkeypatch.setattr(xl, "_warned", set())
-    monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "openai")
-    with caplog.at_level(logging.WARNING, logger="app.extraction_llm"):
-        assert xl.provider() == "local"
-        assert xl.provider() == "local"
-    assert len([r for r in caplog.records if "PROVIDER" in r.getMessage()]) == 1
-
-
-def test_chat_flags_alone_never_enable_extraction(monkeypatch):
-    monkeypatch.delenv("KLUKAI_EXTRACTION_PROVIDER", raising=False)
-    monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "true")
-    monkeypatch.setenv("KLUKAI_CREATIVE_TEXT_PROVIDER", "anthropic")
-    assert xl.uses_anthropic() is False
+def test_call_report_defaults_to_anthropic():
+    report = xl.CallReport()
+    assert (report.provider, report.model, report.outcome) == (
+        "anthropic",
+        "",
+        "pending",
+    )
 
 
 @pytest.mark.parametrize(
@@ -168,23 +161,33 @@ async def test_configured_haiku_model_is_sent(remote, monkeypatch):
     assert seen[0]["model"] == "claude-haiku-4-5"
 
 
-async def test_local_provider_never_reserves_or_dispatches(remote, monkeypatch):
+async def test_retired_local_switch_cannot_turn_the_route_off(remote, monkeypatch):
     reserve, _ = remote
     monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "local")
     seen = []
-    transport(monkeypatch, lambda r: seen.append(r))
-    with pytest.raises(xl.ExtractionUnavailable):
-        await xl.complete("x", max_tokens=100, route="extraction")
-    reserve.assert_not_awaited()
-    assert seen == []
+    transport(
+        monkeypatch, lambda r: seen.append(r) or httpx.Response(200, json=response())
+    )
+    assert await xl.complete("x", max_tokens=100, route="extraction") == (
+        '{"mood": "serene"}'
+    )
+    reserve.assert_awaited_once_with("extraction")
+    assert [str(r.url) for r in seen] == [xl.MESSAGES_URL]
 
 
-async def test_missing_key_never_reserves(remote, monkeypatch):
+async def test_missing_key_never_reserves_or_dispatches(remote, monkeypatch, caplog):
     reserve, _ = remote
     monkeypatch.delenv("ANTHROPIC_API_KEY")
-    with pytest.raises(xl.ExtractionUnavailable):
-        await xl.complete("x", max_tokens=100, route="extraction")
+    seen = []
+    transport(monkeypatch, lambda r: seen.append(r))
+    with caplog.at_level(logging.WARNING, logger="app.extraction_llm"):
+        for _ in range(2):
+            with pytest.raises(xl.ExtractionUnavailable):
+                await xl.complete("x", max_tokens=100, route="extraction")
     reserve.assert_not_awaited()
+    assert seen == []
+    key_lines = [r.getMessage() for r in caplog.records if "API key" in r.getMessage()]
+    assert key_lines == ["No Anthropic API key is set; using safe defaults"]
 
 
 @pytest.mark.parametrize(

@@ -356,9 +356,8 @@ class MilestonesMixin(_EngineBase):
         episode with importance=8 so it surfaces later as a milestone.
         """
         try:
-            from ..context import memory, router as llm_router
+            from ..context import memory
             from ..db import get_pool
-            from ..models import LLMConfig
             from ..personality import build_character_preamble
             import uuid
 
@@ -411,44 +410,14 @@ class MilestonesMixin(_EngineBase):
                     "No bullet points.\n\n"
                     "Past week excerpt:\n" + excerpt
                 )
-                import os
-
                 from .. import background_llm
 
-                config = LLMConfig(
-                    provider="lmstudio",
-                    model="cognitivecomputations_dolphin-mistral-24b-venice-edition",
-                    base_url=os.environ.get(
-                        "LM_STUDIO_URL", "http://100.107.121.5:1234"
-                    ),
-                    temperature=0.85,
-                    max_tokens=400,
-                )
-
-                async def local(
-                    system_prompt: str = system_prompt,
-                    user_prompt: str = user_prompt,
-                    config: LLMConfig = config,
-                ) -> str:
-                    resp = await llm_router.complete_local(
-                        system_prompt=system_prompt,
-                        messages=[{"role": "user", "content": user_prompt}],
-                        config=config,
-                    )
-                    content = (
-                        resp.get("choices", [{}])[0]
-                        .get("message", {})
-                        .get("content", "")
-                    )
-                    return content if isinstance(content, str) else ""
-
-                # Never raises: Haiku, else Dominus while it is up, else "".
+                # Never raises: Haiku, else "".
                 reflection = await background_llm.text(
                     "weekly_reflection",
                     user_prompt,
                     system=system_prompt,
                     max_tokens=400,
-                    local=local,
                 )
 
                 if not reflection or len(reflection.strip()) < 50:

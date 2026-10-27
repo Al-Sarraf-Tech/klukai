@@ -1,6 +1,6 @@
 # Run on amarillo: companion-core (consolidated with aichat infra)
-# Shares Docker networks with infra-postgres, redis, qdrant locally
-# Dominus is the selected voice/STT backend; text remains available when offline.
+# Shares Docker networks with infra-postgres and redis locally.
+# All of Klukai's AI is cloud (Anthropic, Fish Audio, the image accounts).
 # Pin the compose project name so `docker compose` (and every Makefile target)
 # acts on the live stack instead of the directory-default `klukai` project.
 name: companion
@@ -27,49 +27,38 @@ services:
       # Shared secret for /internal/deferred/fire (events-bridge -> core).
       # Fails closed: unset means the endpoint rejects everyone.
       CORE_INTERNAL_TOKEN: "${CORE_INTERNAL_TOKEN:-}"
-      # queue = durable RabbitMQ work rail (prefetch=1 GPU lease via bridge).
+      # queue = durable RabbitMQ work rail (one job at a time via the bridge).
       # inline = in-process asyncio task (unit tests / bridge outage fallback).
       HER_POV_EXECUTION: "${HER_POV_EXECUTION:-queue}"
-      QDRANT_URL: "http://aichat-vector:6333"
       MCP_URL: "http://aichat-mcp:8096"
       # Opt-in, scoped web/reference tools from existing host MCP servers.
       KLUKAI_MCP_CONFIG: "${KLUKAI_MCP_CONFIG:-}"
       KLUKAI_BRAVE_ENABLED: "${KLUKAI_BRAVE_ENABLED:-false}"
       DATA_URL: "http://aichat-data:8091"
-      INFERENCE_URL: "http://aichat-inference:8105"
-      # GPU services on dominus-nobara over its literal Tailscale address.
-      # Overrides are for isolated integration tests only; production must not
-      # use an RFC1918/LAN endpoint.
-      # Owner switch (2026-10-19): voice is off for now. Off, core sends no
-      # speech or transcription work to Dominus. Set true to bring it back.
+      # Cloud AI only (owner, 2026-10-26): no model, embedding, voice or image
+      # service on Dominus-Nobara or Amarillo is used by core.
+      # Voice in and out is Fish Audio. Off, core sends no speech work at all.
       KLUKAI_VOICE_ENABLED: "${KLUKAI_VOICE_ENABLED:-false}"
-      VOICE_URL: "${VOICE_URL:-http://100.107.121.5:8301}"
-      VOICE_BACKEND: "${VOICE_BACKEND:-dominus}"
-      # Keep long cold GPU synthesis off the browser's synchronous deadline.
+      # Opt-in submit/poll speech for long lines.
       VOICE_ASYNC_JOBS: "${VOICE_ASYNC_JOBS:-false}"
-      VOICE_STT_URL: "${VOICE_STT_URL:-http://100.107.121.5:8301}"
-      # Must match the canonical target stack's VOICE_API_TOKEN.
-      VOICE_API_TOKEN: "${VOICE_API_TOKEN:?VOICE_API_TOKEN is required}"
-      # VOICE_BACKEND=fish: the Fish Audio community "Klukai" model (Danastico).
-      # The account has no credit and must never be billed: the model header
-      # stays a free model (s2.1-pro-free is free through 2026-11-30); core
-      # refuses an empty key/model and any model not ending in "-free".
+      # Voice is Fish Audio only (cloud), both directions, with one key:
+      # - speech: the community "Klukai" model (Danastico) on a free model
+      #   header (s2.1-pro-free is free through 2026-11-30); core refuses an
+      #   empty key/model and any model not ending in "-free".
+      # - transcription: transcribe-1-pro, pay-as-you-go ($0.36 per audio
+      #   hour, owner authorized 2026-10-26). It needs API credit on the Fish
+      #   account and fails closed without it. No key: voice input is off.
       FISH_API_KEY: "${FISH_API_KEY:-}"
       KLUKAI_FISH_VOICE_ID: "${KLUKAI_FISH_VOICE_ID:-47fc35b7311944bc9fa238ed856de1f3}"
       KLUKAI_FISH_MODEL: "${KLUKAI_FISH_MODEL:-s2.1-pro-free}"
-      # LM Studio backend. Default: dominus-nobara RTX 3090 over Tailscale (auth required).
-      # Override LM_STUDIO_URL only for isolated integration testing. The core
-      # always sends the required bearer header; test backends may ignore it.
-      LM_STUDIO_URL: "${LM_STUDIO_URL:-http://100.107.121.5:1234}"
-      LM_STUDIO_TOKEN: "${LM_STUDIO_TOKEN:?LM_STUDIO_TOKEN is required}"
-      # Owner authorized paid Sonnet primary / Dominus fallback on 2026-10-14.
-      # Opt-in preserves local-only behavior on other deployments.
+      # Claude: Sonnet 5.5 for chat, Haiku 5.5 for everything else (owner,
+      # 2026-10-14 and 2026-10-26). There is no local model: with this off or
+      # without a key, chat is unavailable. Opt-in keeps other deployments
+      # from billing by default.
       KLUKAI_CLAUDE_PRIMARY: "${KLUKAI_CLAUDE_PRIMARY:-false}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       # Separate opt-in for cloud images/creative text; no billable defaults.
-      # Images never render on Dominus: a missing setting must not route them to
-      # ComfyUI there (game guard, sleeping host). agy = the account worker
-      # (Grok, then Codex, then Agy).
+      # agy = the account worker (Grok, then Codex, then Agy).
       KLUKAI_IMAGE_PROVIDER: "${KLUKAI_IMAGE_PROVIDER:-agy}"
       # Account-quota Agy worker on Amarillo; no credentials enter this container.
       KLUKAI_CHAT_IMAGE_PROVIDER: "${KLUKAI_CHAT_IMAGE_PROVIDER:-}"
@@ -86,25 +75,19 @@ services:
       KLUKAI_OPENAI_IMAGE_MODEL: "${KLUKAI_OPENAI_IMAGE_MODEL:-gpt-image-2.5-sunburst-2026-09-08}"
       KLUKAI_OPENAI_IMAGE_QUALITY: "${KLUKAI_OPENAI_IMAGE_QUALITY:-max}"
       KLUKAI_IMAGE_REFERENCE_FILES: "${KLUKAI_IMAGE_REFERENCE_FILES:-[]}"
-      KLUKAI_CREATIVE_TEXT_PROVIDER: "${KLUKAI_CREATIVE_TEXT_PROVIDER:-local}"
+      KLUKAI_CREATIVE_TEXT_PROVIDER: "${KLUKAI_CREATIVE_TEXT_PROVIDER:-haiku}"
       KLUKAI_CLOUD_IMAGE_DAILY_LIMIT: "${KLUKAI_CLOUD_IMAGE_DAILY_LIMIT:-0}"
       KLUKAI_CLOUD_IMAGE_MONTHLY_LIMIT: "${KLUKAI_CLOUD_IMAGE_MONTHLY_LIMIT:-0}"
       KLUKAI_CLOUD_TEXT_DAILY_LIMIT: "${KLUKAI_CLOUD_TEXT_DAILY_LIMIT:-0}"
       KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT: "${KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT:-0}"
       KLUKAI_CREATIVE_LEDGER: "/images/.creative/attempts.sqlite3"
-      # Owner authorized Claude Haiku (high effort) for the per-turn mood /
-      # affection / facts extraction and compaction summaries on 2026-10-19,
-      # then for every background text/JSON call (promises, episode entries,
-      # proactive lines, reflections, local-creative captions) so nothing
-      # depends on Dominus being on (docker/core/app/background_llm.py).
-      # Paid calls need both provider=anthropic and a positive daily cap
-      # (UTC-day attempts shared by all of it, same ledger).
-      KLUKAI_EXTRACTION_PROVIDER: "${KLUKAI_EXTRACTION_PROVIDER:-local}"
+      # Claude Haiku (high effort) for every background text/JSON call and for
+      # memory recall (owner, 2026-10-19 and 2026-10-26;
+      # docker/core/app/background_llm.py). Paid calls need a positive daily
+      # cap (UTC-day attempts shared by all of it, same ledger); at the cap,
+      # callers use their safe defaults.
       KLUKAI_EXTRACTION_MODEL: "${KLUKAI_EXTRACTION_MODEL:-claude-haiku-5-5}"
       KLUKAI_EXTRACTION_DAILY_LIMIT: "${KLUKAI_EXTRACTION_DAILY_LIMIT:-0}"
-      # ComfyUI has no published raw port. Every operation is proxied by the
-      # authenticated gateway and authorized again with the active GPU lease.
-      COMFYUI_URL: "${COMFYUI_URL:-http://100.107.121.5:1234/api/v1/comfy}"
       PERSONALITY_PATH: "/config/personality.yaml"
       # Commander's location for weather-driven mood (Open-Meteo, keyless).
       # Defaults to Chicago; override in .env. Weather is fail-soft — if unset
@@ -167,9 +150,6 @@ services:
       start_period: 10s
     labels:
       autoheal: "true"
-
-  # companion-voice runs in the canonical ops/dominus-nobara stack on RAID0.
-  # Reachable only at the target Tailscale address on port 8301.
 
   # Fan companion Redis events onto the shared homelab RabbitMQ bus
   # (see ~/git/rabbitmq-ops). Reachable over Tailscale AMQP only.

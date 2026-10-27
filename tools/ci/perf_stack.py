@@ -40,25 +40,34 @@ def write_exclusive(path: Path, value: object) -> None:
 
 
 def environment(stack: DisposableStack, database: str) -> dict[str, str]:
-    """Explicit fresh test settings; never copy host provider/auth credentials."""
+    """Explicit fresh test settings; never copy host provider/auth credentials.
+
+    No voice settings: the core speaks only through the paid Fish Audio API at a
+    hardcoded endpoint, which CI never calls, and the pre-2026-10-26 baseline
+    only reaches its voice backend from routes and websockets this gate does
+    not measure.
+    """
     fixture = "http://fixture:8088"
     return {
         "DATABASE_URL": f"postgresql://perf_test:{stack.password}@postgres:5432/{database}",
         "REDIS_URL": "redis://redis:6379/1",
+        # For the pre-2026-10-26 baseline only (main before the cloud-only core);
+        # the candidate ignores these. Its readiness needs a healthy Qdrant, its
+        # startup creates Qdrant collections and probes LM Studio, and its
+        # scheduler's local-model and embedding calls must reach the fixture, not
+        # the Dominus/Amarillo defaults. Remove them, the Qdrant container and the
+        # fixture's LM Studio/embedding routes once main is cloud-only.
         "QDRANT_URL": "http://qdrant:6333",
+        "LM_STUDIO_URL": fixture,
+        "LM_STUDIO_TOKEN": stack.password,
+        "INFERENCE_URL": fixture,
         "PERSONALITY_PATH": "/perf-fixtures/personality.yaml",
         "SEED_PASSWORD_JALSARRAF": stack.password,
         "SEED_PASSWORD_RICKY": stack.password,
-        "LM_STUDIO_URL": fixture,
-        "LM_STUDIO_TOKEN": stack.password,
+        # Both cores open their MCP session here at startup; perf_evidence
+        # counts that handshake as proof each core ran against the fixture.
         "MCP_URL": fixture,
         "DATA_URL": fixture,
-        "INFERENCE_URL": fixture,
-        "VOICE_URL": fixture,
-        "VOICE_STT_URL": fixture,
-        "VOICE_BACKEND": "dominus",
-        "VOICE_ASYNC_JOBS": "true",
-        "VOICE_API_TOKEN": stack.password,
         "COMFYUI_URL": fixture,
         "KLUKAI_CLAUDE_PRIMARY": "false",
         "KLUKAI_BRAVE_ENABLED": "false",

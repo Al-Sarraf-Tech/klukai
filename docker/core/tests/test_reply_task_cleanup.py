@@ -29,7 +29,7 @@ async def test_reply_settles_its_warmup_notifier_on_every_exit(monkeypatch, exit
     class Router:
         async def route(self, *_args, **_kwargs):
             return LLMConfig(
-                provider="lmstudio", model="offline", base_url="http://127.0.0.1:1"
+                provider="anthropic", model="offline", base_url="http://127.0.0.1:1"
             )
 
         async def stream(self, *_args, **_kwargs):
@@ -119,7 +119,7 @@ async def test_reply_waits_for_started_notifier_finalizer(monkeypatch, token_cou
     class Router:
         async def route(self, *_args, **_kwargs):
             return LLMConfig(
-                provider="lmstudio", model="offline", base_url="http://127.0.0.1:1"
+                provider="anthropic", model="offline", base_url="http://127.0.0.1:1"
             )
 
         async def stream(self, *_args, **_kwargs):

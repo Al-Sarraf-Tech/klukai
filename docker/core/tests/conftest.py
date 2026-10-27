@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import os
 import sys
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -22,27 +21,22 @@ if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
     os.environ["KLUKAI_CLAUDE_PRIMARY"] = "false"
     os.environ.pop("ANTHROPIC_API_KEY", None)
     os.environ.pop("OPENAI_API_KEY", None)
-    os.environ["KLUKAI_IMAGE_PROVIDER"] = "comfyui"
+    os.environ["KLUKAI_IMAGE_PROVIDER"] = "disabled"  # no renderer unless a test picks one
     os.environ["KLUKAI_CHAT_IMAGE_PROVIDER"] = ""
     os.environ["KLUKAI_AGY_ALLOWED_USERS"] = ""
     os.environ["KLUKAI_AGY_SOCKET"] = "/tmp/pytest-klukai-agy-unavailable/image.sock"
     os.environ["KLUKAI_AGY_TOKEN_FILE"] = "/tmp/pytest-klukai-agy-unavailable/token"
     os.environ["KLUKAI_CREATIVE_TEXT_PROVIDER"] = "local"
-    # Haiku extraction is a paid route: off, with no allowance, in unit tests.
-    os.environ["KLUKAI_EXTRACTION_PROVIDER"] = "local"
+    # The Haiku background route is paid: no key (popped above) and no
+    # allowance in unit tests, so every background call gets its safe default.
     os.environ["KLUKAI_EXTRACTION_DAILY_LIMIT"] = "0"
     os.environ.pop("KLUKAI_EXTRACTION_MODEL", None)
     os.environ["KLUKAI_IMAGE_REFERENCE_FILES"] = "[]"
     for _creative_kind in ("IMAGE", "TEXT"):
         for _creative_period in ("DAILY", "MONTHLY"):
             os.environ[f"KLUKAI_CLOUD_{_creative_kind}_{_creative_period}_LIMIT"] = "0"
-    os.environ["LM_STUDIO_URL"] = "http://127.0.0.1:1"
-    os.environ.setdefault("LM_STUDIO_TOKEN", "pytest-local-lm-token")
-    os.environ["VOICE_URL"] = "http://127.0.0.1:1"
-    os.environ["COMFYUI_URL"] = "http://127.0.0.1:1"
-    # Fish is a paid cloud API: unit tests never see a real key or backend.
+    # Fish is a paid cloud API: unit tests never see a real key.
     os.environ.pop("FISH_API_KEY", None)
-    os.environ.pop("VOICE_BACKEND", None)
 
 # ── Psycopg shim ─────────────────────────────────────────────────────────────
 # Mock psycopg/psycopg_pool at the module level before any app code imports
@@ -75,86 +69,6 @@ if not os.environ.get("PERSONALITY_PATH"):
     )
     if _repo_personality.exists():
         os.environ["PERSONALITY_PATH"] = str(_repo_personality)
-
-
-# ── LM Studio mock ──────────────────────────────────────────────────────────
-
-def _lm_studio_response(content: str = "Test response.") -> dict:
-    """Build a minimal LM Studio /v1/chat/completions response."""
-    return {
-        "choices": [
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": content,
-                },
-                "finish_reason": "stop",
-            }
-        ],
-        "model": "test-model",
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-    }
-
-
-class FakeHTTPResponse:
-    """Minimal stand-in for httpx.Response."""
-
-    def __init__(self, status_code: int = 200, json_data: dict | None = None):
-        self.status_code = status_code
-        self._json = json_data or _lm_studio_response()
-
-    def json(self) -> dict:
-        return self._json
-
-    def raise_for_status(self) -> None:
-        if self.status_code >= 400:
-            raise Exception(f"HTTP {self.status_code}")
-
-
-@pytest.fixture
-def mock_lm_studio_response():
-    """Return a factory for fake LM Studio HTTP responses."""
-    return _lm_studio_response
-
-
-@pytest.fixture
-def fake_http_response():
-    """Return a factory for FakeHTTPResponse objects."""
-    return FakeHTTPResponse
-
-
-@pytest.fixture
-def mock_httpx_post():
-    """Patch httpx.AsyncClient.post to return a canned LM Studio response.
-
-    Yields the mock so tests can inspect calls or override return_value.
-    """
-    resp = FakeHTTPResponse(200, _lm_studio_response())
-    mock_post = AsyncMock(return_value=resp)
-    with patch("httpx.AsyncClient.post", mock_post):
-        yield mock_post
-
-
-@pytest.fixture
-def mock_voice_gpu_lease(monkeypatch):
-    """Keep legacy voice-call unit tests offline under the new lease boundary."""
-
-    from app import llm_router, voice_client
-    from app.gpu_lease import GPULease
-
-    class Gate:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return False
-
-    @asynccontextmanager
-    async def lease(_workload: str):
-        yield GPULease(ttl_seconds=600, token="pytest-voice-lease")
-
-    monkeypatch.setattr(llm_router, "get_lm_gate", lambda: Gate())
-    monkeypatch.setattr(voice_client, "gpu_lease", lease)
 
 
 # ── Redis mock ───────────────────────────────────────────────────────────────

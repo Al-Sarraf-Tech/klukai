@@ -56,9 +56,9 @@ async def legacy_schema(pool, before=None):
 
 async def test_fresh_schema_then_repeat_changes_nothing(migration_pool):
     applied = await apply_migrations(migration_pool, MIGRATIONS)
-    assert len(applied) == 26
+    assert len(applied) == 27
     assert await rows(migration_pool, "SELECT count(*) FROM companion_gifts") == [(1,)]
-    assert await rows(migration_pool, "SELECT count(*) FROM companion_schema_migrations") == [(26,)]
+    assert await rows(migration_pool, "SELECT count(*) FROM companion_schema_migrations") == [(27,)]
     assert await rows(
         migration_pool,
         "SELECT data_type, is_nullable FROM information_schema.columns "
@@ -94,6 +94,35 @@ async def test_current_legacy_preserves_low_score_duplicates_and_history(migrati
     assert await rows(migration_pool, "SELECT score FROM companion_affection") == [(5,)]
     assert await rows(migration_pool, "SELECT * FROM companion_gifts ORDER BY id") == gifts_before
     assert await rows(migration_pool, "SELECT * FROM companion_messages ORDER BY id") == history_before
+
+
+async def test_memory_search_text_covers_existing_rows_and_replays(migration_pool):
+    """260 computes search text for rows stored before it, and replays safely."""
+    await legacy_schema(migration_pool, before="260")
+    async with migration_pool.connection() as conn:
+        await conn.execute(
+            "INSERT INTO companion_episodes (id, summary, keywords, user_id) VALUES "
+            "('00000000-0000-0000-0000-0000000000e1', 'We watched the rain from the roof', "
+            "ARRAY['rooftop','storm'], 'alice')"
+        )
+        await conn.execute(
+            "INSERT INTO companion_exchanges (id, user_content, assistant_content, topics, user_id) "
+            "VALUES ('00000000-0000-0000-0000-0000000000a1', 'I miss the beach', "
+            "'Then we go back, Commander.', ARRAY['travel'], 'alice')"
+        )
+    await apply_migrations(migration_pool, MIGRATIONS)
+    await apply_migrations(migration_pool, MIGRATIONS)
+    assert await rows(
+        migration_pool,
+        "SELECT search_tsv @@ websearch_to_tsquery('english', 'storms'), "
+        "search_tsv @@ websearch_to_tsquery('english', 'watching') FROM companion_episodes",
+    ) == [(True, True)]
+    assert await rows(
+        migration_pool,
+        "SELECT search_tsv @@ websearch_to_tsquery('english', 'beaches'), "
+        "search_tsv @@ websearch_to_tsquery('english', 'commander'), "
+        "search_tsv @@ websearch_to_tsquery('english', 'travel') FROM companion_exchanges",
+    ) == [(True, True, True)]
 
 
 async def test_lexical_order_exact_bytes_and_once_only(migration_pool, tmp_path):
@@ -195,25 +224,28 @@ async def test_seed_existence_is_scoped_to_user_and_item(migration_pool):
     ]
 
 
-async def test_reannotation_archives_the_annotation_the_update_replaces(migration_pool):
-    """Successive rewrites each archive the text they replace, so history is
-    the full chain and nothing is lost, even when the second writer read the
-    row before the first one committed."""
-    import reannotate_existing
-
-    await apply_migrations(migration_pool, MIGRATIONS)
+async def test_cloud_only_migration_preserves_annotations_and_history(migration_pool, tmp_path):
+    """The recall migration preserves both the current annotation and its history."""
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    for source in MIGRATIONS.glob("*.sql"):
+        if source.name < "260_memory_full_text_search.sql":
+            (previous / source.name).write_bytes(source.read_bytes())
+    await apply_migrations(migration_pool, previous)
     async with migration_pool.connection() as conn:
         mem_id = (
             await (
                 await conn.execute(
-                    "INSERT INTO companion_memories (filename, annotation, user_id, conversation_id) "
-                    "VALUES ('m.webp', 'original', 'claude', 'seed:x') RETURNING id::text"
+                    "INSERT INTO companion_memories "
+                    "(filename, annotation, annotation_history, user_id, conversation_id) "
+                    "VALUES ('m.webp', 'second', '[{\"annotation\":\"original\"},{\"annotation\":\"first\"}]'::jsonb, "
+                    "'claude', 'seed:x') RETURNING id::text"
                 )
             ).fetchone()
         )[0]
         await conn.commit()
-        assert await reannotate_existing._replace_annotation(conn, mem_id, "claude", "first")
-        assert await reannotate_existing._replace_annotation(conn, mem_id, "claude", "second")
+    assert mem_id
+    assert await apply_migrations(migration_pool, MIGRATIONS) == ["260_memory_full_text_search.sql"]
     rows_ = await rows(
         migration_pool,
         "SELECT annotation, jsonb_path_query_array(annotation_history, '$[*].annotation') "

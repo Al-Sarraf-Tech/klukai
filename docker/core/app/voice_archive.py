@@ -6,24 +6,21 @@ module owns the synthesis + persistence (``save_voice_note``) and the playback
 helpers (``get_voice_note``, ``latest_voice_note``, ``mark_played``).
 
 Design:
-- Audio bytes are produced through ``post_leased_tts``, exactly as the chat WS
-  path and ``/api/tts`` do. Dominus holds the shared LM gate plus a remote
-  ``companion-voice`` GPU lease and sends both voice auth and lease capability.
-  The request shape mirrors ``/api/tts``: ``{"text": ..., "language": ...}``.
-  Her VOICE is Japanese (the Ai Nonaka reference clip); her TEXT is English.
-  ``language`` is the language of the text being read, so it defaults to
-  ``"en"`` — the same thing the PWA sends. ``"ja"`` asked XTTS to parse
-  English as Japanese and needs ``cutlet`` the voice image doesn't ship, so
-  every letter 500'd (zero ever saved).
+- Audio bytes are produced through ``voice_client.post_tts`` (Fish Audio),
+  exactly as the chat WS path and ``/api/tts`` do. The request shape mirrors
+  ``/api/tts``: ``{"text": ..., "language": ...}``. ``language`` is the
+  language of the text being read; her letters are English, so it defaults
+  to ``"en"`` — the same thing the PWA sends.
 - The WAV is written under ``AUDIO_DIR`` (``/audio`` volume), named ``{uuid}.wav``,
   mirroring how memory_archive writes image files under ``IMAGES_DIR``.
 - A row lands in ``companion_voice_notes`` (migration 151), scoped per user.
 - What she reads aloud is the text minus stage directions ("(she smiles)",
   "*nods*"), clipped at a sentence end; the full text is stored as the prompt.
 
-FISH: with ``VOICE_BACKEND=fish`` no letter is synthesized at all. The PWA
-plays a ``voice_letter``'s audio unasked, and she speaks only when he taps, so
-``save_voice_note`` returns ``None`` and the greeting arrives as text.
+TEXT-ONLY TODAY: ``voice_letters_enabled()`` is false, so no letter is
+synthesized at all. The PWA plays a ``voice_letter``'s audio unasked, and she
+speaks only when he taps, so ``save_voice_note`` returns ``None`` and the
+greeting arrives as text. Saved letters still play back.
 
 FAIL-SOFT: every failure mode — voice service down/non-200, disk write error,
 DB insert error — is logged at WARNING and returns ``None`` (no row, no partial
@@ -41,8 +38,6 @@ import os
 import uuid
 from pathlib import Path
 
-import httpx
-
 from .db import get_pool
 from .helpers import strip_actions_for_tts, tts_clip
 
@@ -52,13 +47,12 @@ logger = logging.getLogger(__name__)
 # memory_archive.py — a single env-overridable Path resolved at import time.
 AUDIO_DIR = Path(os.environ.get("AUDIO_DIR", "/audio"))
 
-# The language of the TEXT, not of her voice: the Japanese voice comes from the
-# reference clip whatever the text language. Her letters are written in English,
-# like everything she says, so they are read as "en" (what the PWA sends too).
+# The language of the TEXT. Her letters are written in English, like everything
+# she says, so they are read as "en" (what the PWA sends too).
 DEFAULT_VOICE_LANGUAGE = os.environ.get("VOICE_LANGUAGE", "en")
 
-# XTTS rejects very long inputs; /api/tts caps at 500 chars. Match that so a long
-# reflective greeting never fails synthesis (the text greeting still carries full).
+# /api/tts caps a line at 500 chars. Match that so a long reflective greeting
+# never fails synthesis (the text greeting still carries in full).
 _MAX_TTS_CHARS = 500
 
 
@@ -74,8 +68,8 @@ async def save_voice_note(
     """Synthesize ``text`` to a JP voice letter, store it, and return its id.
 
     Steps (all fail-soft → return ``None`` on any error, leaving no row):
-      1. Acquire the GPU lease and POST ``/tts`` with ``{"text", "language"}``.
-         Non-200 or lease failure → ``None``.
+      1. Synthesize ``{"text", "language"}`` with Fish. Non-200 or an
+         error → ``None``.
       2. Write the returned WAV bytes to ``AUDIO_DIR/{uuid}.wav``.
       3. INSERT a ``companion_voice_notes`` row scoped to ``user_id``.
 
@@ -88,9 +82,8 @@ async def save_voice_note(
     from .voice_client import voice_letters_enabled
 
     if not voice_letters_enabled():
-        # Off, or the Fish voice: the PWA auto-plays a letter's audio and Fish
-        # speaks only when he taps. No synthesis and no voice_id; the
-        # greeting goes out as text instead.
+        # The PWA auto-plays a letter's audio and she speaks only when he
+        # taps. No synthesis and no voice_id; the greeting goes out as text.
         logger.info("Voice letter for %s stays text-only", user_id)
         return None
 
@@ -104,18 +97,11 @@ async def save_voice_note(
     note_id = str(uuid.uuid4())
     filename = f"{note_id}.wav"
 
-    # 1. Synthesize via the voice service (mirror /api/tts request shape).
+    # 1. Synthesize via Fish (mirror /api/tts request shape).
     try:
-        from .voice_client import post_leased_tts, tts_timeout
+        from .voice_client import post_tts
 
-        async with httpx.AsyncClient(
-            timeout=tts_timeout(), trust_env=False, follow_redirects=False
-        ) as client:
-            r = await post_leased_tts(
-                client,
-                {"text": speech, "language": language},
-                timeout=tts_timeout(),
-            )
+        r = await post_tts({"text": speech, "language": language})
         if r.status_code != 200:
             logger.warning(
                 "Voice letter synth failed (HTTP %s) for %s — falling back to text",

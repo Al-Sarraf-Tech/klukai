@@ -231,17 +231,12 @@ async def _handle_message(
     """Process a text message: memory recall, LLM, response, extraction.
 
     Returns her reply text, or None when she had no answer this turn (empty
-    input, or the local LLM produced nothing) so callers such as the voice
-    path know there is nothing of hers to speak.
+    input, or the model produced nothing) so callers such as the voice path
+    know there is nothing of hers to speak.
     """
     if not content.strip():
         return None
 
-    # Preserve relationship activity tracking. This timestamp cannot extend
-    # LLM residency; the compatibility keepalive method is a hard no-op.
-    from .llm_router import mark_user_active
-
-    mark_user_active()
     proactive.mark_user_messaged_today(user_id=user_id)
 
     start = time.monotonic()

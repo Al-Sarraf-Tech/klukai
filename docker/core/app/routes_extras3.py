@@ -300,7 +300,7 @@ def register_extras3(app: FastAPI) -> None:
         req: AccountDeactivateRequest, request: Request
     ) -> Any:
         """Soft-delete user account. ABSOLUTE: chat memories, episodes,
-        affection, Qdrant vectors are NEVER touched (CLAUDE.md SACRED rule).
+        affection and memories are NEVER touched (CLAUDE.md SACRED rule).
 
         Effect:
         - Account row marked deactivated_at = NOW()

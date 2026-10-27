@@ -282,6 +282,11 @@ def evaluate(
             raise InvalidEvidence("unknown check kind")
 
 
+# Eight measured routes (tools/ci/perf_schema.TARGETS) in at least three paired
+# rounds plus the pooled comparison. Voice left the gate on 2026-10-26.
+MIN_PERF_COMPARISONS = 8 * (3 + 1)
+
+
 def performance(root: Path, revision: str, max_age: int, evidence: Path) -> str:
     """Actual producer output is mandatory; generic named assertions never suffice."""
     raw = run(
@@ -312,7 +317,7 @@ def performance(root: Path, revision: str, max_age: int, evidence: Path) -> str:
             or not 0 < ratio
             or result.get("noise_floor_ms") != 5.0
             or type(result["comparisons"]) is not int
-            or result["comparisons"] < 40
+            or result["comparisons"] < MIN_PERF_COMPARISONS
         ):
             raise InvalidEvidence("invalid independently verified performance result")
         return f"Source/lifecycle-verified performance: max p99 ratio={ratio:.4f}; {result['comparisons']} comparisons"

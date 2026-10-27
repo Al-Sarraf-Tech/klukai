@@ -1,8 +1,8 @@
 """Live Portrait + avatar model routes.
 
 GET  /api/portrait                               frames for what she is wearing now (Bearer)
-POST /api/portrait/refresh                        re-render the set (Bearer; 1 per 10 min;
-                                                  GPU renderer only, else 409)
+POST /api/portrait/refresh                        always 409 REDRAW_UNAVAILABLE (Bearer; 1 per
+                                                  10 min): a cached set is kept as drawn
 GET  /api/portrait/frame/{user}/{outfit}/{f}.webp a frame, by short-lived signature (no Bearer,
                                                   so it works as a plain <img src>)
 GET  /api/avatar/model                            the GLB (Bearer; game-ripped, never public;
@@ -92,20 +92,14 @@ def _gzip_file(path: Path) -> bytes:
 
 
 def register_portrait_routes(app: FastAPI) -> None:
-    async def _context(user_id: str) -> tuple[int, str, bool]:
-        level = (await context.affection.get_state(user_id)).level
-        outfit = await portrait.current_outfit(user_id, level)
-        # The game guard belongs to Dominus's GPU; off it, never ask Dominus.
-        game = await context.router.is_game_active() if portrait.uses_gpu() else False
-        return level, outfit, game
-
     @app.get("/api/portrait")
     async def api_portrait(request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
-        level, outfit, game = await _context(user_id)
-        return await portrait.portrait_state(user_id, outfit, level, game_active=game)
+        level = (await context.affection.get_state(user_id)).level
+        outfit = await portrait.current_outfit(user_id, level)
+        return await portrait.portrait_state(user_id, outfit, level)
 
     @app.post("/api/portrait/animate")
     async def api_portrait_animate(request: Request) -> Any:
@@ -120,38 +114,28 @@ def register_portrait_routes(app: FastAPI) -> None:
                 "Portrait animation is not configured for this account.",
                 status_code=403,
             )
-        level, outfit, _ = await _context(user_id)
+        level = (await context.affection.get_state(user_id)).level
+        outfit = await portrait.current_outfit(user_id, level)
         if not portrait.animate(user_id, outfit, level):
             return ec.err(
                 "IN_PROGRESS",
                 "Portrait animation is busy or cooling down.",
                 status_code=409,
             )
-        return await portrait.portrait_state(user_id, outfit, level, game_active=False)
+        return await portrait.portrait_state(user_id, outfit, level)
 
     @app.post("/api/portrait/refresh")
     async def api_portrait_refresh(request: Request) -> Any:
         user_id = await _get_user_id(request)
         if not user_id:
             return ec.auth_required()
-        if not portrait.can_redraw():
-            return ec.err(
-                "REDRAW_UNAVAILABLE",
-                "Her portrait is kept as drawn; redrawing it needs the local renderer.",
-                status_code=409,
-            )
-        level, outfit, game = await _context(user_id)
-        if game:
-            return ec.err(
-                "GPU_BUSY",
-                "A game owns the GPU right now; try again after it.",
-                status_code=409,
-            )
-        if not portrait.refresh(user_id, outfit, level):
-            return ec.err(
-                "IN_PROGRESS", "Her portrait is already being drawn.", status_code=409
-            )
-        return await portrait.portrait_state(user_id, outfit, level, game_active=False)
+        # Pictures are cloud-only: no renderer redraws a whole set, so a cached
+        # set is never thrown away. The 409 refunds the rate-limit token.
+        return ec.err(
+            "REDRAW_UNAVAILABLE",
+            "Her portrait is kept as drawn; it cannot be redrawn.",
+            status_code=409,
+        )
 
     @app.get("/api/portrait/frame/{user_id}/{outfit_id}/{frame}.webp")
     async def api_portrait_frame(

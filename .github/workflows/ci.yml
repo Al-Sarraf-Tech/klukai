@@ -2,7 +2,9 @@ name: Klukai CI
 
 on:
   push:
-    branches: [main]
+    # Dispatched checks do not satisfy PR protection. This owner-approved
+    # branch needs a push run; fork PRs still never execute on our runners.
+    branches: [main, feat/cloud-only-ai]
   workflow_dispatch:
     inputs:
       expected_revision:
@@ -56,7 +58,7 @@ jobs:
           [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
           [[ "$SOURCE_REF" == refs/heads/* ]]
           case "$EVENT_NAME" in
-            push) [[ "$SOURCE_REF" == refs/heads/main ]] ;;
+            push) [[ "$SOURCE_REF" == refs/heads/main || "$SOURCE_REF" == refs/heads/feat/cloud-only-ai ]] ;;
             workflow_dispatch) [[ "$EXPECTED_REVISION" == "$SOURCE_REVISION" ]] ;;
             *) echo 'Unauthorized CI event' >&2; exit 1 ;;
           esac
@@ -65,17 +67,12 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Choose the CI pool (Dominus when online, else amarillo)
-        # tools/ci/pool.py: a fresh Dominus heartbeat moves the build/test chain,
-        # components and Flutter there; quick checks and image-scan/perf stay on
-        # amarillo, which also takes over any Dominus job that waits too long.
+      - name: Route every Klukai job to Amarillo
         id: route
-        env:
-          DOMINUS_HEARTBEAT: ${{ vars.KLUKAI_CI_DOMINUS_HEARTBEAT }}
-        run: python3 -m tools.ci.pool --heartbeat "${DOMINUS_HEARTBEAT:-0}" --now "$(date +%s)" >> "$GITHUB_OUTPUT"
+        run: python3 -m tools.ci.pool >> "$GITHUB_OUTPUT"
       - name: Fail fast on formatting before allocating build VMs
         run: python3 -m tools.ci.quick_lint --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/preflight-ruff"
-      - name: Every main push and dispatch certifies the full source
+      - name: Every admitted push and dispatch certifies the full source
         # Deploy-on-merge releases only commits whose "Required CI gates" ran
         # every job (Flutter tests, format, analysis, PWA build, image gates);
         # a selective plan would leave a merged commit uncertified.
@@ -166,12 +163,9 @@ jobs:
       KLUKAI_CHROME_BINARY: /opt/klukai-ci/toolchains/b838d34bba223857b3cab6b924de31a9ddee0c1f7c81df7611f3a0cb883a17c7/chrome/chrome
       KLUKAI_TEST_ALLOW_LIVE_BACKENDS: "0"
       KLUKAI_CLAUDE_PRIMARY: "false"
-      KLUKAI_CREATIVE_TEXT_PROVIDER: "local"
+      KLUKAI_CREATIVE_TEXT_PROVIDER: "haiku"
       ANTHROPIC_API_KEY: ""
       OPENAI_API_KEY: ""
-      LM_STUDIO_URL: "http://127.0.0.1:1"
-      VOICE_URL: "http://127.0.0.1:1"
-      COMFYUI_URL: "http://127.0.0.1:1"
       KLUKAI_AGY_SOCKET: "/tmp/klukai-ci-no-account/image.sock"
       KLUKAI_AGY_TOKEN_FILE: "/tmp/klukai-ci-no-account/token"
     steps:
@@ -243,6 +237,10 @@ jobs:
         run: scripts/ci/core.sh
 
   real-backends:
+    # Provisions PostgreSQL 17 and Valkey only: memory lives in PostgreSQL
+    # (cloud-only AI, 2026-10-26). The display name is a release/deploy gate
+    # key (FULL_CI_GATES in ops/amarillo/scripts/klukai-fetch-ci-artifacts.py,
+    # read by the deployed relay), so it changes only together with that list.
     name: Real PostgreSQL, Valkey and Qdrant recovery
     needs: [source-policy, ci-image]
     runs-on: ${{ fromJSON(needs.source-policy.outputs.labels_serial) }}
@@ -252,7 +250,6 @@ jobs:
       KLUKAI_CORE_CI_IMAGE: ${{ needs.ci-image.outputs.image_id }}
       KLUKAI_CORE_POSTGRES_IMAGE: postgres@sha256:6f30057d31f5861b66f3545d4821f987aacf1dd920765f0acadea0c58ff975b1
       KLUKAI_CORE_REDIS_IMAGE: valkey/valkey@sha256:cb3339abbd6e18942cd8ac3349f0c371a82ba5b6204b242563ba299e7956cbd0
-      KLUKAI_CORE_QDRANT_IMAGE: qdrant/qdrant@sha256:f1c7272cdac52b38c1a0e89313922d940ba50afd90d593a1605dbbc214e66ffb
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -269,7 +266,7 @@ jobs:
             docker load -q -i "$HANDOFF/image.tar"
           fi
           test "$(docker image inspect --format '{{.Id}}' "$KLUKAI_CORE_CI_IMAGE")" = "$KLUKAI_CORE_CI_IMAGE"
-      - name: Require all nine real-driver fault and recovery cases
+      - name: Require all ten real-driver fault, recovery and memory recall cases
         run: scripts/ci/backends.sh
 
   lint:

@@ -1,4 +1,9 @@
-"""Three-tier memory manager: Redis session, Qdrant episodic, PG factual."""
+"""Three-tier memory manager: Redis session, Postgres episodic, data-service facts.
+
+Episodic and exchange memory live in Postgres only (owner decision
+2026-10-26, cloud AI only). Recall takes Postgres full-text candidates and
+lets Claude Haiku pick the relevant ones; see app/memory_recall.py.
+"""
 
 from __future__ import annotations
 
@@ -8,13 +13,15 @@ from collections.abc import Callable
 import asyncio
 import logging
 import os
+
+# memory_facts.record_milestone reads the clock through this module.
 from datetime import datetime as datetime
 
 import httpx
 
-from .dependencies import http_request
 import redis.asyncio as redis
 
+from . import memory_recall
 from .memory_facts import MemoryFactsMixin
 from .memory_session import (
     RedisSessionMixin,
@@ -24,27 +31,46 @@ from .memory_session import (
 )
 from .memory_exchange import ExchangeMemoryMixin
 from .memory_settings import (
-    EMBED_DIM as EMBED_DIM,
-    MSG_COLLECTION_NAME as MSG_COLLECTION_NAME,
     MSG_RECALL_LIMIT as MSG_RECALL_LIMIT,
-    MSG_MIN_SCORE as MSG_MIN_SCORE,
     RECENCY_WEIGHT as RECENCY_WEIGHT,
-    QDRANT_URL as QDRANT_URL,
 )
 
 logger = logging.getLogger(__name__)
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://aichat-redis:6379/1")
-INFERENCE_URL = os.environ.get("INFERENCE_URL", "http://aichat-inference:8105")
 DATA_URL = os.environ.get("DATA_URL", "http://aichat-data:8091")
 
-COLLECTION_NAME = "companion_episodes"
+# Full-text match on summary + keywords (search_tsv, migration 260), then
+# importance and recency. Rows that match nothing rank by the last two alone.
+_EPISODES_RANKED_SQL = (
+    "SELECT e.id::text, e.summary, e.keywords, e.emotion_tags, e.importance, "
+    "e.created_at "
+    "FROM companion_episodes AS e, websearch_to_tsquery('english', %s) AS q "
+    "WHERE e.user_id = %s "
+    "ORDER BY ts_rank(e.search_tsv, q, 1) DESC, "
+    "e.importance DESC NULLS LAST, e.created_at DESC "
+    "LIMIT %s"
+)
+_EPISODES_RECENT_SQL = (
+    "SELECT e.id::text, e.summary, e.keywords, e.emotion_tags, e.importance, "
+    "e.created_at "
+    "FROM companion_episodes AS e "
+    "WHERE e.user_id = %s "
+    "ORDER BY e.importance DESC NULLS LAST, e.created_at DESC "
+    "LIMIT %s"
+)
 
 
-class EmbeddingFailed(RuntimeError):
-    """Raised by MemoryManager.embed_text(raise_on_failure=True) when the
-    embedding service can't be reached. Store paths should propagate this
-    rather than indexing a zero vector that silently corrupts recall."""
+def _episode_text(row: tuple[Any, ...]) -> str:
+    """What Haiku reads for one episode candidate."""
+    _, summary, keywords, _, _, created_at = row
+    day = (
+        f"[{created_at.strftime('%Y-%m-%d')}] "
+        if hasattr(created_at, "strftime")
+        else ""
+    )
+    words = ", ".join(str(k) for k in (keywords or [])[:8])
+    return f"{day}{summary or ''}" + (f" (keywords: {words})" if words else "")
 
 
 class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
@@ -55,8 +81,6 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
         self._session_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._redis: redis.Redis | None = None
         self._http: httpx.AsyncClient | None = None
-        self._collection_ready = False
-        self._msg_collection_ready = False
 
     async def init(self) -> None:
         # redis factory stubs omit annotations; preserve the established injection seam.
@@ -68,9 +92,8 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
             socket_keepalive=True,
             health_check_interval=30,
         )
+        # The data service (factual memory) client.
         self._http = httpx.AsyncClient(timeout=30.0)
-        await self._ensure_qdrant_collection()
-        await self._ensure_msg_collection()
 
     async def close(self) -> None:
         try:
@@ -80,100 +103,7 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
             if self._http:
                 await self._http.aclose()
 
-    # ── Tier 2: Episodic Memory (Qdrant + embeddings) ────────────────────
-
-    async def _ensure_qdrant_collection(self) -> None:
-        if self._collection_ready:
-            return
-        try:
-            r = await http_request(
-                "qdrant",
-                self._http,
-                "get",
-                f"{QDRANT_URL}/collections/{COLLECTION_NAME}",
-            )
-            if r.status_code == 200:
-                self._collection_ready = True
-                return
-        except httpx.HTTPError:
-            pass
-
-        try:
-            await http_request(
-                "qdrant",
-                self._http,
-                "put",
-                f"{QDRANT_URL}/collections/{COLLECTION_NAME}",
-                json={
-                    "vectors": {"size": EMBED_DIM, "distance": "Cosine"},
-                },
-            )
-            self._collection_ready = True
-            logger.info("Created Qdrant collection: %s", COLLECTION_NAME)
-            # Create user_id index for filtered search performance
-            try:
-                await http_request(
-                    "qdrant",
-                    self._http,
-                    "put",
-                    f"{QDRANT_URL}/collections/{COLLECTION_NAME}/index",
-                    json={"field_name": "user_id", "field_schema": "keyword"},
-                )
-            except Exception:
-                pass  # Non-critical — search still works, just slower
-        except httpx.HTTPError:
-            logger.warning("Failed to create Qdrant collection, will retry later")
-
-    async def embed_text(
-        self, text: str, *, raise_on_failure: bool = False
-    ) -> list[float]:
-        """Get embedding vector for text. Cache-first.
-
-        Args:
-            raise_on_failure: when True (used by store paths) raises EmbeddingFailed
-                instead of returning a zero vector. Search paths can pass False
-                to keep the existing degrade-quietly behavior, but they should
-                check is_zero_vector() and surface a UX signal to the user.
-        """
-        try:
-            from . import caches
-
-            cached = await caches.get_embedding(text)
-            if cached:
-                return cached
-        except Exception:
-            pass
-        try:
-            r = await http_request(
-                "embedding",
-                self._http,
-                "post",
-                f"{INFERENCE_URL}/v1/embeddings",
-                json={"input": text, "model": "nomic-embed-text-v1.5"},
-            )
-            r.raise_for_status()
-            vector = r.json()["data"][0]["embedding"]
-            try:
-                from . import caches
-
-                await caches.put_embedding(text, vector)
-            except Exception:
-                pass
-            if not isinstance(vector, list) or not all(
-                isinstance(v, (int, float)) for v in vector
-            ):
-                raise ValueError("Invalid embedding vector")
-            return [float(v) for v in vector]
-        except Exception as e:
-            logger.error("EMBEDDING FAILED — search quality degraded: %s", e)
-            if raise_on_failure:
-                raise EmbeddingFailed(str(e)) from e
-            return [0.0] * EMBED_DIM
-
-    @staticmethod
-    def is_zero_vector(vec: list[float]) -> bool:
-        """Detect the embed-failure sentinel so callers can surface a UX warning."""
-        return all(v == 0.0 for v in vec)
+    # ── Tier 2: Episodic Memory (Postgres) ──────────────────────────────
 
     async def store_episode(
         self,
@@ -185,49 +115,15 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
         conversation_id: str | None = None,
         user_id: str = "jalsarraf",
     ) -> str:
-        created_at = datetime.now().isoformat()
-
-        # Qdrant vector storage
-        try:
-            vector = await self.embed_text(summary, raise_on_failure=True)
-            r = await http_request(
-                "qdrant",
-                self._http,
-                "put",
-                f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points",
-                json={
-                    "points": [
-                        {
-                            "id": episode_id,
-                            "vector": vector,
-                            "payload": {
-                                "summary": summary,
-                                "keywords": keywords,
-                                "emotion_tags": emotion_tags,
-                                "importance": importance,
-                                "conversation_id": conversation_id,
-                                "user_id": user_id,
-                                "created_at": created_at,
-                            },
-                        }
-                    ]
-                },
-            )
-            # httpx does NOT raise on 4xx/5xx — without this a Qdrant error
-            # status silently dropped the vector with no failure-path logging.
-            r.raise_for_status()
-        except Exception as e:
-            logger.error("Failed to store episode %s in Qdrant: %s", episode_id[:8], e)
-
-        # PostgreSQL fallback — ensures episodes survive Qdrant outages
+        """Insert the episode row (insert-only). Never raises; returns the id."""
         try:
             from .db import get_conn_autocommit
 
             async with get_conn_autocommit() as conn:
                 await conn.execute(
                     "INSERT INTO companion_episodes "
-                    "(id, conversation_id, summary, keywords, emotion_tags, importance, embedding_id, user_id) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                    "(id, conversation_id, summary, keywords, emotion_tags, importance, user_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (id) DO NOTHING",
                     (
                         episode_id,
@@ -236,7 +132,6 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
                         keywords,
                         emotion_tags,
                         importance,
-                        episode_id,
                         user_id,
                     ),
                 )
@@ -249,54 +144,46 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
         self,
         query: str,
         limit: int = 5,
-        min_score: float = 0.3,
+        min_score: float = 0.0,
         user_id: str = "jalsarraf",
     ) -> list[dict[str, Any]]:
+        """The user's episodes relevant to ``query``, most relevant first.
+
+        Postgres candidates, then Claude Haiku's pick (memory_recall).
+        ``score`` is rank-derived (first = 1.0). ``min_score`` is kept for
+        callers and ignored: there are no similarity scores any more.
+        """
         try:
-            vector = await self.embed_text(query)
-            if not vector or all(v == 0.0 for v in vector):
-                # Embedding failed — searching Qdrant with an all-zero vector returns
-                # meaningless (garbage-ranked) results. Return empty instead.
-                logger.warning(
-                    "Episode recall skipped — embedding failed (zero vector)"
-                )
-                return []
-            r = await http_request(
-                "qdrant",
-                self._http,
-                "post",
-                f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points/search",
-                json={
-                    "vector": vector,
-                    "limit": limit,
-                    "score_threshold": min_score,
-                    "with_payload": True,
-                    "filter": {
-                        "must": [{"key": "user_id", "match": {"value": user_id}}]
-                    },
-                },
+            rows = await memory_recall.fetch_candidates(
+                _EPISODES_RANKED_SQL, _EPISODES_RECENT_SQL, query, user_id
             )
-            if r.status_code != 200:
-                logger.warning("Qdrant search failed: %s", r.text)
+            if not rows:
                 return []
-            results = r.json().get("result", [])
+            picked = await memory_recall.select(
+                "memory_recall_episodes",
+                "summaries of past conversations between the Commander and Klukai",
+                query,
+                [_episode_text(row) for row in rows],
+                limit,
+            )
+            chosen = memory_recall.ordered(rows, picked, limit)
             return [
                 {
-                    "summary": hit["payload"]["summary"],
-                    "score": hit["score"],
-                    "keywords": hit["payload"].get("keywords", []),
-                    "emotion_tags": hit["payload"].get("emotion_tags", []),
+                    "summary": row[1] or "",
+                    "score": memory_recall.rank_score(position, len(chosen)),
+                    "keywords": list(row[2] or []),
+                    "emotion_tags": list(row[3] or []),
                 }
-                for hit in results
+                for position, row in enumerate(chosen)
             ]
         except Exception as e:
             # Fail open: this runs inside the live chat read path (WS message
-            # handler). A Qdrant/embed hiccup must degrade context, never crash
+            # handler). A database hiccup must degrade context, never crash
             # the reply or tear down the socket.
             logger.warning("Episode recall failed: %s", e)
             return []
 
-    # ── Conversation Exchange Memory (Qdrant — per-exchange vectors) ────
+    # ── Conversation Exchange Memory (Postgres; memory_exchange) ────────
 
     # ── Tier 3: Factual Memory (aichat-data /memory) ────────────────────
 

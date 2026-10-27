@@ -29,11 +29,11 @@ This README explains **how all of it works**: the app he holds, what happens whe
 | Part | How it works today |
 |---|---|
 | **The app** | A new *Tactical HUD* PWA built for phones (360–430 px wide). There are five tabs: Chat, Album, Day, Kit and Me. Chat flips between a text view and her live 3D model |
-| **Conversation** | Claude Sonnet 5.5 (adaptive thinking, medium effort) writes every reply; a local model on the Dominus GPU host is the secondary |
-| **Voice** | Fish Audio with a community "Klukai" voice, **free model only**. Each Commander picks English or Japanese, and she speaks **only when he taps** ▶ VOICE. Voice input is off |
+| **Conversation** | Claude Sonnet 5.5 (adaptive thinking, medium effort) writes every reply; Claude Haiku 5.5 steps in if Sonnet fails. **All of her AI is cloud** (owner decision, 2026-10-26): nothing runs on a local model or GPU |
+| **Voice** | Fish Audio with a community "Klukai" voice, **free model only**. Each Commander picks English or Japanese, and she speaks **only when he taps** ▶ VOICE. Voice input is transcribed by Fish speech-to-text |
 | **Pictures** | A private worker on amarillo tries **Grok first, then Codex, then Agy**. Claude Sonnet 5.5 checks renders and never draws. Nothing renders on a GPU, and no image service is ever paid |
 | **Dreams & Her POV writing** | Anthropic text, capped at 20 attempts a day and 300 a month across both features |
-| **Memory** | Redis (today) → Qdrant (episodes) → PostgreSQL (facts). Chat history, episodes, affection and vectors are **sacred**: additive only, never deleted |
+| **Memory** | Redis (today) → PostgreSQL (episodes, exchanges, facts). Recall: PostgreSQL full-text candidates, then Claude Haiku picks. Chat history, episodes and affection are **sacred**: additive only, never deleted |
 | **CI** | Self-hosted on amarillo: every job gets a fresh, firewalled VM that is deleted afterwards. No GitHub-hosted runners |
 | **Releases** | Core runs only the exact image CI built and scanned, with signed provenance, a verified backup and automatic rollback. The PWA ships separately with content-hashed files |
 
@@ -73,20 +73,18 @@ flowchart LR
     subgraph amarillo["amarillo (core host)"]
         core["companion-core<br/>FastAPI · serves /app/"]
         redis[("Redis<br/>session")]
-        qdrant[("Qdrant<br/>episodes")]
-        pg[("PostgreSQL<br/>facts · SACRED")]
+        pg[("PostgreSQL<br/>memories · facts · SACRED")]
         bridge["events-bridge<br/>RabbitMQ rails"]
         worker["image worker<br/>Grok → Codex → Agy"]
-        core --- redis & qdrant & pg
+        core --- redis & pg
         core -- "Redis events" --> bridge
         core -- "unix socket" --> worker
     end
 
-    core -- "chat, creative text" --> anthropic["Anthropic<br/>Sonnet 5.5"]
-    core -- "tap-to-play speech" --> fish["Fish Audio<br/>free model"]
+    core -- "chat, background work, recall" --> anthropic["Anthropic<br/>Sonnet 5.5 · Haiku 5.5"]
+    core -- "speech out and in" --> fish["Fish Audio"]
     worker -- "signed-in accounts" --> renderers["Grok · Codex · Agy"]
     worker -- "render check" --> checker["Claude Sonnet 5.5<br/>(checks only)"]
-    core -. "secondary chat (private mesh)" .-> dominus["Dominus-Nobara<br/>RTX 3090"]
 ```
 
 ### The life of one message
@@ -95,13 +93,13 @@ flowchart LR
 2. **Core checks who he is** on every frame: session, expiry and account status. A stale or revoked session never reaches her.
 3. **Her context is assembled**:
    - the session (recent turns, mood and mission) from Redis;
-   - related past episodes from Qdrant;
+   - related past episodes and exchanges: PostgreSQL full-text search finds up to 40 candidates and Claude Haiku picks the ones that matter;
    - facts, affection level and milestones from PostgreSQL;
    - today's outfit and what she is doing right now (Her Day).
 4. **Her personality is applied.** [`config/personality.yaml`](config/personality.yaml) sets her speech register for the affection level (0–9), her 48 moods, the time-of-day colouring, her squad's voices and canon grammar.
-5. **Sonnet 5.5 writes her reply**, which streams back token by token. She can use scoped tools (web search with sources, weather, references). If the chat routes fail, she answers with an in-character disruption line. Two providers' partial answers are never mixed.
+5. **Sonnet 5.5 writes her reply**, which streams back token by token. She can use scoped tools (web search with sources, weather, references). If Sonnet fails, Haiku 5.5 answers instead; if both fail, she answers with an in-character disruption line. Two models' partial answers are never mixed.
 6. **Follow-ups run in the background**:
-   - memory extraction and embeddings;
+   - memory extraction, on Claude Haiku 5.5 like all background work;
    - mood and affection updates;
    - promises and dates she should remember;
    - a picture, if he asked for one.
@@ -185,9 +183,10 @@ sequenceDiagram
   - **English** reads her line as written.
   - **Japanese** first translates it into her polite register through the chat model. The translation is cached in Redis by text hash, and if translation fails she speaks English instead.
 - **One sentence at a time.** The PWA splits her line into sentences and plays each as its own short job, so playback starts quickly and long replies keep their order.
-- **Free model, enforced in code.** Every Fish request carries the `s2.1-pro-free` model header, and core refuses any model that does not end in `-free`. With no key configured, nothing is sent. The voice is a public community model on Fish ("Klukai" by Danastico); no recordings of the actress are uploaded anywhere.
-- **Switches.** `KLUKAI_VOICE_ENABLED=false` turns all speech off: `/api/tts` and `/api/stt` answer 503 and voice letters fall back to text. Voice *input* is off in Fish mode: `/api/stt` answers 503 "Voice input is off" and the mic button is hidden.
-- **Other backends.** The local XTTS backends (`dominus` on the RTX 3090, `amarillo-xpu` on the Arc A380) remain selectable rollback options, each with its own pinned reference clip.
+- **Free model, enforced in code.** Every Fish TTS request carries the `s2.1-pro-free` model header, and core refuses any model that does not end in `-free`. With no key configured, nothing is sent. The voice is a public community model on Fish ("Klukai" by Danastico); no recordings of the actress are uploaded anywhere.
+- **Voice input.** `POST /api/stt` (`{"audio": base64}` → `{"text", "language", "duration"}`) sends his recording to Fish speech-to-text (`transcribe-1-pro`, pay-as-you-go, owner authorized 2026-10-26) with the same key. An optional `language` of `en` or `ja` is passed as a hint; otherwise Fish detects it. Without a key it answers 503 "Voice input is off". The app's mic button is still hidden.
+- **Switches.** `KLUKAI_VOICE_ENABLED=false` turns all speech off: `/api/tts` and `/api/stt` answer 503 and voice letters fall back to text.
+- **Cloud only.** Fish is the only voice backend; core never calls the local XTTS/Whisper services on Dominus or Amarillo.
 
 ---
 
@@ -237,14 +236,15 @@ APIs that feed the app: `GET /api/her-day`, `GET /api/outfits`, `POST /api/costu
 
 ```
 TIER 1  Session    Redis        conversation, mood, mission           ~24 h
-TIER 2  Episodic   Qdrant       summaries + embeddings                permanent
+TIER 2  Episodic   PostgreSQL   episode summaries, exchanges          permanent
 TIER 3  Factual    PostgreSQL   messages, affection, milestones, jobs permanent
 ```
 
-- **Sacred data.** Chat messages, episodes, affection and vectors are additive only. Compaction *inserts* summaries and never deletes history. Thread read receipts and ritual deliveries are insert-only too.
-- **Recall.** Each reply pulls related episodes from Qdrant and the facts she has learned, such as his birthday, promises, inside jokes and growth across the arc.
+- **Sacred data.** Chat messages, episodes and affection are additive only. Compaction *inserts* summaries and never deletes history. Thread read receipts and ritual deliveries are insert-only too.
+- **Recall.** Each reply pulls related episodes and exchanges plus the facts she has learned, such as his birthday, promises, inside jokes and growth across the arc. PostgreSQL full-text search (migration 260) finds up to 40 candidates and Claude Haiku 5.5 picks the relevant ones within 10 seconds; if Haiku is unavailable, the best full-text matches are used. No embeddings are made anywhere.
+- **Moved from Qdrant (2026-10-26).** Memories that lived only in Qdrant were copied into PostgreSQL once, insert-only, by `ops/amarillo/scripts/klukai-memory-backfill-from-qdrant.py`. The Qdrant collections were left untouched.
 - **Album.** She curates her own photo journal. Chat pictures, Her POV renders and seeded historical moments all carry their original context.
-- **Backups.** Nightly backups cover PostgreSQL and the Qdrant collections, and every core release first proves that a fresh dump restores into a throwaway database.
+- **Backups.** Nightly backups cover PostgreSQL (and still the old Qdrant collections), and every core release first proves that a fresh dump restores into a throwaway database.
 
 ---
 
@@ -270,7 +270,7 @@ Distress always routes to **protective**, never irritated. Test accounts at leve
   - Goodbyes are clean ("…Go. I'll be here."), and a goodnight holds her pings until 08:00.
   - The 0200 watch: write to her late at night and she is already awake, quieter and protective.
   - Before his real-life events she sends a short operation brief, then a send-off, then "Report."
-- **Gaming-aware.** When he is mid-game she keeps replies short and holds unprompted pings until the match ends. The Dominus game guard always wins: nothing starts a GPU service around it.
+- **Gaming-aware.** Amarillo publishes a fresh boolean heartbeat; the persona can keep replies short and hold unprompted pings during a game. This uses no model, GPU or Dominus connection.
 
 ---
 
@@ -318,14 +318,13 @@ The `events-bridge` owns the broker. It moves Redis `companion:events` to `homel
 
 | Place | What runs there |
 |---|---|
-| **amarillo** (core host) | `companion-core` (API, WebSocket, PWA), PostgreSQL, Redis, Qdrant, the `events-bridge` and RabbitMQ consumers, Prometheus/Grafana/Loki/Tempo/Alloy and Alertmanager (alerts reach the owner over the bus), the **private image worker**, the retained Arc A380 voice service, and the **Klukai CI runner** (one VM per job) |
-| **Dominus-Nobara** (RTX 3090) | The local secondary chat model behind an authenticated gateway on the private mesh, plus the retained XTTS and STT services. It is often powered off, which is normal: chat, voice and pictures keep working without it |
-| **Cloud, by explicit authorization** | Anthropic (chat, capped creative text, render checks), Fish Audio (free-model speech), the signed-in Grok, Codex and Agy accounts (pictures), and Brave (web search) |
+| **amarillo** (core host) | `companion-core` (API, WebSocket, PWA), PostgreSQL, Redis, the `events-bridge` and RabbitMQ consumers, Prometheus/Grafana/Loki/Tempo/Alloy and Alertmanager (alerts reach the owner over the bus), the **private image worker** (it drives signed-in cloud accounts; nothing renders locally), and the **Klukai CI runner** (one VM per job) |
+| **Dominus-Nobara** | Retired for Klukai, including CI (owner decision, 2026-10-26). App services, CI jobs and release artifacts stay on Amarillo; inference uses cloud providers |
+| **Cloud, by explicit authorization** | Anthropic (Sonnet 5.5 chat; Haiku 5.5 for background work and memory recall; capped creative text; render checks), Fish Audio (free-model speech and pay-as-you-go speech-to-text), the signed-in Grok, Codex and Agy accounts (pictures), and Brave (web search) |
 
 Hard rules:
-- GPU ports bind to the private mesh only (`0.0.0.0` is forbidden).
+- **Cloud AI only.** Core must not call a local model, embedding, voice or image service. `docker/core/tests/test_cloud_only_invariant.py` fails the build if one comes back.
 - Secrets live in the encrypted credential store, never in the repository.
-- A game on Dominus can stop its AI stack. Never start ComfyUI or a model around that guard. Read the [Dominus boot/publish handoff](docs/handoff/2026-09-25-dominus-tailscale-publish.md) before any host work.
 
 ---
 
@@ -333,10 +332,12 @@ Hard rules:
 
 | Work | Production | Fresh-checkout default |
 |---|---|---|
-| Chat and tools | Sonnet 5.5 primary (owner-approved API key), Dominus secondary | Local models through the Dominus gateway |
-| Dreams and Her POV writing | Anthropic text, **20 attempts/day and 300/month**, shared | Local LLM, zero cloud allowance |
+| Chat and tools | Sonnet 5.5 primary (owner-approved API key), Haiku 5.5 fallback | Off: chat needs `KLUKAI_CLAUDE_PRIMARY=true` and `ANTHROPIC_API_KEY`; without them she cannot answer |
+| Background work and memory recall | Haiku 5.5 at high effort, one shared daily cap (`KLUKAI_EXTRACTION_DAILY_LIMIT`, 400) | Off (cap 0): background writers use safe defaults and recall keeps the full-text order |
+| Dreams and Her POV writing | Sonnet 5.5, **20 attempts/day and 300/month**, shared | Haiku 5.5 background route |
 | Pictures | Private worker: Grok → Codex → Agy, included quotas only | Same worker, empty allowlist (no pictures) |
-| Speech | Fish Audio, `s2.1-pro-free` only, tap-to-play | Dominus XTTS |
+| Speech | Fish Audio, `s2.1-pro-free` only, tap-to-play | Off |
+| Speech-to-text | Fish Audio `transcribe-1-pro`, pay-as-you-go (owner authorized 2026-10-26; existing balance only) | Off |
 | Web search | Brave MCP, with free metasearch as fallback | Off |
 
 - **Attempt caps.** Creative calls reserve a persistent UTC daily/monthly attempt *before* dispatch. Failed or uncertain calls still count. These are request limits, not dollar caps, and a refusal never triggers an automatic switch to another provider.
@@ -429,18 +430,17 @@ docker compose build companion-core && docker compose up -d companion-core   # a
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `KLUKAI_CLAUDE_PRIMARY` | `false` | Sonnet as the interactive primary (needs its key) |
+| `KLUKAI_CLAUDE_PRIMARY` | `false` | Turns chat on: Sonnet 5.5, with Haiku 5.5 as fallback (needs `ANTHROPIC_API_KEY`). Off, she cannot chat |
 | `KLUKAI_VOICE_ENABLED` | `false` in compose | Owner switch for all speech |
-| `VOICE_BACKEND` | `dominus` | Production uses `fish`; `amarillo-xpu` selects the Arc service |
 | `FISH_API_KEY` | empty | From the encrypted env file; with it empty, nothing is sent; never logged |
 | `KLUKAI_FISH_VOICE_ID` | `47fc35b7…de1f3` | The community "Klukai" voice (Danastico) |
 | `KLUKAI_FISH_MODEL` | `s2.1-pro-free` | Must end in `-free`, or core refuses it (503) |
-| `KLUKAI_IMAGE_PROVIDER` | `agy` | The private account worker; images never fall back to Dominus |
+| `KLUKAI_IMAGE_PROVIDER` | `agy` | The private account worker; nothing renders locally |
 | `KLUKAI_AGY_ALLOWED_USERS` | empty | Accounts allowed to request pictures (the worker enforces its own list too) |
-| `KLUKAI_CREATIVE_TEXT_PROVIDER` | `local` | `anthropic` for dreams and Her POV writing, within the caps |
+| `KLUKAI_CREATIVE_TEXT_PROVIDER` | `haiku` | `anthropic` for capped Sonnet dreams and Her POV writing (`local` is an old name for `haiku`) |
 | `KLUKAI_CLOUD_{IMAGE,TEXT}_{DAILY,MONTHLY}_LIMIT` | `0` | Persistent UTC attempt allowances; failures count |
 | `KLUKAI_BRAVE_ENABLED` | `false` | Brave web search through its MCP server |
-| `HER_POV_EXECUTION` | `queue` | The durable rail (`inline` is for local generation only) |
+| `HER_POV_EXECUTION` | `queue` | The durable rail (`inline` runs in-process, for tests) |
 | `CORE_INTERNAL_TOKEN` | required in prod | Bridge → core internal routes; they fail closed without it |
 
 The worker's own settings (`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok,codex,agy`, the rotation and the checker) live in its host unit, [`ops/amarillo/systemd/klukai-agy-images.service`](ops/amarillo/systemd/klukai-agy-images.service), outside core and the repository's secrets.
@@ -481,7 +481,7 @@ klukai/
 │   ├── deploy-web.sh              # PWA build + deploy
 │   └── e2e_live.py                # live end-to-end suite (test user only)
 ├── ops/amarillo/                  # release tooling, CI runner, systemd units, Arc voice
-├── ops/dominus-nobara/            # GPU compose, model lock, runbook, publish repair
+├── ops/dominus-nobara/            # old GPU stack for Dominus; core no longer uses it
 ├── web-build/                     # deployed PWA (bind-mounted into core)
 ├── docs/                          # architecture, ADRs, runbooks, handoffs, research, images
 └── docker-compose.yml             # core host stack
@@ -501,7 +501,7 @@ klukai/
 | [docs/runbooks/database-migrations.md](docs/runbooks/database-migrations.md) | Checksum ledger, transactional startup, rollback rules |
 | [docs/runbooks/durable-job-handoff.md](docs/runbooks/durable-job-handoff.md) | Lost wake-ups, original job IDs, ambiguous provider outcomes |
 | [ops/amarillo/ci-runner/README.md](ops/amarillo/ci-runner/README.md) | The one-VM-per-job CI runner: limits, isolation, operations |
-| [ops/dominus-nobara/RUNBOOK.md](ops/dominus-nobara/RUNBOOK.md) | GPU host operations and the game/residency guards |
+| [ops/dominus-nobara/RUNBOOK.md](ops/dominus-nobara/RUNBOOK.md) | The old Dominus GPU stack (core no longer uses it) |
 | [Account image guide](docs/handoff/2026-10-14-agy-main-images.md) | The private worker, reference privacy, quotas, durable state |
 | [Wardrobe dossier](docs/research/2026-10-04-canon-wardrobe-dossier.md) | Canon anchors for every outfit |
 | [S-tier ledger](docs/handoff/2026-10-16-s-tier-finish.md) | Quality criteria and the evidence for each |

@@ -29,6 +29,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app.main as main
+from app.extraction_llm import ExtractionLLMError, ExtractionUnavailable
 from app.models import SessionState
 from app.ws_manager import WSManager
 
@@ -384,93 +385,68 @@ def _recap_pool(rows):
     return pool
 
 
+def _haiku(reply):
+    """Patch the Haiku transport: a string is its reply, an exception its failure."""
+    if isinstance(reply, BaseException):
+        return patch("app.extraction_llm.complete", new=AsyncMock(side_effect=reply))
+    return patch("app.extraction_llm.complete", new=AsyncMock(return_value=reply))
+
+
 class TestGenerateDailyRecap:
     async def test_returns_none_when_too_few_messages(self):
         pool = _recap_pool([("user", "hi"), ("assistant", "hello")])  # < 4 rows
-        with patch.object(main, "get_pool", return_value=pool):
+        with patch.object(main, "get_pool", return_value=pool), \
+             _haiku("unused") as haiku:
             out = await main.generate_daily_recap(affection_level=5)
         assert out is None
+        haiku.assert_not_awaited()
 
-    async def test_streams_recap_text_from_router(self):
+    async def test_recap_text_comes_from_haiku(self):
+        from app.background_llm import haiku_budget
+
         rows = [("user", f"msg {i}") for i in range(8)]
         pool = _recap_pool(rows)
-
-        async def fake_stream(*a, **k):
-            for tok in ["Today ", "we ", "talked."]:
-                yield tok
-
         with patch.object(main, "get_pool", return_value=pool), \
-             patch("app.context.router.route", new=AsyncMock(return_value={})), \
-             patch("app.context.router.stream", new=fake_stream):
+             _haiku("Today we talked.") as haiku:
             out = await main.generate_daily_recap(affection_level=5)
         assert out == "Today we talked."
+        prompt = haiku.await_args.args[0]
+        assert prompt.startswith("You are Klukai writing a brief evening operational log")
+        assert "Commander: msg 7" in prompt
+        assert haiku.await_args.kwargs == {
+            "max_tokens": haiku_budget(2048),
+            "route": "daily_recap",
+        }
 
-    async def test_warm_tone_for_high_affection(self):
+    @pytest.mark.parametrize(
+        ("affection_level", "tone"),
+        [(5, "Write warmly"), (1, "professionally"), (0, "coldly")],
+    )
+    async def test_tone_follows_affection(self, affection_level, tone):
         rows = [("user", f"m {i}") for i in range(8)]
         pool = _recap_pool(rows)
-        captured = {}
-
-        async def fake_stream(prompt, messages, config):
-            captured["prompt"] = prompt
-            yield "ok"
-
-        with patch.object(main, "get_pool", return_value=pool), \
-             patch("app.context.router.route", new=AsyncMock(return_value={})), \
-             patch("app.context.router.stream", new=fake_stream):
-            await main.generate_daily_recap(affection_level=5)
-        assert "Write warmly" in captured["prompt"]
-
-    async def test_professional_tone_for_mid_affection(self):
-        rows = [("user", f"m {i}") for i in range(8)]
-        pool = _recap_pool(rows)
-        captured = {}
-
-        async def fake_stream(prompt, messages, config):
-            captured["prompt"] = prompt
-            yield "ok"
-
-        with patch.object(main, "get_pool", return_value=pool), \
-             patch("app.context.router.route", new=AsyncMock(return_value={})), \
-             patch("app.context.router.stream", new=fake_stream):
-            await main.generate_daily_recap(affection_level=1)
-        assert "professionally" in captured["prompt"]
-
-    async def test_cold_tone_for_zero_affection(self):
-        rows = [("user", f"m {i}") for i in range(8)]
-        pool = _recap_pool(rows)
-        captured = {}
-
-        async def fake_stream(prompt, messages, config):
-            captured["prompt"] = prompt
-            yield "ok"
-
-        with patch.object(main, "get_pool", return_value=pool), \
-             patch("app.context.router.route", new=AsyncMock(return_value={})), \
-             patch("app.context.router.stream", new=fake_stream):
-            await main.generate_daily_recap(affection_level=0)
-        assert "coldly" in captured["prompt"]
+        with patch.object(main, "get_pool", return_value=pool), _haiku("ok") as haiku:
+            await main.generate_daily_recap(affection_level=affection_level)
+        assert tone in haiku.await_args.args[0]
 
     async def test_recap_swallows_db_error_returns_none(self):
         with patch.object(main, "get_pool", side_effect=RuntimeError("db down")):
             out = await main.generate_daily_recap(affection_level=5)
         assert out is None
 
-    async def test_sentinel_recap_is_not_her_log(self):
-        """GPU host down: the stream is the failure sentinel. That is not her
-        evening log and must not be pushed as her words — no recap tonight."""
-        from app.llm_router import FAILURE_SENTINEL
-
+    @pytest.mark.parametrize(
+        "reply",
+        [ExtractionUnavailable("cap"), ExtractionLLMError("boom"), "", "   "],
+    )
+    async def test_no_recap_without_a_haiku_reply(self, reply):
+        """Haiku capped, failed or blank: no recap tonight. Nothing canned is
+        pushed as her words and no local model is tried."""
         rows = [("user", f"m {i}") for i in range(8)]
         pool = _recap_pool(rows)
-
-        async def fake_stream(*a, **k):
-            yield FAILURE_SENTINEL
-
-        with patch.object(main, "get_pool", return_value=pool), \
-             patch("app.context.router.route", new=AsyncMock(return_value={})), \
-             patch("app.context.router.stream", new=fake_stream):
+        with patch.object(main, "get_pool", return_value=pool), _haiku(reply) as haiku:
             out = await main.generate_daily_recap(affection_level=5)
         assert out is None
+        haiku.assert_awaited_once()
 
     async def test_recap_window_is_the_commanders_local_day(self):
         """`today` is the Commander's date and the SQL buckets created_at in
@@ -485,13 +461,9 @@ class TestGenerateDailyRecap:
         # 21:00 Chicago on the 11th is already 02:00Z on the 12th.
         local_evening = datetime(2026, 10, 11, 21, 0)
 
-        async def fake_stream(*a, **k):
-            yield "Today we talked."
-
         with patch.object(main, "get_pool", return_value=pool), \
              patch("app.proactive.state.now_local", return_value=local_evening), \
-             patch("app.context.router.route", new=AsyncMock(return_value={})), \
-             patch("app.context.router.stream", new=fake_stream):
+             _haiku("Today we talked."):
             out = await main.generate_daily_recap(affection_level=5)
 
         assert out == "Today we talked."

@@ -1,8 +1,8 @@
-"""Tests for session-token hashing-at-rest, absolute lifetime, and voice auth.
+"""Tests for session-token hashing-at-rest and absolute lifetime.
 
 These lock in the audit-3 hardening: tokens are stored as a sha256 hash (the
-plaintext is only the client-side bearer), a session can't be rolled forward
-past SESSION_MAX_DAYS, and core->voice calls carry a bearer only when configured.
+plaintext is only the client-side bearer), and a session can't be rolled
+forward past SESSION_MAX_DAYS.
 """
 
 from __future__ import annotations
@@ -13,17 +13,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app import auth
-from app.helpers import voice_auth_headers
-
-
-def test_voice_auth_headers_empty_without_token(monkeypatch):
-    monkeypatch.delenv("VOICE_API_TOKEN", raising=False)
-    assert voice_auth_headers() == {}
-
-
-def test_voice_auth_headers_bearer_with_token(monkeypatch):
-    monkeypatch.setenv("VOICE_API_TOKEN", "vt-secret")
-    assert voice_auth_headers() == {"Authorization": "Bearer vt-secret"}
 
 
 def test_hash_token_is_deterministic_sha256_hex():

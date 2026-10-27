@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
-PORTS = {"postgres": 5432, "redis": 6379, "qdrant": 6333}
+PORTS = {"postgres": 5432, "redis": 6379}
 MODULES = {
     "tests/runtime_backends.py",
     "tests/health_runtime_backends.py",

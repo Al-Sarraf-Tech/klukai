@@ -107,16 +107,30 @@ async def test_postgres_open_breaker_denies_auth_without_acquisition(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_voice_open_breaker_never_contacts_selected_backend(monkeypatch):
+async def test_voice_open_breaker_never_contacts_fish(monkeypatch):
     from app import voice_client
 
-    monkeypatch.setenv("VOICE_BACKEND", "amarillo-xpu")
-    client = AsyncMock()
+    monkeypatch.setenv("KLUKAI_VOICE_ENABLED", "true")
+    monkeypatch.setenv("FISH_API_KEY", "pytest-fish-key")
+    sent = []
+
+    def fish(request):
+        sent.append(request)
+        return httpx.Response(200)
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        voice_client.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(fish), **kwargs),
+    )
     cb.get_breaker("voice").force_open()
     with pytest.raises(cb.CircuitOpen):
-        await voice_client.post_leased_tts(client, {"text": "retained text reply"})
-    client.post.assert_not_awaited()
-    assert not voice_client._local_gate.locked()
+        await voice_client.post_tts({"text": "retained text reply"})
+    with pytest.raises(voice_client.SpeechToTextError) as stt:
+        await voice_client.transcribe("AAAA")
+    assert stt.value.status == 503
+    assert sent == []
 
 
 @pytest.mark.asyncio
@@ -256,7 +270,9 @@ async def test_direct_pool_connection_obeys_postgres_breaker():
 
 
 @pytest.mark.asyncio
-async def test_readiness_requires_session_store_but_qdrant_is_optional(monkeypatch):
+async def test_readiness_requires_the_session_store_and_probes_no_vector_store(
+    monkeypatch,
+):
     from app.observability import health_cache
 
     health_cache.clear_cache()
@@ -266,32 +282,11 @@ async def test_readiness_requires_session_store_but_qdrant_is_optional(monkeypat
     monkeypatch.setattr(
         health_cache, "_check_redis_fresh", AsyncMock(return_value={"status": "down"})
     )
-    monkeypatch.setattr(
-        health_cache, "_check_qdrant_fresh", AsyncMock(return_value={"status": "down"})
-    )
     assert (await health_cache.get_fresh_health())["status"] == "unhealthy"
     monkeypatch.setattr(
         health_cache, "_check_redis_fresh", AsyncMock(return_value={"status": "ok"})
     )
-    assert (await health_cache.get_fresh_health())["status"] == "degraded"
+    ready = await health_cache.get_fresh_health()
+    assert ready["status"] == "ok"
+    assert "qdrant" not in ready
     health_cache.clear_cache()
-
-
-@pytest.mark.asyncio
-async def test_voice_cancellation_cleanup_bypasses_synthesis_breaker(monkeypatch):
-    from app import voice_client
-    from unittest.mock import MagicMock
-
-    cleanup = AsyncMock()
-    cleanup.post.return_value = httpx.Response(
-        200, request=httpx.Request("POST", "https://test.invalid/unload")
-    )
-    context = MagicMock()
-    context.__aenter__ = AsyncMock(return_value=cleanup)
-    context.__aexit__ = AsyncMock(return_value=False)
-    monkeypatch.setattr(voice_client.httpx, "AsyncClient", lambda **kwargs: context)
-    cb.get_breaker("voice").force_open()
-    await voice_client._unload_local_voice()
-    cleanup.post.assert_awaited_once()
-    assert cleanup.post.call_args.args[0].endswith("/unload")
-    assert cb.get_breaker("voice").state is cb.State.OPEN

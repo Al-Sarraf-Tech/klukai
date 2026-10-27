@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -12,6 +12,7 @@ from app import llm_router as routing
 from app.models import LLMConfig
 
 MESSAGES = [{"role": "user", "content": "hello"}]
+SONNET = routing.CLAUDE_PRIMARY
 
 
 @pytest.fixture
@@ -41,8 +42,8 @@ def native_reply(**changes):
 
 async def test_unconfigured_primary_rejects_before_any_transport():
     router = routing.LLMRouter()
-    config = LLMConfig(provider="anthropic", model="selected")
-    with pytest.raises(ValueError, match="primary is unavailable"):
+    config = LLMConfig(provider="anthropic", model=SONNET)
+    with pytest.raises(ValueError, match="model is unavailable"):
         await router._complete_anthropic("persona", MESSAGES, config)
     with pytest.raises(ValueError, match="Unavailable LLM provider"):
         await router.complete_chat("persona", MESSAGES, config)
@@ -57,10 +58,10 @@ async def test_native_model_identity_is_required_before_config_mutation(connect,
         return httpx.Response(200, json=native_reply(model=model))
 
     router = connect(handler)
-    config = LLMConfig(provider="anthropic", model="selected")
+    config = LLMConfig(provider="anthropic", model=SONNET)
     with pytest.raises(ValueError, match="Missing response model"):
         await router._complete_anthropic("persona", MESSAGES, config)
-    assert config.model == "selected" and len(requests) == 1
+    assert config.model == SONNET and len(requests) == 1
 
 
 async def test_native_body_limit_stops_before_exposing_text(connect, monkeypatch):
@@ -74,10 +75,10 @@ async def test_native_body_limit_stops_before_exposing_text(connect, monkeypatch
 
     router = connect(handler)
     monkeypatch.setattr(routing, "_ANTHROPIC_MAX_RESPONSE_BYTES", 64)
-    config = LLMConfig(provider="anthropic", model="selected")
+    config = LLMConfig(provider="anthropic", model=SONNET)
     with pytest.raises(ValueError, match="exceeds size limit"):
         await router._complete_anthropic("persona", MESSAGES, config)
-    assert config.model == "selected" and len(requests) == 1
+    assert config.model == SONNET and len(requests) == 1
     assert router._anthropic_gate._value == 2
 
 
@@ -87,7 +88,7 @@ async def test_broken_usage_metadata_does_not_discard_valid_public_answer(connec
             200, json=native_reply(usage={"input_tokens": "not an integer"})
         )
     )
-    config = LLMConfig(provider="anthropic", model="selected")
+    config = LLMConfig(provider="anthropic", model=SONNET)
     result = await router._complete_anthropic("persona", MESSAGES, config)
     assert result["choices"][0]["message"]["content"] == "public reply"
     assert result["model"] == config.model == "fixture-native-model"
@@ -114,12 +115,12 @@ async def test_disconnect_cancels_native_stream_and_releases_admission_without_f
         return httpx.Response(200, stream=BlockedBody())
 
     router = connect(handler)
-    fallback, failed = AsyncMock(), Mock()
-    monkeypatch.setattr(router, "_select_local_secondary", fallback)
+    fallback, failed = Mock(), Mock()
+    monkeypatch.setattr(router, "_select_secondary", fallback)
     monkeypatch.setattr(router, "_primary_failed", failed)
     task = asyncio.create_task(
         router.complete_chat(
-            "persona", MESSAGES, LLMConfig(provider="anthropic", model="selected")
+            "persona", MESSAGES, LLMConfig(provider="anthropic", model=SONNET)
         )
     )
     try:
@@ -129,32 +130,8 @@ async def test_disconnect_cancels_native_stream_and_releases_admission_without_f
             await task
         assert closed.is_set() and router._anthropic_gate._value == 2
         assert len(requests) == 1
-        fallback.assert_not_awaited()
+        fallback.assert_not_called()
         failed.assert_not_called()
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-
-
-async def test_local_eof_without_done_or_content_never_invents_a_reply(
-    connect, monkeypatch
-):
-    from app import observability
-
-    record = Mock()
-    monkeypatch.setattr(observability, "record_llm_usage", record)
-    router = connect(
-        lambda request: httpx.Response(
-            200, content=b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n'
-        )
-    )
-    router._http = router._anthropic_http
-    config = LLMConfig(
-        provider="lmstudio", model="fixture-local", base_url="http://local.invalid"
-    )
-    assert [
-        text async for text in router._stream_lmstudio("persona", MESSAGES, config)
-    ] == []
-    record.assert_called_once()
-    assert record.call_args.kwargs["model"] == "fixture-local"
-    assert record.call_args.kwargs["tokens_out"] == 0

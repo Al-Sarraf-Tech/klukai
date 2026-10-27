@@ -165,3 +165,12 @@ def test_unknown_provider_is_rejected(monkeypatch):
     monkeypatch.setenv("KLUKAI_CREATIVE_TEXT_PROVIDER", "typo")
     with pytest.raises(ct.CreativeTextError):
         ct.uses_cloud_text()
+
+
+@pytest.mark.parametrize("value", ["haiku", "HAIKU", "local"])
+def test_haiku_and_its_old_name_keep_writing_on_the_background_route(
+    monkeypatch, value
+):
+    from app import creative_text as ct
+    monkeypatch.setenv("KLUKAI_CREATIVE_TEXT_PROVIDER", value)
+    assert ct.uses_cloud_text() is False

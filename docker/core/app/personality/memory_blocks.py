@@ -1,9 +1,9 @@
 """Memory + relationship + conversation-recall blocks for the system prompt.
 
 These three short blocks inject retrieved context into Klukai's prompt:
-- memories: episodic memories (from Qdrant)
+- memories: episodic memories (Postgres candidates, Claude Haiku picks)
 - relationship facts: dossier-style facts about the Commander (from PG)
-- recalled exchanges: actual past conversation pairs (from Qdrant)
+- recalled exchanges: actual past conversation pairs (Postgres, Haiku picks)
 """
 
 from __future__ import annotations

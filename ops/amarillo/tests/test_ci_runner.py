@@ -468,6 +468,27 @@ def test_one_unreadable_run_does_not_hide_the_others():
     assert len(jobs) == 1 and runner.profile_for(jobs[0]) is SMALL
 
 
+def test_pending_workflow_can_boot_its_first_queued_job(env):
+    make, _, _ = env
+    queued = job("klukai-amarillo-small", id=40428212752)
+    github = runner.GitHub("test-only-token")
+
+    def api(method, path, *args):
+        if "actions/runs?status=pending" in path:
+            return {"workflow_runs": [{"id": 55}]}
+        if "actions/runs?status=" in path:
+            return {"workflow_runs": []}
+        if "/runs/55/jobs?" in path:
+            return {"jobs": [queued]}
+        raise AssertionError(path)
+
+    github.call = api
+    controller, fake_github, _ = make()
+    fake_github.jobs = github.queued_jobs()
+    controller.tick()
+    assert [guest.profile for guest in controller.guests.values()] == [SMALL]
+
+
 def test_quick_checks_are_admitted_before_exclusive_work(env):
     make, state, _ = env
     controller, github, host = make(

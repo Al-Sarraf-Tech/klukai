@@ -119,8 +119,8 @@ class TestGetOrRefresh:
             return {"status": "ok"}
 
         with patch.object(hc.time, "monotonic", clock), \
-             patch.object(hc, "_check_qdrant_fresh", AsyncMock(side_effect=slow_check)):
-            await asyncio.gather(*[hc._get_or_refresh("qdrant") for _ in range(8)])
+             patch.object(hc, "_check_redis_fresh", AsyncMock(side_effect=slow_check)):
+            await asyncio.gather(*[hc._get_or_refresh("redis") for _ in range(8)])
         assert calls == 1  # the other 7 saw the freshly-cached entry
 
 
@@ -131,22 +131,20 @@ class TestGetCachedHealth:
     async def test_all_ok_is_ok(self):
         with patch.object(hc, "_check_database_fresh",
                           AsyncMock(return_value={"status": "ok", "pool_size": 5})), \
-             patch.object(hc, "_check_redis_fresh", AsyncMock(return_value={"status": "ok"})), \
-             patch.object(hc, "_check_qdrant_fresh", AsyncMock(return_value={"status": "ok"})):
+             patch.object(hc, "_check_redis_fresh", AsyncMock(return_value={"status": "ok"})):
             out = await hc.get_cached_health()
         assert out["status"] == "ok"
         assert out["service"] == "companion-core"
         assert out["database"]["pool_size"] == 5
         assert out["redis"] == "ok"
-        assert out["qdrant"] == "ok"
+        assert "qdrant" not in out
         assert out["cache"]["ttl_seconds"] == hc.TTL_SECONDS
-        assert set(out["cache"]["entries"]) == {"database", "redis", "qdrant"}
+        assert set(out["cache"]["entries"]) == {"database", "redis"}
 
     @pytest.mark.asyncio
     async def test_db_ok_but_backend_down_is_degraded(self):
         with patch.object(hc, "_check_database_fresh", AsyncMock(return_value={"status": "ok"})), \
-             patch.object(hc, "_check_redis_fresh", AsyncMock(return_value={"status": "down"})), \
-             patch.object(hc, "_check_qdrant_fresh", AsyncMock(return_value={"status": "ok"})):
+             patch.object(hc, "_check_redis_fresh", AsyncMock(return_value={"status": "down"})):
             out = await hc.get_cached_health()
         assert out["status"] == "degraded"
         assert out["redis"] == "down"
@@ -154,8 +152,7 @@ class TestGetCachedHealth:
     @pytest.mark.asyncio
     async def test_db_down_is_unhealthy(self):
         with patch.object(hc, "_check_database_fresh", AsyncMock(return_value={"status": "error"})), \
-             patch.object(hc, "_check_redis_fresh", AsyncMock(return_value={"status": "ok"})), \
-             patch.object(hc, "_check_qdrant_fresh", AsyncMock(return_value={"status": "ok"})):
+             patch.object(hc, "_check_redis_fresh", AsyncMock(return_value={"status": "ok"})):
             out = await hc.get_cached_health()
         assert out["status"] == "unhealthy"
 
@@ -167,8 +164,7 @@ class TestGetFreshHealth:
     async def test_invalidates_cache_then_refreshes(self):
         db_check = AsyncMock(side_effect=[{"status": "ok"}, {"status": "error"}])
         with patch.object(hc, "_check_database_fresh", db_check), \
-             patch.object(hc, "_check_redis_fresh", AsyncMock(return_value={"status": "ok"})), \
-             patch.object(hc, "_check_qdrant_fresh", AsyncMock(return_value={"status": "ok"})):
+             patch.object(hc, "_check_redis_fresh", AsyncMock(return_value={"status": "ok"})):
             first = await hc.get_cached_health()
             # Without a clock advance a normal call would hit cache; fresh forces refresh.
             second = await hc.get_fresh_health()
@@ -211,8 +207,7 @@ class TestFreshCheckImplementations:
 
         with patch.object(hc, "PING_TIMEOUT_SECONDS", 0.01), \
              patch("app.db.check_health", stuck), \
-             patch.object(hc, "_check_redis_fresh", AsyncMock(return_value={"status": "ok"})), \
-             patch.object(hc, "_check_qdrant_fresh", AsyncMock(return_value={"status": "ok"})):
+             patch.object(hc, "_check_redis_fresh", AsyncMock(return_value={"status": "ok"})):
             out = await hc.get_cached_health()
         assert out["status"] == "unhealthy"
         assert out["database"] == {"status": "error", "detail": "probe timeout"}
@@ -246,66 +241,6 @@ class TestFreshCheckImplementations:
             out = await hc._check_redis_fresh()
         assert out == {"status": "down"}
         fake_redis.aclose.assert_awaited_once()  # closed even on failure
-
-    @pytest.mark.asyncio
-    async def test_qdrant_fresh_ok_on_200(self):
-        class _R:
-            status_code = 200
-
-        class _FakeAsyncClient:
-            def __init__(self, *a, **k):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *a):
-                return None
-
-            async def get(self, url):
-                return _R()
-
-        with patch.object(hc.httpx, "AsyncClient", _FakeAsyncClient):
-            out = await hc._check_qdrant_fresh()
-        assert out == {"status": "ok"}
-
-    @pytest.mark.asyncio
-    async def test_qdrant_fresh_down_on_non_200(self):
-        class _R:
-            status_code = 503
-
-        class _FakeAsyncClient:
-            def __init__(self, *a, **k):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *a):
-                return None
-
-            async def get(self, url):
-                return _R()
-
-        with patch.object(hc.httpx, "AsyncClient", _FakeAsyncClient):
-            out = await hc._check_qdrant_fresh()
-        assert out == {"status": "down"}
-
-    @pytest.mark.asyncio
-    async def test_qdrant_fresh_down_on_exception(self):
-        class _FakeAsyncClient:
-            def __init__(self, *a, **k):
-                pass
-
-            async def __aenter__(self):
-                raise RuntimeError("connect fail")
-
-            async def __aexit__(self, *a):
-                return None
-
-        with patch.object(hc.httpx, "AsyncClient", _FakeAsyncClient):
-            out = await hc._check_qdrant_fresh()
-        assert out == {"status": "down"}
 
 
 # ── get_live_health + clear_cache ────────────────────────────────────────────

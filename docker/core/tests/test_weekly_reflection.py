@@ -10,6 +10,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.extraction_llm import ExtractionLLMError  # noqa: E402
+
+_HAIKU = "app.extraction_llm.complete"
+
 
 class _FakeRows:
     def __init__(self, rows):
@@ -94,35 +98,34 @@ class TestWeeklyReflection:
             [messages],
         )
 
-        fake_llm_response = {
-            "choices": [{"message": {"content":
-                "A long reflective journal entry that describes the past week "
-                "with detail and honesty. Plenty of content to pass the 50-char "
-                "sanity threshold so this gets saved as a real reflection."
-            }}]
-        }
+        reflection = (
+            "A long reflective journal entry that describes the past week "
+            "with detail and honesty. Plenty of content to pass the 50-char "
+            "sanity threshold so this gets saved as a real reflection."
+        )
 
         fake_memory = MagicMock()
         fake_memory.store_episode = AsyncMock(return_value="ep-id")
 
-        fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock(return_value=fake_llm_response)
+        haiku = AsyncMock(return_value=reflection)
 
         import app.context as context_mod
-        orig_memory, orig_router = context_mod.memory, context_mod.router
+        orig_memory = context_mod.memory
         context_mod.memory = fake_memory
-        context_mod.router = fake_router
         try:
             with patch("app.db.get_pool", return_value=pool), \
+                 patch(_HAIKU, haiku), \
                  patch("app.personality.load_personality", return_value={"user_title": "Commander"}), \
                  patch("app.personality.build_character_preamble", return_value="You are Klukai."):
                 await engine._weekly_reflection()
         finally:
             context_mod.memory = orig_memory
-            context_mod.router = orig_router
 
+        assert haiku.await_args.kwargs["route"] == "weekly_reflection"
+        assert haiku.await_args.kwargs["system"] == "You are Klukai."
         assert fake_memory.store_episode.called
         kwargs = fake_memory.store_episode.call_args.kwargs
+        assert kwargs["summary"] == reflection
         # companion_episodes.conversation_id is a UUID foreign key: a label
         # there fails the Postgres copy of every reflection.
         assert kwargs["conversation_id"] is None
@@ -143,27 +146,26 @@ class TestWeeklyReflection:
         fake_memory = MagicMock()
         fake_memory.store_episode = AsyncMock(return_value="ep-id")
 
-        fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock(side_effect=RuntimeError("LLM down"))
+        haiku = AsyncMock(side_effect=ExtractionLLMError("down"))
 
         import app.context as context_mod
-        orig_memory, orig_router = context_mod.memory, context_mod.router
+        orig_memory = context_mod.memory
         context_mod.memory = fake_memory
-        context_mod.router = fake_router
         try:
             with patch("app.db.get_pool", return_value=pool), \
+                 patch(_HAIKU, haiku), \
                  patch("app.personality.load_personality", return_value={"user_title": "Commander"}), \
                  patch("app.personality.build_character_preamble", return_value="You are Klukai."):
                 await engine._weekly_reflection()
         finally:
             context_mod.memory = orig_memory
-            context_mod.router = orig_router
 
+        haiku.assert_awaited_once()
         fake_memory.store_episode.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_handles_short_reflection_output(self):
-        """Reflections shorter than 50 chars are rejected (LLM likely errored)."""
+        """Reflections shorter than 50 chars are rejected (the model likely misfired)."""
         from app.proactive import ProactiveEngine
         engine = ProactiveEngine()
 
@@ -173,27 +175,23 @@ class TestWeeklyReflection:
             [messages],
         )
 
-        fake_llm_response = {"choices": [{"message": {"content": "ok"}}]}
-
         fake_memory = MagicMock()
         fake_memory.store_episode = AsyncMock()
-
-        fake_router = MagicMock()
-        fake_router.complete_local = AsyncMock(return_value=fake_llm_response)
+        haiku = AsyncMock(return_value="ok")
 
         import app.context as context_mod
-        orig_memory, orig_router = context_mod.memory, context_mod.router
+        orig_memory = context_mod.memory
         context_mod.memory = fake_memory
-        context_mod.router = fake_router
         try:
             with patch("app.db.get_pool", return_value=pool), \
+                 patch(_HAIKU, haiku), \
                  patch("app.personality.load_personality", return_value={"user_title": "Commander"}), \
                  patch("app.personality.build_character_preamble", return_value="You are Klukai."):
                 await engine._weekly_reflection()
         finally:
             context_mod.memory = orig_memory
-            context_mod.router = orig_router
 
+        haiku.assert_awaited_once()
         fake_memory.store_episode.assert_not_called()
 
 

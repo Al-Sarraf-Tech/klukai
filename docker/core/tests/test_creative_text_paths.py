@@ -1,4 +1,4 @@
-"""Only opted-in dream and memory writers leave the local LLM path."""
+"""Only opted-in dream and memory writers leave the background (Haiku) route."""
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -13,6 +13,14 @@ from .test_memory_her_pov import _RailConn, _patch_rail
 
 
 @pytest.fixture
+def background(monkeypatch):
+    """The background Haiku route's transport; cloud creative paths never use it."""
+    call = AsyncMock(return_value="Welcome back to the hangar, Commander.")
+    monkeypatch.setattr("app.extraction_llm.complete", call)
+    return call
+
+
+@pytest.fixture
 def writer(monkeypatch):
     from app import creative_text
     monkeypatch.setenv("KLUKAI_CREATIVE_TEXT_PROVIDER", "anthropic")
@@ -22,52 +30,45 @@ def writer(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_night_dream_uses_cloud_without_acquiring_local_gate(writer):
+async def test_night_dream_uses_cloud_without_the_background_route(writer, background):
     from app.proactive import ProactiveEngine
     engine = ProactiveEngine()
     engine._affection_level = 5
     engine._on_message_callback = AsyncMock()
     with patch("app.proactive.events.random.random", return_value=0.2), \
-         patch("app.memory_archive.list_memories", AsyncMock(return_value=[])), \
-         patch("app.llm_router.get_lm_gate", side_effect=AssertionError("local gate used")):
+         patch("app.memory_archive.list_memories", AsyncMock(return_value=[])):
         await engine._dream_event()
     engine._on_message_callback.assert_awaited_once_with("I dreamed of the hangar in the rain.")
+    background.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_cloud_dream_failure_does_not_try_local_writer(writer):
+async def test_cloud_dream_failure_does_not_try_the_background_writer(writer, background):
     from app.proactive import ProactiveEngine
     from app.creative_text import CreativeTextError
     writer.side_effect = CreativeTextError("refused")
     engine = ProactiveEngine()
     engine._affection_level = 5
     engine._on_message_callback = AsyncMock()
-    local = AsyncMock()
     with patch("app.proactive.events.random.random", return_value=0.2), \
-         patch("app.memory_archive.list_memories", AsyncMock(return_value=[])), \
-         patch("app.llm_json.call_llm_text", local):
+         patch("app.memory_archive.list_memories", AsyncMock(return_value=[])):
         await engine._dream_event()
-    local.assert_not_awaited()
+    background.assert_not_awaited()
     engine._on_message_callback.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("hour,cloud", [(8, True), (15, False)])
-async def test_only_return_dream_moves_to_cloud(writer, hour, cloud):
+async def test_only_return_dream_moves_to_cloud(writer, background, hour, cloud):
     from app.reflect_helpers import _maybe_reflect_on_return
     last = datetime.now(timezone.utc) - timedelta(hours=12)
     pool = _FakePool([(last,), [("user", "We talked about rain.")], ("tender",)])
-    router = MagicMock()
-    router.complete_local = AsyncMock(return_value={
-        "choices": [{"message": {"content": "Welcome back to the hangar, Commander."}}]
-    })
     ws = MagicMock()
     ws.is_connected.return_value = False
     aff = MagicMock()
     aff.get_state = AsyncMock(return_value=_mk_affection())
     saved = AsyncMock()
     with patch("app.db.get_pool", return_value=pool), \
-         patch("app.reflect_helpers.router", router), \
          patch("app.reflect_helpers.ws", ws), \
          patch("app.reflect_helpers.affection", aff), \
          patch("app.reflect_helpers.now_local", return_value=datetime(2026, 10, 14, hour)), \
@@ -77,22 +78,24 @@ async def test_only_return_dream_moves_to_cloud(writer, hour, cloud):
          patch("asyncio.sleep", AsyncMock()):
         await _maybe_reflect_on_return("alice")
     assert writer.await_count == int(cloud)
-    assert router.complete_local.await_count == int(not cloud)
+    assert background.await_count == int(not cloud)
     if cloud:
         assert saved.await_args.kwargs["dream_text"] == "I dreamed of the hangar in the rain."
 
 
 @pytest.mark.asyncio
-async def test_pov_cloud_json_preserves_scene_without_local_gate(writer):
+async def test_pov_cloud_json_preserves_scene_without_the_background_route(
+    writer, background
+):
     from app.memory_her_pov import compose_pov
     writer.return_value = json.dumps({
         "annotation": "I kept the rain between us.", "scene_tags": "hangar, rain, silver hair",
         "couple": True, "mood": "tender", "title": "Rain at Home",
     })
-    with patch("app.llm_router.get_lm_gate", side_effect=AssertionError("local gate used")):
-        result = await compose_pov({"user_content": "Rain", "assistant_content": "Home"}, 5)
+    result = await compose_pov({"user_content": "Rain", "assistant_content": "Home"}, 5)
     assert result["annotation"] == "I kept the rain between us."
     assert result["scene_tags"] == "hangar, rain, silver hair"
+    background.assert_not_awaited()
 
 
 @pytest.mark.asyncio

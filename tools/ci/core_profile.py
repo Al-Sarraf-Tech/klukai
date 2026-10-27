@@ -114,10 +114,9 @@ def safe_environment(password: str) -> dict[str, str]:
         "HYPOTHESIS_STORAGE_DIRECTORY": "/tmp/hypothesis",
         "KLUKAI_TEST_ALLOW_LIVE_BACKENDS": "0",
         "KLUKAI_CLAUDE_PRIMARY": "false",
-        "KLUKAI_DISABLE_WARMUP": "1",
         "KLUKAI_IMAGE_PROVIDER": "disabled",
         "KLUKAI_CHAT_IMAGE_PROVIDER": "disabled",
-        "KLUKAI_CREATIVE_TEXT_PROVIDER": "local",
+        "KLUKAI_CREATIVE_TEXT_PROVIDER": "haiku",
         "KLUKAI_AGY_ALLOWED_USERS": "",
         "KLUKAI_AGY_SOCKET": "/tmp/disabled/image.sock",
         "KLUKAI_AGY_TOKEN_FILE": "/tmp/disabled/token",
@@ -126,13 +125,9 @@ def safe_environment(password: str) -> dict[str, str]:
         "KLUKAI_MCP_CONFIG": "",
         "ANTHROPIC_API_KEY": "",
         "OPENAI_API_KEY": "",
-        "LM_STUDIO_TOKEN": "ci-dummy-never-used",
-        "VOICE_BACKEND": "disabled",
         "VOICE_ASYNC_JOBS": "false",
         "DATABASE_URL": "postgresql://disabled:disabled@127.0.0.1:1/disabled",
         "REDIS_URL": "redis://127.0.0.1:1/0",
-        "QDRANT_HOST": "127.0.0.1",
-        "QDRANT_PORT": "1",
         "PERSONALITY_PATH": "/source/config/personality.yaml",
         "OTEL_SDK_DISABLED": "true",
         "KLUKAI_MIGRATION_TEST_DATABASE_URL": f"postgresql://core_test:{password}@postgres:5432/core_test",
@@ -141,11 +136,7 @@ def safe_environment(password: str) -> dict[str, str]:
         {
             name: "http://127.0.0.1:1"
             for name in [
-                "LM_STUDIO_URL",
-                "VOICE_URL",
-                "COMFYUI_URL",
                 "MCP_URL",
-                "QDRANT_URL",
             ]
         }
     )

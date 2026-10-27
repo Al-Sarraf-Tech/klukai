@@ -6,10 +6,8 @@ from typing import Any
 
 
 import logging
-import os
 from datetime import date as date, datetime
 
-import httpx
 
 from .db import get_conn, get_conn_autocommit
 from .affection_classifier import (
@@ -28,11 +26,6 @@ from .affection_types import (
 
 logger = logging.getLogger(__name__)
 
-# Affection classification uses gpt-oss-20b — reliable JSON, uncensored.
-# Only used as legacy fallback — primary path is merged extraction via extract_facts().
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://100.107.121.5:1234")
-CLASSIFICATION_MODEL = "cognitivecomputations_dolphin-mistral-24b-venice-edition"
-
 DAILY_POINTS_CAP = (
     8  # fallback only; config affection.scoring.daily_points_cap is authoritative
 )
@@ -48,7 +41,6 @@ class AffectionManager:
 
     def __init__(self) -> None:
         self._states: dict[str, AffectionState] = {}
-        self._http: httpx.AsyncClient | None = None
         self._levels: list[dict[str, Any]] = []
 
     @property
@@ -63,7 +55,6 @@ class AffectionManager:
 
     async def init(self) -> None:
         """Load state from database and personality config."""
-        self._http = httpx.AsyncClient(timeout=12.0)
         p = load_personality()
         self._levels = p.get("affection", {}).get("levels", [])
 
@@ -71,8 +62,7 @@ class AffectionManager:
         await self._apply_absence_decay()
 
     async def close(self) -> None:
-        if self._http:
-            await self._http.aclose()
+        """Nothing to release: classification uses the shared background route."""
 
     async def _load_state(self, user_id: str = "jalsarraf") -> None:
         """Load current affection state from PostgreSQL for a specific user.
@@ -331,11 +321,7 @@ class AffectionManager:
         self, user_message: str, assistant_message: str
     ) -> tuple[str, int]:
         return await classify_interaction(
-            self._http,
-            user_message,
-            url=LM_STUDIO_URL,
-            model=CLASSIFICATION_MODEL,
-            prompt_template=CLASSIFICATION_PROMPT,
+            user_message, prompt_template=CLASSIFICATION_PROMPT
         )
 
     def _calculate_delta(self, interaction_type: str, intensity: int) -> int:

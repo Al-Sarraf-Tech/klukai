@@ -10,7 +10,7 @@ Locks in two behaviors the deep audit flagged:
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -49,13 +49,15 @@ def test_client_ip_unknown_when_no_client():
 
 # ── recall fail-open: a backing-store blip degrades to empty, never raises ───
 
+def _db_down():
+    raise RuntimeError("database down")
+
+
 @pytest.mark.asyncio
-async def test_recall_episodes_fails_open_on_http_error():
+async def test_recall_episodes_fails_open_on_database_error():
     m = MemoryManager()
-    m.embed_text = AsyncMock(return_value=[0.1, 0.2, 0.3])  # non-zero → proceeds
-    m._http = AsyncMock()
-    m._http.post = AsyncMock(side_effect=RuntimeError("qdrant down"))
-    assert await m.recall_episodes("anything", user_id="jalsarraf") == []
+    with patch("app.db.get_conn", side_effect=_db_down):
+        assert await m.recall_episodes("anything", user_id="jalsarraf") == []
 
 
 @pytest.mark.asyncio
@@ -67,12 +69,10 @@ async def test_recall_facts_by_pattern_fails_open_on_http_error():
 
 
 @pytest.mark.asyncio
-async def test_recall_exchanges_fails_open_on_http_error():
+async def test_recall_exchanges_fails_open_on_database_error():
     m = MemoryManager()
-    m.embed_text = AsyncMock(return_value=[0.1, 0.2, 0.3])
-    m._http = AsyncMock()
-    m._http.post = AsyncMock(side_effect=RuntimeError("qdrant down"))
-    assert await m.recall_exchanges("anything", user_id="jalsarraf") == []
+    with patch("app.db.get_conn", side_effect=_db_down):
+        assert await m.recall_exchanges("anything", user_id="jalsarraf") == []
 
 
 @pytest.mark.asyncio

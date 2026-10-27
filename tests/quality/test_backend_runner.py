@@ -57,7 +57,6 @@ def context_fixture(tmp_path):
             for name, port, digit in [
                 ("postgres", 5432, "1"),
                 ("redis", 6379, "2"),
-                ("qdrant", 6333, "3"),
             ]
         },
     }
@@ -129,16 +128,26 @@ def test_managed_context_accepts_only_exact_private_source_bound_inputs(
             loader(path, digest, "tests/runtime_backends.py", source)
 
 
+RUNTIME_CASES = [
+    "test_postgres_auth_failure_and_real_protocol_recovery",
+    "test_redis_session_failure_closed_and_preserved_owner_recovery",
+    "test_postgres_memory_recall_full_text_candidates_and_haiku_pick",
+    "test_postgres_memory_recall_without_haiku_keeps_postgres_order",
+    "test_postgres_memory_loss_fails_open_and_recall_recovers",
+    "test_real_query_cancellation_releases_pool",
+]
+
+
 def junit_file(path, module="tests/runtime_backends.py"):
-    names = [
-        "test_postgres_auth_failure_and_real_protocol_recovery",
-        "test_redis_session_failure_closed_and_preserved_owner_recovery",
-        "test_qdrant_real_search_loss_keeps_optional_memory_and_recovers",
-        "test_real_query_cancellation_releases_pool",
-    ]
+    names = RUNTIME_CASES
     root = ET.Element("testsuites")
     suite = ET.SubElement(
-        root, "testsuite", tests="4", failures="0", errors="0", skipped="0"
+        root,
+        "testsuite",
+        tests=str(len(names)),
+        failures="0",
+        errors="0",
+        skipped="0",
     )
     for name in names:
         ET.SubElement(
@@ -190,7 +199,7 @@ def test_junit_must_prove_actual_exact_driver_identities_without_skips(tmp_path,
         path.rename(target)
         path.symlink_to(target)
     if fault == "none":
-        assert profile.junit_results(path, "tests/runtime_backends.py")["passed"] == 4
+        assert profile.junit_results(path, "tests/runtime_backends.py")["passed"] == 6
     else:
         with pytest.raises(ResourceFailure):
             profile.junit_results(path, "tests/runtime_backends.py")
@@ -302,10 +311,9 @@ def test_worker_context_cannot_alias_writable_evidence(tmp_path):
         )
 
 
-def test_worker_environment_keeps_global_sdk_and_warmup_guards():
+def test_worker_environment_keeps_global_sdk_guards():
     env = profile.worker_environment("tests/runtime_backends.py", "a" * 64)
     assert env["OTEL_SDK_DISABLED"] == "true"
-    assert env["KLUKAI_DISABLE_WARMUP"] == "1"
     assert env["DATABASE_URL"] == "postgresql://disabled:disabled@127.0.0.1:1/disabled"
     assert env["ANTHROPIC_API_KEY"] == env["OPENAI_API_KEY"] == ""
     assert env["KLUKAI_RUNTIME_CONTEXT"] == "/runtime-context/context.json"
@@ -401,7 +409,7 @@ def test_missing_host_docker_leaves_noncertifying_source_bound_manifest(
     output = tmp_path / "run"
     report = runner.execute(
         runner.RunConfig(
-            repo, output, revision, *["sha256:" + digit * 64 for digit in "1234"]
+            repo, output, revision, *["sha256:" + digit * 64 for digit in "123"]
         )
     )
     assert report["passed"] is report["certifying"] is False
@@ -442,7 +450,6 @@ def test_orchestration_closes_owned_sets_and_never_certifies_interrupted_inputs(
             ("core", "1"),
             ("postgres", "2"),
             ("redis", "3"),
-            ("qdrant", "4"),
         ]
     }
     instances = []
@@ -503,7 +510,7 @@ def test_orchestration_closes_owned_sets_and_never_certifies_interrupted_inputs(
         "start_services",
         lambda *args: {
             name: {"host": name, "port": port, "image_id": images[name]}
-            for name, port in [("postgres", 5432), ("redis", 6379), ("qdrant", 6333)]
+            for name, port in [("postgres", 5432), ("redis", 6379)]
         },
     )
     monkeypatch.setattr(runner.backend_profile, "validate_worker", lambda *args: None)
@@ -578,7 +585,14 @@ def test_complete_raw_driver_evidence_and_source_bindings_are_required(tmp_path,
                 "source_sha256": {"app/db.py": "a" * 64},
                 "states": [{"phase": "observed"}],
             }
-            for name in ["postgres", "redis", "qdrant", "cancellation"]
+            for name in [
+                "postgres",
+                "redis",
+                "cancellation",
+                "memory-recall",
+                "memory-recall-fallback",
+                "memory-recall-recovery",
+            ]
         },
         **{
             name + "-cleanup.json": {
@@ -587,12 +601,7 @@ def test_complete_raw_driver_evidence_and_source_bindings_are_required(tmp_path,
                 "proxy_tasks": 0,
                 "proxy_streams": 0,
             }
-            for name in [
-                "test_postgres_auth_failure_and_real_protocol_recovery",
-                "test_redis_session_failure_closed_and_preserved_owner_recovery",
-                "test_qdrant_real_search_loss_keeps_optional_memory_and_recovers",
-                "test_real_query_cancellation_releases_pool",
-            ]
+            for name in RUNTIME_CASES
         },
     }
     for name, value in expected.items():
@@ -617,7 +626,7 @@ def test_complete_raw_driver_evidence_and_source_bindings_are_required(tmp_path,
         result = profile.validate_runtime_evidence(
             tmp_path, "tests/runtime_backends.py", source, expected["containers.json"]
         )
-        assert len(result) == 9
+        assert len(result) == 13
     else:
         with pytest.raises(ResourceFailure):
             profile.validate_runtime_evidence(
@@ -690,47 +699,27 @@ def test_worker_summary_cannot_replace_actual_junit_probe_or_context(tmp_path, f
         )
 
 
-@pytest.mark.parametrize("fault", ["none", "version", "host", "public", "missing"])
-def test_qdrant_version_comes_from_owned_private_server_without_proxy_environment(
-    tmp_path, monkeypatch, fault
-):
-    import io
+def test_backend_set_is_postgres_and_valkey_only_everywhere():
+    """Memory lives in PostgreSQL (cloud-only AI): no vector store to provision."""
+    from tools.ci import backend_runner as runner
     from tools.ci import backend_services as services
 
-    if fault == "host":
-        info = {
-            "NetworkSettings": {"Networks": {"public": {"IPAddress": "172.24.0.2"}}}
-        }
-    else:
-        info = {
-            "NetworkSettings": {
-                "Networks": {
-                    "isolated": {
-                        "IPAddress": "8.8.8.8" if fault == "public" else "172.24.0.2"
-                    }
-                }
-            }
-        }
-    seen = []
-
-    class PrivateOpener:
-        def open(self, url, *, timeout):
-            seen.append(url)
-            if fault == "missing":
-                return io.BytesIO(b"{}")
-            return io.BytesIO(
-                json.dumps(
-                    {"version": "not-a-version" if fault == "version" else "1.17.0"}
-                ).encode()
-            )
-
-    monkeypatch.setattr(services, "build_opener", lambda *handlers: PrivateOpener())
-    if fault == "none":
-        assert services.qdrant_version(info, "isolated") == "1.17.0"
-        assert seen == ["http://172.24.0.2:6333/"]
-    else:
-        with pytest.raises(ResourceFailure):
-            services.qdrant_version(info, "isolated")
+    context = importlib.util.spec_from_file_location(
+        "managed_context_ports", ROOT / "docker/core/tests/runtime_backend_context.py"
+    )
+    module = importlib.util.module_from_spec(context)
+    context.loader.exec_module(module)
+    assert profile.BACKENDS == ("postgres", "redis")
+    assert services.PORTS == module.PORTS == {"postgres": 5432, "redis": 6379}
+    assert set(services.LIMITS) == set(profile.BACKENDS)
+    assert "qdrant_image" not in runner.RunConfig.__dataclass_fields__
+    assert sum(len(cases) for cases in profile.CASES.values()) == 10
+    assert profile.evidence_names("tests/runtime_backends.py") >= {
+        name + ".json" for name in profile.RECALL_EVIDENCE
+    }
+    for module_name in profile.CASES:
+        assert not any("qdrant" in name for name in profile.evidence_names(module_name))
+        assert not any("qdrant" in name for name in profile.CASES[module_name])
 
 
 @pytest.mark.parametrize(

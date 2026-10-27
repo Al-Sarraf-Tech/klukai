@@ -2,24 +2,25 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from .test_lm_gateway_auth import _client_with, _connection_context, _Gate, _RowsConnection
+from .test_memory_archive_coverage import _conn_ctx, _RecordingConn
 
 
 async def _backfill(rows, caption):
     import app.memory_archive as archive
 
-    select_conn = _RowsConnection(rows)
-    update_conn = _RowsConnection()
+    select_conn = _RecordingConn(rows=rows)
+    update_conn = _RecordingConn()
     with (
-        patch("app.memory_archive.get_conn", side_effect=lambda: _connection_context(select_conn)),
+        patch(
+            "app.memory_archive.get_conn", side_effect=lambda: _conn_ctx(select_conn)()
+        ),
         patch(
             "app.memory_archive.get_conn_autocommit",
-            side_effect=lambda: _connection_context(update_conn),
+            side_effect=lambda: _conn_ctx(update_conn)(),
         ),
-        patch("app.memory_archive._get_http", return_value=_client_with(caption)),
-        patch("app.llm_router.get_lm_gate", return_value=_Gate()),
+        patch("app.extraction_llm.complete", AsyncMock(return_value=caption)),
     ):
         result = await archive.backfill_annotations("alice")
     return result, select_conn, update_conn
