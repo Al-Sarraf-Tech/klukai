@@ -97,10 +97,10 @@ extension _ChatComposer on _ChatScreenState {
 
   void _showSendError() => _showHudNotice('TRANSMISSION FAILED // LINK DOWN');
 
-  /// The push-to-talk clip went nowhere: STT is down (the GPU host is off),
-  /// timed out, or heard nothing. Short, in her register; the keyboard works.
-  void _showVoiceLinkError() =>
-      _showHudNotice('// VOICE LINK GARBLED — try again or type.');
+  /// A failed recording leaves the keyboard and its draft available.
+  void _showVoiceLinkError([
+    String message = '// NO SPEECH HEARD — try again or type.',
+  ]) => _showHudNotice(message);
 
   /// Keyboard scroll-navigation for the message list: PageUp/PageDown jump a
   /// near-viewport, Home/End jump to the extremes. Returns

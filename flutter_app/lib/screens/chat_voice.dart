@@ -3,8 +3,7 @@ part of 'chat_screen.dart';
 /// Microphone permission, epoch cancellation, transcription, and voice playback.
 /// Shares the screen's single State owner; no transport or state is duplicated.
 extension _ChatVoice on _ChatScreenState {
-  /// Whisper on a cold GPU takes a while; a powered-off GPU host hangs the
-  /// proxy until it gives up. Bound the wait so he isn't left wondering.
+  /// Bound the wait for cloud transcription so the composer can recover.
   static const _sttTimeout = Duration(seconds: 35);
 
   Future<bool> _startRecorder() async {
@@ -44,7 +43,9 @@ extension _ChatVoice on _ChatScreenState {
     }
     if (!started) {
       _update(() => _speech.fail(epoch, 'permission'));
-      _showVoiceLinkError();
+      _showVoiceLinkError(
+        '// MICROPHONE UNAVAILABLE — allow microphone access or type.',
+      );
       return;
     }
     _update(() => _speech.markRecording(epoch));
@@ -98,6 +99,7 @@ extension _ChatVoice on _ChatScreenState {
 
   Future<void> _transcribeAndSend(String audioBase64, int epoch) async {
     var text = '';
+    var failureNotice = '// VOICE INPUT UNAVAILABLE — use text for now.';
     try {
       final response = await _postStt(
         audioBase64,
@@ -105,11 +107,32 @@ extension _ChatVoice on _ChatScreenState {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         text = (data['text'] as String? ?? '').trim();
+        failureNotice = '// NO SPEECH HEARD — try again or type.';
       } else {
         debugPrint('STT failed: HTTP ${response.statusCode}');
+        // Only fixed notices reach the UI; never display a provider body.
+        if (response.statusCode == 402) {
+          failureNotice = '// VOICE INPUT NEEDS API CREDIT — use text for now.';
+        } else if (response.statusCode == 413) {
+          failureNotice =
+              '// RECORDING TOO LARGE — record a shorter clip or type.';
+        } else if (response.statusCode == 429) {
+          failureNotice = '// VOICE SERVICE BUSY — try later or type.';
+        } else if (response.statusCode == 503) {
+          try {
+            final data = jsonDecode(response.body);
+            if (data is Map && data['error'] == 'Voice service busy') {
+              failureNotice = '// VOICE SERVICE BUSY — try later or type.';
+            }
+          } catch (_) {
+            // An unavailable proxy may return HTML instead of the API shape.
+          }
+        }
       }
-    } catch (e) {
-      debugPrint('STT failed: $e');
+    } on TimeoutException {
+      failureNotice = '// VOICE INPUT TIMED OUT — try again or type.';
+    } catch (_) {
+      debugPrint('STT failed: unavailable or invalid response');
     }
     if (!mounted || !_speech.isCurrent(epoch)) return;
     final spoken = SpeechCapture.voiceUtterance(text);
@@ -118,11 +141,9 @@ extension _ChatVoice on _ChatScreenState {
       spoken,
     );
     if (kept != _textController.text) _textController.text = kept;
-    // GPU host off (502), request timed out, or nothing intelligible came
-    // back: say so instead of swallowing his words. The typed draft stays.
     if (spoken.isEmpty) {
       _update(() => _speech.fail(epoch, 'stt'));
-      _showVoiceLinkError();
+      _showVoiceLinkError(failureNotice);
       return;
     }
     if (!_ws.sendMessage(spoken)) {

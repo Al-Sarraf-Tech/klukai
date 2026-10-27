@@ -181,7 +181,7 @@ class TestErrors:
             (413, "request_too_large", (502, "Transcription failed")),
             (415, "unsupported_media_type", (502, "Transcription failed")),
             (401, None, (502, "Voice service unavailable")),
-            (402, None, (502, "Voice service unavailable")),
+            (402, None, (402, "Voice input needs API credit")),
             (403, "upstream_rejected", (502, "Voice service unavailable")),
             (429, None, (503, "Voice service busy")),
             (500, "internal_error", (502, "Voice service unavailable")),
@@ -406,6 +406,7 @@ class TestRoute:
         [
             # A Fish 401 must never reach the apps as a 401: they log him out.
             (401, (502, "Voice service unavailable")),
+            (402, (402, "Voice input needs API credit")),
             (400, (502, "Transcription failed")),
             (429, (503, "Voice service busy")),
         ],

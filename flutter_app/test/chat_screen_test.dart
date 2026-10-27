@@ -1353,7 +1353,7 @@ void main() {
       );
       await tester.tap(find.byType(VoiceButton));
       await tester.pump();
-      expect(find.textContaining('VOICE LINK GARBLED'), findsOneWidget);
+      expect(find.textContaining('MICROPHONE UNAVAILABLE'), findsOneWidget);
 
       await tester.enterText(
         find.byType(TextField),
@@ -1367,6 +1367,104 @@ void main() {
       expect(
         tester.widget<TextField>(find.byType(TextField)).controller!.text,
         isEmpty,
+      );
+      fake.dispose();
+    });
+
+    for (final (index, failure) in [
+      (
+        402,
+        '{"error":"Voice input needs API credit"}',
+        'VOICE INPUT NEEDS API CREDIT',
+      ),
+      (413, '{}', 'RECORDING TOO LARGE'),
+      (503, '{"error":"Voice service busy"}', 'VOICE SERVICE BUSY'),
+      (503, '{"error":"Voice input is off"}', 'VOICE INPUT UNAVAILABLE'),
+      (502, '{"error":"acct_private_detail"}', 'VOICE INPUT UNAVAILABLE'),
+      (502, '<html>acct_private_detail</html>', 'VOICE INPUT UNAVAILABLE'),
+      (429, '{}', 'VOICE SERVICE BUSY'),
+      (200, '{"text":"  "}', 'NO SPEECH HEARD'),
+      (200, '{"text":123}', 'VOICE INPUT UNAVAILABLE'),
+    ].indexed) {
+      testWidgets(
+        'STT failure $index ${failure.$1} keeps the draft at phone width',
+        (tester) async {
+          tester.view.physicalSize = const Size(320, 780);
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          var requests = 0;
+          final fake = await _pumpChat(
+            tester,
+            voiceInput: true,
+            speechBridge: SpeechBridge(
+              start: () async => true,
+              stop: () async => 'clip',
+            ),
+            httpClient: MockClient((request) async {
+              requests++;
+              return http.Response(failure.$2, failure.$1);
+            }),
+          );
+          await tester.enterText(find.byType(TextField), 'keep this draft');
+          final gesture = await tester.startGesture(
+            tester.getCenter(find.byType(VoiceButton)),
+          );
+          await tester.pump();
+          await gesture.up();
+          await tester.pump();
+
+          expect(find.textContaining(failure.$3), findsOneWidget);
+          expect(find.textContaining('acct_private_detail'), findsNothing);
+          expect(
+            tester.widget<TextField>(find.byType(TextField)).controller!.text,
+            'keep this draft',
+          );
+          expect(fake.sent, isEmpty);
+          expect(
+            requests,
+            1,
+            reason: 'a failed recording must never be retried automatically',
+          );
+          fake.dispose();
+        },
+      );
+    }
+
+    testWidgets('a timed out transcript never sends a late reply or retries', (
+      tester,
+    ) async {
+      final gate = Completer<http.Response>();
+      var requests = 0;
+      final fake = await _pumpChat(
+        tester,
+        voiceInput: true,
+        speechBridge: SpeechBridge(
+          start: () async => true,
+          stop: () async => 'clip',
+        ),
+        httpClient: MockClient((_) {
+          requests++;
+          return gate.future;
+        }),
+      );
+      await tester.enterText(find.byType(TextField), 'keep this draft');
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(VoiceButton)),
+      );
+      await tester.pump();
+      await gesture.up();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 36));
+      await tester.pump();
+      expect(find.textContaining('VOICE INPUT TIMED OUT'), findsOneWidget);
+      gate.complete(http.Response('{"text":"late speech"}', 200));
+      await tester.pump();
+      expect(fake.sent, isEmpty);
+      expect(requests, 1);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'keep this draft',
       );
       fake.dispose();
     });

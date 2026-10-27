@@ -335,6 +335,9 @@ async def transcribe(audio_b64: str, *, language: str | None = None) -> dict[str
         raise SpeechToTextError(503, _FISH_FAILED_MESSAGE) from exc
     if status != 200:
         logger.warning("Fish speech-to-text HTTP %s (%s)", status, _error_code(body))
+        if status == 402:
+            # Funding rejection, not a damaged clip: another take cannot help.
+            raise SpeechToTextError(402, "Voice input needs API credit")
         if status == 429:
             # The account is at its concurrency limit; nothing was transcribed.
             raise SpeechToTextError(503, STT_BUSY_MESSAGE)
