@@ -17,8 +17,6 @@ import os
 # memory_facts.record_milestone reads the clock through this module.
 from datetime import datetime as datetime
 
-import httpx
-
 import redis.asyncio as redis
 
 from . import memory_recall
@@ -37,8 +35,7 @@ from .memory_settings import (
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://aichat-redis:6379/1")
-DATA_URL = os.environ.get("DATA_URL", "http://aichat-data:8091")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://companion-redis:6379/0")
 
 # Full-text match on summary + keywords (search_tsv, migration 260), then
 # importance and recency. Rows that match nothing rank by the last two alone.
@@ -80,7 +77,6 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
         self._redis_reconnect_lock = asyncio.Lock()
         self._session_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._redis: redis.Redis | None = None
-        self._http: httpx.AsyncClient | None = None
 
     async def init(self) -> None:
         # redis factory stubs omit annotations; preserve the established injection seam.
@@ -92,16 +88,10 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
             socket_keepalive=True,
             health_check_interval=30,
         )
-        # The data service (factual memory) client.
-        self._http = httpx.AsyncClient(timeout=30.0)
 
     async def close(self) -> None:
-        try:
-            if self._redis:
-                await self._redis.aclose()
-        finally:
-            if self._http:
-                await self._http.aclose()
+        if self._redis:
+            await self._redis.aclose()
 
     # ── Tier 2: Episodic Memory (Postgres) ──────────────────────────────
 
@@ -185,7 +175,7 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
 
     # ── Conversation Exchange Memory (Postgres; memory_exchange) ────────
 
-    # ── Tier 3: Factual Memory (aichat-data /memory) ────────────────────
+    # ── Tier 3: Factual Memory (Postgres; memory_facts, fact_store) ─────
 
     # ── Combined recall for prompt building ──────────────────────────────
 

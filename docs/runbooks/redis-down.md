@@ -15,18 +15,20 @@
 
 1. Confirm Redis is the problem:
    ```bash
-   docker exec companion-core redis-cli -h aichat-redis ping
+   docker exec companion-redis sh -c 'REDISCLI_AUTH="$KLUKAI_REDIS_PASSWORD" valkey-cli ping'
    ```
    Should return `PONG`. Failure confirms.
 2. Check Redis container:
    ```bash
-   docker ps --filter name=aichat-redis
-   docker logs --tail=200 aichat-redis
+   docker ps --filter name=companion-redis
+   docker logs --tail=200 companion-redis
    ```
-3. If exited: `docker restart aichat-redis`.
+3. If exited: `python3 ops/amarillo/scripts/klukai_compose.py up -d --no-deps redis`
+   (Klukai's own Redis since 2026-10-27; the password comes from the
+   encrypted compose env).
 4. If up but unresponsive: check memory pressure:
    ```bash
-   docker exec aichat-redis redis-cli INFO memory | grep used_memory_human
+   docker exec companion-redis sh -c 'REDISCLI_AUTH="$KLUKAI_REDIS_PASSWORD" valkey-cli INFO memory' | grep used_memory_human
    ```
 
 ## Root-cause investigation

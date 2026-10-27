@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 from .perf_gate import compare, image_reference, revision
+from .perf_mcp import MCP_CONFIG_NAME
 from .perf_measure import Sampler
 from .perf_network import LoopbackProxy
 from .perf_resources import (
@@ -64,8 +65,10 @@ def environment(stack: DisposableStack, database: str) -> dict[str, str]:
         "PERSONALITY_PATH": "/perf-fixtures/personality.yaml",
         "SEED_PASSWORD_JALSARRAF": stack.password,
         "SEED_PASSWORD_RICKY": stack.password,
-        # Both cores open their MCP session here at startup; perf_evidence
-        # counts that handshake as proof each core ran against the fixture.
+        # Both cores open their MCP session against the fixture at startup
+        # (perf_mcp.py); perf_evidence counts that handshake as proof each
+        # core ran against the fixture. MCP_URL/DATA_URL: baseline only.
+        "KLUKAI_MCP_CONFIG": "/perf-fixtures/" + MCP_CONFIG_NAME,
         "MCP_URL": fixture,
         "DATA_URL": fixture,
         "COMFYUI_URL": fixture,

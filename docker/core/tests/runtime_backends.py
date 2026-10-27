@@ -468,3 +468,124 @@ async def test_real_query_cancellation_releases_pool(backends, clients):
         "cancellation",
         [{"phase": "cancelled", "pool_reusable": True, "monotonic": time.monotonic()}],
     )
+
+
+@pytest.mark.asyncio
+async def test_postgres_fact_memory_keeps_the_data_service_contract(
+    backends, clients, monkeypatch
+):
+    """Facts moved from the aichat data service to Klukai's own queries on the
+    same ``memory`` table (app/fact_store.py). On a real PostgreSQL this proves
+    the old service's contract: the table is created when missing, rows
+    written before the move are read in place, store is an upsert, a TTL hides
+    an expired row without deleting it, a store without TTL makes a row
+    permanent again, and pattern recall is scoped, newest first and bounded."""
+    from app import fact_store
+
+    memory, _ = clients
+    monkeypatch.setattr(fact_store, "_ready", False)
+    owner, other = "facts-owner", "facts-other"
+    # A fresh database has no memory table; first use creates the same schema
+    # the data service created, and nothing else.
+    await memory.store_fact("rel:birthday", "March 5", user_id=owner)
+    async with db.get_conn() as conn:
+        columns = await (
+            await conn.execute(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_name = 'memory' ORDER BY ordinal_position"
+            )
+        ).fetchall()
+    assert columns == [
+        ("key", "text"),
+        ("value", "text"),
+        ("category", "text"),
+        ("ts", "timestamp with time zone"),
+        ("expires_at", "timestamp with time zone"),
+    ]
+    # A row the data service wrote earlier, exactly as it wrote it.
+    async with db.get_conn_autocommit() as conn:
+        await conn.execute(
+            "INSERT INTO memory(key, value, ts) VALUES(%s, %s, NOW() - INTERVAL '1 day')",
+            (f"companion:{owner}:rel:joke:tea", "tea :: always tea"),
+        )
+    assert await memory.recall_fact("rel:birthday", user_id=owner) == "March 5"
+    assert await memory.get_inside_jokes(owner) == [
+        {"label": "tea", "note": "always tea"}
+    ]
+    # Upsert keeps one row and the newest value.
+    await memory.store_fact("rel:birthday", "March 6", user_id=owner)
+    assert await memory.recall_fact("rel:birthday", user_id=owner) == "March 6"
+    # Another user's facts never leak.
+    await memory.store_fact("rel:birthday", "June 1", user_id=other)
+    assert await memory.get_relationship_facts(owner) == {"birthday": "March 6"}
+    # Milestones are recorded once.
+    assert await memory.record_milestone("first_tea", user_id=owner) is True
+    assert await memory.record_milestone("first_tea", user_id=owner) is False
+    # A TTL hides the row once expired; the row itself stays.
+    await memory.store_fact("mood", "sleepy", ttl=1, user_id=owner)
+    assert await memory.recall_fact("mood", user_id=owner) == "sleepy"
+    await asyncio.sleep(1.2)
+    assert await memory.recall_fact("mood", user_id=owner) is None
+    # Storing again without a TTL makes it permanent.
+    await memory.store_fact("mood", "awake", user_id=owner)
+    await asyncio.sleep(0.1)
+    assert await memory.recall_fact("mood", user_id=owner) == "awake"
+    # Pattern recall: newest first, bounded like the data service (50).
+    for i in range(55):
+        await fact_store.store(f"companion:{owner}:note:{i:02d}", str(i))
+    notes = await memory.recall_facts_by_pattern("note:%", user_id=owner)
+    assert len(notes) == fact_store.PATTERN_LIMIT == 50
+    assert notes[0]["key"].endswith("note:54")
+    async with db.get_conn() as conn:
+        counts = await (
+            await conn.execute(
+                "SELECT count(*), count(expires_at) FROM memory WHERE key LIKE %s",
+                (f"companion:{owner}:%",),
+            )
+        ).fetchone()
+    # birthday, tea, milestone, mood and 55 notes: nothing was deleted.
+    assert counts == (59, 0)
+
+    # An existing table (production: created by the data service) is used as
+    # is: concurrent first use by fresh processes changes no schema object.
+    async def schema() -> list[tuple[object, ...]]:
+        async with db.get_conn() as conn:
+            return await (
+                await conn.execute(
+                    "SELECT c.oid::bigint, c.relname FROM pg_class c "
+                    "WHERE c.relname IN ('memory', 'memory_pkey', "
+                    "'idx_memory_category', 'idx_memory_expires') ORDER BY 2"
+                )
+            ).fetchall()
+
+    before = await schema()
+    assert [row[1] for row in before] == [
+        "idx_memory_category",
+        "idx_memory_expires",
+        "memory",
+        "memory_pkey",
+    ]
+    monkeypatch.setattr(fact_store, "_ready", False)
+    await asyncio.gather(*(fact_store._ensure_table() for _ in range(4)))
+    assert await schema() == before
+    # TTL 0 or None stores a permanent fact.
+    await memory.store_fact("zero", "z", ttl=0, user_id=owner)
+    await memory.store_fact("none", "n", ttl=None, user_id=owner)
+    async with db.get_conn() as conn:
+        permanent = await (
+            await conn.execute(
+                "SELECT count(*) FROM memory WHERE key = ANY(%s) AND expires_at IS NULL",
+                ([f"companion:{owner}:zero", f"companion:{owner}:none"],),
+            )
+        ).fetchone()
+    assert permanent == (2,)
+    # LIKE metacharacters in a user id match only that user's rows.
+    await memory.store_fact("rel:secret", "theirs", user_id="axb")
+    await memory.store_fact("rel:mine", "ours", user_id="a_b")
+    assert await memory.get_relationship_facts("a_b") == {"mine": "ours"}
+    assert await memory.get_relationship_facts("%") == {}
+    # Concurrent firsts: exactly one caller records the milestone.
+    results = await asyncio.gather(
+        *(memory.record_milestone("first_storm", user_id=owner) for _ in range(5))
+    )
+    assert sorted(results) == [False, False, False, False, True]

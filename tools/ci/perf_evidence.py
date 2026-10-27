@@ -199,9 +199,9 @@ def rounds_bound(
             counts = fixture_bound(run["fixture"], index, role, counts)
 
 
-# Both the pre-2026-10-26 baseline and the cloud-only core open their MCP
-# session against MCP_URL during application startup, before readiness can
-# pass. One new handshake per measured core proves that core really ran wired
+# Both measured cores open their MCP session against the fixture (the
+# configured server in perf_mcp.py) during application startup, before
+# readiness can pass. One new handshake per measured core proves that core really ran wired
 # to the isolated fixture. The measured routes themselves reach no provider
 # since paid Fish voice left the gate, so per-sample fixture work is not
 # expected.

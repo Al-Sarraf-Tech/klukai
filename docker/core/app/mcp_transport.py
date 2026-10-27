@@ -1,7 +1,7 @@
 """Allowlisted Streamable HTTP connections for the opt-in MCP configuration.
 
 Errors deliberately contain no remote text, URLs, headers, or credential paths.
-The legacy gateway protocol lives in mcp_client and remains independent.
+mcp_client routes every external tool call through this module.
 """
 
 from __future__ import annotations

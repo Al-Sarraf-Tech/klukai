@@ -135,6 +135,7 @@ RUNTIME_CASES = [
     "test_postgres_memory_recall_without_haiku_keeps_postgres_order",
     "test_postgres_memory_loss_fails_open_and_recall_recovers",
     "test_real_query_cancellation_releases_pool",
+    "test_postgres_fact_memory_keeps_the_data_service_contract",
 ]
 
 
@@ -199,7 +200,7 @@ def test_junit_must_prove_actual_exact_driver_identities_without_skips(tmp_path,
         path.rename(target)
         path.symlink_to(target)
     if fault == "none":
-        assert profile.junit_results(path, "tests/runtime_backends.py")["passed"] == 6
+        assert profile.junit_results(path, "tests/runtime_backends.py")["passed"] == len(RUNTIME_CASES)
     else:
         with pytest.raises(ResourceFailure):
             profile.junit_results(path, "tests/runtime_backends.py")
@@ -597,7 +598,6 @@ def test_complete_raw_driver_evidence_and_source_bindings_are_required(tmp_path,
         **{
             name + "-cleanup.json": {
                 "pool_closed": True,
-                "http_closed": True,
                 "proxy_tasks": 0,
                 "proxy_streams": 0,
             }
@@ -626,7 +626,7 @@ def test_complete_raw_driver_evidence_and_source_bindings_are_required(tmp_path,
         result = profile.validate_runtime_evidence(
             tmp_path, "tests/runtime_backends.py", source, expected["containers.json"]
         )
-        assert len(result) == 13
+        assert len(result) == len(expected) == 14
     else:
         with pytest.raises(ResourceFailure):
             profile.validate_runtime_evidence(
@@ -713,7 +713,7 @@ def test_backend_set_is_postgres_and_valkey_only_everywhere():
     assert services.PORTS == module.PORTS == {"postgres": 5432, "redis": 6379}
     assert set(services.LIMITS) == set(profile.BACKENDS)
     assert "qdrant_image" not in runner.RunConfig.__dataclass_fields__
-    assert sum(len(cases) for cases in profile.CASES.values()) == 10
+    assert sum(len(cases) for cases in profile.CASES.values()) == 11
     assert profile.evidence_names("tests/runtime_backends.py") >= {
         name + ".json" for name in profile.RECALL_EVIDENCE
     }

@@ -351,8 +351,6 @@ async def clients(
     memory._redis = redis.Redis.from_url(
         redis_url, decode_responses=True, socket_timeout=0.3, socket_connect_timeout=0.3
     )
-    # The data-service (factual memory) client; close() must release it too.
-    memory._http = httpx.AsyncClient(timeout=0.4, trust_env=False)
     for name in ("postgres", "redis"):
         get_breaker(name).cfg.error_threshold = 1
     health_cache.clear_cache()
@@ -371,12 +369,11 @@ async def clients(
         for proxy in proxies.values():
             await proxy.close()
         health_cache.clear_cache()
-        assert pool.closed and memory._http.is_closed
+        assert pool.closed
         (backends.evidence / f"{request.node.name}-cleanup.json").write_text(
             json.dumps(
                 {
                     "pool_closed": pool.closed,
-                    "http_closed": memory._http.is_closed,
                     "proxy_tasks": sum(len(proxy.tasks) for proxy in proxies.values()),
                     "proxy_streams": sum(
                         len(proxy.writers) for proxy in proxies.values()

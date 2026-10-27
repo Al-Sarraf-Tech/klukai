@@ -4,75 +4,42 @@ from __future__ import annotations
 from typing import Any
 import logging
 from datetime import timezone
-import httpx
-from .dependencies import http_request, json_objects, json_object
-from .memory_endpoints import DATA_URL
+from . import fact_store
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryFactsMixin:
-    _http: httpx.AsyncClient | None
+    # Facts live in Klukai's own database (app/fact_store.py). Every operation
+    # fails open: they back the dossier, inside jokes and milestones on the
+    # live chat read path, so a database hiccup degrades context, never the
+    # reply.
 
     async def store_fact(
         self, key: str, value: str, ttl: int | None = None, user_id: str = "jalsarraf"
     ) -> None:
         try:
-            body: dict[str, Any] = {"key": f"companion:{user_id}:{key}", "value": value}
-            if ttl:
-                body["ttl_seconds"] = ttl
-            await http_request(
-                "data", self._http, "post", f"{DATA_URL}/memory/store", json=body
-            )
+            await fact_store.store(f"companion:{user_id}:{key}", value, ttl)
         except Exception as e:
             logger.warning("store_fact failed for %s: %s", key, e)
 
     async def recall_fact(self, key: str, user_id: str = "jalsarraf") -> str | None:
-        full_key = f"companion:{user_id}:{key}"
         try:
-            r = await http_request(
-                "data",
-                self._http,
-                "get",
-                f"{DATA_URL}/memory/recall",
-                params={"key": full_key},
-            )
-            data = json_object(r.json())
-            if data.get("found"):
-                value = data.get("value")
-                if value is None:
-                    # The data service answers a key lookup with its row in
-                    # ``entries`` ({key, value, ts}), not a top-level value.
-                    value = next(
-                        (
-                            entry.get("value")
-                            for entry in json_objects(data.get("entries", []))
-                            if entry.get("key") == full_key
-                        ),
-                        None,
-                    )
-                return value if isinstance(value, str) else None
+            entry = await fact_store.recall(f"companion:{user_id}:{key}")
         except Exception as e:
             logger.warning("recall_fact failed for %s: %s", key, e)
-        return None
+            return None
+        value = entry.get("value") if entry else None
+        return value if isinstance(value, str) else None
 
     async def recall_facts_by_pattern(
         self, pattern: str, user_id: str = "jalsarraf"
     ) -> list[dict[str, Any]]:
-        # Fail open like recall_fact/store_fact — this backs inside-jokes, the
-        # Commander dossier, and milestones on the live chat read path, so a
-        # data-service hiccup must return empty, not raise.
+        # The caller's pattern may use LIKE wildcards; the user scope never
+        # does, so a user id containing % or _ cannot reach another user's rows.
+        scope = fact_store.escape_like(f"companion:{user_id}:")
         try:
-            r = await http_request(
-                "data",
-                self._http,
-                "get",
-                f"{DATA_URL}/memory/recall",
-                params={"pattern": f"companion:{user_id}:{pattern}"},
-            )
-            r.raise_for_status()
-            data = json_object(r.json())
-            return json_objects(data.get("entries", []))
+            return await fact_store.recall_pattern(scope + pattern)
         except Exception as e:
             logger.warning("recall_facts_by_pattern failed (%s): %s", pattern, e)
             return []
@@ -156,21 +123,25 @@ class MemoryFactsMixin:
     async def record_milestone(
         self, milestone: str, user_id: str = "jalsarraf"
     ) -> bool:
-        """Record a relationship milestone. Returns True if new."""
-        existing = await self.recall_fact(f"milestone:{milestone}", user_id=user_id)
-        if existing:
-            return False
+        """Record a relationship milestone once. True only if this call
+        recorded it; an existing first date is never overwritten, and a
+        database error reports False rather than a milestone that was not
+        stored."""
         from . import memory
 
-        await self.store_fact(
-            f"milestone:{milestone}",
-            # Aware UTC: the app renders milestones in his local time, and a
-            # naive container-clock stamp cannot be converted.
-            memory.datetime.now(timezone.utc).isoformat(),
-            user_id=user_id,
-        )
-        logger.info("New milestone recorded: %s for %s", milestone, user_id)
-        return True
+        # Aware UTC: the app renders milestones in his local time, and a
+        # naive container-clock stamp cannot be converted.
+        when = memory.datetime.now(timezone.utc).isoformat()
+        try:
+            new = await fact_store.insert_if_absent(
+                f"companion:{user_id}:milestone:{milestone}", when
+            )
+        except Exception as e:
+            logger.warning("record_milestone failed for %s: %s", milestone, e)
+            return False
+        if new:
+            logger.info("New milestone recorded: %s for %s", milestone, user_id)
+        return new
 
     async def get_milestones(self, user_id: str = "jalsarraf") -> dict[str, str]:
         """Get all recorded relationship milestones for a user."""

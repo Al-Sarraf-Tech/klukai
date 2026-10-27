@@ -1,135 +1,99 @@
-"""Tests for app.mcp_client — MCP JSON-RPC HTTP client."""
+"""MCPClient lifecycle and its no-configuration behaviour.
+
+Configured servers (policy, framing, allowlists) are covered by
+test_mcp_client_configured.py. Without KLUKAI_MCP_CONFIG core offers no
+external tools and never opens a connection; the built-in tools
+(recall_memory, get_current_time) do not go through MCPClient at all.
+"""
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app import mcp_client
 from app.mcp_client import MCPClient
 
 
-def _mk_resp(json_body, headers=None, status_code=200):
-    """Build a mock httpx.Response."""
-    r = MagicMock()
-    r.json = MagicMock(return_value=json_body)
-    r.headers = headers or {}
-    r.status_code = status_code
-    r.raise_for_status = MagicMock()
-    return r
+@pytest.fixture
+def unconfigured(monkeypatch):
+    monkeypatch.delenv("KLUKAI_MCP_CONFIG", raising=False)
+    return MCPClient()
 
 
-class TestInit:
+class TestLifecycle:
     @pytest.mark.asyncio
-    async def test_init_creates_http_client(self):
-        c = MCPClient()
-        # Patch _initialize_session so init() doesn't try real HTTP
-        with patch.object(c, "_initialize_session", new=AsyncMock()):
-            await c.init()
-        assert c._http is not None
-        await c.close()
+    async def test_init_creates_http_client_without_any_request(self, unconfigured):
+        fake = MagicMock()
+        with patch("app.mcp_client.httpx.AsyncClient", return_value=fake):
+            await unconfigured.init()
+        assert unconfigured._http is fake
+        fake.post.assert_not_called()
+        fake.get.assert_not_called()
+        fake.stream.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_close_closes_http_client(self):
-        c = MCPClient()
-        with patch.object(c, "_initialize_session", new=AsyncMock()):
-            await c.init()
-        http = c._http
-        await c.close()
-        # After close, can call again safely
-        await c.close()
+    async def test_close_closes_http_client(self, unconfigured):
+        unconfigured._http = MagicMock()
+        unconfigured._http.aclose = AsyncMock()
+        await unconfigured.close()
+        unconfigured._http.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_initialize_session_captures_session_id(self):
-        c = MCPClient()
-        c._http = AsyncMock()
-        c._http.post = AsyncMock(return_value=_mk_resp(
-            {"result": {}},
-            headers={"Mcp-Session-Id": "session-xyz"},
-        ))
-        await c._initialize_session()
-        assert c._session_id == "session-xyz"
+    async def test_close_noop_when_never_initialized(self, unconfigured):
+        await unconfigured.close()
 
     @pytest.mark.asyncio
-    async def test_initialize_session_fail_soft_on_http_error(self):
-        import httpx
-        c = MCPClient()
-        c._http = AsyncMock()
-        c._http.post = AsyncMock(side_effect=httpx.HTTPError("conn refused"))
-        # Should not raise
-        await c._initialize_session()
-        # Session ID stays None on failure
-        assert c._session_id is None
+    async def test_bad_configuration_disables_external_tools(
+        self, tmp_path, monkeypatch
+    ):
+        path = tmp_path / "mcp.json"
+        path.write_text("{not json")
+        monkeypatch.setenv("KLUKAI_MCP_CONFIG", str(path))
+        client = MCPClient()
+        fake = MagicMock()
+        with patch("app.mcp_client.httpx.AsyncClient", return_value=fake):
+            await client.init()
+        assert await client.list_tools() == []
+        fake.post.assert_not_called()
+        fake.stream.assert_not_called()
 
 
-class TestInvokeTool:
+class TestWithoutConfiguration:
     @pytest.mark.asyncio
-    async def test_raises_when_not_initialized(self):
-        c = MCPClient()
-        # No init() called → _http is None
-        with pytest.raises(RuntimeError, match="not initialized"):
-            await c.invoke_tool("any", {})
-
-    @pytest.mark.asyncio
-    async def test_returns_result_on_success(self):
-        c = MCPClient()
-        c._http = AsyncMock()
-        c._http.post = AsyncMock(return_value=_mk_resp(
-            {"result": {"output": "ok"}}
-        ))
-        result = await c.invoke_tool("search", {"query": "x"})
-        assert result == {"output": "ok"}
+    async def test_invoke_raises_when_not_initialized(self, unconfigured):
+        with pytest.raises(RuntimeError):
+            await unconfigured.invoke_tool("anything", {})
 
     @pytest.mark.asyncio
-    async def test_returns_error_on_jsonrpc_error(self):
-        c = MCPClient()
-        c._http = AsyncMock()
-        c._http.post = AsyncMock(return_value=_mk_resp(
-            {"error": {"code": -32601, "message": "tool not found"}}
-        ))
-        result = await c.invoke_tool("nonexistent", {})
-        assert "error" in result
-        assert "not found" in result["error"]
+    async def test_invoke_reports_tools_unavailable(self, unconfigured):
+        unconfigured._http = MagicMock()
+        assert await unconfigured.invoke_tool("web_search", {"q": "x"}) == {
+            "error": "MCP configured tools unavailable"
+        }
+        unconfigured._http.post.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_includes_session_header_when_present(self):
-        c = MCPClient()
-        c._http = AsyncMock()
-        c._session_id = "test-session-id"
-        c._http.post = AsyncMock(return_value=_mk_resp({"result": {}}))
-        await c.invoke_tool("any", {})
-        # Check the headers passed to post
-        call_kwargs = c._http.post.call_args.kwargs
-        assert call_kwargs["headers"].get("Mcp-Session-Id") == "test-session-id"
+    async def test_lists_no_tools(self, unconfigured):
+        assert await unconfigured.list_tools() == []
+
+    def test_no_aichat_gateway_remains(self):
+        assert not hasattr(mcp_client, "MCP_URL")
+        assert "aichat-mcp:8096" not in Path(mcp_client.__file__).read_text()
+
+
+class TestRecovery:
+    @pytest.mark.asyncio
+    async def test_reinitialize_without_configuration_is_a_no_op(self, unconfigured):
+        unconfigured._http = MagicMock()
+        await unconfigured._initialize_session()
+        unconfigured._http.post.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_session_header_when_id_none(self):
-        c = MCPClient()
-        c._http = AsyncMock()
-        c._session_id = None
-        c._http.post = AsyncMock(return_value=_mk_resp({"result": {}}))
-        await c.invoke_tool("any", {})
-        call_kwargs = c._http.post.call_args.kwargs
-        # Empty headers dict — no session id
-        assert "Mcp-Session-Id" not in call_kwargs.get("headers", {})
-
-
-class TestListTools:
-    @pytest.mark.asyncio
-    async def test_returns_tools_list(self):
-        c = MCPClient()
-        c._http = AsyncMock()
-        c._http.post = AsyncMock(return_value=_mk_resp(
-            {"result": {"tools": [{"name": "alpha"}, {"name": "beta"}]}}
-        ))
-        tools = await c.list_tools()
-        assert len(tools) == 2
-        assert tools[0]["name"] == "alpha"
-
-    @pytest.mark.asyncio
-    async def test_empty_when_no_tools(self):
-        c = MCPClient()
-        c._http = AsyncMock()
-        c._http.post = AsyncMock(return_value=_mk_resp({"result": {}}))
-        tools = await c.list_tools()
-        assert tools == []
+    async def test_reinitialize_reconnects_configured_servers(self, unconfigured):
+        unconfigured._configured = MagicMock()
+        unconfigured._configured.initialize = AsyncMock()
+        await unconfigured._initialize_session()
+        unconfigured._configured.initialize.assert_awaited_once()

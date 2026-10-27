@@ -1,7 +1,7 @@
 """Bridge companion Redis pub/sub events onto the homelab RabbitMQ bus.
 
 Topology (amarillo):
-  companion-core --(Redis PUBLISH companion:events)--> aichat-redis
+  companion-core --(Redis PUBLISH companion:events)--> companion-redis
        ^
        |
   this bridge --(SUBSCRIBE)--+
@@ -32,7 +32,7 @@ import uuid
 import pika
 import redis
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://aichat-redis:6379/1")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://companion-redis:6379/0")
 CHANNEL = os.environ.get("REDIS_CHANNEL", "companion:events")
 RABBIT_HOST = os.environ.get("RABBIT_HOST", "100.111.198.19")
 RABBIT_PORT = int(os.environ.get("RABBIT_PORT", "5672"))
