@@ -116,14 +116,16 @@ def exchange_row(point: dict[str, Any]) -> tuple[Any, ...] | None:
         return None
     user_content = _text(payload.get("user_content"))
     assistant_content = _text(payload.get("assistant_content"))
-    if user_content is None or assistant_content is None:
+    # Interrupted turns can have only one side. Preserve the existing side;
+    # an absent reply stays empty rather than dropping the Commander's entry.
+    if user_content is None and assistant_content is None:
         return None
     mood = _text(payload.get("mood")) or "composed"
     return (
         point_id,
         _uuid(payload.get("conversation_id")),
-        user_content,
-        assistant_content,
+        user_content or "",
+        assistant_content or "",
         _texts(payload.get("topics")),
         mood,
         _importance(payload.get("importance")),

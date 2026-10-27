@@ -85,12 +85,20 @@ def test_episode_row_uses_the_point_id_for_provenance_and_dedupe():
     [
         {"id": "not-a-uuid", "payload": {"user_content": "a", "assistant_content": "b"}},
         {"id": EXCHANGE_ID, "payload": None},
-        _exchange(user_content="   "),
-        _exchange(assistant_content=None),
+        _exchange(user_content="   ", assistant_content=""),
+        _exchange(user_content=None, assistant_content=None),
     ],
 )
 def test_unusable_exchanges_are_skipped(point):
     assert backfill.exchange_row(point) is None
+
+
+@pytest.mark.parametrize("missing", [None, "", "   "])
+def test_interrupted_turn_preserves_its_existing_side(missing):
+    row = backfill.exchange_row(_exchange(assistant_content=missing))
+    assert row[2:4] == ("Remember the rooftop?", "")
+    row = backfill.exchange_row(_exchange(user_content=missing))
+    assert row[2:4] == ("", "I do.")
 
 
 def test_unusable_episodes_are_skipped():
