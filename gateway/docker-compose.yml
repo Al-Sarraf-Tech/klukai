@@ -7,8 +7,6 @@ services:
     ports:
       # companion-core serves 8300 directly now (no longer proxied)
       # aichat HTTP services on Tailscale
-      - "100.111.198.19:18096:18096"  # MCP gateway
-      - "100.111.198.19:18091:18091"  # Data service
       - "100.111.198.19:18105:18105"  # Inference
       # aichat TCP services on Tailscale
       # Redis (16379) is deliberately NOT published: aichat-redis has no auth and
