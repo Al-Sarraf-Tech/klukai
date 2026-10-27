@@ -590,19 +590,19 @@ async def test_postgres_fact_memory_keeps_the_data_service_contract(
     )
     assert sorted(results) == [False, False, False, False, True]
 
-    # The hourly purge removes only TTL rows expired for over an hour, in
+    # The hourly purge removes only TTL rows expired for over a day, in
     # batches, and never a row without an expiry, whatever its age.
     purge_user = "facts-purge"
     async with db.get_conn_autocommit() as conn:
         for i in range(7):
             await conn.execute(
                 "INSERT INTO memory(key, value, ts, expires_at) VALUES"
-                "(%s, 'old', NOW() - INTERVAL '30 days', NOW() - INTERVAL '2 hours')",
+                "(%s, 'old', NOW() - INTERVAL '30 days', NOW() - INTERVAL '2 days')",
                 (f"companion:{purge_user}:gone:{i}",),
             )
         await conn.execute(
             "INSERT INTO memory(key, value, ts, expires_at) VALUES"
-            "(%s, 'grace', NOW(), NOW() - INTERVAL '10 minutes'),"
+            "(%s, 'grace', NOW(), NOW() - INTERVAL '20 hours'),"
             "(%s, 'live', NOW(), NOW() + INTERVAL '1 day'),"
             "(%s, 'forever', NOW() - INTERVAL '3 years', NULL)",
             (

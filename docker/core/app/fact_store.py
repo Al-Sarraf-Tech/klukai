@@ -8,7 +8,7 @@ read and written in place and nothing is migrated. An expired entry is hidden
 on read, exactly as the data service hid it. The only delete is
 ``purge_expired``, which removes what the data service's hourly purge removed:
 rows whose TTL has run out (never a row without an expiry), here only once
-they have been expired for more than an hour.
+they have been expired for more than a day.
 """
 
 from __future__ import annotations
@@ -110,7 +110,7 @@ async def insert_if_absent(key: str, value: str) -> bool:
 
 
 # Expired TTL rows go only after this grace period, a batch at a time.
-PURGE_MARGIN_SECONDS = 3600
+PURGE_MARGIN_SECONDS = 86400
 PURGE_BATCH = 500
 PURGE_MAX_BATCHES = 20
 

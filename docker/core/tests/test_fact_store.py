@@ -136,7 +136,7 @@ class TestPurge:
         )
         assert await fact_store.purge_expired(batch=3) == 4
         assert len(conn.calls) == 2
-        assert conn.calls[0][1] == (3600, 3, 3600)
+        assert conn.calls[0][1] == (86400, 3, 86400)
 
     async def test_bounded_number_of_batches(self, db):
         conn = db(*[("DELETE FROM memory", Cursor(rowcount=2)) for _ in range(5)])

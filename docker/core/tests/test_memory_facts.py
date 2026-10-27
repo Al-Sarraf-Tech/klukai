@@ -239,4 +239,4 @@ class TestPurgeGuards:
         code = inspect.getsource(fact_store.purge_expired).split('"""')[2]
         assert code.count("expires_at IS NOT NULL") == 2
         assert "expires_at IS NULL" not in code
-        assert fact_store.PURGE_MARGIN_SECONDS >= 3600
+        assert fact_store.PURGE_MARGIN_SECONDS >= 86400

@@ -41,7 +41,7 @@ def _tcp_open(host: str, port: int, timeout: float = 0.4) -> bool:
 
 def _backends_reachable() -> tuple[bool, str]:
     """Return (ok, reason). Probe DSN host:port for PG and Redis."""
-    db = os.environ.get("DATABASE_URL", "postgresql://aichat:aichat@aichat-db:5432/aichat")
+    db = os.environ.get("DATABASE_URL", "postgresql://aichat:aichat@infra-postgres:5432/aichat")
     redis_url = os.environ.get("REDIS_URL", "redis://companion-redis:6379/0")
     for url, default_port, name in (
         (db, 5432, "postgres"),
