@@ -155,6 +155,16 @@ async def _session_cleanup_loop() -> None:
             await cleanup_expired_sessions()
         except Exception:
             logger.warning("Session cleanup failed; will retry", exc_info=True)
+        # Expired TTL facts (the aichat data service used to purge these
+        # hourly); permanent facts are never touched.
+        try:
+            from . import fact_store
+
+            purged = await fact_store.purge_expired()
+            if purged:
+                logger.info("Purged %d expired fact rows", purged)
+        except Exception:
+            logger.warning("Expired fact purge failed; will retry", exc_info=True)
 
 
 async def _cancel_task(task: asyncio.Task[Any]) -> None:

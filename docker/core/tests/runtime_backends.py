@@ -589,3 +589,46 @@ async def test_postgres_fact_memory_keeps_the_data_service_contract(
         *(memory.record_milestone("first_storm", user_id=owner) for _ in range(5))
     )
     assert sorted(results) == [False, False, False, False, True]
+
+    # The hourly purge removes only TTL rows expired for over a day, in
+    # batches, and never a row without an expiry, whatever its age.
+    purge_user = "facts-purge"
+    async with db.get_conn_autocommit() as conn:
+        for i in range(7):
+            await conn.execute(
+                "INSERT INTO memory(key, value, ts, expires_at) VALUES"
+                "(%s, 'old', NOW() - INTERVAL '30 days', NOW() - INTERVAL '2 days')",
+                (f"companion:{purge_user}:gone:{i}",),
+            )
+        await conn.execute(
+            "INSERT INTO memory(key, value, ts, expires_at) VALUES"
+            "(%s, 'grace', NOW(), NOW() - INTERVAL '20 hours'),"
+            "(%s, 'live', NOW(), NOW() + INTERVAL '1 day'),"
+            "(%s, 'forever', NOW() - INTERVAL '3 years', NULL)",
+            (
+                f"companion:{purge_user}:grace",
+                f"companion:{purge_user}:live",
+                f"companion:{purge_user}:forever",
+            ),
+        )
+        permanent_before = await (
+            await conn.execute("SELECT count(*) FROM memory WHERE expires_at IS NULL")
+        ).fetchone()
+    assert await fact_store.purge_expired(batch=3) == 7
+    assert await fact_store.purge_expired(batch=3) == 0
+    async with db.get_conn() as conn:
+        left = await (
+            await conn.execute(
+                "SELECT key FROM memory WHERE key LIKE %s ORDER BY key",
+                (f"companion:{purge_user}:%",),
+            )
+        ).fetchall()
+        permanent_after = await (
+            await conn.execute("SELECT count(*) FROM memory WHERE expires_at IS NULL")
+        ).fetchone()
+    assert [k for (k,) in left] == [
+        f"companion:{purge_user}:forever",
+        f"companion:{purge_user}:grace",
+        f"companion:{purge_user}:live",
+    ]
+    assert permanent_after == permanent_before

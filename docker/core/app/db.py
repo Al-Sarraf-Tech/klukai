@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _DB_FAILURES = (psycopg.OperationalError, psycopg.InterfaceError, PoolTimeout)
 
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://aichat:aichat@aichat-db:5432/aichat"
+    "DATABASE_URL", "postgresql://aichat:aichat@infra-postgres:5432/aichat"
 )
 
 
