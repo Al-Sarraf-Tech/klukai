@@ -8,6 +8,7 @@ external tools and never opens a connection; the built-in tools
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -80,7 +81,7 @@ class TestWithoutConfiguration:
 
     def test_no_aichat_gateway_remains(self):
         assert not hasattr(mcp_client, "MCP_URL")
-        assert "aichat-mcp:8096" not in open(mcp_client.__file__).read()
+        assert "aichat-mcp:8096" not in Path(mcp_client.__file__).read_text()
 
 
 class TestRecovery:
