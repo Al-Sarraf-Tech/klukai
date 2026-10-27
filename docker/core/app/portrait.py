@@ -13,6 +13,16 @@ from typing import Any
 
 import asyncio
 import logging
+import io
+from PIL import Image
+from .portrait_geometry import (
+    locate_face,
+    face_box,
+    frame_mask,
+    _png as _png,
+    _iris_pixels,
+)
+from .portrait_style import CROP_PX, BLINK_OPEN_RATIO, BLINK_MIN_IRIS
 import time
 
 from .runtime_tasks import ApplicationClosing, spawn
@@ -231,3 +241,83 @@ async def portrait_state(user_id: str, outfit_id: str, level: int) -> dict[str, 
     else:
         status = "ready" if "base" in have else "unavailable"
     return {"outfit": outfit_id, "status": status, "frames": frames}
+
+
+class _SetPlan:
+    """CPU crop and masks for cloud edits; no local inference or rendering."""
+
+    def __init__(
+        self, user_id: str, outfit_id: str, level: int, frames: list[str]
+    ) -> None:
+        self.frames = frames
+        self.base: Image.Image | None = None
+        self.box = (0, 0, 1, 1)
+        self.masks: dict[str, Image.Image] = {}
+
+    async def __call__(self, base_png: bytes) -> tuple[bytes, list[object]]:
+        return await asyncio.to_thread(self._plan, base_png)
+
+    def _plan(self, base_png: bytes) -> tuple[bytes, list[object]]:
+        self.base = Image.open(io.BytesIO(base_png)).convert("RGB")
+        face = locate_face(base_png)
+        self.box = face_box(face, self.base.size)
+        for frame in self.frames:
+            self.masks[frame] = Image.open(
+                io.BytesIO(frame_mask(self.base.size, face, frame))
+            ).convert("L")
+        crop = self.base.crop(self.box).resize(
+            (CROP_PX, CROP_PX), Image.Resampling.LANCZOS
+        )
+        return _png(crop), []
+
+    def composite(self, frame: str, crop_png: bytes) -> Image.Image:
+        assert self.base is not None
+        x0, y0, x1, y1 = self.box
+        with Image.open(io.BytesIO(crop_png)) as raw:
+            painted = raw.convert("RGB").resize(
+                (x1 - x0, y1 - y0), Image.Resampling.LANCZOS
+            )
+        region = Image.composite(
+            painted, self.base.crop(self.box), self.masks[frame].crop(self.box)
+        )
+        full = self.base.copy()
+        full.paste(region, (x0, y0))
+        return full
+
+    def accept(self, frame: str, crop_png: bytes) -> bool:
+        if frame != "blink" or self.base is None:
+            return True
+        before = _iris_pixels(self.base, self.masks[frame])
+        if before < BLINK_MIN_IRIS:
+            return True
+        after = _iris_pixels(self.composite(frame, crop_png), self.masks[frame])
+        return after / before <= BLINK_OPEN_RATIO
+
+
+def animate(user_id: str, outfit_id: str, level: int) -> bool:
+    """One explicit button press may fill missing cloud blink/talk frames."""
+    from . import portrait_account, portrait_cloud_frames
+
+    key = _key(user_id, outfit_id)
+    if (
+        key in _inflight
+        or _backing_off(key)
+        or not portrait_account.enabled_for(user_id)
+    ):
+        return False
+
+    async def run() -> None:
+        try:
+            if not await portrait_cloud_frames.draw_missing(user_id, outfit_id, level):
+                _fail(key)
+        except Exception as error:
+            logger.warning("Portrait animation failed (%s)", type(error).__name__)
+            _fail(key)
+        finally:
+            _inflight.pop(key, None)
+
+    try:
+        _inflight[key] = spawn(run())
+    except ApplicationClosing:
+        return False
+    return True

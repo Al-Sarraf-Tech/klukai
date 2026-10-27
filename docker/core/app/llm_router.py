@@ -138,14 +138,11 @@ class LLMRouter(LLMCompletionsMixin):
         )
 
     async def is_game_active(self) -> bool:
-        """Whether a game owns the Commander's GPU.
+        """Read Amarillo's boolean heartbeat without contacting a model server."""
+        from .local_presence import game_active
 
-        The only source was the Dominus model gateway, which Klukai no longer
-        uses (cloud AI only, 2026-10-26), so this always answers False; game-
-        aware behaviour (the gaming prompt block, held random events) stays
-        dormant until a non-AI status source is wired here.
-        """
-        return False
+        path = os.environ.get("KLUKAI_GAME_STATUS_FILE", "").strip()
+        return game_active(path or "/config/.amarillo-presence.json")
 
     async def route(
         self,

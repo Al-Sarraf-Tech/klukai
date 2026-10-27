@@ -224,25 +224,28 @@ async def test_seed_existence_is_scoped_to_user_and_item(migration_pool):
     ]
 
 
-async def test_reannotation_archives_the_annotation_the_update_replaces(migration_pool):
-    """Successive rewrites each archive the text they replace, so history is
-    the full chain and nothing is lost, even when the second writer read the
-    row before the first one committed."""
-    import reannotate_existing
-
-    await apply_migrations(migration_pool, MIGRATIONS)
+async def test_cloud_only_migration_preserves_annotations_and_history(migration_pool, tmp_path):
+    """The recall migration preserves both the current annotation and its history."""
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    for source in MIGRATIONS.glob("*.sql"):
+        if source.name < "260_memory_full_text_search.sql":
+            (previous / source.name).write_bytes(source.read_bytes())
+    await apply_migrations(migration_pool, previous)
     async with migration_pool.connection() as conn:
         mem_id = (
             await (
                 await conn.execute(
-                    "INSERT INTO companion_memories (filename, annotation, user_id, conversation_id) "
-                    "VALUES ('m.webp', 'original', 'claude', 'seed:x') RETURNING id::text"
+                    "INSERT INTO companion_memories "
+                    "(filename, annotation, annotation_history, user_id, conversation_id) "
+                    "VALUES ('m.webp', 'second', '[{\"annotation\":\"original\"},{\"annotation\":\"first\"}]'::jsonb, "
+                    "'claude', 'seed:x') RETURNING id::text"
                 )
             ).fetchone()
         )[0]
         await conn.commit()
-        assert await reannotate_existing._replace_annotation(conn, mem_id, "claude", "first")
-        assert await reannotate_existing._replace_annotation(conn, mem_id, "claude", "second")
+    assert mem_id
+    assert await apply_migrations(migration_pool, MIGRATIONS) == ["260_memory_full_text_search.sql"]
     rows_ = await rows(
         migration_pool,
         "SELECT annotation, jsonb_path_query_array(annotation_history, '$[*].annotation') "

@@ -20,7 +20,6 @@ RETIRED_MODULES = (
     "image_inpaint.py",
     "image_workflows.py",
     "image_workflow_templates.py",
-    "portrait_geometry.py",
 )
 IMAGE_MODULES = (
     "image_gen.py",
@@ -34,6 +33,8 @@ IMAGE_MODULES = (
     "portrait.py",
     "portrait_account.py",
     "portrait_style.py",
+    "portrait_geometry.py",
+    "portrait_cloud_frames.py",
     "routes_portrait.py",
 )
 

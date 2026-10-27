@@ -35,7 +35,7 @@ class KlukaiApp extends StatelessWidget {
       ),
       builder: (context, child) =>
           SafeAreaShim(child: child ?? const SizedBox.shrink()),
-      home: ChatScreen(serverUrl: serverUrl),
+      home: ChatScreen(serverUrl: serverUrl, voiceInputEnabled: null),
     );
   }
 }

@@ -120,7 +120,7 @@ def load_references(path):
 
 
 def validate_request(value):
-    if type(value) is not dict or set(value) - {"nudity"} != REQUEST_KEYS:
+    if type(value) is not dict or set(value) - {"nudity", "portrait_source"} != REQUEST_KEYS:
         raise ValueError("invalid request")
     # Only the literal grant, and never with the Commander's reference.
     if "nudity" in value and (value["nudity"] is not True or value["include_commander"] is not False):
@@ -140,6 +140,11 @@ def validate_request(value):
             raise ValueError("invalid request")
     if value["width"] * value["height"] > 12_000_000 or type(value["include_commander"]) is not bool:
         raise ValueError("invalid request")
+    if "portrait_source" in value:
+        from portrait_edit_input import decode_source
+        decode_source(value["portrait_source"])
+        if value["include_commander"] or "nudity" in value:
+            raise ValueError("invalid portrait source")
     value["request_id"] = request_id
     # Surrogate code points have no valid UTF-8 representation for the runtime.
     value["prompt"].encode("utf-8")
@@ -255,6 +260,8 @@ class Worker:
         if value["user_id"] not in self.allowed_users:
             return 403, None
         if value["include_commander"] and value["user_id"] != "jalsarraf":
+            return 403, None
+        if "portrait_source" in value and any(name != "fal" for name, _ in self.providers):
             return 403, None
         digest = request_digest(value)
         with self.db_lock:

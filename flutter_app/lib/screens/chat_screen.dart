@@ -121,10 +121,9 @@ class ChatScreen extends StatefulWidget {
   /// iframe; tests inject a stand-in.
   final CompanionStageBuilder? stageBuilder;
 
-  /// Push-to-talk in the composer. Off: voice input is switched off on the
-  /// server (KLUKAI_VOICE_ENABLED), so the mic button is not shown. The
-  /// capture path stays wired for when it comes back.
-  final bool voiceInputEnabled;
+  /// Push-to-talk override. Null follows authenticated server capabilities;
+  /// false hides the microphone. Tests can enable it explicitly.
+  final bool? voiceInputEnabled;
 
   const ChatScreen({
     super.key,
@@ -231,6 +230,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// Her voice language; English until the server says otherwise.
   VoiceLanguage _voiceLanguage = VoiceLanguage.en;
   bool _voiceLanguageSaving = false;
+  bool _serverVoiceInputEnabled = false;
 
   /// The embedded stage, while it is loaded (no setState: the iframe reports
   /// it during build and dispose).

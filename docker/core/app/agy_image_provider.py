@@ -227,6 +227,7 @@ async def _validated_payload(
     include_commander: bool,
     request_id: str | None,
     nudity: bool = False,
+    portrait_source: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     if not uses_agy_images(user_id):
         logger.warning(
@@ -257,6 +258,10 @@ async def _validated_payload(
     if nudity:
         # Present only when granted, so every earlier request keeps its digest.
         payload["nudity"] = True
+    if portrait_source is not None:
+        if include_commander or nudity:
+            raise ValueError("Portrait edits are covered and solo")
+        payload["portrait_source"] = portrait_source
     return payload
 
 
@@ -282,6 +287,7 @@ async def submit_agy_image(
     include_commander: bool = False,
     request_id: str | None = None,
     nudity: bool = False,
+    portrait_source: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """POST /generate once. A miss is not retried and never falls back."""
     try:
@@ -293,6 +299,7 @@ async def submit_agy_image(
             include_commander=include_commander,
             request_id=request_id,
             nudity=nudity,
+            portrait_source=portrait_source,
         )
         if payload is None:
             return {"status": "refused", "image": None}
@@ -324,6 +331,7 @@ async def recover_agy_image(
     include_commander: bool,
     request_id: str,
     nudity: bool = False,
+    portrait_source: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """POST /recover only. This never submits, rotates, or renders."""
     try:
@@ -335,6 +343,7 @@ async def recover_agy_image(
             include_commander=include_commander,
             request_id=request_id,
             nudity=nudity,
+            portrait_source=portrait_source,
         )
         if payload is None:
             return {"status": "refused", "image": None}
@@ -366,6 +375,7 @@ async def generate_agy_image(
     include_commander: bool = False,
     request_id: str | None = None,
     nudity: bool = False,
+    portrait_source: dict[str, str] | None = None,
 ) -> bytes | None:
     """Submit exactly one request; failures are generic and never fall back."""
     result = await submit_agy_image(
@@ -376,6 +386,7 @@ async def generate_agy_image(
         include_commander=include_commander,
         request_id=request_id,
         nudity=nudity,
+        portrait_source=portrait_source,
     )
     if result.get("status") == "completed":
         return result.get("image")

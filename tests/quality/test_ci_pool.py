@@ -1,4 +1,4 @@
-"""The CI router: Dominus when its heartbeat is fresh, amarillo otherwise."""
+"""Klukai must remain on Amarillo even if the old heartbeat is fresh."""
 
 import json
 from pathlib import Path
@@ -15,17 +15,17 @@ NOW = 1_800_000_000
 
 
 @pytest.mark.parametrize("beat,expected", [
-    (str(NOW - 30), "dominus"),
-    (str(NOW - pool.FRESH_SECONDS), "dominus"),
-    (str(NOW - pool.FRESH_SECONDS - 1), "amarillo"),   # stale: Dominus off or stuck
-    (str(NOW + 30), "dominus"),                        # small clock skew
-    (str(NOW + pool.SKEW_SECONDS + 1), "amarillo"),    # a future beat is not trusted
+    (str(NOW - 30), "amarillo"),
+    (str(NOW - 150), "amarillo"),
+    (str(NOW - 150 - 1), "amarillo"),   # stale: Dominus off or stuck
+    (str(NOW + 30), "amarillo"),                        # small clock skew
+    (str(NOW + 60 + 1), "amarillo"),    # a future beat is not trusted
     ("0", "amarillo"),                                 # Dominus said it cannot take runs
     ("", "amarillo"),                                  # the variable does not exist yet
     ("garbage", "amarillo"),
     ("-5", "amarillo"),
 ])
-def test_a_fresh_heartbeat_routes_to_dominus_and_anything_else_to_amarillo(beat, expected):
+def test_no_heartbeat_can_restore_the_retired_pool(beat, expected):
     assert pool.plan(beat, NOW)["pool"] == expected
 
 
@@ -41,4 +41,4 @@ def test_the_cli_writes_github_output_lines():
     result = subprocess.run([sys.executable, "-m", "tools.ci.pool", "--heartbeat", str(NOW - 5),
                              "--now", str(NOW)], cwd=ROOT, capture_output=True, text=True, check=True)
     lines = dict(line.split("=", 1) for line in result.stdout.splitlines())
-    assert lines["pool"] == "dominus" and json.loads(lines["labels_build"])[-1] == "klukai-dominus-build"
+    assert lines["pool"] == "amarillo" and json.loads(lines["labels_build"])[-1] == "klukai-amarillo-build"

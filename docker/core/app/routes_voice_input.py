@@ -14,6 +14,17 @@ logger = logging.getLogger(__name__)
 def register_voice_input(
     app: FastAPI, resolve_user: Callable[[Request], Awaitable[str | None]]
 ) -> None:
+    @app.get("/api/voice/capabilities")
+    async def api_voice_capabilities(request: Request) -> Any:
+        if not await resolve_user(request):
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from .voice_client import voice_enabled, voice_input_enabled
+
+        return {
+            "output_enabled": voice_enabled(),
+            "input_enabled": voice_input_enabled(),
+        }
+
     @app.post("/api/stt")
     async def api_stt(req: STTRequest, request: Request) -> Any:
         """Transcribe his recording: ``{"audio": base64}`` -> ``{"text": ...}``."""

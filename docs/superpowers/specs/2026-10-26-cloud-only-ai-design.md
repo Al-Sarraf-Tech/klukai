@@ -42,9 +42,10 @@
 - `stream()` / `complete_chat()`: a Sonnet failure before any token falls back to Haiku
   once; a Haiku failure yields `FAILURE_SENTINEL` (stream) or raises (complete_chat).
 - The non-interactive agent loop uses `complete_chat` with the Haiku config.
-- Removed: `LM_STUDIO_URL`, the LM Studio availability probe, the game-active check, the
+- Removed: `LM_STUDIO_URL`, the LM Studio availability probe, the gateway game-active check, the
   global LM gate, `complete_local`, `_stream_lmstudio`, `keepalive`, the `LOCAL_*` model
   aliases and `app/lm_gateway.py`.
+- Gaming awareness reads Amarillo's fresh boolean heartbeat, independently of model availability.
 
 ### Background route (`background_llm`, `extraction_llm`)
 
@@ -79,6 +80,8 @@
 
 - Removed: the ComfyUI provider (`image_comfy`), the Dominus GPU lease (`gpu_lease`,
   `image_leases`) and every ComfyUI-only path (`COMFYUI_URL`). Cloud providers unchanged.
+- Explicit portrait animation retains CPU crop/mask/composite operations around cloud
+  edits. These contain no local model and never submit automatic pictures.
 
 ### Health, warmup, observability
 
@@ -99,8 +102,14 @@
   requests from Klukai; one chat turn, one background call, one memory recall and one
   voice transcription succeed on the cloud providers.
 
+## Dominus retirement (owner continuation, 2026-10-26)
+
+- All Klukai CI profiles and releases use Amarillo, regardless of an old heartbeat.
+- Stop the dedicated Dominus CI pool and exclude Klukai from its shared UCI pool.
+- Retire the old AI containers and startup/repair hooks, preserving data and models.
+- Stop the cross-host evidence pull and archive only Amarillo's CI records.
+
 ## Out of scope
 
-- Retiring the Dominus ai-stack (`ops/dominus-nobara`) and re-pointing the fleet bus
-  triage: done separately once Klukai no longer depends on it.
+- Re-pointing unrelated fleet bus triage.
 - Re-embedding or deleting old Qdrant data.

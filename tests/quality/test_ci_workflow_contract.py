@@ -30,7 +30,7 @@ MOVABLE_JOBS = {"ci-image": "build", "test": "serial", "real-backends": "serial"
                 "components": "serial", "frontend": "frontend"}
 
 
-def test_the_router_only_ever_yields_amarillo_or_dominus_one_job_vm_labels():
+def test_the_router_only_ever_yields_amarillo_one_job_vm_labels():
     from tools.ci import pool
 
     routed = workflow()["jobs"]["source-policy"]["outputs"]
@@ -42,7 +42,9 @@ def test_the_router_only_ever_yields_amarillo_or_dominus_one_job_vm_labels():
             assert json.loads(plan[f"labels_{group}"]) == [
                 "self-hosted", "Linux", "X64", f"klukai-{plan['pool']}-{group}"]
     route = next(s for s in workflow()["jobs"]["source-policy"]["steps"] if s.get("id") == "route")
-    assert route["env"]["DOMINUS_HEARTBEAT"] == "${{ vars.KLUKAI_CI_DOMINUS_HEARTBEAT }}"
+    assert "DOMINUS_HEARTBEAT" not in route.get("env", {})
+    assert "KLUKAI_CI_DOMINUS_HEARTBEAT" not in route["run"]
+    assert plan["pool"] == "amarillo"
     assert "${{" not in route["run"]  # the variable enters through the environment
 
 

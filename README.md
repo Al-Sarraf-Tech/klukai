@@ -270,7 +270,7 @@ Distress always routes to **protective**, never irritated. Test accounts at leve
   - Goodbyes are clean ("…Go. I'll be here."), and a goodnight holds her pings until 08:00.
   - The 0200 watch: write to her late at night and she is already awake, quieter and protective.
   - Before his real-life events she sends a short operation brief, then a send-off, then "Report."
-- **Gaming-aware (dormant).** The persona can keep replies short and hold unprompted pings while he is mid-game, but the only game signal came from the Dominus gateway, which she no longer contacts (2026-10-26). Until another signal exists she treats him as not gaming. She uses no GPU, so she never competes with a game.
+- **Gaming-aware.** Amarillo publishes a fresh boolean heartbeat; the persona can keep replies short and hold unprompted pings during a game. This uses no model, GPU or Dominus connection.
 
 ---
 
@@ -319,7 +319,7 @@ The `events-bridge` owns the broker. It moves Redis `companion:events` to `homel
 | Place | What runs there |
 |---|---|
 | **amarillo** (core host) | `companion-core` (API, WebSocket, PWA), PostgreSQL, Redis, the `events-bridge` and RabbitMQ consumers, Prometheus/Grafana/Loki/Tempo/Alloy and Alertmanager (alerts reach the owner over the bus), the **private image worker** (it drives signed-in cloud accounts; nothing renders locally), and the **Klukai CI runner** (one VM per job) |
-| **Dominus-Nobara** | No AI work for Klukai: no model, embedding, voice or image service there is used (owner decision, 2026-10-26). It can still run CI jobs |
+| **Dominus-Nobara** | Retired for Klukai, including CI (owner decision, 2026-10-26). App services, CI jobs and release artifacts stay on Amarillo; inference uses cloud providers |
 | **Cloud, by explicit authorization** | Anthropic (Sonnet 5.5 chat; Haiku 5.5 for background work and memory recall; capped creative text; render checks), Fish Audio (free-model speech and pay-as-you-go speech-to-text), the signed-in Grok, Codex and Agy accounts (pictures), and Brave (web search) |
 
 Hard rules:

@@ -5,6 +5,27 @@ part of 'chat_screen.dart';
 /// endpoint stays English. Shares the screen's single State owner.
 extension _ChatVoiceLanguage on _ChatScreenState {
   Future<void> _loadVoiceLanguage() async {
+    if (widget.voiceInputEnabled == null) {
+      try {
+        final enabled = await _voiceSettings.inputEnabled();
+        if (mounted && !_authExpired) {
+          _update(() {
+            _serverVoiceInputEnabled = enabled;
+          });
+        }
+      } on VoiceSettingsAuthExpired {
+        if (mounted) {
+          _handleAuthExpired();
+        }
+        return;
+      } catch (_) {
+        if (mounted) {
+          _update(() {
+            _serverVoiceInputEnabled = false;
+          });
+        }
+      }
+    }
     try {
       final language = await _voiceSettings.load();
       if (!mounted || _voiceLanguageSaving || _authExpired) return;

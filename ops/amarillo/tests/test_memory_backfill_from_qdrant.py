@@ -103,7 +103,7 @@ def test_unusable_episodes_are_skipped():
     [
         ({"importance": 7, "user_id": " "}, 1.0, "jalsarraf", datetime(2026, 9, 1, 20, 15, tzinfo=timezone.utc)),
         ({"importance": -1, "created_at": "yesterday"}, 0.0, "tj", None),
-        ({"importance": True, "created_at": "2026-09-01T20:15:00"}, 0.5, "tj", None),
+        ({"importance": True, "created_at": "2026-09-01T20:15:00"}, 0.5, "tj", datetime(2026, 9, 1, 20, 15, tzinfo=timezone.utc)),
         ({"importance": "high", "mood": ""}, 0.5, "tj", datetime(2026, 9, 1, 20, 15, tzinfo=timezone.utc)),
     ],
 )
@@ -112,6 +112,13 @@ def test_defaults_for_odd_payload_values(payload, importance, user, created):
     assert row[6] == importance and row[7] == user and row[8] == created
     if "mood" in payload:
         assert row[5] == "composed"
+
+
+@pytest.mark.parametrize("value", ["2026-08-02T01:00:00", "2026-08-02T01:00:00Z", "2026-08-02T03:00:00+02:00"])
+def test_legacy_episode_and_exchange_dates_keep_the_same_instant(value):
+    expected = datetime(2026, 8, 2, 1, 0, tzinfo=timezone.utc)
+    assert backfill.exchange_row(_exchange(created_at=value))[8] == expected
+    assert backfill.episode_row(_episode(created_at=value))[8] == expected
 
 
 def test_scroll_follows_pages_and_never_asks_for_vectors():

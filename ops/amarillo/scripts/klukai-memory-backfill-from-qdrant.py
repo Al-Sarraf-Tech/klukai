@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 DEFAULT_QDRANT = "http://aichat-vector:6333"
@@ -99,7 +99,9 @@ def _timestamp(value: object) -> datetime | None:
         parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     except ValueError:
         return None
-    return parsed if parsed.tzinfo is not None else None
+    # The legacy core used datetime.now().isoformat() in its UTC container.
+    # Its offset-free values are valid historical dates, not missing dates.
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def _user(value: object) -> str:

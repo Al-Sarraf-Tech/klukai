@@ -48,7 +48,12 @@ def voice_off_response() -> httpx.Response:
 
 def voice_input_enabled() -> bool:
     """Microphone transcription: the switch is on and Fish has a key."""
-    return voice_enabled() and fish_stt_configured()
+    return (
+        voice_enabled()
+        and os.environ.get("KLUKAI_FISH_STT_ENABLED", "true").strip().lower()
+        not in _OFF
+        and fish_stt_configured()
+    )
 
 
 def voice_letters_enabled() -> bool:
@@ -223,7 +228,7 @@ def _stt_language(language: object) -> str | None:
 
 def _decode_audio(audio_b64: str) -> bytes:
     try:
-        audio = base64.b64decode(audio_b64)
+        audio = base64.b64decode(audio_b64, validate=True)
     except ValueError as exc:  # binascii.Error, or non-ASCII text
         raise SpeechToTextError(400, "Invalid audio") from exc
     if not audio:
@@ -290,8 +295,8 @@ async def transcribe(audio_b64: str, *, language: str | None = None) -> dict[str
     once and never retried, logged or kept.
     """
     key = os.environ.get("FISH_API_KEY", "").strip()
-    if not key:
-        logger.warning("Fish speech-to-text refused: FISH_API_KEY is not set")
+    if not voice_input_enabled():
+        logger.warning("Fish speech-to-text refused: voice input is off")
         raise SpeechToTextError(503, VOICE_INPUT_OFF_MESSAGE)
     audio = _decode_audio(audio_b64)
     form = {

@@ -364,3 +364,9 @@ html[data-embed][data-hud] .hud:not([hidden]) {
   html[data-embed] .hud-line { max-height: calc(1.3em * 2); }
   html[data-embed] .hud-card-head { min-height: 32px; }
 }
+
+@media (max-width: 600px) {
+  .controls { max-width: 70%; flex-wrap: wrap; justify-content: flex-end; }
+}
+
+.controls .btn[hidden] { display: none; }

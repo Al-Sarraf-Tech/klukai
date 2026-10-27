@@ -100,3 +100,22 @@ SIGN_BUCKET_S = 900  # frame URLs are stable for a bucket, valid 15-30 min
 BACKFILL_SILENCE_S = 30 * 60
 
 _SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+# CPU pixel masks and crop geometry for explicit cloud expression edits.
+_EYES = [(-0.5, 0.0, 0.40, 0.28), (0.5, 0.0, 0.40, 0.28)]
+_MOUTH = (0.0, 0.68, 0.34, 0.22)
+MASK_FEATHER = 0.06  # Gaussian radius, in eye distances
+CROP_PX = 576
+CROP_SIDE_D = 3.4  # crop side, in eye distances
+CROP_CENTER_DY = 0.3  # crop centre sits this far below the eye line
+BLINK_OPEN_RATIO = 0.25  # a blink keeping >25% of the base's iris pixels didn't close
+BLINK_MIN_IRIS = 40  # fewer iris pixels than this in the base: can't judge, accept
+
+FRAME_REGIONS: dict[str, list[tuple[float, float, float, float]]] = {
+    "blink": _EYES,
+    "talk": [_MOUTH],
+    "smile": [(0.0, 0.66, 0.5, 0.28)],
+    "blush": [(-0.55, 0.38, 0.32, 0.22), (0.55, 0.38, 0.32, 0.22), _MOUTH],
+    "annoyed": [(0.0, -0.05, 0.9, 0.36), _MOUTH],
+}

@@ -77,7 +77,7 @@ def _write(user="jalsarraf", outfit="cat_cafe_date", frames=pt.FRAME_NAMES):
 
 class TestMode:
     def test_there_is_no_local_portrait_renderer(self, monkeypatch):
-        for gone in ("uses_gpu", "can_redraw", "refresh", "_SetPlan"):
+        for gone in ("uses_gpu", "can_redraw", "refresh"):
             assert not hasattr(pt, gone), gone
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "comfyui")
         assert pa.enabled_for("jalsarraf") is False
