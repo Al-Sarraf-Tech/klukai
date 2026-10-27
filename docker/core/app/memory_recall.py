@@ -91,6 +91,13 @@ def clip(text: str, limit: int) -> str:
 
 def selection_prompt(subject: str, query: str, texts: Sequence[str], limit: int) -> str:
     """The Haiku request; candidate ``n`` (1-based) has id ``"n"``."""
+    return _selection_request(subject, query, texts, limit)[0]
+
+
+def _selection_request(
+    subject: str, query: str, texts: Sequence[str], limit: int
+) -> tuple[str, int]:
+    """The bounded prompt and the number of candidates actually shown."""
     lines = [
         json.dumps({"id": str(n), "text": clip(text, TEXT_CHARS)}, ensure_ascii=False)
         for n, text in enumerate(texts, start=1)
@@ -111,7 +118,7 @@ def selection_prompt(subject: str, query: str, texts: Sequence[str], limit: int)
     while len(prompt) > PROMPT_BUDGET_CHARS and len(lines) > 1:
         lines.pop()  # the lowest-ranked candidates go first
         prompt = render(lines)
-    return prompt
+    return prompt, len(lines)
 
 
 def parse_selection(result: object, count: int, limit: int) -> list[int] | None:
@@ -162,7 +169,7 @@ async def select(
     """
     if not texts or limit <= 0:
         return None
-    prompt = selection_prompt(subject, query, texts, limit)
+    prompt, shown = _selection_request(subject, query, texts, limit)
     try:
         async with asyncio.timeout(RECALL_SELECTION_TIMEOUT_S):
             result = await background_llm.json_object(
@@ -178,7 +185,7 @@ async def select(
             "Memory recall %s: selection failed (%s)", caller, type(error).__name__
         )
         return None
-    picked = parse_selection(result, len(texts), limit)
+    picked = parse_selection(result, shown, limit)
     if picked is None and result is not None:
         logger.warning(
             "Memory recall %s: unusable selection; using Postgres order", caller

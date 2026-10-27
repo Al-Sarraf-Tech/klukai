@@ -174,6 +174,18 @@ class TestParseSelection:
 
 class TestSelect:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("reply,expected", [({"ids": ["40"]}, None), ({"ids": ["40", "2"]}, [1])])
+    async def test_ids_trimmed_out_of_the_prompt_are_not_accepted(self, reply, expected):
+        texts = ["\\" * memory_recall.TEXT_CHARS] * RECALL_CANDIDATES
+        pick = AsyncMock(return_value=reply)
+        with patch("app.background_llm.json_object", pick):
+            out = await select("memory_recall_test", "things", "q", texts, 3)
+        prompt = pick.await_args.args[1]
+        shown = [json.loads(line)["id"] for line in prompt.splitlines() if line.startswith('{"id"')]
+        assert "2" in shown and "40" not in shown
+        assert out == expected
+
+    @pytest.mark.asyncio
     async def test_calls_haiku_with_caller_bounded_tokens_and_returns_pick(self):
         pick = AsyncMock(return_value={"ids": ["2"]})
         with patch("app.background_llm.json_object", pick):
