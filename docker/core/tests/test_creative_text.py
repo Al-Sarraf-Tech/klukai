@@ -9,7 +9,7 @@ import pytest
 
 def response(**overrides):
     return {
-        "type": "message", "role": "assistant", "model": "claude-sonnet-5-5",
+        "type": "message", "role": "assistant", "model": "claude-haiku-5-5",
         "stop_reason": "end_turn", "content": [{"type": "text", "text": "A quiet dream."}],
         "usage": {"input_tokens": 12, "output_tokens": 5}, **overrides,
     }
@@ -18,14 +18,19 @@ def response(**overrides):
 @pytest.fixture
 def remote(monkeypatch):
     from app import creative_text as ct
+    from app import extraction_llm as xl
+    monkeypatch.delenv("KLUKAI_EXTRACTION_MODEL", raising=False)
     monkeypatch.setenv("KLUKAI_CREATIVE_TEXT_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-creative-key")
     reserve = AsyncMock(return_value="reserved-attempt")
     monkeypatch.setattr(ct, "reserve_attempt", reserve)
+    monkeypatch.setattr(xl, "reserve_attempt", AsyncMock(return_value="shared-haiku-attempt"))
+    monkeypatch.setattr(xl, "record_usage", AsyncMock())
     return ct, reserve
 
 
 def transport(monkeypatch, ct, handler):
+    from app import extraction_llm as xl
     real_client = httpx.AsyncClient
     options = []
 
@@ -33,7 +38,7 @@ def transport(monkeypatch, ct, handler):
         options.append(kwargs)
         return real_client(transport=httpx.MockTransport(handler), **kwargs)
 
-    monkeypatch.setattr(ct.httpx, "AsyncClient", client)
+    monkeypatch.setattr(xl.httpx, "AsyncClient", client)
     return options
 
 
@@ -54,7 +59,9 @@ async def test_canonical_request_reserves_once_and_returns_only_visible_text(rem
     seen = []
 
     def handler(request):
+        from app import extraction_llm as xl
         assert reserve.await_count == 1
+        xl.reserve_attempt.assert_awaited_once_with("extraction")
         seen.append(request)
         return httpx.Response(200, json=response(content=[
             {"type": "thinking", "thinking": "private reasoning", "signature": "test"},
@@ -71,10 +78,10 @@ async def test_canonical_request_reserves_once_and_returns_only_visible_text(rem
     assert request.headers["x-api-key"] == "test-creative-key"
     assert "authorization" not in request.headers
     body = json.loads(request.content)
-    assert body["model"] == "claude-sonnet-5-5"
+    assert body["model"] == "claude-haiku-5-5"
     assert body["thinking"] == {"type": "adaptive"}
-    assert body["output_config"] == {"effort": "medium"}
-    assert body["max_tokens"] == 256
+    assert body["output_config"] == {"effort": "high"}
+    assert body["max_tokens"] == 256 + 3072
     assert body["system"] == "You are Klukai."
     assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Write a dream."}]}]
     assert "temperature" not in body and "tools" not in body
@@ -92,14 +99,50 @@ async def test_missing_key_never_reserves_or_dispatches(remote, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_success_records_usage_against_reserved_attempt(remote, monkeypatch):
+@pytest.mark.parametrize("system,user,tokens", [
+    ("", "dream", 256), (" ", "dream", 256),
+    ("s" * 8001, "dream", 256), ("system", "", 256),
+    ("system", "d" * 24001, 256), ("system", "dream", 0),
+    ("system", "dream", True), ("system", "dream", 8193),
+])
+async def test_invalid_input_never_consumes_either_allowance(remote, monkeypatch, system, user, tokens):
+    ct, reserve = remote
+    from app import extraction_llm as xl
+    seen = []
+    transport(monkeypatch, ct, lambda request: seen.append(request))
+    with pytest.raises(ct.CreativeTextError):
+        await ct.complete_creative_text(system, user, max_tokens=tokens)
+    reserve.assert_not_awaited()
+    xl.reserve_attempt.assert_not_awaited()
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_success_records_usage_once_on_shared_haiku_attempt(remote, monkeypatch):
     ct, _ = remote
-    from app import creative_budget
+    from app import extraction_llm as xl
     record = AsyncMock()
-    monkeypatch.setattr(creative_budget, "record_usage", record)
+    monkeypatch.setattr(xl, "record_usage", record)
     transport(monkeypatch, ct, lambda request: httpx.Response(200, json=response()))
     assert await ct.complete_creative_text("system", "dream") == "A quiet dream."
-    record.assert_awaited_once_with("reserved-attempt", {"input_tokens": 12, "output_tokens": 5})
+    record.assert_awaited_once_with("shared-haiku-attempt", {"input_tokens": 12, "output_tokens": 5})
+
+
+@pytest.mark.asyncio
+async def test_shared_haiku_cap_also_blocks_creative_transport(remote, monkeypatch):
+    ct, reserve = remote
+    from app import extraction_llm as xl
+    from app.creative_budget import CreativeBudgetError
+    xl.reserve_attempt.side_effect = CreativeBudgetError("shared cap exhausted")
+    seen = []
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json=response())
+    transport(monkeypatch, ct, handler)
+    with pytest.raises(ct.CreativeTextError):
+        await ct.complete_creative_text("system", "dream")
+    reserve.assert_awaited_once_with("text")
+    assert seen == []
 
 
 @pytest.mark.asyncio

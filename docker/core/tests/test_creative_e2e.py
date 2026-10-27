@@ -127,6 +127,7 @@ async def creative_app(monkeypatch, tmp_path):
         "KLUKAI_CREATIVE_LEDGER": str(ledger),
         "KLUKAI_CLOUD_IMAGE_DAILY_LIMIT": "1", "KLUKAI_CLOUD_IMAGE_MONTHLY_LIMIT": "1",
         "KLUKAI_CLOUD_TEXT_DAILY_LIMIT": "1", "KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT": "1",
+        "KLUKAI_EXTRACTION_DAILY_LIMIT": "2",
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
@@ -172,10 +173,12 @@ async def creative_app(monkeypatch, tmp_path):
     async def provider(request):
         if str(request.url) == "https://api.anthropic.com/v1/messages":
             body = json.loads(await request.aread())
+            assert body["model"] == "claude-haiku-5-5"
+            assert body["output_config"] == {"effort": "high"}
             state.text_requests.append((request, body))
             return httpx.Response(200, json={
                 "id": "msg-offline", "type": "message", "role": "assistant",
-                "model": "claude-sonnet-5-5", "stop_reason": "end_turn", "stop_sequence": None,
+                "model": "claude-haiku-5-5", "stop_reason": "end_turn", "stop_sequence": None,
                 "content": [{"type": "text", "text": json.dumps({
                     "annotation": "I remember the lantern you caught before the lake could claim it.",
                     "scene_tags": "lake, paper lanterns, moonlight, gentle smile",
@@ -255,7 +258,7 @@ async def test_queued_cloud_memory_survives_redelivery_and_is_retrievable_only_b
         assert in_flight.json()["status"] == "drawing"
         redelivered = await _run(state, job_id)
         assert redelivered.json()["ok"] is True
-        assert _attempts(state) == {"image": 1, "text": 1}
+        assert _attempts(state) == {"extraction": 1, "image": 1, "text": 1}
     finally:
         state.release_image.set()
         await worker
@@ -276,9 +279,9 @@ async def test_queued_cloud_memory_survives_redelivery_and_is_retrievable_only_b
     text_request, text = state.text_requests[0]
     assert text_request.headers["x-api-key"] == "offline-text-key"
     assert "authorization" not in text_request.headers
-    assert text["model"] == "claude-sonnet-5-5"
+    assert text["model"] == "claude-haiku-5-5"
     assert text["thinking"] == {"type": "adaptive"}
-    assert text["output_config"] == {"effort": "medium"}
+    assert text["output_config"] == {"effort": "high"}
     assert "paper lanterns drift" in json.dumps(text["messages"])
     image_request, fields = state.image_requests[0]
     assert image_request.headers["authorization"] == "Bearer offline-image-key"
@@ -305,7 +308,7 @@ async def test_queued_cloud_memory_survives_redelivery_and_is_retrievable_only_b
     assert (await state.client.get(f"/api/memories/her-pov/{job_id}", headers=_OTHER)).status_code == 404
     assert (await _run(state, job_id)).json()["ok"] is True
     assert len(state.text_requests) == len(state.image_requests) == 1
-    assert _attempts(state) == {"image": 1, "text": 1}
+    assert _attempts(state) == {"extraction": 1, "image": 1, "text": 1}
 
 
 @pytest.mark.asyncio
@@ -317,7 +320,7 @@ async def test_failed_image_attempt_remains_spent_and_new_job_cannot_dispatch(cr
     assert (await _run(state, first)).json()["ok"] is True
     status = (await state.client.get(f"/api/memories/her-pov/{first}", headers=_OWNER)).json()
     assert status["status"] == "failed" and status["error"] == "image_failed"
-    assert _attempts(state) == {"image": 1, "text": 1}
+    assert _attempts(state) == {"extraction": 1, "image": 1, "text": 1}
     assert list(state.image_dir.glob("*.png")) == []
     assert list(state.image_dir.glob("*.webp")) == []
     assert state.database.conn.execute("SELECT count(*) FROM companion_memories").fetchone() == (0,)
@@ -332,7 +335,7 @@ async def test_failed_image_attempt_remains_spent_and_new_job_cannot_dispatch(cr
     status = (await state.client.get(f"/api/memories/her-pov/{second}", headers=_OWNER)).json()
     assert status["status"] == "failed"
     assert len(state.image_requests) == 1 and len(state.text_requests) == 2
-    assert _attempts(state) == {"image": 1, "text": 2}
+    assert _attempts(state) == {"extraction": 2, "image": 1, "text": 2}
 
 
 @pytest.mark.asyncio
