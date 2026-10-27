@@ -1,5 +1,6 @@
-# Run on amarillo: companion-core (consolidated with aichat infra)
-# Shares Docker networks with infra-postgres and redis locally.
+# Run on amarillo: companion-core, its own Redis (companion-redis) and the
+# events bridge. PostgreSQL is the shared infra-postgres (database "aichat",
+# Klukai's own data under an old name).
 # All of Klukai's AI is cloud (Anthropic, Fish Audio, the image accounts).
 # Pin the compose project name so `docker compose` (and every Makefile target)
 # acts on the live stack instead of the directory-default `klukai` project.
@@ -21,19 +22,22 @@ services:
     ports:
       - "127.0.0.1:8300:8300"
     environment:
-      # aichat services on amarillo (LAN via Docker network)
       DATABASE_URL: "postgresql://aichat:${POSTGRES_PASSWORD:?}@infra-postgres:5432/aichat"
-      REDIS_URL: "redis://aichat-redis:6379/1"
+      # Klukai's own Redis (decoupled from the aichat stack, 2026-10-27).
+      REDIS_URL: "redis://:${KLUKAI_REDIS_PASSWORD:?Klukai Redis password required}@companion-redis:6379/0"
       # Shared secret for /internal/deferred/fire (events-bridge -> core).
       # Fails closed: unset means the endpoint rejects everyone.
       CORE_INTERNAL_TOKEN: "${CORE_INTERNAL_TOKEN:-}"
       # queue = durable RabbitMQ work rail (one job at a time via the bridge).
       # inline = in-process asyncio task (unit tests / bridge outage fallback).
       HER_POV_EXECUTION: "${HER_POV_EXECUTION:-queue}"
-      MCP_URL: "http://aichat-mcp:8096"
       # Opt-in, scoped web/reference tools from existing host MCP servers.
+      # Empty means no external tools (there is no aichat-mcp fallback).
       KLUKAI_MCP_CONFIG: "${KLUKAI_MCP_CONFIG:-}"
       KLUKAI_BRAVE_ENABLED: "${KLUKAI_BRAVE_ENABLED:-false}"
+      # Unused since facts moved into core (app/fact_store.py). Kept for one
+      # release, with the aichat network below, so an automatic rollback to
+      # the previous image still reaches every aichat path it used.
       DATA_URL: "http://aichat-data:8091"
       # Cloud AI only (owner, 2026-10-26): no model, embedding, voice or image
       # service on Dominus-Nobara or Amarillo is used by core.
@@ -132,6 +136,9 @@ services:
       - ./assets/build:/avatar:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -151,13 +158,47 @@ services:
     labels:
       autoheal: "true"
 
+  # Klukai's own Redis: rate limits, caches, session state and the
+  # companion:events channel. No published port; only this project's network.
+  redis:
+    image: valkey/valkey@sha256:cb3339abbd6e18942cd8ac3349f0c371a82ba5b6204b242563ba299e7956cbd0
+    container_name: companion-redis
+    # The image's valkey user; the named volume inherits /data's ownership.
+    user: "999:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      KLUKAI_REDIS_PASSWORD: "${KLUKAI_REDIS_PASSWORD:?Klukai Redis password required}"
+    # The password reaches valkey on stdin, never on its command line.
+    command: ["sh", "-c", "exec valkey-server - <<EOF\nappendonly yes\nsave 3600 1 300 100 60 10000\nrequirepass $$KLUKAI_REDIS_PASSWORD\nEOF\n"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    volumes:
+      - companion-redis:/data
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    networks:
+      - default
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$KLUKAI_REDIS_PASSWORD\" valkey-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    labels:
+      autoheal: "true"
+
   # Fan companion Redis events onto the shared homelab RabbitMQ bus
   # (see ~/git/rabbitmq-ops). Reachable over Tailscale AMQP only.
   events-bridge:
     build: ./docker/events-bridge
     container_name: companion-events-bridge
     environment:
-      REDIS_URL: "redis://aichat-redis:6379/1"
+      REDIS_URL: "redis://:${KLUKAI_REDIS_PASSWORD:?Klukai Redis password required}@companion-redis:6379/0"
       REDIS_CHANNEL: "companion:events"
       RABBIT_HOST: "${RABBIT_HOST:-100.111.198.19}"
       RABBIT_PORT: "${RABBIT_PORT:-5672}"
@@ -174,6 +215,8 @@ services:
         limits:
           memory: 64m
     networks:
+      - default
+      # Previous release's Redis; removed with the aichat network next release.
       - aichat
     restart: unless-stopped
     labels:
@@ -183,6 +226,7 @@ services:
 volumes:
   companion-images:
   companion-audio:
+  companion-redis:
 
 networks:
   aichat:

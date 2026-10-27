@@ -63,7 +63,7 @@ case "${DEP}" in
     RUNBOOK=docs/runbooks/db-down.md
     ;;
   redis)
-    TARGET="${CHAOS_CONTAINER:-aichat-aichat-redis-1}"
+    TARGET="${CHAOS_CONTAINER:-companion-redis}"
     RUNBOOK=docs/runbooks/redis-down.md
     ;;
   qdrant)

@@ -12,7 +12,7 @@ Klukai publishes lifecycle signals onto the shared homelab bus so ops tooling (m
 companion-core
     │  Redis PUBLISH  companion:events
     ▼
-aichat-redis (or equivalent)
+companion-redis (Klukai's own)
     │  SUBSCRIBE
     ▼
 events-bridge

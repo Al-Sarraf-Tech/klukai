@@ -20,6 +20,7 @@ from .perf_recording import (
     HOST_FIELDS,
     SCRUBBED,
 )
+from .perf_mcp import MCP_CONFIG, MCP_CONFIG_NAME
 from .perf_resources import RESOURCES
 from .perf_stack import environment
 
@@ -346,6 +347,7 @@ def lifecycle(
     payload = {
         "perf_fixtures.py": (output / "source/tools/ci/perf_fixtures.py").read_text(),
         "personality.yaml": (output / "source/config/personality.yaml").read_text(),
+        MCP_CONFIG_NAME: MCP_CONFIG,
     }
     sequence.take(
         [

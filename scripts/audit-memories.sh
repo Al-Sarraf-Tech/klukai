@@ -64,18 +64,17 @@ QDRANT_EPISODES=$(qdrant_count companion_episodes)
 QDRANT_EXCHANGES=$(qdrant_count companion_exchanges)
 
 log "Counting Redis sessions..."
-# Redis container is aichat-aichat-redis-1 (compose name; 'aichat-redis' is
-# only a network alias, not a docker name). Resolve dynamically as fallback.
-REDIS_CONTAINER="${REDIS_CONTAINER:-aichat-aichat-redis-1}"
-if ! docker ps --format '{{.Names}}' | grep -qx "$REDIS_CONTAINER"; then
-  REDIS_CONTAINER=$(docker ps --filter "name=aichat-redis" --format '{{.Names}}' | head -1)
-fi
-if [[ -z "$REDIS_CONTAINER" ]] \
-   || ! docker exec "$REDIS_CONTAINER" redis-cli ping 2>/dev/null | grep -q PONG; then
-  log "Redis unreachable (container: ${REDIS_CONTAINER:-not found})"
+# Klukai's own Redis (companion-redis, password-protected). The password is
+# read inside the container from its own environment, never on this host.
+REDIS_CONTAINER="${REDIS_CONTAINER:-companion-redis}"
+rcli() {
+  docker exec "$REDIS_CONTAINER" sh -c 'REDISCLI_AUTH="$KLUKAI_REDIS_PASSWORD" exec valkey-cli -n 0 "$@"' rcli "$@"
+}
+if ! rcli ping 2>/dev/null | grep -q PONG; then
+  log "Redis unreachable (container: ${REDIS_CONTAINER})"
   exit 2
 fi
-REDIS_SESSIONS=$(docker exec "$REDIS_CONTAINER" redis-cli --scan --pattern 'session:*' | wc -l) || {
+REDIS_SESSIONS=$(rcli --scan --pattern 'session:*' | wc -l) || {
   log "Redis session scan failed on ${REDIS_CONTAINER}"
   exit 2
 }

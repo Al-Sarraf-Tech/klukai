@@ -38,9 +38,10 @@ def built_images(checkout: Path) -> list[str]:
     return [f"{project}-{service}" for service in BUILT_SERVICES]
 
 
+# Redis is Klukai's own (companion-redis, a compose service started with core
+# from the same pinned image); only PostgreSQL is shared infrastructure.
 INFRA = {
     "infra-postgres": "KLUKAI_PERF_POSTGRES_IMAGE",
-    "aichat-redis": "KLUKAI_PERF_REDIS_IMAGE",
 }
 LOGIN = (
     "TOKEN=$(curl -s -X POST http://127.0.0.1:8300/api/auth/login \\\n"
@@ -113,7 +114,6 @@ def provide_infrastructure(password: str) -> None:
             "-e",
             f"POSTGRES_PASSWORD={password}",
         ],
-        "aichat-redis": [],
     }
     for name, variable in INFRA.items():
         image = os.environ[variable]
@@ -240,6 +240,7 @@ def drill(source: Path, revision: str) -> dict[str, Any]:
     }
     secrets_env = {
         "POSTGRES_PASSWORD": secrets.token_urlsafe(24),
+        "KLUKAI_REDIS_PASSWORD": secrets.token_hex(24),
         "RABBITMQ_PASSWORD": secrets.token_urlsafe(24),
         "SEED_PASSWORD_JALSARRAF": secrets.token_urlsafe(24),
     }

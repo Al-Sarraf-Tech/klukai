@@ -4,75 +4,39 @@ from __future__ import annotations
 from typing import Any
 import logging
 from datetime import timezone
-import httpx
-from .dependencies import http_request, json_objects, json_object
-from .memory_endpoints import DATA_URL
+from . import fact_store
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryFactsMixin:
-    _http: httpx.AsyncClient | None
+    # Facts live in Klukai's own database (app/fact_store.py). Every operation
+    # fails open: they back the dossier, inside jokes and milestones on the
+    # live chat read path, so a database hiccup degrades context, never the
+    # reply.
 
     async def store_fact(
         self, key: str, value: str, ttl: int | None = None, user_id: str = "jalsarraf"
     ) -> None:
         try:
-            body: dict[str, Any] = {"key": f"companion:{user_id}:{key}", "value": value}
-            if ttl:
-                body["ttl_seconds"] = ttl
-            await http_request(
-                "data", self._http, "post", f"{DATA_URL}/memory/store", json=body
-            )
+            await fact_store.store(f"companion:{user_id}:{key}", value, ttl)
         except Exception as e:
             logger.warning("store_fact failed for %s: %s", key, e)
 
     async def recall_fact(self, key: str, user_id: str = "jalsarraf") -> str | None:
-        full_key = f"companion:{user_id}:{key}"
         try:
-            r = await http_request(
-                "data",
-                self._http,
-                "get",
-                f"{DATA_URL}/memory/recall",
-                params={"key": full_key},
-            )
-            data = json_object(r.json())
-            if data.get("found"):
-                value = data.get("value")
-                if value is None:
-                    # The data service answers a key lookup with its row in
-                    # ``entries`` ({key, value, ts}), not a top-level value.
-                    value = next(
-                        (
-                            entry.get("value")
-                            for entry in json_objects(data.get("entries", []))
-                            if entry.get("key") == full_key
-                        ),
-                        None,
-                    )
-                return value if isinstance(value, str) else None
+            entry = await fact_store.recall(f"companion:{user_id}:{key}")
         except Exception as e:
             logger.warning("recall_fact failed for %s: %s", key, e)
-        return None
+            return None
+        value = entry.get("value") if entry else None
+        return value if isinstance(value, str) else None
 
     async def recall_facts_by_pattern(
         self, pattern: str, user_id: str = "jalsarraf"
     ) -> list[dict[str, Any]]:
-        # Fail open like recall_fact/store_fact — this backs inside-jokes, the
-        # Commander dossier, and milestones on the live chat read path, so a
-        # data-service hiccup must return empty, not raise.
         try:
-            r = await http_request(
-                "data",
-                self._http,
-                "get",
-                f"{DATA_URL}/memory/recall",
-                params={"pattern": f"companion:{user_id}:{pattern}"},
-            )
-            r.raise_for_status()
-            data = json_object(r.json())
-            return json_objects(data.get("entries", []))
+            return await fact_store.recall_pattern(f"companion:{user_id}:{pattern}")
         except Exception as e:
             logger.warning("recall_facts_by_pattern failed (%s): %s", pattern, e)
             return []

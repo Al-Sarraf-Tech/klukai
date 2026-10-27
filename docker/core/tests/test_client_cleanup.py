@@ -11,15 +11,15 @@ from app.memory import MemoryManager
 
 
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_second_client_closes_even_if_first_close_fails(cancel):
+async def test_memory_close_awaits_its_only_client_and_surfaces_failure(cancel):
+    # Facts moved to Postgres (app/fact_store.py): Redis is the only client.
     resource = MemoryManager()
-    failure = asyncio.CancelledError() if cancel else RuntimeError("first close failed")
-    first = SimpleNamespace(aclose=AsyncMock(side_effect=failure))
-    second = SimpleNamespace(aclose=AsyncMock())
-    resource._redis, resource._http = first, second
+    failure = asyncio.CancelledError() if cancel else RuntimeError("close failed")
+    client = SimpleNamespace(aclose=AsyncMock(side_effect=failure))
+    resource._redis = client
     with pytest.raises(type(failure)):
         await resource.close()
-    second.aclose.assert_awaited_once()
+    client.aclose.assert_awaited_once()
 
 
 @pytest.mark.parametrize("cancel", [False, True])

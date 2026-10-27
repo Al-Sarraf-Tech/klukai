@@ -26,6 +26,7 @@ CASES = {
         "test_postgres_memory_recall_without_haiku_keeps_postgres_order",
         "test_postgres_memory_loss_fails_open_and_recall_recovers",
         "test_real_query_cancellation_releases_pool",
+        "test_postgres_fact_memory_keeps_the_data_service_contract",
     },
     "tests/health_runtime_backends.py": {
         "test_reused_real_readiness_clients_survive_fault_and_recovery[postgres]",
@@ -236,7 +237,6 @@ def validate_evidence_binding(value: Any, bindings: dict[str, str]) -> None:
 def validate_client_cleanup(value: dict[str, Any]) -> None:
     if (
         value.get("pool_closed") is not True
-        or value.get("http_closed") is not True
         or type(value.get("proxy_tasks")) is not int
         or value["proxy_tasks"] != 0
         or type(value.get("proxy_streams")) is not int

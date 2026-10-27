@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 from .perf_gate import image_reference
+from .perf_mcp import MCP_CONFIG, MCP_CONFIG_NAME
 from .perf_recording import (
     ACTIVE,
     CONTAINER_VIEW,
@@ -309,6 +310,7 @@ class DisposableStack:
             "personality.yaml": (
                 self.repository / "config/personality.yaml"
             ).read_text(),
+            MCP_CONFIG_NAME: MCP_CONFIG,
         }
         writer = self.prefix + "-volume-writer"
         self.containers.append(writer)

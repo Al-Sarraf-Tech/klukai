@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
+import json
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -78,9 +79,16 @@ async def test_weather_fault_and_recovery_uses_one_half_open_probe(monkeypatch):
         requests += 1
         if requests == 1:
             return httpx.Response(503)
-        return httpx.Response(200, json={"current": {
-            "temperature_2m": 12.5, "weather_code": 61, "is_day": 1,
-        }})
+        return httpx.Response(
+            200,
+            json={
+                "current": {
+                    "temperature_2m": 12.5,
+                    "weather_code": 61,
+                    "is_day": 1,
+                }
+            },
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
         monkeypatch.setattr(weather_client, "_get_http", lambda: client)
@@ -134,16 +142,51 @@ async def test_voice_open_breaker_never_contacts_fish(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mcp_open_breaker_rejects_tool_without_network():
-    from app.mcp_client import MCPClient
+async def test_mcp_open_breaker_rejects_tool_without_network(tmp_path):
+    from app.mcp_transport import ConfiguredMCP, load_config
 
-    client = MCPClient()
-    client._http = AsyncMock()
-    client._session_id = "existing-session"
-    cb.get_breaker("mcp").force_open()
-    with pytest.raises(cb.CircuitOpen):
-        await client.invoke_tool("search", {"query": "example"})
-    client._http.post.assert_not_awaited()
+    path = tmp_path / "mcp.json"
+    path.write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "reference",
+                        "url": "http://reference/mcp",
+                        "allowed_tools": ["search"],
+                    }
+                ]
+            }
+        )
+    )
+    seen = []
+
+    def server(request):
+        body = json.loads(request.content)
+        seen.append(body["method"])
+        if body["method"] == "notifications/initialized":
+            return httpx.Response(202)
+        result = {"tools": [{"name": "search", "inputSchema": {"type": "object"}}]}
+        if body["method"] == "initialize":
+            result = {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "fixture", "version": "1"},
+            }
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": body["id"], "result": result}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(server)) as http:
+        configured = ConfiguredMCP(load_config(str(path)), http)
+        await configured.initialize()
+        assert [t["name"] for t in await configured.list_tools()] == ["search"]
+        before = list(seen)
+        cb.get_breaker("mcp").force_open()
+        assert await configured.invoke_tool("search", {"query": "example"}) == {
+            "error": "MCP tool invocation failed"
+        }
+        assert seen == before  # the open breaker sent nothing
 
 
 @pytest.mark.asyncio

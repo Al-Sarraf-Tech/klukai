@@ -73,14 +73,18 @@ def configured(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_empty_environment_preserves_legacy_gateway(configured, monkeypatch):
+async def test_empty_environment_offers_no_external_tools(configured, monkeypatch):
+    """No config means no external tools, and no request to any server: the
+    old fallback to the aichat stack's MCP gateway is gone."""
     server = Server(("legacy_tool",))
     configured(server)
     monkeypatch.setenv("KLUKAI_MCP_CONFIG", "")
     client = MCPClient()
     await client.init()
-    assert await client.list_tools() == [definition("legacy_tool")]
-    assert [body["method"] for _, body in server.requests] == ["initialize", "tools/list"]
+    assert await client.list_tools() == []
+    assert await client.invoke_tool("legacy_tool", {}) == {
+        "error": "MCP configured tools unavailable"}
+    assert server.requests == []
     await client.close()
 
 

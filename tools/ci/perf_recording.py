@@ -53,6 +53,7 @@ WORKER_ENV = frozenset(
         "SEED_PASSWORD_RICKY",
         "LM_STUDIO_URL",
         "LM_STUDIO_TOKEN",
+        "KLUKAI_MCP_CONFIG",
         "MCP_URL",
         "DATA_URL",
         "INFERENCE_URL",

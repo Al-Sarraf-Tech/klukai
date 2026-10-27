@@ -24,7 +24,7 @@ from .circuit_breakers import get_breaker
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://aichat-redis:6379/1")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://companion-redis:6379/0")
 
 # TTLs — tuned for freshness vs. hit-rate
 AFFECTION_TTL = 15  # 15s — score changes per interaction

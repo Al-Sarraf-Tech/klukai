@@ -28,31 +28,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _mk_manager():
-    """MemoryManager with Redis + HTTP mocked (no live services)."""
+    """MemoryManager with Redis mocked (no live services)."""
     from app.memory import MemoryManager
 
     m = MemoryManager()
     m._redis = AsyncMock()
-    m._http = AsyncMock()
     return m
-
-
-class _Resp:
-    """Minimal httpx.Response stand-in with controllable status/json/text."""
-
-    def __init__(self, status_code=200, json_data=None, text=""):
-        self.status_code = status_code
-        self._json = json_data if json_data is not None else {}
-        self.text = text
-
-    def json(self):
-        return self._json
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            import httpx
-
-            raise httpx.HTTPStatusError("err", request=None, response=None)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -63,44 +44,37 @@ class _Resp:
 class TestLifecycle:
     @pytest.mark.asyncio
     async def test_init_builds_clients_without_any_vector_store(self):
-        """init() creates the Redis + data-service clients and touches nothing
-        else: no Qdrant collection bootstrap, no embedding service."""
+        """init() creates the Redis client and touches nothing else: no Qdrant
+        collection bootstrap, no embedding service and no HTTP data service
+        (facts are read from Postgres by app/fact_store.py)."""
         from app.memory import MemoryManager
 
         m = MemoryManager()
         fake_redis = MagicMock()
-        fake_http = MagicMock()
 
-        with patch("app.memory.redis.from_url", return_value=fake_redis) as from_url, \
-             patch("app.memory.httpx.AsyncClient", return_value=fake_http):
+        with patch("app.memory.redis.from_url", return_value=fake_redis) as from_url:
             await m.init()
 
         assert m._redis is fake_redis
-        assert m._http is fake_http
         from_url.assert_called_once()
-        fake_http.put.assert_not_called()
-        fake_http.post.assert_not_called()
-        fake_http.get.assert_not_called()
         for gone in ("embed_text", "is_zero_vector", "_ensure_qdrant_collection",
-                     "_ensure_msg_collection"):
+                     "_ensure_msg_collection", "_http"):
             assert not hasattr(m, gone)
 
     @pytest.mark.asyncio
-    async def test_close_closes_both_clients(self):
+    async def test_close_closes_the_redis_client(self):
         m = _mk_manager()
         m._redis.aclose = AsyncMock()
-        m._http.aclose = AsyncMock()
 
         await m.close()
 
         m._redis.aclose.assert_awaited_once()
-        m._http.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_close_is_safe_when_clients_unset(self):
         from app.memory import MemoryManager
 
-        m = MemoryManager()  # _redis and _http are None
+        m = MemoryManager()  # _redis is None
         # Must not raise when nothing was initialized.
         await m.close()
 
@@ -197,8 +171,6 @@ class TestStoreEpisode:
             "ep-1", "conv-7", "first kiss on the rooftop", ["rooftop", "kiss"],
             ["tender"], 0.9, "alice",
         )
-        m._http.put.assert_not_called()
-        m._http.post.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_store_is_insert_only_never_deletes(self):
@@ -347,19 +319,6 @@ class TestRecallEpisodes:
 
 
 class TestFactBranches:
-    @pytest.mark.asyncio
-    async def test_store_fact_includes_ttl_when_given(self):
-        """A ttl arg must be forwarded as ttl_seconds in the data-API body."""
-        m = _mk_manager()
-        m._http.post = AsyncMock(return_value=_Resp(200))
-
-        await m.store_fact("rel:wearing", "scarf", ttl=3600, user_id="alice")
-
-        body = m._http.post.call_args[1]["json"]
-        assert body["ttl_seconds"] == 3600
-        assert body["key"] == "companion:alice:rel:wearing"
-        assert body["value"] == "scarf"
-
     @pytest.mark.asyncio
     async def test_set_relationship_fact_prefixes_rel_key(self):
         """set_relationship_fact must store under the rel: namespace."""

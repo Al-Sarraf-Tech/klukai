@@ -25,7 +25,7 @@ from .circuit_breakers import get_breaker
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://aichat-redis:6379/1")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://companion-redis:6379/0")
 
 _redis: aioredis.Redis | None = None
 
