@@ -22,6 +22,7 @@ Future<(_Calls, TextEditingController)> _pump(
   String? lockReason,
   bool saving = false,
   Widget? leading,
+  double textScale = 1,
 }) async {
   tester.view.physicalSize = Size(width, 844);
   tester.view.devicePixelRatio = 1.0;
@@ -33,6 +34,12 @@ Future<(_Calls, TextEditingController)> _pump(
   addTearDown(focus.dispose);
   await tester.pumpWidget(
     MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
       home: Scaffold(
         body: Align(
           alignment: Alignment.bottomCenter,
@@ -93,13 +100,79 @@ void main() {
     tester,
   ) async {
     final (calls, controller) = await _pump(tester);
+    await tester.enterText(find.byType(TextField), 'Report');
+    await tester.pump();
     await tester.tap(find.byKey(const Key('composer-send')));
     await tester.tap(find.byKey(const Key('composer-picture')));
-    await tester.enterText(find.byType(TextField), 'Report');
     await tester.testTextInput.receiveAction(TextInputAction.send);
     expect(calls.sends, 2);
     expect(calls.pictures, 1);
     expect(controller.text, 'Report'); // clearing is the screen's job
+  });
+
+  for (final width in [320.0, 390.0, 430.0]) {
+    testWidgets('room to compose at $width with large text and mic', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        width: width,
+        textScale: 2,
+        leading: const SizedBox(width: 44, height: 44, child: Icon(Icons.mic)),
+      );
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.getSize(find.byType(TextField)).width,
+        greaterThanOrEqualTo(width - 32),
+      );
+      expect(
+        tester.getRect(find.byType(TextField)).bottom,
+        lessThanOrEqualTo(
+          tester.getRect(find.byKey(const Key('composer-send'))).top,
+        ),
+      );
+    });
+  }
+
+  testWidgets('send follows draft readiness; picture stays independent', (
+    tester,
+  ) async {
+    final (calls, controller) = await _pump(tester);
+    final send = find.byKey(const Key('composer-send'));
+    expect(tester.widget<HudSquareButton>(send).onTap, isNull);
+    controller.text = '  \n ';
+    await tester.pump();
+    expect(tester.widget<HudSquareButton>(send).onTap, isNull);
+    await tester.tap(find.byKey(const Key('composer-picture')));
+    expect(calls.pictures, 1);
+    controller.text = 'Report';
+    await tester.pump();
+    await tester.tap(send);
+    expect(calls.sends, 1);
+    controller.clear();
+    await tester.pump();
+    expect(tester.widget<HudSquareButton>(send).onTap, isNull);
+  });
+
+  testWidgets('IME composition is not sent before it is committed', (
+    tester,
+  ) async {
+    final (calls, controller) = await _pump(tester);
+    controller.value = const TextEditingValue(
+      text: 'hello',
+      composing: TextRange(start: 0, end: 5),
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('composer-send')));
+    expect(calls.sends, 0);
+    await tester.showKeyboard(find.byType(TextField));
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    expect(calls.sends, 0);
+    expect(controller.text, 'hello');
+    controller.value = const TextEditingValue(text: 'hello');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('composer-send')));
+    expect(calls.sends, 1);
   });
 
   testWidgets('EN | JP reports the choice; inert while saving', (tester) async {

@@ -16,20 +16,17 @@ being tested; never embed provider credentials or production session tokens in
 the app, build arguments, fixtures, or screenshots.
 
 The client connects to core over HTTP and WebSocket. Core alone selects the
-inference providers. The deployed interactive primary is Sonnet 5.5 with medium
-adaptive thinking, with Dominus as the local secondary. English speech uses
-Dominus XTTS through core's submit/poll/cancel TTS jobs. When Dominus is offline,
-text chat remains available without an automatic voice fallback. Speech
-transcription remains on its separate Dominus endpoint.
+inference providers. All inference is cloud-only: Claude Sonnet 5.5 writes
+interactive replies, with Haiku 5.5 fallback; background work and recall use
+Haiku 5.5. Fish Audio handles speech output and transcription. Voice plays
+only on an explicit tap and supports per-Commander English/Japanese settings.
+There is no local model or GPU fallback.
 
-Production uses the existing Claude API key for dream/Her POV writing, initially
-capped at 12 attempts per UTC day and 12 per UTC month across all users. Pictures
-use the private account worker's authorized Agy/Grok alternation and bounded
-service-error failover. Policy refusals never fail over; paid image APIs, paid
-credits and GPU images remain disabled. The app does not choose providers.
-The app requires no API key or provider-specific build to switch core between
-authorized modes. See the [provider policy and local GPU setup](../README.md#provider-policy)
-and [creative-provider handoff](../docs/handoff/2026-10-14-dream-image-preparation.md).
+Pictures use the authorized Seedream 4.5 provider on fal, within core's
+persistent daily/monthly attempt limits. Pictures are requested explicitly;
+there are no automatic, dream, prewarm or seeding pictures. Dreams remain text.
+The app never chooses providers or holds provider keys. The current owner
+policy is in [AGENTS.md](../AGENTS.md).
 
 ## Companion camera
 

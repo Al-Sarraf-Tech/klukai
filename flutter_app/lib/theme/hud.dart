@@ -397,9 +397,10 @@ class HudTabBar extends StatelessWidget {
                 child: InkWell(
                   key: ValueKey('hud-tab-${tab.name}'),
                   onTap: () => onSelect(tab),
-                  child: SizedBox(
-                    height: 52,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 52),
                     child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(
@@ -416,6 +417,8 @@ class HudTabBar extends StatelessWidget {
                         ExcludeSemantics(
                           child: Text(
                             tab.label.toUpperCase(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: HudText.label(
                               size: 9.5,
                               color: tab == current

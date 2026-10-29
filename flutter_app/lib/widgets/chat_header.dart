@@ -202,39 +202,78 @@ class ChatHeader extends StatelessWidget {
     final level = affectionLevel.clamp(0, kMaxAffinityLevel);
     return Padding(
       padding: const EdgeInsets.only(top: 4, bottom: 2),
-      child: Row(
-        children: [
-          Text('KLUKAI', style: HudText.display(size: 18)),
-          const SizedBox(width: 8),
-          Flexible(child: _linkState(size: 10)),
-          const SizedBox(width: 8),
-          Text(
-            'LV$level',
-            key: const Key('chat-header-level'),
-            style: HudText.label(
-              size: 10.5,
-              color: HudColors.text,
-              weight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: SizedBox(
-              height: 18,
-              child: HudEcg(bpm: bpm, color: _ecgColor),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            '$bpm BPM',
-            key: const Key('chat-header-bpm'),
-            style: HudText.label(
-              size: 10.5,
-              color: HudColors.text,
-              weight: FontWeight.w600,
-            ),
-          ),
-        ],
+      child: LayoutBuilder(
+        builder: (context, box) {
+          if (box.maxWidth <
+              300 * MediaQuery.textScalerOf(context).scale(10) / 10) {
+            return Wrap(
+              spacing: 12,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text('KLUKAI', style: HudText.display(size: 18)),
+                _linkState(size: 10),
+                Text(
+                  'LV$level',
+                  key: const Key('chat-header-level'),
+                  style: HudText.label(
+                    size: 10.5,
+                    color: HudColors.text,
+                    weight: FontWeight.w600,
+                  ),
+                ),
+                SizedBox(
+                  width: 60,
+                  height: 18,
+                  child: HudEcg(bpm: bpm, color: _ecgColor),
+                ),
+                Text(
+                  '$bpm BPM',
+                  key: const Key('chat-header-bpm'),
+                  style: HudText.label(
+                    size: 10.5,
+                    color: HudColors.text,
+                    weight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Text('KLUKAI', style: HudText.display(size: 18)),
+              const SizedBox(width: 8),
+              Flexible(child: _linkState(size: 10)),
+              const SizedBox(width: 8),
+              Text(
+                'LV$level',
+                key: const Key('chat-header-level'),
+                style: HudText.label(
+                  size: 10.5,
+                  color: HudColors.text,
+                  weight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: SizedBox(
+                  height: 18,
+                  child: HudEcg(bpm: bpm, color: _ecgColor),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '$bpm BPM',
+                key: const Key('chat-header-bpm'),
+                style: HudText.label(
+                  size: 10.5,
+                  color: HudColors.text,
+                  weight: FontWeight.w600,
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

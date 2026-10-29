@@ -56,6 +56,8 @@ part 'chat_playback.dart';
 
 part 'chat_view.dart';
 
+part 'chat_history_state.dart';
+
 part 'chat_stage.dart';
 
 part 'chat_voice_language.dart';
@@ -291,6 +293,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// in the sliver above the transcript's anchor ([_transcriptAnchor]), so a
   /// page arriving never moves the line he is reading.
   final List<ChatMessage> _older = [];
+  bool _historyLoading = true;
+  bool _historyFailed = false;
+  int _historyGeneration = 0;
+  bool _olderFailed = false;
   bool _loadingOlder = false;
   bool _olderExhausted = false;
   final _transcriptAnchor = const ValueKey('chat-transcript-anchor');
@@ -324,8 +330,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   DateTime? _liveBpmAt;
   Timer? _liveBpmExpiry;
   Timer? _inputLockTimer; // Safety timeout to auto-unlock input
-  Timer?
-  _warmupTimer; // Phased "waking up" status while a cold model loads + warms
+  Timer? _warmupTimer; // Fallback feedback while waiting for a reply
 
   /// Glow color for the current mood (shared source of truth: [kMoodVisuals]).
   Color get _moodGlowColor => moodVisualFor(_state.mood).glow;

@@ -28,6 +28,7 @@ class ChatComposerBar extends StatelessWidget {
     this.lockReason,
     this.lockColor = HudColors.violet,
     this.leading,
+    this.availableHeight,
   });
 
   final TextEditingController controller;
@@ -45,90 +46,153 @@ class ChatComposerBar extends StatelessWidget {
   /// input is switched on).
   final Widget? leading;
 
+  /// Visible viewport height before a Scaffold removes keyboard insets from
+  /// its descendants' MediaQuery. Direct callers may use the default query.
+  final double? availableHeight;
+
+  bool get _canSend =>
+      !disabled &&
+      !locked &&
+      controller.text.trim().isNotEmpty &&
+      controller.value.composing.isCollapsed;
+
+  void _submit() {
+    if (_canSend) onSend();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      key: const Key('chat-composer'),
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          HudSquareButton(
-            key: const Key('composer-picture'),
-            tooltip: 'Ask for a picture',
-            onTap: disabled ? null : onPicture,
-            child: const Icon(Icons.photo_camera_outlined, size: 20),
-          ),
-          if (leading != null) ...[const SizedBox(width: 6), leading!],
-          const SizedBox(width: 6),
-          Expanded(child: _field()),
-          const SizedBox(width: 6),
-          HudSegmented<VoiceLanguage>(
-            key: const Key('composer-language'),
-            semanticLabel: 'Her voice language',
-            options: {for (final l in VoiceLanguage.values) l: l.label},
-            value: language,
-            onChanged: onLanguageChanged,
-          ),
-          const SizedBox(width: 6),
-          HudSquareButton(
-            key: const Key('composer-send'),
-            tooltip: 'Send',
-            onTap: disabled ? null : onSend,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(
-              'SEND',
-              style: HudText.label(
-                size: 11,
-                color: disabled ? HudColors.textMuted : HudColors.cyan,
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) => Padding(
+        key: const Key('chat-composer'),
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+        child: LayoutBuilder(
+          builder: (context, box) {
+            final stacked =
+                box.maxWidth <
+                520 * MediaQuery.textScalerOf(context).scale(15) / 15;
+            final picture = HudSquareButton(
+              key: const Key('composer-picture'),
+              tooltip: 'Ask for a picture',
+              onTap: disabled || locked ? null : onPicture,
+              child: const Icon(Icons.photo_camera_outlined, size: 20),
+            );
+            final languageControl = HudSegmented<VoiceLanguage>(
+              key: const Key('composer-language'),
+              semanticLabel: 'Her voice language',
+              options: {for (final l in VoiceLanguage.values) l: l.label},
+              value: language,
+              onChanged: onLanguageChanged,
+            );
+            final send = HudSquareButton(
+              key: const Key('composer-send'),
+              tooltip: 'Send',
+              onTap: _canSend ? _submit : null,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Text(
+                'SEND',
+                style: HudText.label(
+                  size: 11,
+                  color: _canSend ? HudColors.cyan : HudColors.textMuted,
+                ),
               ),
-            ),
-          ),
-        ],
+            );
+            if (stacked) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _field(context),
+                  const SizedBox(height: 6),
+                  SizedBox(
+                    width: double.infinity,
+                    child: Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [picture, ?leading, languageControl, send],
+                    ),
+                  ),
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                picture,
+                if (leading != null) ...[const SizedBox(width: 6), leading!],
+                const SizedBox(width: 6),
+                Expanded(child: _field(context)),
+                const SizedBox(width: 6),
+                languageControl,
+                const SizedBox(width: 6),
+                send,
+              ],
+            );
+          },
+        ),
       ),
     );
   }
 
-  Widget _field() {
+  Widget _field(BuildContext context) {
+    // Keep long drafts scrollable inside the field when the keyboard and
+    // larger type share a short viewport with recovery and voice controls.
+    final visibleHeight =
+        availableHeight ??
+        (MediaQuery.sizeOf(context).height -
+            MediaQuery.viewInsetsOf(context).bottom);
+    final lineHeight = MediaQuery.textScalerOf(context).scale(15) * 1.3;
+    final maxDraftLines = ((visibleHeight * 0.24 - 26) / lineHeight)
+        .floor()
+        .clamp(1, 4);
     final hint = locked ? '// ${lockReason ?? 'STANDBY'}…' : '> TRANSMIT…';
     OutlineInputBorder edge(Color color) => OutlineInputBorder(
       borderRadius: BorderRadius.zero,
       borderSide: BorderSide(color: color),
     );
-    return TextField(
-      key: const Key('composer-input'),
-      controller: controller,
-      focusNode: focusNode,
-      readOnly: locked,
-      maxLines: 4,
-      minLines: 1,
-      textInputAction: TextInputAction.send,
-      onSubmitted: disabled ? null : (_) => onSend(),
-      cursorColor: HudColors.cyan,
-      style: HudText.body(
-        size: 15,
-        color: locked ? HudColors.textMuted : HudColors.text,
-      ),
-      decoration: InputDecoration(
-        hintText: hint,
-        hintMaxLines: 1,
-        hintStyle: HudText.label(
-          size: 12,
-          color: locked
-              ? lockColor.withValues(alpha: 0.7)
-              : HudColors.textMuted,
+    return Semantics(
+      label: 'Message Klukai',
+      child: TextField(
+        key: const Key('composer-input'),
+        controller: controller,
+        focusNode: focusNode,
+        readOnly: locked,
+        maxLines: maxDraftLines,
+        minLines: 1,
+        textInputAction: TextInputAction.send,
+        // Flutter's default completion clears composing before onSubmitted.
+        // Keep the original editing state so an IME commit cannot send a draft.
+        // The screen owns clearing and restoring focus after a successful send.
+        onEditingComplete: () {},
+        onSubmitted: (_) => _submit(),
+        cursorColor: HudColors.cyan,
+        style: HudText.body(
+          size: 15,
+          color: locked ? HudColors.textMuted : HudColors.text,
         ),
-        isDense: true,
-        filled: true,
-        fillColor: HudColors.ground.withValues(alpha: 0.85),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: 13,
+        decoration: InputDecoration(
+          hintText: hint,
+          hintMaxLines: 1,
+          hintStyle: HudText.label(
+            size: 12,
+            color: locked
+                ? lockColor.withValues(alpha: 0.7)
+                : HudColors.textMuted,
+          ),
+          isDense: true,
+          filled: true,
+          fillColor: HudColors.ground.withValues(alpha: 0.85),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 13,
+          ),
+          border: edge(HudColors.cyanA(0.35)),
+          enabledBorder: edge(HudColors.cyanA(0.35)),
+          disabledBorder: edge(HudColors.cyanA(0.2)),
+          focusedBorder: edge(HudColors.cyan),
         ),
-        border: edge(HudColors.cyanA(0.35)),
-        enabledBorder: edge(HudColors.cyanA(0.35)),
-        disabledBorder: edge(HudColors.cyanA(0.2)),
-        focusedBorder: edge(HudColors.cyan),
       ),
     );
   }

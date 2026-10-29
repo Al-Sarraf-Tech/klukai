@@ -346,6 +346,7 @@ Future<FakeWebSocketService> _pumpChat(
   bool voiceInput = false,
   http.Client? historyClient,
   WardrobeService? wardrobe,
+  double textScale = 1,
 }) async {
   // ChatScreen redirects to "/" when no token is present; prime one.
   web.window.localStorage.setItem('klukai_token', 'test-token');
@@ -353,6 +354,12 @@ Future<FakeWebSocketService> _pumpChat(
   final fake = FakeWebSocketService();
   await tester.pumpWidget(
     MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
       // A non-routable origin keeps the (try/caught) history/affection fetches
       // from reaching any real backend; failures are swallowed by the screen.
       home: ChatScreen(
@@ -364,7 +371,14 @@ Future<FakeWebSocketService> _pumpChat(
         stageBuilder: (stage ?? _FakeStage()).build,
         browser: browser,
         voiceInputEnabled: voiceInput,
-        historyClient: historyClient,
+        historyClient:
+            historyClient ??
+            MockClient(
+              (request) async => http.Response(
+                request.url.path == '/api/messages' ? '{"messages":[]}' : '{}',
+                200,
+              ),
+            ),
         wardrobeService: wardrobe,
       ),
     ),
@@ -382,6 +396,170 @@ void main() {
       web.window.localStorage.removeItem('flutter.$kOpenIn3dPrefKey');
       web.window.localStorage.removeItem(kStageUsedKey);
     } catch (_) {}
+  });
+
+  testWidgets('polish: real reply status replaces the fallback wait', (
+    tester,
+  ) async {
+    final fake = await _pumpChat(tester);
+    await tester.enterText(find.byType(TextField), 'Hello');
+    await tester.pump();
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('composer-send')));
+    await tester.pump(const Duration(seconds: 7));
+    expect(find.text('AWAITING HER REPLY…'), findsOneWidget);
+    fake.emit({'type': 'thinking', 'content': 'Checking the weather'});
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 20));
+    expect(find.text('CHECKING THE WEATHER'), findsOneWidget);
+    expect(find.textContaining('STILL WAITING'), findsNothing);
+    fake.setConnected(false);
+    await tester.pump();
+    expect(find.text('CHECKING THE WEATHER'), findsNothing);
+    fake.dispose();
+  });
+
+  for (final scale in [1.0, 2.0]) {
+    testWidgets('polish: phone keyboard and long draft at text scale $scale', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+      addTearDown(tester.view.reset);
+      var historyFails = true;
+      final fake = await _pumpChat(
+        tester,
+        textScale: scale,
+        voiceInput: true,
+        historyClient: MockClient(
+          (_) async => http.Response(
+            historyFails ? '{}' : '{"messages":[]}',
+            historyFails ? 503 : 200,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.enterText(find.byType(TextField), 'one\ntwo\nthree\nfour');
+      await tester.pump();
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      final send = tester.getRect(find.byKey(const Key('composer-send')));
+      expect(send.bottom, lessThanOrEqualTo(524));
+      historyFails = false;
+      await tester.ensureVisible(find.byKey(const Key('chat-history-retry')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('chat-history-retry')));
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('chat-history-retry')), findsNothing);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'one\ntwo\nthree\nfour',
+      );
+      fake.dispose();
+    });
+  }
+
+  group('polish: history feedback', () {
+    testWidgets('loading, failure and retry stay distinct from an empty chat', (
+      tester,
+    ) async {
+      final pending = Completer<http.Response>();
+      var recovered = false;
+      final client = MockClient((request) async {
+        if (request.url.path != '/api/messages') {
+          return http.Response('{}', 200);
+        }
+        return recovered
+            ? http.Response('{"messages":[]}', 200)
+            : pending.future;
+      });
+      final fake = await _pumpChat(tester, historyClient: client);
+      await tester.pump();
+      expect(find.byKey(const Key('chat-history-status')), findsOneWidget);
+      expect(find.byKey(const Key('chat-empty')), findsNothing);
+      pending.complete(http.Response('{}', 503));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 10));
+      expect(find.byKey(const Key('chat-history-retry')), findsOneWidget);
+      expect(find.byKey(const Key('chat-empty')), findsNothing);
+      await tester.enterText(find.byType(TextField), 'Keep my draft');
+      await tester.pump();
+      recovered = true;
+      await tester.tap(find.byKey(const Key('chat-history-retry')));
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('chat-history-status')), findsNothing);
+      expect(find.byKey(const Key('chat-empty')), findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'Keep my draft',
+      );
+      fake.dispose();
+    });
+
+    testWidgets(
+      'reconnect failure keeps loaded messages and persistent recovery',
+      (tester) async {
+        var fail = false;
+        final backend = _historyBackend();
+        final fake = await _pumpChat(
+          tester,
+          historyClient: MockClient((request) async {
+            if (fail && request.url.path == '/api/messages') {
+              return http.Response('{}', 503);
+            }
+            return backend.get(request.url, headers: request.headers);
+          }),
+        );
+        await tester.pump();
+        fake.setConnected(false);
+        fail = true;
+        fake.setConnected(true);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 10));
+        expect(find.text('Report, Commander.'), findsOneWidget);
+        expect(find.byKey(const Key('chat-history-retry')), findsOneWidget);
+        fail = false;
+        await tester.tap(find.byKey(const Key('chat-history-retry')));
+        await tester.pump();
+        await tester.pump();
+        expect(find.byKey(const Key('chat-history-retry')), findsNothing);
+        expect(find.text('Report, Commander.'), findsOneWidget);
+        fake.dispose();
+      },
+    );
+
+    testWidgets(
+      'stale history failure cannot replace a newer successful load',
+      (tester) async {
+        final pending = <Completer<http.Response>>[];
+        final fake = await _pumpChat(
+          tester,
+          historyClient: MockClient((request) async {
+            if (request.url.path != '/api/messages') {
+              return http.Response('{}', 200);
+            }
+            final response = Completer<http.Response>();
+            pending.add(response);
+            return response.future;
+          }),
+        );
+        await tester.pump();
+        expect(pending.length, greaterThanOrEqualTo(2));
+        pending.last.complete(http.Response('{"messages":[]}', 200));
+        await tester.pump();
+        for (final response in pending.take(pending.length - 1)) {
+          response.complete(http.Response('{}', 503));
+        }
+        await tester.pump();
+        expect(find.byKey(const Key('chat-empty')), findsOneWidget);
+        expect(find.byKey(const Key('chat-history-status')), findsNothing);
+        expect(find.text("COULDN'T LOAD HISTORY"), findsNothing);
+        fake.dispose();
+      },
+    );
   });
 
   group('ChatScreen — history reconciliation', () {
@@ -425,6 +603,7 @@ void main() {
           );
           final fake = await _pumpChat(tester, historyClient: client);
           await tester.enterText(find.byType(TextField), 'Yes');
+          await tester.pump();
           await tester.tap(find.byTooltip('Send'));
           await tester.pump();
           restored = true;
@@ -912,6 +1091,36 @@ void main() {
       }
     }
 
+    testWidgets('polish: older-page failure waits for explicit retry', (
+      tester,
+    ) async {
+      final seen = <Uri>[];
+      final backend = _pagedHistory(seen);
+      var failures = 0;
+      var fail = true;
+      final fake = await _pumpChat(
+        tester,
+        historyClient: MockClient((request) async {
+          if (fail && request.url.queryParameters.containsKey('before')) {
+            failures++;
+            return http.Response('{}', 503);
+          }
+          return backend.get(request.url, headers: request.headers);
+        }),
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      await scrollToTop(tester);
+      expect(failures, 1);
+      expect(find.byKey(const Key('chat-older-retry')), findsOneWidget);
+      fail = false;
+      await tester.tap(find.byKey(const Key('chat-older-retry')));
+      await tester.pump();
+      await scrollToTop(tester);
+      expect(find.text('line o0'), findsOneWidget);
+      expect(find.byKey(const Key('chat-older-retry')), findsNothing);
+      fake.dispose();
+    });
+
     testWidgets('scrolling to the top loads the page before the oldest line', (
       tester,
     ) async {
@@ -1040,6 +1249,7 @@ void main() {
       final fake = await _pumpChat(tester, historyClient: client);
       for (final line in ['First echo', 'Second echo']) {
         await tester.enterText(find.byType(TextField), line);
+        await tester.pump();
         await tester.tap(find.byTooltip('Send'));
         await tester.pump();
       }
@@ -1271,6 +1481,7 @@ void main() {
 
       await tester.enterText(find.byType(TextField), 'status report');
       await tester.pump();
+      await tester.pump();
       // Tap the send button.
       await tester.tap(find.byKey(const Key('composer-send')));
       await tester.pump();
@@ -1293,6 +1504,7 @@ void main() {
         fake.sendShouldSucceed = false;
 
         await tester.enterText(find.byType(TextField), 'status report');
+        await tester.pump();
         await tester.pump();
         await tester.tap(find.byKey(const Key('composer-send')));
         await tester.pump();
@@ -1327,6 +1539,7 @@ void main() {
       );
       await tester.enterText(find.byType(TextField), 'keep this draft');
       await tester.pump();
+      await tester.pump();
       final gesture = await tester.startGesture(
         tester.getCenter(find.byType(VoiceButton)),
       );
@@ -1359,6 +1572,7 @@ void main() {
         find.byType(TextField),
         'typed while voice is down',
       );
+      await tester.pump();
       await tester.pump();
       await tester.tap(find.byKey(const Key('composer-send')));
       await tester.pump();
@@ -1407,6 +1621,7 @@ void main() {
             }),
           );
           await tester.enterText(find.byType(TextField), 'keep this draft');
+          await tester.pump();
           final gesture = await tester.startGesture(
             tester.getCenter(find.byType(VoiceButton)),
           );
@@ -1449,6 +1664,7 @@ void main() {
         }),
       );
       await tester.enterText(find.byType(TextField), 'keep this draft');
+      await tester.pump();
       final gesture = await tester.startGesture(
         tester.getCenter(find.byType(VoiceButton)),
       );
@@ -1483,6 +1699,7 @@ void main() {
         httpClient: MockClient((_) => gate.future),
       );
       await tester.enterText(find.byType(TextField), 'keep this draft');
+      await tester.pump();
       await tester.pump();
       final gesture = await tester.startGesture(
         tester.getCenter(find.byType(VoiceButton)),
@@ -2470,6 +2687,7 @@ void main() {
     ) async {
       final fake = await _pumpChat(tester);
       await tester.enterText(find.byType(TextField), 'half-typed thought');
+      await tester.pump();
       await tester.tap(find.byKey(const Key('composer-picture')));
       await tester.pump();
 
@@ -2489,6 +2707,9 @@ void main() {
       final fake = await _pumpChat(tester);
       HudSquareButton button(String key) =>
           tester.widget<HudSquareButton>(find.byKey(Key(key)));
+      await tester.enterText(find.byType(TextField), 'Ready to send');
+      await tester.pump();
+      await tester.pump();
       expect(button('composer-picture').onTap, isNotNull);
       expect(button('composer-send').onTap, isNotNull);
 
@@ -2689,6 +2910,7 @@ void main() {
       expect(stage.taps, 1);
       // The CHAT face is fully his: the composer still takes his words.
       await tester.enterText(find.byType(TextField), 'Status?');
+      await tester.pump();
       await tester.pump();
       expect(find.text('Status?'), findsOneWidget);
 
@@ -3177,6 +3399,7 @@ void main() {
           'one\ntwo\nthree\nfour\nfive',
         );
         await tester.pump();
+        await tester.pump();
         expect(tester.takeException(), isNull);
         expect(find.byKey(const Key('chat-composer')), findsOneWidget);
         // Short screens get the one-line header.
@@ -3308,6 +3531,7 @@ void main() {
       final (fake, _) = await pumpStage(tester);
       final before = rect(tester, 'chat-stage-layer');
       await tester.enterText(find.byType(TextField), 'one\ntwo\nthree\nfour');
+      await tester.pump();
       fake.emit({'type': 'tool_use', 'tool': 'web_search'});
       await tester.pump();
       expect(find.byType(ToolStatusIndicator), findsOneWidget);

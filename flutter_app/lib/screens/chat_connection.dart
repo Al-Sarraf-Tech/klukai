@@ -16,31 +16,42 @@ extension _ChatConnection on _ChatScreenState {
       : http.get(uri, headers: _authHeaders);
 
   Future<void> _loadHistory() async {
+    if (_authExpired) return;
+    final generation = ++_historyGeneration;
+    _update(() {
+      _historyLoading = true;
+      _historyFailed = false;
+    });
     try {
       final uri = Uri.parse('${widget.serverUrl}/api/messages?limit=50');
       final response = await _getChat(uri);
+      if (!mounted || _authExpired) return;
+      // Revocation is authoritative even when this request was superseded.
+      if (response.statusCode == 401) {
+        _handleAuthExpired();
+        return;
+      }
+      if (generation != _historyGeneration) return;
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final messages = (data['messages'] as List)
             .map((m) => ChatMessage.fromJson(m))
             .toList();
-        if (!mounted || _authExpired) return;
         _mergeHistory(messages);
-        _scrollToBottom(instant: true);
-        _scheduleStageWarmUp(); // her 3D view, quietly, once this has shown
-      } else if (response.statusCode == 401) {
-        // Expired token. Don't wait for the WebSocket's 4001 close — under
-        // uvicorn that close never reaches the client, and the app would sit
-        // soft-locked on LINK DOWN with an empty transcript. Back to login.
-        if (mounted) _handleAuthExpired();
-      } else if (mounted) {
-        // Don't render an empty conversation when the server actually errored —
-        // history is sacred; offer a retry so it can't be mistaken for "wiped".
+        if (_pinnedToBottom) _scrollToBottom(instant: true);
+        _scheduleStageWarmUp();
+      } else {
         _showHistoryError();
       }
     } catch (e) {
       debugPrint('Failed to load history: $e');
-      if (mounted) _showHistoryError();
+      if (mounted && !_authExpired && generation == _historyGeneration) {
+        _showHistoryError();
+      }
+    } finally {
+      if (mounted && !_authExpired && generation == _historyGeneration) {
+        _update(() => _historyLoading = false);
+      }
     }
   }
 
@@ -116,8 +127,13 @@ extension _ChatConnection on _ChatScreenState {
   /// The page of history before the oldest line on screen, fetched when he
   /// scrolls near the top. Pages grow upward above the transcript's anchor,
   /// so what he is reading stays where it is.
-  Future<void> _loadOlder() async {
-    if (_loadingOlder || _olderExhausted || _authExpired) return;
+  Future<void> _loadOlder({bool retry = false}) async {
+    if (_loadingOlder ||
+        _olderExhausted ||
+        _authExpired ||
+        (_olderFailed && !retry)) {
+      return;
+    }
     // Promoted echoes keep their screen positions, so select the canonical
     // minimum independently of display order before advancing the cursor.
     ChatMessage? oldest;
@@ -128,7 +144,10 @@ extension _ChatConnection on _ChatScreenState {
       }
     }
     if (oldest == null) return;
-    _update(() => _loadingOlder = true);
+    _update(() {
+      _loadingOlder = true;
+      _olderFailed = false;
+    });
     try {
       final before = oldest.createdAt.toUtc().toIso8601String();
       final response = await _getChat(
@@ -159,9 +178,12 @@ extension _ChatConnection on _ChatScreenState {
         });
       } else if (response.statusCode == 401) {
         _handleAuthExpired();
+      } else {
+        _update(() => _olderFailed = true);
       }
     } catch (e) {
       debugPrint('Failed to load older history: $e');
+      if (mounted && !_authExpired) _update(() => _olderFailed = true);
     } finally {
       if (mounted) _update(() => _loadingOlder = false);
     }
@@ -182,26 +204,7 @@ extension _ChatConnection on _ChatScreenState {
 
   void _showHistoryError() {
     if (!mounted || _authExpired) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          "COULDN'T LOAD HISTORY",
-          style: HudText.label(size: 11, color: HudColors.text),
-        ),
-        backgroundColor: const Color(0xFF0B1118),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 6),
-        shape: CutCornerBorder(
-          cut: 8,
-          side: BorderSide(color: HudColors.danger.withValues(alpha: 0.5)),
-        ),
-        action: SnackBarAction(
-          label: 'RETRY',
-          textColor: HudColors.cyan,
-          onPressed: _loadHistory,
-        ),
-      ),
-    );
+    _update(() => _historyFailed = true);
   }
 
   Future<void> _loadAffection() async {

@@ -58,42 +58,27 @@ extension _ChatView on _ChatScreenState {
   /// left and the composer stays put.
   Widget _buildChatLayout() {
     return LayoutBuilder(
-      builder: (context, box) => Stack(
+      builder: (context, box) => Column(
         children: [
-          Column(
-            children: [
-              ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: box.maxHeight * 0.5),
-                child: SingleChildScrollView(
-                  child: _buildHeader(
-                    compact:
-                        _keyboardUp ||
-                        box.maxHeight < _ChatView._compactHeaderBelow,
-                  ),
-                ),
-              ),
-              Expanded(child: _buildMessageList()),
-              if (_activeTools.isNotEmpty)
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: box.maxHeight * 0.2),
-                  child: SingleChildScrollView(child: _buildToolStatus()),
-                ),
-              if (_state.isTyping && _streamingId == null)
-                _buildProcessingIndicator(),
-              _buildComposer(),
-            ],
-          ),
-          if (_showScrollFAB)
-            Positioned(
-              bottom: 70,
-              right: 16,
-              child: HudSquareButton(
-                key: const Key('chat-latest'),
-                tooltip: 'Latest',
-                onTap: () => _scrollToBottom(),
-                child: const Icon(Icons.keyboard_arrow_down),
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: box.maxHeight * 0.5),
+            child: SingleChildScrollView(
+              child: _buildHeader(
+                compact:
+                    _keyboardUp ||
+                    box.maxHeight < _ChatView._compactHeaderBelow,
               ),
             ),
+          ),
+          Expanded(child: _buildTranscriptArea()),
+          if (_activeTools.isNotEmpty)
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: box.maxHeight * 0.2),
+              child: SingleChildScrollView(child: _buildToolStatus()),
+            ),
+          if (_state.isTyping && _streamingId == null)
+            _buildProcessingIndicator(),
+          _buildComposer(),
         ],
       ),
     );
@@ -155,6 +140,9 @@ extension _ChatView on _ChatScreenState {
   Widget _buildComposer() {
     return ChatComposerBar(
       controller: _textController,
+      availableHeight:
+          MediaQuery.sizeOf(context).height -
+          MediaQuery.viewInsetsOf(context).bottom,
       focusNode: _focusNode,
       language: _voiceLanguage,
       onLanguageChanged: _voiceLanguageSaving ? null : _setVoiceLanguage,
@@ -186,6 +174,7 @@ extension _ChatView on _ChatScreenState {
 
   Widget _buildMessageList() {
     if (_messages.isEmpty) {
+      if (_historyLoading || _historyFailed) return const SizedBox.expand();
       return LayoutBuilder(
         builder: (context, box) => SingleChildScrollView(
           child: ConstrainedBox(
@@ -327,6 +316,13 @@ extension _ChatView on _ChatScreenState {
   /// The top of what is loaded: a spinner while an older page comes in,
   /// otherwise the list's top margin.
   Widget _historyTop() {
+    if (_olderFailed) {
+      return _historyNotice(
+        label: 'Older messages could not be loaded.',
+        retryKey: const Key('chat-older-retry'),
+        onRetry: () => _loadOlder(retry: true),
+      );
+    }
     if (!_loadingOlder) return const SizedBox(height: 8);
     return const Padding(
       key: Key('chat-history-loading'),
@@ -427,7 +423,7 @@ extension _ChatView on _ChatScreenState {
             ],
           ),
           // Loading bar for the whole pre-response wait — backend "thinking"
-          // status, cold-start model load, prefill, or normal processing. The
+          // status or the client's fallback waiting notice. The
           // enclosing indicator only renders while waiting (isTyping &&
           // _streamingId == null), so this is always the right time to show it.
           // Indeterminate on purpose: the wait varies from seconds to minutes,

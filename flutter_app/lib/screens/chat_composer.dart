@@ -42,26 +42,20 @@ extension _ChatComposer on _ChatScreenState {
     return true;
   }
 
-  // When she's been idle the local model evicts (load-on-demand), so the first
-  // message waits on a JIT model load and then a prefill ("processing prompt")
-  // pass before the first token. Narrate that sequence so a slow first reply
-  // reads as progress, not a hang. Two phases, keyed to elapsed silence — they
-  // only ever surface on a genuinely cold turn, because a warm reply streams its
-  // first token within a second or two and clears them. Phase 1 (~7s): the model
-  // is JIT-loading from cold. Phase 2 (~22s): it's loaded and warming/prefilling
-  // your message. Cleared the instant she responds (token/thinking/done/error).
+  // Elapsed silence only tells us that a reply has not arrived. Keep the
+  // fallback honest; real server status always takes precedence.
   void _startWarmupHint() {
     _clearWarmupHint();
     _warmupTimer = Timer(const Duration(seconds: 7), () {
       if (!mounted || _streamingId != null) return;
       _update(() {
         _state = _state.copyWith(isTyping: true);
-        _thinkingText = 'WAKING HER UP // loading the model from cold';
+        _thinkingText = 'AWAITING HER REPLY…';
       });
       _warmupTimer = Timer(const Duration(seconds: 15), () {
         if (!mounted || _streamingId != null) return;
         _update(() {
-          _thinkingText = 'WARMING UP // processing your message';
+          _thinkingText = 'STILL WAITING // thank you for your patience';
         });
       });
     });

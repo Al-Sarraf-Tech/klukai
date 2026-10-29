@@ -203,6 +203,7 @@ void main() {
         bridge: SpeechBridge(start: () async => true, stop: () async => 'clip'),
       );
       await tester.enterText(find.byType(TextField), 'My own words');
+      await tester.pump();
       final hold = await tester.startGesture(
         tester.getCenter(find.byType(VoiceButton)),
       );
@@ -270,6 +271,7 @@ void main() {
         find.byType(TextField),
         'Permission was cancelled',
       );
+      await tester.pump();
       await tester.tap(find.byTooltip('Send'));
       await tester.pump();
       expect(socket.sent.last['content'], 'Permission was cancelled');

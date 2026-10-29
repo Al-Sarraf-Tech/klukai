@@ -10,7 +10,7 @@ extension _ChatWireEvents on _ChatScreenState {
     switch (type) {
       case 'token':
         final text = msg['text'] as String? ?? '';
-        _clearWarmupHint(); // she's replying — drop any "waking up" notice
+        _clearWarmupHint(); // she's replying — drop the fallback waiting notice
         // The first token always (re)arms the lock for the whole reply. A
         // shorter lock may be active (proactive 1.5s, image 2s, heartbeat 5s);
         // left alone it would lapse mid-reply, freeing the composer while she
