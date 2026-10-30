@@ -23,9 +23,12 @@ in `docs/superpowers/plans/`.
   says the index is unread, and a retry sits beside the pictures that did
   load. The older archive screen does the same for its month list.
 - An empty chat with the link down says the link is lost, and the composer
-  hint says so too. A failed bond read is not shown as level zero. Me
-  distinguishes an unread milestone list, and a failed stats read, from an
-  empty success.
+  hint says so too. A failed bond read is not shown as level zero, including
+  on her 3D stage. Me distinguishes an unread milestone list, and a failed
+  stats read, from an empty success.
+- A cold live session still carries the last persisted lines into her reply,
+  so a new Redis session does not forget the thread the album and the chat
+  already show. A warm session is left as it is.
 
 ### Changed
 

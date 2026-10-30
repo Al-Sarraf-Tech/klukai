@@ -22,6 +22,7 @@ from .background import (
     background_recall,
     do_memory_keep,
 )
+from .conversation_continuity import load_recent_thread, stitch_continuity
 from .context import (
     COMPACT_THRESHOLD,
     affection,
@@ -340,7 +341,9 @@ async def _handle_message(
         )
         system_prompt = await prompt_builder.build(content, session, user_id)
 
-        # Build messages for LLM — use summary + recent turns for compact context
+        # Build messages for LLM — use summary + recent turns for compact context.
+        # A cold Redis session has only the line he just sent. The PWA still
+        # shows the Postgres thread, so she should see those lines too.
         messages = []
         if session.context_summary:
             messages.append(
@@ -349,9 +352,13 @@ async def _handle_message(
                     "content": f"[Earlier conversation summary: {session.context_summary}]",
                 }
             )
-        messages.extend(
+        live = [
             {"role": t["role"], "content": t["content"]} for t in session.turns[-16:]
-        )
+        ]
+        earlier = []
+        if not any((t.get("content") or "").strip() for t in live[:-1]):
+            earlier = await load_recent_thread(user_id)
+        messages.extend(stitch_continuity(live, earlier))
 
         reply_runtime = ChatReplyRuntime(
             router,

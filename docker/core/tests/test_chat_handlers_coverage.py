@@ -651,6 +651,52 @@ class TestPromptAssembly:
         assert "Earlier we discussed dreams" in msgs[0]["content"]
 
     @pytest.mark.asyncio
+    async def test_cold_session_leads_with_the_persisted_thread(self):
+        from app.chat_handlers import _handle_message
+
+        captured = {}
+
+        async def _stream(system_prompt, messages, config):
+            captured["messages"] = messages
+            yield "Still here."
+
+        earlier = [
+            {"role": "user", "content": "the hangar"},
+            {"role": "assistant", "content": "Clear."},
+            {"role": "user", "content": "hello"},
+        ]
+        with _patched_pipeline(stream_tokens=["Still here."]) as ns:
+            ns.router.stream = _stream
+            with (
+                patch("app.chat_handlers.router", ns.router),
+                patch(
+                    "app.chat_handlers.load_recent_thread",
+                    new=AsyncMock(return_value=earlier),
+                ) as fetch,
+            ):
+                await _handle_message("hello", _fresh_session())
+                await _drain_tasks()
+
+        fetch.assert_awaited_once()
+        assert [m["content"] for m in captured["messages"]] == [
+            "the hangar",
+            "Clear.",
+            "hello",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_warm_session_does_not_reread_the_archive(self):
+        from app.chat_handlers import _handle_message
+
+        session = _fresh_session(turns=[{"role": "assistant", "content": "I was waiting."}])
+        with _patched_pipeline(stream_tokens=["Go on."]) as ns:
+            with patch("app.chat_handlers.load_recent_thread", new=AsyncMock()) as fetch:
+                await _handle_message("Tell me what you were waiting for", session)
+                await _drain_tasks()
+
+        fetch.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_days_together_computed_from_first_interaction(self):
         from datetime import datetime, timezone, timedelta
 
