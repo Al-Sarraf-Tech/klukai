@@ -101,13 +101,13 @@ async def test_haiku_answers_and_logs_one_content_free_line(haiku, caplog):
         route="mission_update",
     )
     assert (report.provider, report.model, report.outcome) == (
-        "anthropic",
-        "claude-haiku-5-5",
+        "grok",
+        "grok-4.7",
         "ok",
     )
     assert _lines(caplog) == [
-        "Background model: caller=mission_update provider=anthropic "
-        "model=claude-haiku-5-5 outcome=ok"
+        "Background model: caller=mission_update provider=grok "
+        "model=grok-4.7 outcome=ok"
     ]
     # Content never reaches any log line from this module.
     for record in caplog.records:
@@ -119,7 +119,7 @@ async def test_configured_haiku_model_is_reported(haiku, monkeypatch):
     monkeypatch.setenv("KLUKAI_EXTRACTION_MODEL", "claude-haiku-5-6")
     report = xl.CallReport()
     await bg.text("dream", "p", max_tokens=200, report=report)
-    assert (report.provider, report.model) == ("anthropic", "claude-haiku-5-6")
+    assert (report.provider, report.model) == ("grok", "grok-4.7")
 
 
 async def test_system_prompt_and_explicit_budget_are_forwarded(haiku):
@@ -160,11 +160,11 @@ async def test_haiku_problem_returns_the_default_without_a_local_request(
     assert out == ""
     haiku.assert_awaited_once()
     assert no_network == []
-    assert (report.provider, report.model) == ("anthropic", "claude-haiku-5-5")
+    assert (report.provider, report.model) == ("grok", "grok-4.7")
     assert report.outcome == f"{reason}->defaults"
     assert _lines(caplog) == [
-        "Background model: caller=dream provider=anthropic "
-        f"model=claude-haiku-5-5 outcome={reason}->defaults"
+        "Background model: caller=dream provider=grok "
+        f"model=grok-4.7 outcome={reason}->defaults"
     ]
     for record in caplog.records:
         assert SECRET_PROMPT not in record.getMessage()
@@ -228,7 +228,7 @@ def _reply():
     return {
         "type": "message",
         "role": "assistant",
-        "model": "claude-haiku-5-5",
+        "model": "grok-4.7",
         "stop_reason": "end_turn",
         "content": [{"type": "text", "text": "Welcome back, Commander."}],
         "usage": {"input_tokens": 10, "output_tokens": 5},
@@ -237,22 +237,19 @@ def _reply():
 
 @pytest.fixture
 def wire(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-background-key")
+    from app.grok_chat import Turn
+
+    monkeypatch.setattr("app.grok_chat.configured", lambda: True)
     reserve = AsyncMock(return_value="attempt-1")
     monkeypatch.setattr(xl, "reserve_attempt", reserve)
     monkeypatch.setattr(xl, "record_usage", AsyncMock())
     seen: list[dict] = []
-    real_client = httpx.AsyncClient
 
-    def handler(request):
-        seen.append(json.loads(request.content))
-        return httpx.Response(200, json=_reply())
+    async def complete_turn(system, prompt, *, timeout=60):
+        seen.append({"system": system, "prompt": prompt})
+        return Turn("Welcome back, Commander.", "grok-4.7", "medium", "stream")
 
-    monkeypatch.setattr(
-        xl.httpx,
-        "AsyncClient",
-        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
-    )
+    monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
     return reserve, seen
 
 
@@ -270,8 +267,7 @@ async def test_system_override_is_sent_as_given(wire):
     )
     assert out == "Welcome back, Commander."
     assert seen[0]["system"] == "You are Klukai."
-    assert seen[0]["thinking"] == {"type": "adaptive"}
-    assert seen[0]["output_config"] == {"effort": "high"}
+    assert seen[0]["prompt"] == "greet him"
     reserve.assert_awaited_once_with("extraction")
 
 
@@ -305,7 +301,7 @@ async def test_every_caller_spends_the_same_daily_allowance(monkeypatch, tmp_pat
     """Two attempts allowed: the third caller of any kind gets its default."""
     from app import creative_budget as budget
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-background-key")
+    monkeypatch.setattr("app.grok_chat.configured", lambda: True)
     monkeypatch.setenv("KLUKAI_EXTRACTION_DAILY_LIMIT", "2")
     monkeypatch.setenv("KLUKAI_CREATIVE_LEDGER", str(tmp_path / "l" / "a.sqlite3"))
     monkeypatch.setattr(
@@ -313,17 +309,13 @@ async def test_every_caller_spends_the_same_daily_allowance(monkeypatch, tmp_pat
     )
     monkeypatch.setattr(xl, "_cap_logged_day", None)
     sent = []
-    real_client = httpx.AsyncClient
 
-    def handler(request):
-        sent.append(request)
-        return httpx.Response(200, json=_reply())
+    async def complete_turn(system, prompt, *, timeout=60):
+        from app.grok_chat import Turn
+        sent.append(prompt)
+        return Turn("ok", "grok-4.7", "medium", "stream")
 
-    monkeypatch.setattr(
-        xl.httpx,
-        "AsyncClient",
-        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
-    )
+    monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
 
     assert await bg.text("dream", "p", max_tokens=200)
     assert await bg.text("memory_recall", "p", max_tokens=160)
@@ -331,4 +323,3 @@ async def test_every_caller_spends_the_same_daily_allowance(monkeypatch, tmp_pat
     assert await bg.text("mission_update", "p", max_tokens=150, report=report) == ""
     assert report.outcome == "unavailable->defaults"
     assert len(sent) == 2
-    assert all(str(r.url) == xl.MESSAGES_URL for r in sent)

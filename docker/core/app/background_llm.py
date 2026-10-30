@@ -1,18 +1,11 @@
-"""One background-model route: Claude Haiku, then the caller's safe default.
+"""One background-model route: account-login Grok, then the caller's safe default.
 
 Every non-interactive text/JSON call in the core goes through ``text()`` or
-``json_object()``: the per-turn extraction and compaction, promise/event
-detection, episode journal entries, proactive lines (dreams, memory recall,
-missions, the evening romance line and recap), the weekly reflection, return
-greetings, Her POV and memory-archive captions, memory recall ranking and the
-legacy affection classifier. Paths on the capped creative-text route
-(app/creative_text.py) keep it.
-
-Owner decision, 2026-10-26: Klukai runs on cloud AI only. A call goes to
-Claude Haiku at high effort through app/extraction_llm.py, which reserves an
-attempt in the shared UTC-day ledger (``KLUKAI_EXTRACTION_DAILY_LIMIT``)
-before anything is sent. If Haiku is unavailable, capped, fails or returns
-nothing usable, the caller gets its safe default. There is no local model.
+``json_object()``. Owner decision 2026-10-30: that call is Grok 4.7 at medium
+effort through the host CLI. ``KLUKAI_EXTRACTION_DAILY_LIMIT`` still reserves
+one UTC-day attempt before anything is sent. If Grok is unavailable, capped,
+fails or returns nothing usable, the caller gets its safe default. There is
+no Anthropic fallback and no local model.
 
 Never raises into the caller. One INFO line per call names the caller,
 provider, model and outcome; never prompt or reply content.
@@ -92,7 +85,7 @@ async def _route(
     unusable: str,
 ) -> _T | None:
     report = report if report is not None else CallReport()
-    report.provider, report.model = "anthropic", extraction_llm.model()
+    report.provider, report.model = extraction_llm.provider(), extraction_llm.model()
     text, reason = await _haiku(
         caller,
         prompt,

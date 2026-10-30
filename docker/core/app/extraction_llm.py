@@ -1,14 +1,9 @@
-"""Owner-approved Claude Haiku transport for every background model call.
+"""Account-login Grok for every background model call.
 
-Owner decisions, 2026-10-19: the per-turn background extraction (mood,
-interaction and affection, intensity for her heart rate, facts) and the
-session compaction summaries run on Claude Haiku at high effort, on the
-Anthropic key interactive chat already uses; every other background text/JSON
-call uses the same route through app/background_llm.py. Owner decision,
-2026-10-26: Klukai runs on cloud AI only, so this is the only background
-model; there is no local fallback.
+Owner decision 2026-10-30: background text uses the same Grok 4.7 medium
+account path as chat. There is no Anthropic call and no paid fallback.
 
-A paid request needs the Anthropic key and a positive
+A request needs the host Grok worker and a positive
 ``KLUKAI_EXTRACTION_DAILY_LIMIT``. Each request first reserves one attempt in
 the persistent creative ledger (kind ``extraction``: one UTC-day cap shared by
 every background call). A reserved attempt stays spent after failures and
@@ -22,26 +17,17 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
-
-import httpx
 
 from .creative_budget import CreativeBudgetError, record_usage, reserve_attempt
-from .dependencies import http_stream
 
 logger = logging.getLogger(__name__)
 
 MODEL_ENV = "KLUKAI_EXTRACTION_MODEL"
-DEFAULT_MODEL = "claude-haiku-5-5"
-EFFORT = "high"
-MESSAGES_URL = "https://api.anthropic.com/v1/messages"
-# Its own breaker: repeated extraction failures must never trip the breaker
-# that guards interactive chat's Sonnet primary ("anthropic"), or vice versa.
-BREAKER = "anthropic_extraction"
+DEFAULT_MODEL = "grok-4.7"
+EFFORT = "medium"
 
 # Thinking counts against max_tokens; the JSON itself is a few hundred tokens.
 EXTRACTION_MAX_TOKENS = 4096
@@ -51,7 +37,6 @@ MAX_PROMPT_CHARS = 24_000
 MAX_SYSTEM_CHARS = 8_000
 REQUEST_TIMEOUT_S = 60.0
 _MAX_RESPONSE_BYTES = 512 * 1024
-_MODEL_ID = re.compile(r"claude-haiku-[a-z0-9]+(?:-[a-z0-9]+)*")
 
 SYSTEM_PROMPT = (
     "You do the background work for a character companion app: analysis, "
@@ -73,7 +58,7 @@ class CallReport:
     line in app/memory_extraction.py) can log it without ever logging content.
     """
 
-    provider: str = "anthropic"
+    provider: str = "grok"
     model: str = ""
     outcome: str = "pending"
 
@@ -97,27 +82,24 @@ def _warn_once(key: str, message: str, *args: object) -> None:
 
 
 def provider() -> str:
-    """Always ``anthropic``: Klukai has no local background model."""
-    return "anthropic"
+    """Always ``grok``: background text is the account-login CLI."""
+    return "grok"
 
 
 def uses_anthropic() -> bool:
-    return True
+    return False
 
 
 def model() -> str:
-    """The configured Haiku id; any non-Haiku id falls back to the default."""
+    """Grok 4.7. A leftover Haiku id in the environment is ignored."""
     value = os.environ.get(MODEL_ENV, "").strip()
-    if not value:
-        return DEFAULT_MODEL
-    if _MODEL_ID.fullmatch(value):
-        return value
-    _warn_once(
-        f"model:{value}",
-        "%s accepts only claude-haiku-* ids; using %s",
-        MODEL_ENV,
-        DEFAULT_MODEL,
-    )
+    if value and value != DEFAULT_MODEL:
+        _warn_once(
+            f"model:{value}",
+            "%s is not the background model; using %s",
+            MODEL_ENV,
+            DEFAULT_MODEL,
+        )
     return DEFAULT_MODEL
 
 
@@ -133,59 +115,22 @@ def _log_cap_once() -> None:
         )
 
 
-def _visible_text(data: object) -> tuple[str, str, dict[str, Any]]:
-    """Validate a finished, unrefused reply; return (text, model, usage)."""
-    if (
-        not isinstance(data, dict)
-        or data.get("type") != "message"
-        or data.get("role") != "assistant"
-        or data.get("stop_reason") != "end_turn"
-        or not isinstance(data.get("model"), str)
-        or not data["model"].strip()
-        or not isinstance(data.get("content"), list)
-    ):
-        raise ExtractionLLMError("Haiku reply is incomplete or refused")
-    parts: list[str] = []
-    for block in data["content"]:
-        if not isinstance(block, dict):
-            raise ExtractionLLMError("Malformed Haiku content")
-        kind = block.get("type")
-        if kind == "text":
-            if not isinstance(block.get("text"), str):
-                raise ExtractionLLMError("Malformed Haiku text")
-            parts.append(block["text"])
-        elif kind not in ("thinking", "redacted_thinking"):
-            raise ExtractionLLMError("Unexpected Haiku content")
-    text = "".join(parts).strip()
-    if not text:
-        raise ExtractionLLMError("Empty Haiku reply")
-    usage = data.get("usage", {})
-    if not isinstance(usage, dict) or any(
-        field in usage and (type(usage[field]) is not int or usage[field] < 0)
-        for field in (
-            "input_tokens",
-            "output_tokens",
-            "cache_creation_input_tokens",
-            "cache_read_input_tokens",
-        )
-    ):
-        raise ExtractionLLMError("Malformed Haiku usage")
-    return text, data["model"], usage
-
-
 async def complete(
     prompt: str, *, max_tokens: int, route: str, system: str | None = None
 ) -> str:
-    """Return the visible text of one authorized, budgeted Haiku request.
+    """Return the visible text of one budgeted Grok 4.7 medium request.
 
     ``system`` replaces the default background instructions, for callers that
     carry their own system prompt (her character preamble); it is sent as
     given.
     """
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not key:
-        _warn_once("key", "No Anthropic API key is set; using safe defaults")
-        raise ExtractionUnavailable("Haiku extraction has no API key")
+    from .grok_chat import EFFORT as GROK_EFFORT
+    from .grok_chat import MODEL as GROK_MODEL
+    from .grok_chat import GrokChatError, complete_turn, configured
+
+    if not configured():
+        _warn_once("grok", "Grok account chat is not configured; using safe defaults")
+        raise ExtractionUnavailable("Grok account chat is not configured")
     if (
         not isinstance(prompt, str)
         or not prompt.strip()
@@ -201,74 +146,41 @@ async def complete(
             )
         )
     ):
-        raise ExtractionLLMError("Invalid Haiku extraction request")
-    body = {
-        "model": model(),
-        "system": SYSTEM_PROMPT if system is None else system,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-        "max_tokens": max_tokens,
-        "thinking": {"type": "adaptive"},
-        "output_config": {"effort": EFFORT},
-    }
+        raise ExtractionLLMError("Invalid Grok extraction request")
     try:
         attempt_id = await reserve_attempt("extraction")
     except CreativeBudgetError:
         _log_cap_once()
-        raise ExtractionUnavailable("Haiku extraction allowance unavailable") from None
+        raise ExtractionUnavailable("Grok extraction allowance unavailable") from None
     started = time.monotonic()
+    system_text = SYSTEM_PROMPT if system is None else system
     try:
         async with _gate:
-            # A dedicated client; canonical endpoint, no redirects or ambient proxy.
             async with asyncio.timeout(REQUEST_TIMEOUT_S):
-                async with httpx.AsyncClient(
-                    headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
-                    timeout=httpx.Timeout(REQUEST_TIMEOUT_S, connect=5.0),
-                    trust_env=False,
-                    follow_redirects=False,
-                ) as client:
-                    async with http_stream(
-                        BREAKER, client, "POST", MESSAGES_URL, json=body
-                    ) as result:
-                        result.raise_for_status()
-                        raw = bytearray()
-                        async for chunk in result.aiter_bytes():
-                            raw.extend(chunk)
-                            if len(raw) > _MAX_RESPONSE_BYTES:
-                                raise ExtractionLLMError(
-                                    "Haiku reply exceeds size limit"
-                                )
-        text, used_model, usage = _visible_text(json.loads(raw))
+                turn = await complete_turn(system_text, prompt, timeout=REQUEST_TIMEOUT_S)
+        if turn.model != GROK_MODEL or turn.effort != GROK_EFFORT:
+            raise ExtractionLLMError("Unexpected Grok model or effort")
+        if len(turn.text.encode()) > _MAX_RESPONSE_BYTES:
+            raise ExtractionLLMError("Grok reply exceeds size limit")
+        text = turn.text
     except ExtractionLLMError:
         raise
-    except (httpx.HTTPError, TimeoutError, ValueError, TypeError, KeyError) as error:
-        status = (
-            error.response.status_code
-            if isinstance(error, httpx.HTTPStatusError)
-            else None
-        )
-        # Never expose a response body, the prompt, or request headers.
+    except (GrokChatError, TimeoutError, ValueError, TypeError) as error:
         raise ExtractionLLMError(
-            f"Haiku request failed ({type(error).__name__}, HTTP {status})"
+            f"Grok request failed ({type(error).__name__})"
         ) from None
 
-    await record_usage(attempt_id, usage)
+    await record_usage(attempt_id, {})
     try:
         from .observability import record_llm_usage
 
         record_llm_usage(
-            model=used_model,
-            tokens_in=sum(
-                usage.get(field, 0)
-                for field in (
-                    "input_tokens",
-                    "cache_creation_input_tokens",
-                    "cache_read_input_tokens",
-                )
-            ),
-            tokens_out=usage.get("output_tokens", 0),
+            model=GROK_MODEL,
+            tokens_in=0,
+            tokens_out=0,
             latency_ms=(time.monotonic() - started) * 1000,
             route=route,
         )
     except Exception:
-        pass  # telemetry cannot retry an already completed paid request
+        pass  # telemetry cannot retry an already completed request
     return text

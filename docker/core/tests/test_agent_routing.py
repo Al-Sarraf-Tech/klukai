@@ -158,10 +158,10 @@ class TestExclusionWords:
 class TestAgentRoutingEdgeCases:
     @pytest.mark.asyncio
     async def test_unconfigured_claude_returns_false(self):
-        """Without a configured Claude client, needs_agent always returns False."""
+        """Tool routing does not depend on a paid Claude client."""
         r = LLMRouter()
         result = await r.needs_agent("search for something")
-        assert result is False
+        assert result is True
 
     @pytest.mark.asyncio
     async def test_empty_message(self, router):

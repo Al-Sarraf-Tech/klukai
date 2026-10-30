@@ -157,6 +157,7 @@ async def test_health_reports_voice_disabled_without_probing(voice_off, monkeypa
          patch("redis.asyncio.from_url", return_value=redis), \
          patch("app.routes_health._image_subsystems",
                new=AsyncMock(return_value={"images": {"status": "ok"}})), \
+         patch("app.grok_chat.configured", return_value=True), \
          patch("httpx.AsyncClient", _Client):
         result = await handler(_request())
     assert result["subsystems"]["voice"] == {"status": "disabled"}

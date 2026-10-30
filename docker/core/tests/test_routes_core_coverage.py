@@ -225,10 +225,10 @@ class TestSubsystemHealth:
         assert "comfyui" not in result["subsystems"]
 
     async def _subsystems(self, monkeypatch, *, primary=True, worker_ready=True,
-                          redis_ping=None, db=None):
+                          redis_ping=None, db=None, grok=False):
         monkeypatch.setenv("KLUKAI_IMAGE_PROVIDER", "agy")
         monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "true" if primary else "false")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr("app.grok_chat.configured", lambda: grok)
         handler = _find_route(_app_with_routes(), "/api/health/subsystems", "GET")
         redis_mock = MagicMock(ping=redis_ping or AsyncMock(), aclose=AsyncMock())
         no_http = MagicMock(side_effect=AssertionError("no subsystem is probed over HTTP"))
@@ -240,14 +240,14 @@ class TestSubsystemHealth:
                    new=AsyncMock(return_value=worker_ready)):
             return await handler(_mk_request())
 
-    @pytest.mark.parametrize("primary", [True, False])
-    async def test_llm_status_follows_the_claude_configuration(self, monkeypatch, primary):
-        """Claude is a paid API: its configuration is reported, never a request."""
-        result = await self._subsystems(monkeypatch, primary=primary)
+    @pytest.mark.parametrize("grok", [True, False])
+    async def test_llm_status_follows_the_grok_worker(self, monkeypatch, grok):
+        """Grok is the account worker: its socket is reported, never a prompt."""
+        result = await self._subsystems(monkeypatch, grok=grok)
         assert result["subsystems"]["llm"] == {
-            "status": "ok" if primary else "down", "provider": "anthropic",
+            "status": "ok" if grok else "down", "provider": "grok",
         }
-        assert result["status"] == ("ok" if primary else "degraded")
+        assert result["status"] == ("ok" if grok else "degraded")
 
     async def test_a_down_image_worker_degrades_the_overall_status(self, monkeypatch):
         result = await self._subsystems(monkeypatch, worker_ready=False)
@@ -255,7 +255,7 @@ class TestSubsystemHealth:
         assert result["status"] == "degraded"
 
     async def test_all_ok_overall_ok_and_no_local_ai_subsystem(self, monkeypatch):
-        result = await self._subsystems(monkeypatch)
+        result = await self._subsystems(monkeypatch, grok=True)
         assert result["status"] == "ok"
         subs = result["subsystems"]
         assert set(subs) == {"database", "redis", "llm", "images", "voice"}

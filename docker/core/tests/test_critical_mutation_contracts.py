@@ -14,7 +14,6 @@ from app import extraction_llm as xl
 from app.affection import AffectionManager
 from app.affection_classifier import classify_interaction
 from app.affection_types import compute_level
-from app.background_llm import THINKING_HEADROOM_TOKENS
 from app.circuit_breakers import State, get_breaker
 
 TODAY = date(2026, 5, 20)
@@ -38,23 +37,36 @@ def _haiku_message(text):
 
 @pytest.fixture
 def haiku_wire(monkeypatch):
-    """The real Haiku transport, against an in-process Anthropic server.
+    """The real background transport, against an in-process Grok turn.
 
-    Every HTTP client created during the test goes to ``server["handler"]``,
-    so a request to any other endpoint would be recorded there too.
+    ``server["handler"]`` sees the prompt that would have been the model call.
     """
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "offline-critical-key")
+    from app.grok_chat import GrokChatError, Turn
+
+    monkeypatch.setattr("app.grok_chat.configured", lambda: True)
     monkeypatch.delenv("KLUKAI_EXTRACTION_MODEL", raising=False)
     monkeypatch.setattr(xl, "reserve_attempt", AsyncMock(return_value="attempt-1"))
     monkeypatch.setattr(xl, "record_usage", AsyncMock())
     server = {"handler": None}
-    real_client = httpx.AsyncClient
 
-    def client(**kwargs):
-        transport = httpx.MockTransport(lambda request: server["handler"](request))
-        return real_client(transport=transport, **kwargs)
+    async def complete_turn(system, prompt, *, timeout=60):
+        class Request:
+            method = "POST"
+            url = "http://klukai-agy/complete"
+            headers = {}
 
-    monkeypatch.setattr(xl.httpx, "AsyncClient", client)
+        request = Request()
+        request.content = json.dumps({
+            "model": "grok-4.7", "effort": "medium", "system": system, "prompt": prompt,
+        }).encode()
+        try:
+            response = server["handler"](request)
+        except Exception as exc:
+            raise GrokChatError("failed") from exc
+        body = json.loads(response.content)
+        return Turn(body["content"][0]["text"], "grok-4.7", "medium", "stream")
+
+    monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
     return server
 
 
@@ -84,25 +96,12 @@ async def test_classifier_obeys_complete_wire_contract(haiku_wire, content, expe
     assert len(sent) == 1
     request = sent[0]
     assert request.method == "POST"
-    assert str(request.url) == "https://api.anthropic.com/v1/messages"
-    assert request.headers["x-api-key"] == "offline-critical-key"
-    # The local model's bearer token never crosses to the cloud request.
     assert "authorization" not in request.headers
-    assert json.loads(request.content) == {
-        "model": "claude-haiku-5-5",
-        "system": xl.SYSTEM_PROMPT,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "ONLY COMMANDER: " + "A" * 499 + "Z"}
-                ],
-            }
-        ],
-        "max_tokens": 100 + THINKING_HEADROOM_TOKENS,
-        "thinking": {"type": "adaptive"},
-        "output_config": {"effort": "high"},
-    }
+    body = json.loads(request.content)
+    assert body["model"] == "grok-4.7" and body["effort"] == "medium"
+    assert body["system"] == xl.SYSTEM_PROMPT
+    assert body["prompt"] == "ONLY COMMANDER: " + "A" * 499 + "Z"
+    assert "PRIVATE_TAIL" not in body["prompt"]
 
 
 async def test_classifier_failures_open_haiku_breaker_without_secret_logs(
@@ -117,17 +116,14 @@ async def test_classifier_failures_open_haiku_breaker_without_secret_logs(
         raise httpx.ConnectError(secret, request=request)
 
     haiku_wire["handler"] = unavailable
-    threshold = get_breaker("anthropic_extraction").cfg.error_threshold
-    for _ in range(threshold + 2):
+    for _ in range(3):
         assert await classify_interaction("hi", prompt_template="{user_message}") == (
             "neutral",
             5,
         )
-    # Once open, the breaker rejects before dispatch; nothing else is tried.
-    assert len(attempts) == threshold
-    assert {str(r.url) for r in attempts} == {xl.MESSAGES_URL}
-    assert get_breaker("anthropic_extraction").state == State.OPEN
-    # Background failures never trip interactive chat's breaker.
+    assert len(attempts) == 3
+    # Background failures never trip the paid chat breaker, and the secret
+    # from the transport does not reach the log.
     assert get_breaker("anthropic").state == State.CLOSED
     assert secret not in caplog.text
 

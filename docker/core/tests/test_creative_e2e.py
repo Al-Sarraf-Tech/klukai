@@ -161,6 +161,21 @@ async def creative_app(monkeypatch, tmp_path):
         raise AssertionError("Offline cloud E2E must not reach a socket")
 
     monkeypatch.setattr(socket.socket, "connect", unavailable)
+    monkeypatch.setattr("app.grok_chat.configured", lambda: True)
+
+    from app.grok_chat import Turn
+
+    async def complete_turn(system, prompt, *, timeout=60):
+        state.text_requests.append({
+            "system": system, "prompt": prompt, "model": "grok-4.7", "effort": "medium",
+        })
+        return Turn(json.dumps({
+            "annotation": "I remember the lantern you caught before the lake could claim it.",
+            "scene_tags": "lake, paper lanterns, moonlight, gentle smile",
+            "couple": False, "mood": "tender", "title": "The Last Lantern",
+        }), "grok-4.7", "medium", "stream")
+
+    monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
 
     state = SimpleNamespace(
         database=database, ledger=ledger, image_dir=image_dir, redis=redis,
@@ -171,20 +186,6 @@ async def creative_app(monkeypatch, tmp_path):
     result_png = _png((832, 1216), "teal", metadata=True)
 
     async def provider(request):
-        if str(request.url) == "https://api.anthropic.com/v1/messages":
-            body = json.loads(await request.aread())
-            assert body["model"] == "claude-haiku-5-5"
-            assert body["output_config"] == {"effort": "high"}
-            state.text_requests.append((request, body))
-            return httpx.Response(200, json={
-                "id": "msg-offline", "type": "message", "role": "assistant",
-                "model": "claude-haiku-5-5", "stop_reason": "end_turn", "stop_sequence": None,
-                "content": [{"type": "text", "text": json.dumps({
-                    "annotation": "I remember the lantern you caught before the lake could claim it.",
-                    "scene_tags": "lake, paper lanterns, moonlight, gentle smile",
-                    "couple": False, "mood": "tender", "title": "The Last Lantern",
-                })}], "usage": {"input_tokens": 100, "output_tokens": 70},
-            })
         if str(request.url) == "https://api.openai.com/v1/images/edits":
             raw = await request.aread()
             multipart = BytesParser(policy=policy.default).parsebytes(
@@ -276,13 +277,9 @@ async def test_queued_cloud_memory_survives_redelivery_and_is_retrievable_only_b
         "alice", f"her_pov:{job_id}")
 
     assert len(state.text_requests) == len(state.image_requests) == 1
-    text_request, text = state.text_requests[0]
-    assert text_request.headers["x-api-key"] == "offline-text-key"
-    assert "authorization" not in text_request.headers
-    assert text["model"] == "claude-haiku-5-5"
-    assert text["thinking"] == {"type": "adaptive"}
-    assert text["output_config"] == {"effort": "high"}
-    assert "paper lanterns drift" in json.dumps(text["messages"])
+    text = state.text_requests[0]
+    assert text["model"] == "grok-4.7" and text["effort"] == "medium"
+    assert "paper lanterns drift" in text["prompt"]
     image_request, fields = state.image_requests[0]
     assert image_request.headers["authorization"] == "Bearer offline-image-key"
     assert "x-api-key" not in image_request.headers

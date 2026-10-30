@@ -23,6 +23,7 @@ import implied_scene
 
 
 MAX_BODY = 80 * 1024
+COMPLETE_MAX_BODY = 1_000_000
 MAX_IMAGE = 16 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 REQUEST_KEYS = {"request_id", "user_id", "prompt", "width", "height", "include_commander"}
@@ -624,8 +625,48 @@ class Handler(BaseHTTPRequestHandler):
                              "providers": [name for name, _ in worker.providers], "rotation": worker.rotation,
                              "checker": getattr(worker.checker, "model", None) if worker.checker else None})
 
+    def _complete_chat(self):
+        lengths = self.headers.get_all("Content-Length", [])
+        content_types = self.headers.get_all("Content-Type", [])
+        if (self.headers.get_all("Transfer-Encoding") or len(lengths) != 1
+                or not re.fullmatch(r"[0-9]+", lengths[0]) or len(lengths[0]) > 7
+                or not 1 <= int(lengths[0]) <= COMPLETE_MAX_BODY
+                or len(content_types) != 1
+                or content_types[0].split(";", 1)[0].strip().lower() != "application/json"):
+            self.reply(400)
+            return
+        try:
+            data = self.rfile.read(int(lengths[0]))
+            if len(data) != int(lengths[0]):
+                raise ValueError("incomplete body")
+            value = json.loads(data.decode("utf-8"), object_pairs_hook=unique_object)
+            if type(value) is not dict:
+                raise ValueError("invalid chat")
+            system, prompt = value.get("system", ""), value.get("prompt", "")
+            if (type(system) is not str or type(prompt) is not str or not prompt.strip()
+                    or len(system) > 800_000 or len(prompt) > 200_000):
+                raise ValueError("invalid chat")
+        except (ValueError, UnicodeError, RecursionError, TimeoutError, OSError, KeyError, AttributeError):
+            self.reply(400)
+            return
+        if not self.server.worker.slot.acquire(blocking=False):
+            self.reply(429)
+            return
+        try:
+            import grok_account_chat
+            turn = grok_account_chat.complete(system, prompt)
+            self.reply(200, {"text": turn.text, "model": turn.model, "effort": turn.effort,
+                             "effort_source": turn.effort_source})
+        except Exception:
+            self.reply(502, {"error": "grok chat failed"})
+        finally:
+            self.server.worker.slot.release()
+
     def do_POST(self):
         if not self.authorized():
+            return
+        if self.path == "/complete":
+            self._complete_chat()
             return
         if self.path not in {"/generate", "/recover"}:
             self.reply(404)

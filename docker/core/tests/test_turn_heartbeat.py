@@ -91,8 +91,8 @@ def rt(monkeypatch):
     async def extract(*args, report=None, **kwargs):
         if report is not None:
             report.provider, report.model, report.outcome = (
-                "anthropic",
-                "claude-haiku-5-5",
+                "grok",
+                "grok-4.7",
                 state.get("outcome", "ok"),
             )
             reports["last"] = report
@@ -221,7 +221,7 @@ async def test_one_info_line_without_content(rt, caplog):
         if r.getMessage().startswith("Turn extraction:")
     ]
     assert lines == [
-        "Turn extraction: provider=anthropic model=claude-haiku-5-5 outcome=ok "
+        "Turn extraction: provider=grok model=grok-4.7 outcome=ok "
         "mood=giddy intensity=6 bpm=107"
     ]
     joined = "\n".join(r.getMessage() for r in caplog.records)
@@ -235,6 +235,6 @@ async def test_unreported_extractor_logs_a_pending_outcome(rt, caplog):
     with caplog.at_level(logging.INFO, logger="app.memory_extraction"):
         await rt.runtime.process("u", "a", _session(), user_id="u1")
     assert any(
-        "provider=anthropic model=- outcome=pending" in r.getMessage()
+        "provider=grok model=- outcome=pending" in r.getMessage()
         for r in caplog.records
     )

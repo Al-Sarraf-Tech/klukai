@@ -1398,3 +1398,17 @@ def test_recovery_preserves_explicit_review_exceptions(worker, setup_files, prov
         assert current.generate(value)[0] == 409
         assert current.recover(value) == (200, PNG)
         assert current.db.execute("SELECT COUNT(*) FROM review_attempts").fetchone() == (0,)
+
+
+def test_complete_reports_grok_4_7_at_medium(worker, setup_files, monkeypatch):
+    class Turn:
+        text, model, effort, effort_source = "ready", "grok-4.7", "medium", "stream"
+
+    monkeypatch.setitem(sys.modules, "grok_account_chat", SimpleNamespace(complete=lambda system, prompt: Turn()))
+    with running(worker, setup_files) as path:
+        status, _headers, body = request(path, {"system": "Be Klukai.", "prompt": "Say ready."},
+                                          target="/complete")
+    assert status == 200
+    assert json.loads(body) == {
+        "text": "ready", "model": "grok-4.7", "effort": "medium", "effort_source": "stream",
+    }

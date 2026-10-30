@@ -1,10 +1,10 @@
-"""Cloud-only model routing: Claude Sonnet for chat, Claude Haiku otherwise.
+"""Cloud chat through account-login Grok.
 
-Owner decisions: the billable Sonnet 5.5 primary for interactive chat
-(2026-10-14) and cloud AI only for Klukai (2026-10-26). Interactive turns go
-to Sonnet; non-interactive work (the agent loop outside chat) and a Sonnet
-failure go to Haiku 5.5. There is no local model. The API path requires the
-explicit deployment flag and an API key; a key alone never enables it.
+Owner decision 2026-10-30: every Klukai model call runs through the official
+Grok CLI on the account login. Interactive chat and the agent loop use
+grok-4.7 at medium effort. A failure stays on that path: there is no paid
+Anthropic fallback. The Claude constants below remain only so older unit
+tests of the unused Messages client still describe that client.
 """
 
 from __future__ import annotations
@@ -22,15 +22,16 @@ from .llm_completions import LLMCompletionsMixin
 
 logger = logging.getLogger(__name__)
 
-# Owner authorized the billable API primary on 2026-10-14.
+# Owner authorized the billable API primary on 2026-10-14. It is not the chat
+# path as of 2026-10-30.
 CLAUDE_PRIMARY = "claude-sonnet-5-5"
-# Everything that is not an interactive Sonnet turn (owner, 2026-10-26).
 CLAUDE_SECONDARY = "claude-haiku-5-5"
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_MAX_RESPONSE_BYTES = 1024 * 1024
-# Adaptive-thinking effort per model: Sonnet answers chat at medium, Haiku
-# does background and fallback work at high.
 MODEL_EFFORT = {CLAUDE_PRIMARY: "medium", CLAUDE_SECONDARY: "high"}
+# Pinned Grok CLI 1.0.62 accepts this id and `--effort medium`.
+GROK_MODEL = "grok-4.7"
+GROK_EFFORT = "medium"
 
 
 def model_family(model: str) -> str | None:
@@ -100,8 +101,18 @@ def _config(model: str) -> LLMConfig:
     )
 
 
+def _grok_config() -> LLMConfig:
+    return LLMConfig(
+        provider="grok",
+        model=GROK_MODEL,
+        base_url="",
+        max_tokens=4096,
+        read_timeout=120.0,
+    )
+
+
 class LLMRouter(LLMCompletionsMixin):
-    """Routes interactive turns to Sonnet and everything else to Haiku."""
+    """Routes every turn to account-login Grok 4.7 at medium effort."""
 
     def __init__(self) -> None:
         self._anthropic_http: httpx.AsyncClient | None = None
@@ -109,19 +120,12 @@ class LLMRouter(LLMCompletionsMixin):
         self._anthropic_retry_at = 0.0
 
     async def init(self) -> None:
-        enabled = os.environ.get("KLUKAI_CLAUDE_PRIMARY", "false").lower() == "true"
-        key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        if claude_primary_configured():
-            # Never inherit endpoint/proxy overrides.
-            self._anthropic_http = httpx.AsyncClient(
-                headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
-                timeout=httpx.Timeout(90.0, connect=5.0),
-                trust_env=False,
-            )
-        elif enabled:
-            logger.warning("Claude enabled without an API key; chat is unavailable")
-        else:
-            logger.warning("KLUKAI_CLAUDE_PRIMARY is off; chat is unavailable")
+        # Do not open an Anthropic client. A leftover key must not bill chat.
+        self._anthropic_http = None
+        if os.environ.get("ANTHROPIC_API_KEY", "").strip() or (
+            os.environ.get("KLUKAI_CLAUDE_PRIMARY", "false").lower() == "true"
+        ):
+            logger.warning("Claude is not the chat path; Grok account login is")
 
     async def close(self) -> None:
         if self._anthropic_http:
@@ -154,20 +158,12 @@ class LLMRouter(LLMCompletionsMixin):
         interactive: bool = False,
     ) -> LLMConfig:
         """Decide which model answers this message."""
-        if not self._anthropic_configured():
-            raise RuntimeError("No cloud LLM is configured")
-        override = model_family(user_override) if user_override else None
-        if user_override and override is None:
-            logger.warning("Ignoring unknown model override %r", user_override)
-        if interactive and self._anthropic_ready():
-            return _config(override or CLAUDE_PRIMARY)
-        return _config(CLAUDE_SECONDARY)
+        if user_override and user_override != GROK_MODEL:
+            logger.warning("Ignoring model override %r; chat is grok-4.7", user_override)
+        return _grok_config()
 
     async def needs_agent(self, message: str, *, interactive: bool = False) -> bool:
         """Determine if a message needs the agentic tool-use loop."""
-        if not self._anthropic_configured():
-            return False
-
         from .llm_intent import message_needs_agent
 
         return message_needs_agent(message, AGENT_SIGNALS)

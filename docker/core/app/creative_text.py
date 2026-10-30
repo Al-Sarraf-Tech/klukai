@@ -1,9 +1,8 @@
-"""Separately capped creative writing on the shared Claude Haiku route.
+"""Separately capped creative writing on the shared Grok account route.
 
 The legacy ``anthropic`` setting retains the dream/Her POV attempt cap. Every
-background model call uses Haiku at high effort and the shared daily cap;
-interactive-chat authorization never enables a creative call. Failed attempts
-remain consumed. Actual token usage is recorded once on the Haiku ledger row.
+background model call uses Grok 4.7 at medium effort and the shared daily cap.
+There is no Anthropic call. Failed attempts remain consumed.
 """
 
 from __future__ import annotations
@@ -34,8 +33,10 @@ async def complete_creative_text(system: str, user: str, max_tokens: int = 1024)
     """One creative attempt, subject to both creative and shared Haiku caps."""
     if not uses_cloud_text():
         raise CreativeTextError("Cloud creative text is disabled")
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
-        raise CreativeTextError("Creative text API key is missing")
+    from .grok_chat import configured
+
+    if not configured():
+        raise CreativeTextError("Grok account chat is not configured")
     if (
         not isinstance(system, str)
         or not system.strip()

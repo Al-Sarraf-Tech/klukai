@@ -21,7 +21,7 @@ def remote(monkeypatch):
     from app import extraction_llm as xl
     monkeypatch.delenv("KLUKAI_EXTRACTION_MODEL", raising=False)
     monkeypatch.setenv("KLUKAI_CREATIVE_TEXT_PROVIDER", "anthropic")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-creative-key")
+    monkeypatch.setattr("app.grok_chat.configured", lambda: True)
     reserve = AsyncMock(return_value="reserved-attempt")
     monkeypatch.setattr(ct, "reserve_attempt", reserve)
     monkeypatch.setattr(xl, "reserve_attempt", AsyncMock(return_value="shared-haiku-attempt"))
@@ -30,16 +30,39 @@ def remote(monkeypatch):
 
 
 def transport(monkeypatch, ct, handler):
-    from app import extraction_llm as xl
-    real_client = httpx.AsyncClient
-    options = []
+    from app.grok_chat import GrokChatError, Turn
 
-    def client(**kwargs):
-        options.append(kwargs)
-        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+    seen = []
 
-    monkeypatch.setattr(xl.httpx, "AsyncClient", client)
-    return options
+    async def complete_turn(system, prompt, *, timeout=60):
+        seen.append({"system": system, "prompt": prompt})
+
+        class Request:
+            url = "http://klukai-agy/complete"
+            headers = {}
+            content = b""
+
+        request = Request()
+        response = handler(request)
+        status = getattr(response, "status_code", 200)
+        raw = getattr(response, "content", b"") or b""
+        if status != 200 or len(raw) > 512 * 1024:
+            raise GrokChatError("failed")
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError as exc:
+            raise GrokChatError("malformed") from exc
+        content = body.get("content") if isinstance(body, dict) else None
+        parts = [
+            block.get("text") for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str) and block["text"].strip()
+        ] if isinstance(content, list) else []
+        if not parts:
+            raise GrokChatError("empty")
+        return Turn("".join(parts), "grok-4.7", "medium", "stream")
+
+    monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
+    return seen
 
 
 @pytest.mark.asyncio
@@ -68,31 +91,18 @@ async def test_canonical_request_reserves_once_and_returns_only_visible_text(rem
             {"type": "text", "text": "A quiet dream."},
         ]))
 
-    options = transport(monkeypatch, ct, handler)
+    calls = transport(monkeypatch, ct, handler)
     monkeypatch.setenv("LM_STUDIO_TOKEN", "local-token-must-not-cross")
     result = await ct.complete_creative_text("You are Klukai.", "Write a dream.", max_tokens=256)
     assert result == "A quiet dream."
-    assert len(seen) == 1
-    request = seen[0]
-    assert str(request.url) == "https://api.anthropic.com/v1/messages"
-    assert request.headers["x-api-key"] == "test-creative-key"
-    assert "authorization" not in request.headers
-    body = json.loads(request.content)
-    assert body["model"] == "claude-haiku-5-5"
-    assert body["thinking"] == {"type": "adaptive"}
-    assert body["output_config"] == {"effort": "high"}
-    assert body["max_tokens"] == 256 + 3072
-    assert body["system"] == "You are Klukai."
-    assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Write a dream."}]}]
-    assert "temperature" not in body and "tools" not in body
-    assert options[0]["trust_env"] is False and options[0]["follow_redirects"] is False
+    assert calls == [{"system": "You are Klukai.", "prompt": "Write a dream."}]
     reserve.assert_awaited_once_with("text")
 
 
 @pytest.mark.asyncio
 async def test_missing_key_never_reserves_or_dispatches(remote, monkeypatch):
     ct, reserve = remote
-    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    monkeypatch.setattr("app.grok_chat.configured", lambda: False)
     with pytest.raises(ct.CreativeTextError):
         await ct.complete_creative_text("system", "dream")
     reserve.assert_not_awaited()
@@ -125,7 +135,7 @@ async def test_success_records_usage_once_on_shared_haiku_attempt(remote, monkey
     monkeypatch.setattr(xl, "record_usage", record)
     transport(monkeypatch, ct, lambda request: httpx.Response(200, json=response()))
     assert await ct.complete_creative_text("system", "dream") == "A quiet dream."
-    record.assert_awaited_once_with("shared-haiku-attempt", {"input_tokens": 12, "output_tokens": 5})
+    record.assert_awaited_once_with("shared-haiku-attempt", {})
 
 
 @pytest.mark.asyncio
@@ -159,12 +169,10 @@ async def test_budget_denial_never_reaches_transport(remote, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("payload", [
-    response(stop_reason="max_tokens"), response(stop_reason="refusal"),
     response(content=[]), response(content=[{"type": "text", "text": 4}]),
+    response(content=[{"type": "text", "text": "   "}]),
     response(content=[{"type": "tool_use", "id": "x", "name": "exec", "input": {}}]),
     response(content=[{"type": "image", "source": {}}]),
-    response(model=""), response(role="user"), response(type="error"),
-    response(usage={"output_tokens": -1}), response(usage="bad"),
 ])
 async def test_malformed_or_refused_response_is_terminal(remote, monkeypatch, payload):
     ct, reserve = remote

@@ -65,8 +65,8 @@ async def test_haiku_answers(haiku):
     assert out["interaction"] == {"type": "playful", "intensity": 7}
     assert out["facts"] == GOOD["facts"]
     assert (report.provider, report.model, report.outcome) == (
-        "anthropic",
-        "claude-haiku-5-5",
+        "grok",
+        "grok-4.7",
         "ok",
     )
 
@@ -120,8 +120,8 @@ async def test_haiku_problem_uses_safe_defaults_without_a_local_request(
     complete.assert_awaited_once()
     assert out == dict(fe._DEFAULT_RESULT)
     assert (report.provider, report.model, report.outcome) == (
-        "anthropic",
-        "claude-haiku-5-5",
+        "grok",
+        "grok-4.7",
         f"{reason}->defaults",
     )
 

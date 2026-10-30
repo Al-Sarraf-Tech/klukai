@@ -1,4 +1,4 @@
-"""The owner-approved Haiku route: always Anthropic, key-gated, capped, credential-safe."""
+"""Background text is account-login Grok 4.7 at medium effort, capped and credential-safe."""
 
 from __future__ import annotations
 
@@ -41,16 +41,24 @@ def remote(monkeypatch):
     return reserve, record
 
 
-def transport(monkeypatch, handler):
-    real_client = httpx.AsyncClient
-    options = []
+def transport(monkeypatch, handler=None):
+    from app.grok_chat import GrokChatError, Turn
 
-    def client(**kwargs):
-        options.append(kwargs)
-        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+    seen = []
+    monkeypatch.setattr("app.grok_chat.configured", lambda: True)
 
-    monkeypatch.setattr(xl.httpx, "AsyncClient", client)
-    return options
+    async def complete_turn(system, prompt, *, timeout=60):
+        seen.append({"system": system, "prompt": prompt, "model": "grok-4.7", "effort": "medium"})
+        if handler is not None:
+            outcome = handler(system, prompt)
+            if isinstance(outcome, Exception):
+                raise outcome
+            if isinstance(outcome, Turn):
+                return outcome
+        return Turn('{"mood": "serene"}', "grok-4.7", "medium", "stream")
+
+    monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
+    return seen
 
 
 # ── switches ──────────────────────────────────────────────────────────────
@@ -61,50 +69,36 @@ def test_utc_clock_is_aware():
 
 
 @pytest.mark.parametrize("value", [None, "local", "anthropic", "openai", ""])
-def test_provider_is_always_anthropic(monkeypatch, value):
-    # KLUKAI_EXTRACTION_PROVIDER is retired: whatever an old deployment still
-    # exports, there is no local background model to select.
+def test_provider_is_always_grok(monkeypatch, value):
+    # Whatever an old deployment still exports, background text is Grok.
     if value is None:
         monkeypatch.delenv("KLUKAI_EXTRACTION_PROVIDER", raising=False)
     else:
         monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", value)
-    assert xl.provider() == "anthropic"
-    assert xl.uses_anthropic() is True
+    assert xl.provider() == "grok"
+    assert xl.uses_anthropic() is False
     assert not hasattr(xl, "PROVIDER_ENV")
 
 
-def test_call_report_defaults_to_anthropic():
+def test_call_report_defaults_to_grok():
     report = xl.CallReport()
     assert (report.provider, report.model, report.outcome) == (
-        "anthropic",
+        "grok",
         "",
         "pending",
     )
 
 
 @pytest.mark.parametrize(
-    "value", ["claude-haiku-5-5", "claude-haiku-4-5", "claude-haiku-6"]
+    "value", ["claude-haiku-5-5", "claude-sonnet-5-5", "gpt-5", ""]
 )
-def test_haiku_models_are_allowed(monkeypatch, value):
-    monkeypatch.setenv("KLUKAI_EXTRACTION_MODEL", value)
-    assert xl.model() == value
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "claude-sonnet-5-5",
-        "claude-opus-5-5",
-        "gpt-5",
-        "claude-haiku-",
-        "claude-haiku-5-5 x",
-        "",
-    ],
-)
-def test_non_haiku_models_fall_back_to_the_default(monkeypatch, value):
+def test_leftover_model_ids_stay_on_grok_4_7(monkeypatch, value):
     monkeypatch.setattr(xl, "_warned", set())
-    monkeypatch.setenv("KLUKAI_EXTRACTION_MODEL", value)
-    assert xl.model() == "claude-haiku-5-5"
+    if value:
+        monkeypatch.setenv("KLUKAI_EXTRACTION_MODEL", value)
+    else:
+        monkeypatch.delenv("KLUKAI_EXTRACTION_MODEL", raising=False)
+    assert xl.model() == "grok-4.7"
 
 
 # ── request ───────────────────────────────────────────────────────────────
@@ -114,80 +108,57 @@ async def test_request_shape_reserves_once_and_returns_visible_text(
     remote, monkeypatch
 ):
     reserve, record = remote
-    seen = []
 
-    def handler(request):
+    def handler(system, prompt):
         assert reserve.await_count == 1  # reserved before dispatch
-        seen.append(request)
-        return httpx.Response(200, json=response())
+        assert prompt == "Classify this."
+        assert system == xl.SYSTEM_PROMPT
+        return None
 
-    options = transport(monkeypatch, handler)
+    seen = transport(monkeypatch, handler)
     monkeypatch.setenv("LM_STUDIO_TOKEN", "local-token-must-not-cross")
     text = await xl.complete("Classify this.", max_tokens=4096, route="extraction")
     assert text == '{"mood": "serene"}'
-    assert len(seen) == 1
-    request = seen[0]
-    assert str(request.url) == "https://api.anthropic.com/v1/messages"
-    assert request.headers["x-api-key"] == "test-extraction-key"
-    assert request.headers["anthropic-version"] == "2023-06-01"
-    assert "authorization" not in request.headers
-    body = json.loads(request.content)
-    assert body["model"] == "claude-haiku-5-5"
-    assert body["thinking"] == {"type": "adaptive"}
-    assert body["output_config"] == {"effort": "high"}
-    assert body["max_tokens"] == 4096
-    assert body["messages"] == [
-        {"role": "user", "content": [{"type": "text", "text": "Classify this."}]}
-    ]
-    assert isinstance(body["system"], str) and body["system"]
-    assert "temperature" not in body and "tools" not in body
-    assert options[0]["trust_env"] is False and options[0]["follow_redirects"] is False
+    assert seen[0]["model"] == "grok-4.7" and seen[0]["effort"] == "medium"
+    assert "local-token" not in json.dumps(seen)
     reserve.assert_awaited_once_with("extraction")
-    record.assert_awaited_once_with(
-        "attempt-1", {"input_tokens": 900, "output_tokens": 300}
-    )
+    record.assert_awaited_once_with("attempt-1", {})
 
 
-async def test_configured_haiku_model_is_sent(remote, monkeypatch):
+async def test_leftover_haiku_model_is_not_sent(remote, monkeypatch):
     monkeypatch.setenv("KLUKAI_EXTRACTION_MODEL", "claude-haiku-4-5")
-    seen = []
-    transport(
-        monkeypatch,
-        lambda r: (
-            seen.append(json.loads(r.content)) or httpx.Response(200, json=response())
-        ),
-    )
+    seen = transport(monkeypatch)
     await xl.complete("x", max_tokens=100, route="compaction")
-    assert seen[0]["model"] == "claude-haiku-4-5"
+    assert seen[0]["model"] == "grok-4.7"
 
 
 async def test_retired_local_switch_cannot_turn_the_route_off(remote, monkeypatch):
     reserve, _ = remote
     monkeypatch.setenv("KLUKAI_EXTRACTION_PROVIDER", "local")
-    seen = []
-    transport(
-        monkeypatch, lambda r: seen.append(r) or httpx.Response(200, json=response())
-    )
+    seen = transport(monkeypatch)
     assert await xl.complete("x", max_tokens=100, route="extraction") == (
         '{"mood": "serene"}'
     )
     reserve.assert_awaited_once_with("extraction")
-    assert [str(r.url) for r in seen] == [xl.MESSAGES_URL]
+    assert seen[0]["model"] == "grok-4.7"
 
 
-async def test_missing_key_never_reserves_or_dispatches(remote, monkeypatch, caplog):
+async def test_unconfigured_grok_never_reserves_or_dispatches(remote, monkeypatch, caplog):
     reserve, _ = remote
-    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    monkeypatch.setattr("app.grok_chat.configured", lambda: False)
     seen = []
-    transport(monkeypatch, lambda r: seen.append(r))
+    monkeypatch.setattr(
+        "app.grok_chat.complete_turn",
+        lambda *a, **k: seen.append(a) or (_ for _ in ()).throw(AssertionError("sent")),
+    )
     with caplog.at_level(logging.WARNING, logger="app.extraction_llm"):
         for _ in range(2):
             with pytest.raises(xl.ExtractionUnavailable):
                 await xl.complete("x", max_tokens=100, route="extraction")
     reserve.assert_not_awaited()
     assert seen == []
-    key_lines = [r.getMessage() for r in caplog.records if "API key" in r.getMessage()]
-    assert key_lines == ["No Anthropic API key is set; using safe defaults"]
+    lines = [r.getMessage() for r in caplog.records if "not configured" in r.getMessage()]
+    assert lines == ["Grok account chat is not configured; using safe defaults"]
 
 
 @pytest.mark.parametrize(
@@ -214,8 +185,7 @@ async def test_cap_denial_never_dispatches_and_logs_once_per_day(
     from app.creative_budget import CreativeBudgetError
 
     reserve.side_effect = CreativeBudgetError("exhausted")
-    seen = []
-    transport(monkeypatch, lambda r: seen.append(r))
+    seen = transport(monkeypatch)
     day = {"now": datetime(2026, 10, 19, 23, 0, tzinfo=timezone.utc)}
     monkeypatch.setattr(xl, "_utc_now", lambda: day["now"])
     with caplog.at_level(logging.WARNING, logger="app.extraction_llm"):
@@ -230,59 +200,24 @@ async def test_cap_denial_never_dispatches_and_logs_once_per_day(
     assert len(cap_lines) == 2  # once on the 19th, once on the 20th
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        response(stop_reason="max_tokens"),
-        response(stop_reason="refusal"),
-        response(content=[]),
-        response(content=["bare string block"]),
-        response(content=[{"type": "thinking", "thinking": "", "signature": "s"}]),
-        response(content=[{"type": "text", "text": "   "}]),
-        response(content=[{"type": "text", "text": 4}]),
-        response(
-            content=[{"type": "tool_use", "id": "x", "name": "exec", "input": {}}]
-        ),
-        response(content=[{"type": "image", "source": {}}]),
-        response(model=""),
-        response(role="user"),
-        response(type="error"),
-        response(usage={"output_tokens": -1}),
-        response(usage="bad"),
-        ["not", "an", "object"],
-    ],
-)
-async def test_malformed_or_refused_response_is_an_error(remote, monkeypatch, payload):
+async def test_wrong_effort_is_an_error(remote, monkeypatch):
+    from app.grok_chat import Turn
+
     reserve, record = remote
-    seen = []
-
-    def handler(request):
-        seen.append(request)
-        return httpx.Response(200, json=payload)
-
-    transport(monkeypatch, handler)
-    with pytest.raises(xl.ExtractionLLMError):
+    transport(monkeypatch, lambda system, prompt: Turn("x", "grok-4.7", "high", "stream"))
+    with pytest.raises(xl.ExtractionLLMError, match="effort"):
         await xl.complete("x", max_tokens=100, route="extraction")
-    assert len(seen) == 1
     reserve.assert_awaited_once_with("extraction")
     record.assert_not_awaited()
 
 
-@pytest.mark.parametrize("status", [302, 400, 401, 429, 500, 529])
-async def test_http_failure_is_one_attempt_and_credential_free(
-    remote, monkeypatch, status
-):
-    seen = []
+async def test_grok_failure_is_one_attempt_and_credential_free(remote, monkeypatch):
+    from app.grok_chat import GrokChatError
 
-    def handler(request):
-        seen.append(request)
-        return httpx.Response(
-            status,
-            text="test-extraction-key private words",
-            headers={"location": "https://other.invalid"},
-        )
-
-    transport(monkeypatch, handler)
+    seen = transport(
+        monkeypatch,
+        lambda system, prompt: GrokChatError("test-extraction-key private words"),
+    )
     with pytest.raises(xl.ExtractionLLMError) as error:
         await xl.complete("private words", max_tokens=100, route="extraction")
     assert "private words" not in str(error.value)
@@ -290,38 +225,21 @@ async def test_http_failure_is_one_attempt_and_credential_free(
     assert len(seen) == 1
 
 
-async def test_transport_error_is_wrapped(remote, monkeypatch):
-    def handler(request):
-        raise httpx.ConnectError("boom")
-
-    transport(monkeypatch, handler)
-    with pytest.raises(xl.ExtractionLLMError):
-        await xl.complete("x", max_tokens=100, route="extraction")
-
-
 async def test_oversized_response_rejected(remote, monkeypatch):
+    from app.grok_chat import Turn
+
     transport(
         monkeypatch,
-        lambda r: httpx.Response(200, content=b" " * (xl._MAX_RESPONSE_BYTES + 1)),
+        lambda system, prompt: Turn("x" * (xl._MAX_RESPONSE_BYTES + 1), "grok-4.7", "medium", "stream"),
     )
-    with pytest.raises(xl.ExtractionLLMError):
+    with pytest.raises(xl.ExtractionLLMError, match="size"):
         await xl.complete("x", max_tokens=100, route="extraction")
 
 
-async def test_uses_its_own_breaker_not_chats(remote, monkeypatch):
-    from app import dependencies
-
-    names = []
-    real = dependencies.http_stream
-
-    def spy(dep, *args, **kwargs):
-        names.append(dep)
-        return real(dep, *args, **kwargs)
-
-    monkeypatch.setattr(xl, "http_stream", spy)
-    transport(monkeypatch, lambda r: httpx.Response(200, json=response()))
-    await xl.complete("x", max_tokens=100, route="extraction")
-    assert names == ["anthropic_extraction"]
+async def test_background_call_does_not_open_the_anthropic_breaker(remote, monkeypatch):
+    transport(monkeypatch)
+    assert await xl.complete("x", max_tokens=100, route="extraction") == '{"mood": "serene"}'
+    assert not hasattr(xl, "http_stream")
 
 
 async def test_telemetry_failure_never_fails_a_completed_call(remote, monkeypatch):
@@ -330,7 +248,7 @@ async def test_telemetry_failure_never_fails_a_completed_call(remote, monkeypatc
     monkeypatch.setattr(
         obs, "record_llm_usage", lambda **_: (_ for _ in ()).throw(RuntimeError())
     )
-    transport(monkeypatch, lambda r: httpx.Response(200, json=response()))
+    transport(monkeypatch)
     assert (
         await xl.complete("x", max_tokens=100, route="extraction")
         == '{"mood": "serene"}'

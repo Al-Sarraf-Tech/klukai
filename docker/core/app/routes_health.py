@@ -101,13 +101,13 @@ def register_health_routes(
         except Exception:
             results["redis"] = {"status": "down"}
 
-        # Language models: Claude only. A paid API, so only its configuration
-        # is checked, never a request per probe.
-        from .llm_router import claude_primary_configured
+        # Language model: account-login Grok. The probe only checks that the
+        # host worker socket is present. It does not send a prompt.
+        from .grok_chat import configured as grok_configured
 
         results["llm"] = {
-            "status": "ok" if claude_primary_configured() else "down",
-            "provider": "anthropic",
+            "status": "ok" if grok_configured() else "down",
+            "provider": "grok",
         }
 
         results.update(await _image_subsystems())

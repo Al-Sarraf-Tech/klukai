@@ -22,6 +22,33 @@ logger = logging.getLogger(__name__)
 _RETRYABLE = (httpx.HTTPError, ValueError, TimeoutError)
 
 
+def _grok_tool_calls(text: str, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    known = {tool["function"]["name"] for tool in (tools or [])}
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return []
+    if not isinstance(data, dict) or "tool_calls" not in data:
+        return []
+    raw = data.get("tool_calls")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("Invalid or undeclared tool call")
+    calls = []
+    seen = set()
+    for item in raw:
+        name = item.get("name") if isinstance(item, dict) else None
+        arguments = item.get("arguments", {}) if isinstance(item, dict) else None
+        if name not in known or not isinstance(arguments, dict) or name in seen:
+            raise ValueError("Invalid or undeclared tool call")
+        seen.add(name)
+        calls.append({
+            "id": f"grok_{name}",
+            "type": "function",
+            "function": {"name": name, "arguments": json.dumps(arguments)},
+        })
+    return calls
+
+
 class LLMCompletionsMixin(ABC):
     _anthropic_http: httpx.AsyncClient | None
     _anthropic_gate: asyncio.Semaphore
@@ -64,8 +91,15 @@ class LLMCompletionsMixin(ABC):
         *,
         allow_tools: bool = True,
     ) -> dict[str, Any]:
-        from .llm_router import model_family
+        from .llm_router import GROK_MODEL, model_family
 
+        if config.provider == "grok":
+            if config.model != GROK_MODEL:
+                raise ValueError("Unavailable LLM provider or model")
+            # A Grok failure is terminal. Do not call a paid API.
+            return await self._complete_grok(
+                system_prompt, messages, config, tools, allow_tools=allow_tools
+            )
         if (
             config.provider != "anthropic"
             or self._anthropic_http is None
@@ -175,6 +209,57 @@ class LLMCompletionsMixin(ABC):
             "usage": usage,
         }
 
+    async def _complete_grok(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        config: LLMConfig,
+        tools: list[dict[str, Any]] | None = None,
+        *,
+        allow_tools: bool = True,
+    ) -> dict[str, Any]:
+        from .grok_chat import EFFORT, MODEL, GrokChatError, complete_turn
+
+        lines = []
+        for message in messages:
+            content = message.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            lines.append(f"{message.get('role', 'user')}: {content}")
+        prompt = "\n".join(lines).strip() or "."
+        system = system_prompt
+        if tools and allow_tools:
+            names = ", ".join(tool["function"]["name"] for tool in tools)
+            system += (
+                "\n\nTo call a tool, reply with only this JSON object and nothing else: "
+                '{"tool_calls":[{"name":"<one of: ' + names + '>","arguments":{}}]}. '
+                "Otherwise reply with the message for the user."
+            )
+        elif tools:
+            system += "\n\nDo not call tools. Reply with the message for the user."
+        try:
+            turn = await complete_turn(system, prompt)
+        except GrokChatError as exc:
+            raise ValueError("Grok chat failed") from exc
+        if turn.model != MODEL or turn.effort != EFFORT:
+            raise ValueError("Unexpected Grok model or effort")
+        config.model = turn.model
+        calls = _grok_tool_calls(turn.text, tools) if tools and allow_tools else []
+        return {
+            "model": turn.model,
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "" if calls else turn.text,
+                    "tool_calls": calls,
+                },
+            }],
+            "usage": {},
+        }
+
     async def complete_chat(
         self,
         system_prompt: str,
@@ -184,7 +269,7 @@ class LLMCompletionsMixin(ABC):
         *,
         allow_tools: bool = True,
     ) -> dict[str, Any]:
-        """Tool-loop completion: Sonnet falls back to Haiku; Haiku failures raise."""
+        """Tool-loop completion. Grok failures raise; they do not call a paid API."""
         return await self._complete_with_fallback(
             system_prompt, messages, config, tools, allow_tools=allow_tools
         )
