@@ -22,7 +22,7 @@ test("contract names", () => {
 
 test("only the same-origin parent can update the HUD", () => {
   assert.deepEqual(hudUpdate(msg(SNAP), ctx), {
-    level: 7, mood: "COMPOSED", bpm: 72, spiking: false, wearing: "Blazing Star",
+    level: 7, bondKnown: true, mood: "COMPOSED", bpm: 72, spiking: false, wearing: "Blazing Star",
     line: "The perimeter is quiet, Commander.", lineId: 41, streaming: false, status: null,
   });
   assert.equal(hudUpdate(msg(SNAP, { origin: "https://evil.example" }), ctx), null);
@@ -51,6 +51,8 @@ test("malformed fields keep the last good value; missing fields reset; values ar
   assert.equal(clamped.mood.length, 60);
   assert.equal(clamped.lineId, null);
   assert.equal(hudUpdate(msg({ ...SNAP, level: -1.2, bpm: 71.6 }), ctx).level, 0);
+  assert.equal(hudUpdate(msg({ ...SNAP, bondKnown: false }), ctx).bondKnown, false);
+  assert.equal(hudUpdate(msg({ ...SNAP, bondKnown: "no" }), ctx, prev).bondKnown, true);
   assert.equal(hudUpdate(msg({ ...SNAP, bpm: 71.6 }), ctx).bpm, 72);
   const long = hudUpdate(msg({ ...SNAP, line: "a".repeat(MAX_LINE_CHARS - 1) + "😀" + "b".repeat(50) }), ctx);
   assert.equal(long.line.length, MAX_LINE_CHARS - 1, "capped without splitting a surrogate pair");
@@ -66,6 +68,9 @@ test("the HUD view: chips, her line or her status, and when VOICE is offered", (
   const s = (over) => ({ ...EMPTY_HUD, ...hudUpdate(msg(SNAP), ctx), ...over });
   const v = hudView(s());
   assert.equal(v.level, "LV7");
+  assert.equal(v.levelLabel, "Affinity level 7");
+  assert.equal(hudView(s({ bondKnown: false, level: 0 })).level, "—");
+  assert.equal(hudView(s({ bondKnown: false, level: 0 })).levelLabel, "Affinity unread");
   assert.equal(v.mood, "COMPOSED");
   assert.equal(v.heart, "72 bpm");
   assert.equal(v.spiking, false);

@@ -109,6 +109,9 @@ extension _ChatStage on _ChatScreenState {
     final waiting = _state.isTyping && _streamingId == null;
     return {
       'level': _state.affectionLevel.clamp(0, kMaxAffinityLevel),
+      // False when the bond could not be read. The stage prints "—" rather
+      // than LV0, which would look like Cold Assessment.
+      'bondKnown': !_affectionFailed,
       'mood': moodLabel(_state.mood),
       'bpm': _moodBPM,
       'spiking': _heartbeatSpikeOverride != null,

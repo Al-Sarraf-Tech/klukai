@@ -68,7 +68,7 @@ export function speakRequest(event, { origin, parent }) {
 
 /** What the HUD shows before (or without) a snapshot. */
 export const EMPTY_HUD = Object.freeze({
-  level: 0, mood: "", bpm: 0, spiking: false, wearing: "", line: "", lineId: null, streaming: false, status: null,
+  level: 0, bondKnown: true, mood: "", bpm: 0, spiking: false, wearing: "", line: "", lineId: null, streaming: false, status: null,
 });
 
 /** Trim and cap a string without splitting a UTF-16 surrogate pair. */
@@ -101,6 +101,7 @@ export function hudUpdate(event, { origin, parent }, prev = EMPTY_HUD) {
   };
   const int = (v) => typeof v === "number" && Number.isFinite(v);
   take("level", int(data.level), () => Math.min(9, Math.max(0, Math.round(data.level))));
+  take("bondKnown", typeof data.bondKnown === "boolean", () => data.bondKnown);
   take("bpm", int(data.bpm), () => Math.min(300, Math.max(0, Math.round(data.bpm))));
   take("mood", typeof data.mood === "string", () => capText(data.mood, MAX_LABEL_CHARS));
   take("wearing", typeof data.wearing === "string", () => capText(data.wearing, MAX_WEARING_CHARS));

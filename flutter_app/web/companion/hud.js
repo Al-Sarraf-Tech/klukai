@@ -47,8 +47,10 @@ export function hudView(snapshot, phase = "idle") {
   const line = String(snapshot.line || "").trim();
   const waiting = snapshot.status !== null && snapshot.status !== undefined && !snapshot.streaming;
   const canSpeak = Boolean(line) && !snapshot.streaming && !waiting;
+  const bondKnown = snapshot.bondKnown !== false;
   return {
-    level: `LV${snapshot.level}`,
+    level: bondKnown ? `LV${snapshot.level}` : "—",
+    levelLabel: bondKnown ? `Affinity level ${snapshot.level}` : "Affinity unread",
     mood: snapshot.mood || "—",
     heart: `${snapshot.bpm} bpm`,
     spiking: Boolean(snapshot.spiking),
@@ -111,7 +113,10 @@ export function createHud(doc, { onVoice = () => {}, onHerDay = () => {}, schedu
     pending = null;
     const first = !shown;
     const was = shown || {};
-    if (was.level !== view.level) el.level.textContent = view.level;
+    if (was.level !== view.level) {
+      el.level.textContent = view.level;
+      el.level.setAttribute("aria-label", view.levelLabel || view.level);
+    }
     if (was.mood !== view.mood) el.mood.textContent = view.mood;
     if (was.heart !== view.heart) el.heart.textContent = view.heart;
     if (was.spiking !== view.spiking) el.heartTag.classList.toggle("hot", view.spiking);

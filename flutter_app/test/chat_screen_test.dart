@@ -355,8 +355,9 @@ Future<FakeWebSocketService> _pumpChat(
   await tester.pumpWidget(
     MaterialApp(
       builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context)
-            .copyWith(textScaler: TextScaler.linear(textScale)),
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
         child: child!,
       ),
       // A non-routable origin keeps the (try/caught) history/affection fetches
@@ -3016,6 +3017,7 @@ void main() {
       final hud = stage.link.huds.last;
       expect(hud, {
         'level': 1,
+        'bondKnown': true,
         'mood': moodLabel('quietly_pleased'),
         'bpm': moodVisualFor('quietly_pleased').bpm,
         'spiking': false,
@@ -3035,6 +3037,24 @@ void main() {
       for (var i = 0; i < 4; i++) {
         await tester.pump(const Duration(milliseconds: 200)); // scroll retries
       }
+      fake.dispose();
+    });
+
+    testWidgets('a failed bond read is unread on her stage, not LV0', (
+      tester,
+    ) async {
+      final (fake, stage, _) = await pump3d(
+        tester,
+        historyClient: MockClient((request) async {
+          if (request.url.path == '/api/affection') {
+            return http.Response('{}', 503);
+          }
+          return http.Response('{"messages":[]}', 200);
+        }),
+      );
+      stage.onEvent!('klukai:stage-ready', {'ready': true});
+      await tester.pump();
+      expect(stage.link.huds.last['bondKnown'], isFalse);
       fake.dispose();
     });
 

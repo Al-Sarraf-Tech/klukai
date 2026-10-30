@@ -13,10 +13,10 @@ import {
   applySubtitle, completedAnnouncement, clearDecorativeMotion, motionPreference,
   beginWake, portraitStatusNotice,
 } from "./stage_life.js";
-import { createHud, hudView, nextVoicePhase } from "./hud.js?v=9951e2213d37";
+import { createHud, hudView, nextVoicePhase } from "./hud.js?v=9b4b16656ea9";
 import {
   embedConfig, speakRequest, visibilityRequest, hudUpdate, HERDAY, stageActivity, createSpeakGate, resumeWithin, postToParent,
-} from "./embed.js?v=8b18934d";
+} from "./embed.js?v=9a664121";
 
 const $ = (id) => document.getElementById(id);
 const PREFS_KEY = "klukai_companion_prefs";
