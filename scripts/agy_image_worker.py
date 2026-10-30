@@ -29,14 +29,15 @@ REQUEST_KEYS = {"request_id", "user_id", "prompt", "width", "height", "include_c
 # Owner decision 2026-10-19: core grants nudity of Klukai alone past the intimacy
 # gate ("nudity": true, present only when granted: her own decision in the
 # relationship). Owner standing rule 2026-10-23: it need not be tasteful; it
-# stays adult, solo and without sex acts. Only providers whose rules allow it
-# (Grok) get the permission, and the Claude checker never receives such a render;
-# every other provider is told to keep her covered.
+# stays adult, solo and without sex acts. The permission text remains for that
+# rule. Owner decision 2026-10-30: the active Grok renderer refuses the flag
+# before any reference, ledger or CLI work, the same as fal's renderer, and
+# the grant is not a reason to skip the checker.
 # Owner 2026-10-24: on fal, intimacy and nudity are implied only. Its filter
 # refuses anything it reads as sexual and this account cannot lift it, so fal's
 # scene is rewritten (implied_scene) and a grant becomes NUDITY_IMPLIED; a
 # refusal is redrawn once, fully clothed. Those renders are checked as usual.
-NUDITY_PROVIDERS = frozenset({"grok"})
+NUDITY_PROVIDERS = frozenset()
 IMPLIED_PROVIDERS = frozenset({"fal"})
 NUDITY_IMPLIED = (
     "\n\nKeep it implied: a towel, a bedsheet, steam or the framing covers her body; only her "
@@ -159,6 +160,11 @@ def provider_request(provider, value, *, plain=False):
     """
     request = {key: item for key, item in value.items() if key != "nudity"}
     prompt = value["prompt"]
+    if provider == "grok" and value.get("nudity") is True:
+        # The renderer refuses this flag before references or the attempt ledger.
+        request["nudity"] = True
+        request["prompt"] = prompt
+        return request
     if provider in IMPLIED_PROVIDERS:
         prompt = (implied_scene.plain if plain else implied_scene.implied)(prompt)
     if value.get("nudity") is True:
@@ -673,8 +679,8 @@ class UnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
 
 
 ROTATIONS = ("alternate", "fixed")
-# Production remains fal-only. API alternatives need explicit selection,
-# their own positive allowances and runtime credentials; none activate here.
+# Production is account-login Grok only. fal stays in the code as an opt-in
+# sole provider (its own caps and key). It is never a failover behind Grok.
 PROVIDER_NAMES = frozenset({"agy", "grok", "codex", "fal", "openai", "gemini"})
 
 
@@ -691,6 +697,8 @@ def validate_providers(providers):
 
 def load_providers(names):
     # Validate the complete selection before importing any native provider.
+    if "fal" in names and list(names) != ["fal"]:
+        raise ValueError("fal is opt-in only and is not a failover")
     validate_providers([(name, lambda *_: None) for name in names])
     providers = []
     for name in names:
@@ -713,11 +721,14 @@ def load_providers(names):
 def load_checker(name):
     if name == "none":
         return None
-    import claude_image_check
+    if name == "grok":
+        import grok_image_check as checker_mod
+    else:
+        import claude_image_check as checker_mod
 
     def checker(output, value, references, *, timeout):
-        return claude_image_check.run(output, value, references, timeout=timeout)
-    checker.model = claude_image_check.MODEL
+        return checker_mod.run(output, value, references, timeout=timeout)
+    checker.model = checker_mod.MODEL
     return checker
 
 
@@ -771,14 +782,15 @@ def main():
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--references", type=Path, required=True)
     parser.add_argument("--allowed-users", required=True)
-    parser.add_argument("--providers", default="agy",
-                        help="Ordered providers: fal, openai, gemini, agy, grok, codex. "
-                             "Production uses fal; optional APIs require separate positive allowances.")
+    parser.add_argument("--providers", default="grok",
+                        help="Ordered providers: grok, agy, codex, openai, gemini, or fal alone. "
+                             "Production is grok. fal cannot be combined with another provider.")
     parser.add_argument("--rotation", default="alternate", choices=ROTATIONS,
                         help="alternate: rotate the first provider per request; fixed: always start with the "
                              "first provider and use the rest only as failovers")
-    parser.add_argument("--checker", default="none", choices=("none", "claude"),
-                        help="claude: Claude Sonnet 5.5 (effort high) checks every render (subscription login)")
+    parser.add_argument("--checker", default="grok", choices=("none", "grok", "claude"),
+                        help="grok: Grok 4.7 (effort medium) checks every render through the account login. "
+                             "claude remains available and is not the default.")
     args = parser.parse_args()
     try:
         server = create_server(args.runtime_dir, args.state_dir, args.references,

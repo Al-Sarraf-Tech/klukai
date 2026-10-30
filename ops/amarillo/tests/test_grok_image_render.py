@@ -201,6 +201,81 @@ def test_the_gate_hook_finds_its_policy_and_work_beside_itself(tmp_path):
     assert json.loads((work/'gate-audit.ndjson').read_text())['decision']=='allow'
 
 
+def _ready(monkeypatch, tmp_path, module):
+    monkeypatch.setenv("KLUKAI_GROK_DAILY_LIMIT", "10")
+    monkeypatch.setenv("KLUKAI_GROK_MONTHLY_LIMIT", "150")
+    monkeypatch.setenv("KLUKAI_GROK_LEDGER", str(tmp_path / "grok.sqlite3"))
+    return module
+
+
+def test_render_locks_anime_style_uses_text_commander_and_grok_4_7_medium(tmp_path, monkeypatch):
+    m = _ready(monkeypatch, tmp_path, module())
+    reads = []
+    monkeypatch.setattr(m, "read_image", lambda entry: reads.append(entry) or png())
+    captured = {}
+
+    def execute(profile, work, args, timeout=170):
+        captured["args"] = args
+        session = args[args.index("--session-id") + 1]
+        (work / "gate-audit.ndjson").write_text(json.dumps({
+            "decision": "allow", "tool": "image_edit", "session": session,
+        }))
+        return "{}"
+
+    monkeypatch.setattr(m, "execute", execute)
+    monkeypatch.setattr(m, "parse_stream", lambda *a, **k: None)
+    monkeypatch.setattr(m, "artifact", lambda *a, **k: png("blue"))
+    request = {"request_id": "r", "user_id": "jalsarraf", "prompt": "rooftop garden",
+               "width": 832, "height": 1216, "include_commander": True}
+    assert m.render(request, {"klukai": "KLUkai-REF", "commander": "COMMANDER-REF"}).startswith(b"\x89PNG")
+    assert reads == ["KLUkai-REF"]
+    prompt = captured["args"][-1]
+    assert prompt.startswith("Create exactly one polished illustration")
+    assert "2D anime illustration" in prompt and "NOT photorealistic" in prompt
+    assert "hand-painted anime background art" in prompt
+    assert "text-only appearance guidance" in prompt and "Exactly two" in prompt
+    assert "rooftop garden" in prompt
+    assert captured["args"][captured["args"].index("--model") + 1] == "grok-4.7"
+    assert captured["args"][captured["args"].index("--effort") + 1] == "medium"
+    assert "disable_api_key_auth = true" in m.CONFIG
+    import sqlite3
+    from contextlib import closing
+    with closing(sqlite3.connect(tmp_path / "grok.sqlite3")) as db:
+        assert db.execute("SELECT COUNT(*) FROM grok_attempts").fetchone()[0] == 1
+
+
+def test_nudity_and_missing_caps_fail_before_references_or_the_ledger(tmp_path, monkeypatch):
+    m = module()
+    monkeypatch.delenv("KLUKAI_GROK_DAILY_LIMIT", raising=False)
+    monkeypatch.delenv("KLUKAI_GROK_MONTHLY_LIMIT", raising=False)
+    monkeypatch.setenv("KLUKAI_GROK_LEDGER", str(tmp_path / "grok.sqlite3"))
+    reads = []
+    monkeypatch.setattr(m, "read_image", lambda entry: reads.append(entry) or png())
+    monkeypatch.setattr(m, "execute", lambda *a, **k: (_ for _ in ()).throw(AssertionError("cli")))
+    request = {"request_id": "r", "user_id": "jalsarraf", "prompt": "scene",
+               "width": 832, "height": 1216, "include_commander": False, "nudity": True}
+    with pytest.raises(m.agy.RuntimeError, match="Nudity rendering is unsupported"):
+        m.render(request, {"klukai": "K", "commander": "C"})
+    request.pop("nudity")
+    with pytest.raises(m.agy.ProviderUnavailable, match="allowance not configured"):
+        m.render(request, {"klukai": "K", "commander": "C"})
+    assert reads == []
+    assert not (tmp_path / "grok.sqlite3").exists()
+
+
+def test_stream_rejects_a_session_that_is_not_grok_4_7_at_medium():
+    m = module()
+    sid = str(uuid.uuid4())
+    rows = events(sid)
+    rows[0]["model"] = "grok-4.6"
+    with pytest.raises(m.agy.RuntimeError, match="not grok-4.7"):
+        parse(rows, sid)
+    rows = events(sid)
+    rows[0]["reasoning_effort"] = "high"
+    with pytest.raises(m.agy.RuntimeError, match="not medium"):
+        parse(rows, sid)
+
+
 def test_pinned_copy_is_preferred_and_downloads_are_the_fallback(tmp_path, monkeypatch):
     m=module()
     home=tmp_path/'home'; pinned=tmp_path/'pinned'; downloads=home/'.grok/downloads'

@@ -837,22 +837,24 @@ def test_an_unknown_rotation_is_refused(worker, setup_files):
             pass
 
 
-def test_granted_nudity_reaches_only_grok_and_skips_the_checker(worker, setup_files):
+def test_granted_nudity_is_refused_by_grok_before_review(worker, setup_files):
+    """The flag reaches the renderer, which refuses it; the checker never sees a render."""
+    from agy_art_runtime import RuntimeError as RendererError
+
     seen_prompts, checked = [], []
 
     def grok(value, references):
         seen_prompts.append(value)
-        return PNG
+        raise RendererError("Nudity rendering is unsupported; provider safety checks stay enabled")
 
     value = payload(prompt="Klukai bathing in an onsen", nudity=True)
     with running(worker, setup_files, providers=[("grok", grok)],
                  checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as path:
-        assert request(path, value)[0] == 200
+        assert request(path, value)[0] == 502
     (sent,) = seen_prompts
-    assert "nudity" not in sent
-    assert sent["prompt"] == value["prompt"] + worker.NUDITY_PERMITTED
-    assert "adult woman" in sent["prompt"] and "No sexual acts" in sent["prompt"]
-    assert checked == []  # Claude never receives a nude render
+    assert sent["nudity"] is True
+    assert worker.NUDITY_PERMITTED not in sent["prompt"]
+    assert checked == []
 
 
 def test_other_providers_get_the_covered_version_and_are_checked(worker, setup_files):
@@ -919,11 +921,13 @@ def test_a_failed_attempt_says_why_in_the_journal(worker, setup_files, capsys):
     assert "unavailable: ProviderUnavailable: Grok account or image service" in err
 
 
-def test_fal_is_an_accepted_sole_provider():
-    """Owner decision 2026-10-23: Seedream 4.5 on fal is Klukai's only renderer."""
+def test_fal_is_an_accepted_sole_provider_and_not_a_failover():
+    """fal stays opt-in. It cannot sit behind Grok as a paid failover."""
     import agy_image_worker as w
     assert w.validate_providers([("fal", lambda *_: None)])[0][0] == "fal"
     assert [name for name, _ in w.load_providers(["fal"])] == ["fal"]
+    with pytest.raises(ValueError, match="not a failover"):
+        w.load_providers(["grok", "fal"])
 
 
 def test_optional_cloud_apis_load_only_when_explicitly_selected(worker, monkeypatch):
@@ -1380,7 +1384,7 @@ def test_candidate_with_no_remaining_request_time_can_be_reviewed_afterward(work
     assert len(rendered) == len(checked) == 1
 
 
-@pytest.mark.parametrize("provider,grant", [("fal", False), ("grok", True)])
+@pytest.mark.parametrize("provider,grant", [("fal", False)])
 def test_recovery_preserves_explicit_review_exceptions(worker, setup_files, provider, grant):
     from agy_art_runtime import GenerationPending
     value = payload(**({"nudity": True} if grant else {}))

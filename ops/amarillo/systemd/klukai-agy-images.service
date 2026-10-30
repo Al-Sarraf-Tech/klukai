@@ -1,5 +1,5 @@
 [Unit]
-Description=Klukai image worker (Seedream 4.5 on fal, checked by Claude)
+Description=Klukai image worker (Grok account login, checked by Grok)
 After=default.target
 
 [Service]
@@ -8,11 +8,12 @@ UMask=0077
 WorkingDirectory=%h/git/klukai
 Environment=HOME=%h
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
-Environment=KLUKAI_ACCOUNT_IMAGE_PROVIDERS=fal
-Environment=KLUKAI_FAL_DAILY_LIMIT=10
-Environment=KLUKAI_FAL_MONTHLY_LIMIT=150
+Environment=KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok
+Environment=KLUKAI_GROK_DAILY_LIMIT=10
+Environment=KLUKAI_GROK_MONTHLY_LIMIT=150
+Environment=GROK_AUTH_PATH=%h/.grok/auth.json
 Environment=KLUKAI_IMAGE_ROTATION=fixed
-Environment=KLUKAI_IMAGE_CHECKER=claude
+Environment=KLUKAI_IMAGE_CHECKER=grok
 EnvironmentFile=%h/.config/klukai/agy-images.env
 ExecStart=/usr/bin/python3 %h/git/klukai/scripts/agy_image_worker.py --runtime-dir %h/.local/share/klukai/agy-bridge/runtime --state-dir %h/.local/share/klukai/agy-bridge/state --references %h/.local/share/klukai/agy-bridge/references.json --allowed-users ${KLUKAI_AGY_ALLOWED_USERS} --providers ${KLUKAI_ACCOUNT_IMAGE_PROVIDERS} --rotation ${KLUKAI_IMAGE_ROTATION} --checker ${KLUKAI_IMAGE_CHECKER}
 Restart=on-failure
