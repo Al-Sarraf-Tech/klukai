@@ -107,6 +107,9 @@ extension _ChatStage on _ChatScreenState {
   Map<String, Object?> get _hudSnapshot {
     final line = _latestLine;
     final waiting = _state.isTyping && _streamingId == null;
+    // No line yet and the link is down: the stage's own subtitle would
+    // otherwise read "Awaiting orders", as if she could hear him.
+    final quietOffline = !_state.isConnected && line == null && !waiting;
     return {
       'level': _state.affectionLevel.clamp(0, kMaxAffinityLevel),
       // False when the bond could not be read. The stage prints "—" rather
@@ -119,7 +122,9 @@ extension _ChatStage on _ChatScreenState {
       'line': line?.content ?? '',
       'lineId': line?.id,
       'streaming': line?.isStreaming ?? false,
-      'status': waiting ? (_thinkingText ?? 'PROCESSING') : null,
+      'status': waiting
+          ? (_thinkingText ?? 'PROCESSING')
+          : (quietOffline ? 'LINK DOWN' : null),
     };
   }
 

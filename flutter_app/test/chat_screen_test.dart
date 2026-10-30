@@ -3058,6 +3058,47 @@ void main() {
       fake.dispose();
     });
 
+    testWidgets(
+      'an empty stage says the link is down instead of awaiting orders',
+      (tester) async {
+        final (fake, stage, _) = await pump3d(tester);
+        stage.onEvent!('klukai:stage-ready', {'ready': true});
+        await tester.pump();
+        expect(stage.link.huds.last['status'], isNull);
+        expect(stage.link.huds.last['line'], '');
+        // 3D does not run the heart trace, so no frame is pending. The
+        // connection event arrives in a microtask: the first pump delivers it,
+        // the second paints and sends the HUD.
+        fake.setConnected(false);
+        await tester.pump();
+        await tester.pump();
+        expect(find.text('// LINK DOWN…'), findsOneWidget);
+        expect(stage.link.huds.last['status'], 'LINK DOWN');
+        expect(stage.link.huds.last['line'], '');
+        expect(stage.link.huds.last['streaming'], isFalse);
+        fake.dispose();
+      },
+    );
+
+    testWidgets('her last line stays on the stage when the link drops', (
+      tester,
+    ) async {
+      final (fake, stage, _) = await pump3d(
+        tester,
+        historyClient: _historyBackend(),
+      );
+      await tester.pump();
+      stage.onEvent!('klukai:stage-ready', {'ready': true});
+      await tester.pump();
+      expect(stage.link.huds.last['line'], 'Report, Commander.');
+      fake.setConnected(false);
+      await tester.pump();
+      await tester.pump();
+      expect(stage.link.huds.last['line'], 'Report, Commander.');
+      expect(stage.link.huds.last['status'], isNull);
+      fake.dispose();
+    });
+
     testWidgets('its HUD carries her live heart rate, a surge over it', (
       tester,
     ) async {

@@ -92,6 +92,11 @@ test("the HUD view: chips, her line or her status, and when VOICE is offered", (
   const working = hudView(s({ status: "Compiling tactical visualization, Commander..." }));
   assert.deepEqual([working.status, working.line, working.voice], ["Compiling tactical visualization, Commander...", "", "off"]);
   assert.equal(hudView(s({ status: null })).status, "");
+  // Link down, nothing said yet: her status, not the "awaiting orders" placeholder.
+  const down = hudView(s({ line: "", lineId: null, status: "LINK DOWN" }));
+  assert.deepEqual([down.status, down.line, down.placeholder, down.voice], ["LINK DOWN", "", false, "off"]);
+  // A line she already said stays when the snapshot has no status.
+  assert.equal(hudView(s({ status: null, line: SNAP.line })).line, SNAP.line);
   // Playing or preparing: the button stays (to stop her) whatever the line does.
   assert.equal(hudView(s({ streaming: true }), "playing").voice, "playing");
   assert.equal(hudView(s({ line: "" }), "loading").voice, "loading");
