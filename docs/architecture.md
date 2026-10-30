@@ -11,7 +11,7 @@ Existing authorized cloud services
   Anthropic: Sonnet 5.5 chat, Haiku 5.5 background work and memory recall,
              capped creative text, render checks
   Fish Audio: speech and speech-to-text · Brave search
-  Signed-in Grok/Codex/Agy accounts, driven by the image worker
+  fal Seedream 4.5, driven by the image worker (on demand; Claude checks)
       ▲
       │
 Public TLS edge
@@ -58,7 +58,7 @@ Single FastAPI process. Important modules:
 | `deferred.py` | One-shot future tasks (Postgres + bridge timer) |
 | `proactive/` | Cron engine + durability catch-up |
 | `memory*.py` | Session and PostgreSQL memory + archive |
-| `image_provider.py` / `agy_image_provider.py` | Provider policy and private account-worker client; production selects `agy` |
+| `image_provider.py` / `agy_image_provider.py` | Provider policy and private account-worker client. `KLUKAI_IMAGE_PROVIDER=agy` (the default) means that worker. The worker's selected renderer is fal Seedream 4.5 |
 | `image_gen.py` / `image_*.py` | Local Comfy facade, workflows, rendering and lease ownership retained for explicit local deployments/rollback |
 | `runtime_tasks.py` / `ws_manager.py` | Application background-work ownership, admission and cancellation-safe shutdown |
 | `shared_http.py` / `observability/health_cache.py` | Lazy HTTP close contract and lifetime-owned readiness clients |
@@ -107,7 +107,7 @@ retention remain separate live release checks.
 - Interactive: explicitly enabled Anthropic Sonnet 5.5, medium adaptive thinking; Haiku 5.5 answers when Sonnet fails or backs off.
 - Background work (extraction, compaction, proactive lines, captions) and memory recall: Haiku 5.5 at high effort, sharing one daily attempt cap; a refused or failed call uses the caller's safe default.
 - Dream/Her POV creative text: separately authorized Anthropic route, initially 12 attempts per UTC day and 12 per UTC month. These are attempt limits, not a dollar cap. With it off, these writers use the Haiku background route.
-- Images: existing Agy/Grok account quotas, alternating preferred providers and at most one eligible service-error failover. Policy refusals do not fail over. Google paid-credit fallback stays disabled; owner confirmed Grok extra usage off/$0. No paid image API or GPU fallback.
+- Images: Seedream 4.5 on fal through the private account worker, on demand only. Attempt caps fail closed (10 a UTC day and 150 a UTC month on the worker unit). Intimacy is implied; fal's safety checks stay on. Claude checks renders and never draws. No GPU renderer. `KLUKAI_IMAGE_PROVIDER=openai` is an explicit edit path, off unless set.
 - Voice: Fish Audio on the free `s2.1-pro-free` model, tap to play. Speech-to-text: Fish `transcribe-1-pro`, pay-as-you-go (owner authorized 2026-10-26). Text remains usable when voice is off.
 - Web: existing authorized Brave MCP search path. This authorization does not extend to other new paid services.
 - Fresh checkout defaults differ from private deployment configuration. Use the dated handoffs and verified runtime settings when describing what is deployed.

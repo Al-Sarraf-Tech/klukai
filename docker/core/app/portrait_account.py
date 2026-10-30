@@ -6,7 +6,7 @@ inpaints for blink, talk, smile, blush and annoyed). Pictures are cloud-only
 (``KLUKAI_IMAGE_PROVIDER=agy``) has no inpaint. An outfit without a cached
 set gets ONE base portrait, drawn through the same journalled path his
 explicit chat pictures use, so the user allowlist, the worker's
-Grok -> Codex -> Agy rotation and the Claude checker all apply. The other frames stay missing; the stage then keeps the base for
+fal Seedream renderer and the Claude checker all apply. The other frames stay missing; the stage then keeps the base for
 them (its breathing and sway are CSS). Cached sets are never touched.
 
 Bounds, all fail-closed:

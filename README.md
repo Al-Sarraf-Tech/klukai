@@ -24,15 +24,15 @@ This README explains **how all of it works**: the app he holds, what happens whe
 
 ---
 
-## At a glance (October 19, 2026)
+## At a glance (October 30, 2026)
 
 | Part | How it works today |
 |---|---|
 | **The app** | A new *Tactical HUD* PWA built for phones (360–430 px wide). There are five tabs: Chat, Album, Day, Kit and Me. Chat flips between a text view and her live 3D model |
 | **Conversation** | Claude Sonnet 5.5 (adaptive thinking, medium effort) writes every reply; Claude Haiku 5.5 steps in if Sonnet fails. **All of her AI is cloud** (owner decision, 2026-10-26): nothing runs on a local model or GPU |
 | **Voice** | Fish Audio with a community "Klukai" voice, **free model only**. Each Commander picks English or Japanese, and she speaks **only when he taps** ▶ VOICE. Voice input is transcribed by Fish speech-to-text |
-| **Pictures** | A private worker on amarillo tries **Grok first, then Codex, then Agy**. Claude Sonnet 5.5 checks renders and never draws. Nothing renders on a GPU, and no image service is ever paid |
-| **Dreams & Her POV writing** | Anthropic text, capped at 20 attempts a day and 300 a month across both features |
+| **Pictures** | On demand only. The private worker draws with Seedream 4.5 on fal and Claude Sonnet 5.5 checks. Intimacy stays implied. Nothing renders on a GPU |
+| **Dreams & Her POV writing** | Text. Capped Sonnet when that route is on; otherwise Haiku. Dreams are never pictures |
 | **Memory** | Redis (today) → PostgreSQL (episodes, exchanges, facts). Recall: PostgreSQL full-text candidates, then Claude Haiku picks. Chat history, episodes and affection are **sacred**: additive only, never deleted |
 | **CI** | Self-hosted on amarillo: every job gets a fresh, firewalled VM that is deleted afterwards. No GitHub-hosted runners |
 | **Releases** | Core runs only the exact image CI built and scanned, with signed provenance, a verified backup and automatic rollback. The PWA ships separately with content-hashed files |
@@ -75,7 +75,7 @@ flowchart LR
         redis[("Redis<br/>session")]
         pg[("PostgreSQL<br/>memories · facts · SACRED")]
         bridge["events-bridge<br/>RabbitMQ rails"]
-        worker["image worker<br/>Grok → Codex → Agy"]
+        worker["image worker<br/>Seedream 4.5 on fal"]
         core --- redis & pg
         core -- "Redis events" --> bridge
         core -- "unix socket" --> worker
@@ -83,7 +83,7 @@ flowchart LR
 
     core -- "chat, background work, recall" --> anthropic["Anthropic<br/>Sonnet 5.5 · Haiku 5.5"]
     core -- "speech out and in" --> fish["Fish Audio"]
-    worker -- "signed-in accounts" --> renderers["Grok · Codex · Agy"]
+    worker -- "reference edit" --> renderers["fal Seedream 4.5"]
     worker -- "render check" --> checker["Claude Sonnet 5.5<br/>(checks only)"]
 ```
 
@@ -192,22 +192,22 @@ sequenceDiagram
 
 ## Pictures
 
-He can ask in chat ("take a picture for me"), tap 📷 in the composer, or let her Her POV pipeline draw a memory. Every picture follows the same path:
+He can ask in chat ("take a picture for me"), tap the camera in the composer, or ask her to draw a Her POV memory. Nothing is drawn on a schedule, on connect, or because a dream mentioned a scene. Dreams stay text. Every picture he asks for follows the same path:
 
 1. **Core composes the scene** from his words and recent context, plus:
    - what she is wearing right now (`her_day.render_costume()`, gated by affection);
    - **scene dressing**, which picks what fits the place (a terrace, a lantern walk, a hangar);
    - seeded variety in pose, angle, hair and accessories, so no two renders look the same.
 2. **Core journals the request** under a durable request ID before dispatch, so a reconnect or retry recovers the finished picture instead of drawing it again.
-3. **The private image worker** (`klukai-agy-images.service` on amarillo, [`scripts/agy_image_worker.py`](scripts/agy_image_worker.py)) takes the request over a local unix socket. It runs a **fixed rotation: Grok, then Codex, then Agy**. A later provider runs only when an earlier one fails with a service error, and a policy refusal never fails over.
+3. **The private image worker** (`klukai-agy-images.service` on amarillo, [`scripts/agy_image_worker.py`](scripts/agy_image_worker.py)) takes the request over a local unix socket. Production selects Seedream 4.5 on fal (`fal-ai/bytedance/seedream/v4.5/edit`, `KLUKAI_ACCOUNT_IMAGE_PROVIDERS=fal`). The unit and core setting are still named `agy` because that is the account-worker socket: `KLUKAI_IMAGE_PROVIDER=agy` means that worker, not the retired Agy account. An OpenAI edit path exists only when `KLUKAI_IMAGE_PROVIDER=openai` is set on purpose. There is no GPU renderer.
 4. **Claude Sonnet 5.5 checks the render** against her reference sheet and may ask for one re-render with notes. Claude never generates images.
 5. **She delivers it** in chat, and it lands in her album with its original context: conversation, mood and affection.
 
 **Rules that never bend:**
-- Pictures run on the accounts' included quotas only, with paid fallback off everywhere.
-- Nothing renders on Dominus, so a game on that machine is never interrupted.
+- Pictures are on demand only. The worker's attempt caps fail closed (`KLUKAI_FAL_DAILY_LIMIT=10` and `KLUKAI_FAL_MONTHLY_LIMIT=150` in the unit). A missing cap does not send.
+- Nothing renders on Dominus or amarillo. A game on either machine is never interrupted for a picture.
 - The worker serves only allowlisted Commander accounts. The test account is refused by design.
-- **Content gates:** at bond level 8 or higher, and only when his own words ask for it, Grok may draw her **alone** with tasteful nudity: an adult woman, no sexual acts, never with the Commander. Codex and Agy are always told to keep her covered.
+- **On fal, intimacy is implied only.** The worker rewrites the scene ([`scripts/implied_scene.py`](scripts/implied_scene.py)): a grant becomes a towel, quilt or blanket that covers, and a refusal is redrawn once, fully clothed. fal's own safety checks stay on. The Commander is described in text. His portrait is never sent.
 
 ---
 
@@ -320,7 +320,7 @@ The `events-bridge` owns the broker. It moves Redis `companion:events` to `homel
 |---|---|
 | **amarillo** (core host) | `companion-core` (API, WebSocket, PWA), PostgreSQL, Redis, the `events-bridge` and RabbitMQ consumers, Prometheus/Grafana/Loki/Tempo/Alloy and Alertmanager (alerts reach the owner over the bus), the **private image worker** (it drives signed-in cloud accounts; nothing renders locally), and the **Klukai CI runner** (one VM per job) |
 | **Dominus-Nobara** | Retired for Klukai, including CI (owner decision, 2026-10-26). App services, CI jobs and release artifacts stay on Amarillo; inference uses cloud providers |
-| **Cloud, by explicit authorization** | Anthropic (Sonnet 5.5 chat; Haiku 5.5 for background work and memory recall; capped creative text; render checks), Fish Audio (free-model speech and pay-as-you-go speech-to-text), the signed-in Grok, Codex and Agy accounts (pictures), and Brave (web search) |
+| **Cloud, by explicit authorization** | Anthropic (Sonnet 5.5 chat; Haiku 5.5 for background work and memory recall; capped creative text; render checks), Fish Audio (free-model speech and pay-as-you-go speech-to-text), fal Seedream 4.5 (pictures, on demand), and Brave (web search) |
 
 Hard rules:
 - **Cloud AI only.** Core must not call a local model, embedding, voice or image service. `docker/core/tests/test_cloud_only_invariant.py` fails the build if one comes back.
@@ -334,14 +334,14 @@ Hard rules:
 |---|---|---|
 | Chat and tools | Sonnet 5.5 primary (owner-approved API key), Haiku 5.5 fallback | Off: chat needs `KLUKAI_CLAUDE_PRIMARY=true` and `ANTHROPIC_API_KEY`; without them she cannot answer |
 | Background work and memory recall | Haiku 5.5 at high effort, one shared daily cap (`KLUKAI_EXTRACTION_DAILY_LIMIT`, 400) | Off (cap 0): background writers use safe defaults and recall keeps the full-text order |
-| Dreams and Her POV writing | Sonnet 5.5, **20 attempts/day and 300/month**, shared | Haiku 5.5 background route |
-| Pictures | Private worker: Grok → Codex → Agy, included quotas only | Same worker, empty allowlist (no pictures) |
+| Dreams and Her POV writing | Sonnet 5.5 when `KLUKAI_CREATIVE_TEXT_PROVIDER=anthropic` and both text attempt caps are positive. The authorized starting caps are 12 a UTC day and 12 a UTC month | Haiku 5.5 background route (caps at 0) |
+| Pictures | Private worker: Seedream 4.5 on fal, on demand, implied intimacy, Claude checks | Same worker, empty allowlist (no pictures) |
 | Speech | Fish Audio, `s2.1-pro-free` only, tap-to-play | Off |
 | Speech-to-text | Fish Audio `transcribe-1-pro`, pay-as-you-go (owner authorized 2026-10-26; existing balance only) | Off |
 | Web search | Brave MCP, with free metasearch as fallback | Off |
 
 - **Attempt caps.** Creative calls reserve a persistent UTC daily/monthly attempt *before* dispatch. Failed or uncertain calls still count. These are request limits, not dollar caps, and a refusal never triggers an automatic switch to another provider.
-- **No new spending.** Image accounts run with paid fallback disabled (Grok extra usage is off with a $0 cap), and Fish runs on the free model only. An API key alone never enables a cloud route; each route needs its own explicit switch.
+- **No new spending.** Picture spend is the owner's existing fal allowance, fail-closed at the worker caps, and only when he asks. Fish speech stays on the free model. An API key alone never enables a cloud route; each route needs its own explicit switch.
 
 ---
 
@@ -435,7 +435,7 @@ docker compose build companion-core && docker compose up -d companion-core   # a
 | `FISH_API_KEY` | empty | From the encrypted env file; with it empty, nothing is sent; never logged |
 | `KLUKAI_FISH_VOICE_ID` | `47fc35b7…de1f3` | The community "Klukai" voice (Danastico) |
 | `KLUKAI_FISH_MODEL` | `s2.1-pro-free` | Must end in `-free`, or core refuses it (503) |
-| `KLUKAI_IMAGE_PROVIDER` | `agy` | The private account worker; nothing renders locally |
+| `KLUKAI_IMAGE_PROVIDER` | `agy` | The private account worker (the name is historical). The worker draws with fal. `openai` is an explicit edit path. Nothing renders locally |
 | `KLUKAI_AGY_ALLOWED_USERS` | empty | Accounts allowed to request pictures (the worker enforces its own list too) |
 | `KLUKAI_CREATIVE_TEXT_PROVIDER` | `haiku` | `anthropic` for capped Sonnet dreams and Her POV writing (`local` is an old name for `haiku`) |
 | `KLUKAI_CLOUD_{IMAGE,TEXT}_{DAILY,MONTHLY}_LIMIT` | `0` | Persistent UTC attempt allowances; failures count |
@@ -443,7 +443,7 @@ docker compose build companion-core && docker compose up -d companion-core   # a
 | `HER_POV_EXECUTION` | `queue` | The durable rail (`inline` runs in-process, for tests) |
 | `CORE_INTERNAL_TOKEN` | required in prod | Bridge → core internal routes; they fail closed without it |
 
-The worker's own settings (`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok,codex,agy`, the rotation and the checker) live in its host unit, [`ops/amarillo/systemd/klukai-agy-images.service`](ops/amarillo/systemd/klukai-agy-images.service), outside core and the repository's secrets.
+The worker's own settings (`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=fal`, the fal daily and monthly caps, and the Claude checker) live in its host unit, [`ops/amarillo/systemd/klukai-agy-images.service`](ops/amarillo/systemd/klukai-agy-images.service), outside core and the repository's secrets.
 
 ---
 
@@ -477,7 +477,7 @@ klukai/
 │   ├── assets/fonts/              # bundled Rajdhani + JetBrains Mono (OFL)
 │   └── web/companion/             # the 3D stage (standalone + embed mode)
 ├── scripts/
-│   ├── agy_image_worker.py        # private image worker: Grok → Codex → Agy, Claude checker
+│   ├── agy_image_worker.py        # private image worker: Seedream 4.5 on fal, Claude checker
 │   ├── deploy-web.sh              # PWA build + deploy
 │   └── e2e_live.py                # live end-to-end suite (test user only)
 ├── ops/amarillo/                  # release tooling, CI runner, systemd units, Arc voice

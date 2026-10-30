@@ -12,8 +12,28 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Short questions that ask her to remember (`my birthday?`, `remember?`) load
+  facts, episodes, exchanges and inside jokes. A greeting of twenty characters
+  or fewer still skips that fan-out. When a dossier or an operational record
+  is present, the prompt tells her to use one item if it fits and not to
+  recite the list.
+- The album no longer hides a failed category index or month list. The count
+  says the index is unread, and a retry sits beside the pictures that did
+  load. The older archive screen does the same for its month list.
+- An empty chat with the link down says the link is lost, and the composer
+  hint says so too. A failed bond read is not shown as level zero. Me
+  distinguishes an unread milestone list, and a failed stats read, from an
+  empty success.
+
 ### Changed
 
+- Picture docs match the worker: Seedream 4.5 on fal, on demand, implied
+  intimacy, Claude checks, fail-closed caps. `KLUKAI_IMAGE_PROVIDER=agy` is
+  the account-worker socket, not the retired Agy account. Dream writing caps
+  in the README match the authorized 12/12 starting point and the zero
+  fresh-checkout default.
 - **Cloud AI only (owner decision 2026-10-26, ADR-0020).** No model, embedding, speech or
   image service on Dominus-Nobara or amarillo is used by core any more:
   - chat is Claude Sonnet 5.5 with Claude Haiku 5.5 as the fallback (the Dominus model
