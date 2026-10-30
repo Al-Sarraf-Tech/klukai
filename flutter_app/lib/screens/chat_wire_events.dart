@@ -108,6 +108,7 @@ extension _ChatWireEvents on _ChatScreenState {
 
       case 'affection':
         _update(() {
+          _affectionFailed = false;
           _lastAffectionDelta = msg['delta'] as int? ?? 0;
           _state = _state.copyWith(
             affectionScore: msg['score'] as int? ?? _state.affectionScore,

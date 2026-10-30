@@ -109,7 +109,16 @@ extension _ArchiveSidebar on _MemoryArchiveScreenState {
             ),
             _buildSidebarItem('All', _totalKept),
             // Month/year section
-            if (_timeline.isNotEmpty) ...[
+            if (_timelineFailed)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+                child: TextButton(
+                  key: const Key('archive-timeline-retry'),
+                  onPressed: _loadTimeline,
+                  child: const Text("Couldn't read the months. Retry."),
+                ),
+              )
+            else if (_timeline.isNotEmpty) ...[
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
                 child: Text(

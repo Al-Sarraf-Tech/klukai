@@ -215,6 +215,7 @@ extension _ChatConnection on _ChatScreenState {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         _update(() {
+          _affectionFailed = false;
           _state = _state.copyWith(
             affectionScore: data['score'] as int? ?? 0,
             affectionLevel: data['level'] as int? ?? 0,
@@ -224,9 +225,12 @@ extension _ChatConnection on _ChatScreenState {
         });
       } else if (response.statusCode == 401) {
         _handleAuthExpired(); // same soft-lock as _loadHistory; see there
+      } else if (mounted && !_authExpired) {
+        _update(() => _affectionFailed = true);
       }
     } catch (e) {
       debugPrint('Failed to load affection: $e');
+      if (mounted && !_authExpired) _update(() => _affectionFailed = true);
     }
   }
 

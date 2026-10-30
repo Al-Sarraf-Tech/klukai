@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+
 import 'dart:js_interop';
+
 import 'package:web/web.dart' as web;
+
 import '../main.dart';
 import '../theme/mood_visuals.dart';
 import '../models/message.dart';
@@ -295,6 +299,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final List<ChatMessage> _older = [];
   bool _historyLoading = true;
   bool _historyFailed = false;
+  bool _affectionFailed = false;
   int _historyGeneration = 0;
   bool _olderFailed = false;
   bool _loadingOlder = false;

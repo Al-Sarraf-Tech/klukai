@@ -1,8 +1,10 @@
 import 'dart:typed_data';
 import 'dart:js_interop';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:web/web.dart' as web;
+
 import '../main.dart';
 import '../models/memory.dart';
 import '../services/memory_service.dart';
@@ -48,6 +50,7 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
 
   List<MemoryCategory> _categories = [];
   List<MonthGroup> _timeline = [];
+  bool _timelineFailed = false;
   List<Memory> _memories = [];
   String _selectedCategory = 'All';
   String? _selectedMonth; // null = all months
@@ -113,10 +116,21 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
   Future<void> _loadTimeline() async {
     try {
       final tl = await _service.fetchTimeline();
-      if (mounted) setState(() => _timeline = tl);
+      if (mounted) {
+        setState(() {
+          _timeline = tl;
+          _timelineFailed = false;
+        });
+      }
     } on MemoryServiceException catch (e) {
-      if (e.isAuthExpired) _handleAuthExpired();
-    } catch (_) {}
+      if (e.isAuthExpired) {
+        _handleAuthExpired();
+        return;
+      }
+      if (mounted) setState(() => _timelineFailed = true);
+    } catch (_) {
+      if (mounted) setState(() => _timelineFailed = true);
+    }
   }
 
   Future<void> _loadMemories({String? category, String? month}) async {

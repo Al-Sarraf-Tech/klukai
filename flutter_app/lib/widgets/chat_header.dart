@@ -39,6 +39,7 @@ class ChatHeader extends StatelessWidget {
     this.glow = HudColors.cyan,
     this.spiking = false,
     this.affectionScore = 0,
+    this.affectionKnown = true,
     this.lastAffectionDelta,
     this.herDay,
     this.onMenu,
@@ -61,6 +62,10 @@ class ChatHeader extends StatelessWidget {
   /// A heartbeat surge is in progress: the ECG runs red.
   final bool spiking;
   final int affectionScore;
+
+  /// False when the bond could not be read. The header must not print LV0
+  /// as if that were her level.
+  final bool affectionKnown;
   final int? lastAffectionDelta;
   final HerDay? herDay;
   final ValueChanged<ChatMenuAction>? onMenu;
@@ -161,15 +166,18 @@ class ChatHeader extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         Tooltip(
-          message: '$affectionLevelName · $affectionScore$deltaText',
+          message: affectionKnown
+              ? '$affectionLevelName · $affectionScore$deltaText'
+              : 'Affinity unread',
           child: Semantics(
-            label:
-                'Affinity level $level of $kMaxAffinityLevel, $affectionLevelName',
+            label: affectionKnown
+                ? 'Affinity level $level of $kMaxAffinityLevel, $affectionLevelName'
+                : 'Affinity unread',
             excludeSemantics: true,
             child: _ReadoutRow(
               label: 'AFFINITY',
-              middle: AffinityPips(level: level),
-              value: 'LV$level',
+              middle: AffinityPips(level: affectionKnown ? level : 0),
+              value: affectionKnown ? 'LV$level' : '—',
               valueKey: const Key('chat-header-level'),
             ),
           ),
@@ -200,6 +208,7 @@ class ChatHeader extends StatelessWidget {
 
   Widget _compactLine() {
     final level = affectionLevel.clamp(0, kMaxAffinityLevel);
+    final levelLabel = affectionKnown ? 'LV$level' : '—';
     return Padding(
       padding: const EdgeInsets.only(top: 4, bottom: 2),
       child: LayoutBuilder(
@@ -214,7 +223,7 @@ class ChatHeader extends StatelessWidget {
                 Text('KLUKAI', style: HudText.display(size: 18)),
                 _linkState(size: 10),
                 Text(
-                  'LV$level',
+                  levelLabel,
                   key: const Key('chat-header-level'),
                   style: HudText.label(
                     size: 10.5,
@@ -246,7 +255,7 @@ class ChatHeader extends StatelessWidget {
               Flexible(child: _linkState(size: 10)),
               const SizedBox(width: 8),
               Text(
-                'LV$level',
+                levelLabel,
                 key: const Key('chat-header-level'),
                 style: HudText.label(
                   size: 10.5,

@@ -12,6 +12,8 @@ import '../widgets/hud_parts.dart';
 import 'subscription_screen.dart';
 import 'timeline_screen.dart';
 
+enum _Fetch { loading, ready, failed }
+
 /// The bond readout from GET /api/user/stats.
 class BondStats {
   const BondStats({
@@ -103,7 +105,9 @@ class _HudMeScreenState extends State<HudMeScreen> {
   late final LocalPrefs _prefs = widget.prefs ?? defaultLocalPrefs();
 
   BondStats? _stats;
+  _Fetch _statsFetch = _Fetch.loading;
   Map<String, String> _milestones = const {};
+  _Fetch _milestonesFetch = _Fetch.loading;
   VoiceLanguage _language = VoiceLanguage.en;
   bool _savingLanguage = false;
   late bool _open3d = _prefs.read(kOpenIn3dPrefKey) == 'true';
@@ -145,12 +149,22 @@ class _HudMeScreenState extends State<HudMeScreen> {
         headers: _headers,
       );
       if (r.statusCode == 401) return _authExpired();
-      if (r.statusCode != 200) return;
+      if (r.statusCode != 200) {
+        if (mounted) setState(() => _statsFetch = _Fetch.failed);
+        return;
+      }
       final body = jsonDecode(utf8.decode(r.bodyBytes));
       if (body is Map<String, dynamic> && mounted) {
-        setState(() => _stats = BondStats.fromJson(body));
+        setState(() {
+          _stats = BondStats.fromJson(body);
+          _statsFetch = _Fetch.ready;
+        });
+      } else if (mounted) {
+        setState(() => _statsFetch = _Fetch.failed);
       }
-    } catch (_) {}
+    } catch (_) {
+      if (mounted) setState(() => _statsFetch = _Fetch.failed);
+    }
   }
 
   Future<void> _loadMilestones() async {
@@ -160,17 +174,25 @@ class _HudMeScreenState extends State<HudMeScreen> {
         headers: _headers,
       );
       if (r.statusCode == 401) return _authExpired();
-      if (r.statusCode != 200) return;
+      if (r.statusCode != 200) {
+        if (mounted) setState(() => _milestonesFetch = _Fetch.failed);
+        return;
+      }
       final body = jsonDecode(utf8.decode(r.bodyBytes));
       final data = body is Map ? body['milestones'] : null;
       if (data is Map && mounted) {
-        setState(
-          () => _milestones = data.map(
+        setState(() {
+          _milestones = data.map(
             (k, v) => MapEntry(k.toString(), v.toString()),
-          ),
-        );
+          );
+          _milestonesFetch = _Fetch.ready;
+        });
+      } else if (mounted) {
+        setState(() => _milestonesFetch = _Fetch.failed);
       }
-    } catch (_) {}
+    } catch (_) {
+      if (mounted) setState(() => _milestonesFetch = _Fetch.failed);
+    }
   }
 
   Future<void> _loadVoice() async {
@@ -337,6 +359,33 @@ class _HudMeScreenState extends State<HudMeScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
+                if (_statsFetch == _Fetch.failed)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            "Couldn't read days, streak, or memories.",
+                            key: const Key('me-stats-error'),
+                            style: HudText.body(
+                              size: 13,
+                              color: HudColors.textDim,
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          key: const Key('me-stats-retry'),
+                          onPressed: _loadStats,
+                          style: TextButton.styleFrom(
+                            foregroundColor: HudColors.cyan,
+                            minimumSize: const Size(64, 48),
+                          ),
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
                 Row(
                   children: [
                     Expanded(
@@ -422,12 +471,19 @@ class _HudMeScreenState extends State<HudMeScreen> {
           HudSettingRow(
             key: const Key('me-timeline'),
             title: 'Relationship timeline',
-            subtitle: _milestones.isEmpty
-                ? 'Your milestones together'
-                : _milestones.length == 1
-                ? '1 milestone together'
-                : '${_milestones.length} milestones together',
-            onTap: _openTimeline,
+            subtitle: switch (_milestonesFetch) {
+              _Fetch.loading => 'Reading milestones…',
+              _Fetch.failed => "Couldn't read milestones. Tap to retry.",
+              _Fetch.ready =>
+                _milestones.isEmpty
+                    ? 'No milestones recorded yet.'
+                    : _milestones.length == 1
+                    ? '1 milestone together'
+                    : '${_milestones.length} milestones together',
+            },
+            onTap: _milestonesFetch == _Fetch.failed
+                ? _loadMilestones
+                : _openTimeline,
             trailing: const Icon(Icons.chevron_right, color: HudColors.textDim),
           ),
           const SizedBox(height: 10),

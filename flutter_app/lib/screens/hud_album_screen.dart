@@ -130,6 +130,8 @@ class _HudAlbumScreenState extends State<HudAlbumScreen> {
 
   List<MemoryCategory>? _categories;
   List<MonthGroup> _timeline = const [];
+  bool _categoriesFailed = false;
+  bool _timelineFailed = false;
   List<Memory> _memories = [];
   AlbumFilter _filter = AlbumFilter.all;
   String? _month;
@@ -182,19 +184,41 @@ class _HudAlbumScreenState extends State<HudAlbumScreen> {
   Future<void> _loadCategories() async {
     try {
       final cats = await _service.fetchCategories();
-      if (mounted) setState(() => _categories = cats);
+      if (mounted) {
+        setState(() {
+          _categories = cats;
+          _categoriesFailed = false;
+        });
+      }
     } on MemoryServiceException catch (e) {
-      if (e.isAuthExpired) _authExpired();
-    } catch (_) {}
+      if (e.isAuthExpired) {
+        _authExpired();
+        return;
+      }
+      if (mounted) setState(() => _categoriesFailed = true);
+    } catch (_) {
+      if (mounted) setState(() => _categoriesFailed = true);
+    }
   }
 
   Future<void> _loadTimeline() async {
     try {
       final tl = await _service.fetchTimeline();
-      if (mounted) setState(() => _timeline = tl);
+      if (mounted) {
+        setState(() {
+          _timeline = tl;
+          _timelineFailed = false;
+        });
+      }
     } on MemoryServiceException catch (e) {
-      if (e.isAuthExpired) _authExpired();
-    } catch (_) {}
+      if (e.isAuthExpired) {
+        _authExpired();
+        return;
+      }
+      if (mounted) setState(() => _timelineFailed = true);
+    } catch (_) {
+      if (mounted) setState(() => _timelineFailed = true);
+    }
   }
 
   /// First page for the current month. Filters are applied on the client,
@@ -536,7 +560,9 @@ class _HudAlbumScreenState extends State<HudAlbumScreen> {
         padding: _kGutter,
         child: HudScreenHeader(
           kicker: 'Archive // Memory album',
-          trailing: '$_entryCount ${_entryCount == 1 ? 'entry' : 'entries'}',
+          trailing: _categoriesFailed
+              ? 'index unread'
+              : '$_entryCount ${_entryCount == 1 ? 'entry' : 'entries'}',
           trailingKey: const Key('album-count'),
           title: 'Album',
           subtitle: 'Her collection',
@@ -584,8 +610,55 @@ class _HudAlbumScreenState extends State<HudAlbumScreen> {
           ),
         ),
       ],
+      if (!_loading && !_error && (_categoriesFailed || _timelineFailed))
+        _indexNotice(),
     ],
   );
+
+  /// Pictures can load while the index or the month list cannot. Say so,
+  /// instead of hiding the month control and printing a page-length total.
+  Widget _indexNotice() {
+    final line = _categoriesFailed && _timelineFailed
+        ? "Couldn't read the archive index or the months. The pictures you can see are still here."
+        : _categoriesFailed
+        ? "Couldn't read the archive index. The pictures you can see are still here."
+        : "Couldn't read the months. The pictures you can see are still here.";
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+      child: Semantics(
+        key: const Key('album-partial-error'),
+        liveRegion: true,
+        child: Row(
+          children: [
+            const Icon(
+              Icons.cloud_off_outlined,
+              size: 18,
+              color: HudColors.textDim,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                line,
+                style: HudText.body(size: 13, color: HudColors.textDim),
+              ),
+            ),
+            TextButton(
+              key: const Key('album-partial-retry'),
+              onPressed: () {
+                if (_categoriesFailed) _loadCategories();
+                if (_timelineFailed) _loadTimeline();
+              },
+              style: TextButton.styleFrom(
+                foregroundColor: HudColors.cyan,
+                minimumSize: const Size(64, 48),
+              ),
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   String _monthLabel(String month) {
     for (final g in _timeline) {

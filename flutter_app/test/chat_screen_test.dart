@@ -355,9 +355,8 @@ Future<FakeWebSocketService> _pumpChat(
   await tester.pumpWidget(
     MaterialApp(
       builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(
-          context,
-        ).copyWith(textScaler: TextScaler.linear(textScale)),
+        data: MediaQuery.of(context)
+            .copyWith(textScaler: TextScaler.linear(textScale)),
         child: child!,
       ),
       // A non-routable origin keeps the (try/caught) history/affection fetches
@@ -1721,6 +1720,42 @@ void main() {
         fake.sent.where((frame) => frame['content'] == 'spoken line'),
         isEmpty,
       );
+      fake.dispose();
+    });
+  });
+
+  group('ChatScreen — quiet states', () {
+    testWidgets('an empty chat with the link down does not look ready', (
+      tester,
+    ) async {
+      final fake = await _pumpChat(tester);
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Awaiting orders, Commander.'), findsOneWidget);
+      fake.setConnected(false);
+      await tester.pump();
+      expect(find.byKey(const Key('chat-link-down')), findsOneWidget);
+      expect(find.text('Awaiting orders, Commander.'), findsNothing);
+      expect(find.text('// LINK DOWN…'), findsOneWidget);
+      expect(find.text('Mission briefing'), findsNothing);
+      fake.dispose();
+    });
+
+    testWidgets('a failed bond read is not Cold Assessment', (tester) async {
+      final fake = await _pumpChat(
+        tester,
+        historyClient: MockClient((request) async {
+          if (request.url.path == '/api/affection') {
+            return http.Response('{}', 503);
+          }
+          return http.Response('{"messages":[]}', 200);
+        }),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('chat-affection-unread')), findsOneWidget);
+      expect(find.text('—'), findsWidgets);
+      expect(find.text('LV0'), findsNothing);
       fake.dispose();
     });
   });

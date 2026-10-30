@@ -147,7 +147,11 @@ class ChatComposerBar extends StatelessWidget {
     final maxDraftLines = ((visibleHeight * 0.24 - 26) / lineHeight)
         .floor()
         .clamp(1, 4);
-    final hint = locked ? '// ${lockReason ?? 'STANDBY'}…' : '> TRANSMIT…';
+    final hint = locked
+        ? '// ${lockReason ?? 'STANDBY'}…'
+        : disabled
+        ? '// LINK DOWN…'
+        : '> TRANSMIT…';
     OutlineInputBorder edge(Color color) => OutlineInputBorder(
       borderRadius: BorderRadius.zero,
       borderSide: BorderSide(color: color),
@@ -179,6 +183,8 @@ class ChatComposerBar extends StatelessWidget {
             size: 12,
             color: locked
                 ? lockColor.withValues(alpha: 0.7)
+                : disabled
+                ? HudColors.danger
                 : HudColors.textMuted,
           ),
           isDense: true,

@@ -19,6 +19,7 @@ class _Server {
   int voiceStatus;
   int putStatus;
   int statsStatus = 200;
+  int milestonesStatus = 200;
   final List<String> puts = [];
 
   late final client = MockClient((req) async {
@@ -38,7 +39,7 @@ class _Server {
           jsonEncode({
             'milestones': {'first_kiss': '2026-05-01'},
           }),
-          200,
+          milestonesStatus,
         );
       case '/api/voice/settings':
         if (req.method == 'PUT') {
@@ -93,9 +94,9 @@ String _text(WidgetTester tester, Key key) => tester
     )
     .data!;
 
-bool _selected(WidgetTester tester, String label) => isSemantics(
-  isSelected: true,
-).matches(tester.getSemantics(find.text(label)), <dynamic, dynamic>{});
+bool _selected(WidgetTester tester, String label) =>
+    isSemantics(isSelected: true)
+        .matches(tester.getSemantics(find.text(label)), <dynamic, dynamic>{});
 
 void main() {
   testWidgets('bond: level, bar and the stats', (tester) async {
@@ -118,6 +119,22 @@ void main() {
     await _pump(tester, server: s);
     expect(_text(tester, const Key('me-days')), '—');
     expect(find.text('JALSARRAF'), findsNothing);
+    expect(find.byKey(const Key('me-stats-error')), findsOneWidget);
+    expect(find.text("Couldn't read milestones. Tap to retry."), findsNothing);
+  });
+
+  testWidgets('a dead milestone list is not an empty timeline', (tester) async {
+    final s = _Server()..milestonesStatus = 503;
+    await _pump(tester, server: s);
+    expect(
+      find.text("Couldn't read milestones. Tap to retry."),
+      findsOneWidget,
+    );
+    expect(find.text('No milestones recorded yet.'), findsNothing);
+    s.milestonesStatus = 200;
+    await tester.tap(find.byKey(const Key('me-timeline')));
+    await tester.pumpAndSettle();
+    expect(find.text('1 milestone together'), findsOneWidget);
   });
 
   testWidgets('voice language loads JP and saves EN', (tester) async {

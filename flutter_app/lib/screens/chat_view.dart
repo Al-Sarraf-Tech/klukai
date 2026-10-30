@@ -76,6 +76,7 @@ extension _ChatView on _ChatScreenState {
               constraints: BoxConstraints(maxHeight: box.maxHeight * 0.2),
               child: SingleChildScrollView(child: _buildToolStatus()),
             ),
+          if (_affectionFailed) _buildAffectionNotice(),
           if (_state.isTyping && _streamingId == null)
             _buildProcessingIndicator(),
           _buildComposer(),
@@ -126,6 +127,7 @@ extension _ChatView on _ChatScreenState {
       affectionScore: _state.affectionScore,
       affectionLevel: _state.affectionLevel,
       affectionLevelName: _state.affectionLevelName,
+      affectionKnown: !_affectionFailed,
       lastAffectionDelta: _lastAffectionDelta,
       herDay: _herDay,
       view: _view,
@@ -136,6 +138,35 @@ extension _ChatView on _ChatScreenState {
       compact: compact,
     );
   }
+
+  Widget _buildAffectionNotice() => Semantics(
+    key: const Key('chat-affection-unread'),
+    liveRegion: true,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 8, 0),
+      child: Row(
+        children: [
+          const Icon(Icons.favorite_border, size: 16, color: HudColors.textDim),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              "Couldn't read the bond.",
+              style: HudText.body(size: 13, color: HudColors.textDim),
+            ),
+          ),
+          TextButton(
+            key: const Key('chat-affection-retry'),
+            onPressed: _loadAffection,
+            style: TextButton.styleFrom(
+              foregroundColor: HudColors.cyan,
+              minimumSize: const Size(64, 48),
+            ),
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
+    ),
+  );
 
   Widget _buildComposer() {
     return ChatComposerBar(
@@ -175,6 +206,7 @@ extension _ChatView on _ChatScreenState {
   Widget _buildMessageList() {
     if (_messages.isEmpty) {
       if (_historyLoading || _historyFailed) return const SizedBox.expand();
+      final linkDown = !_state.isConnected;
       return LayoutBuilder(
         builder: (context, box) => SingleChildScrollView(
           child: ConstrainedBox(
@@ -195,26 +227,36 @@ extension _ChatView on _ChatScreenState {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'H.I.D.E. 404 — NEURAL LINK ESTABLISHED',
+                      linkDown
+                          ? 'SECURE LINK LOST'
+                          : 'H.I.D.E. 404 — NEURAL LINK ESTABLISHED',
                       textAlign: TextAlign.center,
                       style: HudText.label(
                         size: 9.5,
-                        color: HudColors.textMuted,
+                        color: linkDown
+                            ? HudColors.danger
+                            : HudColors.textMuted,
                       ),
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      'Awaiting orders, Commander.',
+                      linkDown
+                          ? 'She cannot hear this until the link returns.'
+                          : 'Awaiting orders, Commander.',
+                      key: linkDown ? const Key('chat-link-down') : null,
+                      textAlign: TextAlign.center,
                       style: HudText.body(size: 15, color: HudColors.textDim),
                     ),
-                    const SizedBox(height: 16),
-                    // Conversation starters — adapt to affection level
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      alignment: WrapAlignment.center,
-                      children: _getStarters().map(_starterChip).toList(),
-                    ),
+                    if (!linkDown) ...[
+                      const SizedBox(height: 16),
+                      // Conversation starters — adapt to affection level
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.center,
+                        children: _getStarters().map(_starterChip).toList(),
+                      ),
+                    ],
                   ],
                 ),
               ),

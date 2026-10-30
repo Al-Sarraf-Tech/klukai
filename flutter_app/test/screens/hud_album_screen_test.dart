@@ -25,6 +25,8 @@ class _FakeMemoryService extends MemoryService {
   List<MemoryCategory> categories;
   List<MonthGroup> timeline;
   Object? error;
+  Object? categoriesError;
+  Object? timelineError;
   final List<({String? before, String? beforeId, String? month})> calls = [];
 
   @override
@@ -43,10 +45,18 @@ class _FakeMemoryService extends MemoryService {
   }
 
   @override
-  Future<List<MemoryCategory>> fetchCategories() async => categories;
+  Future<List<MemoryCategory>> fetchCategories() async {
+    final e = categoriesError;
+    if (e != null) throw e;
+    return categories;
+  }
 
   @override
-  Future<List<MonthGroup>> fetchTimeline() async => timeline;
+  Future<List<MonthGroup>> fetchTimeline() async {
+    final e = timelineError;
+    if (e != null) throw e;
+    return timeline;
+  }
 }
 
 class _Links implements AlbumLinks {
@@ -394,6 +404,33 @@ void main() {
     expect(find.byKey(const Key('album-card-older')), findsOneWidget);
     expect(fake.calls[1].beforeId, 'm49');
     expect(fake.calls[1].before, first.last.createdAtRaw);
+  });
+
+  testWidgets('a dead index stays visible beside the pictures that loaded', (
+    tester,
+  ) async {
+    final fake = _FakeMemoryService(pages: [_sample])
+      ..categoriesError = MemoryServiceException(
+        503,
+        '/api/memories/categories',
+      )
+      ..timelineError = Exception('timeline down');
+    await _pump(tester, service: fake);
+    expect(find.byKey(const Key('album-featured-stars')), findsOneWidget);
+    expect(find.byKey(const Key('album-empty')), findsNothing);
+    expect(find.byKey(const Key('album-partial-error')), findsOneWidget);
+    expect(find.text('INDEX UNREAD'), findsOneWidget);
+    expect(find.byKey(const Key('album-months')), findsNothing);
+
+    fake.categoriesError = null;
+    fake.categories = _cats();
+    fake.timelineError = null;
+    fake.timeline = [MonthGroup(month: '2026-10', count: 4)];
+    await tester.tap(find.byKey(const Key('album-partial-retry')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('album-partial-error')), findsNothing);
+    expect(find.text('128 ENTRIES'), findsOneWidget);
+    expect(find.byKey(const Key('album-months')), findsOneWidget);
   });
 
   testWidgets('an unreachable archive shows RETRY, not an empty album', (
