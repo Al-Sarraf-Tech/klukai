@@ -14,7 +14,6 @@ callers fall back to safe defaults and never surface them to the chat turn.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import time
