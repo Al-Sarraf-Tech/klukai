@@ -94,9 +94,9 @@ String _text(WidgetTester tester, Key key) => tester
     )
     .data!;
 
-bool _selected(WidgetTester tester, String label) =>
-    isSemantics(isSelected: true)
-        .matches(tester.getSemantics(find.text(label)), <dynamic, dynamic>{});
+bool _selected(WidgetTester tester, String label) => isSemantics(
+  isSelected: true,
+).matches(tester.getSemantics(find.text(label)), <dynamic, dynamic>{});
 
 void main() {
   testWidgets('bond: level, bar and the stats', (tester) async {
