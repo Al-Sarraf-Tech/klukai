@@ -440,6 +440,28 @@ def wants_recall(message: str) -> bool:
     return any(kw in lower for kw in RECALL_KEYWORDS)
 
 
+# Turns of twenty characters or fewer skip the recall fan-out (greetings,
+# "ok", "thanks"). These still need it: she is being asked for something
+# she is supposed to already know, even when the question is short.
+_SHORT_MEMORY_CUE = re.compile(
+    r"\b(?:remember|memories|memory|birthday|birthdays|promise|promised|"
+    r"anniversary|nickname)\b|my name|who am i",
+    re.IGNORECASE,
+)
+
+
+def asks_to_be_remembered(message: str) -> bool:
+    """True when this turn should load memories, facts and past exchanges.
+
+    Album phrases in ``wants_recall`` count, and so do short personal
+    questions ("my birthday?", "what's my name", "remember?") that would
+    otherwise fall under the twenty-character skip.
+    """
+    if wants_recall(message):
+        return True
+    return _SHORT_MEMORY_CUE.search(message) is not None
+
+
 def wants_mission_start(message: str) -> bool:
     lower = message.lower()
     return any(kw in lower for kw in MISSION_START_KEYWORDS)

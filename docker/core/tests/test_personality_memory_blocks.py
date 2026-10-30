@@ -32,6 +32,7 @@ class TestMemoryBlock:
     def test_header_text_intact(self):
         out = build_memory_block(["x"])
         assert "relevant past interactions with the Commander" in out
+        assert "do not recite the list" in out
 
 
 class TestRelationshipBlock:
@@ -41,6 +42,7 @@ class TestRelationshipBlock:
     def test_single_fact(self):
         out = build_relationship_block({"birthday": "March 5"})
         assert "COMMANDER DOSSIER" in out
+        assert "do not recite it as a list" in out
         assert "birthday: March 5" in out
 
     def test_multiple_facts_each_on_own_line(self):

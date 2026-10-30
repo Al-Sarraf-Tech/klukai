@@ -18,7 +18,11 @@ def build_memory_block(memories: list[str]) -> str:
             "Do not invent a preference, a shared event, or a ready briefing."
         )
     formatted = "\n".join(f"  - {m}" for m in memories)
-    return f"OPERATIONAL RECORDS (relevant past interactions with the Commander):\n{formatted}"
+    return (
+        "OPERATIONAL RECORDS (relevant past interactions with the Commander — "
+        "use one if it fits this turn; do not recite the list):\n"
+        f"{formatted}"
+    )
 
 
 def build_relationship_block(facts: dict[str, Any]) -> str:
@@ -26,8 +30,10 @@ def build_relationship_block(facts: dict[str, Any]) -> str:
     if not facts:
         return ""
     lines = [f"  - {k}: {v}" for k, v in facts.items()]
-    return "COMMANDER DOSSIER (what you know about your Commander):\n" + "\n".join(
-        lines
+    return (
+        "COMMANDER DOSSIER (what you know about your Commander — "
+        "answer from it when he asks, and do not recite it as a list):\n"
+        + "\n".join(lines)
     )
 
 

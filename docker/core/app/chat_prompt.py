@@ -54,9 +54,14 @@ class ChatPromptBuilder:
         # (importance bias only fires when affection_level is passed through).
         aff_state = await self.affection.get_state(user_id)
 
-        is_short = len(content.strip()) <= 20
+        # Greetings stay cheap. A short question that asks her to remember
+        # ("my birthday?", "remember?") still loads the dossier and the
+        # past, or she answers as if she had never been told.
+        from .helpers import asks_to_be_remembered
+
+        skip_recall = len(content.strip()) <= 20 and not asks_to_be_remembered(content)
         episode_memories, rel_facts, recalled_exchanges = await self.recall(
-            content, is_short, aff_state.level, user_id
+            content, skip_recall, aff_state.level, user_id
         )
 
         # Assemble system prompt
@@ -99,7 +104,9 @@ class ChatPromptBuilder:
         # Inside jokes / running references (feature: inside jokes). Surfaced as a
         # per-message block below — NOT folded into assemble_system_prompt — so the
         # golden system-prompt snapshots stay stable. Skipped for very short msgs.
-        inside_jokes = [] if is_short else await self.memory.get_inside_jokes(user_id)
+        inside_jokes = (
+            [] if skip_recall else await self.memory.get_inside_jokes(user_id)
+        )
 
         # Crown jewel tribute — the Commander's most treasured words to Klukai.
         # Only surfaces in the prompt at affection level 4+ (per build_crown_jewel_block).
@@ -169,10 +176,12 @@ class ChatPromptBuilder:
         )
 
     async def recall(
-        self, content: str, is_short: bool, level: int, user_id: str
+        self, content: str, skip_recall: bool, level: int, user_id: str
     ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
-        # Skip expensive memory recall for very short messages (hi, ok, yes, etc)
-        if is_short:
+        # Skip the recall fan-out for a short greeting. A short question that
+        # asks her to remember is not a greeting; ``skip_recall`` is already
+        # false for those.
+        if skip_recall:
             episode_memories: list[Any] = []
             rel_facts: dict[Any, Any] = {}
             recalled_exchanges: list[Any] = []

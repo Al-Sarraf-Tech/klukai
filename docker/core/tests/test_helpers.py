@@ -226,6 +226,17 @@ class TestIntentDetection:
     def test_recall_scrapbook(self):
         assert _wants_recall("open your scrapbook")
 
+    def test_short_personal_question_still_asks_to_be_remembered(self):
+        from app.helpers import asks_to_be_remembered
+
+        assert asks_to_be_remembered("my birthday?")
+        assert asks_to_be_remembered("what's my name")
+        assert asks_to_be_remembered("remember?")
+        assert asks_to_be_remembered("do you remember")
+        assert not asks_to_be_remembered("hello")
+        assert not asks_to_be_remembered("ok")
+        assert not asks_to_be_remembered("thanks")
+
     # Mission start
     def test_mission_start_updates_every(self):
         assert _wants_mission_start("Give me updates every 30 minutes")

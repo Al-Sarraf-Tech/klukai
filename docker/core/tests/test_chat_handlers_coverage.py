@@ -324,6 +324,18 @@ class TestDirectStreamingPath:
             await _drain_tasks()
 
         ns.memory.recall_for_prompt.assert_not_called()
+        ns.memory.get_inside_jokes.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_short_memory_question_still_recalls(self):
+        from app.chat_handlers import _handle_message
+
+        with _patched_pipeline(stream_tokens=["March."]) as ns:
+            await _handle_message("my birthday?", _fresh_session())
+            await _drain_tasks()
+
+        ns.memory.recall_for_prompt.assert_awaited_once()
+        ns.memory.get_inside_jokes.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_long_message_triggers_recall(self):
