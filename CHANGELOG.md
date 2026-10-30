@@ -35,11 +35,20 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- **Grok account login for every Klukai model call (owner, 2026-10-30).**
+  Chat, background text, pictures, and the picture checker use the official
+  Grok CLI at `grok-4.7` with `--effort medium`. No xAI API key, no paid
+  credits, and no fallback to Claude or fal. Picture renders reserve a
+  fail-closed ledger (`KLUKAI_GROK_DAILY_LIMIT=10`,
+  `KLUKAI_GROK_MONTHLY_LIMIT=150`). fal remains an opt-in sole provider.
+  `ops/amarillo/scripts/klukai-grok-smoke.py` checks one render, the checker,
+  the ledger, and one chat turn after deploy.
 - Picture docs match the worker: Seedream 4.5 on fal, on demand, implied
   intimacy, Claude checks, fail-closed caps. `KLUKAI_IMAGE_PROVIDER=agy` is
   the account-worker socket, not the retired Agy account. Dream writing caps
   in the README match the authorized 12/12 starting point and the zero
-  fresh-checkout default.
+  fresh-checkout default. The 2026-10-30 Grok decision above is the production
+  path; this bullet records the doc alignment that preceded it.
 - **Cloud AI only (owner decision 2026-10-26, ADR-0020).** No model, embedding, speech or
   image service on Dominus-Nobara or amarillo is used by core any more:
   - chat is Claude Sonnet 5.5 with Claude Haiku 5.5 as the fallback (the Dominus model

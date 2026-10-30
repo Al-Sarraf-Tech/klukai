@@ -1,19 +1,34 @@
 # Amarillo operations
 
 Amarillo owns Klukai's core services, persistent state, PWA, event bridge, and
-the retained [Intel Arc XTTS release](voice_xpu/README.md). The documented
-production conversation primary is Sonnet 5.5 with medium adaptive thinking;
-Dominus is secondary. Main speech uses Dominus-Nobara XTTS with asynchronous
-jobs and 24 kHz WAV output. Arc speech is an explicit rollback choice, with no
-automatic Arc or paid voice fallback. Text remains available without Dominus.
-Transcription retains its separate Dominus endpoint.
+the retained [Intel Arc XTTS release](voice_xpu/README.md). Chat, background
+text, pictures, and the picture checker are Grok 4.7 at medium effort through
+the official CLI and `GROK_AUTH_PATH` (owner, 2026-10-30). There is no paid
+API fallback. Fish voice is unchanged. Text remains available when voice is off.
 
-Production images use the private Agy/Grok account pair with alternating
-preference and bounded eligible failover. The newly requested Dominus-third,
+Production pictures are the account worker with `KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok`
+and `KLUKAI_IMAGE_CHECKER=grok`. fal is opt-in only: set the provider to `fal`
+alone, set `KLUKAI_FAL_DAILY_LIMIT` and `KLUKAI_FAL_MONTHLY_LIMIT`, and restart
+`klukai-agy-images.service`. Do not append fal after grok. The Dominus-third,
 Amarillo-last image chain is research work, not an activated production route.
 See the [account-image guide](../../docs/handoff/2026-10-14-agy-main-images.md),
 [main voice handoff](../../docs/handoff/2026-10-14-nobara-primary-voice.md) and
 [ordered-backup samples](../../docs/handoff/2026-10-15-ordered-image-backup-research.md).
+
+After deploy, confirm the account path with one real render and one chat turn.
+This spends one Grok image attempt. It does not print credentials:
+
+```
+GROK_AUTH_PATH=$HOME/.grok/auth.json \
+KLUKAI_GROK_DAILY_LIMIT=10 \
+KLUKAI_GROK_MONTHLY_LIMIT=150 \
+python3 ops/amarillo/scripts/klukai-grok-smoke.py
+```
+
+`SMOKE PASS` requires a PNG, a checker verdict of pass, a ledger row, and a
+chat line `model=grok-4.7 effort=medium` whose source is `stream` or `summary`.
+If the login is stale, `grok login` on this host, then rerun. The unit file
+must be the deployed environment: caps missing fail closed.
 
 Fresh checkouts retain local creative defaults and zero creative API allowances.
 The owner authorized production Anthropic dream/Her POV writing with 12 attempts
@@ -44,6 +59,45 @@ targets. The [PR reviewer](../../docs/runbooks/pr-reviewer.md) (Claude Opus
 5.5, xhigh) reviews ready PRs and approves within fixed rules, keeping
 protected paths for the owner.
 
+Deploy-on-merge recreates `companion-core` and the PWA. It does not install
+or restart `klukai-agy-images.service`. The worker keeps its old process
+until restarted, and `EnvironmentFile=%h/.config/klukai/agy-images.env`
+overrides the unit's `Environment=` lines. A leftover
+`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=fal` in that file wins. Pause the deployer
+before this merges, or the two-minute timer can ship core while chat's
+`POST /complete` route is not running yet.
+
+```sh
+D=~/.local/share/klukai/deployer/current/ops/amarillo/scripts
+python3 $D/klukai-deploy-on-merge.py pause
+```
+
+After CI is green for the merge commit, and while the deployer stays paused,
+move only the production checkout, then restart the worker, and only then
+let core roll out:
+
+```sh
+git -C ~/git/klukai fetch -q origin
+git -C ~/git/klukai checkout -q --no-overwrite-ignore --detach <full sha>
+install -m 0644 ~/git/klukai/ops/amarillo/systemd/klukai-agy-images.service \
+  ~/.config/systemd/user/
+```
+
+In `~/.config/klukai/agy-images.env`, set these without printing the file:
+`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok`, `KLUKAI_IMAGE_CHECKER=grok`,
+`KLUKAI_GROK_DAILY_LIMIT=10`, `KLUKAI_GROK_MONTHLY_LIMIT=150`. Then:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user restart klukai-agy-images.service
+python3 $D/klukai-deploy-on-merge.py resume
+```
+
+Comments in `docker-compose.yml` changed, so the resume deploys only when
+`docs/releases/recovery/compose-22349876a042.md` is in that commit and the
+merge was an approved PR. The smoke command above spends one image attempt
+and runs after core is ready.
+
 ## Memory archive seeding
 
 Amarillo owns the memory-seeding schedule because `companion-core`, its
@@ -51,7 +105,7 @@ database, and the seed script live there.
 
 Since 2026-10-19 seeding does not need Dominus. With
 `KLUKAI_IMAGE_PROVIDER=agy` (production) the seeder selects and annotates
-through the background text helper (Claude Haiku, `app/extraction_llm.py`)
+through the background text helper (Grok 4.7 at medium effort, `app/extraction_llm.py`)
 and draws each kept memory through the account worker
 (`klukai-agy-images.service`), the same journalled path as chat pictures. It
 draws nothing unless core's environment sets `KLUKAI_ALBUM_SEED_RENDERS` to

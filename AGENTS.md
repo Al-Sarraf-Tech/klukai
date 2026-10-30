@@ -1,10 +1,16 @@
 # Klukai
 
 **Cloud AI only (owner decision, 2026-10-26).** Klukai runs no inference on
-Dominus-Nobara or Amarillo: chat is Claude Sonnet 5.5, every background model
-call and memory recall is Claude Haiku 5.5 (high effort), voice in and out is
-Fish Audio, pictures use the cloud providers. There is no local fallback of
-any kind. Design: `docs/superpowers/specs/2026-10-26-cloud-only-ai-design.md`.
+Dominus-Nobara or Amarillo. Voice in and out is Fish Audio. There is no local
+fallback of any kind. Design: `docs/superpowers/specs/2026-10-26-cloud-only-ai-design.md`.
+
+**Grok account login (owner decision, 2026-10-30).** All of Klukai's model use
+runs through the official Grok CLI on the owner's account login: chat,
+background text, pictures, and the picture checker are `grok-4.7` at effort
+`medium`. No xAI API key, no `api.x.ai` client, no paid credits, extra usage
+stays at $0, and `disable_api_key_auth = true`. There is no fallback to a paid
+API. The Claude image checker and the Sonnet/Haiku chat path stay in the tree
+and are not selected. Fish voice is unchanged. See the section below.
 Do not reintroduce LM Studio, Dominus voice, ComfyUI, the GPU lease, local
 embeddings or Qdrant into `docker/core`; `tests/test_cloud_only_invariant.py`
 fails if any of them comes back. `ops/dominus-nobara` is the retired Dominus
@@ -57,9 +63,68 @@ conditioning clips. Dominus XTTS retains its separately pinned
 excerpt and adoption record under `ops/amarillo/voice_xpu`; do not change the
 Dominus lock to deploy that release.
 
+## Klukai's models: Grok account login (owner decision, 2026-10-30)
+
+Jamal: "Switch klukai to Grok through my account login, no API costs." Then:
+"Also for her chat put 4.7 at medium too." Then: "All her stuff must run
+through grok." This supersedes the 2026-10-23 choice of fal/Seedream as the
+picture provider and the 2026-10-14/2026-10-26 choice of Claude Sonnet for
+chat and Claude Haiku for background text.
+
+The pinned CLI is Grok Build 1.0.62. `grok --help` on that binary accepts
+`-m/--model` and `--reasoning-effort` (alias `--effort`). The model id is
+`grok-4.7`. Medium is one of the effort ids the binary documents. Chat,
+background text, picture renders, and the picture checker all pass
+`--model grok-4.7 --effort medium`. The session must report OAuth
+(`apiKeySource=oauth`). `disable_api_key_auth = true` stays in the clean
+Grok home. No `XAI_API_KEY` and no call to `api.x.ai` is added here.
+
+Pictures: `ops/amarillo/systemd/klukai-agy-images.service` sets
+`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok`, `KLUKAI_IMAGE_CHECKER=grok`,
+`GROK_AUTH_PATH=%h/.grok/auth.json`, and
+`KLUKAI_GROK_DAILY_LIMIT=10` / `KLUKAI_GROK_MONTHLY_LIMIT=150`. A missing or
+invalid cap fails closed. The render uses the same locked 2D-anime brief as
+fal, sends only Klukai's approved reference, and describes the Commander in
+text. A nudity grant is refused before references, the ledger, or the CLI.
+The checker uses the same rejection rubric as the Claude checker, including
+photorealistic, 3D, and semi-realistic drift. Core still selects the account
+worker with `KLUKAI_IMAGE_PROVIDER=agy`; that name is the bridge, not the
+renderer. Chat and background text use `POST /complete` on that same worker
+socket. A Grok failure does not fall back to Claude, fal, or any other paid
+API.
+
+fal/Seedream stays in the tree as an opt-in sole provider. To turn it back
+on, set `KLUKAI_ACCOUNT_IMAGE_PROVIDERS=fal` alone (the worker rejects fal
+combined with another provider, so it cannot fail over), set
+`KLUKAI_FAL_DAILY_LIMIT` and `KLUKAI_FAL_MONTHLY_LIMIT` to positive integers,
+and restart `klukai-agy-images.service`. That spends fal credit.
+
+After deploy, as the user who owns the Grok login:
+
+```
+GROK_AUTH_PATH=$HOME/.grok/auth.json \
+KLUKAI_GROK_DAILY_LIMIT=10 \
+KLUKAI_GROK_MONTHLY_LIMIT=150 \
+python3 ops/amarillo/scripts/klukai-grok-smoke.py
+```
+
+That spends one image attempt. It renders once, checks the picture, confirms
+the ledger grew by one, and runs one chat turn. The chat line must show
+`model=grok-4.7` and `effort=medium` with `source=stream` or `source=summary`.
+The summary is `SMOKE PASS` or `SMOKE FAIL`. It does not print credentials.
+
+The login at `GROK_AUTH_PATH` has to still be valid (`grok login` on the host
+if `grok models` says it is not). The unit environment above has to be the
+one the service process actually has; a shell without those variables fails
+closed. The PR reviewer (`ops/amarillo/scripts/klukai-pr-reviewer.py`) is
+still Claude Opus 5.5 at xhigh effort on the Anthropic API. That is an
+operator tool, not her chat, pictures, or background text.
+
 ## Klukai's pictures: Seedream 4.5 on fal (owner decisions, 2026-10-23)
 
-Supersedes the Grok-only and "no paid image APIs" rules below for pictures.
+Provider choice in this section is superseded by the 2026-10-30 Grok decision
+above. The standing rules below still apply. Supersedes the Grok-only and
+"no paid image APIs" rules further down for the period they were in force.
 The owner funded fal.ai and made Seedream 4.5 (`fal-ai/bytedance/seedream/v4.5/edit`)
 Klukai's **only** picture provider (`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=fal`), checked
 by Claude as before. `scripts/fal_image_render.py` sends her approved reference

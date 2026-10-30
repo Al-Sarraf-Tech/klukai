@@ -51,14 +51,11 @@ services:
       FISH_API_KEY: "${FISH_API_KEY:-}"
       KLUKAI_FISH_VOICE_ID: "${KLUKAI_FISH_VOICE_ID:-47fc35b7311944bc9fa238ed856de1f3}"
       KLUKAI_FISH_MODEL: "${KLUKAI_FISH_MODEL:-s2.1-pro-free}"
-      # Claude: Sonnet 5.5 for chat, Haiku 5.5 for everything else (owner,
-      # 2026-10-14 and 2026-10-26). There is no local model: with this off or
-      # without a key, chat is unavailable. Opt-in keeps other deployments
-      # from billing by default.
+      # Chat is account-login Grok through the host worker (owner, 2026-10-30).
+      # These Claude variables are not the chat path and do not open a client.
       KLUKAI_CLAUDE_PRIMARY: "${KLUKAI_CLAUDE_PRIMARY:-false}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      # Separate opt-in for cloud images/creative text; no billable defaults.
-      # agy = the account worker (Grok, then Codex, then Agy).
+      # agy is the account-worker bridge. The host unit selects Grok.
       KLUKAI_IMAGE_PROVIDER: "${KLUKAI_IMAGE_PROVIDER:-agy}"
       # Account-quota Agy worker on Amarillo; no credentials enter this container.
       KLUKAI_CHAT_IMAGE_PROVIDER: "${KLUKAI_CHAT_IMAGE_PROVIDER:-}"
@@ -81,11 +78,10 @@ services:
       KLUKAI_CLOUD_TEXT_DAILY_LIMIT: "${KLUKAI_CLOUD_TEXT_DAILY_LIMIT:-0}"
       KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT: "${KLUKAI_CLOUD_TEXT_MONTHLY_LIMIT:-0}"
       KLUKAI_CREATIVE_LEDGER: "/images/.creative/attempts.sqlite3"
-      # Claude Haiku (high effort) for every background text/JSON call and for
-      # memory recall (owner, 2026-10-19 and 2026-10-26;
-      # docker/core/app/background_llm.py). Paid calls need a positive daily
-      # cap (UTC-day attempts shared by all of it, same ledger); at the cap,
-      # callers use their safe defaults.
+      # Grok 4.7 (medium) for every background text/JSON call and for memory
+      # recall (owner, 2026-10-30; docker/core/app/background_llm.py). Calls
+      # need the host worker and a positive daily cap (UTC-day attempts shared
+      # by all of it, same ledger); at the cap, callers use their safe defaults.
       KLUKAI_EXTRACTION_MODEL: "${KLUKAI_EXTRACTION_MODEL:-claude-haiku-5-5}"
       KLUKAI_EXTRACTION_DAILY_LIMIT: "${KLUKAI_EXTRACTION_DAILY_LIMIT:-0}"
       PERSONALITY_PATH: "/config/personality.yaml"
