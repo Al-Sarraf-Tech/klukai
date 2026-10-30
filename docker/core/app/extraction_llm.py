@@ -156,7 +156,9 @@ async def complete(
     try:
         async with _gate:
             async with asyncio.timeout(REQUEST_TIMEOUT_S):
-                turn = await complete_turn(system_text, prompt, timeout=REQUEST_TIMEOUT_S)
+                turn = await complete_turn(
+                    system_text, prompt, timeout=REQUEST_TIMEOUT_S
+                )
         if turn.model != GROK_MODEL or turn.effort != GROK_EFFORT:
             raise ExtractionLLMError("Unexpected Grok model or effort")
         if len(turn.text.encode()) > _MAX_RESPONSE_BYTES:

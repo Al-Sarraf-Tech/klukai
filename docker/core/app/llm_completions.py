@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 _RETRYABLE = (httpx.HTTPError, ValueError, TimeoutError)
 
 
-def _grok_tool_calls(text: str, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+def _grok_tool_calls(
+    text: str, tools: list[dict[str, Any]] | None
+) -> list[dict[str, Any]]:
     known = {tool["function"]["name"] for tool in (tools or [])}
     try:
         data = json.loads(text)
@@ -41,11 +43,13 @@ def _grok_tool_calls(text: str, tools: list[dict[str, Any]] | None) -> list[dict
         if name not in known or not isinstance(arguments, dict) or name in seen:
             raise ValueError("Invalid or undeclared tool call")
         seen.add(name)
-        calls.append({
-            "id": f"grok_{name}",
-            "type": "function",
-            "function": {"name": name, "arguments": json.dumps(arguments)},
-        })
+        calls.append(
+            {
+                "id": f"grok_{name}",
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(arguments)},
+            }
+        )
     return calls
 
 
@@ -250,13 +254,15 @@ class LLMCompletionsMixin(ABC):
         calls = _grok_tool_calls(turn.text, tools) if tools and allow_tools else []
         return {
             "model": turn.model,
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "" if calls else turn.text,
-                    "tool_calls": calls,
-                },
-            }],
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "" if calls else turn.text,
+                        "tool_calls": calls,
+                    },
+                }
+            ],
             "usage": {},
         }
 

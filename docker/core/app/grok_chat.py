@@ -56,13 +56,21 @@ async def complete_turn(system: str, prompt: str, *, timeout: float = 120.0) -> 
     try:
         transport = httpx.AsyncHTTPTransport(uds=socket, retries=0, trust_env=False)
         async with httpx.AsyncClient(
-            transport=transport, trust_env=False, follow_redirects=False,
+            transport=transport,
+            trust_env=False,
+            follow_redirects=False,
             timeout=httpx.Timeout(timeout, connect=5.0),
         ) as client:
             async with http_stream(
-                "grok_chat", client, "POST", "http://klukai-agy/complete",
+                "grok_chat",
+                client,
+                "POST",
+                "http://klukai-agy/complete",
                 json=payload,
-                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
             ) as response:
                 raw = bytearray()
                 async for chunk in response.aiter_bytes():
@@ -80,7 +88,12 @@ async def complete_turn(system: str, prompt: str, *, timeout: float = 120.0) -> 
         raise GrokChatError("Grok chat returned malformed JSON") from exc
     text, model, effort = data.get("text"), data.get("model"), data.get("effort")
     source = data.get("effort_source")
-    if (not isinstance(text, str) or not text.strip() or model != MODEL or effort != EFFORT
-            or source not in {"stream", "summary", "flag"}):
+    if (
+        not isinstance(text, str)
+        or not text.strip()
+        or model != MODEL
+        or effort != EFFORT
+        or source not in {"stream", "summary", "flag"}
+    ):
         raise GrokChatError("Grok chat model or effort was unexpected")
     return Turn(text.strip(), model, effort, source)

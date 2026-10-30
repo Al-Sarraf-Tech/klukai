@@ -159,7 +159,9 @@ class LLMRouter(LLMCompletionsMixin):
     ) -> LLMConfig:
         """Decide which model answers this message."""
         if user_override and user_override != GROK_MODEL:
-            logger.warning("Ignoring model override %r; chat is grok-4.7", user_override)
+            logger.warning(
+                "Ignoring model override %r; chat is grok-4.7", user_override
+            )
         return _grok_config()
 
     async def needs_agent(self, message: str, *, interactive: bool = False) -> bool:
