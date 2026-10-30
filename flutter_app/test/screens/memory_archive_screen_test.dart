@@ -41,6 +41,7 @@ class _FakeMemoryService extends MemoryService {
   >
   memoryArgs = [];
   List<MemoryCategory> categories = [];
+  Object? categoriesError;
   List<MonthGroup> timeline = [];
 
   @override
@@ -64,7 +65,11 @@ class _FakeMemoryService extends MemoryService {
   }
 
   @override
-  Future<List<MemoryCategory>> fetchCategories() async => categories;
+  Future<List<MemoryCategory>> fetchCategories() async {
+    final error = categoriesError;
+    if (error != null) throw error;
+    return categories;
+  }
 
   @override
   Future<List<MonthGroup>> fetchTimeline() async => timeline;
@@ -109,6 +114,32 @@ Future<_FakeMemoryService> _pumpArchive(
 const _sentinel = Key('archive-load-more');
 
 void main() {
+  testWidgets('a dead category list is not an empty sidebar', (tester) async {
+    final fake = _FakeMemoryService()
+      ..categoriesError = MemoryServiceException(
+        503,
+        '/api/memories/categories',
+      );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MemoryArchiveScreen(
+          serverUrl: 'http://127.0.0.1:1',
+          memoryService: fake,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('archive-categories-retry')), findsOneWidget);
+    expect(find.text('The Commander'), findsNothing);
+
+    fake.categoriesError = null;
+    fake.categories = [MemoryCategory(name: 'The Commander', count: 2)];
+    await tester.tap(find.byKey(const Key('archive-categories-retry')));
+    await tester.pump();
+    expect(find.text('The Commander'), findsOneWidget);
+    expect(find.byKey(const Key('archive-categories-retry')), findsNothing);
+  });
+
   testWidgets('the archive header opens The Thread', (tester) async {
     await _pumpArchive(tester);
     expect(find.byTooltip('The Thread'), findsOneWidget);

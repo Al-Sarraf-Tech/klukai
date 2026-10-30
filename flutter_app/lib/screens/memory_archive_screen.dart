@@ -49,6 +49,7 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
   String _authToken = '';
 
   List<MemoryCategory> _categories = [];
+  bool _categoriesFailed = false;
   List<MonthGroup> _timeline = [];
   bool _timelineFailed = false;
   List<Memory> _memories = [];
@@ -100,6 +101,7 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
           // that row showed twice and doubled every total.
           _categories = cats.where((c) => c.name != 'All').toList();
           _loadingCategories = false;
+          _categoriesFailed = false;
         });
       }
     } on MemoryServiceException catch (e) {
@@ -107,9 +109,19 @@ class _MemoryArchiveScreenState extends State<MemoryArchiveScreen> {
         _handleAuthExpired();
         return;
       }
-      if (mounted) setState(() => _loadingCategories = false);
+      if (mounted) {
+        setState(() {
+          _loadingCategories = false;
+          _categoriesFailed = true;
+        });
+      }
     } catch (_) {
-      if (mounted) setState(() => _loadingCategories = false);
+      if (mounted) {
+        setState(() {
+          _loadingCategories = false;
+          _categoriesFailed = true;
+        });
+      }
     }
   }
 

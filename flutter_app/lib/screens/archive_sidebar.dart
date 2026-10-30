@@ -94,6 +94,15 @@ extension _ArchiveSidebar on _MemoryArchiveScreenState {
                   ),
                 ),
               )
+            else if (_categoriesFailed)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+                child: TextButton(
+                  key: const Key('archive-categories-retry'),
+                  onPressed: _loadCategories,
+                  child: const Text("Couldn't read the categories. Retry."),
+                ),
+              )
             else ...[
               ..._categories.map(
                 (cat) => _buildSidebarItem(cat.name, cat.count),

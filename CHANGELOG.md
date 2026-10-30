@@ -29,6 +29,9 @@ in `docs/superpowers/plans/`.
 - A cold live session still carries the last persisted lines into her reply,
   so a new Redis session does not forget the thread the album and the chat
   already show. A warm session is left as it is.
+- An empty 3D stage says the link is down instead of awaiting orders. A line
+  she already said stays. The composer names a dropped link for assistive
+  tech. A failed category list in the older archive offers a retry.
 
 ### Changed
 
