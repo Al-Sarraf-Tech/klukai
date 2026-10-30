@@ -156,8 +156,17 @@ class ChatComposerBar extends StatelessWidget {
       borderRadius: BorderRadius.zero,
       borderSide: BorderSide(color: color),
     );
+    final fieldLabel = locked
+        ? 'Message Klukai. ${lockReason ?? 'Standby'}.'
+        : disabled
+        ? 'Message Klukai. Link down.'
+        : 'Message Klukai';
     return Semantics(
-      label: 'Message Klukai',
+      container: true,
+      // The text field's own node replaces a parent label. When he cannot
+      // send, that node is the reason, not an empty field named only "message".
+      excludeSemantics: disabled || locked,
+      label: fieldLabel,
       child: TextField(
         key: const Key('composer-input'),
         controller: controller,

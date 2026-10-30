@@ -35,8 +35,9 @@ Future<(_Calls, TextEditingController)> _pump(
   await tester.pumpWidget(
     MaterialApp(
       builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context)
-            .copyWith(textScaler: TextScaler.linear(textScale)),
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
         child: child!,
       ),
       home: Scaffold(
@@ -199,6 +200,7 @@ void main() {
     expect(calls.sends, 0);
     expect(calls.pictures, 0);
     expect(find.text('// LINK DOWN…'), findsOneWidget);
+    expect(find.bySemanticsLabel('Message Klukai. Link down.'), findsOneWidget);
   });
 
   testWidgets('locked: read-only with her reason as the hint', (tester) async {
