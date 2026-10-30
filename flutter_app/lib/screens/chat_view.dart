@@ -63,10 +63,19 @@ extension _ChatView on _ChatScreenState {
           ConstrainedBox(
             constraints: BoxConstraints(maxHeight: box.maxHeight * 0.5),
             child: SingleChildScrollView(
-              child: _buildHeader(
-                compact:
-                    _keyboardUp ||
-                    box.maxHeight < _ChatView._compactHeaderBelow,
+              // The unread-bond line scrolls with the header. A fixed row
+              // under the transcript overflowed the composer when the
+              // keyboard was up and the type was large.
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildHeader(
+                    compact:
+                        _keyboardUp ||
+                        box.maxHeight < _ChatView._compactHeaderBelow,
+                  ),
+                  if (_affectionFailed) _buildAffectionNotice(),
+                ],
               ),
             ),
           ),
@@ -76,7 +85,6 @@ extension _ChatView on _ChatScreenState {
               constraints: BoxConstraints(maxHeight: box.maxHeight * 0.2),
               child: SingleChildScrollView(child: _buildToolStatus()),
             ),
-          if (_affectionFailed) _buildAffectionNotice(),
           if (_state.isTyping && _streamingId == null)
             _buildProcessingIndicator(),
           _buildComposer(),
