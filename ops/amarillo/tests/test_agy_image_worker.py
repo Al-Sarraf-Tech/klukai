@@ -922,9 +922,9 @@ def test_a_failed_attempt_says_why_in_the_journal(worker, setup_files, capsys):
     assert "unavailable: ProviderUnavailable: Grok account or image service" in err
 
 
-def test_fal_is_an_accepted_sole_provider_and_not_a_failover():
+def test_fal_is_an_accepted_sole_provider_and_not_a_failover(worker):
     """fal stays opt-in. It cannot sit behind Grok as a paid failover."""
-    import agy_image_worker as w
+    w = worker
     assert w.validate_providers([("fal", lambda *_: None)])[0][0] == "fal"
     assert [name for name, _ in w.load_providers(["fal"])] == ["fal"]
     with pytest.raises(ValueError, match="not a failover"):
@@ -1045,10 +1045,10 @@ def test_fal_without_a_grant_never_sees_the_switch(worker, setup_files):
     assert "nudity" not in seen[0]
 
 
-def test_standing_rule_nudity_need_not_be_tasteful_but_stays_adult_and_solo():
+def test_standing_rule_nudity_need_not_be_tasteful_but_stays_adult_and_solo(worker):
     """Owner standing rule 2026-10-23: Klukai's nudity need not be tasteful.
     It stays adult, Klukai alone, and free of sexual acts."""
-    import agy_image_worker as w
+    w = worker
     text = w.NUDITY_PERMITTED
     assert "tasteful" not in text.lower() and "explicit sexual poses" not in text
     assert "full, explicit nudity of Klukai alone is permitted" in text
@@ -1063,14 +1063,15 @@ class InterruptedWorker(BaseException):
 
 @contextmanager
 def opened_worker(module, setup_files, render, *, checker=None, providers=None):
-    runtime, state, references = setup_files
-    server = module.create_server(
-        runtime, state, references, {"jalsarraf", "test-user"},
+    _runtime, state, references = setup_files
+    current = module.Worker(
+        module.private_directory(state), TOKEN.encode(), module.load_references(references),
+        {"jalsarraf", "test-user"},
         providers=providers or [("fal", render)], checker=checker, rotation="fixed")
     try:
-        yield server.worker
+        yield current
     finally:
-        server.server_close()
+        current.close()
 
 
 def test_uncertain_generation_remains_pending_without_failover(worker, setup_files):
@@ -1534,6 +1535,52 @@ def test_chat_does_not_wait_for_a_slow_background_call(worker, setup_files, monk
         server.server_close()
         thread.join(timeout=3)
         background.join(timeout=3)
+
+
+@pytest.mark.parametrize("error,terminal", [
+    ("Grok was cancelled", {"type": "done", "cancelled": True, "text": ""}),
+    ("Grok chat process failed", {"type": "error", "error": "grok chat failed"}),
+])
+def test_a_stream_that_stops_after_its_first_delta_still_ends_cleanly(
+        worker, setup_files, monkeypatch, error, terminal):
+    # A preempted background call usually dies mid-reply. Core must read a
+    # closed chunked body with a terminal event, not a truncated transport
+    # (which it counts as an outage and does not requeue).
+    def stream(system, prompt, cancel=None, effort="low", role="chat"):
+        yield {"type": "delta", "text": "Partial"}
+        raise RuntimeError(error)
+
+    monkeypatch.setitem(sys.modules, "grok_account_chat", SimpleNamespace(
+        stream=stream, effort_for=lambda role: "low",
+    ))
+    with running(worker, setup_files) as path:
+        status, headers, body = request(
+            path, {"system": "facts", "prompt": "extract", "role": "background"}, target="/complete")
+    assert status == 200
+    assert headers["Content-Type"] == "application/x-ndjson"
+    lines = [json.loads(line) for line in body.decode().splitlines() if line.strip()]
+    assert lines == [{"type": "delta", "text": "Partial"}, terminal]
+
+
+def test_a_failed_chat_call_says_why_without_quoting_the_prompt(worker, setup_files, monkeypatch, capsys):
+    from agy_art_runtime import ProviderUnavailable
+    errors = iter([ProviderUnavailable("Grok account or image service is temporarily unavailable"),
+                   KeyError("the Commander's private words")])
+
+    def stream(system, prompt, cancel=None, effort="low", role="chat"):
+        raise next(errors)
+        yield  # pragma: no cover
+
+    monkeypatch.setitem(sys.modules, "grok_account_chat", SimpleNamespace(
+        stream=stream, effort_for=lambda role: "low",
+    ))
+    with running(worker, setup_files) as path:
+        for _ in range(2):
+            assert request(path, {"system": "s", "prompt": "p", "role": "chat"}, target="/complete")[0] == 502
+    err = capsys.readouterr().err
+    assert "role=chat failed: ProviderUnavailable: Grok account or image service" in err
+    assert "role=chat failed: KeyError: withheld" in err
+    assert "private words" not in err
 
 
 def test_complete_reports_grok_4_7_at_low(worker, setup_files, monkeypatch):

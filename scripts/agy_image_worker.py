@@ -218,7 +218,9 @@ class ChatGate:
                     return False
                 self.holder = "background" if background else "chat"
                 if background:
-                    self.cancel_background.clear()
+                    # A previous caller's socket watcher may still be finishing
+                    # after release. Its cancellation must stay with that call.
+                    self.cancel_background = threading.Event()
                 return True
             finally:
                 if not background:
@@ -707,8 +709,9 @@ class Handler(BaseHTTPRequestHandler):
             effort = value.get("effort")
             if (type(system) is not str or type(prompt) is not str or not prompt.strip()
                     or len(system) > 800_000 or len(prompt) > 200_000
-                    or role not in {"chat", "recall", "background"}
-                    or (effort is not None and effort not in {"minimal", "low", "medium", "high", "xhigh"})):
+                    or type(role) is not str or role not in {"chat", "recall", "background"}
+                    or (effort is not None and (type(effort) is not str
+                        or effort not in {"minimal", "low", "medium", "high", "xhigh"}))):
                 raise ValueError("invalid chat")
         except (ValueError, UnicodeError, RecursionError, TimeoutError, OSError, KeyError, AttributeError):
             self.reply(400)
@@ -737,12 +740,12 @@ class Handler(BaseHTTPRequestHandler):
                     cancel.set()
                     return
 
-        threading.Thread(target=watch, daemon=True).start()
         started = False
         cancelled = False
         tokens = None
         self._cache_read = None
         try:
+            threading.Thread(target=watch, daemon=True).start()
             stream = getattr(grok_account_chat, "stream", None)
             if stream is None:
                 turn = grok_account_chat.complete(
@@ -765,11 +768,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._end_ndjson()
         except Exception as exc:
             cancelled = "cancelled" in str(exc).lower()
-            if not started and not client_gone(self.connection):
+            if not cancelled:
+                # Why, in the journal. Only the runtime's own (fixed) messages are
+                # printed; anything else could quote the prompt.
+                detail = str(exc)[:160] if isinstance(exc, RendererError) else "withheld"
+                print(f"grok complete role={role} failed: {type(exc).__name__}: {detail}",
+                      file=sys.stderr, flush=True)
+            if client_gone(self.connection):
+                pass
+            elif not started:
                 if cancelled:
                     self.reply(409, {"error": "cancelled", "cancelled": True})
                 else:
                     self.reply(502, {"error": "grok chat failed"})
+            else:
+                # The reply already began. Close the chunked body with a terminal
+                # event, so core reads a preempted call as cancelled (and requeues
+                # it) and a failure as a failure, never as a truncated transport.
+                try:
+                    self._write_ndjson({"type": "done", "cancelled": True, "text": ""} if cancelled
+                                       else {"type": "error", "error": "grok chat failed"})
+                    self._end_ndjson()
+                except OSError:
+                    pass
         finally:
             stop.set()
             self._log_complete(
