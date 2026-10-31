@@ -133,8 +133,6 @@ class ChatReplyRuntime:
         warmup_timer: asyncio.Task[Any] | None = asyncio.create_task(_warmup_notify())
 
         full_response = []
-        buffer = ""
-        first_flush = True
         from .xai_chat import _conversation
 
         conv = _conversation.set(session.conversation_id or "")
@@ -148,13 +146,10 @@ class ChatReplyRuntime:
                 ):
                     warmup_timer.cancel()
                 full_response.append(token)
-                buffer += token
-                # First flush after 20 chars for fast perceived response, then sentence boundaries
-                flush_threshold = 20 if first_flush else 80
-                if any(c in buffer for c in ".!?\n)") or len(buffer) > flush_threshold:
-                    await self.ws.send_token(user_id, buffer)
-                    buffer = ""
-                    first_flush = False
+                # Each model delta is its own frame. Narration is corrected on
+                # the finished reply, not by holding tokens for a sentence.
+                if token:
+                    await self.ws.send_token(user_id, token)
         except LLMStreamFailed as e:
             # Mid-stream death: don't propagate (it would kill the WS). The
             # user message is already persisted; surface an explicit error,
@@ -169,9 +164,6 @@ class ChatReplyRuntime:
                     "Commander. Say that again?",
                 },
             )
-            # The unflushed tail is not sent after the error: a token frame
-            # following an error opens a stray second bubble in the client.
-            buffer = ""
         finally:
             _conversation.reset(conv)
             # Retain and join the notifier even after the first token cancels
@@ -181,8 +173,6 @@ class ChatReplyRuntime:
                 if not warmup_timer.done() and not warmup_timer.cancelling():
                     warmup_timer.cancel()
                 await asyncio.gather(warmup_timer, return_exceptions=True)
-        if buffer:
-            await self.ws.send_token(user_id, buffer)
 
         # Apply narration fix only to the complete text (avoids split-pattern bugs)
         raw_text = "".join(full_response)

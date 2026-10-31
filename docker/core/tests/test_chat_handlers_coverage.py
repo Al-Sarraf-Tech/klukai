@@ -1099,22 +1099,22 @@ class TestNoAnswerTurns:
 
     @pytest.mark.asyncio
     async def test_midstream_failure_drops_unflushed_buffer(self):
-        """The unflushed tail is NOT sent after the error frame — a token
-        following an error opens a stray second bubble in the client. `done`
+        """A delta already on the wire stays. Nothing is sent after the error
+        frame — a token following an error opens a stray second bubble. `done`
         still goes out so clients unlock."""
         from app.chat_handlers import _handle_message
         from app.llm_router import LLMStreamFailed
 
         with _patched_pipeline() as ns:
             async def _stream(system_prompt, messages, config):
-                yield "Partial"  # no sentence ender, under the flush threshold
+                yield "Partial"
                 raise LLMStreamFailed("upstream died")
 
             ns.router.stream = _stream
             await _handle_message("Tell me something long enough", _fresh_session())
             await _drain_tasks()
 
-        ns.ws.send_token.assert_not_called()
+        assert [c.args[1] for c in ns.ws.send_token.call_args_list] == ["Partial"]
         types = [c.args[1].get("type") for c in ns.ws.send.call_args_list]
         assert "error" in types
         ns.ws.send_done.assert_awaited_once()

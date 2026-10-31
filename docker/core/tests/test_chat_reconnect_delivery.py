@@ -157,7 +157,7 @@ async def test_interrupted_direct_reply_does_not_publish_incomplete_final_text(f
             assert "text" not in device.output[-1]
         assert [
             event["text"] for event in device.output if event["type"] == "token"
-        ] == ["Already visible."]
+        ] == ["Already visible.", " hidden-tail"]
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
