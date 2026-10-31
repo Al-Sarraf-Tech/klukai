@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 from pathlib import Path
 import tempfile
 import time
@@ -35,6 +36,11 @@ from grok_image_render import CONFIG, EFFORT, MODEL, execute
 # Re-exported so the worker can report the checker the same way as before.
 __all__ = ["MODEL", "EFFORT", "RUBRIC", "run", "fix_hint", "validate_verdict"]
 
+logger = logging.getLogger(__name__)
+# One argv string must stay under Linux MAX_ARG_STRLEN (131072). A real JPEG
+# pair as --prompt-json exceeds that and raises E2BIG.
+MAX_ARG_STRLEN = 131072
+
 
 def _jpeg(raw: bytes) -> bytes:
     """A small JPEG so the ACP image block fits on the CLI argument list."""
@@ -55,7 +61,7 @@ def _block(raw: bytes) -> dict:
 
 
 def prompt_document(candidate: bytes, value: dict, references: dict) -> str:
-    """ACP content the pinned CLI accepts as ``--prompt-json``."""
+    """ACP content the pinned CLI accepts as a prompt file."""
     who = "Klukai and the Commander" if value.get("include_commander") else "Klukai alone"
     description = (
         f"\nCommander description (text only): {COMMANDER_TEXT_DESCRIPTION}"
@@ -70,14 +76,19 @@ def prompt_document(candidate: bytes, value: dict, references: dict) -> str:
     return json.dumps({"type": "acp", "content": blocks}, separators=(",", ":"))
 
 
-def arguments(session: str, payload: str) -> list[str]:
-    return [
+def arguments(session: str, prompt_file: Path) -> list[str]:
+    """Headless Grok reads ``--prompt-file`` from disk. Stdin is not the prompt,
+    and the ACP document is too large for one argv string."""
+    result = [
         "--session-id", session, "--model", MODEL, "--effort", EFFORT,
         "--no-subagents", "--disable-web-search", "--permission-mode", "dontAsk",
         "--max-turns", "1", "--output-format", "streaming-messages-json",
         "--verbatim", "--system-prompt-override", RUBRIC,
-        "--prompt-json", payload,
+        "--prompt-file", str(prompt_file),
     ]
+    if any(len(arg) >= MAX_ARG_STRLEN for arg in result):
+        raise OSError(7, "Argument list too long")
+    return result
 
 
 def _require_model(raw: str) -> None:
@@ -108,10 +119,16 @@ def run(candidate: bytes, value: dict, references: dict, *, timeout: float) -> d
             config = profile / ".grok"
             config.mkdir()
             (config / "config.toml").write_text(CONFIG)
-            raw = execute(profile, work, arguments(session, payload), timeout=timeout)
+            prompt_file = work / "prompt.json"
+            prompt_file.write_text(payload)
+            prompt_file.chmod(0o600)
+            raw = execute(profile, work, arguments(session, prompt_file), timeout=timeout)
         _require_model(raw)
         verdict = parse(raw.encode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        errno = getattr(exc, "errno", None)
+        detail = type(exc).__name__ if not isinstance(errno, int) else f"{type(exc).__name__}:{errno}"
+        logger.warning("Grok image check failed (%s)", detail)
         return {"verdict": "unchecked", "issues": [], "seconds": round(time.monotonic() - started, 1)}
     verdict["issues"] = verdict["issues"][:MAX_ISSUES]
     verdict["seconds"] = round(time.monotonic() - started, 1)
