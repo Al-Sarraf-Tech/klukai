@@ -117,10 +117,10 @@ def run(candidate: bytes, value: dict, references: dict, *, timeout: float) -> d
         with tempfile.TemporaryDirectory(prefix="klukai-grok-check-") as temp:
             root = Path(temp)
             profile, work = root / "profile", root / "work"
-            profile.mkdir(mode=0o700)
-            work.mkdir(mode=0o700)
+            profile.mkdir(mode=0o700, exist_ok=True)
+            work.mkdir(mode=0o700, exist_ok=True)
             config = profile / ".grok"
-            config.mkdir()
+            config.mkdir(exist_ok=True)
             (config / "config.toml").write_text(CONFIG)
             prompt_file = work / "prompt.json"
             prompt_file.write_text(payload)

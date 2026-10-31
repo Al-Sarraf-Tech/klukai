@@ -15,6 +15,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import threading
 import uuid
 
 logger = logging.getLogger("klukai.grok_chat")
@@ -231,14 +232,34 @@ def parse_turn(raw: str, session: str, profile: Path, *, effort: str | None = No
     return Turn(text.strip(), MODEL, echoed, source, tokens, cache_read)
 
 
+_HOME_LOCKS: dict[str, threading.Lock] = {}
+_HOME_LOCKS_GUARD = threading.Lock()
+
+
+def _home_kind(role: str) -> str:
+    return "chat" if role == "chat" else "background"
+
+
+def _home_lock(kind: str) -> threading.Lock:
+    with _HOME_LOCKS_GUARD:
+        lock = _HOME_LOCKS.get(kind)
+        if lock is None:
+            lock = threading.Lock()
+            _HOME_LOCKS[kind] = lock
+        return lock
+
+
 def home_for(role: str) -> tuple[Path, Path]:
     """One clean Grok home per role. Settings stay; old sessions do not.
 
-    Chat has its own directory. Recall and other background calls share one,
-    and the worker never runs two of the same role at once. The account login
-    stays on GROK_AUTH_PATH, not in this home.
+    Chat has its own directory. Recall and other background calls share
+    another, so those two can run at once. A second call of the same role
+    reuses the directories. ``stream`` and ``complete`` hold that role's
+    lock for the whole CLI run: this function deletes ``sessions/``, which
+    would clobber a call already using the home. The account login stays
+    on GROK_AUTH_PATH, not in this home.
     """
-    kind = "chat" if role == "chat" else "background"
+    kind = _home_kind(role)
     root = Path(
         os.environ.get(
             "KLUKAI_GROK_HOME_ROOT",
@@ -246,8 +267,8 @@ def home_for(role: str) -> tuple[Path, Path]:
         )
     )
     profile, work = root / kind / "profile", root / kind / "work"
-    profile.mkdir(parents=True, mode=0o700)
-    work.mkdir(parents=True, mode=0o700)
+    profile.mkdir(parents=True, mode=0o700, exist_ok=True)
+    work.mkdir(parents=True, mode=0o700, exist_ok=True)
     os.chmod(root, 0o700)
     config = profile / ".grok"
     if config.is_symlink():
@@ -285,28 +306,33 @@ def stream(
     if cancel is not None and cancel.is_set():
         raise agy.RuntimeError("Grok chat was cancelled")
     chosen = chat_effort() if effort is None else effort
-    session, profile, work, args = _prepare(system, prompt, chosen, role)
-    raw_lines: list[str] = []
-    emitted = ""
-    for line in iter_stdout(profile, work, args, timeout=timeout, cancel=cancel):
-        raw_lines.append(line)
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        assistant = row.get("type") == "assistant"
-        for piece in text_deltas(row):
-            extra = _novel(piece, emitted, assistant=assistant)
-            if not extra:
+    lock = _home_lock(_home_kind(role))
+    lock.acquire()
+    try:
+        session, profile, work, args = _prepare(system, prompt, chosen, role)
+        raw_lines: list[str] = []
+        emitted = ""
+        for line in iter_stdout(profile, work, args, timeout=timeout, cancel=cancel):
+            raw_lines.append(line)
+            try:
+                row = json.loads(line)
+            except ValueError:
                 continue
-            emitted += extra
-            yield {"type": "delta", "text": extra}
-    turn = parse_turn("\n".join(raw_lines), session, profile, effort=chosen)
-    yield {
-        "type": "done", "text": turn.text, "model": turn.model, "effort": turn.effort,
-        "effort_source": turn.effort_source, "tokens": turn.tokens,
-        "cache_read": turn.cache_read,
-    }
+            assistant = row.get("type") == "assistant"
+            for piece in text_deltas(row):
+                extra = _novel(piece, emitted, assistant=assistant)
+                if not extra:
+                    continue
+                emitted += extra
+                yield {"type": "delta", "text": extra}
+        turn = parse_turn("\n".join(raw_lines), session, profile, effort=chosen)
+        yield {
+            "type": "done", "text": turn.text, "model": turn.model, "effort": turn.effort,
+            "effort_source": turn.effort_source, "tokens": turn.tokens,
+            "cache_read": turn.cache_read,
+        }
+    finally:
+        lock.release()
 
 
 def complete(
@@ -321,6 +347,7 @@ def complete(
     if cancel is not None and cancel.is_set():
         raise agy.RuntimeError("Grok chat was cancelled")
     chosen = chat_effort() if effort is None else effort
-    session, profile, work, args = _prepare(system, prompt, chosen, role)
-    raw = execute(profile, work, args, timeout=timeout, cancel=cancel)
-    return parse_turn(raw, session, profile, effort=chosen)
+    with _home_lock(_home_kind(role)):
+        session, profile, work, args = _prepare(system, prompt, chosen, role)
+        raw = execute(profile, work, args, timeout=timeout, cancel=cancel)
+        return parse_turn(raw, session, profile, effort=chosen)

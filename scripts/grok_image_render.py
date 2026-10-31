@@ -203,16 +203,16 @@ def bundled_skills(profile: Path) -> set[str]:
 
 def prepare(root: Path, images: set[str], aspect: str | None = None):
     profile, work = root/'profile', root/'work'
-    profile.mkdir(mode=0o700); work.mkdir(mode=0o700)
-    gate = root/'gate'; gate.mkdir(mode=0o700)
+    profile.mkdir(mode=0o700, exist_ok=True); work.mkdir(mode=0o700, exist_ok=True)
+    gate = root/'gate'; gate.mkdir(mode=0o700, exist_ok=True)
     shutil.copyfile(Path(__file__).with_name('grok_image_gate.py'), gate/'gate.py')
     policy = {'images': sorted(images)}
     if aspect is not None:
         policy['aspect_ratio'] = aspect
     (gate/'policy.json').write_text(json.dumps(policy))
-    config = profile/'.grok'; config.mkdir()
+    config = profile/'.grok'; config.mkdir(exist_ok=True)
     (config/'config.toml').write_text(CONFIG)
-    hooks = config/'hooks'; hooks.mkdir()
+    hooks = config/'hooks'; hooks.mkdir(exist_ok=True)
     (hooks/'image-gate.json').write_text(json.dumps({'hooks': {'PreToolUse': [{
         'matcher': '*', 'hooks': [{'type': 'command',
           'command': '/usr/bin/python3 ' + shlex.quote(str(gate/'gate.py')), 'timeout': 5}]}]}}))

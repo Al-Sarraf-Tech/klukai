@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 import sys
+import threading
+import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
@@ -63,6 +65,85 @@ def test_arguments_put_the_system_text_in_prompt_json():
         assert exc.errno == 7 and "120KB" in exc.strerror
     else:
         raise AssertionError("an oversized prompt JSON was accepted")
+
+
+def _fake_stdout(profile, work, args, timeout=170, *, cancel=None):
+    session = args[args.index("--session-id") + 1]
+    yield from _stream(session).splitlines()
+
+
+def test_home_for_and_stream_can_run_twice(monkeypatch, tmp_path):
+    monkeypatch.setenv("KLUKAI_GROK_HOME_ROOT", str(tmp_path))
+    monkeypatch.setattr(chat, "iter_stdout", _fake_stdout)
+    first = chat.home_for("chat")
+    second = chat.home_for("chat")
+    assert first == second
+    assert first[0].is_dir() and first[1].is_dir()
+    assert (first[0] / ".grok" / "config.toml").is_file()
+    for _ in range(2):
+        events = list(chat.stream("persona", "hello", role="chat"))
+        assert events[-1]["type"] == "done"
+        assert events[-1]["text"] == "ready"
+    assert chat.home_for("chat")[0] != chat.home_for("recall")[0]
+
+
+def test_chat_and_recall_homes_run_together_and_one_role_does_not(monkeypatch, tmp_path):
+    monkeypatch.setenv("KLUKAI_GROK_HOME_ROOT", str(tmp_path))
+    chat_inside = threading.Event()
+    release_chat = threading.Event()
+    recall_inside = threading.Event()
+
+    def fake_stdout(profile, work, args, timeout=170, *, cancel=None):
+        kind = profile.parent.name
+        if kind == "chat":
+            chat_inside.set()
+            assert release_chat.wait(2)
+        else:
+            recall_inside.set()
+        yield from _fake_stdout(profile, work, args, timeout=timeout, cancel=cancel)
+
+    monkeypatch.setattr(chat, "iter_stdout", fake_stdout)
+
+    def consume(role, out):
+        out.extend(chat.stream("persona", "hello", role=role))
+
+    chat_out, recall_out = [], []
+    chat_thread = threading.Thread(target=consume, args=("chat", chat_out))
+    recall_thread = threading.Thread(target=consume, args=("recall", recall_out))
+    chat_thread.start()
+    assert chat_inside.wait(2)
+    recall_thread.start()
+    assert recall_inside.wait(2)
+    release_chat.set()
+    chat_thread.join(2)
+    recall_thread.join(2)
+    assert chat_out[-1]["type"] == "done"
+    assert recall_out[-1]["type"] == "done"
+
+    active = {"n": 0, "max": 0}
+    guard = threading.Lock()
+
+    def counting_stdout(profile, work, args, timeout=170, *, cancel=None):
+        with guard:
+            active["n"] += 1
+            active["max"] = max(active["max"], active["n"])
+        try:
+            time.sleep(0.05)
+            yield from _fake_stdout(profile, work, args, timeout=timeout, cancel=cancel)
+        finally:
+            with guard:
+                active["n"] -= 1
+
+    monkeypatch.setattr(chat, "iter_stdout", counting_stdout)
+    threads = [
+        threading.Thread(target=consume, args=("chat", [])) for _ in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(2)
+    assert active["max"] == 1
+    assert active["n"] == 0
 
 
 def test_chat_background_and_image_efforts_are_configurable(monkeypatch):
