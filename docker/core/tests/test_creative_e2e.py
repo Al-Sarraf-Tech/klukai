@@ -165,7 +165,7 @@ async def creative_app(monkeypatch, tmp_path):
 
     from app.grok_chat import Turn
 
-    async def complete_turn(system, prompt, *, timeout=60):
+    async def complete_turn(system, prompt, *, timeout=60, role="chat"):
         state.text_requests.append({
             "system": system, "prompt": prompt, "model": "grok-4.7", "effort": "medium",
         })

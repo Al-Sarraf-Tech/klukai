@@ -99,7 +99,9 @@ def parse_turn(raw: str, session: str, profile: Path) -> Turn:
     return Turn(text.strip(), MODEL, echoed, source)
 
 
-def complete(system: str, prompt: str, *, timeout: float = 90) -> Turn:
+def complete(system: str, prompt: str, *, timeout: float = 90, cancel=None) -> Turn:
+    if cancel is not None and cancel.is_set():
+        raise agy.RuntimeError("Grok chat was cancelled")
     if not isinstance(system, str) or not isinstance(prompt, str) or not prompt.strip():
         raise agy.RuntimeError("Invalid Grok chat request")
     session = str(uuid.uuid4())
@@ -111,5 +113,5 @@ def complete(system: str, prompt: str, *, timeout: float = 90) -> Turn:
         config = profile / ".grok"
         config.mkdir()
         (config / "config.toml").write_text(CONFIG)
-        raw = execute(profile, work, arguments(session, system, prompt), timeout=timeout)
+        raw = execute(profile, work, arguments(session, system, prompt), timeout=timeout, cancel=cancel)
         return parse_turn(raw, session, profile)

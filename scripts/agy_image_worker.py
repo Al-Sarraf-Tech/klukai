@@ -9,7 +9,9 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import signal
+import socket
 import socketserver
 import sqlite3
 import stat
@@ -191,6 +193,58 @@ def valid_image(data):
     return type(data) is bytes and data.startswith(PNG_SIGNATURE) and len(data) <= MAX_IMAGE
 
 
+class ChatGate:
+    """One text CLI. Image work does not use this gate. Chat preempts background."""
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self.holder = None
+        self.chat_waiting = 0
+        self.cancel_background = threading.Event()
+
+    def acquire(self, *, background, stopped):
+        with self._condition:
+            if not background:
+                self.chat_waiting += 1
+                self.cancel_background.set()
+            try:
+                while self.holder is not None or (background and self.chat_waiting):
+                    if stopped():
+                        return False
+                    self._condition.wait(timeout=0.05)
+                if stopped():
+                    return False
+                self.holder = "background" if background else "chat"
+                if background:
+                    self.cancel_background.clear()
+                return True
+            finally:
+                if not background:
+                    self.chat_waiting -= 1
+
+    def release(self):
+        with self._condition:
+            self.holder = None
+            self._condition.notify_all()
+
+
+def client_gone(conn) -> bool:
+    """True when the core caller has closed the socket (its timeout fired)."""
+    try:
+        readable, _, _ = select.select([conn], [], [], 0)
+    except (OSError, ValueError):
+        return True
+    if not readable:
+        return False
+    try:
+        peeked = conn.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT)
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+    return peeked == b""
+
+
 class Worker:
     def __init__(self, state_dir, token, references, allowed_users, renderer=None, *, providers=None,
                  checker=None, rotation="alternate"):
@@ -210,6 +264,7 @@ class Worker:
         self.providers = validate_providers(providers if providers is not None else [("agy", renderer)])
         self.renderer = self.providers[0][1]
         self.slot = threading.BoundedSemaphore(1)
+        self.chat_gate = ChatGate()
         self.db_lock = threading.Lock()
         database = state_dir / "requests.sqlite3"
         fd = os.open(database, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -643,24 +698,39 @@ class Handler(BaseHTTPRequestHandler):
             if type(value) is not dict:
                 raise ValueError("invalid chat")
             system, prompt = value.get("system", ""), value.get("prompt", "")
+            role = value.get("role", "chat")
             if (type(system) is not str or type(prompt) is not str or not prompt.strip()
-                    or len(system) > 800_000 or len(prompt) > 200_000):
+                    or len(system) > 800_000 or len(prompt) > 200_000
+                    or role not in {"chat", "background"}):
                 raise ValueError("invalid chat")
         except (ValueError, UnicodeError, RecursionError, TimeoutError, OSError, KeyError, AttributeError):
             self.reply(400)
             return
-        if not self.server.worker.slot.acquire(blocking=False):
-            self.reply(429)
+        background = role == "background"
+        gate = self.server.worker.chat_gate
+        if not gate.acquire(background=background, stopped=lambda: client_gone(self.connection)):
             return
+        cancel = gate.cancel_background if background else threading.Event()
+        stop = threading.Event()
+
+        def watch():
+            while not stop.wait(0.05):
+                if client_gone(self.connection):
+                    cancel.set()
+                    return
+
+        threading.Thread(target=watch, daemon=True).start()
         try:
             import grok_account_chat
-            turn = grok_account_chat.complete(system, prompt)
+            turn = grok_account_chat.complete(system, prompt, cancel=cancel)
             self.reply(200, {"text": turn.text, "model": turn.model, "effort": turn.effort,
                              "effort_source": turn.effort_source})
         except Exception:
-            self.reply(502, {"error": "grok chat failed"})
+            if not client_gone(self.connection):
+                self.reply(502, {"error": "grok chat failed"})
         finally:
-            self.server.worker.slot.release()
+            stop.set()
+            gate.release()
 
     def do_POST(self):
         if not self.authorized():

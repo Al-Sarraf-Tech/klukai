@@ -49,7 +49,7 @@ def haiku_wire(monkeypatch):
     monkeypatch.setattr(xl, "record_usage", AsyncMock())
     server = {"handler": None}
 
-    async def complete_turn(system, prompt, *, timeout=60):
+    async def complete_turn(system, prompt, *, timeout=60, role="chat"):
         class Request:
             method = "POST"
             url = "http://klukai-agy/complete"

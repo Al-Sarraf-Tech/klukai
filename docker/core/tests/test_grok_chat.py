@@ -103,7 +103,7 @@ async def test_complete_turn_accepts_medium_grok_from_the_worker(
     finally:
         sock.close()
     assert seen["authorization"] == "Bearer test-private-token"
-    assert seen["body"] == {"system": "persona", "prompt": "hi"}
+    assert seen["body"] == {"system": "persona", "prompt": "hi", "role": "chat"}
     assert (turn.text, turn.model, turn.effort, turn.effort_source) == (
         "Hello, Commander.",
         grok_chat.MODEL,

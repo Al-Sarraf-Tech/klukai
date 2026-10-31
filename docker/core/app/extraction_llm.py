@@ -157,7 +157,7 @@ async def complete(
         async with _gate:
             async with asyncio.timeout(REQUEST_TIMEOUT_S):
                 turn = await complete_turn(
-                    system_text, prompt, timeout=REQUEST_TIMEOUT_S
+                    system_text, prompt, timeout=REQUEST_TIMEOUT_S, role="background"
                 )
         if turn.model != GROK_MODEL or turn.effort != GROK_EFFORT:
             raise ExtractionLLMError("Unexpected Grok model or effort")

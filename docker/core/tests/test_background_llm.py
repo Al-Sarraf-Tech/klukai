@@ -245,7 +245,7 @@ def wire(monkeypatch):
     monkeypatch.setattr(xl, "record_usage", AsyncMock())
     seen: list[dict] = []
 
-    async def complete_turn(system, prompt, *, timeout=60):
+    async def complete_turn(system, prompt, *, timeout=60, role="chat"):
         seen.append({"system": system, "prompt": prompt})
         return Turn("Welcome back, Commander.", "grok-4.7", "medium", "stream")
 
@@ -310,7 +310,7 @@ async def test_every_caller_spends_the_same_daily_allowance(monkeypatch, tmp_pat
     monkeypatch.setattr(xl, "_cap_logged_day", None)
     sent = []
 
-    async def complete_turn(system, prompt, *, timeout=60):
+    async def complete_turn(system, prompt, *, timeout=60, role="chat"):
         from app.grok_chat import Turn
         sent.append(prompt)
         return Turn("ok", "grok-4.7", "medium", "stream")

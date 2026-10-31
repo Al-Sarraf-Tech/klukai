@@ -41,7 +41,7 @@ async def router(monkeypatch):
 def scripted(monkeypatch, replies):
     calls = []
 
-    async def complete_turn(system, prompt, *, timeout=120):
+    async def complete_turn(system, prompt, *, timeout=120, role="chat"):
         calls.append({"system": system, "prompt": prompt})
         reply = replies.pop(0)
         if isinstance(reply, Exception):
@@ -155,7 +155,7 @@ async def test_hand_built_configs_cannot_reach_any_other_backend(router, monkeyp
 async def test_cancellation_does_not_start_another_provider(router, monkeypatch):
     started = asyncio.Event()
 
-    async def complete_turn(system, prompt, *, timeout=120):
+    async def complete_turn(system, prompt, *, timeout=120, role="chat"):
         started.set()
         await asyncio.Event().wait()
 

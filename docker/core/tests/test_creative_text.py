@@ -34,7 +34,7 @@ def transport(monkeypatch, ct, handler):
 
     seen = []
 
-    async def complete_turn(system, prompt, *, timeout=60):
+    async def complete_turn(system, prompt, *, timeout=60, role="chat"):
         seen.append({"system": system, "prompt": prompt})
 
         class Request:

@@ -48,11 +48,13 @@ def _settings() -> tuple[str, str]:
     return image_settings()
 
 
-async def complete_turn(system: str, prompt: str, *, timeout: float = 120.0) -> Turn:
+async def complete_turn(
+    system: str, prompt: str, *, timeout: float = 120.0, role: str = "chat"
+) -> Turn:
     if not configured():
         raise GrokChatError("Grok account chat is not configured")
     socket, token = _settings()
-    payload = {"system": system, "prompt": prompt}
+    payload = {"system": system, "prompt": prompt, "role": role}
     try:
         transport = httpx.AsyncHTTPTransport(uds=socket, retries=0, trust_env=False)
         async with httpx.AsyncClient(

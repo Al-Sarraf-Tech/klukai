@@ -47,7 +47,7 @@ def transport(monkeypatch, handler=None):
     seen = []
     monkeypatch.setattr("app.grok_chat.configured", lambda: True)
 
-    async def complete_turn(system, prompt, *, timeout=60):
+    async def complete_turn(system, prompt, *, timeout=60, role="chat"):
         seen.append({"system": system, "prompt": prompt, "model": "grok-4.7", "effort": "medium"})
         if handler is not None:
             outcome = handler(system, prompt)

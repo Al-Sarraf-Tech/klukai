@@ -12,6 +12,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import uuid
 
@@ -1400,11 +1401,76 @@ def test_recovery_preserves_explicit_review_exceptions(worker, setup_files, prov
         assert current.db.execute("SELECT COUNT(*) FROM review_attempts").fetchone() == (0,)
 
 
+def test_a_closed_caller_is_detected(worker):
+    left, right = socket.socketpair()
+    try:
+        assert worker.client_gone(left) is False
+        right.close()
+        assert worker.client_gone(left) is True
+    finally:
+        left.close()
+
+
+def test_chat_runs_right_after_a_slow_background_call(worker, setup_files, monkeypatch):
+    started = threading.Event()
+    background_done = threading.Event()
+    result = {}
+
+    class Turn:
+        def __init__(self, text):
+            self.text = text
+            self.model, self.effort, self.effort_source = "grok-4.7", "medium", "stream"
+
+    def complete(system, prompt, cancel=None):
+        if prompt == "recall":
+            started.set()
+            while cancel is None or not cancel.is_set():
+                time.sleep(0.01)
+            raise RuntimeError("cancelled")
+        return Turn("hello")
+
+    monkeypatch.setitem(sys.modules, "grok_account_chat", SimpleNamespace(complete=complete))
+    runtime, state, references = setup_files
+    server = worker.create_server(runtime, state, references, {"jalsarraf", "test-user"})
+    server.worker.slot.acquire()
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    thread.start()
+    path = runtime / "image.sock"
+
+    def run_background():
+        result["background"] = request(
+            path, {"system": "rank", "prompt": "recall", "role": "background"}, target="/complete",
+        )
+        background_done.set()
+
+    background = threading.Thread(target=run_background)
+    background.start()
+    try:
+        assert started.wait(2)
+        status, _headers, body = request(
+            path, {"system": "Be Klukai.", "prompt": "Say ready.", "role": "chat"}, target="/complete",
+        )
+        assert status == 200
+        assert json.loads(body)["text"] == "hello"
+        assert background_done.wait(2)
+        assert result["background"][0] == 502
+        assert request(
+            path, {"system": "Be Klukai.", "prompt": "again", "role": "nope"}, target="/complete",
+        )[0] == 400
+    finally:
+        server.worker.slot.release()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+        background.join(timeout=3)
+
+
 def test_complete_reports_grok_4_7_at_medium(worker, setup_files, monkeypatch):
     class Turn:
         text, model, effort, effort_source = "ready", "grok-4.7", "medium", "stream"
 
-    monkeypatch.setitem(sys.modules, "grok_account_chat", SimpleNamespace(complete=lambda system, prompt: Turn()))
+    monkeypatch.setitem(sys.modules, "grok_account_chat", SimpleNamespace(
+        complete=lambda system, prompt, cancel=None: Turn()))
     with running(worker, setup_files) as path:
         status, _headers, body = request(path, {"system": "Be Klukai.", "prompt": "Say ready."},
                                           target="/complete")
