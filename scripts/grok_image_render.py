@@ -400,51 +400,77 @@ def execute(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=N
         except UnicodeError as exc: raise agy.RuntimeError('Grok output was not UTF-8') from exc
 
 
-def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=None):
-    """Yield stdout lines as the CLI writes them."""
-    auth = account_auth()
-    process = subprocess.Popen(command(profile, work, args, auth=auth), cwd=work,
-        env=environment(home=profile, auth=auth),
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        start_new_session=True)
-    lines: queue.Queue = queue.Queue()
-
-    def read() -> None:
+def _kill(process) -> None:
+    if process.poll() is None:
         try:
-            assert process.stdout is not None
-            for line in process.stdout:
-                lines.put(line)
-        finally:
-            lines.put(None)
-
-    threading.Thread(target=read, daemon=True).start()
-    deadline = time.monotonic() + timeout
-    try:
-        while True:
-            if cancel is not None and cancel.is_set():
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
-                raise agy.RuntimeError('Grok was cancelled')
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
-                raise agy.RuntimeError('Grok timed out with unknown completion; not retried')
-            try:
-                item = lines.get(timeout=min(0.2, remaining))
-            except queue.Empty:
-                continue
-            if item is None:
-                break
-            yield item.decode('utf-8', 'replace')
-        process.wait(timeout=5)
-        if process.returncode:
-            provider_error('Grok chat process failed')
-    except BaseException:
-        if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-        raise
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
+def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=None):
+    """Yield stdout lines as the CLI writes them.
+
+    Same limits as execute(): MAX_OUTPUT bytes of stdout, the deadline, and a
+    failed exit classified from the CLI's own stderr (rate limit and sign-in
+    problems are ProviderUnavailable, everything else RuntimeError).
+    """
+    auth = account_auth()
+    with tempfile.TemporaryFile() as err:
+        process = subprocess.Popen(command(profile, work, args, auth=auth), cwd=work,
+            env=environment(home=profile, auth=auth),
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
+            start_new_session=True)
+        lines: queue.Queue = queue.Queue()
+
+        def read() -> None:
+            try:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    lines.put(line)
+            except (OSError, ValueError):
+                pass
+            finally:
+                lines.put(None)
+
+        threading.Thread(target=read, daemon=True).start()
+        deadline = time.monotonic() + timeout
+        size = 0
+        try:
+            while True:
+                if cancel is not None and cancel.is_set():
+                    _kill(process)
+                    raise agy.RuntimeError('Grok was cancelled')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _kill(process)
+                    raise agy.RuntimeError('Grok timed out with unknown completion; not retried')
+                try:
+                    item = lines.get(timeout=min(0.2, remaining))
+                except queue.Empty:
+                    continue
+                if item is None:
+                    break
+                size += len(item)
+                if size > MAX_OUTPUT:
+                    _kill(process)
+                    raise agy.RuntimeError('Grok output exceeded the limit')
+                yield item.decode('utf-8', 'replace')
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # stdout is closed but the CLI lingers: the turn is complete or
+                # never will be. Do not hold the caller's slot on it.
+                _kill(process)
+                raise agy.RuntimeError('Grok did not exit after its output closed') from None
+            if process.returncode:
+                err.seek(0)
+                detail = err.read(MAX_OUTPUT).decode('utf-8', 'replace')
+                provider_error('Grok chat process failed\n' + detail)
+        except BaseException:
+            _kill(process)
+            raise
 
 
 def _refuse_unsupported(request: dict) -> None:
@@ -472,6 +498,9 @@ def render(request: dict, references: dict) -> bytes:
     try: inputs = {'klukai': read_image(references['klukai'])}
     except (ValueError, KeyError, TypeError, OSError) as exc:
         raise agy.RuntimeError('Approved image references are unavailable') from exc
+    # A missing pinned binary or login cannot run the CLI. Say so before an
+    # attempt is spent, or every request burns the day's allowance.
+    command(Path(), Path(), [], auth=account_auth())
     reserve_attempt()
     with tempfile.TemporaryDirectory(prefix='klukai-grok-render-') as temp:
         paths = {str(Path(temp)/'work'/(name+'.png')) for name in inputs}

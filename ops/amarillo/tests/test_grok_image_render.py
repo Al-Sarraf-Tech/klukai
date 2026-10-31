@@ -290,6 +290,7 @@ def test_render_locks_anime_style_uses_text_commander_and_grok_4_7_medium(tmp_pa
         return "{}"
 
     monkeypatch.setattr(m, "execute", execute)
+    monkeypatch.setattr(m, "command", lambda *a, **k: ["grok"])
     monkeypatch.setattr(m, "parse_stream", lambda *a, **k: None)
     monkeypatch.setattr(m, "artifact", lambda *a, **k: png("blue"))
     request = {"request_id": "r", "user_id": "jalsarraf", "prompt": "rooftop garden",
@@ -328,6 +329,22 @@ def test_nudity_and_missing_caps_fail_before_references_or_the_ledger(tmp_path, 
     with pytest.raises(m.agy.ProviderUnavailable, match="allowance not configured"):
         m.render(request, {"klukai": "K", "commander": "C"})
     assert reads == []
+    assert not (tmp_path / "grok.sqlite3").exists()
+
+
+def test_a_missing_cli_or_login_never_spends_an_attempt(tmp_path, monkeypatch):
+    m = _ready(monkeypatch, tmp_path, module())
+    monkeypatch.setattr(m, "read_image", lambda entry: png())
+    monkeypatch.setattr(m, "PINNED_DIR", tmp_path / "no-pinned")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(m.Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    monkeypatch.setenv("GROK_AUTH_PATH", str(tmp_path / "missing-auth.json"))
+    monkeypatch.setattr(m, "execute", lambda *a, **k: (_ for _ in ()).throw(AssertionError("cli")))
+    request = {"request_id": "r", "user_id": "jalsarraf", "prompt": "scene",
+               "width": 832, "height": 1216, "include_commander": False}
+    for _ in range(3):
+        with pytest.raises(m.agy.ProviderUnavailable, match="credentials or pinned executable"):
+            m.render(request, {"klukai": "K", "commander": "C"})
     assert not (tmp_path / "grok.sqlite3").exists()
 
 
