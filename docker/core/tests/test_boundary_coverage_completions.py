@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import Mock
 
 import httpx
@@ -135,3 +136,70 @@ async def test_disconnect_cancels_native_stream_and_releases_admission_without_f
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_current_time",
+        "description": "Current time",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+async def test_unused_sonnet_client_still_falls_back_to_haiku(connect):
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        if len(calls) == 1:
+            raise httpx.ConnectError("down")
+        return httpx.Response(200, json=native_reply())
+
+    router = connect(handler)
+    config = LLMConfig(
+        provider="anthropic", model=SONNET, max_tokens=128, read_timeout=30
+    )
+    result = await router.complete_chat("persona", MESSAGES, config)
+    assert calls == [SONNET, routing.CLAUDE_SECONDARY]
+    assert result["choices"][0]["message"]["content"] == "public reply"
+
+
+async def test_unused_haiku_client_does_not_switch_again(connect):
+    def handler(request):
+        raise httpx.ConnectError("down")
+
+    router = connect(handler)
+    config = LLMConfig(provider="anthropic", model=routing.CLAUDE_SECONDARY)
+    with pytest.raises(httpx.ConnectError):
+        await router.complete_chat("persona", MESSAGES, config)
+    assert config.model == routing.CLAUDE_SECONDARY
+
+
+async def test_backing_off_primary_is_refused(connect, monkeypatch):
+    monkeypatch.setattr(routing.time, "monotonic", lambda: 0.0)
+    router = connect(lambda request: httpx.Response(200, json=native_reply()))
+    router._anthropic_retry_at = 10.0
+    config = LLMConfig(provider="anthropic", model=SONNET)
+    with pytest.raises(ValueError, match="backing off"):
+        await router._complete_anthropic("persona", MESSAGES, config)
+
+
+async def test_native_tools_can_be_offered_or_suppressed(connect):
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json=native_reply())
+
+    router = connect(handler)
+    config = LLMConfig(provider="anthropic", model=SONNET)
+    await router._complete_anthropic("persona", MESSAGES, config, tools=[TOOL])
+    config.model = SONNET
+    await router._complete_anthropic(
+        "persona", MESSAGES, config, tools=[TOOL], allow_tools=False
+    )
+    assert seen[0]["tools"][0]["name"] == "get_current_time"
+    assert "tool_choice" not in seen[0]
+    assert seen[1]["tool_choice"] == {"type": "none"}

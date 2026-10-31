@@ -185,3 +185,82 @@ async def test_primary_backoff_delay(router, monkeypatch, status, headers, delay
     )
     router._primary_failed(error)
     assert router._anthropic_retry_at == 1000.0 + delay
+
+
+def test_model_family_rejects_non_claude_ids():
+    assert lr.model_family("grok-4.7") is None
+    assert lr.model_family(lr.CLAUDE_PRIMARY) == lr.CLAUDE_PRIMARY
+
+
+async def test_init_without_a_claude_key_stays_quiet(monkeypatch, caplog):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("KLUKAI_CLAUDE_PRIMARY", raising=False)
+    router = lr.LLMRouter()
+    with caplog.at_level("WARNING"):
+        await router.init()
+    try:
+        assert router._anthropic_http is None
+        assert router._anthropic_configured() is False
+        assert "Claude is not the chat path" not in caplog.text
+    finally:
+        await router.close()
+
+
+async def test_prose_that_is_not_a_tool_call_stays_text(router, monkeypatch):
+    from app.llm_completions import _grok_tool_calls
+
+    assert _grok_tool_calls("not json", [TOOL]) == []
+    assert _grok_tool_calls("[1]", [TOOL]) == []
+    assert _grok_tool_calls('{"note": 1}', [TOOL]) == []
+    scripted(monkeypatch, [turn("not json"), turn("[1]")])
+    config = await router.route(
+        "time", SessionState(conversation_id="c"), interactive=True
+    )
+    messages = [{"role": "user", "content": "time"}]
+    for reply_text in ("not json", "[1]"):
+        result = await router.complete_chat("persona", messages, config, tools=[TOOL])
+        message = result["choices"][0]["message"]
+        assert message["content"] == reply_text
+        assert message["tool_calls"] == []
+
+
+async def test_a_mismatched_grok_model_is_refused(router):
+    config = lr._grok_config()
+    config.model = "grok-4"
+    with pytest.raises(ValueError, match="Unavailable"):
+        await router.complete_chat(
+            "persona", [{"role": "user", "content": "hi"}], config
+        )
+
+
+async def test_multipart_turns_can_forbid_tools(router, monkeypatch):
+    calls = scripted(monkeypatch, [turn("ok")])
+    config = lr._grok_config()
+    await router.complete_chat(
+        "persona",
+        [{"role": "user", "content": [{"text": "hi"}, "there", {"nope": 1}]}],
+        config,
+        tools=[TOOL],
+        allow_tools=False,
+    )
+    assert calls[0]["prompt"] == "user: hi there"
+    assert "Do not call tools" in calls[0]["system"]
+    assert "tool_calls" not in calls[0]["system"]
+
+
+async def test_an_empty_tool_call_list_is_rejected(router, monkeypatch):
+    scripted(monkeypatch, [turn(json.dumps({"tool_calls": []}))])
+    config = lr._grok_config()
+    with pytest.raises(ValueError, match="Invalid or undeclared"):
+        await router.complete_chat(
+            "persona", [{"role": "user", "content": "time"}], config, tools=[TOOL]
+        )
+
+
+async def test_an_unexpected_grok_effort_is_rejected(router, monkeypatch):
+    scripted(monkeypatch, [Turn("Hello.", MODEL, "high", "flag")])
+    config = lr._grok_config()
+    with pytest.raises(ValueError, match="Unexpected"):
+        await router.complete_chat(
+            "persona", [{"role": "user", "content": "hi"}], config
+        )
