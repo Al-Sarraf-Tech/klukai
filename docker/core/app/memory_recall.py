@@ -230,7 +230,10 @@ async def select(
             result = await background_llm.json_object(caller, prompt, **kwargs)
     except TimeoutError:
         logger.warning(
-            "Memory recall %s: selection timed out; using Postgres order", caller
+            "Memory recall %s: selection timed out after %.0fs "
+            "(background CLI startup or the shared queue); using Postgres order",
+            caller,
+            budget,
         )
         return None
     except Exception as error:  # background_llm never raises; belt and braces

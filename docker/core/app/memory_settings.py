@@ -15,4 +15,7 @@ SELECTION_SHOW = 8
 # it after this long and keep the Postgres ranking.
 RECALL_SELECTION_TIMEOUT_S = 2.5
 # After the reply, one Grok pick may run this long. It cannot delay the turn.
-RECALL_PRECOMPUTE_TIMEOUT_S = 12.0
+# A background CLI turn measured about 8–11s before the first token, and this
+# pick shares that CLI with extraction. 12s expired during startup or the
+# queue. The reply does not wait on this.
+RECALL_PRECOMPUTE_TIMEOUT_S = 45.0
