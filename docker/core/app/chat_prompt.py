@@ -141,6 +141,14 @@ class ChatPromptBuilder:
             ),
         )
         (episode_memories, rel_facts, recalled_exchanges), nudge = recalled_pair
+        recent_replies = [
+            str(turn.get("content") or "")
+            for turn in session.turns
+            if turn.get("role") == "assistant"
+        ][-3:]
+        from .personality.memory_blocks import drop_repeated_replies
+
+        recalled_exchanges = drop_repeated_replies(recalled_exchanges, recent_replies)
         phys_state, phys_detail = physical_state
 
         dream_hint = ""
@@ -390,6 +398,10 @@ class ChatPromptBuilder:
     ) -> str:
         # Memory nudge — proactive past reference based on affection level.
         # When the caller already started it beside the main recall, use that.
+        system_prompt += (
+            "\n\nTHIS TURN: Do not open with the same stage direction or the "
+            "same sentence as your previous reply. Change the wording."
+        )
         nudge = (
             memory_nudge
             if nudge_ready

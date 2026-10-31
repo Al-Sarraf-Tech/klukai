@@ -37,6 +37,43 @@ def build_relationship_block(facts: dict[str, Any]) -> str:
     )
 
 
+def _words(text: str) -> set[str]:
+    return {word for word in text.lower().split() if word}
+
+
+def repeats_recent_reply(candidate: str, recent: list[str]) -> bool:
+    """True when a recalled line is almost the same as one she just said."""
+    left = " ".join(candidate.lower().split())
+    if len(left) < 12:
+        return False
+    for reply in recent:
+        right = " ".join(reply.lower().split())
+        if not right:
+            continue
+        if left == right or left in right or right in left:
+            return True
+        shared = _words(left) & _words(right)
+        smaller = min(len(_words(left)), len(_words(right)))
+        if smaller and len(shared) / smaller >= 0.8:
+            return True
+    return False
+
+
+def drop_repeated_replies(
+    exchanges: list[dict[str, Any]], recent_replies: list[str]
+) -> list[dict[str, Any]]:
+    kept = []
+    for exchange in exchanges:
+        if not isinstance(exchange, dict):
+            kept.append(exchange)
+            continue
+        reply = exchange.get("assistant_content")
+        if isinstance(reply, str) and repeats_recent_reply(reply, recent_replies):
+            continue
+        kept.append(exchange)
+    return kept
+
+
 def build_conversation_recall_block(exchanges: list[dict[str, Any]]) -> str:
     """Format recalled past conversation exchanges for the prompt."""
     if not exchanges:
