@@ -123,7 +123,7 @@ class TestSelectionPrompt:
         prompt = selection_prompt("memories", "q " * 2000, texts, 10)
         assert len(prompt) <= memory_recall.PROMPT_BUDGET_CHARS
         assert memory_recall.PROMPT_BUDGET_CHARS < extraction_llm.MAX_PROMPT_CHARS
-        assert prompt.count('{"id"') == RECALL_CANDIDATES
+        assert prompt.count('{"id"') == memory_recall.SELECTION_SHOW
 
     def test_escaping_heavy_text_drops_lowest_ranked_candidates_to_fit(self):
         texts = ['"\\' * 400 for _ in range(RECALL_CANDIDATES)]

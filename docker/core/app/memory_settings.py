@@ -8,6 +8,9 @@ RECENCY_WEIGHT = 0.15
 # order immediately. A Grok pick, when one is still run, is not on the reply
 # path: it precomputes the next turn and may take longer than this budget.
 RECALL_CANDIDATES = 40
+# The Grok pick after the reply only sees this many short lines. Forty full
+# rows made the CLI miss its budget; the reply itself never waits on the pick.
+SELECTION_SHOW = 8
 # Callers that still wait for a Grok selection (not the chat reply) abandon
 # it after this long and keep the Postgres ranking.
 RECALL_SELECTION_TIMEOUT_S = 2.5

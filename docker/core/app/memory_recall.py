@@ -22,14 +22,18 @@ from collections.abc import Sequence
 from typing import Any, TypeVar
 
 from . import background_llm
-from .memory_settings import RECALL_CANDIDATES, RECALL_SELECTION_TIMEOUT_S
+from .memory_settings import (
+    RECALL_CANDIDATES,
+    RECALL_SELECTION_TIMEOUT_S,
+    SELECTION_SHOW,
+)
 
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
-QUERY_CHARS = 1_000
-TEXT_CHARS = 360
+QUERY_CHARS = 240
+TEXT_CHARS = 160
 MAX_SEARCH_TERMS = 32
 MAX_TERM_CHARS = 64
 # The visible reply is at most RECALL_CANDIDATES short ids.
@@ -98,9 +102,10 @@ def _selection_request(
     subject: str, query: str, texts: Sequence[str], limit: int
 ) -> tuple[str, int]:
     """The bounded prompt and the number of candidates actually shown."""
+    shown_texts = list(texts[:SELECTION_SHOW])
     lines = [
         json.dumps({"id": str(n), "text": clip(text, TEXT_CHARS)}, ensure_ascii=False)
-        for n, text in enumerate(texts, start=1)
+        for n, text in enumerate(shown_texts, start=1)
     ]
 
     def render(listing: list[str]) -> str:
