@@ -29,6 +29,23 @@ def test_the_allowlist_comes_from_the_environment(monkeypatch):
     assert e2e_live.agy_allowed_users() == {"jalsarraf", "alice"}
 
 
+def test_the_allowlist_is_read_from_the_container_config(monkeypatch):
+    monkeypatch.delenv("KLUKAI_AGY_ALLOWED_USERS", raising=False)
+    seen = []
+
+    def run(argv, **_kwargs):
+        seen.append(argv)
+        class Result:
+            returncode = 0
+            stdout = "PATH=/usr/bin\nKLUKAI_AGY_ALLOWED_USERS=jalsarraf,alice\n"
+        return Result()
+
+    monkeypatch.setattr(e2e_live.subprocess, "run", run)
+    assert e2e_live.agy_allowed_users() == {"jalsarraf", "alice"}
+    assert seen[0][1] == "inspect"
+    assert "printenv" not in seen[0]
+
+
 def test_a_skipped_check_is_not_a_failure(monkeypatch, capsys):
     monkeypatch.setattr(e2e_live, "mint_token", lambda username: "token")
     monkeypatch.setattr(e2e_live, "revoke_token", lambda token: None)

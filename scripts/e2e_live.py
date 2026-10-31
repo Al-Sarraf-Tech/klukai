@@ -61,8 +61,15 @@ def agy_allowed_users() -> set[str] | None:
     else:
         core = os.environ.get("KLUKAI_E2E_CORE", "companion-core")
         try:
+            # The core image has no printenv. Config.Env is the container env.
             probe = subprocess.run(
-                ["docker", "exec", core, "printenv", "KLUKAI_AGY_ALLOWED_USERS"],
+                [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{range .Config.Env}}{{println .}}{{end}}",
+                    core,
+                ],
                 capture_output=True,
                 text=True,
                 timeout=15,
@@ -71,7 +78,12 @@ def agy_allowed_users() -> set[str] | None:
             return None
         if probe.returncode != 0:
             return None
-        raw = probe.stdout
+        raw = ""
+        prefix = "KLUKAI_AGY_ALLOWED_USERS="
+        for line in probe.stdout.splitlines():
+            if line.startswith(prefix):
+                raw = line[len(prefix) :]
+                break
     return {user.strip() for user in raw.split(",") if user.strip()}
 
 
