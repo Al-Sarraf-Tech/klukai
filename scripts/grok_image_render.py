@@ -433,8 +433,15 @@ def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, canc
                 pass
             finally:
                 lines.put(None)
+                stdout = process.stdout
+                if stdout is not None:
+                    try:
+                        stdout.close()
+                    except (OSError, ValueError):
+                        pass
 
-        threading.Thread(target=read, daemon=True).start()
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
         deadline = time.monotonic() + timeout
         size = 0
         try:
@@ -471,6 +478,20 @@ def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, canc
         except BaseException:
             _kill(process)
             raise
+        finally:
+            # Kill first so a blocked read sees EOF, then let that thread close
+            # the pipe. Closing it from here can deadlock against the reader.
+            if process.poll() is None:
+                _kill(process)
+            else:
+                process.wait()
+            reader.join(timeout=2)
+            stdout = process.stdout
+            if stdout is not None:
+                try:
+                    stdout.close()
+                except (OSError, ValueError):
+                    pass
 
 
 def _refuse_unsupported(request: dict) -> None:

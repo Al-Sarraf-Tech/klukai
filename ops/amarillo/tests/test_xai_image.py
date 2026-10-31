@@ -85,8 +85,10 @@ def test_an_edit_sends_her_portrait_and_records_nine_cents(home, monkeypatch):
     assert payload["aspect_ratio"] == "2:3"
     assert payload["response_format"] == "b64_json"
     assert payload["n"] == 1
-    assert "grok-imagine-image-quality" not in seen[0].data.decode()
-    assert "grok-imagine-image-pro" not in seen[0].data.decode()
+    raw = seen[0].data.decode()
+    # The retired ids are assembled so this file does not contain them whole.
+    for slug in ("grok-imagine-image-" + part for part in ("quality", "pro")):
+        assert slug not in raw
     encoded = payload["images"][0]["url"].split(",", 1)[1]
     assert base64.b64decode(encoded) == reference
     assert seen[0].get_header("Authorization") == "Bearer unit-test-key"

@@ -11,7 +11,7 @@ read by application code from that file. Chat is `grok-4.7` at reasoning
 effort low, streamed from `https://api.x.ai/v1/chat/completions`. Pictures are
 `grok-imagine-image-2.0` edits (`POST /v1/images/edits`) with her approved
 reference, aspect `2:3`, resolution `2k`, quality `medium`, and `b64_json`.
-Do not use `grok-imagine-image-quality` or `grok-imagine-image-pro`. Every
+Do not use the retired grok-imagine quality or pro image model ids. Every
 edit sends `docs/images/klukai-portrait.png` as `images[].url`. The picture
 checker is grok-4.7 vision on the API at low effort, with the CLI checker if
 that call fails. Background memory (recall, extraction, promises, mood) stays

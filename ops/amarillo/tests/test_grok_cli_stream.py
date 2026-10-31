@@ -65,7 +65,13 @@ def cli(tmp_path, monkeypatch):
         monkeypatch.setattr(m, 'command', lambda *a, **k: [sys.executable, str(script), mode])
         return m.iter_stdout(tmp_path, work, [], **kwargs)
     run.processes = started
-    return run
+    yield run
+    for process in started:
+        if process.stdout is not None and not process.stdout.closed:
+            process.stdout.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def test_lines_arrive_in_order(cli):
