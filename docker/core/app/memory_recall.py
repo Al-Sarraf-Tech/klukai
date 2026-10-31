@@ -161,6 +161,22 @@ def _candidate_index(raw: object, count: int) -> int | None:
 # Texts a finished Grok pick stored for the next chat turn. The reply that
 # is already on its way never waits for this.
 _PINNED: dict[str, list[str]] = {}
+_PENDING_PINS: dict[str, object] = {}
+
+
+def begin_pin(user_id: str) -> object:
+    """Drop the previous pick and give this user's newest job ownership."""
+    token = object()
+    _PINNED.pop(user_id, None)
+    _PENDING_PINS[user_id] = token
+    return token
+
+
+def finish_pin(user_id: str, token: object, texts: Sequence[str]) -> None:
+    """Publish only while this job is still the newest, then release it."""
+    if _PENDING_PINS.get(user_id) is token:
+        del _PENDING_PINS[user_id]
+        store_pinned(user_id, texts)
 
 
 def store_pinned(user_id: str, texts: Sequence[str]) -> None:
@@ -183,13 +199,16 @@ async def select(
     limit: int,
     *,
     timeout: float | None = None,
+    role: str = "recall",
 ) -> list[int] | None:
     """Haiku's pick of the relevant ``texts`` (0-based, in order), or None.
 
     None means "use the Postgres ranking": Haiku is unavailable or capped,
     took longer than the budget, or replied with nothing usable. The chat
     reply does not call this. A precompute after the reply may, and that
-    wait is not on the way to the answer.
+    wait is not on the way to the answer. ``role="recall"`` preempts a
+    running background call in the worker; a caller nobody is waiting on
+    passes ``role="background"`` so it queues behind memory extraction.
     """
     if not texts or limit <= 0:
         return None
@@ -197,7 +216,7 @@ async def select(
     budget = RECALL_SELECTION_TIMEOUT_S if timeout is None else timeout
     kwargs: dict[str, Any] = {
         "max_tokens": SELECTION_MAX_TOKENS,
-        "role": "recall",
+        "role": role,
     }
     if timeout is not None:
         kwargs["timeout"] = budget

@@ -240,8 +240,13 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
         """Grok-pick this turn's episodes after the reply, for the next one.
 
         A failure leaves the next turn on the Postgres ranking. This never
-        runs on the way to the answer.
+        runs on the way to the answer. It runs at background priority so it
+        does not cancel the extraction still running for the previous turn.
+        A newer pick owns the slot: an older one cannot overwrite it, and an
+        empty or failed pick does not leave the previous topic in place.
         """
+        token = memory_recall.begin_pin(user_id)
+        texts: list[str] = []
         try:
             rows = await memory_recall.fetch_candidates(
                 _EPISODES_RANKED_SQL, _EPISODES_RECENT_SQL, query, user_id
@@ -255,16 +260,19 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
                 [_episode_text(row) for row in rows],
                 5,
                 timeout=RECALL_PRECOMPUTE_TIMEOUT_S,
+                role="background",
             )
             if not picked:
                 return
             chosen = memory_recall.ordered(rows, picked, 5)
-            memory_recall.store_pinned(user_id, [row[1] or "" for row in chosen])
+            texts = [row[1] or "" for row in chosen]
         except Exception as exc:
             logger.warning(
                 "Recall precompute failed (%s); next turn keeps Postgres order",
                 type(exc).__name__,
             )
+        finally:
+            memory_recall.finish_pin(user_id, token, texts)
 
     async def get_memory_nudge(
         self,

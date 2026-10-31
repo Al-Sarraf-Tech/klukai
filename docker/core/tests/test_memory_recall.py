@@ -285,6 +285,7 @@ async def test_pin_next_recall_stores_only_a_real_pick(monkeypatch):
 
     async def picked(*_args, **kwargs):
         assert kwargs["timeout"] == memory_recall.RECALL_SELECTION_TIMEOUT_S or kwargs["timeout"] > 2
+        assert kwargs["role"] == "background"
         return [0]
 
     monkeypatch.setattr(memory_recall, "fetch_candidates", fetch)
