@@ -14,6 +14,21 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- Chat sends the conversation as real user and assistant turns. The stable
+  persona stays first. This turn's clock, mood, and memories come after the
+  history, so earlier turns can stay in the prompt cache. Sticky routing
+  stays `x-grok-conv-id`. `prompt_cache_key` is only on the Responses API.
+- Recalled exchanges that repeat her last replies are left out. A one-line
+  per-turn note tells her to change the wording and the stage direction.
+- A failed Grok CLI call logs the exit code, stop reason, and a short
+  scrubbed stderr line. Background story and summary calls may use 8192
+  completion tokens so reasoning does not eat the JSON. Chat stays at 2048.
+- The memory pick after a reply may wait 45s. It shares the background CLI
+  with extraction, and a CLI turn was already 8–11s before the first token.
+  The reply still does not wait.
+
+### Changed
+
 - The chat persona is a byte-stable prefix. Turn state (clock, mood, memories,
   pace) is a later message so prompt caching can keep the prefix.
 - Chat deltas are forwarded as they arrive instead of waiting for a sentence.
