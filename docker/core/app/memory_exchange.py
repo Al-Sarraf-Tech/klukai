@@ -124,6 +124,8 @@ class ExchangeMemoryMixin:
         limit: int = MSG_RECALL_LIMIT,
         min_score: float = 0.0,
         user_id: str = "jalsarraf",
+        *,
+        pick: bool = True,
     ) -> list[dict[str, Any]]:
         """Past exchanges relevant to ``query``, most relevant first, scoped to user.
 
@@ -137,13 +139,15 @@ class ExchangeMemoryMixin:
             )
             if not rows:
                 return []
-            picked = await memory_recall.select(
-                "memory_recall_exchanges",
-                "past exchanges between the Commander and Klukai",
-                query,
-                [_exchange_text(row) for row in rows],
-                limit,
-            )
+            picked = None
+            if pick:
+                picked = await memory_recall.select(
+                    "memory_recall_exchanges",
+                    "past exchanges between the Commander and Klukai",
+                    query,
+                    [_exchange_text(row) for row in rows],
+                    limit,
+                )
             chosen = memory_recall.ordered(rows, picked, limit)
             return [
                 {
@@ -171,9 +175,13 @@ class ExchangeMemoryMixin:
         limit: int = MSG_RECALL_LIMIT,
         affection_level: int = 0,
         user_id: str = "jalsarraf",
+        *,
+        pick: bool = True,
     ) -> list[dict[str, Any]]:
         """Recall exchanges with recency-weighted re-ranking and affection bias."""
-        exchanges = await self.recall_exchanges(query, limit=limit * 2, user_id=user_id)
+        exchanges = await self.recall_exchanges(
+            query, limit=limit * 2, user_id=user_id, pick=pick
+        )
         if not exchanges:
             return []
 

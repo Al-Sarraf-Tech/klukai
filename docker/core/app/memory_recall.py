@@ -158,26 +158,52 @@ def _candidate_index(raw: object, count: int) -> int | None:
     return number - 1 if 1 <= number <= count else None
 
 
+# Texts a finished Grok pick stored for the next chat turn. The reply that
+# is already on its way never waits for this.
+_PINNED: dict[str, list[str]] = {}
+
+
+def store_pinned(user_id: str, texts: Sequence[str]) -> None:
+    cleaned = [text.strip() for text in texts if isinstance(text, str) and text.strip()]
+    if cleaned:
+        _PINNED[user_id] = cleaned[:8]
+    else:
+        _PINNED.pop(user_id, None)
+
+
+def take_pinned(user_id: str) -> list[str]:
+    return _PINNED.pop(user_id, [])
+
+
 async def select(
-    caller: str, subject: str, query: str, texts: Sequence[str], limit: int
+    caller: str,
+    subject: str,
+    query: str,
+    texts: Sequence[str],
+    limit: int,
+    *,
+    timeout: float | None = None,
 ) -> list[int] | None:
     """Haiku's pick of the relevant ``texts`` (0-based, in order), or None.
 
     None means "use the Postgres ranking": Haiku is unavailable or capped,
-    took longer than RECALL_SELECTION_TIMEOUT_S, or replied with nothing
-    usable.
+    took longer than the budget, or replied with nothing usable. The chat
+    reply does not call this. A precompute after the reply may, and that
+    wait is not on the way to the answer.
     """
     if not texts or limit <= 0:
         return None
     prompt, shown = _selection_request(subject, query, texts, limit)
+    budget = RECALL_SELECTION_TIMEOUT_S if timeout is None else timeout
+    kwargs: dict[str, Any] = {
+        "max_tokens": SELECTION_MAX_TOKENS,
+        "role": "recall",
+    }
+    if timeout is not None:
+        kwargs["timeout"] = budget
     try:
-        async with asyncio.timeout(RECALL_SELECTION_TIMEOUT_S):
-            result = await background_llm.json_object(
-                caller,
-                prompt,
-                max_tokens=SELECTION_MAX_TOKENS,
-                role="recall",
-            )
+        async with asyncio.timeout(budget):
+            result = await background_llm.json_object(caller, prompt, **kwargs)
     except TimeoutError:
         logger.warning(
             "Memory recall %s: selection timed out; using Postgres order", caller

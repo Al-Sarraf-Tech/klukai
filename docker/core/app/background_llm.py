@@ -61,11 +61,14 @@ async def _haiku(
     max_tokens: int,
     system: str | None,
     role: str = "background",
+    timeout: float | None = None,
 ) -> tuple[str | None, str]:
     """One budgeted background request: (visible text or None, outcome)."""
     kwargs: dict[str, Any] = {"max_tokens": max_tokens, "route": caller}
     if role != "background":
         kwargs["role"] = role
+    if timeout is not None:
+        kwargs["timeout"] = timeout
     if system is not None:
         kwargs["system"] = system
     try:
@@ -93,6 +96,7 @@ async def _route(
     convert: Callable[[str], _T | None],
     unusable: str,
     role: str = "background",
+    timeout: float | None = None,
 ) -> _T | None:
     report = report if report is not None else CallReport()
     report.provider, report.model = extraction_llm.provider(), extraction_llm.model()
@@ -102,6 +106,7 @@ async def _route(
         max_tokens=haiku_max_tokens or haiku_budget(max_tokens),
         system=system,
         role=role,
+        timeout=timeout,
     )
     result = convert(text) if text is not None else None
     if text is not None and result is None:
@@ -156,6 +161,7 @@ async def json_object(
     report: CallReport | None = None,
     haiku_max_tokens: int | None = None,
     role: str = "background",
+    timeout: float | None = None,
 ) -> dict[str, Any] | None:
     """A non-empty JSON object for ``caller``; None means use your defaults.
 
@@ -172,4 +178,5 @@ async def json_object(
         convert=_parsed_object,
         unusable="unparsable",
         role=role,
+        timeout=timeout,
     )

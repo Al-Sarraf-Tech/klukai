@@ -256,6 +256,82 @@ class TestSelect:
 # ── ordering helpers ─────────────────────────────────────────────────────────
 
 
+def test_a_precomputed_pick_is_read_once():
+    memory_recall.store_pinned("pin-user", ["  the harbour  ", ""])
+    assert memory_recall.take_pinned("pin-user") == ["the harbour"]
+    assert memory_recall.take_pinned("pin-user") == []
+    memory_recall.store_pinned("pin-user", ["kept"])
+    memory_recall.store_pinned("pin-user", ["", " "])
+    assert memory_recall.take_pinned("pin-user") == []
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_selection_timeout_is_forwarded():
+    pick = AsyncMock(return_value={"ids": ["1"]})
+    with patch("app.background_llm.json_object", pick):
+        assert await select("c", "s", "q", ["a"], 1, timeout=4) == [0]
+    assert pick.await_args.kwargs["timeout"] == 4
+    assert pick.await_args.kwargs["role"] == "recall"
+
+
+@pytest.mark.asyncio
+async def test_pin_next_recall_stores_only_a_real_pick(monkeypatch):
+    from app.memory import MemoryManager
+
+    memory = MemoryManager.__new__(MemoryManager)
+
+    async def fetch(*_args, **_kwargs):
+        return [("id", "harbour log", [], [], 0.4, None)]
+
+    async def picked(*_args, **kwargs):
+        assert kwargs["timeout"] == memory_recall.RECALL_SELECTION_TIMEOUT_S or kwargs["timeout"] > 2
+        return [0]
+
+    monkeypatch.setattr(memory_recall, "fetch_candidates", fetch)
+    monkeypatch.setattr(memory_recall, "select", picked)
+    await memory.pin_next_recall("lighthouse", "pin-next")
+    assert memory_recall.take_pinned("pin-next") == ["harbour log"]
+
+    async def empty(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(memory_recall, "fetch_candidates", empty)
+    await memory.pin_next_recall("lighthouse", "pin-next")
+    assert memory_recall.take_pinned("pin-next") == []
+
+    async def none_pick(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(memory_recall, "fetch_candidates", fetch)
+    monkeypatch.setattr(memory_recall, "select", none_pick)
+    await memory.pin_next_recall("lighthouse", "pin-next")
+    assert memory_recall.take_pinned("pin-next") == []
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("db")
+
+    monkeypatch.setattr(memory_recall, "fetch_candidates", boom)
+    await memory.pin_next_recall("lighthouse", "pin-next")
+
+
+@pytest.mark.asyncio
+async def test_recall_budget_reaches_the_background_call(monkeypatch):
+    from app import background_llm, extraction_llm
+
+    seen = {}
+
+    async def complete(prompt, **kwargs):
+        seen.update(kwargs)
+        return '{"ids": ["1"]}'
+
+    monkeypatch.setattr(extraction_llm, "complete", complete)
+    await background_llm.json_object(
+        "memory_recall_episodes", "prompt", max_tokens=8, role="recall", timeout=12
+    )
+    assert seen["role"] == "recall"
+    assert seen["timeout"] == 12
+
+
 def test_ordered_follows_pick_or_postgres_prefix():
     rows = ["r0", "r1", "r2", "r3"]
     assert ordered(rows, [2, 0], 3) == ["r2", "r0"]

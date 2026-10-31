@@ -104,6 +104,33 @@ def test_leftover_model_ids_stay_on_grok_4_7(monkeypatch, value):
 # ── request ───────────────────────────────────────────────────────────────
 
 
+async def test_recall_uses_the_configurable_budget(remote, monkeypatch):
+    monkeypatch.setattr("app.grok_chat.configured", lambda: True)
+    seen = {}
+
+    async def complete_turn(system, prompt, *, timeout=60, role="chat"):
+        seen["timeout"] = timeout
+        seen["role"] = role
+        from app.grok_chat import Turn
+
+        return Turn('{"mood": "serene"}', "grok-4.7", "low", "stream")
+
+    monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
+    text = await xl.complete(
+        "x", max_tokens=100, route="memory_recall_episodes", role="recall"
+    )
+    assert text == '{"mood": "serene"}'
+    assert seen == {"timeout": 2.5, "role": "recall"}
+    text = await xl.complete(
+        "x",
+        max_tokens=100,
+        route="memory_recall_episodes",
+        role="recall",
+        timeout=12,
+    )
+    assert seen["timeout"] == 12
+
+
 async def test_request_shape_reserves_once_and_returns_visible_text(
     remote, monkeypatch
 ):

@@ -30,6 +30,7 @@ from .memory_session import (
 from .memory_exchange import ExchangeMemoryMixin
 from .memory_settings import (
     MSG_RECALL_LIMIT as MSG_RECALL_LIMIT,
+    RECALL_PRECOMPUTE_TIMEOUT_S,
     RECENCY_WEIGHT as RECENCY_WEIGHT,
 )
 
@@ -136,6 +137,8 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
         limit: int = 5,
         min_score: float = 0.0,
         user_id: str = "jalsarraf",
+        *,
+        pick: bool = True,
     ) -> list[dict[str, Any]]:
         """The user's episodes relevant to ``query``, most relevant first.
 
@@ -149,13 +152,15 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
             )
             if not rows:
                 return []
-            picked = await memory_recall.select(
-                "memory_recall_episodes",
-                "summaries of past conversations between the Commander and Klukai",
-                query,
-                [_episode_text(row) for row in rows],
-                limit,
-            )
+            picked = None
+            if pick:
+                picked = await memory_recall.select(
+                    "memory_recall_episodes",
+                    "summaries of past conversations between the Commander and Klukai",
+                    query,
+                    [_episode_text(row) for row in rows],
+                    limit,
+                )
             chosen = memory_recall.ordered(rows, picked, limit)
             return [
                 {
@@ -193,13 +198,16 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
         """
         import asyncio
 
-        episodes_task = self.recall_episodes(query, limit=5, user_id=user_id)
+        episodes_task = self.recall_episodes(
+            query, limit=5, user_id=user_id, pick=False
+        )
         facts_task = self.get_relationship_facts(user_id=user_id)
         exchanges_task = self.recall_exchanges_with_recency(
             query,
             limit=MSG_RECALL_LIMIT,
             affection_level=affection_level,
             user_id=user_id,
+            pick=False,
         )
 
         episodes, facts, exchanges = await asyncio.gather(
@@ -221,7 +229,42 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
             logger.warning("recall_for_prompt: exchanges failed: %s", exchanges)
             exchanges = []
         episode_texts = [ep["summary"] for ep in episodes]
-        return episode_texts, facts, exchanges
+        pinned = [
+            text
+            for text in memory_recall.take_pinned(user_id)
+            if text not in episode_texts
+        ]
+        return pinned + episode_texts, facts, exchanges
+
+    async def pin_next_recall(self, query: str, user_id: str = "jalsarraf") -> None:
+        """Grok-pick this turn's episodes after the reply, for the next one.
+
+        A failure leaves the next turn on the Postgres ranking. This never
+        runs on the way to the answer.
+        """
+        try:
+            rows = await memory_recall.fetch_candidates(
+                _EPISODES_RANKED_SQL, _EPISODES_RECENT_SQL, query, user_id
+            )
+            if not rows:
+                return
+            picked = await memory_recall.select(
+                "memory_recall_episodes",
+                "summaries of past conversations between the Commander and Klukai",
+                query,
+                [_episode_text(row) for row in rows],
+                5,
+                timeout=RECALL_PRECOMPUTE_TIMEOUT_S,
+            )
+            if not picked:
+                return
+            chosen = memory_recall.ordered(rows, picked, 5)
+            memory_recall.store_pinned(user_id, [row[1] or "" for row in chosen])
+        except Exception as exc:
+            logger.warning(
+                "Recall precompute failed (%s); next turn keeps Postgres order",
+                type(exc).__name__,
+            )
 
     async def get_memory_nudge(
         self,
@@ -258,6 +301,7 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
             limit=3,
             affection_level=affection_level,
             user_id=user_id,
+            pick=False,
         )
         if not exchanges:
             return None

@@ -125,6 +125,7 @@ async def complete(
     route: str,
     system: str | None = None,
     role: str = "background",
+    timeout: float | None = None,
 ) -> str:
     """Return the visible text of one budgeted Grok 4.7 medium request.
 
@@ -168,12 +169,15 @@ async def complete(
         raise ExtractionUnavailable("Grok extraction allowance unavailable") from None
     started = time.monotonic()
     system_text = SYSTEM_PROMPT if system is None else system
-    timeout = RECALL_SELECTION_TIMEOUT_S if role == "recall" else REQUEST_TIMEOUT_S
+    if timeout is None or timeout <= 0:
+        budget = RECALL_SELECTION_TIMEOUT_S if role == "recall" else REQUEST_TIMEOUT_S
+    else:
+        budget = timeout
     try:
         async with _gate:
-            async with asyncio.timeout(timeout):
+            async with asyncio.timeout(budget):
                 turn = await complete_turn(
-                    system_text, prompt, timeout=timeout, role=role
+                    system_text, prompt, timeout=budget, role=role
                 )
         if turn.model != GROK_MODEL or turn.effort != background_effort():
             raise ExtractionLLMError("Unexpected Grok model or effort")
