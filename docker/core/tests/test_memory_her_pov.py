@@ -600,6 +600,35 @@ class TestRunHerPovFailures:
         assert "claude" not in hp._ACTIVE_JOB_BY_USER
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("delivery", ["annotation", "image", "done"])
+    async def test_cancelled_delivery_preserves_a_saved_job(
+        self, clean_jobs, pipeline, delivery
+    ):
+        hp._ACTIVE_JOB_BY_USER["claude"] = "job-1"
+
+        async def send(_user_id, frame):
+            if (delivery == "image" and frame["type"] == "image") or (
+                delivery == "done" and frame.get("status") == "done"
+            ):
+                raise asyncio.CancelledError()
+
+        if delivery == "annotation":
+            pipeline.ws.send_proactive.side_effect = asyncio.CancelledError()
+        else:
+            pipeline.ws.send.side_effect = send
+
+        with pytest.raises(asyncio.CancelledError):
+            await hp.run_her_pov("claude", "job-1")
+
+        job = await hp.get_job("job-1")
+        assert job["status"] == "done"
+        assert job["phase"] == "done"
+        assert job["memory_id"] == "mem-123"
+        assert job["has_image"] is True
+        assert job.get("error") is None
+        assert "claude" not in hp._ACTIVE_JOB_BY_USER
+
+    @pytest.mark.asyncio
     async def test_dead_socket_on_image_failure_still_records_failure(
         self, clean_jobs, pipeline
     ):

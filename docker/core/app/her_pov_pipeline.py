@@ -31,6 +31,7 @@ class HerPOVPipeline:
         from .her_day import render_costume
         from . import wardrobe as _wardrobe
 
+        completed = False
         try:
             await self.set_job(
                 job_id,
@@ -259,6 +260,7 @@ class HerPOVPipeline:
                 # do not store full image b64 in job forever — client gets WS once
                 has_image=True,
             )
+            completed = True
 
             try:
                 line = pov["annotation"]
@@ -293,6 +295,10 @@ class HerPOVPipeline:
             )
 
         except asyncio.CancelledError:
+            # Delivery can be cancelled after the archive and terminal job are
+            # saved. Keep that successful result available to reconnecting clients.
+            if completed:
+                raise
             # WSManager.disconnect cancels tracked tasks when the last device drops,
             # and this pipeline runs for minutes. CancelledError is not an Exception
             # subclass, so without this the job would sit at "drawing" forever and
