@@ -280,4 +280,4 @@ async def test_recall_does_not_share_chats_breaker(monkeypatch, tmp_path):
     finally:
         sock.close()
     assert deps == ["grok_chat", "grok_recall"]
-    assert grok_chat.breaker_name("background") == "grok_chat"
+    assert grok_chat.breaker_name("background") == "grok_background"

@@ -72,8 +72,12 @@ def _expected(role: str) -> str:
 
 
 def breaker_name(role: str) -> str:
-    """Recall has its own breaker so a timed-out selection cannot lock chat out."""
-    return "grok_recall" if role == "recall" else "grok_chat"
+    """Recall and background each have their own breaker so neither can lock chat out."""
+    if role == "recall":
+        return "grok_recall"
+    if role == "background":
+        return "grok_background"
+    return "grok_chat"
 
 
 def _event(obj: dict[str, Any]) -> dict[str, Any]:
@@ -115,21 +119,25 @@ async def iter_events(
                 },
             ) as response:
                 status = response.status_code
-                if status == 409:
-                    raise GrokChatCancelled("cancelled")
-                if status != 200:
+                if status not in {200, 409}:
                     raise GrokChatError("Grok chat failed")
-                raw = bytearray()
-                async for chunk in response.aiter_bytes():
-                    raw.extend(chunk)
-                    if len(raw) > 1_000_000:
-                        raise GrokChatError("Grok chat response is too large")
-                    while b"\n" in raw:
-                        line, raw = raw.split(b"\n", 1)
-                        if line.strip():
-                            yield _event(json.loads(line))
-                if raw.strip():
-                    yield _event(json.loads(raw))
+                if status == 200:
+                    raw = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        raw.extend(chunk)
+                        if len(raw) > 1_000_000:
+                            raise GrokChatError("Grok chat response is too large")
+                        while b"\n" in raw:
+                            line, raw = raw.split(b"\n", 1)
+                            if line.strip():
+                                yield _event(json.loads(line))
+                    if raw.strip():
+                        yield _event(json.loads(raw))
+            # A 409 is the worker making room for a higher-priority call, not
+            # an outage. Leave the breaker before reporting it, or five
+            # preemptions open the chat path.
+            if status == 409:
+                raise GrokChatCancelled("cancelled")
     except GrokChatError:
         raise
     except ValueError as exc:
@@ -141,15 +149,24 @@ async def iter_events(
 async def iter_text(
     system: str, prompt: str, *, timeout: float = 120.0, role: str = "chat"
 ) -> AsyncIterator[str]:
-    """Yield reply text as it arrives. The last event is not yielded as text."""
+    """Yield reply text as it arrives. The last event is not yielded as text.
+
+    After ``done`` the worker only closes the body. Read it to the end rather
+    than returning: an abandoned stream is closed later by GeneratorExit,
+    which the breaker treats as neither success nor failure, so a streamed
+    half-open probe would never close the breaker.
+    """
+    finished = False
     async for event in iter_events(system, prompt, timeout=timeout, role=role):
+        if finished:
+            continue
         if event.get("cancelled") is True:
             raise GrokChatCancelled("cancelled")
         if event.get("type") == "delta" and isinstance(event.get("text"), str):
             yield event["text"]
         elif event.get("type") == "done":
             _turn_from(event, role)
-            return
+            finished = True
 
 
 def _turn_from(data: dict[str, Any], role: str) -> Turn:
