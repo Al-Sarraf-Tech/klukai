@@ -10,12 +10,13 @@ The user turn is ``--prompt-json``. Each of those argv strings stays under
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+import fcntl
 import json
 import logging
 import os
 from pathlib import Path
 import shutil
-import threading
 import uuid
 
 logger = logging.getLogger("klukai.grok_chat")
@@ -232,21 +233,36 @@ def parse_turn(raw: str, session: str, profile: Path, *, effort: str | None = No
     return Turn(text.strip(), MODEL, echoed, source, tokens, cache_read)
 
 
-_HOME_LOCKS: dict[str, threading.Lock] = {}
-_HOME_LOCKS_GUARD = threading.Lock()
-
-
 def _home_kind(role: str) -> str:
     return "chat" if role == "chat" else "background"
 
 
-def _home_lock(kind: str) -> threading.Lock:
-    with _HOME_LOCKS_GUARD:
-        lock = _HOME_LOCKS.get(kind)
-        if lock is None:
-            lock = threading.Lock()
-            _HOME_LOCKS[kind] = lock
-        return lock
+def _home_root() -> Path:
+    return Path(
+        os.environ.get(
+            "KLUKAI_GROK_HOME_ROOT",
+            str(Path.home() / ".local/share/klukai/agy-bridge/grok-homes"),
+        )
+    )
+
+
+@contextmanager
+def _home_lock(kind: str):
+    """Exclusive lock for one role home, visible to other processes.
+
+    ``fcntl.flock`` is tied to the open file, so a smoke script and the
+    worker cannot prepare the same home at once. The kernel drops the lock
+    when this process closes the file or exits.
+    """
+    directory = _home_root() / kind
+    directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+    fd = os.open(directory / ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def home_for(role: str) -> tuple[Path, Path]:
@@ -254,18 +270,13 @@ def home_for(role: str) -> tuple[Path, Path]:
 
     Chat has its own directory. Recall and other background calls share
     another, so those two can run at once. A second call of the same role
-    reuses the directories. ``stream`` and ``complete`` hold that role's
-    lock for the whole CLI run: this function deletes ``sessions/``, which
-    would clobber a call already using the home. The account login stays
-    on GROK_AUTH_PATH, not in this home.
+    reuses the directories. ``stream`` and ``complete`` hold a file lock
+    in that role home for the whole CLI run: this function deletes
+    ``sessions/``, which would clobber a call already using the home.
+    The account login stays on GROK_AUTH_PATH, not in this home.
     """
     kind = _home_kind(role)
-    root = Path(
-        os.environ.get(
-            "KLUKAI_GROK_HOME_ROOT",
-            str(Path.home() / ".local/share/klukai/agy-bridge/grok-homes"),
-        )
-    )
+    root = _home_root()
     profile, work = root / kind / "profile", root / kind / "work"
     profile.mkdir(parents=True, mode=0o700, exist_ok=True)
     work.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -306,9 +317,7 @@ def stream(
     if cancel is not None and cancel.is_set():
         raise agy.RuntimeError("Grok chat was cancelled")
     chosen = chat_effort() if effort is None else effort
-    lock = _home_lock(_home_kind(role))
-    lock.acquire()
-    try:
+    with _home_lock(_home_kind(role)):
         session, profile, work, args = _prepare(system, prompt, chosen, role)
         raw_lines: list[str] = []
         emitted = ""
@@ -331,8 +340,6 @@ def stream(
             "effort_source": turn.effort_source, "tokens": turn.tokens,
             "cache_read": turn.cache_read,
         }
-    finally:
-        lock.release()
 
 
 def complete(

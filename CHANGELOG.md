@@ -16,8 +16,9 @@ in `docs/superpowers/plans/`.
 
 - A second Grok chat call no longer crashes because the per-role home
   already exists. Chat and recall keep separate homes so they can run
-  together. Two calls of the same role wait, so one cannot delete the
-  other's session files.
+  together. Two calls of the same role, including a smoke script beside
+  the worker, take a file lock so one cannot delete the other's session
+  files.
 - A cancelled memory-recall probe no longer re-trips the Grok circuit
   breaker. Recall uses its own `grok_recall` breaker, so a recall problem
   cannot lock out chat. The reply uses the Postgres ranking immediately.

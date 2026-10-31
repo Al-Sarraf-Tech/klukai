@@ -1,6 +1,9 @@
 """Grok chat turns report grok-4.7 and low effort without printing secrets."""
+import fcntl
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import threading
 import time
@@ -144,6 +147,54 @@ def test_chat_and_recall_homes_run_together_and_one_role_does_not(monkeypatch, t
         thread.join(2)
     assert active["max"] == 1
     assert active["n"] == 0
+
+
+def test_the_role_home_lock_blocks_another_process(monkeypatch, tmp_path):
+    root = tmp_path / "homes"
+    monkeypatch.setenv("KLUKAI_GROK_HOME_ROOT", str(root))
+    scripts = str(Path(chat.__file__).resolve().parent)
+    held = tmp_path / "held"
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import os, sys, time\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "os.environ['KLUKAI_GROK_HOME_ROOT'] = sys.argv[2]\n"
+            "import grok_account_chat as chat\n"
+            "with chat._home_lock('chat'):\n"
+            "    open(sys.argv[3], 'w').write('held')\n"
+            "    time.sleep(30)\n",
+            scripts,
+            str(root),
+            str(held),
+        ]
+    )
+    try:
+        deadline = time.monotonic() + 3
+        while not held.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert held.exists()
+        lock_path = root / "chat" / ".lock"
+        blocked = os.open(lock_path, os.O_RDWR)
+        try:
+            try:
+                fcntl.flock(blocked, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except BlockingIOError:
+                acquired = False
+        finally:
+            os.close(blocked)
+        assert acquired is False
+    finally:
+        child.kill()
+        child.wait(timeout=3)
+    free = os.open(root / "chat" / ".lock", os.O_RDWR)
+    try:
+        fcntl.flock(free, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(free, fcntl.LOCK_UN)
+    finally:
+        os.close(free)
 
 
 def test_chat_background_and_image_efforts_are_configurable(monkeypatch):
