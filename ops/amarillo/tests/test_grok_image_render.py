@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
+import time
 import uuid
 
 import pytest
@@ -41,6 +43,71 @@ def events(session, result=None):
 
 def parse(rows, session):
     return module().parse_stream('\n'.join(map(json.dumps, rows)), session, {'/work/klukai.png'})
+
+
+def test_cancel_stops_the_cli_without_another_attempt(tmp_path, monkeypatch):
+    m = module()
+    auth = tmp_path / "auth.json"
+    auth.write_text("login")
+    monkeypatch.setenv("GROK_AUTH_PATH", str(auth))
+    monkeypatch.setattr(m, "command", lambda *args, **kwargs: ["/bin/sleep", "30"])
+    cancel = threading.Event()
+
+    def trip():
+        time.sleep(0.15)
+        cancel.set()
+
+    threading.Thread(target=trip).start()
+    with pytest.raises(m.agy.RuntimeError, match="cancelled"):
+        m.execute(tmp_path, tmp_path, ["ignored"], timeout=5, cancel=cancel)
+
+
+def test_portrait_frame_uses_the_nearest_supported_aspect_ratio():
+    assert module().aspect_ratio(832, 1216) == "2:3"
+    assert module().aspect_ratio(1216, 832) == "3:2"
+    assert module().aspect_ratio(1024, 1024) == "1:1"
+
+
+def test_gate_requires_the_requested_aspect_ratio_when_the_policy_sets_one(tmp_path):
+    gate = module("grok_image_gate")
+    policy = {"images": ["/work/klukai.png"], "aspect_ratio": "2:3"}
+    call = {"toolName": "image_edit", "toolInput": {
+        "image": ["/work/klukai.png"], "prompt": "Draw", "aspect_ratio": "2:3",
+    }}
+    assert gate.decide(call, policy, tmp_path / "claim") == "allow"
+    call["toolInput"]["aspect_ratio"] = "1:1"
+    assert gate.decide(call, policy, tmp_path / "square") == "deny"
+    del call["toolInput"]["aspect_ratio"]
+    assert gate.decide(call, policy, tmp_path / "missing") == "deny"
+
+
+def test_bundled_skills_are_accepted_and_anything_else_is_rejected(tmp_path):
+    m = module()
+    sid = str(uuid.uuid4())
+    root = tmp_path / "profile" / ".grok" / "bundled" / "skills"
+    (root / "imagine").mkdir(parents=True)
+    (root / "build-with-ai").mkdir()
+    (root / "code-review").mkdir()
+    allowed = m.bundled_skills(tmp_path / "profile")
+    rows = events(sid)
+    rows[0]["skills"] = ["build-with-ai", "bundled:imagine", {"name": "code-review"}]
+    assert m.parse_stream(
+        "\n".join(map(json.dumps, rows)), sid, {"/work/klukai.png"}, allowed_skills=allowed,
+    ) is None
+    rows[0]["skills"] = ["build-with-ai", "user-added"]
+    with pytest.raises(m.agy.RuntimeError, match="bundled"):
+        m.parse_stream("\n".join(map(json.dumps, rows)), sid, {"/work/klukai.png"}, allowed_skills=allowed)
+    rows[0].pop("skills")
+    with pytest.raises(m.agy.RuntimeError, match="missing"):
+        m.parse_stream("\n".join(map(json.dumps, rows)), sid, {"/work/klukai.png"}, allowed_skills=allowed)
+    rows = events(sid)
+    rows[1]["message"]["content"][0]["input"]["aspect_ratio"] = "2:3"
+    assert m.parse_stream(
+        "\n".join(map(json.dumps, rows)), sid, {"/work/klukai.png"}, aspect="2:3",
+    ) is None
+    del rows[1]["message"]["content"][0]["input"]["aspect_ratio"]
+    with pytest.raises(m.agy.RuntimeError, match="unapproved"):
+        m.parse_stream("\n".join(map(json.dumps, rows)), sid, {"/work/klukai.png"}, aspect="2:3")
 
 
 def test_gate_allows_one_edit_and_denies_retries_and_extra_references(tmp_path):
@@ -235,6 +302,7 @@ def test_render_locks_anime_style_uses_text_commander_and_grok_4_7_medium(tmp_pa
     assert "hand-painted anime background art" in prompt
     assert "text-only appearance guidance" in prompt and "Exactly two" in prompt
     assert "rooftop garden" in prompt
+    assert "aspect_ratio to 2:3" in prompt
     assert captured["args"][captured["args"].index("--model") + 1] == "grok-4.7"
     assert captured["args"][captured["args"].index("--effort") + 1] == "medium"
     assert "disable_api_key_auth = true" in m.CONFIG

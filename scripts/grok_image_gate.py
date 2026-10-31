@@ -16,10 +16,12 @@ def decide(call, policy, claim=None):
     if call.get('toolName') != 'image_edit' or not isinstance(args, dict):
         return 'deny'
     refs = args.get('image')
+    expected = policy.get('aspect_ratio')
     if (not isinstance(refs, list) or not refs or
             any(not isinstance(x, str) for x in refs) or
             sorted(refs) != sorted(policy['images']) or
-            not isinstance(args.get('prompt'), str) or not args['prompt'].strip()):
+            not isinstance(args.get('prompt'), str) or not args['prompt'].strip()
+            or (expected is not None and args.get('aspect_ratio') != expected)):
         return 'deny'
     try:
         with claim.open('x') as handle:
