@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Grok 4.7 (effort medium) checks each account-rendered Klukai image.
+"""Grok 4.7 (effort xhigh) checks each account-rendered Klukai image.
 
 Owner decision 2026-10-30: all of Klukai's model use runs through the official
 Grok CLI on the account login. This checker uses the same rubric as the Claude
@@ -31,7 +31,7 @@ from claude_image_check import (
 )
 from commander_description import COMMANDER_TEXT_DESCRIPTION
 from gemini_art_review import read_image
-from grok_image_render import CONFIG, EFFORT, MODEL, execute
+from grok_image_render import CONFIG, EFFORT, MODEL, execute, image_effort
 
 # Re-exported so the worker can report the checker the same way as before.
 __all__ = ["MODEL", "EFFORT", "RUBRIC", "run", "fix_hint", "validate_verdict"]
@@ -80,7 +80,7 @@ def arguments(session: str, prompt_file: Path) -> list[str]:
     """Headless Grok reads ``--prompt-file`` from disk. Stdin is not the prompt,
     and the ACP document is too large for one argv string."""
     result = [
-        "--session-id", session, "--model", MODEL, "--effort", EFFORT,
+        "--session-id", session, "--model", MODEL, "--effort", image_effort(),
         "--no-subagents", "--disable-web-search", "--permission-mode", "dontAsk",
         "--max-turns", "1", "--output-format", "streaming-messages-json",
         "--verbatim", "--system-prompt-override", RUBRIC,
@@ -99,8 +99,8 @@ def _require_model(raw: str) -> None:
     if init[0].get("apiKeySource") != "oauth":
         raise ValueError("checker authentication was not OAuth")
     echoed = init[0].get("reasoning_effort", init[0].get("effort"))
-    if echoed is not None and echoed != EFFORT:
-        raise ValueError("checker effort was not medium")
+    if echoed is not None and echoed != image_effort():
+        raise ValueError("checker effort was not " + image_effort())
 
 
 def run(candidate: bytes, value: dict, references: dict, *, timeout: float) -> dict:

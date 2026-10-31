@@ -1,4 +1,4 @@
-"""Grok checks with the same rubric as Claude, on grok-4.7 at medium effort."""
+"""Grok checks with the same rubric as Claude, on grok-4.7 at xhigh effort."""
 import io
 import json
 import os
@@ -23,7 +23,7 @@ def png():
 def test_the_rubric_and_drift_rule_match_the_claude_checker():
     assert grok.RUBRIC is claude.RUBRIC
     assert "photorealistic" in grok.RUBRIC and "3D-rendered" in grok.RUBRIC
-    assert grok.MODEL == "grok-4.7" and grok.EFFORT == "medium"
+    assert grok.MODEL == "grok-4.7" and grok.image_effort() == "xhigh"
 
 
 def test_prompt_json_is_an_acp_image_block_and_the_command_pins_the_model(monkeypatch):
@@ -36,7 +36,7 @@ def test_prompt_json_is_an_acp_image_block_and_the_command_pins_the_model(monkey
     assert "rooftop" in document["content"][-1]["text"]
     args = grok.arguments(str(uuid.uuid4()), Path("prompt.json"))
     assert args[args.index("--model") + 1] == "grok-4.7"
-    assert args[args.index("--effort") + 1] == "medium"
+    assert args[args.index("--effort") + 1] == "xhigh"
     assert args[args.index("--prompt-file") + 1] == "prompt.json"
     assert "--prompt-json" not in args
     assert "--system-prompt-override" in args

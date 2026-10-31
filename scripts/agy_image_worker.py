@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import hashlib
+import logging
 import hmac
 from http.server import BaseHTTPRequestHandler
 import json
@@ -23,6 +24,7 @@ import uuid
 from agy_art_runtime import ContentRefused, GenerationPending, ProviderUnavailable, RuntimeError as RendererError
 import implied_scene
 
+logger = logging.getLogger("klukai.agy_images")
 
 MAX_BODY = 80 * 1024
 COMPLETE_MAX_BODY = 1_000_000
@@ -264,7 +266,10 @@ class Worker:
         self.providers = validate_providers(providers if providers is not None else [("agy", renderer)])
         self.renderer = self.providers[0][1]
         self.slot = threading.BoundedSemaphore(1)
+        # Chat has its own CLI so a reply never waits on memory work.
+        # Recall uses the background CLI and preempts extraction and promises.
         self.chat_gate = ChatGate()
+        self.background_gate = ChatGate()
         self.db_lock = threading.Lock()
         database = state_dir / "requests.sqlite3"
         fd = os.open(database, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -699,18 +704,31 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("invalid chat")
             system, prompt = value.get("system", ""), value.get("prompt", "")
             role = value.get("role", "chat")
+            effort = value.get("effort")
             if (type(system) is not str or type(prompt) is not str or not prompt.strip()
                     or len(system) > 800_000 or len(prompt) > 200_000
-                    or role not in {"chat", "background"}):
+                    or role not in {"chat", "recall", "background"}
+                    or (effort is not None and effort not in {"minimal", "low", "medium", "high", "xhigh"})):
                 raise ValueError("invalid chat")
         except (ValueError, UnicodeError, RecursionError, TimeoutError, OSError, KeyError, AttributeError):
             self.reply(400)
             return
-        background = role == "background"
-        gate = self.server.worker.chat_gate
-        if not gate.acquire(background=background, stopped=lambda: client_gone(self.connection)):
+        import grok_account_chat
+        if not isinstance(effort, str):
+            effort = grok_account_chat.effort_for(role)
+        worker = self.server.worker
+        if role == "chat":
+            gate, low_priority = worker.chat_gate, False
+        elif role == "recall":
+            gate, low_priority = worker.background_gate, False
+        else:
+            gate, low_priority = worker.background_gate, True
+        queued = time.monotonic()
+        if not gate.acquire(background=low_priority, stopped=lambda: client_gone(self.connection)):
+            self._log_complete(role, effort, queued, queued, None, True)
             return
-        cancel = gate.cancel_background if background else threading.Event()
+        queue_s = time.monotonic()
+        cancel = gate.cancel_background if low_priority else threading.Event()
         stop = threading.Event()
 
         def watch():
@@ -720,17 +738,63 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
         threading.Thread(target=watch, daemon=True).start()
+        started = False
+        cancelled = False
+        tokens = None
         try:
-            import grok_account_chat
-            turn = grok_account_chat.complete(system, prompt, cancel=cancel)
-            self.reply(200, {"text": turn.text, "model": turn.model, "effort": turn.effort,
-                             "effort_source": turn.effort_source})
-        except Exception:
-            if not client_gone(self.connection):
-                self.reply(502, {"error": "grok chat failed"})
+            stream = getattr(grok_account_chat, "stream", None)
+            if stream is None:
+                turn = grok_account_chat.complete(system, prompt, cancel=cancel, effort=effort)
+                tokens = getattr(turn, "tokens", None)
+                self.reply(200, {"text": turn.text, "model": turn.model, "effort": turn.effort,
+                                 "effort_source": turn.effort_source, "tokens": tokens})
+            else:
+                for event in stream(system, prompt, cancel=cancel, effort=effort):
+                    if not started:
+                        self._begin_ndjson()
+                        started = True
+                    if event.get("type") == "done":
+                        tokens = event.get("tokens")
+                        cancelled = bool(event.get("cancelled"))
+                    self._write_ndjson(event)
+                self._end_ndjson()
+        except Exception as exc:
+            cancelled = "cancelled" in str(exc).lower()
+            if not started and not client_gone(self.connection):
+                if cancelled:
+                    self.reply(409, {"error": "cancelled", "cancelled": True})
+                else:
+                    self.reply(502, {"error": "grok chat failed"})
         finally:
             stop.set()
+            self._log_complete(role, effort, queued, queue_s, tokens, cancelled)
             gate.release()
+
+    def _begin_ndjson(self):
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+    def _write_ndjson(self, event):
+        payload = (json.dumps(event, separators=(",", ":")) + "\n").encode()
+        self.wfile.write(f"{len(payload):x}\r\n".encode() + payload + b"\r\n")
+        self.wfile.flush()
+
+    def _end_ndjson(self):
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+
+    def _log_complete(self, role, effort, queued, started, tokens, cancelled):
+        now = time.monotonic()
+        logger.info(
+            "grok complete role=%s effort=%s queue_ms=%d run_ms=%d tokens=%s cancelled=%s",
+            role, effort, int((started - queued) * 1000), int((now - started) * 1000),
+            "-" if tokens is None else tokens, str(bool(cancelled)).lower(),
+        )
 
     def do_POST(self):
         if not self.authorized():
@@ -900,7 +964,7 @@ def main():
                         help="alternate: rotate the first provider per request; fixed: always start with the "
                              "first provider and use the rest only as failovers")
     parser.add_argument("--checker", default="grok", choices=("none", "grok", "claude"),
-                        help="grok: Grok 4.7 (effort medium) checks every render through the account login. "
+                        help="grok: Grok 4.7 (effort xhigh) checks every render through the account login. "
                              "claude remains available and is not the default.")
     args = parser.parse_args()
     try:

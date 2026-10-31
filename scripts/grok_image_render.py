@@ -9,7 +9,7 @@ the brief can carry another account's typed words. No credential bytes enter
 Python or a repository.
 
 Owner decision 2026-10-30: this account-login path is Klukai's picture provider.
-The session is grok-4.7 at medium effort. The scene uses the same locked
+The session is grok-4.7 at xhigh effort. The scene uses the same locked
 2D-anime brief as the fal renderer. The Commander is text only. A nudity grant
 is refused before references, the ledger or the CLI. Every render reserves one
 attempt against KLUKAI_GROK_DAILY_LIMIT / KLUKAI_GROK_MONTHLY_LIMIT (default
@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import queue
 import re
 import shlex
 import shutil
@@ -31,6 +32,7 @@ import signal
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 
@@ -45,7 +47,13 @@ VERSION = '1.0.62'
 # grok-4.7; medium is one of the effort ids it documents (minimal, low,
 # medium, high, xhigh). grok-4.7-high-fast is a different id and is not used.
 MODEL = 'grok-4.7'
-EFFORT = 'medium'
+# Pictures and the checker. Override with KLUKAI_GROK_IMAGE_EFFORT.
+EFFORT = 'xhigh'
+
+
+def image_effort() -> str:
+    value = os.environ.get('KLUKAI_GROK_IMAGE_EFFORT', EFFORT).strip().lower()
+    return value or EFFORT
 DEFAULT_LEDGER = Path.home() / '.local/share/klukai/agy-bridge/state/grok-attempts.sqlite3'
 # The CLI updater keeps only the newest two builds in ~/.grok/downloads, so the
 # worker keeps its own copy of the pinned build here and prefers it.
@@ -270,8 +278,8 @@ def parse_stream(raw: str, session: str, images: set[str], *, allowed_skills: se
         if init[0].get('model') != MODEL:
             raise agy.RuntimeError('Grok session model was not grok-4.7')
         echoed = init[0].get('reasoning_effort', init[0].get('effort'))
-        if echoed is not None and echoed != EFFORT:
-            raise agy.RuntimeError('Grok session effort was not medium')
+        if echoed is not None and echoed != image_effort():
+            raise agy.RuntimeError('Grok session effort was not ' + image_effort())
         if init[0].get('mcp_servers') != []:
             raise agy.RuntimeError('Grok session MCP inventory was not empty or was missing')
         allowed = set() if allowed_skills is None else allowed_skills
@@ -392,6 +400,53 @@ def execute(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=N
         except UnicodeError as exc: raise agy.RuntimeError('Grok output was not UTF-8') from exc
 
 
+def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=None):
+    """Yield stdout lines as the CLI writes them."""
+    auth = account_auth()
+    process = subprocess.Popen(command(profile, work, args, auth=auth), cwd=work,
+        env=environment(home=profile, auth=auth),
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        start_new_session=True)
+    lines: queue.Queue = queue.Queue()
+
+    def read() -> None:
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                lines.put(line)
+        finally:
+            lines.put(None)
+
+    threading.Thread(target=read, daemon=True).start()
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            if cancel is not None and cancel.is_set():
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+                raise agy.RuntimeError('Grok was cancelled')
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+                raise agy.RuntimeError('Grok timed out with unknown completion; not retried')
+            try:
+                item = lines.get(timeout=min(0.2, remaining))
+            except queue.Empty:
+                continue
+            if item is None:
+                break
+            yield item.decode('utf-8', 'replace')
+        process.wait(timeout=5)
+        if process.returncode:
+            provider_error('Grok chat process failed')
+    except BaseException:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        raise
+
+
 def _refuse_unsupported(request: dict) -> None:
     """Policy failures happen before references, the ledger or the CLI."""
     if request.get('nudity') is True:
@@ -426,7 +481,7 @@ def render(request: dict, references: dict) -> bytes:
             'change billing, delegate or retry. After the image result, finish.\n'
             + brief(request)
         )
-        args = ['--session-id', session, '--model', MODEL, '--effort', EFFORT,
+        args = ['--session-id', session, '--model', MODEL, '--effort', image_effort(),
                 '--tools', 'image_edit', '--no-subagents',
                 '--disable-web-search', '--permission-mode', 'dontAsk', '--allow', 'image_edit',
                 '--max-turns', '2', '--output-format', 'streaming-messages-json', '--single', prompt]

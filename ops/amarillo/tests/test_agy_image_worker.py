@@ -1411,25 +1411,31 @@ def test_a_closed_caller_is_detected(worker):
         left.close()
 
 
-def test_chat_runs_right_after_a_slow_background_call(worker, setup_files, monkeypatch):
+def test_recall_returns_while_extraction_is_still_running(worker, setup_files, monkeypatch):
     started = threading.Event()
+    release = threading.Event()
     background_done = threading.Event()
     result = {}
 
     class Turn:
         def __init__(self, text):
             self.text = text
-            self.model, self.effort, self.effort_source = "grok-4.7", "medium", "stream"
+            self.model, self.effort, self.effort_source = "grok-4.7", "low", "stream"
+            self.tokens = 3
 
-    def complete(system, prompt, cancel=None):
-        if prompt == "recall":
+    def stream(system, prompt, cancel=None, effort="low"):
+        if prompt == "extract":
             started.set()
             while cancel is None or not cancel.is_set():
                 time.sleep(0.01)
-            raise RuntimeError("cancelled")
-        return Turn("hello")
+            raise RuntimeError("Grok was cancelled")
+        yield {"type": "delta", "text": "Hi"}
+        yield {"type": "done", "text": "Hi", "model": "grok-4.7", "effort": effort,
+               "effort_source": "stream", "tokens": 1}
 
-    monkeypatch.setitem(sys.modules, "grok_account_chat", SimpleNamespace(complete=complete))
+    monkeypatch.setitem(sys.modules, "grok_account_chat", SimpleNamespace(
+        stream=stream, effort_for=lambda role: "low",
+    ))
     runtime, state, references = setup_files
     server = worker.create_server(runtime, state, references, {"jalsarraf", "test-user"})
     server.worker.slot.acquire()
@@ -1439,7 +1445,71 @@ def test_chat_runs_right_after_a_slow_background_call(worker, setup_files, monke
 
     def run_background():
         result["background"] = request(
-            path, {"system": "rank", "prompt": "recall", "role": "background"}, target="/complete",
+            path, {"system": "facts", "prompt": "extract", "role": "background", "effort": "low"},
+            target="/complete",
+        )
+        background_done.set()
+
+    background = threading.Thread(target=run_background)
+    background.start()
+    try:
+        assert started.wait(2)
+        status, _headers, body = request(
+            path, {"system": "rank", "prompt": "recall", "role": "recall", "effort": "low"},
+            target="/complete",
+        )
+        assert status == 200
+        lines = [json.loads(line) for line in body.decode().splitlines() if line.strip()]
+        assert lines[0] == {"type": "delta", "text": "Hi"}
+        assert lines[-1]["type"] == "done"
+        assert background_done.wait(2)
+        assert result["background"][0] == 409
+        chat = request(
+            path, {"system": "Be Klukai.", "prompt": "Say ready.", "role": "chat", "effort": "low"},
+            target="/complete",
+        )
+        assert chat[0] == 200
+    finally:
+        release.set()
+        server.worker.slot.release()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+        background.join(timeout=3)
+
+
+def test_chat_does_not_wait_for_a_slow_background_call(worker, setup_files, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    background_done = threading.Event()
+    result = {}
+
+    class Turn:
+        def __init__(self, text):
+            self.text = text
+            self.model, self.effort, self.effort_source = "grok-4.7", "low", "stream"
+            self.tokens = None
+
+    def complete(system, prompt, cancel=None, effort="low"):
+        if prompt == "extract":
+            started.set()
+            release.wait(2)
+            return Turn("stored")
+        return Turn("hello")
+
+    monkeypatch.setitem(sys.modules, "grok_account_chat", SimpleNamespace(
+        complete=complete, effort_for=lambda role: "low",
+    ))
+    runtime, state, references = setup_files
+    server = worker.create_server(runtime, state, references, {"jalsarraf", "test-user"})
+    server.worker.slot.acquire()
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    thread.start()
+    path = runtime / "image.sock"
+
+    def run_background():
+        result["background"] = request(
+            path, {"system": "facts", "prompt": "extract", "role": "background"}, target="/complete",
         )
         background_done.set()
 
@@ -1452,8 +1522,9 @@ def test_chat_runs_right_after_a_slow_background_call(worker, setup_files, monke
         )
         assert status == 200
         assert json.loads(body)["text"] == "hello"
+        release.set()
         assert background_done.wait(2)
-        assert result["background"][0] == 502
+        assert result["background"][0] == 200
         assert request(
             path, {"system": "Be Klukai.", "prompt": "again", "role": "nope"}, target="/complete",
         )[0] == 400
@@ -1465,16 +1536,20 @@ def test_chat_runs_right_after_a_slow_background_call(worker, setup_files, monke
         background.join(timeout=3)
 
 
-def test_complete_reports_grok_4_7_at_medium(worker, setup_files, monkeypatch):
+def test_complete_reports_grok_4_7_at_low(worker, setup_files, monkeypatch):
     class Turn:
-        text, model, effort, effort_source = "ready", "grok-4.7", "medium", "stream"
+        text, model, effort, effort_source = "ready", "grok-4.7", "low", "stream"
+        tokens = None
 
     monkeypatch.setitem(sys.modules, "grok_account_chat", SimpleNamespace(
-        complete=lambda system, prompt, cancel=None: Turn()))
+        complete=lambda system, prompt, cancel=None, effort="low": Turn(),
+        effort_for=lambda role: "low",
+    ))
     with running(worker, setup_files) as path:
         status, _headers, body = request(path, {"system": "Be Klukai.", "prompt": "Say ready."},
                                           target="/complete")
     assert status == 200
     assert json.loads(body) == {
-        "text": "ready", "model": "grok-4.7", "effort": "medium", "effort_source": "stream",
+        "text": "ready", "model": "grok-4.7", "effort": "low", "effort_source": "stream",
+        "tokens": None,
     }

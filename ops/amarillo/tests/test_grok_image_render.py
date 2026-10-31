@@ -304,7 +304,7 @@ def test_render_locks_anime_style_uses_text_commander_and_grok_4_7_medium(tmp_pa
     assert "rooftop garden" in prompt
     assert "aspect_ratio to 2:3" in prompt
     assert captured["args"][captured["args"].index("--model") + 1] == "grok-4.7"
-    assert captured["args"][captured["args"].index("--effort") + 1] == "medium"
+    assert captured["args"][captured["args"].index("--effort") + 1] == "xhigh"
     assert "disable_api_key_auth = true" in m.CONFIG
     import sqlite3
     from contextlib import closing
@@ -331,7 +331,7 @@ def test_nudity_and_missing_caps_fail_before_references_or_the_ledger(tmp_path, 
     assert not (tmp_path / "grok.sqlite3").exists()
 
 
-def test_stream_rejects_a_session_that_is_not_grok_4_7_at_medium():
+def test_stream_rejects_a_session_that_is_not_grok_4_7_at_xhigh():
     m = module()
     sid = str(uuid.uuid4())
     rows = events(sid)
@@ -340,7 +340,7 @@ def test_stream_rejects_a_session_that_is_not_grok_4_7_at_medium():
         parse(rows, sid)
     rows = events(sid)
     rows[0]["reasoning_effort"] = "high"
-    with pytest.raises(m.agy.RuntimeError, match="not medium"):
+    with pytest.raises(m.agy.RuntimeError, match="not xhigh"):
         parse(rows, sid)
 
 
