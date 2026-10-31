@@ -64,9 +64,22 @@ class FakeHaiku:
         self.calls: list[dict[str, object]] = []
 
     async def __call__(
-        self, prompt: str, *, max_tokens: int, route: str, system: str | None = None
+        self,
+        prompt: str,
+        *,
+        max_tokens: int,
+        route: str,
+        system: str | None = None,
+        role: str = "background",
     ) -> str:
-        self.calls.append({"route": route, "prompt": prompt, "max_tokens": max_tokens})
+        self.calls.append(
+            {
+                "route": route,
+                "prompt": prompt,
+                "max_tokens": max_tokens,
+                "role": role,
+            }
+        )
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
@@ -262,6 +275,7 @@ async def test_postgres_memory_recall_full_text_candidates_and_haiku_pick(
     assert episodes[0]["emotion_tags"] == ["calm"]
     call = haiku.calls[0]
     assert call["route"] == "memory_recall_episodes"
+    assert call["role"] == "recall"
     # Postgres sent only this user's rows: full-text matches first (more
     # matched words rank higher), then the non-match despite its importance.
     assert ranked(candidates(call["prompt"]), [HARBOUR, LOGBOOK, REACTOR])
@@ -286,6 +300,7 @@ async def test_postgres_memory_recall_full_text_candidates_and_haiku_pick(
     assert datetime.fromisoformat(exchange["created_at"]).tzinfo is not None
     call = haiku.calls[1]
     assert call["route"] == "memory_recall_exchanges"
+    assert call["role"] == "recall"
     assert ranked(candidates(call["prompt"]), [LAMP[0], PUMP[0]])
     events.append(
         {
@@ -305,6 +320,7 @@ async def test_postgres_memory_recall_full_text_candidates_and_haiku_pick(
     # A user with no rows never reaches Haiku.
     assert await memory.recall_episodes(QUERY, user_id="recall-nobody") == []
     assert len(haiku.calls) == 4 and not haiku.replies
+    assert [call["role"] for call in haiku.calls] == ["recall"] * 4
     events.append(
         {"phase": "scoped", "calls": len(haiku.calls), "monotonic": time.monotonic()}
     )
@@ -356,6 +372,7 @@ async def test_postgres_memory_recall_without_haiku_keeps_postgres_order(
     assert [c["route"] for c in haiku.calls] == ["memory_recall_episodes"] * 4 + [
         "memory_recall_exchanges"
     ]
+    assert [c["role"] for c in haiku.calls] == ["recall"] * len(haiku.calls)
     assert not haiku.replies
     events.append(
         {

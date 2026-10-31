@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from app import grok_chat
-from app.grok_chat import GrokChatError
+from app.grok_chat import GrokChatCancelled, GrokChatError
 
 
 def _token(tmp_path):
@@ -104,7 +104,10 @@ async def test_complete_turn_accepts_medium_grok_from_the_worker(
         sock.close()
     assert seen["authorization"] == "Bearer test-private-token"
     assert seen["body"] == {
-        "system": "persona", "prompt": "hi", "role": "chat", "effort": "low",
+        "system": "persona",
+        "prompt": "hi",
+        "role": "chat",
+        "effort": "low",
     }
     assert (turn.text, turn.model, turn.effort, turn.effort_source) == (
         "Hello, Commander.",
@@ -187,3 +190,69 @@ async def test_complete_turn_reports_a_worker_outage_without_a_paid_fallback(
     finally:
         sock.close()
     assert isinstance(caught.value.__cause__, httpx.ConnectError)
+
+
+def _frames(*frames: dict | str) -> bytes:
+    lines = [b"" if frame == "" else json.dumps(frame).encode() for frame in frames]
+    return b"\n".join(lines) + b"\n"
+
+
+def _done(**changes) -> dict:
+    payload = {
+        "type": "done",
+        "text": "Hi there",
+        "model": grok_chat.MODEL,
+        "effort": grok_chat.EFFORT,
+        "effort_source": "stream",
+    }
+    payload.update(changes)
+    return payload
+
+
+async def test_iter_events_refuses_an_unconfigured_socket(monkeypatch, tmp_path):
+    monkeypatch.setenv("KLUKAI_AGY_SOCKET", str(tmp_path / "missing.sock"))
+    monkeypatch.setenv("KLUKAI_AGY_TOKEN_FILE", str(tmp_path / "missing-token"))
+    with pytest.raises(GrokChatError, match="not configured"):
+        await anext(grok_chat.iter_events("persona", "hi"))
+
+
+async def test_stream_frames_yield_deltas_then_a_done_turn(monkeypatch, tmp_path):
+    body = _frames({"type": "delta", "text": "Hi"}, "", _done(effort_source="summary"))
+    sock = _install(
+        monkeypatch, tmp_path, lambda request: httpx.Response(200, content=body)
+    )
+    try:
+        pieces = [piece async for piece in grok_chat.iter_text("persona", "hi")]
+        turn = await grok_chat.complete_turn("persona", "hi")
+    finally:
+        sock.close()
+    assert pieces == ["Hi"]
+    assert (turn.text, turn.effort_source) == ("Hi there", "summary")
+
+
+async def test_a_cancelled_frame_stops_streaming_and_the_turn(monkeypatch, tmp_path):
+    body = _frames({"cancelled": True})
+    sock = _install(
+        monkeypatch, tmp_path, lambda request: httpx.Response(200, content=body)
+    )
+    try:
+        with pytest.raises(GrokChatCancelled, match="cancelled"):
+            async for _piece in grok_chat.iter_text("persona", "hi"):
+                pass
+        with pytest.raises(GrokChatCancelled, match="cancelled"):
+            await grok_chat.complete_turn("persona", "hi")
+    finally:
+        sock.close()
+
+
+async def test_a_stream_without_a_done_frame_returns_no_text(monkeypatch, tmp_path):
+    body = _frames({"type": "delta", "text": 1})
+    sock = _install(
+        monkeypatch, tmp_path, lambda request: httpx.Response(200, content=body)
+    )
+    try:
+        assert [piece async for piece in grok_chat.iter_text("persona", "hi")] == []
+        with pytest.raises(GrokChatError, match="no text"):
+            await grok_chat.complete_turn("persona", "hi")
+    finally:
+        sock.close()
