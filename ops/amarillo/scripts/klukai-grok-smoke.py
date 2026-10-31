@@ -20,7 +20,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
+import tempfile
 import uuid
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -36,11 +38,18 @@ def _line(name: str, ok: bool, detail: str) -> str:
 
 
 def chat_turn() -> tuple[bool, str]:
-    turn = grok_account_chat.complete(
-        "You are Klukai. Reply with one word.",
-        "Reply with the single word ready.",
-        timeout=90,
-    )
+    # A private home: complete() deletes sessions in its home, and the smoke
+    # script does not go through the worker gate that serializes chat.
+    home = Path(tempfile.mkdtemp(prefix="klukai-grok-smoke-"))
+    os.environ["KLUKAI_GROK_HOME_ROOT"] = str(home)
+    try:
+        turn = grok_account_chat.complete(
+            "You are Klukai. Reply with one word.",
+            "Reply with the single word ready.",
+            timeout=90,
+        )
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
     ok = (
         turn.model == grok_account_chat.MODEL
         and turn.effort == grok_account_chat.chat_effort()
