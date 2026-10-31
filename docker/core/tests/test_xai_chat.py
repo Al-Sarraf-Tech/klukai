@@ -15,9 +15,11 @@ from app.xai_chat import (
     XaiAuthError,
     XaiCapError,
     XaiChatError,
+    complete_text,
     content_delta,
     conversation_messages,
     iter_text,
+    message_text,
     usage_counts,
 )
 from app.xai_spend import CHAT_MODEL, CHAT_URL
@@ -114,6 +116,25 @@ async def test_turn_state_is_a_later_message_than_the_persona(isolated, monkeypa
         "role": "system",
         "content": "OPERATIONAL CONTEXT: 1727 hours",
     }
+
+
+def test_history_drops_blanks_and_merges_a_repeated_role():
+    built = conversation_messages(
+        "PERSONA",
+        [
+            {"role": "system", "content": "no"},
+            {"role": "user", "content": "  "},
+            {"role": "user", "content": 5},
+            {"role": "user", "content": "hello"},
+            {"role": "user", "content": "again"},
+        ],
+    )
+    assert built == [
+        {"role": "system", "content": "PERSONA"},
+        {"role": "user", "content": "hello\nagain"},
+    ]
+    empty = conversation_messages("PERSONA", [], "   ")
+    assert empty[1] == {"role": "user", "content": "."}
 
 
 def test_later_turns_keep_history_as_a_message_prefix():
@@ -413,3 +434,166 @@ def test_an_empty_cli_turn_is_the_failure_sentinel(isolated, monkeypatch):
     import asyncio
 
     assert asyncio.run(run()) == [FAILURE_SENTINEL]
+
+
+def _story(text="Kept.", usage=None):
+    body = {"choices": [{"message": {"role": "assistant", "content": text}}]}
+    if usage is not None:
+        body["usage"] = usage
+    return httpx.Response(200, json=body)
+
+
+async def test_a_story_stays_on_grok_4_7_and_records_ticks(isolated, monkeypatch, caplog):
+    monkeypatch.setenv("KLUKAI_CHAT_MODEL", "grok-4.20-0309-non-reasoning")
+    calls = _install(
+        monkeypatch,
+        [
+            _story(
+                "  Kept.  ",
+                {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 4,
+                    "prompt_tokens_details": {"cached_tokens": 8},
+                    "completion_tokens_details": {"reasoning_tokens": 2},
+                    "cost_in_usd_ticks": 20_000_000,
+                },
+            )
+        ],
+    )
+    caplog.set_level("INFO")
+    assert await complete_text("system", "prompt") == "Kept."
+    body = json.loads(calls[0].content)
+    assert body["model"] == CHAT_MODEL
+    assert body["stream"] is False
+    assert body["reasoning_effort"] == "low"
+    assert body["max_completion_tokens"] == 8192
+    assert calls[0].headers["authorization"] == "Bearer unit-test-key"
+    assert "unit-test-key" not in caplog.text
+    from app import xai_spend
+
+    assert xai_spend.spent_today() == pytest.approx(0.002)
+
+
+async def test_the_chat_model_env_selects_a_documented_slug(isolated, monkeypatch):
+    monkeypatch.setenv("KLUKAI_CHAT_MODEL", "grok-4.3")
+    calls = _install(monkeypatch, [_ok()])
+    assert [piece async for piece in iter_text("persona", "hello")] == ["Hi", " there"]
+    assert json.loads(calls[0].content)["model"] == "grok-4.3"
+
+
+async def test_an_unknown_chat_model_stays_on_the_default(isolated, monkeypatch, caplog):
+    monkeypatch.setenv("KLUKAI_CHAT_MODEL", "not-a-chat-model")
+    calls = _install(monkeypatch, [_ok()])
+    caplog.set_level("WARNING")
+    assert [piece async for piece in iter_text("persona", "hello")]
+    assert json.loads(calls[0].content)["model"] == CHAT_MODEL
+    assert "not a documented chat model" in caplog.text
+
+
+@pytest.mark.parametrize("budget", [0, 8193, "8"])
+async def test_a_bad_story_budget_skips_the_network(isolated, monkeypatch, budget):
+    calls = _install(monkeypatch, [])
+    with pytest.raises(XaiChatError, match="budget"):
+        await complete_text("s", "p", max_tokens=budget)
+    assert calls == []
+
+
+async def test_story_cap_and_missing_key_skip_the_network(isolated, monkeypatch):
+    monkeypatch.setenv("KLUKAI_API_DAILY_USD_CAP", "0")
+    calls = _install(monkeypatch, [])
+    with pytest.raises(XaiCapError):
+        await complete_text("s", "p")
+    monkeypatch.delenv("KLUKAI_XAI_API_KEY")
+    monkeypatch.delenv("KLUKAI_API_DAILY_USD_CAP")
+    with pytest.raises(XaiChatError, match="not configured"):
+        await complete_text("s", "p")
+    assert calls == []
+
+
+async def test_story_auth_failure_does_not_open_the_breaker(isolated, monkeypatch):
+    _install(monkeypatch, [httpx.Response(401)])
+    with pytest.raises(XaiAuthError):
+        await complete_text("s", "p")
+    assert get_breaker("xai_chat").state is State.CLOSED
+
+
+async def test_story_server_errors_open_the_breaker(isolated, monkeypatch):
+    calls = _install(monkeypatch, [httpx.Response(502) for _ in range(5)])
+    for _ in range(5):
+        with pytest.raises(XaiChatError, match="failed"):
+            await complete_text("s", "p")
+    assert get_breaker("xai_chat").state is State.OPEN
+    with pytest.raises(XaiChatError, match="unavailable"):
+        await complete_text("s", "p")
+    assert len(calls) == 5
+
+
+async def test_a_blank_story_is_still_charged(isolated, monkeypatch):
+    _install(
+        monkeypatch,
+        [
+            _story(
+                "   ",
+                {"prompt_tokens": 10, "completion_tokens": 1, "cost_in_usd_ticks": 10_000_000_000},
+            )
+        ],
+    )
+    with pytest.raises(XaiChatError, match="no text"):
+        await complete_text("s", "p")
+    from app import xai_spend
+
+    assert xai_spend.spent_today() == pytest.approx(1.0)
+
+
+async def test_story_malformed_error_and_oversize_bodies(isolated, monkeypatch):
+    _install(monkeypatch, [httpx.Response(200, text="not-json")])
+    with pytest.raises(XaiChatError, match="malformed"):
+        await complete_text("s", "p")
+    _install(monkeypatch, [httpx.Response(200, json=["nope"])])
+    with pytest.raises(XaiChatError, match="malformed"):
+        await complete_text("s", "p")
+    _install(monkeypatch, [httpx.Response(200, json={"error": {"message": "no"}})])
+    with pytest.raises(XaiChatError, match="malformed"):
+        await complete_text("s", "p")
+    monkeypatch.setattr("app.xai_chat._MAX_BODY", 8)
+    _install(monkeypatch, [_story("this is longer than eight bytes")])
+    with pytest.raises(XaiChatError, match="too large"):
+        await complete_text("s", "p")
+
+
+async def test_a_story_transport_error_hides_the_key(isolated, monkeypatch):
+    def boom(_request):
+        raise httpx.ConnectError("unit-test-key")
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_kwargs: httpx.MockTransport(boom))
+    with pytest.raises(XaiChatError, match="unavailable") as caught:
+        await complete_text("s", "p")
+    assert "unit-test-key" not in str(caught.value)
+
+
+async def test_a_story_without_usage_still_returns_and_a_ledger_miss_is_kept(
+    isolated, monkeypatch, caplog
+):
+    caplog.set_level("INFO")
+    _install(monkeypatch, [_story("Hi")])
+    assert await complete_text("s", "p") == "Hi"
+    assert "input=-" in caplog.text
+
+    def locked(*_args, **_kwargs):
+        import sqlite3
+
+        raise sqlite3.OperationalError("locked")
+
+    monkeypatch.setattr("app.xai_chat.record", locked)
+    caplog.clear()
+    _install(monkeypatch, [_story("Hi", {"prompt_tokens": 3, "completion_tokens": 1})])
+    assert await complete_text("s", "p") == "Hi"
+    assert "daily_usd=-" in caplog.text
+
+
+def test_message_text_ignores_unusable_shapes():
+    assert message_text({}) == ""
+    assert message_text({"choices": []}) == ""
+    assert message_text({"choices": [{"message": "no"}]}) == ""
+    assert message_text({"choices": [{"message": {"content": 5}}]}) == ""
+    assert message_text({"choices": [{"message": {"content": "  hi  "}}]}) == "hi"

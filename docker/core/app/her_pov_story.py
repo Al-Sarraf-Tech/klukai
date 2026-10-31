@@ -189,8 +189,8 @@ async def compose_pov(
     else:
         from . import background_llm
 
-        # Never raises: Haiku, else the defaults.
-        raw = await background_llm.json_object("her_pov", prompt, max_tokens=512) or {}
+        # Never raises: the API, the CLI, or the defaults below.
+        raw = await background_llm.json_object("her_pov", prompt, max_tokens=512)
 
     if not isinstance(raw, dict):
         raw = {}

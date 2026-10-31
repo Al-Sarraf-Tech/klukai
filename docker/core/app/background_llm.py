@@ -57,6 +57,49 @@ def _parsed_object(text: str) -> dict[str, Any] | None:
     return _usable_object(parse_json(text))
 
 
+# Her POV story and episode summaries. Extraction, compaction, promises and
+# the recall pick stay on the CLI. The pick's wait already covers measured
+# CLI startup, so it does not move to the API.
+_API_CALLERS = frozenset({"her_pov", "episode_summary"})
+
+
+async def _from_api(
+    caller: str,
+    prompt: str,
+    *,
+    system: str | None,
+    convert: Callable[[str], _T | None],
+) -> tuple[_T | None, str | None]:
+    """(result, fallback reason). No key means the API was not attempted."""
+    from .xai_chat import XaiCapError, XaiChatError, complete_text
+    from .xai_spend import CHAT_MODEL, api_key
+
+    if not api_key():
+        return None, None
+    system_text = extraction_llm.SYSTEM_PROMPT if system is None else system
+    try:
+        text = await complete_text(system_text, prompt, max_tokens=8192, timeout=120.0)
+    except XaiCapError:
+        reason = "capped->cli"
+    except XaiChatError:
+        reason = "failed->cli"
+    except Exception as error:
+        logger.warning("xAI %s failed (%s)", caller, type(error).__name__)
+        reason = "failed->cli"
+    else:
+        result = convert(text) if text else None
+        if result is not None:
+            return result, None
+        reason = "unusable->cli"
+    logger.info(
+        "Background model: caller=%s provider=xai model=%s outcome=%s",
+        caller,
+        CHAT_MODEL,
+        reason,
+    )
+    return None, reason
+
+
 async def _haiku(
     caller: str,
     prompt: str,
@@ -106,6 +149,23 @@ async def _route(
     requeue: bool = False,
 ) -> _T | None:
     report = report if report is not None else CallReport()
+    if caller in _API_CALLERS:
+        api_result, _api_reason = await _from_api(
+            caller, prompt, system=system, convert=convert
+        )
+        if api_result is not None:
+            from .xai_spend import CHAT_MODEL
+
+            report.provider, report.model = "xai", CHAT_MODEL
+            report.outcome = "ok"
+            logger.info(
+                "Background model: caller=%s provider=%s model=%s outcome=%s",
+                caller,
+                report.provider,
+                report.model,
+                report.outcome,
+            )
+            return api_result
     report.provider, report.model = extraction_llm.provider(), extraction_llm.model()
     text, reason = await _haiku(
         caller,

@@ -41,6 +41,7 @@ if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
     # unit tests opt in with a fake one.
     os.environ.pop("KLUKAI_XAI_API_KEY", None)
     os.environ.pop("KLUKAI_CHAT_BACKEND", None)
+    os.environ.pop("KLUKAI_CHAT_MODEL", None)
     os.environ.pop("KLUKAI_IMAGE_BACKEND", None)
 
 # ── Psycopg shim ─────────────────────────────────────────────────────────────

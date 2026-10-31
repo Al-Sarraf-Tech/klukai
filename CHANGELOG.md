@@ -14,6 +14,14 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- Her POV story text and episode summaries try the xAI API first
+  (`grok-4.7`, low effort, the shared `$3` daily cap). An API failure or a
+  reached cap uses the Grok CLI. Extraction, promises, compaction, and the
+  memory pick stay on the CLI.
+- Chat's model is `KLUKAI_CHAT_MODEL`, default `grok-4.7`. Only text slugs
+  from the xAI models page are accepted. The public API has no Grok 4.7
+  Fast model. The documented non-reasoning slug is
+  `grok-4.20-0309-non-reasoning`. Production stays on the default.
 - Chat sends the conversation as real user and assistant turns. The stable
   persona stays first. This turn's clock, mood, and memories come after the
   history, so earlier turns can stay in the prompt cache. Sticky routing
@@ -52,6 +60,9 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- A Her POV job that has not moved for 20 minutes no longer blocks the next
+  request when pictures are paid. The dead row is marked failed. The worker
+  still does not redraw that same row on its own.
 - A second Grok chat call no longer crashes because the per-role home
   already exists. Chat and recall keep separate homes so they can run
   together. Two calls of the same role, including a smoke script beside
