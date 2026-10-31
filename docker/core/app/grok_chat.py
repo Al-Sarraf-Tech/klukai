@@ -71,6 +71,11 @@ def _expected(role: str) -> str:
     return chat_effort() if role == "chat" else background_effort()
 
 
+def breaker_name(role: str) -> str:
+    """Recall has its own breaker so a timed-out selection cannot lock chat out."""
+    return "grok_recall" if role == "recall" else "grok_chat"
+
+
 def _event(obj: dict[str, Any]) -> dict[str, Any]:
     if obj.get("type") in {"delta", "done"}:
         return obj
@@ -99,7 +104,7 @@ async def iter_events(
             timeout=httpx.Timeout(timeout, connect=5.0),
         ) as client:
             async with http_stream(
-                "grok_chat",
+                breaker_name(role),
                 client,
                 "POST",
                 "http://klukai-agy/complete",

@@ -256,3 +256,28 @@ async def test_a_stream_without_a_done_frame_returns_no_text(monkeypatch, tmp_pa
             await grok_chat.complete_turn("persona", "hi")
     finally:
         sock.close()
+
+
+async def test_recall_does_not_share_chats_breaker(monkeypatch, tmp_path):
+    from contextlib import asynccontextmanager
+
+    deps = []
+    real = grok_chat.http_stream
+
+    @asynccontextmanager
+    async def wrapped(dep, *args, **kwargs):
+        deps.append(dep)
+        async with real(dep, *args, **kwargs) as response:
+            yield response
+
+    monkeypatch.setattr(grok_chat, "http_stream", wrapped)
+    sock = _install(
+        monkeypatch, tmp_path, lambda request: httpx.Response(200, content=_body())
+    )
+    try:
+        await grok_chat.complete_turn("persona", "hi", role="chat")
+        await grok_chat.complete_turn("persona", "hi", role="recall")
+    finally:
+        sock.close()
+    assert deps == ["grok_chat", "grok_recall"]
+    assert grok_chat.breaker_name("background") == "grok_chat"

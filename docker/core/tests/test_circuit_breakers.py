@@ -5,6 +5,7 @@ Per S+ Phase 4 (docs/superpowers/specs/2026-05-16-s-plus-uplift.md §5.4)."""
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -181,6 +182,105 @@ async def test_half_open_waiter_is_rejected_once_the_probe_settles() -> None:
     with pytest.raises(CircuitOpen):
         await waiter
     assert probe_calls == 1  # the waiter never ran as a second probe
+
+
+@pytest.mark.asyncio
+async def test_cancelled_half_open_probe_does_not_retrip() -> None:
+    """A timed-out probe releases the slot. The next call is allowed."""
+    cb = CircuitBreaker(
+        cfg=BreakerConfig(
+            name="cancel-probe",
+            error_threshold=1,
+            window_seconds=10,
+            probe_interval_seconds=0,
+        )
+    )
+
+    async def boom() -> int:
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        await cb.call(boom)
+    assert cb.state == State.OPEN
+
+    async def hang() -> int:
+        await asyncio.sleep(30)
+        return 1
+
+    probe = asyncio.create_task(cb.call(hang))
+    await asyncio.sleep(0)
+    assert cb.state == State.HALF_OPEN
+    probe.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await probe
+    assert cb.state == State.HALF_OPEN
+    assert not cb._half_open_lock.locked()
+    assert len(cb._errors) == 1
+
+    async def ok() -> int:
+        return 7
+
+    assert await cb.call(ok) == 7
+    assert cb.state == State.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_real_half_open_error_trips_with_the_error_counted() -> None:
+    cb = CircuitBreaker(
+        cfg=BreakerConfig(
+            name="real-probe",
+            error_threshold=1,
+            window_seconds=10,
+            probe_interval_seconds=0,
+        )
+    )
+
+    async def boom() -> int:
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        await cb.call(boom)
+    assert cb.state == State.OPEN
+    with pytest.raises(RuntimeError):
+        await cb.call(boom)
+    assert cb.state == State.OPEN
+    assert len(cb._errors) >= 1
+
+
+@pytest.mark.asyncio
+async def test_errors_outside_the_window_do_not_keep_the_breaker_open() -> None:
+    """One fresh error after the window has aged does not trip, and a probe
+    after the open interval closes on success."""
+    cb = CircuitBreaker(
+        cfg=BreakerConfig(
+            name="window",
+            error_threshold=2,
+            window_seconds=10,
+            probe_interval_seconds=30,
+        )
+    )
+    cb._errors.append(time.monotonic() - 11)
+
+    async def boom() -> int:
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        await cb.call(boom)
+    assert cb.state == State.CLOSED
+
+    with pytest.raises(RuntimeError):
+        await cb.call(boom)
+    assert cb.state == State.OPEN
+    with pytest.raises(CircuitOpen):
+        await cb.call(boom)
+
+    cb._last_probe = time.monotonic() - 30
+
+    async def ok() -> int:
+        return 1
+
+    assert await cb.call(ok) == 1
+    assert cb.state == State.CLOSED
 
 
 def test_all_breakers_returns_registry() -> None:

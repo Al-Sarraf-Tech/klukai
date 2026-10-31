@@ -148,7 +148,9 @@ class CircuitBreaker:
         """Protect one operation, including streaming body consumption.
 
         Admission is immediate: concurrent half-open callers never queue behind
-        a probe. Cancellation reopens a probe and releases admission.
+        a probe. Cancelling a probe (a recall timeout, a dropped caller)
+        releases the half-open slot and does not count as a failure. Only a
+        real error trips the breaker.
         """
         now = time.monotonic()
         self._prune_window(now)
@@ -159,15 +161,13 @@ class CircuitBreaker:
 
             metrics.incr("circuit_rejected_total", dep=self.cfg.name)
             raise CircuitOpen(f"breaker open for {self.cfg.name!r}")
+        held = False
         if probe:
             await self._half_open_lock.acquire()
+            held = True
         epoch = self._epoch
         try:
             yield
-        except asyncio.CancelledError:
-            if probe and self._epoch == epoch:
-                self._trip()
-            raise
         except Exception as error:
             if isinstance(error, failures):
                 self._errors.append(time.monotonic())
@@ -181,7 +181,7 @@ class CircuitBreaker:
             if probe and self._epoch == epoch:
                 self._close()
         finally:
-            if probe:
+            if held:
                 self._half_open_lock.release()
 
     async def call(

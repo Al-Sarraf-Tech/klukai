@@ -41,7 +41,8 @@ async def test_redis_open_breaker_fails_session_closed():
 
 
 @pytest.mark.asyncio
-async def test_cancelled_probe_reopens_and_releases_admission():
+async def test_cancelled_probe_releases_without_reopening():
+    """A cancelled half-open probe frees the slot and does not trip again."""
     breaker = cb.CircuitBreaker(cb.BreakerConfig("cancel", probe_interval_seconds=0))
     breaker.force_open()
     entered = asyncio.Event()
@@ -55,8 +56,10 @@ async def test_cancelled_probe_reopens_and_releases_admission():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert breaker.state is cb.State.OPEN
+    assert breaker.state is cb.State.HALF_OPEN
+    assert not breaker._half_open_lock.locked()
     assert await breaker.call(AsyncMock(return_value=42)) == 42
+    assert breaker.state is cb.State.CLOSED
 
 
 @pytest.mark.asyncio
