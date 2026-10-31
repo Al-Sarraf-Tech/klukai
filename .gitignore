@@ -1,4 +1,6 @@
 .env
+xai.env
+**/xai.env
 /ops/dominus-nobara/config/stack.env
 /ops/dominus-nobara/config/tls/
 /ops/dominus-nobara/recovery-snapshots/

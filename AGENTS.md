@@ -4,13 +4,31 @@
 Dominus-Nobara or Amarillo. Voice in and out is Fish Audio. There is no local
 fallback of any kind. Design: `docs/superpowers/specs/2026-10-26-cloud-only-ai-design.md`.
 
-**Grok account login (owner decision, 2026-10-30).** All of Klukai's model use
-runs through the official Grok CLI on the owner's account login: chat,
-background text, pictures, and the picture checker are `grok-4.7` at effort
-`medium`. No xAI API key, no `api.x.ai` client, no paid credits, extra usage
-stays at $0, and `disable_api_key_auth = true`. There is no fallback to a paid
-API. The Claude image checker and the Sonnet/Haiku chat path stay in the tree
-and are not selected. Fish voice is unchanged. See the section below.
+**xAI API for chat and pictures (owner decision, 2026-10-31).** Chat replies
+and picture generation use the prepaid key in `KLUKAI_XAI_API_KEY`, loaded from
+`~/.config/klukai/xai.env` at runtime. The key is never committed, logged, or
+read by application code from that file. Chat is `grok-4.7` at reasoning
+effort low, streamed from `https://api.x.ai/v1/chat/completions`. Pictures are
+`grok-imagine-image-2.0` edits (`POST /v1/images/edits`) with her approved
+reference, aspect `2:3`, resolution `2k`, quality `medium`, and `b64_json`.
+Do not use `grok-imagine-image-quality` or `grok-imagine-image-pro`. Every
+edit sends `docs/images/klukai-portrait.png` as `images[].url`. The picture
+checker is grok-4.7 vision on the API at low effort, with the CLI checker if
+that call fails. Background memory (recall, extraction, promises, mood) stays
+on the CLI with `disable_api_key_auth=true`. `KLUKAI_CHAT_BACKEND` and
+`KLUKAI_IMAGE_BACKEND` are `api` or `cli`. The default is `api` when the key
+is present. A missing key, the daily USD cap (`KLUKAI_API_DAILY_USD_CAP`,
+default 3; chat uses `usage.cost_in_usd_ticks` / 10^10, each 2k edit is about
+$0.09, a vision check about $0.007), or an API failure before any chat token
+falls back to the CLI. Fal stays off. Chat sends a stable `x-grok-conv-id`.
+Fish voice is unchanged.
+
+**Grok account login (owner decision, 2026-10-30, still the CLI fallback and
+the background path).** Background text, the picture checker, and the chat
+and picture fallbacks run through the official Grok CLI on the owner's account
+login. `disable_api_key_auth = true` on that path. The Claude image checker
+and the Sonnet/Haiku chat path stay in the tree and are not selected. See the
+section below.
 Do not reintroduce LM Studio, Dominus voice, ComfyUI, the GPU lease, local
 embeddings or Qdrant into `docker/core`; `tests/test_cloud_only_invariant.py`
 fails if any of them comes back. `ops/dominus-nobara` is the retired Dominus

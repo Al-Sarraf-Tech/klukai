@@ -93,9 +93,16 @@ class LLMCompletionsMixin(ABC):
     async def _stream_grok(
         self, system_prompt: str, messages: list[dict[str, Any]]
     ) -> AsyncIterator[str]:
-        """Yield Grok text as the worker streams it. No paid fallback."""
+        """Yield Grok text. The xAI API is first; the account CLI is the fallback.
+
+        A failure after any API token is already on the wire stops the turn.
+        Appending a CLI answer would concatenate two replies.
+        """
         from .grok_chat import GrokChatError, iter_text
         from .llm_router import FAILURE_SENTINEL, LLMStreamFailed
+        from .xai_chat import XaiChatError
+        from .xai_chat import iter_text as xai_text
+        from .xai_spend import api_key, chat_backend, redact
 
         lines = []
         for message in messages:
@@ -107,6 +114,21 @@ class LLMCompletionsMixin(ABC):
                 )
             lines.append(f"{message.get('role', 'user')}: {content}")
         prompt = "\n".join(lines).strip() or "."
+        if chat_backend() == "api" and api_key():
+            yielded = False
+            try:
+                async for piece in xai_text(system_prompt, prompt):
+                    yielded = True
+                    yield piece
+                if yielded:
+                    return
+            except XaiChatError as exc:
+                if yielded:
+                    raise LLMStreamFailed("Grok chat failed") from exc
+                logger.warning(
+                    "xai chat falling back to the CLI: %s",
+                    redact(f"{type(exc).__name__}: {exc}"),
+                )
         yielded = False
         try:
             async for piece in iter_text(system_prompt, prompt):

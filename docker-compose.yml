@@ -51,7 +51,12 @@ services:
       FISH_API_KEY: "${FISH_API_KEY:-}"
       KLUKAI_FISH_VOICE_ID: "${KLUKAI_FISH_VOICE_ID:-47fc35b7311944bc9fa238ed856de1f3}"
       KLUKAI_FISH_MODEL: "${KLUKAI_FISH_MODEL:-s2.1-pro-free}"
-      # Chat is account-login Grok through the host worker (owner, 2026-10-30).
+      # Chat is the xAI API when KLUKAI_XAI_API_KEY is loaded (owner, 2026-10-31).
+      # The account-login CLI is the fallback. The key file is not copied into
+      # the image. Pictures use the same key in the host worker.
+      KLUKAI_CHAT_BACKEND: "${KLUKAI_CHAT_BACKEND:-api}"
+      KLUKAI_API_DAILY_USD_CAP: "${KLUKAI_API_DAILY_USD_CAP:-3}"
+      KLUKAI_XAI_LEDGER: "/var/klukai/xai/xai-spend.sqlite3"
       # These Claude variables are not the chat path and do not open a client.
       KLUKAI_CLAUDE_PRIMARY: "${KLUKAI_CLAUDE_PRIMARY:-false}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
@@ -112,8 +117,15 @@ services:
       # Personal mode — every user is elite, all features on, quotas disabled.
       # Flip to "false" to honor companion_subscriptions tier rows. See ADR-0017.
       KLUKAI_PERSONAL_MODE: "${KLUKAI_PERSONAL_MODE:-true}"
+    env_file:
+      # Optional. Missing file: chat stays on the account CLI.
+      - path: ${KLUKAI_XAI_ENV_FILE:-${HOME}/.config/klukai/xai.env}
+        required: false
     volumes:
       - ./config:/config:ro
+      # Same directory the host image worker uses for the daily USD cap.
+      # Create it mode 0700, owned by uid 1000, before the first start.
+      - ${KLUKAI_XAI_LEDGER_DIR:-${HOME}/.local/share/klukai/xai-ledger}:/var/klukai/xai
       - ${KLUKAI_MCP_SECRETS_DIR:-./.mcp-secrets}:/run/klukai-mcp:ro
       - ${KLUKAI_AGY_RUNTIME_DIR:-./.agy-runtime}:/run/klukai-agy:ro
       # Only the dedicated metrics token's directory: a tmpfs copy written at boot

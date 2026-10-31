@@ -607,7 +607,11 @@ def test_provider_loading_imports_only_explicit_native_selection(worker, monkeyp
     monkeypatch.setattr(builtins, "__import__", guarded_import)
     assert worker.load_providers(["agy"]) == [("agy", fake_agy)]
     assert imports == ["agy_image_render"]
-    assert worker.load_providers(["grok", "agy"]) == [("grok", fake_grok), ("agy", fake_agy)]
+    loaded = worker.load_providers(["grok", "agy"])
+    assert [name for name, _fn in loaded] == ["grok", "agy"]
+    assert loaded[1][1] is fake_agy
+    # No key: the wrapper does not call the API. It is the explicit Grok renderer.
+    assert loaded[0][1]({}, {}) == PNG
     assert imports == ["agy_image_render", "grok_image_render", "agy_image_render"]
     with pytest.raises(ValueError):
         worker.load_providers(["agy", "paid"])

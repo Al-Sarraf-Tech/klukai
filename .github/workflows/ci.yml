@@ -281,6 +281,8 @@ jobs:
           persist-credentials: false
       - name: Lint with the existing hash-locked Ruff closure
         run: python3 -m tools.ci.quick_lint --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/lint-ruff"
+      - name: Reject a committed xAI API key
+        run: python3 -m tools.ci.xai_secret_scan --root "$GITHUB_WORKSPACE"
 
   typecheck:
     name: Type Check (mypy)

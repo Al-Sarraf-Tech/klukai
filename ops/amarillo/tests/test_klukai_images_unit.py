@@ -26,6 +26,14 @@ def test_renders_have_daily_and_monthly_caps_and_no_fal_selection():
     assert "KLUKAI_FAL_MONTHLY_LIMIT" not in text
 
 
+def test_pictures_prefer_the_xai_api_and_the_key_file_is_optional():
+    assert "Environment=KLUKAI_IMAGE_BACKEND=api" in lines()
+    assert "Environment=KLUKAI_API_DAILY_USD_CAP=3" in lines()
+    assert "Environment=KLUKAI_XAI_LEDGER=%h/.local/share/klukai/xai-ledger/xai-spend.sqlite3" in lines()
+    assert "EnvironmentFile=-%h/.config/klukai/xai.env" in lines()
+    assert "Environment=KLUKAI_IMAGE_CHECKER=grok" in lines()
+
+
 def test_shutdown_allows_an_inflight_picture_to_finish_before_group_kill():
     settings = dict(line.split("=", 1) for line in lines() if "=" in line and not line.startswith("#"))
     # The main process stops admission and joins request threads. Do not send

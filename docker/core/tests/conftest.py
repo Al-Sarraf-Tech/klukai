@@ -37,6 +37,11 @@ if os.environ.get("KLUKAI_TEST_ALLOW_LIVE_BACKENDS") != "1":
             os.environ[f"KLUKAI_CLOUD_{_creative_kind}_{_creative_period}_LIMIT"] = "0"
     # Fish is a paid cloud API: unit tests never see a real key.
     os.environ.pop("FISH_API_KEY", None)
+    # xAI is a paid cloud API. A developer shell may export the real key;
+    # unit tests opt in with a fake one.
+    os.environ.pop("KLUKAI_XAI_API_KEY", None)
+    os.environ.pop("KLUKAI_CHAT_BACKEND", None)
+    os.environ.pop("KLUKAI_IMAGE_BACKEND", None)
 
 # ── Psycopg shim ─────────────────────────────────────────────────────────────
 # Mock psycopg/psycopg_pool at the module level before any app code imports

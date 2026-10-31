@@ -919,7 +919,12 @@ def load_providers(names):
         elif name == "gemini":
             from cloud_image_render import render_gemini as render
         else:
-            from grok_image_render import render
+            from grok_image_render import render as cli_render
+
+            def render(request, references, _cli=cli_render):
+                from xai_image import render_with_fallback
+
+                return render_with_fallback(request, references, _cli)
         providers.append((name, render))
     return providers
 
@@ -932,8 +937,14 @@ def load_checker(name):
     else:
         import claude_image_check as checker_mod
 
-    def checker(output, value, references, *, timeout):
-        return checker_mod.run(output, value, references, timeout=timeout)
+    def checker(output, value, references, *, timeout, _cli=checker_mod.run):
+        if name == "grok":
+            from xai_image import check_with_fallback
+
+            return check_with_fallback(
+                output, value, references, timeout=timeout, cli=_cli
+            )
+        return _cli(output, value, references, timeout=timeout)
     checker.model = checker_mod.MODEL
     return checker
 

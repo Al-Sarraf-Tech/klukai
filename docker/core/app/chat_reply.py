@@ -135,6 +135,9 @@ class ChatReplyRuntime:
         full_response = []
         buffer = ""
         first_flush = True
+        from .xai_chat import _conversation
+
+        conv = _conversation.set(session.conversation_id or "")
         try:
             async for token in self.router.stream(system_prompt, messages, config):
                 # Cancel warmup message once first token arrives
@@ -170,6 +173,7 @@ class ChatReplyRuntime:
             # following an error opens a stray second bubble in the client.
             buffer = ""
         finally:
+            _conversation.reset(conv)
             # Retain and join the notifier even after the first token cancels
             # it. Disconnects and stream exceptions must retire status work
             # before a later connection can receive another reply.

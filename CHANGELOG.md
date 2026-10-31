@@ -12,6 +12,19 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+### Added
+
+- Chat replies can use the xAI API (`grok-4.7`, reasoning effort low,
+  streamed, with `x-grok-conv-id` per conversation). Picture generation uses
+  `grok-imagine-image-2.0` edits of `docs/images/klukai-portrait.png`, aspect
+  `2:3`, resolution `2k`. The checker is grok-4.7 vision at low effort. The
+  key is `KLUKAI_XAI_API_KEY` from the environment only. Cost prefers
+  `usage.cost_in_usd_ticks` (divide by 10^10); a 2k edit is about $0.09 and a
+  vision check about $0.007. A missing key, the daily USD cap (default $3),
+  or an API failure before any chat token falls back to the account CLI.
+  Background memory stays on the CLI. A tracked-file scan rejects `xai-`
+  key material.
+
 ### Fixed
 
 - A second Grok chat call no longer crashes because the per-role home
