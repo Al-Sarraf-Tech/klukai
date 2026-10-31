@@ -155,7 +155,7 @@ class ChatPromptBuilder:
         outfit_line, location_line = outfit.outfit_line, outfit.location_line
         her_where, outfit_request_block = outfit.activity, outfit.request_block
 
-        system_prompt = self.assemble_prompt(
+        assembled = self.assemble_prompt(
             mood=session.mood,
             memories=episode_memories,
             relationship_facts=rel_facts,
@@ -177,9 +177,9 @@ class ChatPromptBuilder:
             current_location=location_line,
         )
 
-        system_prompt = await self.presence(system_prompt, aff_state, user_id)
+        system_prompt = await self.presence(assembled, aff_state, user_id)
 
-        return await self.append_blocks(
+        system_prompt = await self.append_blocks(
             system_prompt,
             content,
             session,
@@ -192,6 +192,13 @@ class ChatPromptBuilder:
             memory_nudge=nudge,
             nudge_ready=not skip_recall,
         )
+        stable = getattr(assembled, "stable", "")
+        text = str(system_prompt)
+        if stable and text.startswith(stable):
+            from .personality.system_prompt import PromptText
+
+            return PromptText(text, stable)
+        return text
 
     async def recall(
         self, content: str, skip_recall: bool, level: int, user_id: str

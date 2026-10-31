@@ -112,6 +112,7 @@ async def iter_text(
     *,
     timeout: float = 120.0,
     conversation_id: str | None = None,
+    volatile: str = "",
 ) -> AsyncIterator[str]:
     """Yield visible reply text. Raises before the first yield when the CLI should run."""
     key = api_key()
@@ -119,12 +120,14 @@ async def iter_text(
         raise XaiChatError("xai chat is not configured")
     if capped():
         raise XaiCapError("xai daily cap reached")
+    messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+    # Volatile turn state is a later message so the persona prefix can cache.
+    if volatile.strip():
+        messages.append({"role": "system", "content": volatile})
+    messages.append({"role": "user", "content": prompt})
     body = {
         "model": CHAT_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ],
+        "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
         "reasoning_effort": "low",

@@ -84,6 +84,7 @@ async def test_a_stream_yields_visible_text_and_records_the_price(isolated, monk
     assert body["reasoning_effort"] == "low"
     assert body["stream"] is True
     assert body["messages"][0] == {"role": "system", "content": "persona"}
+    assert body["messages"][1]["role"] == "user"
     assert request.headers["authorization"] == "Bearer unit-test-key"
     assert "x-grok-conv-id" not in request.headers
     assert "unit-test-key" not in caplog.text
@@ -94,6 +95,24 @@ async def test_a_stream_yields_visible_text_and_records_the_price(isolated, monk
 
     assert xai_spend.spent_today() == pytest.approx(0.00014)
     assert get_breaker("xai_chat").state is State.CLOSED
+
+
+async def test_turn_state_is_a_later_message_than_the_persona(isolated, monkeypatch):
+    calls = _install(monkeypatch, [_ok()])
+    pieces = [
+        piece
+        async for piece in iter_text(
+            "STATIC PERSONA", "hello", volatile="OPERATIONAL CONTEXT: 1727 hours"
+        )
+    ]
+    assert pieces == ["Hi", " there"]
+    body = json.loads(calls[0].content)
+    assert body["messages"][0] == {"role": "system", "content": "STATIC PERSONA"}
+    assert body["messages"][1] == {
+        "role": "system",
+        "content": "OPERATIONAL CONTEXT: 1727 hours",
+    }
+    assert body["messages"][2] == {"role": "user", "content": "hello"}
 
 
 async def test_a_conversation_header_and_api_ticks_set_the_charge(isolated, monkeypatch):
@@ -183,7 +202,7 @@ async def test_malformed_json_is_an_error(isolated, monkeypatch):
 async def test_router_uses_the_api_and_falls_back_only_before_text(isolated, monkeypatch):
     seen = {"cli": 0}
 
-    async def api_ok(system, prompt, *, timeout=120.0, conversation_id=None):
+    async def api_ok(system, prompt, *, timeout=120.0, conversation_id=None, volatile=""):
         assert system == "persona"
         yield "Hi"
 
@@ -202,7 +221,7 @@ async def test_router_uses_the_api_and_falls_back_only_before_text(isolated, mon
     ] == ["Hi"]
     assert seen["cli"] == 0
 
-    async def api_down(system, prompt, *, timeout=120.0, conversation_id=None):
+    async def api_down(system, prompt, *, timeout=120.0, conversation_id=None, volatile=""):
         raise XaiChatError("boom")
         yield "no"  # pragma: no cover
 
@@ -215,7 +234,7 @@ async def test_router_uses_the_api_and_falls_back_only_before_text(isolated, mon
     ] == ["from cli"]
     assert seen["cli"] == 1
 
-    async def api_partial(system, prompt, *, timeout=120.0, conversation_id=None):
+    async def api_partial(system, prompt, *, timeout=120.0, conversation_id=None, volatile=""):
         yield "Hi"
         raise XaiChatError("cut")
 

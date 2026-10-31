@@ -7,6 +7,7 @@ rules, character preamble) lands at the top and dynamic state
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 
@@ -41,6 +42,21 @@ from .state_blocks import (
 )
 
 
+class PromptText(str):
+    """The full prompt, plus the byte-stable persona prefix used for caching."""
+
+    stable: str
+
+    def __new__(cls, text: str, stable: str) -> PromptText:
+        obj = str.__new__(cls, text)
+        obj.stable = stable
+        return obj
+
+
+def _filled(blocks: list[str]) -> str:
+    return "\n\n".join(block for block in blocks if block)
+
+
 def assemble_system_prompt(
     mood: str = "composed",
     memories: list[str] | None = None,
@@ -63,7 +79,7 @@ def assemble_system_prompt(
     crown_jewel: dict[str, Any] | None = None,
     current_outfit: str | None = None,
     current_location: str | None = None,
-) -> str:
+) -> PromptText:
     """Assemble the full Klukai system prompt from all components."""
     p = load_personality(personality_path)
 
@@ -81,39 +97,45 @@ def assemble_system_prompt(
 
     # Static persona first so a prompt cache can keep the prefix. Time, mood,
     # memories and the rest of this turn's state stay at the end. The words
-    # of each block are unchanged.
-    blocks = [
-        build_character_contract(p, affection_level),
-        abs_block,
-        build_character_preamble(p, affection_level),
-        build_character_rules(),
-        build_squad_voices_block(p),
-        build_expressive_block(p, affection_level),
-        build_japanese_block(p, affection_level),
-        build_speech_guidelines(p, affection_level),
-        build_behavioral_grammar_block(affection_level),
-        build_canon_arcs_block(p, affection_level),
-        build_quirks_block(p, affection_level),
-        build_wardrobe_block(p, affection_level),
-        build_tool_block(tools_available),
-        build_squad_interaction_hint(addressed_member),
-        build_jealousy_block(jealousy_target, affection_level),
-        build_physical_state_block(physical_state, physical_detail),
-        build_pace_block(last_msg_length),
-        build_affection_block(affection_score, affection_level, level_name, p),
-        build_context_block(
-            mood, affection_level, days_together, current_outfit, current_location
-        ),
-        build_mood_bleed_block(mood),
-        build_anniversary_block(anniversaries),
-        build_comfort_objects_block(comfort_objects, affection_level),
-        build_crown_jewel_block(crown_jewel, affection_level),
-        build_mission_context_block(mission_description),
-        build_memory_block(memories or []),
-        build_conversation_recall_block(recalled_exchanges or []),
-        build_relationship_block(relationship_facts or {}),
-        build_answer_discipline(affection_level),
-    ]
-
-    # Filter empty blocks and join with clear separators
-    return "\n\n".join(b for b in blocks if b)
+    # of each block are unchanged. The stable prefix does not include pace,
+    # the clock, or anything else that changes between turns at one level.
+    stable = _filled(
+        [
+            build_character_contract(p, affection_level),
+            abs_block,
+            build_character_preamble(p, affection_level),
+            build_character_rules(),
+            build_squad_voices_block(p),
+            build_expressive_block(p, affection_level),
+            build_japanese_block(p, affection_level),
+            build_speech_guidelines(p, affection_level),
+            build_behavioral_grammar_block(affection_level),
+            build_canon_arcs_block(p, affection_level),
+            build_quirks_block(p, affection_level),
+            build_wardrobe_block(p, affection_level),
+            build_tool_block(tools_available),
+        ]
+    )
+    volatile = _filled(
+        [
+            build_squad_interaction_hint(addressed_member),
+            build_jealousy_block(jealousy_target, affection_level),
+            build_physical_state_block(physical_state, physical_detail),
+            build_pace_block(last_msg_length),
+            build_affection_block(affection_score, affection_level, level_name, p),
+            build_context_block(
+                mood, affection_level, days_together, current_outfit, current_location
+            ),
+            build_mood_bleed_block(mood),
+            build_anniversary_block(anniversaries),
+            build_comfort_objects_block(comfort_objects, affection_level),
+            build_crown_jewel_block(crown_jewel, affection_level),
+            build_mission_context_block(mission_description),
+            build_memory_block(memories or []),
+            build_conversation_recall_block(recalled_exchanges or []),
+            build_relationship_block(relationship_facts or {}),
+            build_answer_discipline(affection_level),
+        ]
+    )
+    full = _filled([stable, volatile])
+    return PromptText(full, stable)

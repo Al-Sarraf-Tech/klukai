@@ -114,10 +114,16 @@ class LLMCompletionsMixin(ABC):
                 )
             lines.append(f"{message.get('role', 'user')}: {content}")
         prompt = "\n".join(lines).strip() or "."
+        stable = getattr(system_prompt, "stable", "")
+        text = str(system_prompt)
+        if isinstance(stable, str) and stable and text.startswith(stable):
+            persona, turn_state = stable, text[len(stable) :].lstrip("\n")
+        else:
+            persona, turn_state = text, ""
         if chat_backend() == "api" and api_key():
             yielded = False
             try:
-                async for piece in xai_text(system_prompt, prompt):
+                async for piece in xai_text(persona, prompt, volatile=turn_state):
                     yielded = True
                     yield piece
                 if yielded:

@@ -65,6 +65,44 @@ def test_brief_input_and_departure_have_no_sentence_floor(level):
     assert "self-deprecating withdrawal" not in prompt
 
 
+def test_the_persona_prefix_is_identical_when_only_the_turn_changes():
+    calm = assemble_system_prompt(
+        personality_path=str(CONFIG),
+        affection_level=5,
+        affection_score=10,
+        mood="composed",
+        memories=["the harbour"],
+        last_msg_length=12,
+        days_together=3,
+        current_outfit="tactical",
+        mission_description=None,
+    )
+    later = assemble_system_prompt(
+        personality_path=str(CONFIG),
+        affection_level=5,
+        affection_score=400,
+        mood="tender",
+        memories=["a different night"],
+        last_msg_length=420,
+        days_together=90,
+        current_outfit="dorm casual",
+        current_location="the rec room",
+        mission_description="east patrol",
+        physical_state="tired",
+        physical_detail="a long watch",
+        jealousy_target="Groza",
+        addressed_member="Vector",
+    )
+    assert calm.stable == later.stable
+    assert calm.stable
+    assert calm.startswith(calm.stable)
+    assert "OPERATIONAL CONTEXT" not in calm.stable
+    assert "PACE MATCHING" not in calm.stable
+    assert "the harbour" not in calm.stable
+    assert "OPERATIONAL CONTEXT" in calm
+    assert calm.stable in later
+
+
 def test_answer_discipline_closes_the_prompt_and_gates_the_name():
     low = assemble_system_prompt(personality_path=str(CONFIG), affection_level=0)
     high = assemble_system_prompt(personality_path=str(CONFIG), affection_level=9,
