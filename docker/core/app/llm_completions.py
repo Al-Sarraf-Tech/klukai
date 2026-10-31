@@ -77,6 +77,10 @@ class LLMCompletionsMixin(ABC):
         """
         from .llm_router import FAILURE_SENTINEL
 
+        if config.provider == "grok":
+            async for piece in self._stream_grok(system_prompt, messages):
+                yield piece
+            return
         try:
             response = await self._complete_with_fallback(
                 system_prompt, messages, config
@@ -85,6 +89,36 @@ class LLMCompletionsMixin(ABC):
             yield FAILURE_SENTINEL
             return
         yield response["choices"][0]["message"]["content"]
+
+    async def _stream_grok(
+        self, system_prompt: str, messages: list[dict[str, Any]]
+    ) -> AsyncIterator[str]:
+        """Yield Grok text as the worker streams it. No paid fallback."""
+        from .grok_chat import GrokChatError, iter_text
+        from .llm_router import FAILURE_SENTINEL, LLMStreamFailed
+
+        lines = []
+        for message in messages:
+            content = message.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            lines.append(f"{message.get('role', 'user')}: {content}")
+        prompt = "\n".join(lines).strip() or "."
+        yielded = False
+        try:
+            async for piece in iter_text(system_prompt, prompt):
+                yielded = True
+                yield piece
+        except GrokChatError as exc:
+            if yielded:
+                raise LLMStreamFailed("Grok chat failed") from exc
+            yield FAILURE_SENTINEL
+            return
+        if not yielded:
+            yield FAILURE_SENTINEL
 
     async def _complete_with_fallback(
         self,
@@ -222,7 +256,7 @@ class LLMCompletionsMixin(ABC):
         *,
         allow_tools: bool = True,
     ) -> dict[str, Any]:
-        from .grok_chat import EFFORT, MODEL, GrokChatError, complete_turn
+        from .grok_chat import MODEL, GrokChatError, chat_effort, complete_turn
 
         lines = []
         for message in messages:
@@ -248,7 +282,7 @@ class LLMCompletionsMixin(ABC):
             turn = await complete_turn(system, prompt)
         except GrokChatError as exc:
             raise ValueError("Grok chat failed") from exc
-        if turn.model != MODEL or turn.effort != EFFORT:
+        if turn.model != MODEL or turn.effort != chat_effort():
             raise ValueError("Unexpected Grok model or effort")
         config.model = turn.model
         calls = _grok_tool_calls(turn.text, tools) if tools and allow_tools else []

@@ -1,4 +1,4 @@
-"""Background text is account-login Grok 4.7 at medium effort, capped and credential-safe."""
+"""Background text is account-login Grok 4.7 at low effort, capped and credential-safe."""
 
 from __future__ import annotations
 
@@ -48,14 +48,14 @@ def transport(monkeypatch, handler=None):
     monkeypatch.setattr("app.grok_chat.configured", lambda: True)
 
     async def complete_turn(system, prompt, *, timeout=60, role="chat"):
-        seen.append({"system": system, "prompt": prompt, "model": "grok-4.7", "effort": "medium"})
+        seen.append({"system": system, "prompt": prompt, "model": "grok-4.7", "effort": "low"})
         if handler is not None:
             outcome = handler(system, prompt)
             if isinstance(outcome, Exception):
                 raise outcome
             if isinstance(outcome, Turn):
                 return outcome
-        return Turn('{"mood": "serene"}', "grok-4.7", "medium", "stream")
+        return Turn('{"mood": "serene"}', "grok-4.7", "low", "stream")
 
     monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
     return seen
@@ -119,7 +119,7 @@ async def test_request_shape_reserves_once_and_returns_visible_text(
     monkeypatch.setenv("LM_STUDIO_TOKEN", "local-token-must-not-cross")
     text = await xl.complete("Classify this.", max_tokens=4096, route="extraction")
     assert text == '{"mood": "serene"}'
-    assert seen[0]["model"] == "grok-4.7" and seen[0]["effort"] == "medium"
+    assert seen[0]["model"] == "grok-4.7" and seen[0]["effort"] == "low"
     assert "local-token" not in json.dumps(seen)
     reserve.assert_awaited_once_with("extraction")
     record.assert_awaited_once_with("attempt-1", {})
@@ -230,7 +230,7 @@ async def test_oversized_response_rejected(remote, monkeypatch):
 
     transport(
         monkeypatch,
-        lambda system, prompt: Turn("x" * (xl._MAX_RESPONSE_BYTES + 1), "grok-4.7", "medium", "stream"),
+        lambda system, prompt: Turn("x" * (xl._MAX_RESPONSE_BYTES + 1), "grok-4.7", "low", "stream"),
     )
     with pytest.raises(xl.ExtractionLLMError, match="size"):
         await xl.complete("x", max_tokens=100, route="extraction")

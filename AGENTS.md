@@ -73,9 +73,11 @@ chat and Claude Haiku for background text.
 
 The pinned CLI is Grok Build 1.0.62. `grok --help` on that binary accepts
 `-m/--model` and `--reasoning-effort` (alias `--effort`). The model id is
-`grok-4.7`. Medium is one of the effort ids the binary documents. Chat,
-background text, picture renders, and the picture checker all pass
-`--model grok-4.7 --effort medium`. The session must report OAuth
+`grok-4.7`. On 2026-10-31 the owner set chat and background text to `low`
+(the fastest effort) and picture renders plus the checker to `xhigh`.
+Those are the defaults of `KLUKAI_GROK_CHAT_EFFORT`,
+`KLUKAI_GROK_BACKGROUND_EFFORT`, and `KLUKAI_GROK_IMAGE_EFFORT`. The session
+must report OAuth
 (`apiKeySource=oauth`). `disable_api_key_auth = true` stays in the clean
 Grok home. No `XAI_API_KEY` and no call to `api.x.ai` is added here.
 

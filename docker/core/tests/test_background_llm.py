@@ -131,7 +131,10 @@ async def test_system_prompt_and_explicit_budget_are_forwarded(haiku):
         haiku_max_tokens=1234,
     )
     haiku.assert_awaited_once_with(
-        "write", max_tokens=1234, route="weekly_reflection", system="You are Klukai."
+        "write",
+        max_tokens=1234,
+        route="weekly_reflection",
+        system="You are Klukai.",
     )
 
 
@@ -247,7 +250,7 @@ def wire(monkeypatch):
 
     async def complete_turn(system, prompt, *, timeout=60, role="chat"):
         seen.append({"system": system, "prompt": prompt})
-        return Turn("Welcome back, Commander.", "grok-4.7", "medium", "stream")
+        return Turn("Welcome back, Commander.", "grok-4.7", "low", "stream")
 
     monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
     return reserve, seen
@@ -313,7 +316,7 @@ async def test_every_caller_spends_the_same_daily_allowance(monkeypatch, tmp_pat
     async def complete_turn(system, prompt, *, timeout=60, role="chat"):
         from app.grok_chat import Turn
         sent.append(prompt)
-        return Turn("ok", "grok-4.7", "medium", "stream")
+        return Turn("ok", "grok-4.7", "low", "stream")
 
     monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
 

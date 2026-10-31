@@ -2,7 +2,8 @@
 
 Amarillo owns Klukai's core services, persistent state, PWA, event bridge, and
 the retained [Intel Arc XTTS release](voice_xpu/README.md). Chat, background
-text, pictures, and the picture checker are Grok 4.7 at medium effort through
+text and background memory are Grok 4.7 at low effort, and pictures plus the
+checker are Grok 4.7 at xhigh effort, through
 the official CLI and `GROK_AUTH_PATH` (owner, 2026-10-30). There is no paid
 API fallback. Fish voice is unchanged. Text remains available when voice is off.
 

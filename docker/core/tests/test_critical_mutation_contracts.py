@@ -57,14 +57,14 @@ def haiku_wire(monkeypatch):
 
         request = Request()
         request.content = json.dumps({
-            "model": "grok-4.7", "effort": "medium", "system": system, "prompt": prompt,
+            "model": "grok-4.7", "effort": "low", "system": system, "prompt": prompt,
         }).encode()
         try:
             response = server["handler"](request)
         except Exception as exc:
             raise GrokChatError("failed") from exc
         body = json.loads(response.content)
-        return Turn(body["content"][0]["text"], "grok-4.7", "medium", "stream")
+        return Turn(body["content"][0]["text"], "grok-4.7", "low", "stream")
 
     monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
     return server
@@ -98,7 +98,7 @@ async def test_classifier_obeys_complete_wire_contract(haiku_wire, content, expe
     assert request.method == "POST"
     assert "authorization" not in request.headers
     body = json.loads(request.content)
-    assert body["model"] == "grok-4.7" and body["effort"] == "medium"
+    assert body["model"] == "grok-4.7" and body["effort"] == "low"
     assert body["system"] == xl.SYSTEM_PROMPT
     assert body["prompt"] == "ONLY COMMANDER: " + "A" * 499 + "Z"
     assert "PRIVATE_TAIL" not in body["prompt"]

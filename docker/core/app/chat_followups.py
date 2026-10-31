@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Collection, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 import logging
 
+from .extraction_llm import ExtractionCancelled
 from .models import SessionState
 from .picture_curation import PictureCuration
 from .ws_manager import WSManager
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 # Recent turns the picture's setting is read from (his last eight, with hers).
 SCENE_TURNS = 16
 SCENE_TURN_CHARS = 600
+# Wait until he has been quiet this long before spending a background call.
+EXTRACTION_IDLE_S = 4.0
 
 
 @dataclass
@@ -39,6 +42,39 @@ class ChatFollowups:
 
     # Render-only contextual wording; never replaces the stored user turn.
     image_request: str | None = None
+    extraction_idle_s: float = EXTRACTION_IDLE_S
+    _extract_queue: dict[str, list[Callable[[], Coroutine[Any, Any, None]]]] = field(
+        default_factory=dict
+    )
+    _extract_gen: dict[str, int] = field(default_factory=dict)
+
+    def _queue_extract(
+        self, user_id: str, job: Callable[[], Coroutine[Any, Any, None]]
+    ) -> None:
+        """Run extraction after a quiet gap. A cancelled job goes back on the queue."""
+        pending = self._extract_queue.setdefault(user_id, [])
+        pending.append(job)
+        self._extract_gen[user_id] = self._extract_gen.get(user_id, 0) + 1
+        generation = self._extract_gen[user_id]
+
+        async def run() -> None:
+            while self._extract_gen.get(user_id) == generation:
+                await asyncio.sleep(self.extraction_idle_s)
+                if self._extract_gen.get(user_id) != generation:
+                    return
+                jobs = self._extract_queue.get(user_id) or []
+                if not jobs:
+                    return
+                current = jobs.pop(0)
+                try:
+                    await current()
+                except ExtractionCancelled:
+                    jobs.insert(0, current)
+                    continue
+                if not jobs:
+                    return
+
+        self.ws.track_task(user_id, asyncio.create_task(run()), survive_disconnect=True)
 
     async def admit(
         self, content: str, response_text: str, session: SessionState, user_id: str
@@ -132,20 +168,16 @@ class ChatFollowups:
                         image_generated=image_triggered,
                         picture=picture,
                     )
+                except ExtractionCancelled:
+                    raise
                 except Exception as e:
                     import traceback
 
                     logger.error("EXTRACTION CRASH: %s\n%s", e, traceback.format_exc())
 
-            # Survives his disconnect: closing the app right after her reply
-            # cancelled it, and the turn lost its mood, heart rate, affection,
-            # facts and recall memory. Its mood write checks the session
-            # revision, so a newer turn always wins.
-            self.ws.track_task(
-                user_id,
-                asyncio.create_task(_safe_extraction()),
-                survive_disconnect=True,
-            )
+            # Idle a few seconds so a quick follow-up does not start the call.
+            # A recall that cancels it puts the same job back on the queue.
+            self._queue_extract(user_id, _safe_extraction)
         else:
             logger.info("Trivial message, skipping extraction")
 

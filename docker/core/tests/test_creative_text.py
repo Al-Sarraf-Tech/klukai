@@ -59,7 +59,7 @@ def transport(monkeypatch, ct, handler):
         ] if isinstance(content, list) else []
         if not parts:
             raise GrokChatError("empty")
-        return Turn("".join(parts), "grok-4.7", "medium", "stream")
+        return Turn("".join(parts), "grok-4.7", "low", "stream")
 
     monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
     return seen

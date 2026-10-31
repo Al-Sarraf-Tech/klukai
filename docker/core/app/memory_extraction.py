@@ -14,7 +14,7 @@ from typing import Any
 import uuid
 
 from .affection import AffectionManager, AffectionChange
-from .extraction_llm import CallReport
+from .extraction_llm import CallReport, ExtractionCancelled
 from .heartbeat import (
     DEFAULT_INTENSITY,
     HIGH_INTENSITY_MOODS,
@@ -65,7 +65,7 @@ class ExtractionRuntime:
         can never hold back what he sees of her this turn.
         """
         session = session.model_copy(deep=True)
-        await asyncio.sleep(3)  # Let main response finish streaming first
+        await asyncio.sleep(3)  # Let the reply finish streaming before this call.
         try:
             aff_state_bg = await self.affection.get_state(user_id)
             report = CallReport()
@@ -149,6 +149,8 @@ class ExtractionRuntime:
                 result, mood, user_msg, assistant_msg, session, user_id
             )
 
+        except ExtractionCancelled:
+            raise
         except Exception as e:
             import traceback
 

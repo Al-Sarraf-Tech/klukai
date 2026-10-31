@@ -25,7 +25,7 @@ TOOL = {"type": "function", "function": {
 
 
 def turn(text="Hello."):
-    return Turn(text, MODEL, "medium", "stream")
+    return Turn(text, MODEL, "low", "stream")
 
 
 @pytest.fixture
@@ -48,8 +48,13 @@ def scripted(monkeypatch, replies):
             raise reply
         return reply
 
+    async def iter_text(system, prompt, *, timeout=120, role="chat"):
+        turn = await complete_turn(system, prompt, timeout=timeout, role=role)
+        yield turn.text
+
     monkeypatch.setattr("app.grok_chat.configured", lambda: True)
     monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
+    monkeypatch.setattr("app.grok_chat.iter_text", iter_text)
     return calls
 
 
@@ -155,12 +160,13 @@ async def test_hand_built_configs_cannot_reach_any_other_backend(router, monkeyp
 async def test_cancellation_does_not_start_another_provider(router, monkeypatch):
     started = asyncio.Event()
 
-    async def complete_turn(system, prompt, *, timeout=120, role="chat"):
+    async def iter_text(system, prompt, *, timeout=120, role="chat"):
         started.set()
         await asyncio.Event().wait()
+        yield "unused"
 
     monkeypatch.setattr("app.grok_chat.configured", lambda: True)
-    monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
+    monkeypatch.setattr("app.grok_chat.iter_text", iter_text)
     config = await router.route("hi", SessionState(conversation_id="c"), interactive=True)
     task = asyncio.create_task(collect(router, config))
     await started.wait()

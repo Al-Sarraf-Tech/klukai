@@ -60,8 +60,11 @@ class ChatPromptBuilder:
         from .helpers import asks_to_be_remembered
 
         skip_recall = len(content.strip()) <= 20 and not asks_to_be_remembered(content)
-        episode_memories, rel_facts, recalled_exchanges = await self.recall(
-            content, skip_recall, aff_state.level, user_id
+        (
+            (episode_memories, rel_facts, recalled_exchanges),
+            nudge,
+        ) = await self.recall_and_nudge(
+            content, skip_recall, aff_state.level, user_id, session.turn_count
         )
 
         # Assemble system prompt
@@ -173,6 +176,8 @@ class ChatPromptBuilder:
             her_where,
             outfit_request_block,
             dream_hint,
+            memory_nudge=nudge,
+            nudge_ready=not skip_recall,
         )
 
     async def recall(
@@ -206,6 +211,19 @@ class ChatPromptBuilder:
                 episode_memories, rel_facts, recalled_exchanges = [], {}, []
 
         return episode_memories, rel_facts, recalled_exchanges
+
+    async def recall_and_nudge(
+        self, content: str, skip_recall: bool, level: int, user_id: str, turn_count: int
+    ) -> tuple[tuple[list[Any], dict[str, Any], list[Any]], str | None]:
+        """Main recall and the nudge recall at the same time."""
+        nudge_task = None
+        if not skip_recall:
+            nudge_task = asyncio.create_task(
+                self.memory.get_memory_nudge(turn_count, level, user_id=user_id)
+            )
+        recalled = await self.recall(content, skip_recall, level, user_id)
+        nudge = await nudge_task if nudge_task is not None else None
+        return recalled, nudge
 
     async def wardrobe_turn(
         self,
@@ -347,10 +365,17 @@ class ChatPromptBuilder:
         her_where: str | None,
         outfit_request_block: str,
         dream_hint: str,
+        memory_nudge: str | None = None,
+        nudge_ready: bool = False,
     ) -> str:
-        # Memory nudge — proactive past reference based on affection level
-        nudge = await self.memory.get_memory_nudge(
-            session.turn_count, aff_state.level, user_id=user_id
+        # Memory nudge — proactive past reference based on affection level.
+        # When the caller already started it beside the main recall, use that.
+        nudge = (
+            memory_nudge
+            if nudge_ready
+            else await self.memory.get_memory_nudge(
+                session.turn_count, aff_state.level, user_id=user_id
+            )
         )
         if nudge:
             system_prompt += f"\n\n{nudge}"

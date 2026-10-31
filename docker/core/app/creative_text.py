@@ -1,7 +1,7 @@
 """Separately capped creative writing on the shared Grok account route.
 
 The legacy ``anthropic`` setting retains the dream/Her POV attempt cap. Every
-background model call uses Grok 4.7 at medium effort and the shared daily cap.
+background model call uses Grok 4.7 at low effort and the shared daily cap.
 There is no Anthropic call. Failed attempts remain consumed.
 """
 

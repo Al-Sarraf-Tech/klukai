@@ -193,7 +193,10 @@ class TestSelect:
         assert out == [1]
         args, kwargs = pick.await_args
         assert args[0] == "memory_recall_test"
-        assert kwargs == {"max_tokens": memory_recall.SELECTION_MAX_TOKENS}
+        assert kwargs == {
+            "max_tokens": memory_recall.SELECTION_MAX_TOKENS,
+            "role": "recall",
+        }
         assert '{"id": "2", "text": "b"}' in args[1]
 
     @pytest.mark.asyncio

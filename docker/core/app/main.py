@@ -216,7 +216,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         proactive.start()
         load_personality()
 
-        logger.info("LLM: Grok 4.7 at medium effort through the account login")
+        logger.info("LLM: Grok 4.7 at low effort through the account login")
         task = asyncio.create_task(_session_cleanup_loop(), name="session-cleanup")
         owners.push_async_callback(_cancel_task, task)
         await owners.enter_async_context(job_handoff.running())

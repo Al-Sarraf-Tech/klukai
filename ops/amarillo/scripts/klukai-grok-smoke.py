@@ -43,7 +43,7 @@ def chat_turn() -> tuple[bool, str]:
     )
     ok = (
         turn.model == grok_account_chat.MODEL
-        and turn.effort == grok_account_chat.EFFORT
+        and turn.effort == grok_account_chat.chat_effort()
         and turn.effort_source in {"stream", "summary"}
         and bool(turn.text)
     )

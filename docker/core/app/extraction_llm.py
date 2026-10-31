@@ -1,7 +1,7 @@
 """Account-login Grok for every background model call.
 
-Owner decision 2026-10-30: background text uses the same Grok 4.7 medium
-account path as chat. There is no Anthropic call and no paid fallback.
+Owner decision 2026-10-31: background text is Grok 4.7 at low effort.
+There is no Anthropic call and no paid fallback.
 
 A request needs the host Grok worker and a positive
 ``KLUKAI_EXTRACTION_DAILY_LIMIT``. Each request first reserves one attempt in
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 MODEL_ENV = "KLUKAI_EXTRACTION_MODEL"
 DEFAULT_MODEL = "grok-4.7"
-EFFORT = "medium"
+EFFORT = "low"
 
 # Thinking counts against max_tokens; the JSON itself is a few hundred tokens.
 EXTRACTION_MAX_TOKENS = 4096
@@ -63,7 +63,11 @@ class CallReport:
 
 
 class ExtractionLLMError(RuntimeError):
-    """A terminal, credential-free failure of one Haiku request."""
+    """A credential-free background failure. Callers use their safe default."""
+
+
+class ExtractionCancelled(ExtractionLLMError):
+    """A higher-priority recall took the background CLI. Requeue the job."""
 
 
 class ExtractionUnavailable(ExtractionLLMError):
@@ -115,7 +119,12 @@ def _log_cap_once() -> None:
 
 
 async def complete(
-    prompt: str, *, max_tokens: int, route: str, system: str | None = None
+    prompt: str,
+    *,
+    max_tokens: int,
+    route: str,
+    system: str | None = None,
+    role: str = "background",
 ) -> str:
     """Return the visible text of one budgeted Grok 4.7 medium request.
 
@@ -123,9 +132,15 @@ async def complete(
     carry their own system prompt (her character preamble); it is sent as
     given.
     """
-    from .grok_chat import EFFORT as GROK_EFFORT
     from .grok_chat import MODEL as GROK_MODEL
-    from .grok_chat import GrokChatError, complete_turn, configured
+    from .grok_chat import (
+        GrokChatCancelled,
+        GrokChatError,
+        background_effort,
+        complete_turn,
+        configured,
+    )
+    from .memory_settings import RECALL_SELECTION_TIMEOUT_S
 
     if not configured():
         _warn_once("grok", "Grok account chat is not configured; using safe defaults")
@@ -153,19 +168,22 @@ async def complete(
         raise ExtractionUnavailable("Grok extraction allowance unavailable") from None
     started = time.monotonic()
     system_text = SYSTEM_PROMPT if system is None else system
+    timeout = RECALL_SELECTION_TIMEOUT_S if role == "recall" else REQUEST_TIMEOUT_S
     try:
         async with _gate:
-            async with asyncio.timeout(REQUEST_TIMEOUT_S):
+            async with asyncio.timeout(timeout):
                 turn = await complete_turn(
-                    system_text, prompt, timeout=REQUEST_TIMEOUT_S, role="background"
+                    system_text, prompt, timeout=timeout, role=role
                 )
-        if turn.model != GROK_MODEL or turn.effort != GROK_EFFORT:
+        if turn.model != GROK_MODEL or turn.effort != background_effort():
             raise ExtractionLLMError("Unexpected Grok model or effort")
         if len(turn.text.encode()) > _MAX_RESPONSE_BYTES:
             raise ExtractionLLMError("Grok reply exceeds size limit")
         text = turn.text
     except ExtractionLLMError:
         raise
+    except GrokChatCancelled:
+        raise ExtractionCancelled("cancelled") from None
     except (GrokChatError, TimeoutError, ValueError, TypeError) as error:
         raise ExtractionLLMError(
             f"Grok request failed ({type(error).__name__})"

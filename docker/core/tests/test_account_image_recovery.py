@@ -478,8 +478,11 @@ async def test_chat_picture_survives_disconnect_and_repeats_without_another_rend
             durable = [
                 item for item in ws._durable_tasks.get(user_id, ()) if not item.done()
             ]
-            assert len(durable) == 1
-            task = durable[0]
+            pictures = [
+                item for item in durable if "background_image_gen" in item.get_coro().__name__
+            ]
+            assert len(pictures) == 1
+            task = pictures[0]
             await ws.disconnect(user_id, socket)
             assert task.cancelled() is False
             assert task.done() is False

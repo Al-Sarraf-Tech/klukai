@@ -167,13 +167,13 @@ async def creative_app(monkeypatch, tmp_path):
 
     async def complete_turn(system, prompt, *, timeout=60, role="chat"):
         state.text_requests.append({
-            "system": system, "prompt": prompt, "model": "grok-4.7", "effort": "medium",
+            "system": system, "prompt": prompt, "model": "grok-4.7", "effort": "low",
         })
         return Turn(json.dumps({
             "annotation": "I remember the lantern you caught before the lake could claim it.",
             "scene_tags": "lake, paper lanterns, moonlight, gentle smile",
             "couple": False, "mood": "tender", "title": "The Last Lantern",
-        }), "grok-4.7", "medium", "stream")
+        }), "grok-4.7", "low", "stream")
 
     monkeypatch.setattr("app.grok_chat.complete_turn", complete_turn)
 
@@ -278,7 +278,7 @@ async def test_queued_cloud_memory_survives_redelivery_and_is_retrievable_only_b
 
     assert len(state.text_requests) == len(state.image_requests) == 1
     text = state.text_requests[0]
-    assert text["model"] == "grok-4.7" and text["effort"] == "medium"
+    assert text["model"] == "grok-4.7" and text["effort"] == "low"
     assert "paper lanterns drift" in text["prompt"]
     image_request, fields = state.image_requests[0]
     assert image_request.headers["authorization"] == "Bearer offline-image-key"

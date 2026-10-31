@@ -51,8 +51,8 @@ Single FastAPI process. Important modules:
 |---|---|
 | `chat.py` / `chat_handlers.py` | Authenticated multi-device WebSocket admission and conversation coordination |
 | `chat_prompt.py` / `chat_reply.py` / `chat_followups.py` | Prompt preparation, agent/direct reply presentation and follow-up memory work |
-| `llm_router.py` / `llm_completions.py` / `llm_intent.py` | Model selection and transport; account-login Grok 4.7 at medium effort, no paid fallback |
-| `background_llm.py` / `extraction_llm.py` | The one background route: Grok 4.7 at medium effort under a shared daily cap, else the caller's safe default |
+| `llm_router.py` / `llm_completions.py` / `llm_intent.py` | Model selection and transport; account-login Grok 4.7 at low effort, no paid fallback |
+| `background_llm.py` / `extraction_llm.py` | The one background route: Grok 4.7 at low effort under a shared daily cap, else the caller's safe default |
 | `memory_recall.py` | Recall: PostgreSQL full-text candidates, then Grok picks |
 | `memory_her_pov.py` / `her_pov_*.py` | Durable job board, pipeline, storage and story preparation |
 | `deferred.py` | One-shot future tasks (Postgres + bridge timer) |
@@ -104,9 +104,9 @@ retention remain separate live release checks.
 
 ### Production provider policy
 
-- Interactive and background text (owner, 2026-10-30): official Grok CLI, model `grok-4.7`, effort `medium`, account login at `GROK_AUTH_PATH`. A failure does not fall back to Claude or any paid API. Background calls still share `KLUKAI_EXTRACTION_DAILY_LIMIT`; a refused or failed call uses the caller's safe default.
+- Interactive and background text (owner, 2026-10-31): official Grok CLI, model `grok-4.7`, effort `low` (override `KLUKAI_GROK_CHAT_EFFORT` / `KLUKAI_GROK_BACKGROUND_EFFORT`), account login at `GROK_AUTH_PATH`. A failure does not fall back to Claude or any paid API. Background calls still share `KLUKAI_EXTRACTION_DAILY_LIMIT`; a refused or failed call uses the caller's safe default. Recall is allowed about 2.5s, then Postgres order is used.
 - Dream/Her POV creative text uses that same Grok route. The separate creative attempt cap still applies when `KLUKAI_CREATIVE_TEXT_PROVIDER=anthropic` (the legacy name of that cap). With it off, these writers use the ordinary background route.
-- Images: the account worker's active provider is Grok (`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok`), checked by Grok with the same drift rubric. Core still addresses the worker as `KLUKAI_IMAGE_PROVIDER=agy`. Daily/monthly render caps fail closed at 10/150. fal is opt-in and is not a failover. Google paid-credit fallback stays disabled; Grok extra usage stays off/$0. No paid image API or GPU fallback. `KLUKAI_IMAGE_PROVIDER=openai` is an explicit edit path, off unless set.
+- Images: the account worker's active provider is Grok (`KLUKAI_ACCOUNT_IMAGE_PROVIDERS=grok`) at effort `xhigh` (`KLUKAI_GROK_IMAGE_EFFORT`), checked by Grok at the same effort with the same drift rubric. Core still addresses the worker as `KLUKAI_IMAGE_PROVIDER=agy`. Daily/monthly render caps fail closed at 10/150. fal is opt-in and is not a failover. Google paid-credit fallback stays disabled; Grok extra usage stays off/$0. No paid image API or GPU fallback. `KLUKAI_IMAGE_PROVIDER=openai` is an explicit edit path, off unless set.
 - Voice: Fish Audio on the free `s2.1-pro-free` model, tap to play. Speech-to-text: Fish `transcribe-1-pro`, pay-as-you-go (owner authorized 2026-10-26). Text remains usable when voice is off.
 - Web: existing authorized Brave MCP search path. This authorization does not extend to other new paid services.
 - Fresh checkout defaults differ from private deployment configuration. Use the dated handoffs and verified runtime settings when describing what is deployed.

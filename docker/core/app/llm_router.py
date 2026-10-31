@@ -2,7 +2,7 @@
 
 Owner decision 2026-10-30: every Klukai model call runs through the official
 Grok CLI on the account login. Interactive chat and the agent loop use
-grok-4.7 at medium effort. A failure stays on that path: there is no paid
+grok-4.7 at low effort. A failure stays on that path: there is no paid
 Anthropic fallback. The Claude constants below remain only so older unit
 tests of the unused Messages client still describe that client.
 """
@@ -29,9 +29,10 @@ CLAUDE_SECONDARY = "claude-haiku-5-5"
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_MAX_RESPONSE_BYTES = 1024 * 1024
 MODEL_EFFORT = {CLAUDE_PRIMARY: "medium", CLAUDE_SECONDARY: "high"}
-# Pinned Grok CLI 1.0.62 accepts this id and `--effort medium`.
+# Pinned Grok CLI 1.0.62 accepts this id. Chat and background default to low;
+# pictures use xhigh. KLUKAI_GROK_CHAT_EFFORT overrides the chat default.
 GROK_MODEL = "grok-4.7"
-GROK_EFFORT = "medium"
+GROK_EFFORT = "low"
 
 
 def model_family(model: str) -> str | None:
@@ -112,7 +113,7 @@ def _grok_config() -> LLMConfig:
 
 
 class LLMRouter(LLMCompletionsMixin):
-    """Routes every turn to account-login Grok 4.7 at medium effort."""
+    """Routes every turn to account-login Grok 4.7 at low effort."""
 
     def __init__(self) -> None:
         self._anthropic_http: httpx.AsyncClient | None = None

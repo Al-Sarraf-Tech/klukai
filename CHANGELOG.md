@@ -35,6 +35,11 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- **Faster Grok replies (owner, 2026-10-31).** Chat and background text
+  default to effort `low`. Picture renders and the checker default to
+  `xhigh`. Recall waits about 2.5s and runs beside the nudge. Extraction
+  waits for a few quiet seconds and is requeued if a recall cancels it.
+  The reply streams to the existing `token` WebSocket frames.
 - **Grok account login for every Klukai model call (owner, 2026-10-30).**
   Chat, background text, pictures, and the picture checker use the official
   Grok CLI at `grok-4.7` with `--effort medium`. No xAI API key, no paid

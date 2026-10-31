@@ -1,7 +1,7 @@
 """One background-model route: account-login Grok, then the caller's safe default.
 
 Every non-interactive text/JSON call in the core goes through ``text()`` or
-``json_object()``. Owner decision 2026-10-30: that call is Grok 4.7 at medium
+``json_object()``. Owner decision 2026-10-31: that call is Grok 4.7 at low
 effort through the host CLI. ``KLUKAI_EXTRACTION_DAILY_LIMIT`` still reserves
 one UTC-day attempt before anything is sent. If Grok is unavailable, capped,
 fails or returns nothing usable, the caller gets its safe default. There is
@@ -55,14 +55,23 @@ def _parsed_object(text: str) -> dict[str, Any] | None:
 
 
 async def _haiku(
-    caller: str, prompt: str, *, max_tokens: int, system: str | None
+    caller: str,
+    prompt: str,
+    *,
+    max_tokens: int,
+    system: str | None,
+    role: str = "background",
 ) -> tuple[str | None, str]:
-    """One budgeted Haiku request: (visible text or None, outcome)."""
+    """One budgeted background request: (visible text or None, outcome)."""
     kwargs: dict[str, Any] = {"max_tokens": max_tokens, "route": caller}
+    if role != "background":
+        kwargs["role"] = role
     if system is not None:
         kwargs["system"] = system
     try:
         return await extraction_llm.complete(prompt, **kwargs), "ok"
+    except extraction_llm.ExtractionCancelled:
+        raise
     except extraction_llm.ExtractionUnavailable:
         return None, "unavailable"
     except extraction_llm.ExtractionLLMError as error:
@@ -83,6 +92,7 @@ async def _route(
     haiku_max_tokens: int | None,
     convert: Callable[[str], _T | None],
     unusable: str,
+    role: str = "background",
 ) -> _T | None:
     report = report if report is not None else CallReport()
     report.provider, report.model = extraction_llm.provider(), extraction_llm.model()
@@ -91,6 +101,7 @@ async def _route(
         prompt,
         max_tokens=haiku_max_tokens or haiku_budget(max_tokens),
         system=system,
+        role=role,
     )
     result = convert(text) if text is not None else None
     if text is not None and result is None:
@@ -114,6 +125,7 @@ async def text(
     system: str | None = None,
     report: CallReport | None = None,
     haiku_max_tokens: int | None = None,
+    role: str = "background",
 ) -> str:
     """Plain text for ``caller``; ``""`` when nothing usable came back.
 
@@ -130,6 +142,7 @@ async def text(
         haiku_max_tokens=haiku_max_tokens,
         convert=_usable_text,
         unusable="empty",
+        role=role,
     )
     return result or ""
 
@@ -142,6 +155,7 @@ async def json_object(
     system: str | None = None,
     report: CallReport | None = None,
     haiku_max_tokens: int | None = None,
+    role: str = "background",
 ) -> dict[str, Any] | None:
     """A non-empty JSON object for ``caller``; None means use your defaults.
 
@@ -157,4 +171,5 @@ async def json_object(
         haiku_max_tokens=haiku_max_tokens,
         convert=_parsed_object,
         unusable="unparsable",
+        role=role,
     )

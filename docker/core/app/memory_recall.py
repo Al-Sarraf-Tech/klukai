@@ -173,7 +173,10 @@ async def select(
     try:
         async with asyncio.timeout(RECALL_SELECTION_TIMEOUT_S):
             result = await background_llm.json_object(
-                caller, prompt, max_tokens=SELECTION_MAX_TOKENS
+                caller,
+                prompt,
+                max_tokens=SELECTION_MAX_TOKENS,
+                role="recall",
             )
     except TimeoutError:
         logger.warning(
