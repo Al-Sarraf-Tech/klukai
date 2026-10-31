@@ -126,8 +126,10 @@ class AgentLoop:
                 else "No matching facts found."
             )
 
-            # Search episodic memories (Postgres candidates, Haiku picks)
-            episodes = await memory.recall_episodes(query, user_id=user_id, limit=3)
+            # Postgres ranking only. A Grok pick here would preempt extraction.
+            episodes = await memory.recall_episodes(
+                query, user_id=user_id, limit=3, pick=False
+            )
             ep_text = (
                 "\n".join(f"- {e.get('summary', '')[:150]}" for e in episodes)
                 if episodes
