@@ -457,6 +457,14 @@ def _refuse_unsupported(request: dict) -> None:
         raise agy.RuntimeError('Commander reference is not authorized')
 
 
+def image_arguments(session: str, prompt: str) -> list[str]:
+    """Flags pinned CLI 1.0.62 accepts for one image_edit turn."""
+    return ['--session-id', session, '--model', MODEL, '--effort', image_effort(),
+            '--tools', 'image_edit', '--no-subagents',
+            '--disable-web-search', '--permission-mode', 'dontAsk', '--allow', 'image_edit',
+            '--max-turns', '2', '--output-format', 'streaming-messages-json', '--single', prompt]
+
+
 def render(request: dict, references: dict) -> bytes:
     _refuse_unsupported(request)
     _limits()
@@ -481,10 +489,7 @@ def render(request: dict, references: dict) -> bytes:
             'change billing, delegate or retry. After the image result, finish.\n'
             + brief(request)
         )
-        args = ['--session-id', session, '--model', MODEL, '--effort', image_effort(),
-                '--tools', 'image_edit', '--no-subagents',
-                '--disable-web-search', '--permission-mode', 'dontAsk', '--allow', 'image_edit',
-                '--max-turns', '2', '--output-format', 'streaming-messages-json', '--single', prompt]
+        args = image_arguments(session, prompt)
         raw = execute(profile, work, args)
         parse_stream(raw, session, paths, allowed_skills=bundled_skills(profile), aspect=ratio)
         try:

@@ -14,6 +14,10 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- Chat through the account worker no longer passes `--system-prompt-file`.
+  Pinned Grok CLI 1.0.62 rejects that flag and every text turn 502s. The
+  system text is inside `--prompt-json` (one argv, refused over 120KB) and
+  `--system-prompt-override` still replaces the agent prompt.
 - Short questions that ask her to remember (`my birthday?`, `remember?`) load
   facts, episodes, exchanges and inside jokes. A greeting of twenty characters
   or fewer still skips that fan-out. When a dossier or an operational record

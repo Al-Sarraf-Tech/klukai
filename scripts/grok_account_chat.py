@@ -3,8 +3,9 @@
 
 Chat and background text default to low effort. The caller passes the effort.
 No xAI API key and no paid credits. The clean Grok home keeps
-``disable_api_key_auth = true``. The system prompt is a file, not an argv
-string.
+``disable_api_key_auth = true``. Pinned CLI 1.0.62 has no
+``--system-prompt-file``. The system text rides inside ``--prompt-json``
+content, and that one argv stays under 120KB.
 """
 from __future__ import annotations
 
@@ -22,6 +23,9 @@ CHAT_EFFORT = "low"
 BACKGROUND_EFFORT = "low"
 _EFFORTS = {"minimal", "low", "medium", "high", "xhigh"}
 MAX_ARG_STRLEN = 131072
+# --prompt-json is one argv. Stay under Linux MAX_ARG_STRLEN and fail in
+# process instead of letting the kernel return E2BIG.
+PROMPT_JSON_LIMIT = 120_000
 
 
 def _configured_effort(name: str, default: str) -> str:
@@ -52,15 +56,34 @@ class Turn:
         self.tokens = tokens
 
 
-def arguments(session: str, prompt: str, system_file: Path, effort: str) -> list[str]:
+def prompt_document(system: str, prompt: str) -> str:
+    """ACP content blocks. 1.0.62 parses this shape for ``--prompt-json``."""
+    return json.dumps(
+        {
+            "type": "acp",
+            "content": [
+                {"type": "text", "text": system},
+                {"type": "text", "text": prompt},
+            ],
+        },
+        separators=(",", ":"),
+    )
+
+
+def arguments(session: str, system: str, prompt: str, effort: str) -> list[str]:
+    document = prompt_document(system, prompt)
+    if len(document.encode()) >= PROMPT_JSON_LIMIT:
+        raise OSError(7, "Grok prompt JSON exceeds 120KB")
     result = [
         "--session-id", session, "--model", MODEL, "--effort", effort,
         "--no-subagents", "--disable-web-search", "--permission-mode", "dontAsk",
         "--max-turns", "1", "--output-format", "streaming-messages-json",
         "--include-partial-messages",
-        "--verbatim", "--system-prompt-file", str(system_file), "--single", prompt,
+        "--verbatim",
+        "--system-prompt-override", system,
+        "--prompt-json", document,
     ]
-    if any(len(arg) >= MAX_ARG_STRLEN for arg in result):
+    if any(len(arg.encode()) >= MAX_ARG_STRLEN for arg in result):
         raise OSError(7, "Argument list too long")
     return result
 
@@ -182,10 +205,7 @@ def _prepare(system: str, prompt: str, effort: str):
     config = profile / ".grok"
     config.mkdir()
     (config / "config.toml").write_text(CONFIG)
-    system_file = work / "system.txt"
-    system_file.write_text(system)
-    system_file.chmod(0o600)
-    return session, profile, work, arguments(session, prompt, system_file, effort)
+    return session, profile, work, arguments(session, system, prompt, effort)
 
 
 def stream(system: str, prompt: str, *, timeout: float = 90, cancel=None, effort: str | None = None):

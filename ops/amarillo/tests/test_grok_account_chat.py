@@ -36,18 +36,33 @@ def test_parse_turn_requires_oauth_grok_4_7_and_low(tmp_path):
         raise AssertionError("high effort was accepted")
 
 
-def test_arguments_put_the_system_prompt_in_a_file(tmp_path):
-    system = "S" * 200_000
-    path = tmp_path / "system.txt"
-    path.write_text(system)
-    args = chat.arguments("s", "hello", path, "low")
+def test_arguments_put_the_system_text_in_prompt_json():
+    system = "You are Klukai."
+    args = chat.arguments("s", system, "hello", "low")
     assert args[args.index("--model") + 1] == "grok-4.7"
     assert args[args.index("--effort") + 1] == "low"
-    assert args[args.index("--system-prompt-file") + 1] == str(path)
-    assert system not in args
-    assert max(len(arg) for arg in args) < chat.MAX_ARG_STRLEN
+    assert args[args.index("--output-format") + 1] == "streaming-messages-json"
+    assert "--include-partial-messages" in args
+    assert "--system-prompt-file" not in args
+    assert "--single" not in args
+    assert args[args.index("--system-prompt-override") + 1] == system
+    document = json.loads(args[args.index("--prompt-json") + 1])
+    assert document == {
+        "type": "acp",
+        "content": [
+            {"type": "text", "text": system},
+            {"type": "text", "text": "hello"},
+        ],
+    }
+    assert max(len(arg.encode()) for arg in args) < chat.PROMPT_JSON_LIMIT
     assert "disable_api_key_auth = true" in chat.CONFIG
     assert "api.x.ai" not in Path(chat.__file__).read_text()
+    try:
+        chat.arguments("s", "S" * chat.PROMPT_JSON_LIMIT, "hello", "low")
+    except OSError as exc:
+        assert exc.errno == 7 and "120KB" in exc.strerror
+    else:
+        raise AssertionError("an oversized prompt JSON was accepted")
 
 
 def test_chat_background_and_image_efforts_are_configurable(monkeypatch):
