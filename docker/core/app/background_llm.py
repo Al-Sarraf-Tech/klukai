@@ -7,8 +7,11 @@ one UTC-day attempt before anything is sent. If Grok is unavailable, capped,
 fails or returns nothing usable, the caller gets its safe default. There is
 no Anthropic fallback and no local model.
 
-Never raises into the caller. One INFO line per call names the caller,
-provider, model and outcome; never prompt or reply content.
+Never raises into the caller. A call that a higher-priority recall preempts
+returns the safe default too, unless the caller passes ``requeue=True`` (the
+turn's own extraction, whose queue puts the job back): then it raises
+ExtractionCancelled. One INFO line per call names the caller, provider, model
+and outcome; never prompt or reply content.
 """
 
 from __future__ import annotations
@@ -62,6 +65,7 @@ async def _haiku(
     system: str | None,
     role: str = "background",
     timeout: float | None = None,
+    requeue: bool = False,
 ) -> tuple[str | None, str]:
     """One budgeted background request: (visible text or None, outcome)."""
     kwargs: dict[str, Any] = {"max_tokens": max_tokens, "route": caller}
@@ -74,7 +78,9 @@ async def _haiku(
     try:
         return await extraction_llm.complete(prompt, **kwargs), "ok"
     except extraction_llm.ExtractionCancelled:
-        raise
+        if requeue:
+            raise
+        return None, "cancelled"
     except extraction_llm.ExtractionUnavailable:
         return None, "unavailable"
     except extraction_llm.ExtractionLLMError as error:
@@ -97,6 +103,7 @@ async def _route(
     unusable: str,
     role: str = "background",
     timeout: float | None = None,
+    requeue: bool = False,
 ) -> _T | None:
     report = report if report is not None else CallReport()
     report.provider, report.model = extraction_llm.provider(), extraction_llm.model()
@@ -107,6 +114,7 @@ async def _route(
         system=system,
         role=role,
         timeout=timeout,
+        requeue=requeue,
     )
     result = convert(text) if text is not None else None
     if text is not None and result is None:
@@ -131,6 +139,7 @@ async def text(
     report: CallReport | None = None,
     haiku_max_tokens: int | None = None,
     role: str = "background",
+    requeue: bool = False,
 ) -> str:
     """Plain text for ``caller``; ``""`` when nothing usable came back.
 
@@ -148,6 +157,7 @@ async def text(
         convert=_usable_text,
         unusable="empty",
         role=role,
+        requeue=requeue,
     )
     return result or ""
 
@@ -162,6 +172,7 @@ async def json_object(
     haiku_max_tokens: int | None = None,
     role: str = "background",
     timeout: float | None = None,
+    requeue: bool = False,
 ) -> dict[str, Any] | None:
     """A non-empty JSON object for ``caller``; None means use your defaults.
 
@@ -179,4 +190,5 @@ async def json_object(
         unusable="unparsable",
         role=role,
         timeout=timeout,
+        requeue=requeue,
     )

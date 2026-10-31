@@ -20,6 +20,12 @@ SCENE_TURNS = 16
 SCENE_TURN_CHARS = 600
 # Wait until he has been quiet this long before spending a background call.
 EXTRACTION_IDLE_S = 4.0
+# A preempted extraction goes back on the queue, but every try reserves
+# another attempt in the daily extraction ledger. Give up after this many.
+EXTRACTION_MAX_TRIES = 3
+# Waiting turns per user. When a long chat outruns extraction, the oldest
+# waiting turn is dropped (and logged) rather than holding every snapshot.
+EXTRACTION_MAX_PENDING = 12
 
 
 @dataclass
@@ -43,38 +49,64 @@ class ChatFollowups:
     # Render-only contextual wording; never replaces the stored user turn.
     image_request: str | None = None
     extraction_idle_s: float = EXTRACTION_IDLE_S
-    _extract_queue: dict[str, list[Callable[[], Coroutine[Any, Any, None]]]] = field(
-        default_factory=dict
-    )
+    extraction_max_tries: int = EXTRACTION_MAX_TRIES
+    extraction_max_pending: int = EXTRACTION_MAX_PENDING
+    # Per user: waiting jobs as [job, tries], oldest first.
+    _extract_queue: dict[str, list[list[Any]]] = field(default_factory=dict)
     _extract_gen: dict[str, int] = field(default_factory=dict)
+    _extract_runner: dict[str, asyncio.Task[None]] = field(default_factory=dict)
 
     def _queue_extract(
         self, user_id: str, job: Callable[[], Coroutine[Any, Any, None]]
     ) -> None:
-        """Run extraction after a quiet gap. A cancelled job goes back on the queue."""
+        """Run extraction after a quiet gap, one job at a time per user.
+
+        A new turn restarts the quiet gap. A preempted job goes back to the
+        front of the queue, at most ``extraction_max_tries`` times in all.
+        """
         pending = self._extract_queue.setdefault(user_id, [])
-        pending.append(job)
+        pending.append([job, 0])
+        while len(pending) > self.extraction_max_pending:
+            pending.pop(0)
+            logger.warning(
+                "Extraction backlog full for this user; dropped the oldest turn"
+            )
         self._extract_gen[user_id] = self._extract_gen.get(user_id, 0) + 1
-        generation = self._extract_gen[user_id]
+        runner = self._extract_runner.get(user_id)
+        if runner is not None and not runner.done():
+            return  # the running loop picks the job up after the next quiet gap
 
         async def run() -> None:
-            while self._extract_gen.get(user_id) == generation:
-                await asyncio.sleep(self.extraction_idle_s)
-                if self._extract_gen.get(user_id) != generation:
-                    return
-                jobs = self._extract_queue.get(user_id) or []
-                if not jobs:
-                    return
-                current = jobs.pop(0)
-                try:
-                    await current()
-                except ExtractionCancelled:
-                    jobs.insert(0, current)
-                    continue
-                if not jobs:
-                    return
+            try:
+                while True:
+                    generation = self._extract_gen.get(user_id)
+                    await asyncio.sleep(self.extraction_idle_s)
+                    if self._extract_gen.get(user_id) != generation:
+                        continue  # he spoke again: wait for a fresh quiet gap
+                    jobs = self._extract_queue.get(user_id)
+                    if not jobs:
+                        return
+                    entry = jobs.pop(0)
+                    entry[1] += 1
+                    try:
+                        await entry[0]()
+                    except ExtractionCancelled:
+                        if entry[1] < self.extraction_max_tries:
+                            jobs.insert(0, entry)
+                        else:
+                            logger.warning(
+                                "Extraction preempted %d times; skipping this turn",
+                                entry[1],
+                            )
+            finally:
+                if self._extract_runner.get(user_id) is task:
+                    del self._extract_runner[user_id]
+                if not self._extract_queue.get(user_id):
+                    self._extract_queue.pop(user_id, None)
 
-        self.ws.track_task(user_id, asyncio.create_task(run()), survive_disconnect=True)
+        task = asyncio.create_task(run())
+        self._extract_runner[user_id] = task
+        self.ws.track_task(user_id, task, survive_disconnect=True)
 
     async def admit(
         self, content: str, response_text: str, session: SessionState, user_id: str

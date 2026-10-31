@@ -197,12 +197,15 @@ async def extract_facts(
 
     # Only a non-empty JSON object comes back: a top-level list or string has
     # no .get and would escape a function that promises not to raise.
+    # A recall that preempts this call raises ExtractionCancelled, so the
+    # turn's extraction queue puts the job back (nothing was applied yet).
     result = await background_llm.json_object(
         "extraction",
         prompt,
         max_tokens=2048,
         haiku_max_tokens=extraction_llm.EXTRACTION_MAX_TOKENS,
         report=report,
+        requeue=True,
     )
     if result is None:
         return dict(_DEFAULT_RESULT)
