@@ -117,7 +117,9 @@ async def test_terminal_error_finishes_before_another_device_reply(endpoint_setu
             await device.frames.put(None)
         await asyncio.wait_for(asyncio.gather(*tasks), 1)
         for device in (first, second):
-            assert [event['type'] for event in device.output] == ['connected', 'error', 'token', 'done']
+            assert [event['type'] for event in device.output] == [
+                'connected', 'thinking', 'thinking', 'error', 'token', 'done'
+            ]
     finally:
         release_error.set()
         release_second.set()

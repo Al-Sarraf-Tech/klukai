@@ -12,6 +12,16 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+### Changed
+
+- The chat persona is a byte-stable prefix. Turn state (clock, mood, memories,
+  pace) is a later message so prompt caching can keep the prefix.
+- Chat deltas are forwarded as they arrive instead of waiting for a sentence.
+- Typing is sent when a message arrives, before session work and the model.
+- The post-reply memory pick asks the CLI for eight short lines, not forty
+  long ones. The reply still uses the Postgres order.
+- The Her POV harness reads `KLUKAI_AGY_ALLOWED_USERS` from `docker inspect`.
+
 ### Added
 
 - Chat replies can use the xAI API (`grok-4.7`, reasoning effort low,

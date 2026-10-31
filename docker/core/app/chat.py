@@ -356,6 +356,11 @@ async def _dispatch_device_frame(
                 )
                 return
             content = content[:4000]  # Input length limit
+            # Typing before session IO and the model, so the client is not blank.
+            try:
+                await ws.send_thinking(user_id, "…")
+            except Exception as exc:
+                logger.debug("Could not show typing: %s", exc)
             await _admit_turn("message", content, user_id, websocket)
         elif msg_type == "typing":
             pass

@@ -42,7 +42,7 @@ async def test_decoder_limit_frame_does_not_disconnect_valid_next_message(
     monkeypatch.setattr(chat, '_handle_message', handle)
     await endpoint(device)
     assert handled == ['still here']
-    assert [event['type'] for event in device.output] == ['connected', 'done']
+    assert [event['type'] for event in device.output] == ['connected', 'thinking', 'done']
     assert not manager.is_connected('alice')
 
 
