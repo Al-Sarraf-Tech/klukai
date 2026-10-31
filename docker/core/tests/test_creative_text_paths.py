@@ -180,14 +180,45 @@ async def test_cloud_pov_missed_queue_hint_stays_queued_without_inline_work(writ
 
 
 @pytest.mark.asyncio
-async def test_cloud_pov_existing_inflight_job_is_not_retired_for_new_request(writer):
+async def test_cloud_pov_live_inflight_job_is_reused(writer):
+    """A picture that is still moving is not failed, and it is not redrawn."""
     from app import memory_her_pov as hp
-    conn = _RailConn(results=[[("job", "drawing")]])
+    conn = _RailConn(results=[[], [("job", "drawing")]])
     patches = _patch_rail(conn)
     with patches[0], patches[1], patches[2]:
         result = await hp._claim_active_from_db("alice")
     assert result == {"job_id": "job", "status": "drawing", "reused": True}
-    assert all(sql.lstrip().startswith("SELECT") for sql, _ in conn.calls)
+    sweep_sql, sweep_params = conn.calls[0]
+    assert "status = 'failed'" in sweep_sql
+    assert "status <> 'queued'" in sweep_sql
+    assert sweep_params == ("alice", hp._STALE_JOB_MINUTES)
+    assert conn.calls[1][0].lstrip().startswith("SELECT")
+
+
+@pytest.mark.asyncio
+async def test_cloud_pov_stale_job_unlocks_the_next_request(writer):
+    """A paid job that stopped moving used to be reused forever."""
+    from app import memory_her_pov as hp
+    stale_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    hp._ACTIVE_JOB_BY_USER["alice"] = stale_id
+    hp._JOBS[stale_id] = {
+        "id": stale_id,
+        "user_id": "alice",
+        "status": "drawing",
+        "requested_by_user": True,
+    }
+    conn = _RailConn(results=[[(stale_id,)], []])
+    patches = _patch_rail(conn)
+    try:
+        with patches[0], patches[1], patches[2]:
+            assert await hp._claim_active_from_db("alice") is None
+        assert "alice" not in hp._ACTIVE_JOB_BY_USER
+        assert hp._JOBS[stale_id]["status"] == "failed"
+        assert hp._JOBS[stale_id]["error"] == "stale"
+    finally:
+        hp._ACTIVE_JOB_BY_USER.pop("alice", None)
+        hp._JOBS.pop(stale_id, None)
+    assert "error = 'stale'" in conn.calls[0][0]
 
 
 @pytest.mark.asyncio

@@ -1219,6 +1219,25 @@ class TestEnqueueJob:
         assert out["status"] == "queued" and out["reused"] is False
 
     @pytest.mark.asyncio
+    async def test_queue_mode_stays_queued_when_dispatch_raises(
+        self, clean_jobs, monkeypatch
+    ):
+        """A raise from the wake-up must not strand the accepted row."""
+        monkeypatch.setenv("HER_POV_EXECUTION", "queue")
+
+        async def boom(_job_id):
+            raise RuntimeError("redis down")
+
+        with (
+            patch.object(hp, "_claim_active_from_db", AsyncMock(return_value=None)),
+            patch.object(hp, "_persist_job", AsyncMock()),
+            patch.object(hp, "_enqueue_job", boom),
+            patch.object(hp, "_start_inline", AsyncMock()) as inline,
+        ):
+            out = await hp.start_her_pov("claude")
+        inline.assert_not_awaited()
+        assert out["status"] == "queued" and out["reused"] is False
+
     async def test_queue_mode_stays_queued_when_bridge_heard_it(
         self, clean_jobs, monkeypatch
     ):
@@ -1295,6 +1314,26 @@ class TestRunJobFromQueue:
         run.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_db_outage_with_a_finished_requested_job_acks(self, clean_jobs):
+        hp._JOBS[self._JOB] = {
+            "id": self._JOB,
+            "user_id": "claude",
+            "status": "failed",
+            "requested_by_user": True,
+        }
+        broken = MagicMock()
+        broken.execute = AsyncMock(side_effect=RuntimeError("db down"))
+        run = AsyncMock()
+        p = _patch_rail(broken)
+        with p[0], p[1], p[2], patch.object(hp, "run_her_pov", run):
+            assert await hp.run_job_from_queue(self._JOB) is True
+        run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_cloud_check_failure_asks_the_bridge_to_retry(self, clean_jobs):
+        with patch.object(hp, "_cloud_generation_enabled", side_effect=RuntimeError("cfg")):
+            assert await hp.run_job_from_queue(self._JOB) is False
+
     async def test_db_outage_with_unknown_job_acks(self, clean_jobs):
         broken = MagicMock()
         broken.execute = AsyncMock(side_effect=RuntimeError("db down"))
