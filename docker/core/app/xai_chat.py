@@ -106,6 +106,41 @@ def _event(line: str) -> dict[str, Any] | None:
     return payload
 
 
+def conversation_messages(
+    persona: str,
+    turns: list[dict[str, str]],
+    volatile: str = "",
+) -> list[dict[str, str]]:
+    """Stable persona, then real turns, then this turn's changing context.
+
+    xAI caches a prefix of messages that match a previous request exactly.
+    A changing system message before the history stops the cache at the
+    persona. ``prompt_cache_key`` is a Responses API field, not chat
+    completions; sticky routing stays the ``x-grok-conv-id`` header.
+    """
+    messages: list[dict[str, str]] = [{"role": "system", "content": persona}]
+    for turn in turns:
+        role = turn.get("role")
+        content = turn.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            continue
+        text = content.strip()
+        if not text:
+            continue
+        if messages[-1]["role"] == role:
+            messages[-1] = {
+                "role": role,
+                "content": messages[-1]["content"] + "\n" + text,
+            }
+            continue
+        messages.append({"role": role, "content": text})
+    if messages[-1]["role"] == "system":
+        messages.append({"role": "user", "content": "."})
+    if volatile.strip():
+        messages.append({"role": "system", "content": volatile.strip()})
+    return messages
+
+
 async def iter_text(
     system: str,
     prompt: str,
@@ -113,6 +148,7 @@ async def iter_text(
     timeout: float = 120.0,
     conversation_id: str | None = None,
     volatile: str = "",
+    turns: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
     """Yield visible reply text. Raises before the first yield when the CLI should run."""
     key = api_key()
@@ -120,11 +156,8 @@ async def iter_text(
         raise XaiChatError("xai chat is not configured")
     if capped():
         raise XaiCapError("xai daily cap reached")
-    messages: list[dict[str, str]] = [{"role": "system", "content": system}]
-    # Volatile turn state is a later message so the persona prefix can cache.
-    if volatile.strip():
-        messages.append({"role": "system", "content": volatile})
-    messages.append({"role": "user", "content": prompt})
+    history = turns if turns is not None else [{"role": "user", "content": prompt}]
+    messages = conversation_messages(system, history, volatile)
     body = {
         "model": CHAT_MODEL,
         "messages": messages,

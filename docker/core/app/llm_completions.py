@@ -105,6 +105,8 @@ class LLMCompletionsMixin(ABC):
         from .xai_spend import api_key, chat_backend, redact
 
         lines = []
+        turns: list[dict[str, str]] = []
+        notes: list[str] = []
         for message in messages:
             content = message.get("content", "")
             if isinstance(content, list):
@@ -112,18 +114,28 @@ class LLMCompletionsMixin(ABC):
                     part.get("text", "") if isinstance(part, dict) else str(part)
                     for part in content
                 )
-            lines.append(f"{message.get('role', 'user')}: {content}")
+            text_line = content if isinstance(content, str) else str(content)
+            role = message.get("role")
+            if role == "system" and text_line.strip():
+                notes.append(text_line.strip())
+            elif role in {"user", "assistant"} and text_line.strip():
+                turns.append({"role": role, "content": text_line.strip()})
+            lines.append(f"{role or 'user'}: {text_line}")
         prompt = "\n".join(lines).strip() or "."
         stable = getattr(system_prompt, "stable", "")
-        text = str(system_prompt)
-        if isinstance(stable, str) and stable and text.startswith(stable):
-            persona, turn_state = stable, text[len(stable) :].lstrip("\n")
+        full = str(system_prompt)
+        if isinstance(stable, str) and stable and full.startswith(stable):
+            persona, turn_state = stable, full[len(stable) :].lstrip("\n")
         else:
-            persona, turn_state = text, ""
+            persona, turn_state = full, ""
+        if notes:
+            turn_state = "\n\n".join([*notes, turn_state] if turn_state else notes)
         if chat_backend() == "api" and api_key():
             yielded = False
             try:
-                async for piece in xai_text(persona, prompt, volatile=turn_state):
+                async for piece in xai_text(
+                    persona, prompt, volatile=turn_state, turns=turns
+                ):
                     yielded = True
                     yield piece
                 if yielded:
