@@ -1,6 +1,7 @@
 """Flags passed to pinned Grok CLI 1.0.62, checked against its --help when present."""
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -65,7 +66,20 @@ def _flags(args: list[str]) -> list[str]:
     return [arg for arg in args if arg.startswith("--")]
 
 
+def _version(binary: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            [str(binary), "--version"], check=False, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = re.match(r"grok (\d+\.\d+\.\d+)\b", completed.stdout.strip())
+    return found.group(1) if found else None
+
+
 def _pinned_binary() -> Path | None:
+    """The pinned build only. A ``grok`` on PATH counts only if it reports the
+    pinned version: a newer CLI accepting a flag says nothing about 1.0.62."""
     name = f"grok-{render.VERSION}-linux-x86_64"
     candidates = [
         render.PINNED_DIR / name,
@@ -75,9 +89,26 @@ def _pinned_binary() -> Path | None:
     if found:
         candidates.append(Path(found))
     for path in candidates:
-        if path.is_file() and os.access(path, os.X_OK):
+        if path.is_file() and os.access(path, os.X_OK) and _version(path) == render.VERSION:
             return path
     return None
+
+
+def _assert_help_lists_the_contract_flags(binary: Path) -> None:
+    completed = subprocess.run(
+        [str(binary), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    help_text = completed.stdout + completed.stderr
+    assert completed.returncode == 0, help_text
+    for flag in dict.fromkeys([*CHAT_FLAGS, *CHECK_FLAGS, *RENDER_FLAGS]):
+        names = (flag, ALIASES[flag]) if flag in ALIASES else (flag,)
+        assert any(re.search(re.escape(name) + r"\b", help_text) for name in names), flag
+    assert "streaming-messages-json" in help_text
+    assert "--include-partial-messages" in help_text
 
 
 def test_chat_check_and_render_pass_only_the_contract_flags():
@@ -101,18 +132,16 @@ def test_chat_check_and_render_pass_only_the_contract_flags():
 def test_pinned_cli_help_lists_every_flag_the_scripts_pass():
     binary = _pinned_binary()
     if binary is None:
-        pytest.skip("pinned Grok CLI 1.0.62 is absent")
-    completed = subprocess.run(
-        [str(binary), "--help"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    help_text = completed.stdout + completed.stderr
-    assert completed.returncode == 0, help_text
-    for flag in dict.fromkeys([*CHAT_FLAGS, *CHECK_FLAGS, *RENDER_FLAGS]):
-        names = (flag, ALIASES[flag]) if flag in ALIASES else (flag,)
-        assert any(name in help_text for name in names), flag
-    assert "streaming-messages-json" in help_text
-    assert "--include-partial-messages" in help_text
+        pytest.skip(f"pinned Grok CLI {render.VERSION} is absent")
+    _assert_help_lists_the_contract_flags(binary)
+
+
+def test_an_upgrade_candidate_accepts_every_flag_the_scripts_pass():
+    """Set KLUKAI_GROK_CLI_CANDIDATE to a newer binary before moving the pin."""
+    candidate = os.environ.get("KLUKAI_GROK_CLI_CANDIDATE")
+    if not candidate:
+        pytest.skip("KLUKAI_GROK_CLI_CANDIDATE is not set")
+    binary = Path(candidate)
+    assert binary.is_file() and os.access(binary, os.X_OK), candidate
+    assert _version(binary) is not None, "candidate does not report a grok version"
+    _assert_help_lists_the_contract_flags(binary)
