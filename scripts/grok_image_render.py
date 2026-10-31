@@ -22,6 +22,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import queue
@@ -37,6 +38,8 @@ import time
 import uuid
 
 import agy_art_runtime as agy
+
+logger = logging.getLogger(__name__)
 from agy_image_render import MAX_BYTES, normalize
 from fal_image_render import brief
 from gemini_art_review import read_image
@@ -233,6 +236,32 @@ def command(profile: Path, work: Path, args: list[str], *, auth=None, binary=Non
     return [str(binary)] + args
 
 
+def _scrub_cli(text: str) -> str:
+    """Drop credentials from a CLI failure before it is logged."""
+    cleaned = re.sub(r'(?i)(bearer\s+)\S+', r'\1[redacted]', text)
+    cleaned = re.sub(
+        r'(?i)\b(api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*\S+',
+        r'\1=[redacted]',
+        cleaned,
+    )
+    cleaned = re.sub('xai-' + r'[A-Za-z0-9]{8,}', '[redacted]', cleaned)
+    return " ".join(cleaned.split())[:300]
+
+
+def _log_cli_failure(returncode: int | None, detail: str) -> None:
+    stop = "-"
+    for line in detail.splitlines():
+        if "stop_reason" in line:
+            stop = _scrub_cli(line)[:120]
+            break
+    logger.warning(
+        "grok cli failed exit=%s stop=%s detail=%s",
+        "-" if returncode is None else returncode,
+        stop,
+        _scrub_cli(detail),
+    )
+
+
 def provider_error(message: str):
     """Conservative classification; provider safety/unknown errors never fail over."""
     text = message.lower()
@@ -326,7 +355,9 @@ def parse_stream(raw: str, session: str, images: set[str], *, allowed_skills: se
         if end.get('is_error') or end.get('subtype') != 'success':
             errors.append(json.dumps(end.get('errors', [])))
         if errors:
-            provider_error('\n'.join(errors))
+            joined = '\n'.join(errors)
+            _log_cli_failure(None, joined)
+            provider_error(joined)
         if end.get('stop_reason') != 'end_turn' or len(calls) != 1 or results != set(calls):
             raise agy.RuntimeError('Grok did not complete exactly one image edit')
     except agy.RuntimeError:
@@ -395,7 +426,9 @@ def execute(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=N
         if len(raw) > MAX_OUTPUT: raise agy.RuntimeError('Grok output exceeded the limit')
         if process.returncode:
             err.seek(0)
-            provider_error((raw + err.read(MAX_OUTPUT)).decode('utf-8', 'replace'))
+            detail = (raw + err.read(MAX_OUTPUT)).decode('utf-8', 'replace')
+            _log_cli_failure(process.returncode, detail)
+            provider_error(detail)
         try: return raw.decode('utf-8')
         except UnicodeError as exc: raise agy.RuntimeError('Grok output was not UTF-8') from exc
 
@@ -474,6 +507,7 @@ def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, canc
             if process.returncode:
                 err.seek(0)
                 detail = err.read(MAX_OUTPUT).decode('utf-8', 'replace')
+                _log_cli_failure(process.returncode, detail)
                 provider_error('Grok chat process failed\n' + detail)
         except BaseException:
             _kill(process)

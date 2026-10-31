@@ -88,6 +88,10 @@ def test_home_for_and_stream_can_run_twice(monkeypatch, tmp_path):
         assert events[-1]["type"] == "done"
         assert events[-1]["text"] == "ready"
     assert chat.home_for("chat")[0] != chat.home_for("recall")[0]
+    chat_cfg = (chat.home_for("chat")[0] / ".grok" / "config.toml").read_text()
+    story_cfg = (chat.home_for("background")[0] / ".grok" / "config.toml").read_text()
+    assert "max_completion_tokens = 2048" in chat_cfg
+    assert "max_completion_tokens = 8192" in story_cfg
 
 
 def test_chat_and_recall_homes_run_together_and_one_role_does_not(monkeypatch, tmp_path):

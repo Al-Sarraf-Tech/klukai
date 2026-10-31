@@ -198,6 +198,19 @@ def test_service_errors_are_failover_eligible(message):
     with pytest.raises(m.agy.ProviderUnavailable): m.provider_error(message)
 
 
+def test_a_cli_failure_log_keeps_the_exit_and_drops_the_secret(caplog):
+    m = module()
+    secret = "xai-" + ("k" * 12)
+    detail = f'exit talk stop_reason=max_tokens token={secret} bearer abc.def'
+    with caplog.at_level("WARNING"):
+        m._log_cli_failure(3, detail)
+    text = caplog.text
+    assert "exit=3" in text
+    assert "stop_reason" in text
+    assert secret not in text
+    assert "abc.def" not in text
+
+
 @pytest.mark.parametrize('message', ['HTTP 403 Forbidden', 'content safety refusal', 'invalid image',
                                    'policy refusal: HTTP 500', 'generation refused: HTTP 500',
                                    'content blocked: HTTP 500', 'prompt prohibited: HTTP 500',

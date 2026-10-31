@@ -285,7 +285,16 @@ def home_for(role: str) -> tuple[Path, Path]:
     if config.is_symlink():
         raise agy.RuntimeError("Grok home config is a symlink")
     config.mkdir(mode=0o700, exist_ok=True)
-    (config / "config.toml").write_text(CONFIG)
+    # 2048 counts reasoning and the reply together. Story JSON and episode
+    # summaries were cut off once thinking used most of that budget. Chat
+    # stays at 2048; background roles get room for both.
+    limit = 2048 if role == "chat" else 8192
+    text = CONFIG.replace(
+        "max_completion_tokens = 2048",
+        f"max_completion_tokens = {limit}",
+        1,
+    )
+    (config / "config.toml").write_text(text)
     sessions = config / "sessions"
     if sessions.is_symlink():
         raise agy.RuntimeError("Grok home sessions is a symlink")
