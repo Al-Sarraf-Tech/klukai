@@ -25,6 +25,8 @@ CHAT_FLAGS = [
     "--output-format",
     "--include-partial-messages",
     "--verbatim",
+    "--tools",
+    "--disallowed-tools",
     "--system-prompt-override",
     "--prompt-json",
 ]
@@ -39,6 +41,8 @@ CHECK_FLAGS = [
     "--output-format",
     "--verbatim",
     "--system-prompt-override",
+    "--tools",
+    "--disallowed-tools",
     "--prompt-file",
 ]
 RENDER_FLAGS = [

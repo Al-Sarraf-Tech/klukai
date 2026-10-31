@@ -84,6 +84,9 @@ def arguments(session: str, prompt_file: Path) -> list[str]:
         "--no-subagents", "--disable-web-search", "--permission-mode", "dontAsk",
         "--max-turns", "1", "--output-format", "streaming-messages-json",
         "--verbatim", "--system-prompt-override", RUBRIC,
+        "--tools", "read_file",
+        "--disallowed-tools",
+        "read_file,grep,list_dir,web_search,web_fetch,search_replace,run_terminal_cmd,Agent",
         "--prompt-file", str(prompt_file),
     ]
     if any(len(arg) >= MAX_ARG_STRLEN for arg in result):

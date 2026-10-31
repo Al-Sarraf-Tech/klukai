@@ -14,6 +14,17 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- A cancelled memory-recall probe no longer re-trips the Grok circuit
+  breaker. Recall uses its own `grok_recall` breaker, so a recall problem
+  cannot lock out chat. The reply uses the Postgres ranking immediately.
+  A Grok pick, if it runs, happens after the reply and only fills the next
+  turn. The persona is sent once. Chat and the checker pass `--tools` and
+  `--disallowed-tools` with ids from the pinned CLI help. Typing shows as
+  soon as a turn is accepted, and an in-character line replaces the 8s
+  "Loading neural pathways" message at 2.5s. Prompt lookups that do not
+  depend on each other run together. Each Grok role reuses one home, and
+  each call logs `cache_read_input_tokens`. Her POV e2e skips the image
+  step when the user is not on `KLUKAI_AGY_ALLOWED_USERS`.
 - Chat through the account worker no longer passes `--system-prompt-file`.
   Pinned Grok CLI 1.0.62 rejects that flag and every text turn 502s. The
   system text is inside `--prompt-json` (one argv, refused over 120KB) and

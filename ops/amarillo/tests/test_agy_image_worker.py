@@ -1423,7 +1423,7 @@ def test_recall_returns_while_extraction_is_still_running(worker, setup_files, m
             self.model, self.effort, self.effort_source = "grok-4.7", "low", "stream"
             self.tokens = 3
 
-    def stream(system, prompt, cancel=None, effort="low"):
+    def stream(system, prompt, cancel=None, effort="low", role="chat"):
         if prompt == "extract":
             started.set()
             while cancel is None or not cancel.is_set():
@@ -1490,7 +1490,7 @@ def test_chat_does_not_wait_for_a_slow_background_call(worker, setup_files, monk
             self.model, self.effort, self.effort_source = "grok-4.7", "low", "stream"
             self.tokens = None
 
-    def complete(system, prompt, cancel=None, effort="low"):
+    def complete(system, prompt, cancel=None, effort="low", role="chat"):
         if prompt == "extract":
             started.set()
             release.wait(2)
@@ -1542,7 +1542,7 @@ def test_complete_reports_grok_4_7_at_low(worker, setup_files, monkeypatch):
         tokens = None
 
     monkeypatch.setitem(sys.modules, "grok_account_chat", SimpleNamespace(
-        complete=lambda system, prompt, cancel=None, effort="low": Turn(),
+        complete=lambda system, prompt, cancel=None, effort="low", role="chat": Turn(),
         effort_for=lambda role: "low",
     ))
     with running(worker, setup_files) as path:
@@ -1551,5 +1551,5 @@ def test_complete_reports_grok_4_7_at_low(worker, setup_files, monkeypatch):
     assert status == 200
     assert json.loads(body) == {
         "text": "ready", "model": "grok-4.7", "effort": "low", "effort_source": "stream",
-        "tokens": None,
+        "tokens": None, "cache_read": None,
     }

@@ -741,21 +741,26 @@ class Handler(BaseHTTPRequestHandler):
         started = False
         cancelled = False
         tokens = None
+        self._cache_read = None
         try:
             stream = getattr(grok_account_chat, "stream", None)
             if stream is None:
-                turn = grok_account_chat.complete(system, prompt, cancel=cancel, effort=effort)
+                turn = grok_account_chat.complete(
+                    system, prompt, cancel=cancel, effort=effort, role=role
+                )
                 tokens = getattr(turn, "tokens", None)
                 self.reply(200, {"text": turn.text, "model": turn.model, "effort": turn.effort,
-                                 "effort_source": turn.effort_source, "tokens": tokens})
+                                 "effort_source": turn.effort_source, "tokens": tokens,
+                                 "cache_read": getattr(turn, "cache_read", None)})
             else:
-                for event in stream(system, prompt, cancel=cancel, effort=effort):
+                for event in stream(system, prompt, cancel=cancel, effort=effort, role=role):
                     if not started:
                         self._begin_ndjson()
                         started = True
                     if event.get("type") == "done":
                         tokens = event.get("tokens")
                         cancelled = bool(event.get("cancelled"))
+                        self._cache_read = event.get("cache_read")
                     self._write_ndjson(event)
                 self._end_ndjson()
         except Exception as exc:
@@ -767,7 +772,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(502, {"error": "grok chat failed"})
         finally:
             stop.set()
-            self._log_complete(role, effort, queued, queue_s, tokens, cancelled)
+            self._log_complete(
+                role, effort, queued, queue_s, tokens, cancelled, self._cache_read
+            )
             gate.release()
 
     def _begin_ndjson(self):
@@ -788,12 +795,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"0\r\n\r\n")
         self.wfile.flush()
 
-    def _log_complete(self, role, effort, queued, started, tokens, cancelled):
+    def _log_complete(self, role, effort, queued, started, tokens, cancelled, cache_read=None):
         now = time.monotonic()
         logger.info(
-            "grok complete role=%s effort=%s queue_ms=%d run_ms=%d tokens=%s cancelled=%s",
+            "grok complete role=%s effort=%s queue_ms=%d run_ms=%d tokens=%s "
+            "cache_read=%s cancelled=%s",
             role, effort, int((started - queued) * 1000), int((now - started) * 1000),
-            "-" if tokens is None else tokens, str(bool(cancelled)).lower(),
+            "-" if tokens is None else tokens,
+            "-" if cache_read is None else cache_read,
+            str(bool(cancelled)).lower(),
         )
 
     def do_POST(self):

@@ -46,13 +46,13 @@ def test_arguments_put_the_system_text_in_prompt_json():
     assert "--system-prompt-file" not in args
     assert "--single" not in args
     assert args[args.index("--system-prompt-override") + 1] == system
+    assert system not in args[args.index("--prompt-json") + 1]
+    assert args[args.index("--tools") + 1] == "read_file"
+    assert "run_terminal_cmd" in args[args.index("--disallowed-tools") + 1]
     document = json.loads(args[args.index("--prompt-json") + 1])
     assert document == {
         "type": "acp",
-        "content": [
-            {"type": "text", "text": system},
-            {"type": "text", "text": "hello"},
-        ],
+        "content": [{"type": "text", "text": "hello"}],
     }
     assert max(len(arg.encode()) for arg in args) < chat.PROMPT_JSON_LIMIT
     assert "disable_api_key_auth = true" in chat.CONFIG

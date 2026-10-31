@@ -46,6 +46,47 @@ class CheckFailed(Exception):
     """A check assertion failed (as opposed to the harness breaking)."""
 
 
+class CheckSkipped(Exception):
+    """The check does not apply here. It is reported, not failed."""
+
+
+def agy_allowed_users() -> set[str] | None:
+    """Users allowed to request pictures. None means the list could not be read.
+
+    The harness does not change ``KLUKAI_AGY_ALLOWED_USERS``. It reads the
+    process environment, then the running core container.
+    """
+    if "KLUKAI_AGY_ALLOWED_USERS" in os.environ:
+        raw = os.environ["KLUKAI_AGY_ALLOWED_USERS"]
+    else:
+        core = os.environ.get("KLUKAI_E2E_CORE", "companion-core")
+        try:
+            probe = subprocess.run(
+                ["docker", "exec", core, "printenv", "KLUKAI_AGY_ALLOWED_USERS"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if probe.returncode != 0:
+            return None
+        raw = probe.stdout
+    return {user.strip() for user in raw.split(",") if user.strip()}
+
+
+def her_pov_image_skipped(username: str, job: dict[str, Any], allowed: set[str] | None) -> bool:
+    """The story was written and the picture was refused because this user is
+    not on the allowlist. That image step is a skip, not a failed story."""
+    if allowed is None or username in allowed:
+        return False
+    return (
+        job.get("status") != "done"
+        and job.get("error") == "image_failed"
+        and bool(job.get("title"))
+    )
+
+
 def _log(msg: str) -> None:
     print(f"  {msg}", flush=True)
 
@@ -298,6 +339,11 @@ async def check_her_pov(ctx: dict[str, Any]) -> str:
             if last.get("status") in ("done", "failed"):
                 break
 
+        if her_pov_image_skipped(ctx["username"], last, agy_allowed_users()):
+            raise CheckSkipped(
+                f"image skipped: {ctx['username']} is not on KLUKAI_AGY_ALLOWED_USERS "
+                f"(story {last.get('title')!r} was written)"
+            )
         if last.get("status") != "done":
             raise CheckFailed(
                 f"job ended status={last.get('status')} error={last.get('error')} "
@@ -514,6 +560,9 @@ async def run(names: list[str], username: str, other_username: str) -> int:
             started = time.monotonic()
             try:
                 detail = await CHECKS[name](ctx)
+            except CheckSkipped as e:
+                skipped.append(name)
+                print(f"  – SKIP ({time.monotonic() - started:.1f}s): {e}", flush=True)
             except CheckFailed as e:
                 failures.append(name)
                 print(f"  ✗ FAIL ({time.monotonic() - started:.1f}s): {e}", flush=True)
@@ -532,6 +581,8 @@ async def run(names: list[str], username: str, other_username: str) -> int:
     print("\n" + "─" * 60)
     passed = len(names) - len(failures) - len(skipped)
     print(f"E2E: {passed}/{len(names)} passed as user '{username}'")
+    if skipped:
+        print(f"SKIPPED: {', '.join(skipped)}")
     if failures:
         print(f"FAILED: {', '.join(failures)}")
     return 1 if failures else 0
