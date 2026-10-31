@@ -97,6 +97,7 @@ def _patched_pipeline(
     memory.recall_for_prompt = AsyncMock(return_value=(["ep1"], {"name": "x"}, ["ex1"]))
     memory.get_memory_nudge = AsyncMock(return_value=nudge)
     memory.get_inside_jokes = AsyncMock(return_value=[])  # inside-jokes feature
+    memory.pin_next_recall = AsyncMock()
     ns.memory = memory
 
     # ── affection ──
@@ -364,8 +365,9 @@ class TestDirectStreamingPath:
             await _handle_message("A normal length question here", _fresh_session())
             await _drain_tasks()
 
-        first_thinking = ns.ws.send_thinking.await_args_list[0].args[1]
-        assert "Composing" in first_thinking
+        texts = [c.args[1] for c in ns.ws.send_thinking.await_args_list]
+        assert texts[0] == "…"
+        assert any("Composing" in text for text in texts)
 
 
 # ── Tests: agent path ─────────────────────────────────────────────────────────
@@ -819,7 +821,7 @@ class TestWarmupTimer:
     @pytest.mark.asyncio
     async def test_warmup_notify_fires_before_first_token(self):
         """A slow first token lets the warmup task body run first and send the
-        'Loading neural pathways' thinking message (covers the inner coroutine).
+        'One moment, Commander.' thinking message (covers the inner coroutine).
 
         The stream yields the event loop (real sleep 0) before its first token,
         and the warmup sleep is patched to resolve immediately, so the warmup
@@ -845,7 +847,7 @@ class TestWarmupTimer:
                 await _drain_tasks()
 
         thinking = [c.args[1] for c in ns.ws.send_thinking.await_args_list]
-        assert any("Loading neural pathways" in t for t in thinking)
+        assert any("One moment, Commander." in t for t in thinking)
 
     @pytest.mark.asyncio
     async def test_warmup_timer_cancelled_after_loop_when_pending(self):
@@ -869,9 +871,9 @@ class TestWarmupTimer:
             ):
                 await _handle_message("A normal length question here", _fresh_session())
 
-        # The "Loading neural pathways" message must NOT have fired (cancelled).
+        # The interim line must NOT have fired (cancelled).
         thinking = [c.args[1] for c in ns.ws.send_thinking.await_args_list]
-        assert not any("Loading neural pathways" in t for t in thinking)
+        assert not any("One moment, Commander." in t for t in thinking)
 
 
 class TestErrorResilience:

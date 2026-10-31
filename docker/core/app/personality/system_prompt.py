@@ -79,20 +79,27 @@ def assemble_system_prompt(
             f"- {r}" for r in abs_rules
         )
 
+    # Static persona first so a prompt cache can keep the prefix. Time, mood,
+    # memories and the rest of this turn's state stay at the end. The words
+    # of each block are unchanged.
     blocks = [
         build_character_contract(p, affection_level),
         abs_block,
         build_character_preamble(p, affection_level),
         build_character_rules(),
         build_squad_voices_block(p),
-        build_squad_interaction_hint(addressed_member),
-        build_jealousy_block(jealousy_target, affection_level),
-        build_physical_state_block(physical_state, physical_detail),
-        build_pace_block(last_msg_length),
         build_expressive_block(p, affection_level),
         build_japanese_block(p, affection_level),
         build_speech_guidelines(p, affection_level),
         build_behavioral_grammar_block(affection_level),
+        build_canon_arcs_block(p, affection_level),
+        build_quirks_block(p, affection_level),
+        build_wardrobe_block(p, affection_level),
+        build_tool_block(tools_available),
+        build_squad_interaction_hint(addressed_member),
+        build_jealousy_block(jealousy_target, affection_level),
+        build_physical_state_block(physical_state, physical_detail),
+        build_pace_block(last_msg_length),
         build_affection_block(affection_score, affection_level, level_name, p),
         build_context_block(
             mood, affection_level, days_together, current_outfit, current_location
@@ -101,14 +108,10 @@ def assemble_system_prompt(
         build_anniversary_block(anniversaries),
         build_comfort_objects_block(comfort_objects, affection_level),
         build_crown_jewel_block(crown_jewel, affection_level),
-        build_canon_arcs_block(p, affection_level),
-        build_quirks_block(p, affection_level),
-        build_wardrobe_block(p, affection_level),
         build_mission_context_block(mission_description),
         build_memory_block(memories or []),
         build_conversation_recall_block(recalled_exchanges or []),
         build_relationship_block(relationship_facts or {}),
-        build_tool_block(tools_available),
         build_answer_discipline(affection_level),
     ]
 

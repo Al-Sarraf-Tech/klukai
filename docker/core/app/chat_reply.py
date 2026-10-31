@@ -124,13 +124,11 @@ class ChatReplyRuntime:
             return ChatReply("", "offline", 0, True)
         logger.info("Routing to %s/%s", config.provider, config.model)
 
-        # Fire a delayed "stand by" message if the model is slow to respond
-        # (long adaptive thinking, or a Sonnet failure falling back to Haiku).
+        # Typing is already on (sent when the turn was accepted). If the
+        # model is still quiet, say so in character well before the old 8s line.
         async def _warmup_notify() -> None:
-            await asyncio.sleep(8.0)
-            await self.ws.send_thinking(
-                user_id, "Loading neural pathways, Commander. Stand by..."
-            )
+            await asyncio.sleep(2.5)
+            await self.ws.send_thinking(user_id, "One moment, Commander.")
 
         warmup_timer: asyncio.Task[Any] | None = asyncio.create_task(_warmup_notify())
 

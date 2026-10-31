@@ -14,11 +14,26 @@ from app.memory_settings import RECALL_SELECTION_TIMEOUT_S
 def test_effort_defaults_are_low_for_chat_and_background(monkeypatch):
     assert chat_effort() == EFFORT == "low"
     assert background_effort() == "low"
-    assert RECALL_SELECTION_TIMEOUT_S <= 3
+    assert RECALL_SELECTION_TIMEOUT_S == 2.5
     monkeypatch.setenv("KLUKAI_GROK_CHAT_EFFORT", "minimal")
     monkeypatch.setenv("KLUKAI_GROK_BACKGROUND_EFFORT", "medium")
     assert chat_effort() == "minimal"
     assert background_effort() == "medium"
+
+
+async def test_a_failed_prompt_lookup_keeps_the_other_results():
+    from app.chat_prompt import _together
+
+    async def bad():
+        raise RuntimeError("no")
+
+    async def good():
+        return "kept"
+
+    assert await _together(bad(), good(), defaults=("fallback", "fallback")) == (
+        "fallback",
+        "kept",
+    )
 
 
 async def test_nudge_recall_runs_during_the_main_recall():

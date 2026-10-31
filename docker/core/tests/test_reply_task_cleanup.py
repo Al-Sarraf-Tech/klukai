@@ -95,13 +95,13 @@ async def test_reply_waits_for_started_notifier_finalizer(monkeypatch, token_cou
     actual_sleep = asyncio.sleep
 
     async def quick_sleep(delay):
-        await actual_sleep(0 if delay == 8.0 else delay)
+        await actual_sleep(0 if delay == 2.5 else delay)
 
     monkeypatch.setattr(asyncio, "sleep", quick_sleep)
 
     class Socket:
         async def send_thinking(self, _user_id, text):
-            if text.startswith("Loading"):
+            if text.startswith("One moment"):
                 started.set()
                 try:
                     await asyncio.Event().wait()

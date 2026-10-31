@@ -26,6 +26,19 @@ from .ws_manager import WSManager
 logger = logging.getLogger(__name__)
 
 
+async def _together(*aws: Awaitable[Any], defaults: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Run lookups at the same time. A failed one keeps its default."""
+    results = await asyncio.gather(*aws, return_exceptions=True)
+    kept = []
+    for result, default in zip(results, defaults, strict=True):
+        if isinstance(result, BaseException):
+            logger.warning("Prompt lookup failed (%s)", type(result).__name__)
+            kept.append(default)
+        else:
+            kept.append(result)
+    return tuple(kept)
+
+
 @dataclass(frozen=True)
 class OutfitContext:
     outfit_line: str | None
@@ -60,14 +73,7 @@ class ChatPromptBuilder:
         from .helpers import asks_to_be_remembered
 
         skip_recall = len(content.strip()) <= 20 and not asks_to_be_remembered(content)
-        (
-            (episode_memories, rel_facts, recalled_exchanges),
-            nudge,
-        ) = await self.recall_and_nudge(
-            content, skip_recall, aff_state.level, user_id, session.turn_count
-        )
 
-        # Assemble system prompt
         # Calculate days together
         days = 0
         if aff_state.first_interaction:
@@ -93,32 +99,49 @@ class ChatPromptBuilder:
         # Jealousy detection — Commander complimenting another T-Doll
         jealousy_target = detect_jealousy_trigger(content)
 
-        # Physical state awareness
         from .context import physical
-
-        phys_state, phys_detail = await physical.get_state(user_id)
-
-        # Anniversary awareness
-        anniversaries = await self.proactive.check_anniversaries(user_id)
-
-        # Comfort objects for prompt context
-        comfort_objects = await self.proactive.get_comfort_objects(user_id)
-
-        # Inside jokes / running references (feature: inside jokes). Surfaced as a
-        # per-message block below — NOT folded into assemble_system_prompt — so the
-        # golden system-prompt snapshots stay stable. Skipped for very short msgs.
-        inside_jokes = (
-            [] if skip_recall else await self.memory.get_inside_jokes(user_id)
-        )
-
-        # Crown jewel tribute — the Commander's most treasured words to Klukai.
-        # Only surfaces in the prompt at affection level 4+ (per build_crown_jewel_block).
         from . import tributes
-
-        crown_jewel = await tributes.get_crown_jewel(user_id)
-
-        # Dream inquiry — if Commander asks about dreams, add context
         from .helpers import wants_dream_inquiry
+
+        async def _jokes() -> list[Any]:
+            if skip_recall:
+                return []
+            return await self.memory.get_inside_jokes(user_id)
+
+        # These reads do not depend on each other. One slow lookup must not
+        # queue the rest, and a failure keeps that block empty.
+        (
+            recalled_pair,
+            physical_state,
+            anniversaries,
+            comfort_objects,
+            inside_jokes,
+            crown_jewel,
+            outfit,
+        ) = await _together(
+            self.recall_and_nudge(
+                content, skip_recall, aff_state.level, user_id, session.turn_count
+            ),
+            physical.get_state(user_id),
+            self.proactive.check_anniversaries(user_id),
+            self.proactive.get_comfort_objects(user_id),
+            _jokes(),
+            tributes.get_crown_jewel(user_id),
+            self.wardrobe_turn(
+                content, session, user_id, aff_state.level, mission_desc
+            ),
+            defaults=(
+                (([], {}, []), None),
+                ("normal", ""),
+                [],
+                [],
+                [],
+                None,
+                OutfitContext(None, None, None, ""),
+            ),
+        )
+        (episode_memories, rel_facts, recalled_exchanges), nudge = recalled_pair
+        phys_state, phys_detail = physical_state
 
         dream_hint = ""
         if wants_dream_inquiry(content):
@@ -129,16 +152,6 @@ class ChatPromptBuilder:
                 "But add a subtle tell — a pause, a look away, a faint blush. "
                 "The truth is you DID dream about him. You just won't admit it."
             )
-
-        # Her Day — what she has on and where she is right now. His outfit
-        # request, if any, is decided deterministically HERE, before the prompt:
-        # this reply already knows the outcome, and an image requested in the same
-        # message renders the change. Bounded and fail-soft: the row is normally
-        # warm from connect; if not, the hour-based defaults stand this turn while
-        # the (shielded) pick finishes in the background for the next one.
-        outfit = await self.wardrobe_turn(
-            content, session, user_id, aff_state.level, mission_desc
-        )
         outfit_line, location_line = outfit.outfit_line, outfit.location_line
         her_where, outfit_request_block = outfit.activity, outfit.request_block
 

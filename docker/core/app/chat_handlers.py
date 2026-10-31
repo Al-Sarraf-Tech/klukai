@@ -238,6 +238,11 @@ async def _handle_message(
     if not content.strip():
         return None
 
+    try:
+        await ws.send_thinking(user_id, "…")
+    except Exception as exc:
+        logger.debug("Could not show typing: %s", exc)
+
     proactive.mark_user_messaged_today(user_id=user_id)
 
     start = time.monotonic()
@@ -438,6 +443,17 @@ async def _handle_message(
         logger.warning("Failed to set read_at: %s", e)
     await ws.send(
         user_id, {"type": "read_receipt", "read_at": datetime.now().isoformat()}
+    )
+
+    async def _pin_next_recall() -> None:
+        import inspect
+
+        pin = getattr(memory, "pin_next_recall", None)
+        if inspect.iscoroutinefunction(pin):
+            await pin(content, user_id)
+
+    ws.track_task(
+        user_id, asyncio.create_task(_pin_next_recall()), survive_disconnect=True
     )
 
     followups = ChatFollowups(
